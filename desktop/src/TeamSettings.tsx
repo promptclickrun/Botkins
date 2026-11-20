@@ -214,9 +214,9 @@ function Requests({ team, update, run, busy }: Actions) {
                 <Users size={16} />
               </span>
               <div className="set-label">
-                <span className="set-name">{request.name}</span>
+                <span className="set-name">{request.person || request.name}</span>
                 <small className="int-line">
-                  {deviceName(request.kind, request.platform)} · {when(request.at)}
+                  {request.person ? request.name : deviceName(request.kind, request.platform)} · {when(request.at)}
                 </small>
                 <small className="int-line">
                   Invite {source ? formatCode(source.code) : "no longer available"} · {group?.name ?? "Original group"}
@@ -224,7 +224,7 @@ function Requests({ team, update, run, busy }: Actions) {
               </div>
               <div className="set-control team-request-actions">
                 <select
-                  aria-label={"Group for " + request.name}
+                  aria-label={"Group for " + (request.person || request.name)}
                   value={picked(request)}
                   onChange={(event) => setGroups((now) => ({ ...now, [request.id]: event.target.value }))}
                 >

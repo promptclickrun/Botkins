@@ -25,6 +25,7 @@ import {
   Volume2,
   Square,
 } from "lucide-react";
+import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { RichText } from "./RichText";
 import type { FilePreview } from "./ChatFileLink";
 import {
@@ -119,6 +120,8 @@ function Attachments({ list }: { list: Message["attachments"] }) {
 
 /** One conversation: header, transcript, pending requests and the composer slot. */
 export default function ChatView({
+  completions,
+  onScreen,
   state,
   chat,
   bot,
@@ -137,6 +140,8 @@ export default function ChatView({
   openRoutines,
   openBot,
 }: {
+  completions: CompletionScroll;
+  onScreen: boolean;
   state: State;
   chat: Chat;
   bot: Bot;
@@ -162,6 +167,7 @@ export default function ChatView({
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const gliding = useRef(false);
+  const readingBeginning = useRef(false);
   const [away, setAway] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, string>>({});
   const [drawer, setDrawer] = useState<"" | "tasks" | "helpers">("");
@@ -261,7 +267,12 @@ export default function ChatView({
     const el = scroller.current;
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   };
+  const clearBeginning = () => {
+    readingBeginning.current = false;
+    scroller.current?.style.removeProperty("--reply-scroll-room");
+  };
   const toBottom = () => {
+    clearBeginning();
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
     gliding.current = false;
@@ -273,6 +284,7 @@ export default function ChatView({
   const glideToBottom = () => {
     const el = scroller.current;
     if (!el) return;
+    clearBeginning();
     stick.current = true;
     setAway(false);
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return toBottom();
@@ -281,9 +293,13 @@ export default function ChatView({
   };
   const stopGlide = () => {
     gliding.current = false;
+    readingBeginning.current = false;
   };
   // A new chat, or a message the person sent, jumps to the latest.
-  useLayoutEffect(toBottom, [chat.id, sentCount]);
+  useLayoutEffect(toBottom, [completions, chat.id]);
+  useLayoutEffect(() => {
+    if (!readingBeginning.current || busy) toBottom();
+  }, [sentCount]);
   // New output follows only while the person is at the bottom.
   const liveSteps = latest?.status === "Working" ? (latest.steps?.length ?? 0) + (latest.reasoning?.length ?? 0) : 0;
   useLayoutEffect(() => {
@@ -325,6 +341,39 @@ export default function ChatView({
       document.removeEventListener("keydown", mark, true);
     };
   }, [chat.id]);
+  const pendingRun = completions.pending(chat.id);
+  const replyIndex = pendingRun ? finalReplyIndex(chat, pendingRun) : undefined;
+  useLayoutEffect(() => {
+    if (!pendingRun || replyIndex === undefined || busy || !onScreen || state.settings.completionPosition !== "beginning") return;
+    if (!stick.current) {
+      completions.readerMoved(chat.id, pendingRun);
+      return;
+    }
+    const showBeginning = () => {
+      const el = scroller.current;
+      const row = document.getElementById(`message-${chat.id}-${replyIndex}`);
+      if (!el || !row || !el.contains(row)) return;
+      if (!completions.take(chat.id, { visible: !document.hidden && document.hasFocus(), rendered: pendingRun })) return;
+      gliding.current = false;
+      stick.current = false;
+      readingBeginning.current = true;
+      setAway(true);
+      const top = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      // Even a one-line reply needs enough space below it to align with the top edge.
+      const column = row.closest(".chat-column")!;
+      const missing = Math.max(0, Math.ceil(el.clientHeight - (column.getBoundingClientRect().bottom - row.getBoundingClientRect().top)));
+      el.style.setProperty("--reply-scroll-room", missing + "px");
+      el.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+    };
+    showBeginning();
+    window.addEventListener("focus", showBeginning);
+    document.addEventListener("visibilitychange", showBeginning);
+    return () => {
+      window.removeEventListener("focus", showBeginning);
+      document.removeEventListener("visibilitychange", showBeginning);
+    };
+  }, [completions, chat.id, pendingRun, replyIndex, busy, onScreen, state.settings.completionPosition]);
+
   const [earlier, setEarlier] = useState<{ target: typeof messageTarget; from: number; messages: Message[] }>();
   const loadedFrom = chat.loaded?.from ?? 0;
   useEffect(() => {
@@ -350,6 +399,7 @@ export default function ChatView({
   // Opening a row never scrolls; it only decides whether the view still follows.
   const disclosed = () =>
     requestAnimationFrame(() => {
+      if (readingBeginning.current) return;
       stick.current = atBottom();
       setAway(!stick.current);
     });
@@ -751,12 +801,14 @@ export default function ChatView({
           className="messages"
           ref={scroller}
           onScroll={() => {
+            if (readingBeginning.current) return;
             const bottom = atBottom();
             if (gliding.current) {
               if (bottom) gliding.current = false;
               return;
             }
             stick.current = bottom;
+            if (!bottom && busy && latest && onScreen) completions.readerMoved(chat.id, latest.id);
             if (bottom === away) setAway(!bottom);
           }}
           onScrollEnd={() => {

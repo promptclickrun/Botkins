@@ -112,6 +112,8 @@ export type Message = {
   author?: { memberId: string; name: string };
 };
 export type Chat = {
+  /** Latest message count advertised by a paired computer, even before its chat page arrives. */
+  count?: number;
   loaded?: { from: number; total: number } | null;
   id: string;
   /** Set on a group chat: its 2 to 6 members, in answer order. `botId` is the first. */
@@ -301,7 +303,7 @@ export type TeamInvite = {
   published?: boolean;
   link: string;
 };
-export type TeamRequest = { id: string; name: string; platform: string; kind: string; at: number; inviteId: string };
+export type TeamRequest = { id: string; name: string; person?: string; platform: string; kind: string; at: number; inviteId: string };
 export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[] };
 export type MemberTeam = {
   me: {
@@ -922,6 +924,7 @@ declare global {
       renameRemoteHost(id: string, name: string): Promise<void>;
       /** Renames a paired phone or computer as this computer lists it. */
       renamePhone(id: string, name: string): Promise<void>;
+      setPhonePerson(id: string, person: string): Promise<void>;
       /** Each connected provider's plan and limits. `refresh` reads every provider again first. */
       providerUsage(options?: { refresh?: boolean }): Promise<ProviderUsage[]>;
       /** A read that nobody waited for has come in: ask again. */
@@ -1363,6 +1366,7 @@ export type ProviderService = {
 };
 /** Phone access as Settings › Phone shows it. */
 export type PhoneLink = {
+  canSetPerson?: boolean;
   /** The server operator handles pairing outside this virtual workspace. */
   managed?: boolean;
   enabled: boolean;
@@ -1374,7 +1378,7 @@ export type PhoneLink = {
   /** The name phones show for this computer. */
   name: string;
   addresses: { address: string; kind: "lan" | "tailnet" | "loopback" | "link"; interface: string }[];
-  devices: { id: string; name: string; platform: string; kind?: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean }[];
+  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean }[];
   /** An open pairing code. `qr` is the code's link as one SVG path in a square of `size` units. */
   pairing: { code: string; expiresAt: number; url: string; qr: { size: number; d: string } } | null;
   /**
@@ -1398,6 +1402,7 @@ export type PhoneLink = {
    */
   screen: {
     mode: "off" | "view" | "control";
+    setBy?: { deviceId: string; name: string; at: number };
     viewers: { deviceId: string; name: string; since: number }[];
     permissions: { system: boolean; screenRecording: boolean; accessibility: boolean };
   };
@@ -1436,6 +1441,7 @@ export type MacToolsStatus = {
 export type Preferences = {
   model: ModelChoice;
   appearance: Appearance;
+  completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
   steps?: "folded" | "every" | "failed" | "hidden";
   thinking?: "open" | "folded" | "hidden";
   foldTools: boolean;

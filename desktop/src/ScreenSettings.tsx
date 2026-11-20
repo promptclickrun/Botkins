@@ -58,6 +58,7 @@ export function ScreenRows({ status, busy, run }: { status: PhoneLink; busy: boo
         <div className="set-label">
           <span className="set-name">Screen</span>
           <small>{SCREEN_HELP[status.screen.mode]}</small>
+          {status.screen.setBy && <small>Set by {status.screen.setBy.name}</small>}
         </div>
         <div className="set-control">
           <Choices label="Screen" value={status.screen.mode} options={SCREEN_MODES} onChange={(mode) => run(() => api.setPhoneScreen(mode))} />

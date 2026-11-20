@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newKeyPair, open, random, seal, seqNonce, unb64u, unbox, CIPHER } from "../desktop/link/crypto.mjs";
 import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
+import { pair } from "../desktop/remote/link-client.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-phone-"));
@@ -69,7 +70,7 @@ try {
   assert.equal(hello.app, "botkins");
   const mine = newKeyPair();
   const pairKey = (code) => hkdf(agree(mine, unb64u(hello.publicKey)), Buffer.from(cleanCode(code), "utf8"), INFO.pair);
-  const tryPair = (code) => post(base, "pair", JSON.stringify({ publicKey: b64u(mine.publicKey), box: box(pairKey(code), { name: "Sam's iPhone", platform: "ios" }, "pair:" + hello.serverId) }));
+  const tryPair = (code) => post(base, "pair", JSON.stringify({ publicKey: b64u(mine.publicKey), box: box(pairKey(code), { name: "iPhone 17 Pro", person: "River", platform: "ios" }, "pair:" + hello.serverId) }));
   const wrong = await tryPair("WRONGCODE234");
   assert.deepEqual([wrong.status, (await wrong.json()).error], [403, "pair_failed"], "a wrong code is refused as a wrong code");
   const paired = await tryPair(status.pairing.code);
@@ -97,7 +98,27 @@ try {
   console.log("A stand-in phone paired with the code on the page, opened a session and made a sealed call (Node's cipher on one side, Electron's on the other).");
 
   // ---- The page shows the phone.
-  await expect(settings.getByText("Sam's iPhone", { exact: true })).toBeVisible();
+  await expect(settings.getByText("River", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Pair a phone", exact: true }).click();
+  const second = await page.evaluate(() => window.botkins.phoneLink());
+  await pair(fetch, { hosts: ["127.0.0.1:" + second.port], code: second.pairing.code }, { name: "iPhone", platform: "ios" });
+  const roster = settings.locator("section.set-group").filter({ has: page.getByRole("heading", { name: "Devices", exact: true }) });
+  const add = roster.getByRole("button", { name: "Add name for iPhone", exact: true });
+  await expect(add).toBeVisible();
+  await expect(roster.getByText(/iPhone 17 Pro ·/)).toBeVisible();
+  if (process.env.BOTKINS_ROSTER_SCREENSHOT) await roster.screenshot({ path: process.env.BOTKINS_ROSTER_SCREENSHOT });
+  await add.click();
+  const input = roster.getByRole("textbox", { name: "Person’s name for iPhone", exact: true });
+  await expect(input).toHaveValue("");
+  await input.fill("Avery");
+  await roster.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(roster.getByText("Avery", { exact: true })).toBeVisible();
+  await roster.getByRole("button", { name: "Change name for Avery" }).click();
+  await expect(input).toHaveValue("Avery");
+  await input.fill("Robin");
+  await roster.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(roster.getByRole("button", { name: "Change name for Robin" })).toBeVisible();
+  assert.equal((await page.evaluate(() => window.botkins.phoneLink())).devices.find(d => d.person === "Robin").name, "iPhone");
   await expect(settings.getByRole("button", { name: "Pair a phone", exact: true })).toBeVisible();
   console.log("The page lists three ways to pair and shows the paired phone.");
 

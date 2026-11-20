@@ -217,6 +217,7 @@ for (const name of [
   "cancelPhonePairing",
   "removePhone",
   "renamePhone",
+  "setPhonePerson",
   "renamePhoneLinkComputer",
   "setPhoneScreen",
   "setPhoneRelay",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RelayHost, newRelayKey, HOST_PROTOCOL, HOST_PROTOCOL_V3 } from "../desktop/link/relay.mjs";
+import { RelayHost, RelayLink, newRelayKey, HOST_PROTOCOL, HOST_PROTOCOL_V3 } from "../desktop/link/relay.mjs";
 
 class Clock {
   constructor() { this.time = 1_700_000_000_000; this.next = 1; this.tasks = new Map(); }
@@ -53,6 +53,127 @@ test("v3 uses one signed group for active and standby seats", async () => {
   const group = active.protocols.find((part) => part.startsWith("g.")); assert.match(group, /^g\.[A-Za-z0-9_-]{43}$/);
   active.open(); await clock.advance(0); assert.equal(Socket.all.length, 2);
   assert.equal(Socket.all[1].protocols[0], HOST_PROTOCOL_V3); assert.equal(Socket.all[1].protocols.find((part) => part.startsWith("g.")), group); link.stop();
+});
+
+test("v3 probes every five seconds and reconnects both dead seats within the first retry", async () => {
+  const { link, clock } = newLink(); link.start();
+  const active = Socket.all[0]; active.open(); await clock.advance(0);
+  const standby = Socket.all[1]; standby.open();
+
+  await clock.advance(4_999); assert.deepEqual(active.sent, []);
+  await clock.advance(1); assert.deepEqual(active.sent, [Buffer.from("ping")]);
+  await clock.advance(3_999); assert.equal(active.readyState, 1);
+  await clock.advance(1); assert.equal(active.readyState, 3);
+
+  await clock.advance(749); assert.equal(Socket.all.length, 2);
+  await clock.advance(1); assert.equal(Socket.all.length, 4);
+  link.stop();
+});
+
+test("v2 keeps its existing heartbeat timing", async () => {
+  Socket.all = []; const clock = new Clock();
+  const link = new RelayLink({ url: "https://relay.test", key: newRelayKey(), serve: async () => ({ status: 200, body: Buffer.from("ok") }), WebSocket: Socket, timers: clock.timers });
+  link.start(); const socket = Socket.all[0]; socket.open();
+
+  await clock.advance(24_999); assert.deepEqual(socket.sent, []);
+  await clock.advance(1); assert.deepEqual(socket.sent, [Buffer.from("ping")]);
+  await clock.advance(9_999); assert.equal(socket.readyState, 1);
+  await clock.advance(1); assert.equal(socket.readyState, 3);
+  link.stop();
+});
+
+test("a RelayHost v2 fallback keeps its existing heartbeat timing", async () => {
+  class V2Socket extends Socket {
+    constructor(url, protocols) {
+      super(url, protocols);
+      if (protocols[0] === HOST_PROTOCOL_V3) queueMicrotask(() => this.close(1002));
+    }
+  }
+  Socket.all = []; const clock = new Clock();
+  const link = new RelayHost({ url: "https://relay.test", key: newRelayKey(), serve: async () => ({ status: 200, body: Buffer.from("ok") }), WebSocket: V2Socket, timers: clock.timers });
+  link.start(); await Promise.resolve(); const legacy = Socket.all[1]; legacy.open();
+
+  await clock.advance(24_999); assert.deepEqual(legacy.sent, []);
+  await clock.advance(1); assert.deepEqual(legacy.sent, [Buffer.from("ping")]);
+  await clock.advance(9_999); assert.equal(legacy.readyState, 1);
+  await clock.advance(1); assert.equal(legacy.readyState, 3);
+  link.stop();
+});
+
+test("v3 double losses of a known-good group restart the active retry backoff", async () => {
+  const { link, clock } = newLink(); link.start();
+  const firstActive = Socket.all[0]; firstActive.open(); await clock.advance(0);
+  const firstStandby = Socket.all[1]; firstStandby.open();
+
+  for (let cycle = 0; cycle < 5; cycle++) {
+    const active = link.socket; const standby = link.standby;
+    assert.ok(active); assert.ok(standby);
+    const before = Socket.all.length;
+    active.close(1006); standby.close(1006);
+    await clock.advance(749); assert.equal(Socket.all.length, before);
+    await clock.advance(1); assert.equal(Socket.all.length, before + 2, `cycle ${cycle}: reconnect both seats`);
+    const [nextStandby, nextActive] = Socket.all.slice(before);
+    nextActive.open(); nextStandby.open();
+  }
+  link.stop();
+});
+
+test("v3 failures before a socket opens keep exponential active backoff", async () => {
+  class RejectV3 extends Socket {
+    constructor(url, protocols) {
+      super(url, protocols);
+      queueMicrotask(() => this.close(1006));
+    }
+  }
+  Socket.all = []; const clock = new Clock();
+  const link = new RelayHost({ url: "https://relay.test", key: newRelayKey(), serve: async () => ({ status: 200, body: Buffer.from("ok") }), WebSocket: RejectV3, timers: clock.timers, fallbackV2: false });
+  link.start(); await Promise.resolve();
+  for (const wait of [750, 1_500, 3_000]) {
+    const before = Socket.all.length;
+    await clock.advance(wait - 1); assert.equal(Socket.all.length, before);
+    await clock.advance(1); assert.equal(Socket.all.length, before + 1);
+    await Promise.resolve();
+  }
+  link.stop();
+});
+
+test("v3 services and answers authenticated requests on either seat exactly once", async () => {
+  let calls = 0;
+  const { link, clock } = newLink({ serve: async () => { calls++; return { status: 200, body: Buffer.from("ok") }; } });
+  link.start(); const active = Socket.all[0]; active.open(); await clock.advance(0);
+  const standby = Socket.all[1]; standby.open();
+  const activeConn = "07".repeat(8); const standbyConn = "08".repeat(8);
+
+  active.feed(frame(activeConn, 1, "active")); standby.feed(frame(standbyConn, 2, "standby"));
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(calls, 2);
+  assert.deepEqual(active.sent.map(answerId), [1]);
+  assert.deepEqual(standby.sent.map(answerId), [2]);
+
+  active.feed(ackFrame(activeConn, 1)); standby.feed(ackFrame(standbyConn, 2));
+  assert.equal(link.cacheBytes, 0);
+  active.feed(frame(activeConn, 1)); standby.feed(frame(standbyConn, 2));
+  for (let i = 0; i < 2; i++) await Promise.resolve();
+  assert.equal(active.sent.at(-1).readUInt16BE(13), 409);
+  assert.equal(standby.sent.at(-1).readUInt16BE(13), 409);
+  link.stop();
+});
+
+test("v3 answers a pending replay on the latest observed seat", async () => {
+  let calls = 0; let finish;
+  const { link, clock } = newLink({ serve: () => { calls++; return new Promise((resolve) => (finish = resolve)); } });
+  link.start(); const active = Socket.all[0]; active.open(); await clock.advance(0);
+  const standby = Socket.all[1]; standby.open(); const conn = "09".repeat(8);
+
+  active.feed(frame(conn, 1, "original"));
+  for (let i = 0; i < 2; i++) await Promise.resolve();
+  assert.equal(calls, 1);
+  standby.feed(frame(conn, 1, "replay"));
+  finish({ status: 200, body: Buffer.from("done") });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.deepEqual(active.sent.map(answerId), []);
+  assert.deepEqual(standby.sent.map(answerId), [1]);
+  link.stop();
 });
 
 test("an in-flight request runs once and answers after active transport promotion", async () => {
