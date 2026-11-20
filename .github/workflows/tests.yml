@@ -39,6 +39,9 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
+      # Two of the host's tests run the self-hosted relay (mobile/relay/node), which has its own packages.
+      - run: npm ci --omit=dev --ignore-scripts
+        working-directory: mobile/relay
       # Type-checks the window's code and bundles it.
       - run: npm run build
       - run: npm test

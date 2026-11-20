@@ -115,6 +115,7 @@ test("the headless server opens and renews a private pairing file and clears it 
   }
 });
 
+// The next two tests run the self-hosted relay, which has its own packages: `npm ci` in mobile/relay.
 test("with BOTKINS_RELAY_URL the headless server pairs a phone through a self-hosted relay alone", async () => {
   const { createRelay } = await import("../../mobile/relay/node/server.mjs");
   const relay = createRelay({ limits: false, pushUpstream: "off" });
