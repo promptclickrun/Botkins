@@ -63,13 +63,23 @@ export class AppUpdates {
    * that can install by itself and `last` when an install has ended here before.
    */
   status() {
+    const last = this.lastInstall();
+    return { ...this.state, ...(this.auto && { auto: this.auto.get() === true }), ...(last && { last }) };
+  }
+  /**
+   * How the last install ended, while it still says something about the copy that runs: an
+   * install that worked brought this version, one that failed left this version. A record of
+   * anything else (a failure from before a later upgrade by hand) is old news and is not shown.
+   */
+  lastInstall() {
     let last = null;
     try {
       last = this.last();
     } catch {
       // A record that can't be read says nothing.
     }
-    return { ...this.state, ...(this.auto && { auto: this.auto.get() === true }), ...(last && { last }) };
+    if (!last) return null;
+    return (last.ok ? last.to : last.from) === this.current ? last : null;
   }
   /** fn(version) each time a check finds a version newer than any it found before. Returns a function that stops it. */
   onAvailable(fn) {
@@ -91,12 +101,21 @@ export class AppUpdates {
    */
   autoInstall() {
     if (this.autoTimer || !this.auto?.get() || this.state.status !== "available" || !this.state.canInstall) return;
+    // A release that was tried and didn't stay up is not tried again by itself: without this, a
+    // bad release would be installed, put back and installed again for as long as it is the latest.
+    // The person can still install it on purpose, and the next release is a new one.
+    const last = this.lastInstall();
+    if (last && !last.ok && last.to === this.state.latest) {
+      if (this.skipped !== last.to) this.log("Botkins " + last.to + " was tried and put back, so it is not installed by itself again. Install it with `botkins update` when you choose to.");
+      this.skipped = last.to;
+      return;
+    }
     const attempt = () => {
       if (!this.auto.get() || this.state.status !== "available" || !this.state.canInstall) return this.stopAuto();
       if (!this.idle()) return;
       this.stopAuto();
       this.log("Installing Botkins " + this.state.latest + " by itself (updates.auto is on).");
-      this.install().catch((error) => this.log("The update was not installed: " + error.message));
+      this.install(undefined, { unasked: true }).catch((error) => this.log("The update was not installed: " + error.message));
     };
     this.autoTimer = setInterval(attempt, this.autoPollMs);
     this.autoTimer.unref?.();
@@ -146,7 +165,12 @@ export class AppUpdates {
     }
   }
 
-  install(afterTurn) {
+  /**
+   * @param afterTurn  A promise the restart waits for (a bot's turn that asked, a reply on its way to a phone).
+   * @param options.unasked  True for an install the host starts by itself: it is given up, and
+   *   tried again later, when a turn has started by the time the restart would be asked for.
+   */
+  install(afterTurn, { unasked = false } = {}) {
     if (this.state.status === "restarting") return Promise.resolve(this.state);
     if (this.installing) return this.installing;
     const checked = this.check();
@@ -160,6 +184,12 @@ export class AppUpdates {
         this.state = { ...info, status: "restarting", canInstall: false };
         // Give the tool's turn time to save its reply before the native updater closes the app.
         Promise.resolve(afterTurn).catch(() => {}).then(() => setImmediate(() => {
+          // Looked at again at the last moment: the check and the staging above take time, and
+          // a turn that began meanwhile is not cut short for an update nobody asked for just now.
+          if (unasked && !this.idle()) {
+            this.state = { ...info };
+            return void this.autoInstall();
+          }
           Promise.resolve().then(() => this.restart()).catch(() => this.failedInstall());
         }));
         return this.state;

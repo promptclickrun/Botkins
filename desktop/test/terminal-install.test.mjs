@@ -13,7 +13,7 @@ import { ownCommand } from "../cli/commands/install.mjs";
 import { keyFrom } from "../desktop/host/keystore.mjs";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
 import { launchdJob, systemUnit, updateUnits, userUnit } from "../desktop/terminal/units.mjs";
-import { applyUpdate, assetName, folderName, installLayout, lastUpdateFile, readLastUpdate, switchTo, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
+import { applyUpdate, asOwnerOf, assetName, cleanLastUpdate, folderName, installLayout, lastUpdateFile, readLastUpdate, switchTo, takeRequest, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
 import { defaults } from "../desktop/terminal/config.mjs";
 import { terminalUpdates } from "../desktop/terminal/updates.mjs";
 import { AppUpdates } from "../desktop/updates.mjs";
@@ -129,7 +129,10 @@ test("installing for the whole computer makes the user, the folders, a root-only
     "systemctl restart botkins-update.path",
     "systemctl restart botkins.service",
   ]);
-  assert.deepEqual(owned, [["/var/lib/botkins", 998, 998], ["/var/lib/botkins/home", 998, 998]]);
+  // Root makes the data folder the service's. What is inside it (the home folder too) is made with
+  // the service user's rights, and root changes no owner and no mode in there.
+  assert.deepEqual(owned, [["/var/lib/botkins", 998, 998]]);
+  assert.ok(existsSync(root + "/var/lib/botkins/home"));
   assert.equal(statSync(root + "/var/lib/botkins").mode & 0o777, 0o700);
   // The key: 32 random bytes, readable by root alone, and outside the data folder.
   assert.equal(statSync(root + "/etc/botkins/host.key").mode & 0o777, 0o400);
@@ -162,6 +165,28 @@ test("installing for the whole computer makes the user, the folders, a root-only
   const boxedUnit = readFileSync(boxed + "/etc/systemd/system/botkins.service", "utf8");
   assert.ok(boxedUnit.includes("Environment=BOTKINS_KEY_FILE=/etc/botkins/host.key") && !boxedUnit.includes("LoadCredential"));
   await assert.rejects(serviceManager({ command, platform: "linux", uid: 0, env: {}, run: tools({ "id -": { stdout: "998\n" }, "systemd-run": { code: 1 } }).run, root: tempDir(t), own: () => {} }).install({ encryptedKey: true }), /an encrypted host key can't be used here/);
+  // A name in the data folder may have been made a link by a bot's tool. An install run again
+  // follows none: the home folder as a link to somewhere else leaves that place as it was.
+  const planted = tempDir(t);
+  const elsewhere = join(planted, "elsewhere");
+  mkdirSync(elsewhere, { mode: 0o755 });
+  mkdirSync(planted + "/var/lib/botkins", { recursive: true });
+  symlinkSync(elsewhere, planted + "/var/lib/botkins/home");
+  const touched = [];
+  await serviceManager({ command, platform: "linux", uid: 0, env: {}, run: tools({ "id -": { stdout: "998\n" } }).run, root: planted, own: (path) => touched.push(path.slice(planted.length)) }).install({ start: false });
+  assert.equal(statSync(elsewhere).mode & 0o777, 0o755, "the place the link points at keeps its mode");
+  assert.ok(!touched.some((path) => path.includes("home")), "and root changes no owner through the link");
+  // The data folder itself as a link, or as a file, is refused before anything is changed.
+  for (const make of [(path) => symlinkSync(elsewhere, path), (path) => writeFileSync(path, "x")]) {
+    const odd = tempDir(t);
+    mkdirSync(odd + "/var/lib", { recursive: true });
+    make(odd + "/var/lib/botkins");
+    const changed = [];
+    await assert.rejects(serviceManager({ command, platform: "linux", uid: 0, env: {}, run: tools({ "id -": { stdout: "998\n" } }).run, root: odd, own: (path) => changed.push(path) }).install(), /is not a folder \(a link or a file is in its place\)/);
+    assert.deepEqual(changed, []);
+    assert.equal(existsSync(odd + "/etc/systemd/system/botkins.service"), false);
+  }
+  assert.equal(statSync(elsewhere).mode & 0o777, 0o755);
   // Someone who isn't root is told so, and nothing is run.
   const other = tools();
   const user = serviceManager({ command, platform: "linux", uid: 1000, home: join(root, "home/sam"), user: "sam", env: {}, run: other.run, root });
@@ -243,7 +268,7 @@ test("on macOS the service is a launchd job: yours in your session, or the whole
   const installed = await daemon.install();
   assert.deepEqual([installed.scope, installed.file, installed.user, installed.dataDir], ["system", "/Library/LaunchDaemons/app.botkins.terminal.plist", "sam", "/Library/Application Support/Botkins Terminal"]);
   assert.match(installed.key, /key file \(\/etc\/botkins\/host\.key, readable by sam only\)/);
-  assert.ok(owned.every((uid) => uid === 501) && owned.length === 3);
+  assert.ok(owned.every((uid) => uid === 501) && owned.length === 2, "the data folder and the key file; nothing inside the data folder");
   assert.ok(system.calls.includes("launchctl bootout system/app.botkins.terminal"));
   await assert.rejects(serviceManager({ command, platform: "darwin", uid: 0, user: "root", env: {}, run: tools().run, root: tempDir(t) }).install(), /Say which user the service runs as/);
 });
@@ -411,8 +436,9 @@ test("the running service can only ask for an update: a request file for the roo
 test("how an install ended is kept for the service to read: installed, failed, or put back", { skip }, async (t) => {
   const dir = tempDir(t);
   const { installRoot, entry } = installed(dir, "1.2.3");
-  const root = join(dir, "data-root");
-  mkdirSync(root);
+  // The record is beside the versions, in the install folder, which is root's own for the whole
+  // computer's service. Nothing is written into the data folder.
+  const root = installRoot;
   assert.equal(readLastUpdate(root), null);
   const next = release(dir, "1.3.0");
   const assets = [next.name + ".tar.gz", "SHA256SUMS", "SHA256SUMS.asc"];
@@ -438,7 +464,7 @@ test("how an install ended is kept for the service to read: installed, failed, o
   await assert.rejects(applyUpdate({ ...options, manager: dying }), /was put back/);
   assert.deepEqual(reports.at(-1), { at: "2026-01-02T03:04:05.000Z", from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." });
   assert.deepEqual(readLastUpdate(root), reports.at(-1));
-  assert.equal(statSync(lastUpdateFile(root)).mode & 0o777, 0o600);
+  assert.equal(statSync(lastUpdateFile(root)).mode & 0o777, 0o644, "the service's user reads it; only the installer writes it");
   // A release that can't be reached at all is an install that didn't end well, too.
   await assert.rejects(applyUpdate({ ...options, latest: async () => { throw new Error("GitHub could not check for updates (HTTP 503)."); } }), /HTTP 503/);
   assert.deepEqual([reports.at(-1).ok, reports.at(-1).from, reports.at(-1).to, reports.at(-1).message], [false, "1.2.3", "1.2.3", "GitHub could not check for updates (HTTP 503)."]);
@@ -450,15 +476,61 @@ test("how an install ended is kept for the service to read: installed, failed, o
   assert.equal((await applyUpdate({ ...options, entry: join(installRoot, "current", "cli", "botkins.mjs") })).status, "current");
   await assert.rejects(applyUpdate({ ...options, entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)) }), { code: "UNMANAGED" });
   assert.equal(reports.length, before);
-  // A record that isn't one is no record; a folder that isn't there takes none.
+  // A name that was made a link beforehand decides nothing: the place it points at is untouched,
+  // whether the link is at the temporary name or at the record's own.
+  const victim = join(dir, "victim.conf");
+  const good = { at: "2026-01-03T00:00:00.000Z", from: "1.2.3", to: "1.3.0", ok: true };
+  for (const name of [lastUpdateFile(root) + ".tmp", lastUpdateFile(root)]) {
+    writeFileSync(victim, "the system's own file\n", { mode: 0o600 });
+    rmSync(name, { force: true });
+    symlinkSync(victim, name);
+    assert.equal(writeLastUpdate(root, good), true);
+    assert.equal(readFileSync(victim, "utf8"), "the system's own file\n", name + " as a link: its target is as it was");
+    assert.equal(statSync(victim).mode & 0o777, 0o600);
+    assert.equal(lstatSync(lastUpdateFile(root)).isFile(), true, "the record is a plain file again");
+    assert.deepEqual(readLastUpdate(root), good);
+  }
+  // A record behind a link is not read either, and a temporary name that is a folder stops the write, with nothing changed.
+  rmSync(lastUpdateFile(root));
+  writeFileSync(victim, JSON.stringify(good));
+  symlinkSync(victim, lastUpdateFile(root));
+  assert.equal(readLastUpdate(root), null);
+  rmSync(lastUpdateFile(root));
+  mkdirSync(lastUpdateFile(root) + ".tmp");
+  assert.equal(writeLastUpdate(root, good), false);
+  rmSync(lastUpdateFile(root) + ".tmp", { recursive: true });
+  // Only a record that is one is written or shown: versions that are versions, a date that is a date, a message of a sensible length.
+  for (const bad of [null, {}, { ...good, at: "yesterday" }, { ...good, at: "2026-01-03T00:00:00.000Z".padEnd(60, "0") }, { ...good, from: "1.2.3; rm -rf /" }, { ...good, to: "v1.3.0" }, { ...good, to: "9".repeat(40) + ".0.0" }, { ...good, ok: "yes" }]) {
+    assert.equal(cleanLastUpdate(bad), null);
+    assert.equal(writeLastUpdate(root, bad), false);
+  }
+  assert.equal(cleanLastUpdate({ ...good, ok: false, message: "x".repeat(900) + "\u0000\n" }).message.length, 300);
   writeFileSync(lastUpdateFile(root), '{"at":5}');
   assert.equal(readLastUpdate(root), null);
-  assert.equal(writeLastUpdate(join(dir, "nowhere"), reports[0]), false);
+  assert.equal(writeLastUpdate(join(dir, "nowhere"), good), false);
+  // The request the service leaves is taken up whatever was put under its name: a file, a link
+  // (the link goes, its target stays), or a folder with things in it.
+  const data = join(dir, "data-folder");
+  mkdirSync(join(data, "run"), { recursive: true });
+  const request = join(data, "run", "update-requested");
+  writeFileSync(request, "");
+  assert.equal(takeRequest(data), true);
+  assert.equal(existsSync(request), false);
+  symlinkSync(victim, request);
+  assert.equal(takeRequest(data), true);
+  assert.equal(lstatSync(victim).isFile() && !existsSync(request), true);
+  mkdirSync(join(request, "deep"), { recursive: true });
+  writeFileSync(join(request, "deep", "file"), "x");
+  assert.equal(takeRequest(data), true);
+  assert.equal(existsSync(request), false);
+  assert.equal(takeRequest(join(dir, "no-such-folder")), true, "nothing there is nothing to take up");
+  // Not root: the work is done as who we are. (As root it is done with the folder owner's rights: test/terminal-root.test.mjs.)
+  assert.equal(asOwnerOf(data, () => "done"), "done");
 });
 
 test("a host that can install tells how it stands, installs by itself only when asked to, and never during a turn", { skip }, async (t) => {
   const dir = tempDir(t);
-  const { entry } = installed(dir, "1.2.3");
+  const { entry, installRoot } = installed(dir, "1.2.3");
   const runDir = join(dir, "run");
   mkdirSync(runDir);
   const lines = [];
@@ -468,7 +540,7 @@ test("a host that can install tells how it stands, installs by itself only when 
   const service = { version: "1.2.3", paths: { runDir, root: dir }, log: { info: (line) => lines.push(line), error: (line) => lines.push(line) }, config: () => config, setConfig: async (next) => void (config = next), runtime: { workspace: { active: { get size() { return active; } } } }, changed: () => changes++ };
   let found = "1.2.3";
   const latest = async () => ({ version: found, assets: ["botkins-terminal-" + found + "-linux-arm64.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"] });
-  const updates = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch: assert.fail, env: {}, pollMs: 10, heardMs: 200, autoPollMs: 10 });
+  const updates = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch: assert.fail, env: {}, pollMs: 10, startedMs: 60_000, heardMs: 60_000, autoPollMs: 10 });
   t.after(() => updates.stopAuto());
   const requested = () => existsSync(join(runDir, "update-requested"));
   // What a phone is shown: the state, and the choice, off until someone switches it on.
@@ -490,19 +562,49 @@ test("a host that can install tells how it stands, installs by itself only when 
   assert.equal(updates.status().status, "restarting");
   assert.ok(lines.some((line) => /Installing Botkins 1\.3\.0 by itself/.test(line)));
   // The install job failed before it could restart the service: the service hears of it and says so in the job's own words.
-  writeLastUpdate(dir, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." });
+  rmSync(join(runDir, "update-requested"));
+  assert.equal(writeLastUpdate(installRoot, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." }), true);
   for (let tries = 0; tries < 100 && updates.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
   const status = updates.status();
   assert.deepEqual([status.status, status.message, status.last.ok, status.last.to], ["error", "The new version didn't stay running. Botkins 1.2.3 was put back.", false, "1.3.0"]);
   assert.ok(changes > 0, "a dashboard that waits is told");
+  // A release that was tried and put back is not installed by itself again, however often a check finds it.
+  // (It can still be installed on purpose, and the next release is a new one.)
+  await updates.check();
+  assert.equal(updates.status().status, "available");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(requested(), false, "no second try by itself");
+  assert.ok(lines.some((line) => /was tried and put back, so it is not installed by itself again/.test(line)));
+  found = "1.3.1";
+  await updates.check();
+  for (let tries = 0; tries < 100 && !requested(); tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(requested(), true, "the release after it is tried");
+  rmSync(join(runDir, "update-requested"));
   assert.equal(updates.setAuto(false).auto, false);
   assert.equal(config.updates.auto, false);
   assert.throws(() => updates.setAuto("yes"), /Say on or off/);
-  // An install that never starts is said too, after a while.
-  const quiet = terminalUpdates({ ...service, paths: { runDir, root: join(dir, "other") } }, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, heardMs: 50 });
+  // A turn that starts between the decision and the request stops an install nobody asked for; it is tried again when the turn is over.
+  let late = 0;
+  const idleThenBusy = terminalUpdates({ ...service, config: () => ({ updates: { auto: true } }), runtime: { workspace: { active: { get size() { return late++ === 0 ? 0 : 1; } } } } }, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, autoPollMs: 10_000 });
+  rmSync(lastUpdateFile(installRoot));
+  await idleThenBusy.check();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(requested(), false);
+  assert.equal(idleThenBusy.status().status, "available");
+  idleThenBusy.stopAuto();
+  // A request nobody takes up (no update job on this computer) is said, and taken back, so a job that starts later installs nothing unasked.
+  const quiet = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, startedMs: 50, heardMs: 60_000 });
   await quiet.install();
   for (let tries = 0; tries < 100 && quiet.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.match(quiet.status().message, /The update did not start/);
+  assert.equal(requested(), false);
+  // One that was taken up and never said how it ended is said too, later.
+  const silent = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, startedMs: 60_000, heardMs: 80 });
+  await silent.install();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  rmSync(join(runDir, "update-requested"));
+  for (let tries = 0; tries < 100 && silent.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(silent.status().message, /started and did not say how it ended/);
   // The bots' tools speak of a host, not of a desktop app.
   assert.match(updates.words.check, /Botkins on this host/);
   assert.doesNotMatch(updates.words.check + updates.words.install, /desktop|the app/);

@@ -141,7 +141,8 @@ test("the workspace's calls reach a dialog, the clipboard and the window only th
 test("a computer that looks for updates says so to its phones, tells them of a new one once, and answers their calls", async (t) => {
   let found = "9.9.9";
   const { AppUpdates } = await import("../desktop/updates.mjs");
-  const updates = new AppUpdates({ current: "9.9.9", mac: true, arch: "arm64", latest: async () => ({ version: found, assets: ["Botkins-" + found + "-arm64-mac.zip", "latest-mac.yml"] }), stage: async () => {}, restart: () => {} });
+  let restarted = 0;
+  const updates = new AppUpdates({ current: "9.9.9", mac: true, arch: "arm64", latest: async () => ({ version: found, assets: ["Botkins-" + found + "-arm64-mac.zip", "latest-mac.yml"] }), stage: async () => {}, restart: () => void restarted++ });
   const host = { ...fakeHost(), updates: () => updates };
   const runtime = await runtimeOn(t, host);
   const { handlers, link, linkBackend } = runtime;
@@ -157,6 +158,11 @@ test("a computer that looks for updates says so to its phones, tells them of a n
   assert.deepEqual(told, ["9.10.0"], "once for each version");
   assert.deepEqual(handlers.appUpdateStatus(), { status: "available", current: "9.9.9", latest: "9.10.0", canInstall: true });
   assert.equal((await handlers.installAppUpdate()).status, "restarting");
+  // The answer is out before the app goes down: the restart waits a moment after the call returns.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(restarted, 0, "not yet: the phone that asked is still being answered");
+  for (let tries = 0; tries < 40 && !restarted; tries++) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(restarted, 1);
   // The desktop app has no choice to install by itself: the status has no `auto`, and the call is refused.
   assert.throws(() => handlers.setAppUpdateAuto(true), /doesn't install updates by itself/);
   // A copy with no update service names no such capability, and its calls say so.

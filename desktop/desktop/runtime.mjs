@@ -82,6 +82,8 @@ const hostOf = (url) => {
 // What this app supports that a phone has to ask about by name (the link adds them to its own):
 // model details in the catalog, a Botkin's eyes and own colors, where a routine's result goes and
 // whether it notifies, and a Today item carried by a message.
+/** How long a restart for an update waits after the call that asked for it was answered. */
+const REPLY_MS = 1500;
 /** A paired phone can read how up to date this computer is, look for a release and start its install. */
 export const APP_UPDATE = "app-update-v1";
 export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS];
@@ -689,7 +691,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return updates.status();
     },
     installAppUpdate: async () => {
-      await updating().install();
+      // The restart waits a moment, so this answer is on its way to the window or the phone that
+      // asked before the app goes down. (A phone also copes with an answer that never comes.)
+      await updating().install(new Promise((resolve) => setTimeout(resolve, REPLY_MS)));
       return updates.status();
     },
     // Installing by itself, on a host that has the choice. Refused where it has none.

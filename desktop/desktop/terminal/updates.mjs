@@ -15,14 +15,16 @@
 // request: the latest release from the project's own address, checked against its signed
 // checksums. Nothing a phone, a bot or a setting says names a version or an address.
 //
-// How it ended is in <data folder>/last-update.json, which the install writes and the service
+// How it ended is in <install folder>/last-update.json, which the install writes and the service
 // reads (`last` in the status a phone is shown): after a restart on the new version, and also
-// when the new version didn't stay up and the old one was put back.
+// when the new version didn't stay up and the old one was put back. It is beside the versions,
+// in a folder that is root's own, and not in the data folder, where a bot's tool could have put
+// a link under any name (desktop/terminal/update-install.mjs).
 //
 // `updates.auto` (off unless switched on, here or from a phone) installs a new release without
 // being asked, once no bot is in the middle of a turn.
 import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, existsSync, openSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AppUpdates, latestRelease } from "../updates.mjs";
@@ -33,14 +35,16 @@ import { assetName, installLayout, readLastUpdate } from "./update-install.mjs";
 const ENTRY = fileURLToPath(new URL("../../cli/botkins.mjs", import.meta.url));
 export const REQUEST = "update-requested";
 
-/** How long the service waits to hear how an install it asked for ended, before it says the install never started. */
-const HEARD_MS = 10 * 60_000;
+/** How long the root job has to take the request up, before the service says the install never started and takes the request back. */
+const STARTED_MS = 2 * 60_000;
+/** How long an install that started may take to say how it ended: three downloads of five minutes at most, and the watch on the new version. */
+const HEARD_MS = 25 * 60_000;
 
 /** The update service for `botkins serve` (desktop/terminal/serve.mjs). */
-export function terminalUpdates(service, { entry = ENTRY, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), manager = serviceManager({ command: [process.execPath, entry] }), launch = spawn, env = process.env, pollMs = 2000, heardMs = HEARD_MS, autoPollMs } = {}) {
+export function terminalUpdates(service, { entry = ENTRY, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), manager = serviceManager({ command: [process.execPath, entry] }), launch = spawn, env = process.env, pollMs = 2000, startedMs = STARTED_MS, heardMs = HEARD_MS, autoPollMs } = {}) {
   const layout = installLayout(entry);
   const found = () => manager.installed();
-  const last = () => readLastUpdate(service.paths.root);
+  const last = () => (layout ? readLastUpdate(layout.installRoot) : null);
   // A container is replaced, not updated from inside: its image is named, so the person knows what to pull.
   const image = env.BOTKINS_IMAGE;
   const updates = new AppUpdates({
@@ -79,8 +83,11 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
     restart: () => {
       const scope = found()?.scope;
       const before = last()?.at;
+      const request = join(service.paths.runDir, REQUEST);
+      // The whole computer's service leaves a request for the root job; anyone else's starts the install itself.
+      const asked = scope === "system" && platform !== "darwin";
       service.log.info("An update was asked for.");
-      if (scope === "system" && platform !== "darwin") closeSync(openSync(join(service.paths.runDir, REQUEST), "w", 0o600));
+      if (asked) closeSync(openSync(request, "w", 0o600));
       else {
         // Its own session, so the service's restart leaves it running; systemd-run where there is one, so the unit's own cleanup does too.
         const command = platform === "darwin" ? [process.execPath, [entry, "update", "--apply"]] : ["systemd-run", ["--user", "--collect", "--unit=botkins-update", process.execPath, entry, "update", "--apply"]];
@@ -89,15 +96,26 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
       // An install that works restarts this service, and the next one reads how it ended. One
       // that fails before that leaves this service running: it hears of it here, and says so.
       const started = Date.now();
+      const giveUp = (message) => {
+        clearInterval(watch);
+        updates.state = { ...updates.state, status: "error", canInstall: false, message };
+        service.log.error("Update: " + message);
+        service.changed?.();
+      };
       const watch = setInterval(() => {
         const record = last();
-        const heard = record && record.at !== before;
-        if (!heard && Date.now() - started < heardMs) return;
-        clearInterval(watch);
-        if (heard && record.ok) return;
-        updates.state = { ...updates.state, status: "error", canInstall: false, message: heard ? record.message ?? "The update could not be installed." : "The update did not start. On the computer, `botkins update` says why." };
-        service.log.error("Update: " + updates.state.message);
-        service.changed?.();
+        if (record && record.at !== before) {
+          if (record.ok) return void clearInterval(watch);
+          return giveUp(record.message ?? "The update could not be installed.");
+        }
+        const waited = Date.now() - started;
+        // The root job takes the request away as its first act. Still there after a while: no job
+        // came for it. It is taken back, so a watch that starts later doesn't install unasked.
+        if (asked && existsSync(request) && waited >= startedMs) {
+          rmSync(request, { force: true });
+          return giveUp("The update did not start: this computer's update job did not take the request. On the computer, `botkins doctor` and `botkins update` say why.");
+        }
+        if (waited >= heardMs) giveUp("The update started and did not say how it ended. On the computer, `botkins update` says where it stands.");
       }, pollMs);
       watch.unref?.();
     },

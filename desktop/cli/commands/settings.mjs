@@ -4,13 +4,11 @@ import { loadConfig, parseValue, read, saveConfig, SETTINGS, validate, withSetti
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { ask, edit } from "./input.mjs";
 import { ownCommand } from "./install.mjs";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { latestRelease } from "../../desktop/updates.mjs";
 import { serviceManager } from "../../desktop/terminal/manager.mjs";
-import { applyUpdate, assetName, installLayout, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
+import { applyUpdate, assetName, installLayout, takeRequest, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
 import { REQUEST } from "../../desktop/terminal/updates.mjs";
 
 /**
@@ -133,8 +131,9 @@ export const settings = {
       }
       const manager = serviceManager({ command: ownCommand(), env: context.env });
       const installed = manager.installed();
-      // The service's request is taken up: left there, the watch would start this job again.
-      if (context.options.apply) rmSync(join(context.paths.runDir, REQUEST), { force: true });
+      // The service's request is taken up: left there, the watch would start this job again. This
+      // is the one thing the root job does in the data folder, and it does it as that folder's owner.
+      if (context.options.apply) takeRequest(context.paths.root, REQUEST);
       if (installed?.scope === "system" && process.getuid?.() !== 0) {
         // Not root: the service is asked, and its own root job does the installing.
         const state = await context.client.call("update.install");
@@ -142,8 +141,8 @@ export const settings = {
       }
       let result;
       try {
-        // How it ends is left where the service reads it when it is back, for a phone that asked and for `botkins status`.
-        result = await applyUpdate({ entry, manager: installed ? manager : undefined, say: (line) => context.note(line), report: (record) => void writeLastUpdate(context.paths.root, record) });
+        // How it ends is left beside the versions, where the service reads it when it is back, for a phone that asked and for `botkins status`.
+        result = await applyUpdate({ entry, manager: installed ? manager : undefined, say: (line) => context.note(line), report: (record) => void (layout && writeLastUpdate(layout.installRoot, record)) });
       } catch (error) {
         throw new CliError(error.message, EXIT.failed, error.code);
       }

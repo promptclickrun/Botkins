@@ -17,7 +17,7 @@
 // restarts the service and watches it for a while. If the new one doesn't stay up, `current` goes
 // back to the old version and that one is started again. The old version stays on disk.
 import { execFile, execFileSync } from "node:child_process";
-import { chownSync, createWriteStream, existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, createWriteStream, existsSync, fsyncSync, lstatSync, mkdtempSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -32,33 +32,105 @@ const FOLDER = /^botkins-terminal-(\d+\.\d+\.\d+)-(linux|macos)-(x64|arm64)$/;
 const run = promisify(execFile);
 
 /**
- * How the last install ended, kept in the data folder: <root>/last-update.json. The install runs
- * in a process of its own (a root job, for the whole computer's service) and restarts the
- * service, so this file is the only way the service, and a phone that asked for the update,
- * learns afterwards that it worked, failed, or was put back.
+ * How the last install ended, kept beside the versions: <install folder>/last-update.json. The
+ * install runs in a process of its own (a root job, for the whole computer's service) and
+ * restarts the service, so this file is the only way the service, and a phone that asked for the
+ * update, learns afterwards that it worked, failed, or was put back.
+ *
+ * It is in the install folder, not the data folder, on purpose. The data folder belongs to the
+ * user the service runs as, and so to every tool a bot runs: a name there can be made a link to
+ * any file on the computer. The root job writes nothing into it. The install folder is root's
+ * own (the job refuses any other), so what the job writes here can't be redirected.
  */
-export const lastUpdateFile = (root) => join(root, "last-update.json");
+export const lastUpdateFile = (installRoot) => join(installRoot, "last-update.json");
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+/** A record as it may be shown: versions that are versions, a date that is a date, a message of a sensible length. Anything else is no record. */
+export function cleanLastUpdate(record) {
+  if (record === null || typeof record !== "object") return null;
+  const { at, from, to, ok, message } = record;
+  if (typeof at !== "string" || at.length > 40 || !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(at) || Number.isNaN(Date.parse(at))) return null;
+  if (typeof from !== "string" || from.length > 32 || !VERSION.test(from) || typeof to !== "string" || to.length > 32 || !VERSION.test(to) || typeof ok !== "boolean") return null;
+  return { at, from, to, ok, ...(typeof message === "string" && message.trim() && { message: message.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300) }) };
+}
 /** { at, from, to, ok, message? }, or null when there is none or it can't be read. */
-export function readLastUpdate(root) {
+export function readLastUpdate(installRoot) {
   try {
-    const record = JSON.parse(readFileSync(lastUpdateFile(root), "utf8"));
-    if (typeof record?.at !== "string" || typeof record.from !== "string" || typeof record.to !== "string" || typeof record.ok !== "boolean") return null;
-    return { at: record.at, from: record.from, to: record.to, ok: record.ok, ...(typeof record.message === "string" && record.message && { message: record.message.slice(0, 500) }) };
+    const file = lastUpdateFile(installRoot);
+    // A link in its place is not followed: the record is a plain file the install made.
+    if (!lstatSync(file).isFile()) return null;
+    return cleanLastUpdate(JSON.parse(readFileSync(file, "utf8")));
   } catch {
     return null;
   }
 }
-/** Writes the record as the data folder's own user, whoever runs the install (root, for the whole computer's service). */
-export function writeLastUpdate(root, record, { own = chownSync } = {}) {
-  const file = lastUpdateFile(root);
+/**
+ * Writes the record. As root, only into a folder that is root's own and that nobody else can
+ * write to; the temporary name is removed first and then made new without following a link, so
+ * nothing that was put there beforehand decides where the bytes go.
+ * @returns true when it was written.
+ */
+export function writeLastUpdate(installRoot, record) {
+  const clean = cleanLastUpdate(record);
+  if (!clean) return false;
+  const file = lastUpdateFile(installRoot);
+  const temp = file + ".tmp";
   try {
-    const folder = statSync(root);
-    writeFileSync(file + ".tmp", JSON.stringify(record) + "\n", { mode: 0o600 });
-    if (process.getuid?.() === 0 && folder.uid !== 0) own(file + ".tmp", folder.uid, folder.gid);
-    renameSync(file + ".tmp", file);
+    const folder = lstatSync(installRoot);
+    if (!folder.isDirectory()) return false;
+    if (process.getuid?.() === 0 && (folder.uid !== 0 || folder.mode & 0o022)) return false;
+    rmSync(temp, { force: true });
+    const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+    try {
+      writeSync(fd, JSON.stringify(clean) + "\n");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    // rename replaces the name itself, whatever it was: a link there is replaced, never written through.
+    renameSync(temp, file);
     return true;
   } catch {
-    // No data folder to write to (an install that isn't a service's): nothing reads it either.
+    return false;
+  }
+}
+
+/**
+ * Runs `fn` with the rights of the user a folder belongs to, when this process is root. What
+ * root does inside a folder that isn't root's own (the service's data folder) is done this way:
+ * a name in there that was made a link then leads only where that user could go anyway.
+ */
+export function asOwnerOf(dir, fn) {
+  if (process.getuid?.() !== 0) return fn();
+  const folder = lstatSync(dir);
+  if (!folder.isDirectory()) throw new Error(dir + " is not a folder.");
+  if (folder.uid === 0) return fn();
+  const groups = process.getgroups();
+  process.setgroups([folder.gid]);
+  process.setegid(folder.gid);
+  process.seteuid(folder.uid);
+  try {
+    return fn();
+  } finally {
+    process.seteuid(0);
+    process.setegid(0);
+    process.setgroups(groups);
+  }
+}
+
+/**
+ * Takes the service's request for an update up: removes <data folder>/run/update-requested,
+ * with the data folder owner's rights, whatever was put under that name. Left there, the watch
+ * would start the job again. Never throws: a request that can't be removed is not a reason to
+ * skip the install, and systemd's own limit stops a watch that keeps firing.
+ * @returns true when nothing is left under that name.
+ */
+export function takeRequest(root, name = "update-requested") {
+  try {
+    return asOwnerOf(root, () => {
+      rmSync(join(root, "run", name), { recursive: true, force: true });
+      return true;
+    });
+  } catch {
     return false;
   }
 }
