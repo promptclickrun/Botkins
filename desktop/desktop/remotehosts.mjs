@@ -30,7 +30,7 @@ const WATCHED = 4;
 
 /** Calls about this window and this computer: they run here whichever host is shown. */
 export const HERE = new Set([
-  "snapshot", "appInfo", "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "openAppRelease",
+  "snapshot", "appInfo", "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto", "openAppRelease",
   "viewing",
   "openLink",
   "copyText",

@@ -17,12 +17,22 @@
 // folder of their own and nothing on the computer changes.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { CREDENTIAL } from "../host/keystore.mjs";
 import { INSTALL_RECORD, SERVICE_USER, systemRoot, userRoot } from "./paths.mjs";
 import { LABEL, launchdJob, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit } from "./units.mjs";
+import { asOwnerOf } from "./update-install.mjs";
+
+/** What is at a path, without following a link there; null when nothing is. */
+function existing(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
 
 export const KEY_FILE = "/etc/botkins/host.key";
 
@@ -107,13 +117,21 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       await must("useradd", ["--system", "--user-group", "--home-dir", accountHome, "--no-create-home", "--shell", "/usr/sbin/nologin", account], "Creating the user " + account);
     }
     const ids = { uid: Number((await must("id", ["-u", account], "Reading the user " + account)).stdout.trim()), gid: Number((await must("id", ["-g", account], "Reading the user " + account)).stdout.trim()) };
-    for (const dir of [dataDir, accountHome]) {
-      const fresh = !existsSync(at(dir));
-      mkdirSync(at(dir), { recursive: true, mode: 0o700 });
-      chmodSync(at(dir), 0o700);
-      // A folder that was already there keeps what is in it as it is; only the folder itself is made the service's.
-      if (fresh || statSync(at(dir)).uid !== ids.uid) own(at(dir), ids.uid, ids.gid);
+    // The data folder itself sits in a folder that is root's, so its name can't be swapped under
+    // this. It has to be a real folder: a link or a file in its place is refused, never followed.
+    const there = existing(at(dataDir));
+    if (there && !there.isDirectory()) throw new Error(dataDir + " is not a folder (a link or a file is in its place). Move it aside, or name another data folder with --data-dir.");
+    if (!there) {
+      mkdirSync(at(dirname(dataDir)), { recursive: true });
+      mkdirSync(at(dataDir), { mode: 0o700 });
     }
+    chmodSync(at(dataDir), 0o700);
+    // A folder that was already there keeps what is in it as it is; only the folder itself is made the service's.
+    if (!there || there.uid !== ids.uid) own(at(dataDir), ids.uid, ids.gid);
+    // Everything inside the data folder is the service user's, and so is every tool a bot runs:
+    // a name in there may have been made a link to anywhere. Root makes the home folder with
+    // that user's rights and changes no owner or mode inside, so such a link leads nowhere new.
+    asOwnerOf(at(dataDir), () => mkdirSync(at(accountHome), { recursive: true, mode: 0o700 }));
     // The host key: 32 random bytes only root can read. systemd hands the service a copy when it starts.
     let key = { file: KEY_FILE };
     const encrypted = KEY_FILE + ".cred";
@@ -177,14 +195,16 @@ export function serviceManager({ command, platform = process.platform, uid = pro
     if (system && (!account || account === "root")) throw new Error("Say which user the service runs as: `sudo botkins service install --system --run-as <user>`.");
     const folder = dataDir ?? (system ? systemRoot("darwin") : userRoot({ platform: "darwin", home }));
     const logFile = join(folder, "logs", "launchd.log");
-    const fresh = !existsSync(at(folder));
-    mkdirSync(at(join(folder, "logs")), { recursive: true, mode: 0o700 });
+    const there = existing(at(folder));
+    if (there && !there.isDirectory()) throw new Error(folder + " is not a folder (a link or a file is in its place). Move it aside, or name another data folder with --data-dir.");
+    const fresh = !there;
+    if (fresh) mkdirSync(at(folder), { recursive: true, mode: 0o700 });
     chmodSync(at(folder), 0o700);
     let keyNote = "macOS keychain of " + account;
     const extra = system ? {} : ownPath();
     if (system) {
       const ids = { uid: Number((await must("id", ["-u", account], "Reading the user " + account)).stdout.trim()), gid: Number((await must("id", ["-g", account], "Reading the user " + account)).stdout.trim()) };
-      if (fresh) for (const dir of [folder, join(folder, "logs")]) own(at(dir), ids.uid, ids.gid);
+      if (fresh) own(at(folder), ids.uid, ids.gid);
       // A daemon has no keychain session to ask: its key is a file only its user reads, outside the data folder.
       if (!existsSync(at(KEY_FILE))) {
         mkdirSync(at(dirname(KEY_FILE)), { recursive: true, mode: 0o755 });
@@ -196,6 +216,8 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       keyNote = "key file (" + KEY_FILE + ", readable by " + account + " only)";
       write(INSTALL_RECORD, JSON.stringify({ version: 1, scope: "system", dataDir: folder, user: account, command }, null, 2) + "\n", 0o644);
     }
+    // The log folder is inside the data folder: made with its owner's rights, as everything in there is.
+    asOwnerOf(at(folder), () => mkdirSync(at(join(folder, "logs")), { recursive: true, mode: 0o700 }));
     const file = files.launchd[scope];
     // A job that is loaded is taken out first, so the new file is the one that runs.
     await run("launchctl", ["bootout", domain(scope) + "/" + LABEL]);

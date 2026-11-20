@@ -210,6 +210,7 @@ for (const name of [
   "appUpdateStatus",
   "checkAppUpdate",
   "installAppUpdate",
+  "setAppUpdateAuto",
   "openAppRelease",
   "phoneLink",
   "setPhoneLink",

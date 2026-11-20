@@ -46,7 +46,8 @@ export const SETTINGS = {
   "providers.only": { check: list(providerId, 20), default: [], restart: true, about: "Start only these model providers. Empty: all of them." },
   "secrets.source": { check: oneOf(SOURCES), default: "auto", restart: true, about: "Where the host key that wraps secrets at rest comes from: auto, systemd, keychain or file." },
   "secrets.keyFile": { check: (value) => (value === null ? null : text(1024)(value)), default: null, restart: true, about: "The key file for the source \"file\". Empty: host.key in the data folder." },
-  "updates.check": { check: flag, default: true, restart: true, about: "Look for a new release now and then." },
+  "updates.check": { check: flag, default: true, restart: true, about: "Look for a new release now and then, and tell the paired phones when there is one." },
+  "updates.auto": { check: flag, default: false, about: "Install a new signed release without being asked, once no bot is in the middle of a turn." },
   "logs.level": { check: oneOf(["error", "info", "debug"]), default: "info", about: "How much the service logs." },
   "logs.lines": { check: whole(100, 100000), default: 5000, restart: true, about: "How many recent log lines the service keeps in memory for `botkins logs`." },
 };

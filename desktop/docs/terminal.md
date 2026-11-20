@@ -221,7 +221,8 @@ botkins config edit
 | `providers.only` | `[]` | Start only these providers. Empty means all. Needs a restart. |
 | `secrets.source` | `auto` | Where the host key comes from: `auto`, `systemd`, `keychain` or `file`. |
 | `secrets.keyFile` | none | The key file for the source `file`. |
-| `updates.check` | `true` | Look for a new release at intervals. |
+| `updates.check` | `true` | Look for a new release at intervals, and tell the paired phones about it. |
+| `updates.auto` | `false` | Install a new signed release without a request, when no bot is in a turn. |
 | `logs.level` | `info` | `error`, `info` or `debug`. |
 | `logs.lines` | `5000` | The number of log lines that the service keeps in memory. |
 
@@ -269,7 +270,29 @@ sudo botkins update
 
 The command unpacks the new version next to the old version. Then it restarts the service on the new version and monitors it for 30 seconds. If the new version does not stay in operation, the command puts the old version back. The old version stays on the disk.
 
-A paired phone can also ask for an update. The service has no permission to replace its own program, so it only makes a request. A root job (`botkins-update.service`) sees the request and does the same signed update.
+### Updates from a phone
+
+The service looks for a new release at intervals. When it finds one, it tells the paired phones of the owner, one time for each version. Team members get no such message.
+
+The owner can check for an update and start it from a paired phone. A bot can do the same if you ask it to. No call names a version or an address. The service installs only the latest signed release.
+
+The service has no permission to replace its own program, so it only makes a request. A root job (`botkins-update.service`) sees the request and does the same signed update. The link to the phone drops while the service restarts. When the link is back, the phone shows the result: the new version, or the reason that the update failed and the old version came back. `botkins status --json` shows the same result as `update.last`. The result stays there while it describes the version that runs.
+
+The root job writes this result next to the versions in `/opt/botkins`, which only root can change. It writes nothing into the data folder. The only thing it does there is remove the request, and it does that as the `botkins` user.
+
+### Install updates automatically
+
+```sh
+botkins config set updates.auto true
+```
+
+This setting is off by default. You can also change it from a paired phone. When it is on, the service installs a new release without a request. It uses the same signed update and the same rollback.
+
+- The service waits until no bot is in a turn. A turn that waits for your approval or your answer is a turn, so the service waits for it too.
+- The service looks again immediately before it asks for the install. The download then takes some minutes. A turn that starts in that time stops at the restart and continues after it.
+- If a release does not stay in operation and the old version comes back, the service does not try that release again by itself. It tries the next release. You can still install that release with `botkins update`.
+
+The setting applies only to an installation from a release that runs as a service. A checkout and a Docker container do not update themselves.
 
 ## Docker
 

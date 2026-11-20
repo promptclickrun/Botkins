@@ -24,6 +24,7 @@ test("every setting has a default that is valid, and a line that says what it is
   assert.equal(config.link.enabled, true, "a terminal host is there to be reached by phones");
   assert.equal(config.relay.enabled, false, "the relay is off until the person turns it on");
   assert.equal(config.secrets.source, "auto");
+  assert.deepEqual(config.updates, { check: true, auto: false }, "a host looks for updates, and installs one only when asked, unless told otherwise");
 });
 
 test("a config names only what it changes, and anything wrong is said one line each", () => {

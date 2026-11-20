@@ -75,6 +75,8 @@ export async function startService({ paths, version, trial = false, out, console
     config: () => config,
     keys: () => keys && { source: keys.source, where: keys.where },
     revision: () => revision,
+    /** Something the command line or a dashboard shows changed outside the workspace (an update's state). */
+    changed: () => bump(),
     waitForChange({ after = 0, ms = 25_000, signal } = {}) {
       if (revision !== after || signal?.aborted) return Promise.resolve({ revision });
       return new Promise((resolve) => {
@@ -126,6 +128,9 @@ export async function startService({ paths, version, trial = false, out, console
     const apply = async (next) => {
       const { link } = runtime;
       log.setLevel(next.logs.level);
+      // Switched on while a newer release is already known: it is installed now, not at the next look.
+      if (next.updates.auto) runtime.updates?.autoInstall?.();
+      else runtime.updates?.stopAuto?.();
       if (link.store.data.locked) return void log.error("The phone link's key can't be opened with this host key, so phone access stays off. Run `botkins doctor`.");
       if (next.name && link.store.data.name !== next.name) link.setName(next.name);
       const status = link.status();

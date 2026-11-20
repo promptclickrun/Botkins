@@ -37,13 +37,93 @@ export class AppUpdates {
    *   updates to. The desktop app's by default; the terminal host names its own.
    * @param options.unitMissing  What to say when that tarball is there and the updater isn't set up.
    * @param options.cannotInstall  What to say when asked to install and this copy can't. The desktop app's own words when left out.
+   * @param options.auto   { get() → boolean, set(on) }: the choice to install a new release without
+   *   being asked, on a host that can (the terminal host). Left out, the host never does, and
+   *   `status()` has no `auto`.
+   * @param options.idle   () → true when no turn is under way: an install the host starts by itself waits for that.
+   * @param options.last   () → how the last install ended ({ at, from, to, ok, message? }), or null.
+   *   Read from where the install job wrote it, so it is still there after the restart.
+   * @param options.words  { check, install }: how the bots' two tools describe themselves. The desktop app's by default.
    */
   constructor({ current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable = async () => true, notify = () => {},
     linuxAsset = (version, arch) => "botkins-desktop-" + version + (arch === "arm64" ? "-arm64" : "") + ".tar.gz",
     unitMissing = "Linux updates need the Botkins systemd updater unit.",
-    cannotInstall }) {
-    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify, linuxAsset, unitMissing, cannotInstall });
+    cannotInstall, auto, idle = () => true, last = () => null, autoPollMs = 30_000, log = () => {},
+    words = {
+      check: "Check the installed Botkins desktop version against the latest stable GitHub release.",
+      install: "When the person asks to update Botkins, download its signed update and restart the app after this reply.",
+    } }) {
+    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify, linuxAsset, unitMissing, cannotInstall, auto, idle, last, autoPollMs, log, words });
     this.state = { status: "idle", current, canInstall: false };
+    this.watchers = new Set();
+  }
+
+  /**
+   * What a window or a paired phone is shown ("app-update-v1"): the state, with `auto` on a host
+   * that can install by itself and `last` when an install has ended here before.
+   */
+  status() {
+    const last = this.lastInstall();
+    return { ...this.state, ...(this.auto && { auto: this.auto.get() === true }), ...(last && { last }) };
+  }
+  /**
+   * How the last install ended, while it still says something about the copy that runs: an
+   * install that worked brought this version, one that failed left this version. A record of
+   * anything else (a failure from before a later upgrade by hand) is old news and is not shown.
+   */
+  lastInstall() {
+    let last = null;
+    try {
+      last = this.last();
+    } catch {
+      // A record that can't be read says nothing.
+    }
+    if (!last) return null;
+    return (last.ok ? last.to : last.from) === this.current ? last : null;
+  }
+  /** fn(version) each time a check finds a version newer than any it found before. Returns a function that stops it. */
+  onAvailable(fn) {
+    this.watchers.add(fn);
+    return () => this.watchers.delete(fn);
+  }
+  /** Switches installing by itself on or off. Refused on a host that has no such choice. */
+  setAuto(on) {
+    if (!this.auto) throw new Error("This computer doesn't install updates by itself. Install one when you choose to.");
+    if (typeof on !== "boolean") throw new Error("Say on or off.");
+    this.auto.set(on);
+    if (on) this.autoInstall();
+    else this.stopAuto();
+    return this.status();
+  }
+  /**
+   * With the choice on and a newer release this copy can install: installs it once no turn is
+   * under way. A turn that is running is never cut short for an update nobody asked for just now.
+   */
+  autoInstall() {
+    if (this.autoTimer || !this.auto?.get() || this.state.status !== "available" || !this.state.canInstall) return;
+    // A release that was tried and didn't stay up is not tried again by itself: without this, a
+    // bad release would be installed, put back and installed again for as long as it is the latest.
+    // The person can still install it on purpose, and the next release is a new one.
+    const last = this.lastInstall();
+    if (last && !last.ok && last.to === this.state.latest) {
+      if (this.skipped !== last.to) this.log("Botkins " + last.to + " was tried and put back, so it is not installed by itself again. Install it with `botkins update` when you choose to.");
+      this.skipped = last.to;
+      return;
+    }
+    const attempt = () => {
+      if (!this.auto.get() || this.state.status !== "available" || !this.state.canInstall) return this.stopAuto();
+      if (!this.idle()) return;
+      this.stopAuto();
+      this.log("Installing Botkins " + this.state.latest + " by itself (updates.auto is on).");
+      this.install(undefined, { unasked: true }).catch((error) => this.log("The update was not installed: " + error.message));
+    };
+    this.autoTimer = setInterval(attempt, this.autoPollMs);
+    this.autoTimer.unref?.();
+    attempt();
+  }
+  stopAuto() {
+    clearInterval(this.autoTimer);
+    this.autoTimer = null;
   }
 
   check() {
@@ -68,7 +148,16 @@ export class AppUpdates {
       if (newer && this.announced !== version) {
         this.announced = version;
         this.notify(version);
+        // Whoever else wants to hear (the phone link tells the paired phones). One that fails stops nothing.
+        for (const fn of this.watchers) {
+          try {
+            fn(version);
+          } catch (error) {
+            this.log("Update notice: " + error.message);
+          }
+        }
       }
+      this.autoInstall();
       return this.state;
     } catch (error) {
       this.state = { status: "error", current: this.current, canInstall: false, message: error.message };
@@ -76,7 +165,12 @@ export class AppUpdates {
     }
   }
 
-  install(afterTurn) {
+  /**
+   * @param afterTurn  A promise the restart waits for (a bot's turn that asked, a reply on its way to a phone).
+   * @param options.unasked  True for an install the host starts by itself: it is given up, and
+   *   tried again later, when a turn has started by the time the restart would be asked for.
+   */
+  install(afterTurn, { unasked = false } = {}) {
     if (this.state.status === "restarting") return Promise.resolve(this.state);
     if (this.installing) return this.installing;
     const checked = this.check();
@@ -90,6 +184,12 @@ export class AppUpdates {
         this.state = { ...info, status: "restarting", canInstall: false };
         // Give the tool's turn time to save its reply before the native updater closes the app.
         Promise.resolve(afterTurn).catch(() => {}).then(() => setImmediate(() => {
+          // Looked at again at the last moment: the check and the staging above take time, and
+          // a turn that began meanwhile is not cut short for an update nobody asked for just now.
+          if (unasked && !this.idle()) {
+            this.state = { ...info };
+            return void this.autoInstall();
+          }
           Promise.resolve().then(() => this.restart()).catch(() => this.failedInstall());
         }));
         return this.state;
@@ -116,7 +216,7 @@ export function updateTools(updates, chat, run, task, currentTask) {
     },
   });
   return [
-    tool("check_app_update", "Check the installed Botkins desktop version against the latest stable GitHub release.", () => updates.check(), true),
-    tool("install_app_update", "When the person asks to update Botkins, download its signed update and restart the app after this reply.", () => updates.install(task.done), false),
+    tool("check_app_update", updates.words?.check ?? "Check the installed Botkins version against the latest stable GitHub release.", () => updates.check(), true),
+    tool("install_app_update", updates.words?.install ?? "When the person asks to update Botkins, install its signed update and restart after this reply.", () => updates.install(task.done), false),
   ];
 }

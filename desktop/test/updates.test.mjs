@@ -38,6 +38,60 @@ test("check compares stable GitHub tags, notifies once, and installs only on req
   assert.deepEqual(installs, ["0.15.10", "restart"]);
 });
 
+test("the status carries the choice to install by itself and how the last install ended, only where there is one", async () => {
+  let on = false;
+  let idle = false;
+  const installs = [];
+  const base = { current: "1.0.0", linux: true, mac: false, arch: "x64", latest: async () => ({ version: "1.1.0", assets: ["botkins-desktop-1.1.0.tar.gz"] }), stage: async version => installs.push(version), restart: () => {} };
+  const plain = new AppUpdates(base);
+  assert.deepEqual(plain.status(), { status: "idle", current: "1.0.0", canInstall: false });
+  assert.throws(() => plain.setAuto(true), /doesn't install updates by itself/);
+  const heard = [];
+  const stop = plain.onAvailable(version => heard.push(version));
+  plain.onAvailable(() => { throw new Error("a listener that fails"); });
+  await plain.check();
+  await plain.check();
+  assert.deepEqual(heard, ["1.1.0"]);
+  stop();
+  const last = { at: "2026-01-02T03:04:05.000Z", from: "0.9.0", to: "1.0.0", ok: true };
+  const auto = new AppUpdates({ ...base, auto: { get: () => on, set: value => { on = value; } }, idle: () => idle, last: () => last, autoPollMs: 5 });
+  assert.deepEqual(auto.status(), { status: "idle", current: "1.0.0", canInstall: false, auto: false, last });
+  await auto.check();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(installs, [], "off: a new release waits to be asked for");
+  assert.equal(auto.setAuto(true).auto, true);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(installs, [], "on, and a turn is under way: it waits");
+  idle = true;
+  for (let tries = 0; tries < 100 && !installs.length; tries++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(installs, ["1.1.0"]);
+  assert.throws(() => auto.setAuto(1), /Say on or off/);
+  auto.stopAuto();
+  // The last install is shown only while it says something about the copy that runs: it brought
+  // this version, or it failed and left this version. Old news is not shown.
+  const shown = (record) => new AppUpdates({ ...base, last: () => record }).status().last;
+  assert.deepEqual(shown({ ...last, from: "0.9.0", to: "1.0.0", ok: true }), { ...last, from: "0.9.0", to: "1.0.0", ok: true });
+  assert.deepEqual(shown({ ...last, from: "1.0.0", to: "1.1.0", ok: false, message: "It was put back." }).ok, false);
+  assert.equal(shown({ ...last, from: "0.8.0", to: "0.9.0", ok: true }), undefined, "an install from before a later upgrade");
+  assert.equal(shown({ ...last, from: "0.9.0", to: "1.0.0", ok: false }), undefined, "a failure the person has since got past by hand");
+  // A release that failed here is not tried again by itself; the one after it is.
+  let tried = "1.1.0";
+  const stuck = [];
+  const wary = new AppUpdates({ ...base, latest: async () => ({ version: tried, assets: ["botkins-desktop-" + tried + ".tar.gz"] }), stage: async version => stuck.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false }), autoPollMs: 5 });
+  await wary.check();
+  await wary.check();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(stuck, []);
+  assert.equal((await wary.install()).status, "restarting", "on purpose, it is installed");
+  assert.deepEqual(stuck, ["1.1.0"]);
+  const next = new AppUpdates({ ...base, latest: async () => ({ version: "1.2.0", assets: ["botkins-desktop-1.2.0.tar.gz"] }), stage: async version => stuck.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false }), autoPollMs: 5 });
+  await next.check();
+  for (let tries = 0; tries < 100 && stuck.length < 2; tries++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(stuck, ["1.1.0", "1.2.0"]);
+  next.stopAuto();
+  wary.stopAuto();
+});
+
 test("GitHub release discovery follows API redirects", async () => {
   let options;
   const result = await latestRelease({ fetcher: async (_url, next) => { options = next; return Response.json({ tag_name: "v0.15.7", draft: false, prerelease: false, assets: [] }); } });
