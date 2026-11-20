@@ -76,8 +76,8 @@ export type RelayOptions = {
 /** The fetch `relayFetch` makes. `check` pings every open relay socket and ends those that stay silent for `ms` (3 s). */
 export type RelayFetch = FetchLike & { check(ms?: number): void };
 
-const ROUTES: Record<string, number> = { hello: 1, pair: 2, session: 3, rpc: 4 };
-const URL_SHAPE = /^https?:\/\/([^/?#]+)\/botkins\/v1\/(hello|pair|session|rpc)$/;
+const ROUTES: Record<string, number> = { hello: 1, pair: 2, session: 3, rpc: 4, join: 5 };
+const URL_SHAPE = /^https?:\/\/([^/?#]+)\/botkins\/v1\/(hello|pair|session|rpc|join)$/;
 const OPEN = 1;
 type Timer = ReturnType<typeof setTimeout>;
 type Pending = { resolve(response: RelayResponse): void; reject(error: Error): void; frame: Uint8Array; settle(): void };

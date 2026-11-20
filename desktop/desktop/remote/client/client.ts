@@ -4,7 +4,9 @@
 // code runs in the tests.
 import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
 import type { PairTarget } from "./pairing";
+import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 const PREFIX = "/botkins/v1/";
 export const PROTOCOL = 1;
@@ -23,6 +25,8 @@ export type Pairing = {
   /** Addresses to find the computer at, best first. */
   hosts: string[];
   name: string;
+  /** This device joined through an invite rather than pairing with full owner trust. */
+  member?: true;
   /** The name this phone keeps its presence key under, when it made one for this pairing. Never sent anywhere. */
   presenceTag?: string;
 };
@@ -33,7 +37,7 @@ export type LinkRoute = "direct" | "relay";
 /** online: in step with the computer. offline: it can't be reached. revoked: the computer no longer knows this phone. */
 export type LinkState = "connecting" | "online" | "offline" | "revoked";
 
-export type LinkErrorCode = "offline" | "revoked" | "remote" | "protocol" | "code" | "closed" | "not-found";
+export type LinkErrorCode = "offline" | "revoked" | "remote" | "protocol" | "code" | "closed" | "not-found" | "join_closed" | "join_wait" | "join_owner";
 export class LinkError extends Error {
   code: LinkErrorCode;
   constructor(code: LinkErrorCode, message: string) {
@@ -47,7 +51,7 @@ export type FetchLike = (url: string, init?: { method?: string; headers?: Record
 
 /** What a computer says about itself. Over the relay it says only the first four (no name, app or version). */
 /** `pairing` says whether a code is open. Through the relay the computer leaves it out, so a stranger can't watch for one. */
-type Hello = { botkins: number; serverId: string; publicKey: string; pairing?: boolean; name?: string; app?: string; version?: string };
+type Hello = { botkins: number; serverId: string; publicKey: string; pairing?: boolean; join?: boolean; name?: string; app?: string; version?: string };
 
 /**
  * Runs a request with a deadline. It gives up by itself at the deadline, or when `outer` aborts: it
@@ -189,6 +193,138 @@ export async function pair(fetcher: FetchLike, target: PairTarget, device: { nam
   }
   const hosts = mergeHosts(host, reply.hosts, target.hosts, Infinity);
   return { serverId: reply.serverId, serverKey, deviceId: reply.device, secretKey: b64u(keys.secretKey), hosts, name: reply.name };
+}
+
+export type JoinTarget = {
+  code: string;
+  hosts: string[];
+  serverKey: string;
+  serverId?: string;
+  name?: string;
+};
+export type JoinDevice = { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string };
+export type JoinKeyPair = { publicKey: string; secretKey: string };
+export type JoinAttempt = { target: JoinTarget; device: JoinDevice; keys: JoinKeyPair; serverId?: string };
+export type JoinResult =
+  | { status: "pending"; requestId: string; team: { name: string } }
+  | { status: "approved"; pairing: Pairing }
+  | { status: "denied" };
+
+export type InviteCard = { v: 1; serverId: string; serverKey: string; name: string; room: string; hosts: string[] };
+export type InviteTarget = JoinTarget & { relayBase: string; room: string };
+export const DEFAULT_RELAY = "https://relay.botkins.app";
+
+function joinFailure(body: { error?: string }, status: number, target: JoinTarget): LinkError {
+  if (body.error === "join_closed") return new LinkError("join_closed", "That invite is closed or has expired.");
+  if (body.error === "join_wait" || status === 429) return new LinkError("join_wait", "Too many invites were tried. Wait a moment before trying again.");
+  if (body.error === "join_owner") return new LinkError("join_owner", "That code belongs to a device that is already paired as the owner.");
+  return new LinkError("protocol", "Joining " + (target.name || "that team") + " didn't work. Try again.");
+}
+
+async function sendJoin(fetcher: FetchLike, attempt: JoinAttempt): Promise<{ result: JoinResult; attempt: JoinAttempt }> {
+  const target = { ...attempt.target, code: normalizeCode(attempt.target.code) };
+  let foundHost: Awaited<ReturnType<typeof findHost>>;
+  try {
+    foundHost = await findHost(fetcher, target.hosts, { serverId: target.serverId, serverKey: target.serverKey });
+  } catch (error) {
+    if (error instanceof LinkError) throw new LinkError(error.code === "not-found" ? "offline" : error.code, error.message);
+    throw new LinkError("offline", "The team's computer can't be reached right now.");
+  }
+  const { host, hello: found } = foundHost;
+  if (found.botkins !== PROTOCOL) throw new LinkError("protocol", "Update Botkins and the team's app to the same version.");
+  const keys = { publicKey: unb64u(attempt.keys.publicKey), secretKey: unb64u(attempt.keys.secretKey) };
+  const code = normalizeCode(target.code);
+  const key = hkdf(agree(keys.secretKey, unb64u(target.serverKey)), utf8(code), "botkins-join-v1");
+  let response: FetchResponse;
+  try {
+    response = await timed(10_000, undefined, (signal) =>
+      fetcher("http://" + host + PREFIX + "join", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: attempt.keys.publicKey, box: box(key, attempt.device, "join:" + found.serverId) }),
+        signal,
+      }),
+    );
+  } catch {
+    throw new LinkError("offline", "Can't reach " + (target.name || "that team") + " right now. Try again when the owner's computer is on.");
+  }
+  const body = (await response.json().catch(() => ({}))) as { box?: string; error?: string };
+  if (!response.ok || !body.box) throw joinFailure(body, response.status, target);
+  let answer: { status: "pending" | "approved" | "denied"; requestId?: string; team?: { name: string }; device?: string; serverId?: string; name?: string; hosts?: string[] };
+  try {
+    answer = unbox(key, body.box, "joined:" + found.serverId);
+  } catch {
+    throw new LinkError("protocol", "That team's answer could not be opened.");
+  }
+  const next = { ...attempt, target: { ...target, serverId: found.serverId }, serverId: found.serverId };
+  if (answer.status === "pending" && answer.requestId && answer.team) return { result: { status: "pending", requestId: answer.requestId, team: answer.team }, attempt: next };
+  if (answer.status === "denied") return { result: { status: "denied" }, attempt: next };
+  if (answer.status === "approved" && answer.device && answer.serverId && answer.name && Array.isArray(answer.hosts)) {
+    const hosts = mergeHosts(host, answer.hosts, target.hosts, Infinity);
+    return {
+      result: {
+        status: "approved",
+        pairing: { serverId: answer.serverId, serverKey: target.serverKey, deviceId: answer.device, secretKey: attempt.keys.secretKey, hosts, name: answer.name, member: true },
+      },
+      attempt: next,
+    };
+  }
+  throw new LinkError("protocol", "That team's answer was incomplete.");
+}
+
+/** Starts one join request. Keep `attempt` to check the same request without using a second key. */
+export async function startJoin(fetcher: FetchLike, target: JoinTarget, device: JoinDevice): Promise<{ result: JoinResult; attempt: JoinAttempt }> {
+  const keys = newKeyPair();
+  return sendJoin(fetcher, { target: { ...target, code: normalizeCode(target.code) }, device, keys: { publicKey: b64u(keys.publicKey), secretKey: b64u(keys.secretKey) } });
+}
+/** Repeats the sealed request with the same key, which checks status on the host. */
+export function checkJoin(fetcher: FetchLike, attempt: JoinAttempt): Promise<JoinResult> {
+  return sendJoin(fetcher, attempt).then(({ result }) => result);
+}
+/**
+ * A convenience join call with the result's status at the top level. Pass the returned `attempt`
+ * on the next call to check status without creating a second request.
+ */
+export async function join(fetcher: FetchLike, target: JoinTarget, device: JoinDevice, previous?: JoinAttempt): Promise<JoinResult & { attempt: JoinAttempt }> {
+  const outcome = previous ? await sendJoin(fetcher, previous) : await startJoin(fetcher, target, device);
+  return { ...outcome.result, attempt: outcome.attempt };
+}
+
+/** Reads and opens the relay's sealed invite directory entry. */
+export async function findInvite(
+  fetcher: FetchLike,
+  code: string,
+  relayBase: string | { relayBase?: string; serverKey?: string } = DEFAULT_RELAY,
+  expectedServerKey?: string,
+): Promise<InviteTarget> {
+  const clean = normalizeCode(code);
+  const options = typeof relayBase === "string" ? { relayBase, serverKey: expectedServerKey } : relayBase;
+  const base = String(options.relayBase || DEFAULT_RELAY).replace(/\/+$/, "");
+  if (clean.length !== 10) throw new LinkError("join_closed", "Enter the ten-character invite code.");
+  const lookup = b64u(sha256(utf8("botkins-invite-v1:" + clean)));
+  let response: FetchResponse;
+  try {
+    response = await timed(10_000, undefined, (signal) => fetcher(base + "/v1/invites/" + lookup, { signal }));
+  } catch {
+    throw new LinkError("offline", "The invite service can't be reached right now.");
+  }
+  const body = (await response.json().catch(() => ({}))) as { card?: string };
+  if (response.status === 404) throw new LinkError("join_closed", "That invite is closed or has expired.");
+  if (!response.ok || typeof body.card !== "string") throw new LinkError("offline", "The invite service couldn't find that team.");
+  const cardKey = hkdf(utf8(clean), utf8("botkins-invite-card-v1"), lookup);
+  let card: InviteCard;
+  try {
+    const sealed = unb64u(body.card);
+    if (sealed.length > 4096 || sealed.length < 28) throw new Error("card");
+    card = JSON.parse(fromUtf8(open(cardKey, sealed.subarray(0, 12), sealed.subarray(12), ""))) as InviteCard;
+  } catch {
+    throw new LinkError("join_closed", "That invite code couldn't be opened.");
+  }
+  if (card.v !== 1 || !Array.isArray(card.hosts) || typeof card.serverId !== "string" || !card.serverId || !/^[A-Za-z0-9_-]{43}$/.test(card.serverKey) || !/^[A-Za-z0-9_-]{43}$/.test(card.room) || typeof card.name !== "string") {
+    throw new LinkError("protocol", "That invite card is not a supported Botkins invite.");
+  }
+  if (options.serverKey && card.serverKey !== options.serverKey) throw new LinkError("join_closed", "That invite points to a different computer.");
+  return { code: clean, serverId: card.serverId, serverKey: card.serverKey, name: card.name.slice(0, 60), hosts: card.hosts.filter((host) => typeof host === "string"), room: card.room, relayBase: base };
 }
 
 /** The key this phone and its computer share from pairing. Sessions are built on it. */

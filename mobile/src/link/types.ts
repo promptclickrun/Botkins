@@ -136,6 +136,35 @@ export type BotTemplate = {
   source: "saved" | "imported";
   createdAt: number;
 };
+export type Scope = "agents" | "today" | "skills" | "mcp" | "plugins" | "settings";
+export type Role = {
+  id: string;
+  name: string;
+  perms: Record<Scope, string[]>;
+  bots: "all" | string[];
+};
+export type Group = { id: string; name: string; roleId: string };
+export type MemberDevice = { id: string; name: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
+export type Member = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices?: MemberDevice[] };
+export type Invite = {
+  id: string;
+  code: string;
+  groupId: string;
+  createdAt: number;
+  expiresAt: number;
+  maxUses: number;
+  uses: number;
+  revoked?: true;
+  published?: boolean;
+  link?: string;
+};
+export type JoinRequest = { id: string; name: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
+export type TeamPart =
+  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[] }
+  | {
+      me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] } };
+      team: { name: string };
+    };
 
 /**
  * What a message carried along, as the computer keeps it. A Today item ("board-mentions-v1") keeps
@@ -157,6 +186,8 @@ export type Message = {
   quote?: string;
   /** In a group chat, the bot that wrote this reply. */
   botId?: string;
+  /** The team member who sent this user message. Missing on the owner's messages. */
+  author?: { memberId: string; name: string };
   /** A person's message delivered into a turn that was under way (a steer): that turn's run. The desktop app records it today. */
   steeredRunId?: string;
   /**
@@ -304,6 +335,8 @@ export type ChatSummary = {
   panes?: number;
   /** Set on a group chat: its 2 to 6 members, in answer order. */
   botIds?: string[];
+  /** The member who created it. Missing on an owner chat. */
+  createdBy?: string;
   title: string;
   time: number;
   pinned?: boolean;
@@ -748,7 +781,16 @@ export type UsageReport = {
  * computer, each adding skills, tools, hooks, agents and commands to the person's bots; the part
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
  */
-export type Meta ={ app: string; version: string; platform: string; name: string; serverId: string; protocol: number; capabilities: string[] };
+export type Meta = {
+  app: string;
+  version: string;
+  platform: string;
+  name: string;
+  serverId: string;
+  protocol: number;
+  capabilities: string[];
+  you?: { kind: "owner" } | { kind: "member"; memberId: string; name: string };
+};
 
 /** Everything the phone keeps in step with the desktop, by part name. */
 export type Parts = {
@@ -780,6 +822,8 @@ export type Parts = {
   voice?: VoiceSettings;
   /** The plugins installed on the computer (`plugins-v1`). A secret field says only whether it is set. */
   plugins?: InstalledPlugin[];
+  /** The full team for an owner device, or this member's team identity. Needs "teams-v1". */
+  team: TeamPart;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1160,6 +1204,19 @@ export type Calls = {
   "link.devices.rename"(id: string, name: string): PairedDevice[];
   /** Removes a paired device: it can't reach the computer any more. Removing this device is unpairing. Answers the devices that are left. */
   "link.devices.remove"(id: string): PairedDevice[];
+  // ---- Teams ("teams-v1")
+  "link.team.get"(): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.saveRole"(role: Role): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.deleteRole"(id: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.saveGroup"(group: Group): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.deleteGroup"(id: string, moveTo?: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.createInvite"(input: { groupId: string; days: 1 | 7 | 30; maxUses: 1 | 5 | 25 }): Invite & { link: string };
+  "link.team.revokeInvite"(id: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.approve"(requestId: string, groupId?: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.deny"(requestId: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.moveMember"(memberId: string, groupId: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.removeMember"(memberId: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.rename"(name: string): Extract<TeamPart, { roles: Role[] }>;
   /** A custom view (an html block) as its bot wrote it, and its data. Needs "frames-v1". */
   "link.frame.page"(frame: string): { html: string; data: unknown };
   /** The chat a custom view's answer goes to, for a view in a Today panel. */

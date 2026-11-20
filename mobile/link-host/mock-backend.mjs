@@ -928,6 +928,7 @@ export class MockBackend {
       this.installPlugin("writing-skills@awesome-copilot");
     }
     this.cache = { bytes: 48_340_992, catalogs: 6 };
+    this.callContexts = [];
     state.artifacts = { revision: 1 };
     this.artifacts = demoArtifacts(state);
     // A server with no window of its own: a phone may set what phones do with its screen (grant.mjs).
@@ -1075,10 +1076,24 @@ export class MockBackend {
   changed() {
     for (const fn of this.listeners) fn();
   }
-  async call(method, args) {
+  async call(method, args, context = {}) {
+    this.callContexts.push({ method, principal: context.principal ? structuredClone(context.principal) : null });
+    if (this.callContexts.length > 100) this.callContexts.shift();
     const fn = this.handlers[method];
     if (!fn) throw new Error("The demo computer doesn't do " + method + " yet.");
     const result = await fn.apply(this, args);
+    const principal = context.principal;
+    if (principal?.kind === "member") {
+      if (method === "createChat" || method === "createGroupChat" || method === "forkChat") {
+        const chat = this.state.chats.find((item) => item.id === result);
+        if (chat) chat.createdBy = principal.memberId;
+      }
+      if (method === "send") {
+        const chat = this.chat(args[0]);
+        const message = [...chat.messages].reverse().find((item) => item.role === "user" && item.text === args[1]);
+        if (message) message.author = { memberId: principal.memberId, name: principal.name };
+      }
+    }
     this.changed();
     return result;
   }

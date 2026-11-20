@@ -12,6 +12,7 @@
 // ChaCha20-Poly1305 under a numbered nonce that is accepted once.
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
@@ -21,9 +22,10 @@ import { isNear, reachable } from "./net.mjs";
 import { baseParts, CHAT_PAGE, chatPart, runPart, runsByChat } from "./parts.mjs";
 import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
-import { cleanRelayUrl, RelayLink, roomOf } from "./relay.mjs";
+import { cleanRelayUrl, RelayLink, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
-import { cleanLook, LinkStore, SCREEN_MODES } from "./store.mjs";
+import { cleanLook, deviceKind, LinkStore, SCREEN_MODES } from "./store.mjs";
+import { authorize, cleanGroup, cleanRole, filterParts, inviteLink, inviteLookup, newInviteCode, normalizeCode } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -45,6 +47,7 @@ const MAX_SOURCES = 256;
 const MAX_NONCES = 64; // session nonces remembered for each phone, to refuse a recorded session request
 const SESSION_IDLE = 12 * 60 * 60_000;
 const MAX_SESSIONS = 48;
+const MAX_MEMBER_SESSIONS = 32;
 const MAX_SESSIONS_PER_DEVICE = 6;
 const MAX_PER_ADDRESS = 24; // connections one address may hold open
 const WINDOW = 4096;
@@ -53,7 +56,7 @@ const PUMP_MS = 60;
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "maintenance-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "maintenance-v1", "teams-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 const MAX_FRAME_HTML = 300_000;
 const MAX_FRAME_DATA = 200_000;
@@ -67,6 +70,10 @@ const ASK_BOT = {
 };
 const MAX_WAITERS = 2; // "link.sync" calls a session may have waiting at once
 const LIVE_NOTES_MS = 2000; // the longest a live call waits for the app's notes (backend.liveContext)
+const DENIED_REQUEST_MS = 24 * 60 * 60_000;
+const JOIN_PENDING_MAX = 50;
+const JOIN_TRIES_PER_SOURCE = 8;
+const INVITE_CARD_TIMEOUT = 15_000;
 const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const SYSTEM_ERROR = "That didn't work on your computer.";
 
@@ -183,7 +190,7 @@ export class LinkHost extends EventEmitter {
    */
   constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, log = () => {} }) {
     super();
-    Object.assign(this, { backend, log, portOverride: port, extraHosts });
+    Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
     this.relayLink = null;
     this.store = new LinkStore(dir, { protect, reveal });
@@ -286,6 +293,18 @@ export class LinkHost extends EventEmitter {
       "link.screen.grant.begin": async (session, a, _gone, via) => this.grants.begin(session, via, a[0]),
       "link.screen.grant.confirm": async (session, a, _gone, via) => this.grants.confirm(session, via, a[0], a[1]),
       "link.screen.revoke": async (session, _a, _gone, via) => this.grants.revoke(session, via),
+      "link.team.get": () => this.team(),
+      "link.team.saveRole": async (_session, a) => this.saveRole(a[0]),
+      "link.team.deleteRole": async (_session, a) => this.deleteRole(a[0]),
+      "link.team.saveGroup": async (_session, a) => this.saveGroup(a[0]),
+      "link.team.deleteGroup": async (_session, a) => this.deleteGroup(a[0], a[1]),
+      "link.team.createInvite": async (_session, a) => this.createInvite(a[0]),
+      "link.team.revokeInvite": async (_session, a) => this.revokeInvite(a[0]),
+      "link.team.approve": async (_session, a) => this.approve(a[0], a[1]),
+      "link.team.deny": async (_session, a) => this.deny(a[0]),
+      "link.team.moveMember": async (_session, a) => this.moveMember(a[0], a[1]),
+      "link.team.removeMember": async (_session, a) => this.removeMember(a[0]),
+      "link.team.rename": async (_session, a) => this.renameTeam(a[0]),
     };
     this.grants = new ScreenGrants({
       serverId: this.store.data.serverId,
@@ -298,9 +317,12 @@ export class LinkHost extends EventEmitter {
     this.deviceKeys = new Map();
     this.waiters = new Set();
     this.parts = new Map(); // name → { json, v }
+    this.partViews = new Map(); // principal id → name → { json, v }
     this.version = 0;
     this.dirty = true;
     this.pairing = null;
+    this.joinTries = new Map();
+    this.inviteTimers = new Map();
     this.server = null;
     this.port = 0;
     this.failures = { http: new Failures(FAIL_BACKSTOP.http), relay: new Failures(FAIL_BACKSTOP.relay) };
@@ -430,6 +452,7 @@ export class LinkHost extends EventEmitter {
     if (this.portOverride === undefined && this.port !== this.store.data.port) this.store.set({ port: this.port });
     this.log("link listening on " + this.port);
     this.applyRelay();
+    void this.syncInvites();
   }
   async close() {
     this.relayLink?.stop();
@@ -449,6 +472,8 @@ export class LinkHost extends EventEmitter {
     this.cancelPairing();
     clearTimeout(this.pumping);
     this.push.dispose();
+    for (const timer of this.inviteTimers.values()) clearTimeout(timer);
+    this.inviteTimers.clear();
     this.device.dispose();
     this.voice.close?.();
     this.screen.dispose();
@@ -534,6 +559,7 @@ export class LinkHost extends EventEmitter {
     if (url !== undefined) next.url = cleanRelayUrl(url);
     this.store.set({ relay: next });
     this.applyRelay();
+    void this.syncInvites();
     if (this.relayEntry() !== before) this.endSessions();
     this.dirty = true;
     this.changed();
@@ -543,6 +569,7 @@ export class LinkHost extends EventEmitter {
   resetRelay() {
     this.store.resetRelayKey();
     this.applyRelay();
+    void this.syncInvites();
     this.endSessions();
     this.dirty = true;
     this.changed();
@@ -646,6 +673,14 @@ export class LinkHost extends EventEmitter {
     for (const session of this.sessions.values()) if (now - session.used < 90_000) live.add(session.deviceId);
     return live;
   }
+  principal(deviceId) {
+    const device = this.store.device(deviceId);
+    if (!device) return null;
+    if (!device.memberId) return { kind: "owner" };
+    const member = this.store.data.team.members.find((item) => item.id === device.memberId);
+    if (!member) return null;
+    return { kind: "member", memberId: member.id, name: member.name, groupId: member.groupId };
+  }
   /**
    * The paired devices as a client is told of them: never a key or a notification address.
    * `current` marks the one that asks.
@@ -691,11 +726,348 @@ export class LinkHost extends EventEmitter {
     const own = this.backend.attention?.();
     if (own?.focused) return own;
     for (const device of this.store.data.devices) {
+      if (device.memberId) continue;
       if (device.kind !== "desktop") continue;
       const front = this.push.frontOf(device.id);
       if (front) return { focused: true, ...(front.chatId && { chatId: front.chatId }) };
     }
     return own;
+  }
+  // ── Teams and invites ───────────────────────────────────────────────────────────────
+
+  team() {
+    this.pruneTeamRequests();
+    const live = this.liveDevices();
+    const team = this.store.data.team;
+    const serverKey = b64u(this.store.data.keys.publicKey);
+    return {
+      name: team.name,
+      roles: structuredClone(team.roles),
+      groups: structuredClone(team.groups),
+      members: team.members.map((member) => ({
+        ...structuredClone(member),
+        devices: this.store.data.devices.filter((device) => device.memberId === member.id).map((device) => ({
+          id: device.id,
+          name: device.name,
+          kind: device.kind,
+          platform: device.platform,
+          connected: live.has(device.id),
+        })),
+      })),
+      invites: team.invites.map((invite) => ({ ...structuredClone(invite), link: inviteLink(invite.code, serverKey, this.relayUrl()) })),
+      requests: team.requests.filter((request) => request.status === "pending").map((request) => ({
+        id: request.id,
+        name: request.name,
+        platform: request.platform,
+        kind: request.kind,
+        at: request.at,
+        inviteId: request.inviteId,
+      })),
+    };
+  }
+  teamChanged() {
+    this.dirty = true;
+    for (const session of this.sessions.values()) session.principal = this.principal(session.deviceId);
+    this.changed();
+    this.emit("status");
+  }
+  setTeam(team) {
+    this.store.set({ team });
+    this.teamChanged();
+  }
+  saveRole(role) {
+    const clean = cleanRole(role);
+    const roles = this.store.data.team.roles.filter((item) => item.id !== clean.id);
+    roles.push(clean);
+    this.setTeam({ ...this.store.data.team, roles });
+    return this.team();
+  }
+  deleteRole(id) {
+    const team = this.store.data.team;
+    if (!team.roles.some((role) => role.id === id)) throw new Failure("That role no longer exists.");
+    if (team.groups.some((group) => group.roleId === id)) throw new Failure("Move every group off this role before deleting it.");
+    this.setTeam({ ...team, roles: team.roles.filter((role) => role.id !== id) });
+    return this.team();
+  }
+  saveGroup(group) {
+    const clean = cleanGroup(group);
+    if (!this.store.data.team.roles.some((role) => role.id === clean.roleId)) throw new Failure("Choose a role that still exists.");
+    const groups = this.store.data.team.groups.filter((item) => item.id !== clean.id);
+    groups.push(clean);
+    this.setTeam({ ...this.store.data.team, groups });
+    return this.team();
+  }
+  deleteGroup(id, moveTo) {
+    const team = this.store.data.team;
+    const group = team.groups.find((item) => item.id === id);
+    if (!group || id === "g_everyone") throw new Failure("That group can't be deleted.");
+    const moving = team.members.filter((member) => member.groupId === id);
+    const invited = team.invites.filter((invite) => invite.groupId === id);
+    const requests = team.requests.filter((request) => request.groupId === id && request.status === "pending");
+    if (moving.length || invited.length || requests.length) {
+      if (!team.groups.some((item) => item.id === moveTo && item.id !== id)) throw new Failure("Choose a group to move these members to.");
+      for (const member of moving) member.groupId = moveTo;
+      for (const invite of invited) invite.groupId = moveTo;
+      for (const request of requests) request.groupId = moveTo;
+    }
+    this.setTeam({ ...team, groups: team.groups.filter((item) => item.id !== id) });
+    return this.team();
+  }
+  async createInvite({ groupId = "g_everyone", days = 7, maxUses = 1 } = {}) {
+    if (![1, 7, 30].includes(days) || ![1, 5, 25].includes(maxUses)) throw new Failure("Choose 1, 7 or 30 days and 1, 5 or 25 uses.");
+    if (!this.store.data.team.groups.some((group) => group.id === groupId)) throw new Failure("Choose a group that still exists.");
+    let code;
+    do code = newInviteCode(); while (this.store.data.team.invites.some((invite) => invite.code === code));
+    const now = Date.now();
+    const invite = { id: "i_" + newInviteCode(), code, groupId, createdAt: now, expiresAt: now + days * 24 * 60 * 60_000, maxUses, uses: 0, published: false };
+    this.store.set({ team: { ...this.store.data.team, invites: [...this.store.data.team.invites, invite] } });
+    this.scheduleInvite(invite);
+    this.dirty = true;
+    this.changed();
+    await this.publishInvite(invite);
+    this.emit("status");
+    return { ...invite, link: inviteLink(invite.code, b64u(this.store.data.keys.publicKey), this.relayUrl()) };
+  }
+  liveInvite(invite) {
+    return !!invite && !invite.revoked && invite.expiresAt > Date.now() && invite.uses < invite.maxUses;
+  }
+  findInvite(value) {
+    const code = normalizeCode(value);
+    return this.store.data.team.invites.find((invite) => invite.code === code && this.liveInvite(invite));
+  }
+  async revokeInvite(id) {
+    const invite = this.store.data.team.invites.find((item) => item.id === id);
+    if (!invite) throw new Failure("That invite no longer exists.");
+    const published = invite.published === true;
+    invite.revoked = true;
+    invite.published = false;
+    clearTimeout(this.inviteTimers.get(id));
+    this.inviteTimers.delete(id);
+    this.store.save();
+    if (published) await this.deleteInviteCard(invite).catch(() => {});
+    this.teamChanged();
+    return this.team();
+  }
+  async publishInvite(invite) {
+    if (!this.liveInvite(invite) || !this.relaySettings()) {
+      invite.published = false;
+      this.store.save();
+      return false;
+    }
+    const relayKey = this.store.relayKey();
+    const room = roomOf(relayKey.publicKey);
+    const lookup = inviteLookup(invite.code);
+    const cardKey = hkdf(Buffer.from(invite.code, "utf8"), Buffer.from("botkins-invite-card-v1", "utf8"), lookup);
+    const cardValue = Buffer.from(JSON.stringify({ v: 1, serverId: this.store.data.serverId, serverKey: b64u(this.store.data.keys.publicKey), name: this.store.data.team.name, room, hosts: this.hosts() }), "utf8");
+    const nonce = random(12);
+    const card = b64u(Buffer.concat([nonce, seal(cardKey, nonce, cardValue, "")]));
+    const cardHash = createHash("sha256").update(card, "utf8").digest("base64url");
+    const time = Math.floor(Date.now() / 1000);
+    const signature = signWithRelayKey(relayKey, `botkins-relay-invite-v1:${room}:${lookup}:${invite.expiresAt}:${cardHash}:${time}`);
+    try {
+      const response = await this.fetch(String(this.relayUrl()).replace(/\/+$/, "") + "/v1/invites/" + lookup, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-botkins-key": relayKey.publicKey, "x-botkins-time": String(time), "x-botkins-sig": signature },
+        body: JSON.stringify({ card, expiresAt: invite.expiresAt }),
+        signal: AbortSignal.timeout(INVITE_CARD_TIMEOUT),
+      });
+      invite.published = response?.status === 204;
+    } catch {
+      invite.published = false;
+    }
+    this.store.save();
+    this.dirty = true;
+    this.changed();
+    return invite.published;
+  }
+  async deleteInviteCard(invite) {
+    const relayKey = this.store.data.relay.key;
+    if (!relayKey || !validRelayKey(relayKey)) return false;
+    const room = roomOf(relayKey.publicKey);
+    const lookup = inviteLookup(invite.code);
+    const time = Math.floor(Date.now() / 1000);
+    try {
+      const response = await this.fetch(String(this.relayUrl()).replace(/\/+$/, "") + "/v1/invites/" + lookup, {
+        method: "DELETE",
+        headers: { "x-botkins-key": relayKey.publicKey, "x-botkins-time": String(time), "x-botkins-sig": signWithRelayKey(relayKey, `botkins-relay-invite-del-v1:${room}:${lookup}:${time}`) },
+        signal: AbortSignal.timeout(INVITE_CARD_TIMEOUT),
+      });
+      return response?.status === 204;
+    } catch {
+      return false;
+    }
+  }
+  scheduleInvite(invite) {
+    clearTimeout(this.inviteTimers.get(invite.id));
+    if (!this.liveInvite(invite)) return;
+    const left = Math.max(0, invite.expiresAt - Date.now());
+    const timer = setTimeout(async () => {
+      if (invite.expiresAt > Date.now()) return this.scheduleInvite(invite);
+      this.inviteTimers.delete(invite.id);
+      invite.published = false;
+      this.store.save();
+      await this.deleteInviteCard(invite);
+      this.teamChanged();
+    }, Math.min(left, 2_147_000_000));
+    timer.unref?.();
+    this.inviteTimers.set(invite.id, timer);
+  }
+  async syncInvites() {
+    for (const invite of this.store.data.team.invites) {
+      this.scheduleInvite(invite);
+      if (this.liveInvite(invite) && this.relaySettings()) await this.publishInvite(invite);
+      else if (invite.published) {
+        const published = invite.published;
+        invite.published = false;
+        if (published) await this.deleteInviteCard(invite);
+      }
+    }
+    this.store.save();
+  }
+  pruneTeamRequests() {
+    const before = this.store.data.team.requests.length;
+    const now = Date.now();
+    const kept = this.store.data.team.requests.filter((request) => request.status === "pending" || (request.status === "denied" && now - request.deniedAt < DENIED_REQUEST_MS) || (request.status === "approved" && now - request.approvedAt < DENIED_REQUEST_MS));
+    if (kept.length !== before) this.store.set({ team: { ...this.store.data.team, requests: kept } });
+  }
+  join(message, source = "", direct = false) {
+    this.pruneTeamRequests();
+    const { serverId, keys } = this.store.data;
+    let theirs;
+    try {
+      theirs = unb64u(message?.key);
+      if (theirs.length !== 32) throw new Error("Bad key");
+    } catch {
+      throw new Refused(400, "bad_key");
+    }
+    const publicKey = b64u(theirs);
+    const owner = this.store.data.devices.find((device) => !device.memberId && device.publicKey === publicKey);
+    if (owner) throw new Refused(409, "join_owner");
+    let shared;
+    try {
+      shared = agree(keys, theirs);
+    } catch {
+      throw new Refused(400, "bad_key");
+    }
+    const existing = this.store.data.team.requests.find((request) => request.publicKey === publicKey);
+    let request = existing;
+    let invite = existing ? this.store.data.team.invites.find((item) => item.id === existing.inviteId) : null;
+    let key;
+    let hello;
+    if (existing) {
+      key = hkdf(shared, Buffer.from(existing.code, "utf8"), "botkins-join-v1");
+      try {
+        hello = unbox(key, message.box, "join:" + serverId);
+      } catch {
+        throw new Refused(403, "join_closed");
+      }
+    } else {
+      if ((this.joinTries.get(source) ?? 0) >= JOIN_TRIES_PER_SOURCE) throw new Refused(429, "join_wait");
+      for (const candidate of this.store.data.team.invites) {
+        if (!this.liveInvite(candidate)) continue;
+        const candidateKey = hkdf(shared, Buffer.from(candidate.code, "utf8"), "botkins-join-v1");
+        try {
+          hello = unbox(candidateKey, message.box, "join:" + serverId);
+          invite = candidate;
+          key = candidateKey;
+          break;
+        } catch {}
+      }
+      if (!hello || !invite) {
+        const used = (this.joinTries.get(source) ?? 0) + 1;
+        this.joinTries.set(source, used);
+        if (this.joinTries.size > MAX_SOURCES) this.joinTries.delete(this.joinTries.keys().next().value);
+        throw new Refused(used >= JOIN_TRIES_PER_SOURCE ? 429 : 403, used >= JOIN_TRIES_PER_SOURCE ? "join_wait" : "join_closed");
+      }
+      if (this.store.data.team.requests.filter((item) => item.status === "pending").length >= JOIN_PENDING_MAX) throw new Refused(429, "join_wait");
+      const at = Date.now();
+      request = {
+        id: "q_" + newInviteCode(),
+        status: "pending",
+        publicKey,
+        code: invite.code,
+        name: String(hello?.name || "Team member").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60) || "Team member",
+        platform: String(hello?.platform || "").slice(0, 20),
+        kind: deviceKind(hello?.kind, hello?.platform),
+        presenceKey: direct ? cleanPresenceKey(hello?.presenceKey) : null,
+        groupId: invite.groupId,
+        inviteId: invite.id,
+        at,
+      };
+      this.store.set({ team: { ...this.store.data.team, requests: [...this.store.data.team.requests, request] } });
+      this.joinTries.delete(source);
+      this.teamChanged();
+      this.emit("joinRequest", { id: request.id, name: request.name, platform: request.platform, kind: request.kind, at, inviteId: invite.id });
+      this.push.teamJoin?.(request);
+    }
+    if (request.status === "denied") return { box: box(key, { status: "denied" }, "joined:" + serverId) };
+    if (request.status === "approved") {
+      return { box: box(key, { status: "approved", device: request.deviceId, serverId, name: this.store.name, hosts: this.hosts() }, "joined:" + serverId) };
+    }
+    return { box: box(key, { status: "pending", requestId: request.id, team: { name: this.store.data.team.name } }, "joined:" + serverId) };
+  }
+  async approve(requestId, groupId) {
+    const team = this.store.data.team;
+    const request = team.requests.find((item) => item.id === requestId && item.status === "pending");
+    if (!request) throw new Failure("That join request is no longer pending.");
+    const chosen = groupId ?? request.groupId;
+    const group = team.groups.find((item) => item.id === chosen);
+    if (!group) throw new Failure("Choose a group that still exists.");
+    const invite = team.invites.find((item) => item.id === request.inviteId);
+    if (invite && invite.uses >= invite.maxUses) throw new Failure("That invite has already been used up.");
+    const memberId = "m_" + newInviteCode();
+    const member = { id: memberId, name: request.name, groupId: chosen, joinedAt: Date.now(), deviceIds: [] };
+    const device = this.store.addDevice({ name: request.name, platform: request.platform, kind: request.kind, publicKey: unb64u(request.publicKey), presenceKey: request.presenceKey, memberId });
+    member.deviceIds.push(device.id);
+    team.members.push(member);
+    Object.assign(request, { status: "approved", approvedAt: Date.now(), memberId, deviceId: device.id });
+    if (invite) {
+      invite.uses++;
+      if (invite.uses >= invite.maxUses) {
+        const published = invite.published === true;
+        invite.published = false;
+        if (published) await this.deleteInviteCard(invite);
+        clearTimeout(this.inviteTimers.get(invite.id));
+        this.inviteTimers.delete(invite.id);
+      }
+    }
+    this.store.save();
+    this.teamChanged();
+    return this.team();
+  }
+  deny(requestId) {
+    const request = this.store.data.team.requests.find((item) => item.id === requestId && item.status === "pending");
+    if (!request) throw new Failure("That join request is no longer pending.");
+    request.status = "denied";
+    request.deniedAt = Date.now();
+    this.store.save();
+    this.teamChanged();
+    return this.team();
+  }
+  moveMember(memberId, groupId) {
+    const team = this.store.data.team;
+    const member = team.members.find((item) => item.id === memberId);
+    if (!member) throw new Failure("That member is no longer on the team.");
+    if (!team.groups.some((item) => item.id === groupId)) throw new Failure("Choose a group that still exists.");
+    member.groupId = groupId;
+    this.store.save();
+    this.teamChanged();
+    return this.team();
+  }
+  removeMember(memberId) {
+    const team = this.store.data.team;
+    const member = team.members.find((item) => item.id === memberId);
+    if (!member) throw new Failure("That member is no longer on the team.");
+    for (const device of this.store.data.devices.filter((item) => item.memberId === memberId)) this.removeDevice(device.id);
+    this.setTeam({ ...team, members: team.members.filter((item) => item.id !== memberId) });
+    return this.team();
+  }
+  renameTeam(name) {
+    const clean = typeof name === "string" ? name.trim() : "";
+    if (!clean || clean.length > 60 || /[\u0000-\u001f\u007f]/.test(clean)) throw new Failure("Give the team a name of up to 60 characters.");
+    this.setTeam({ ...this.store.data.team, name: clean });
+    void this.syncInvites();
+    return this.team();
   }
   removeDevice(id) {
     const removed = this.store.removeDevice(id);
@@ -726,7 +1098,7 @@ export class LinkHost extends EventEmitter {
   /** What a call needs before any of its body is read: a session this computer knows. Throws Refused(401) otherwise. */
   knownSession(id) {
     const session = this.sessions.get(String(id ?? ""));
-    if (!session || !this.store.device(session.deviceId)) throw new Refused(401, "session");
+    if (!session || !this.store.device(session.deviceId) || !this.principal(session.deviceId)) throw new Refused(401, "session");
     return session;
   }
   async handle(req, res) {
@@ -743,7 +1115,7 @@ export class LinkHost extends EventEmitter {
       };
       if (route === "hello" && req.method === "GET") return answer(await this.serve({ route, from }));
       if (req.method !== "POST") throw new Refused(405, "method");
-      if (route !== "rpc" && route !== "pair" && route !== "session") throw new Refused(404, "not_found");
+      if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session") throw new Refused(404, "not_found");
       // A call needs a known session and a body that fits before any of the body is read.
       const sessionId = String(req.headers["x-botkins-session"] ?? "");
       if (route === "rpc") this.knownSession(sessionId);
@@ -772,7 +1144,7 @@ export class LinkHost extends EventEmitter {
     const json = (status, value) => ({ status, body: Buffer.from(JSON.stringify(value), "utf8"), json: true });
     try {
       if (route === "hello") return json(200, this.hello(via));
-      if (route !== "rpc" && route !== "pair" && route !== "session") throw new Refused(404, "not_found");
+      if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session") throw new Refused(404, "not_found");
       const limit = route === "rpc" ? MAX_RPC_BODY : MAX_BODY;
       if (route === "rpc") {
         // The phone may have been removed while its call was on the way.
@@ -786,6 +1158,7 @@ export class LinkHost extends EventEmitter {
       // A session isn't held back up front: one that proves itself is served, so a stranger who shares a
       // source with a real phone (a carrier's NAT, a café) can't keep it out. Only a failing one is held back.
       if (route === "pair" && failures.blocked(from)) throw new Refused(429, "pair_wait");
+      if (route === "join" && failures.blocked(from)) throw new Refused(429, "join_wait");
       const gate = { blocked: () => failures.blocked(from), tripped: () => failures.tripped() };
       const bad = (status, code) => {
         throw new Refused(route === "session" && gate.blocked() ? 429 : status, route === "session" && gate.blocked() ? "slow_down" : code);
@@ -798,10 +1171,10 @@ export class LinkHost extends EventEmitter {
         } catch {
           bad(400, "bad_json");
         }
-        if (route === "pair") {
+        if (route === "pair" || route === "join") {
           // Pairing (and a session for a device this computer doesn't know) is what a flood from many sources aims at.
           if (failures.tripped()) throw new Refused(429, "slow_down");
-          return json(200, this.pair(message, via + ":" + from, via === "http"));
+          return json(200, route === "pair" ? this.pair(message, via + ":" + from, via === "http") : this.join(message, via + ":" + from, via === "http"));
         }
         return json(200, this.session(message, gate));
       } catch (error) {
@@ -817,7 +1190,8 @@ export class LinkHost extends EventEmitter {
   hello(via = "http") {
     // Through the relay anyone who knows the room can knock, so a hello says only what pairing needs.
     // It doesn't even say whether a code is open: that would let a stranger watch for one.
-    if (via === "relay") return { botkins: PROTOCOL, serverId: this.store.data.serverId, publicKey: b64u(this.store.data.keys.publicKey) };
+    const join = this.store.data.team.invites.some((invite) => this.liveInvite(invite));
+    if (via === "relay") return { botkins: PROTOCOL, serverId: this.store.data.serverId, publicKey: b64u(this.store.data.keys.publicKey), ...(join && { join: true }) };
     const info = this.backend.info();
     return {
       botkins: PROTOCOL,
@@ -827,6 +1201,7 @@ export class LinkHost extends EventEmitter {
       app: info.app,
       version: info.version,
       pairing: !!this.activePairing(),
+      ...(join && { join: true }),
     };
   }
   /** `direct`: the request came straight over HTTP, not through the relay. Only then is a phone's presence key kept. */
@@ -912,6 +1287,7 @@ export class LinkHost extends EventEmitter {
     const session = {
       id: b64u(random(12)),
       deviceId: device.id,
+      principal: this.principal(device.id),
       toHost: hkdf(master, salt, INFO.toHost),
       toPhone: hkdf(master, salt, INFO.toPhone),
       max: 0,
@@ -934,11 +1310,13 @@ export class LinkHost extends EventEmitter {
       list.sort((a, b) => b.used - a.used);
       for (const extra of list.slice(MAX_SESSIONS_PER_DEVICE)) this.dropSession(extra);
     }
-    while (this.sessions.size > MAX_SESSIONS) {
+    const oldestOf = (member) => {
       let oldest = null;
-      for (const session of this.sessions.values()) if (!oldest || session.used < oldest.used) oldest = session;
-      this.dropSession(oldest);
-    }
+      for (const session of this.sessions.values()) if (!!session.principal && (session.principal.kind === "member") === member && (!oldest || session.used < oldest.used)) oldest = session;
+      return oldest;
+    };
+    while ([...this.sessions.values()].filter((session) => session.principal?.kind === "member").length > MAX_MEMBER_SESSIONS) this.dropSession(oldestOf(true));
+    while ([...this.sessions.values()].filter((session) => session.principal?.kind !== "member").length > MAX_SESSIONS) this.dropSession(oldestOf(false));
   }
   /** Ends a session and whatever it has waiting. */
   dropSession(session) {
@@ -980,6 +1358,17 @@ export class LinkHost extends EventEmitter {
   async dispatch(session, message, gone, via = "http") {
     const method = String(message?.m ?? "");
     const args = Array.isArray(message?.a) ? message.a : [];
+    const principal = this.principal(session.deviceId) ?? session.principal ?? { kind: "owner" };
+    if (!principal) throw new Failure("This device is no longer on the team.");
+    session.principal = principal;
+    const state = this.backend.snapshot();
+    const refusal = authorize(principal, this.store.data.team, method, args, {
+      bot: (id) => (state.bots ?? []).find((bot) => bot.id === id),
+      chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
+      request: (id) => (state.requests ?? []).find((request) => request.id === id),
+      run: (id) => (state.runs ?? []).find((run) => run.id === id),
+    });
+    if (refusal) throw new Failure(refusal);
     if (method === "link.sync") return this.sync(session, args[0] ?? {}, gone);
     if (method === "link.messages") {
       const limit = Math.max(1, Math.min(Number(args[2]) || CHAT_PAGE, 200));
@@ -1025,10 +1414,10 @@ export class LinkHost extends EventEmitter {
     if (!REMOTE_METHODS.has(method)) throw new Error("That can't be done from a phone.");
     // A credential reference is filled in at a few fixed places of three calls, and refused everywhere else.
     const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, args, { deviceId: session.deviceId, uploads: this.uploads }));
-    if (!secrets.length) return this.backend.call(method, callArgs);
+    if (!secrets.length) return this.backend.call(method, callArgs, { principal });
     // The desktop may echo what it was given. Nothing of a value goes back to a phone.
     try {
-      return scrub(await this.backend.call(method, callArgs), secrets);
+      return scrub(await this.backend.call(method, callArgs, { principal }), secrets);
     } catch (error) {
       throw new Failure(plain(error) === SYSTEM_ERROR ? SYSTEM_ERROR : scrub(plain(error), secrets));
     }
@@ -1097,7 +1486,7 @@ export class LinkHost extends EventEmitter {
         if (!this.waiters.size) return;
         this.refresh([]);
         for (const waiter of [...this.waiters]) {
-          const news = this.news(waiter.known, waiter.watching);
+          const news = this.news(waiter.session, waiter.known, waiter.watching);
           if (news) waiter.end(news);
         }
       } catch (error) {
@@ -1113,6 +1502,8 @@ export class LinkHost extends EventEmitter {
     const ownLooks = typeof this.backend.setLook === "function";
     if (!ownLooks) this.store.syncLooks((state.bots ?? []).map((bot) => bot.id));
     const next = baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings(), ...(this.headless() && { headless: true, display: this.display() }), screenSetBy: this.store.data.screenSetBy });
+    next.meta.you = { kind: "owner" };
+    next.team = this.team();
     // What each phone set up (never a token), and what bots are asking phones for right now.
     next.phones = Object.fromEntries(this.store.data.devices.map((device) => [device.id, { name: device.name, kind: device.kind, platform: device.platform, ...(device.presenceKey && { presence: true }), ...(this.push.view(device.id) && { push: this.push.view(device.id) }), sources: this.store.sources(device.id) }]));
     next.asks = this.device.asks();
@@ -1139,11 +1530,28 @@ export class LinkHost extends EventEmitter {
     return names;
   }
   /** The parts a phone doesn't have yet, as JSON text, or null when it has them all. */
-  news(known, watching) {
+  viewParts(session, watching) {
+    const principal = this.principal(session.deviceId);
+    if (principal?.kind === "owner") return this.parts;
+    const key = principal?.kind === "member" ? "member:" + principal.memberId : "owner";
+    const previous = this.partViews.get(key) ?? new Map();
+    const raw = Object.fromEntries([...this.parts].map(([name, part]) => [name, JSON.parse(part.json)]));
+    const values = filterParts(raw, principal, this.store.data.team);
+    for (const name of this.names(watching)) {
+      if (!(name in values)) continue;
+      const json = JSON.stringify(values[name] ?? null);
+      if (previous.get(name)?.json !== json) previous.set(name, { json, v: ++this.version });
+    }
+    this.partViews.set(key, previous);
+    return previous;
+  }
+  /** The parts a phone doesn't have yet, as JSON text, or null when it has them all. */
+  news(session, known, watching) {
+    const values = this.viewParts(session, watching);
     const parts = [];
     const versions = {};
     for (const name of this.names(watching)) {
-      const part = this.parts.get(name);
+      const part = values.get(name);
       if (!part) continue;
       versions[name] = part.v;
       if (known[name] !== part.v) parts.push(JSON.stringify(name) + ":" + part.json);
@@ -1155,7 +1563,7 @@ export class LinkHost extends EventEmitter {
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     const known = epoch === this.epoch && have && typeof have === "object" ? have : {};
     this.refresh(watching);
-    const now = this.news(known, watching);
+    const now = this.news(session, known, watching);
     const quiet = () => ({ epoch: this.epoch, v: null, parts: {} });
     if (now || !(Number(wait) > 0)) return now ?? quiet();
     // A phone has a couple of waits open at most; a newer one ends the oldest.
