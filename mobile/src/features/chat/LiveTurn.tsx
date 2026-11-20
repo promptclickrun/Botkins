@@ -1,18 +1,24 @@
-// The turn a bot is working on now: its steps, its thinking, and the reply as it streams in.
-// What shows follows the chat settings (Settings › Chat): steps and thinking can be summarized,
-// narrowed or hidden. Requests and errors are shown elsewhere and always show.
+// The turn a bot is working on now. With Steps on "Every step" (Settings › Chat) a turn is drawn in
+// parts, in the order things happened (turn.ts): each part's steps and thinking is a `WorkPart`,
+// and the newest part is the `LiveTurn` at the bottom. Folded (the default) and the other choices
+// draw only the text being written here; its work is the fold line under it (FoldRow.tsx).
+// Requests and errors are shown elsewhere and always show.
 import { router } from "expo-router";
 import { Brain, ChevronDown, ChevronRight } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
-import type { Bot } from "@/link/types";
+import type { Bot, Step } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { useApp } from "@/state/store";
 import { BotAvatar, Markdown, radius, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { StepMark } from "./bits";
+import { WorkLine } from "./Messages";
+import { type Item, stepLabel } from "./turn";
 
 const SHOWN_STEPS = 4;
+/** The height of the row under a reply that holds Read aloud (MessageRow). */
+const READ_ALOUD_ROW = 28;
 
 function Dot({ delay }: { delay: number }) {
   const { colors } = useTheme();
@@ -50,7 +56,7 @@ function Typing({ bot, intent }: { bot?: Bot; intent?: string }) {
   );
 }
 
-function Thinking({ text, startOpen }: { text: string; startOpen: boolean }) {
+export function Thinking({ text, startOpen }: { text: string; startOpen: boolean }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(startOpen);
   const tail = text.length > 260 ? "…" + text.slice(-260).trimStart() : text;
@@ -70,28 +76,14 @@ function Thinking({ text, startOpen }: { text: string; startOpen: boolean }) {
   );
 }
 
-function Steps({ chatId, mode }: { chatId: string; mode: ChatPrefs["steps"] }) {
+/** A part of the turn under way's steps: the last few (failed ones only, on "Failed only"). A tap opens the turn's activity. */
+function Steps({ chatId, runId, all, mode }: { chatId: string; runId?: string; all: Step[]; mode: ChatPrefs["steps"] }) {
   const { colors } = useTheme();
-  const run = useApp((state) => state.running[chatId]);
-  const all = run?.steps ?? [];
-  if (!run || all.length === 0 || mode === "hide") return null;
+  if (all.length === 0 || mode === "hide") return null;
   const steps = mode === "failed" ? all.filter((step) => step.status === "Failed") : all;
   if (steps.length === 0) return null;
-  const open = () => router.push({ pathname: "/chat/activity", params: { chatId, runId: run.id } });
+  const open = () => runId && router.push({ pathname: "/chat/activity", params: { chatId, runId } });
   const count = all.length === 1 ? "1 step" : all.length + " steps";
-
-  if (mode === "summary") {
-    const current = [...all].reverse().find((step) => step.status === "Running") ?? all[all.length - 1];
-    return (
-      <Tap onPress={open} feel="select" sink={0.99} accessibilityLabel={"Working, " + count + ", show activity"} style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 32 }}>
-        <StepMark status={current.status} size={14} />
-        <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
-          {(current.label || current.name) + " · " + count}
-        </T>
-        <ChevronRight size={14} color={colors.faint} strokeWidth={2.4} />
-      </Tap>
-    );
-  }
 
   const hidden = Math.max(0, steps.length - SHOWN_STEPS);
   return (
@@ -111,7 +103,7 @@ function Steps({ chatId, mode }: { chatId: string; mode: ChatPrefs["steps"] }) {
         <View key={step.id} style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 28 }}>
           <StepMark status={step.status} size={15} />
           <T variant="subhead" color={step.status === "Running" ? "ink" : step.status === "Failed" ? "danger" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
-            {step.label || step.name}
+            {stepLabel(step)}
           </T>
         </View>
       ))}
@@ -119,16 +111,51 @@ function Steps({ chatId, mode }: { chatId: string; mode: ChatPrefs["steps"] }) {
   );
 }
 
-/** Everything the bot is doing in this chat right now. Rendered only while a reply is under way. */
-export function LiveTurn({ chatId, bot, group, bots }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot> }) {
-  const stream = useApp((state) => state.parts.live?.streams[chatId]) ?? "";
-  const thinking = useApp((state) => state.parts.live?.thinking[chatId]);
+/** A part of a turn before a steer, an answer or more text: its steps and thinking while it runs, a work line once it ended. */
+export function WorkPart({ chatId, item }: { chatId: string; item: Extract<Item, { kind: "work" }> }) {
+  const stepsMode = useChatPrefs((prefs) => prefs.steps);
+  const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
+  if (!item.live) return <WorkLine chatId={chatId} runId={item.run.id} label={item.label} failed={stepsMode === "failed"} />;
+  return (
+    <View style={{ gap: space.md }}>
+      <Steps chatId={chatId} runId={item.run.id} all={item.steps} mode={stepsMode} />
+      {thinkingMode !== "hide" && !!item.thinking && <Thinking text={item.thinking} startOpen={thinkingMode === "show"} />}
+    </View>
+  );
+}
+
+/** Text a bot wrote that is not a message of its own (noted by this phone from an older computer). */
+export function TurnText({ item }: { item: Extract<Item, { kind: "text" }> }) {
+  const markdown = useChatPrefs((prefs) => prefs.markdown);
+  return <Markdown text={item.text} plain={!markdown} />;
+}
+
+/** The newest part of the turn under way: its steps and thinking, and the reply as it streams in. Rendered only while a reply is under way. */
+export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot>; item: Extract<Item, { kind: "live" }> }) {
   const intent = useApp((state) => state.parts.live?.intents[chatId]);
   const speakerId = useApp((state) => state.parts.live?.speakers[chatId]);
   const stepsMode = useChatPrefs((prefs) => prefs.steps);
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
+  const stream = item.text;
+  // Folded: the text alone, laid out as the reply will be once the turn ends (MessageRow), so it
+  // stays where it is when it becomes the reply. The empty row is where Read aloud will be.
+  if (item.folded)
+    return (
+      <View style={{ gap: space.sm }}>
+        {group && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+            <BotAvatar bot={speaker} size={22} state="talking" />
+            <T variant="footnote" weight="700" color="ink2" numberOfLines={1}>
+              {speaker?.name ?? "Bot"}
+            </T>
+          </View>
+        )}
+        <Markdown text={stream} plain={!markdown} />
+        <View style={{ height: READ_ALOUD_ROW }} />
+      </View>
+    );
   return (
     <View style={{ gap: space.md }}>
       {group && !!stream && (
@@ -139,8 +166,8 @@ export function LiveTurn({ chatId, bot, group, bots }: { chatId: string; bot?: B
           </T>
         </View>
       )}
-      <Steps chatId={chatId} mode={stepsMode} />
-      {thinkingMode !== "hide" && !!thinking && <Thinking text={thinking} startOpen={thinkingMode === "show"} />}
+      <Steps chatId={chatId} runId={item.run?.id} all={item.steps} mode={stepsMode} />
+      {thinkingMode !== "hide" && !!item.thinking && <Thinking text={item.thinking} startOpen={thinkingMode === "show"} />}
       {stream ? <Markdown text={stream} plain={!markdown} /> : <Typing bot={speaker} intent={intent} />}
     </View>
   );

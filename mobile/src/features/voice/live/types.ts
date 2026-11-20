@@ -1,7 +1,9 @@
 // What every live voice transport shares: its interface, its events, and the small base class that
 // keeps the transcript and runs tools. Pure (no React Native), so the tests run the transports
 // against a fake socket and a fake sound module. A transport never logs audio or a token.
+import { type InputMode, MicGate } from "./input";
 
+export type { InputMode } from "./input";
 export type LiveStatus = "connecting" | "listening" | "thinking" | "talking" | "ended";
 export type Line = { id: string; who: "you" | "bot"; text: string; final: boolean };
 
@@ -37,11 +39,19 @@ export type DuplexLike = {
 };
 
 export interface LiveTransport {
+  /** How the microphone is used: hands-free, or only while the talk button is held. Set before `start`. */
+  setInput(mode: InputMode): void;
+  readonly input: InputMode;
   /** Connects and starts both ways. Rejects with a plain sentence. */
   start(): Promise<void>;
   mute(muted: boolean): void;
   /** The speaker (true) or the earpiece. */
   setSpeaker(on: boolean): void | Promise<void>;
+  /** Stops the bot's sound and its response at once; the phone listens. */
+  interrupt(): void;
+  /** Push to talk: the talk button went down (the bot stops first) and came up (the turn is sent). */
+  press(): void;
+  release(): void;
   /** Ends at once. Safe to call more than once. */
   end(): void;
   on<K extends keyof Events>(event: K, listener: (value: Events[K]) => void): () => void;
@@ -107,13 +117,25 @@ export abstract class LiveBase implements LiveTransport {
   private lines = new Map<string, Line>();
   private toolsRunning = 0;
   protected ended = false;
+  /** When the microphone is sent (input.ts). A transport with its own clock or quiet replaces it. */
+  protected gate = new MicGate("conversation");
 
   constructor(protected readonly runTool: ToolRunner) {}
 
   abstract start(): Promise<void>;
   abstract mute(muted: boolean): void;
   abstract setSpeaker(on: boolean): void | Promise<void>;
+  abstract interrupt(): void;
+  abstract press(): void;
+  abstract release(): void;
   protected abstract close(): void;
+
+  setInput(mode: InputMode) {
+    this.gate = this.gate.withMode(mode);
+  }
+  get input(): InputMode {
+    return this.gate.mode;
+  }
 
   on<K extends keyof Events>(event: K, listener: (value: Events[K]) => void) {
     const set = this.listeners[event] as Set<(value: Events[K]) => void>;

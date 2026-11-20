@@ -4,7 +4,7 @@
 import { MenuView } from "@react-native-menu/menu";
 import { router, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { Ellipsis, Globe, ScreenShare } from "lucide-react-native";
+import { Ellipsis, Globe } from "lucide-react-native";
 import { useEffect } from "react";
 import { ScrollView, View } from "react-native";
 import type { PanePanel } from "@/link/types";
@@ -13,6 +13,7 @@ import { api, attempt } from "@/state/link";
 import { Blocks, Button, Chip, Dot, EmptyState, HtmlFrame, Sheet, space, T, useTheme } from "@/ui";
 import { handToChat } from "./inbox";
 import { paneFront, paneUrl } from "./pane";
+import { PaneScreen } from "./PaneScreen";
 import { paneClosed, paneOpened } from "./usePane";
 
 function Body({ panel, chatId }: { panel: PanePanel; chatId: string }) {
@@ -56,16 +57,7 @@ function Body({ panel, chatId }: { panel: PanePanel; chatId: string }) {
       </View>
     );
   }
-  if (panel.kind === "screen")
-    return (
-      <View style={{ padding: space.xl, gap: space.lg, alignItems: "center" }}>
-        <ScreenShare size={28} color={colors.muted} strokeWidth={2} />
-        <T variant="callout" color="muted" center>
-          Your computer's screen
-        </T>
-        <Button title="Open Screen" onPress={() => router.push("/remote")} />
-      </View>
-    );
+  if (panel.kind === "screen") return <PaneScreen />;
   return <EmptyState title="Nothing to show" />;
 }
 

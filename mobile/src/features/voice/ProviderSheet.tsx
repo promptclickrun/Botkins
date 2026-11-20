@@ -8,8 +8,9 @@ import type { VoiceKeyProvider, VoicePatch, VoiceSettings } from "@/link/types";
 import { api, attempt } from "@/state/link";
 import { Button, Field, Group, Label, Row, Segmented, Sheet, space, T } from "@/ui";
 import { providerName, providerState, sizeLabel } from "./choices";
+import type { SheetProvider } from "./settings/summary";
 
-export type SheetProvider = VoiceKeyProvider | "local";
+export type { SheetProvider };
 
 const save = (patch: VoicePatch) => void attempt(api["link.voice.set"](patch));
 

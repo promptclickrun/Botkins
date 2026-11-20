@@ -1,5 +1,6 @@
 // How chats look and behave on this phone: steps, thinking, rich cards, Markdown, code, typing and
 // reading aloud. Saved on the phone only; the computer keeps its own two (Show thinking, Fold steps).
+import { settleSteps, type StepsChoice } from "@/features/chat/fold";
 import { keep, readKept } from "@/state/keep";
 import { Platform } from "react-native";
 import { create } from "zustand";
@@ -8,8 +9,10 @@ import { useApp } from "./store";
 const KEY = "botkins.chatPrefs.v1";
 
 export type ChatPrefs = {
-  /** A turn's tool calls. show: every step. summary: one line. failed: failed steps only. hide: nothing. */
-  steps: "show" | "summary" | "failed" | "hide";
+  /** A turn's work. folded: one line per turn (the default). show: every step, thought and update in order. failed: failed steps only. hide: nothing. */
+  steps: StepsChoice;
+  /** The person chose `steps`. Until then it is Folded (settleSteps in src/features/chat/fold.ts). */
+  stepsPicked?: boolean;
   /** A bot's live reasoning. */
   thinking: "show" | "folded" | "hide";
   /** Cards, charts, tables and suggested replies a bot attaches. Off keeps only a card's title. */
@@ -31,7 +34,7 @@ export type ChatPrefs = {
 };
 
 export const chatPrefDefaults: ChatPrefs = {
-  steps: "show",
+  steps: "folded",
   thinking: "folded",
   richCards: true,
   markdown: true,
@@ -52,7 +55,10 @@ export function loadChatPrefs(): Promise<void> {
   loading ??= (async () => {
     try {
       const saved = await readKept(KEY);
-      if (saved) useChatPrefs.setState({ ...chatPrefDefaults, ...(JSON.parse(saved) as Partial<ChatPrefs>) });
+      if (saved) {
+        const read = JSON.parse(saved) as Partial<ChatPrefs>;
+        useChatPrefs.setState({ ...chatPrefDefaults, ...read, steps: settleSteps(read) });
+      }
     } catch {
       // Unreadable choices fall back to the defaults.
     }
@@ -61,7 +67,7 @@ export function loadChatPrefs(): Promise<void> {
 }
 
 export function setChatPrefs(given: Partial<ChatPrefs>) {
-  const patch = "readAloud" in given ? { ...given, readAloudPicked: true } : given;
+  const patch = { ...given, ...("readAloud" in given && { readAloudPicked: true }), ...("steps" in given && { stepsPicked: true }) };
   useChatPrefs.setState(patch);
   // Saved after the stored choices were read, so a change made early never writes the defaults over them.
   void loadChatPrefs().then(() => {

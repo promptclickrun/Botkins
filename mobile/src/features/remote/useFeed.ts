@@ -20,7 +20,11 @@ export type FeedState = "starting" | "live" | "retrying" | "failed";
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const messageOf = (error: unknown) => (error instanceof Error && error.message ? error.message : "Couldn't get the picture.");
 
-export function useFeed({ enabled, display, maxWidth, quality }: { enabled: boolean; display: string | undefined; maxWidth: number; quality: number }) {
+/**
+ * `gapMs` is the least time from one ask to the next (default 0: ask again as soon as an answer is
+ * in, as Settings › Screen does). A screen card in a chat and the side pane ask more slowly.
+ */
+export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0 }: { enabled: boolean; display: string | undefined; maxWidth: number; quality: number; gapMs?: number }) {
   const [pictures, setPictures] = useState<Pictures>({ a: null, b: null, front: "a" });
   /** The latest picture's size in pixels, and the display it shows. */
   const [size, setSize] = useState<{ width: number; height: number; display: string } | null>(null);
@@ -77,6 +81,8 @@ export function useFeed({ enabled, display, maxWidth, quality }: { enabled: bool
           }
           if (shown.current) setState("live");
           after = frame.seq;
+          const rest = gapMs - (Date.now() - asked);
+          if (rest > 0) await sleep(rest);
         } catch (caught) {
           if (!alive) break;
           failures += 1;
@@ -95,7 +101,7 @@ export function useFeed({ enabled, display, maxWidth, quality }: { enabled: bool
       alive = false;
       waiting.current?.finish(false);
     };
-  }, [enabled, display, maxWidth, quality, run]);
+  }, [enabled, display, maxWidth, quality, gapMs, run]);
 
   /** The image in `slot` was drawn (or failed to load, with `promote` false). */
   function drawn(slot: SlotName, id: number, promote = true) {

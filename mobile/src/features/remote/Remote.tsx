@@ -11,6 +11,7 @@ import { ActivityIndicator, AppState, Platform, StyleSheet, type TextInput, View
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { screenWatch } from "@/features/pane/watching";
 import type { Meta, ScreenInfo, ScreenInput } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api } from "@/state/link";
@@ -186,6 +187,9 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
     });
     return () => subscription.remove();
   }, [gestures]);
+
+  // While the Screen is open, a chat's screen cards and the side pane leave telling the computer to it.
+  useEffect(() => screenWatch.hold({ own: true }), []);
 
   // Leaving the Screen: let go of everything and tell the computer.
   useEffect(

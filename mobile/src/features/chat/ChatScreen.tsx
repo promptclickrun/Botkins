@@ -8,10 +8,11 @@ import Animated, { FadeIn, useAnimatedStyle } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Preferences, Project, QueuedMessage } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { activityLabel, type AvatarState, useBot, useBots, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
+import { activityLabel, type AvatarState, useBot, useBots, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { showToast, useApp } from "@/state/store";
+import { useTurnMarks } from "@/state/turnMarks";
 import { BotAvatar, Chip, EmptyState, LinkBanner, Loading, radius, space, T, Tap, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
@@ -21,16 +22,28 @@ import { GroupFace } from "./bits";
 import { MAX_MENTIONS, withBoardQuote } from "./compose";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ContextMeter } from "./ContextMeter";
-import { LiveTurn } from "./LiveTurn";
-import { FailedNote, type Item, type MessageActions, MessageRow, StoppedNote } from "./Messages";
+import { latestTurn } from "./helpers";
+import { HelperRail } from "./HelperRail";
+import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
+import { EndedNote, type MessageActions, MessageRow } from "./Messages";
+import { type FoldHold, FoldRow } from "./FoldRow";
+import { chatTimeline, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
 import { endSelecting, selectionEnds } from "./selecting";
 import { usePane } from "../pane/usePane";
+import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
 
 const STARTERS = ["What can you do?", "Plan my day", "Summarize my week"];
-const LIVE_ITEM: Item = { kind: "live", key: "live" };
+// The rows each open chat drew last, by key: a row that didn't change stays the same object (turn.ts, reuseItems).
+const drawn = new Map<string, Map<string, Item>>();
+function steady(chatId: string, items: Item[]): Item[] {
+  const kept = reuseItems(drawn.get(chatId), items);
+  drawn.set(chatId, kept.byKey);
+  return kept.items;
+}
+const forgetDrawn = (chatId: string) => void drawn.delete(chatId);
 
 function ChatTitle({ chat, bot, bots, state, model, room }: { chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; state: AvatarState; model: string; room: number }) {
   const { width } = useWindowDimensions();
@@ -133,7 +146,8 @@ function RoutineBanner({ chat }: { chat: ChatSummary }) {
   );
 }
 
-function Queued({ chatId, items }: { chatId: string; items: QueuedMessage[] }) {
+/** Messages waiting for the turn under way. Its button is the desktop app's: "Steer now" when the turn takes a steer, else "Send next". */
+function Queued({ chatId, items, steerable }: { chatId: string; items: QueuedMessage[]; steerable: boolean }) {
   const { colors } = useTheme();
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: space.lg, gap: space.sm }}>
@@ -142,9 +156,9 @@ function Queued({ chatId, items }: { chatId: string; items: QueuedMessage[] }) {
           <T variant="subhead" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }} accessibilityLabel={"Queued: " + item.text}>
             {item.text}
           </T>
-          <Tap onPress={() => void attempt(api.sendNow(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel="Send now" style={{ height: 40, justifyContent: "center", paddingLeft: space.md, paddingRight: space.xs }}>
+          <Tap onPress={() => void attempt(api.sendNow(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel={steerable ? "Steer now" : "Send next"} style={{ height: 40, justifyContent: "center", paddingLeft: space.md, paddingRight: space.xs }}>
             <T variant="footnote" weight="700" color="accentText">
-              Send now
+              {steerable ? "Steer now" : "Send next"}
             </T>
           </Tap>
           <Tap onPress={() => void attempt(api.unqueue(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4, right: 4 }} accessibilityLabel="Remove from queue" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
@@ -193,7 +207,7 @@ export default function ChatScreen() {
   // A bot's request leaves room for the bar above it and the composer below it, also over the keyboard.
   const keyboardUp = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
-  const requestRoom = Math.max(200, Math.min(screenHeight * 0.45, screenHeight - (keyboardUp ? keyboardHeight : insets.bottom) - insets.top - 168));
+  const requestRoom = Math.max(200, Math.min(screenHeight * 0.6, screenHeight - (keyboardUp ? keyboardHeight : insets.bottom) - insets.top - 168));
   const chat = useChat(chatId);
   const chatsLoaded = useApp((state) => !!state.parts.chats);
   const view = useWatchedChat(chatId);
@@ -205,10 +219,12 @@ export default function ChatScreen() {
   const state = useChatActivity(chatId);
   const live = usePart("live");
   const streaming = !!live && chatId in live.streams;
-  const runningId = useApp((s) => s.running[chatId]?.id);
+  // The chat's run part: the turn under way, or its newest turn when that ended without a reply.
+  const runPart = useApp((s) => s.running[chatId]);
+  const turnRun = underWay(runPart);
   const requests = useMemo(() => live?.requests.filter((request) => request.chatId === chatId) ?? [], [live, chatId]);
   const queued = live?.queued[chatId];
-  const working = streaming || !!runningId;
+  const working = streaming || !!turnRun;
   const group = !!chat?.botIds && chat.botIds.length > 1;
 
   const [text, setText] = useState(draft ?? "");
@@ -230,6 +246,22 @@ export default function ChatScreen() {
   // The newest message is out of view: the button that goes back to it shows.
   const away = useRef(false);
   const [awayNow, setAway] = useState(false);
+  // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
+  const scrolled = useRef(0);
+  const listBox = useRef<ComponentRef<typeof View>>(null);
+  const frame = useRef({ top: 0, height: 0 });
+  const measureList = () => listBox.current?.measureInWindow((_x, top, _w, height) => (frame.current = { top, height }));
+  // The list is inverted: a larger offset shows older rows, so content moves down by as much.
+  const holdFold: FoldHold = ({ was, top, bottom }) => {
+    const box = frame.current;
+    if (!box.height || !Number.isFinite(was + top + bottom)) return;
+    // Keep the line where it was tapped, as long as the fold's end stays in view; never push the line out of the top.
+    let shift = was - top;
+    shift = Math.min(shift, box.top + box.height - bottom);
+    shift = Math.max(shift, box.top - top);
+    if (Math.abs(shift) < 1) return;
+    list.current?.scrollToOffset({ offset: Math.max(0, scrolled.current + shift), animated: false });
+  };
 
   // Opening a chat wakes its bot up and marks it read.
   useEffect(() => {
@@ -248,23 +280,37 @@ export default function ChatScreen() {
     effort: choice?.reasoningEffort ? effortLabel(choice.reasoningEffort) : undefined,
   };
 
-  const messages = useMemo(() => {
+  // The chat in the order things happened (turn.ts): steps, thinking and text in place, a steer or
+  // an answer where it came, and how a turn ended when it didn't finish. Newest first for the inverted list.
+  const timeline = useCapability(TIMELINE_V1);
+  const panesOn = useCapability("side-pane-v1");
+  const marks = useTurnMarks();
+  const stepsPref = useChatPrefs((prefs) => prefs.steps);
+  const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
+  const stream = streaming ? live?.streams[chatId] : undefined;
+  const liveThinking = live?.thinking[chatId];
+  const intent = live?.intents[chatId];
+  const panels = view?.pane?.panels;
+  const data = useMemo(() => {
     if (!view) return [];
-    const out: Item[] = [];
-    const all = view.messages;
-    for (let i = 0; i < all.length; i++) {
-      const message = all[i];
-      const next = all[i + 1];
-      const run = message.runId ? view.runs[message.runId] : undefined;
-      const end = !!run && next?.runId !== message.runId;
-      out.push({ kind: "message", key: "m" + (view.from + i), index: view.from + i, message, run, end: end && message.role === "assistant", latest: i === all.length - 1 });
-      if (!run || !end || run.id === runningId) continue;
-      if (message.role === "user" && run.status === "Needs you" && next?.role !== "assistant") out.push({ kind: "failed", key: "f" + run.id, run });
-      else if (run.status === "Stopped") out.push({ kind: "stopped", key: "s" + run.id });
-    }
-    return out.reverse();
-  }, [view, runningId]);
-  const data = useMemo(() => (streaming ? [LIVE_ITEM, ...messages] : messages), [streaming, messages]);
+    const screens = panesOn ? panels?.filter((panel) => panel.kind === "screen") : undefined;
+    const items = chatTimeline({
+      messages: view.messages,
+      from: view.from,
+      runs: view.runs,
+      running: runPart,
+      live: { stream, thinking: liveThinking, intent },
+      marks,
+      timeline,
+      group,
+      screens,
+      prefs: { steps: stepsPref, thinking: thinkingPref },
+    });
+    return steady(chatId, items).reverse();
+  }, [view, runPart, stream, liveThinking, intent, marks, timeline, group, panesOn, panels, stepsPref, thinkingPref, chatId]);
+  useEffect(() => () => forgetDrawn(chatId), [chatId]);
+  // The helpers of the chat's newest turn, above the composer.
+  const newest = view ? latestTurn(runPart, view.messages, view.runs) : undefined;
 
   // Going to one message: earlier pages are loaded until it is there, then the list scrolls to it.
   const target = at !== undefined && /^\d{1,7}$/.test(at) ? Number(at) : undefined;
@@ -340,7 +386,8 @@ export default function ChatScreen() {
     }
     setText("");
     list.current?.scrollToOffset({ offset: 0, animated: true });
-    return api.send(chatId, message, sent).then(
+    // While the chat works, the message steers the turn where the provider takes one, as on the desktop app.
+    return api.send(chatId, message, working ? { ...sent, delivery: "steer" } : sent).then(
       () => true,
       (error: unknown) => {
         if (card) setPinnedId(card.id);
@@ -429,7 +476,7 @@ export default function ChatScreen() {
         headerRight: () => (
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             {measured && <ContextMeter chatId={chat.id} context={measured} />}
-            <ChatMenu chat={chat} bot={bot} bots={bots} started={!!view && view.messages.length > 0} projects={projects} settings={settings} onDelete={() => void remove()} panes={pane.tabs} onPane={pane.show} />
+            <ChatMenu chat={chat} bot={bot} bots={bots} started={!!view && view.messages.length > 0} projects={projects} settings={settings} onDelete={() => void remove()} panes={pane.tabs} onPane={() => pane.show()} />
           </View>
         ),
       }}
@@ -452,7 +499,7 @@ export default function ChatScreen() {
           <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
         </View>
       ) : (
-        <View style={{ flex: 1 }} {...selectionEnds}>
+        <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
         <FlatList
           ref={list}
           inverted
@@ -460,6 +507,7 @@ export default function ChatScreen() {
           // scrolled up to read, the list stays where they are (maintainVisibleContentPosition
           // below), and the button offers the way back.
           onScroll={(event) => {
+            scrolled.current = event.nativeEvent.contentOffset.y;
             const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
             if (next !== away.current) {
               away.current = next;
@@ -472,12 +520,18 @@ export default function ChatScreen() {
           renderItem={({ item }) =>
             item.kind === "message" ? (
               <MessageRow item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
-            ) : item.kind === "failed" ? (
-              <FailedNote run={item.run} />
-            ) : item.kind === "stopped" ? (
-              <StoppedNote />
+            ) : item.kind === "work" ? (
+              <WorkPart chatId={chatId} item={item} />
+            ) : item.kind === "text" ? (
+              <TurnText item={item} />
+            ) : item.kind === "screen" ? (
+              <ScreenCard chatId={chatId} panel={item.panel} onOpen={() => pane.show(item.panel.id)} />
+            ) : item.kind === "ended" ? (
+              <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
+            ) : item.kind === "fold" ? (
+              <FoldRow chatId={chatId} bot={bot} group={group} bots={bots} item={item} hold={holdFold} />
             ) : (
-              <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} />
+              <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
             )
           }
           style={{ flex: 1 }}
@@ -510,9 +564,10 @@ export default function ChatScreen() {
       )}
       {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
       <View style={{ paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
+        {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
         {requests.length > 0 && (
           <View style={{ paddingHorizontal: space.md }}>
-            <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} />
+            <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} count={requests.length} />
           </View>
         )}
         {side && (
@@ -520,7 +575,7 @@ export default function ChatScreen() {
             <SideAnswer side={side} onDismiss={() => setSide(null)} />
           </View>
         )}
-        {!!queued?.length && <Queued chatId={chatId} items={queued} />}
+        {!!queued?.length && <Queued chatId={chatId} items={queued} steerable={!!live?.steerable?.[chatId]} />}
         <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
           <TalkBar chatId={chatId} />
           <Composer

@@ -157,6 +157,15 @@ export type Message = {
   quote?: string;
   /** In a group chat, the bot that wrote this reply. */
   botId?: string;
+  /** A person's message delivered into a turn that was under way (a steer): that turn's run. The desktop app records it today. */
+  steeredRunId?: string;
+  /**
+   * Text a bot wrote during a turn before a step, a steer or a request, or before the turn ended
+   * without a reply ("turn-timeline-v1", docs/turn-timeline.md). `time` is when its first words came.
+   */
+  interim?: true;
+  /** What the person answered to a request in a turn ("turn-timeline-v1"): `text` is the answer in words, never a secret. */
+  answer?: { runId: string; requestId: string; kind: AgentRequest["kind"]; title: string };
 };
 /**
  * What the composer sends for a mention; the computer checks it and fills in the label. "board" is a
@@ -322,10 +331,17 @@ export type Step = {
   started: number;
   finished?: number;
   botId?: string;
+  /** The helper (`Subagent.id`) that ran this step ("turn-timeline-v1"). Missing: the turn's own step, or a computer that doesn't say. */
+  agentId?: string;
 };
-export type Todo = { id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
+export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
-export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed"; started: number; finished?: number; detail?: string };
+/**
+ * A helper a turn started ("In the background"). `id` is the id of the step that started it. With
+ * "turn-timeline-v1": `prompt` is what it was asked, `intent` what it says it is doing now, and
+ * `result` what it came back with (each cut short by the computer).
+ */
+export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string };
 export type Usage = { input: number; output: number; cacheRead?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;
@@ -379,6 +395,8 @@ export type Run = RunSummary & {
   speakers?: string[];
   failures?: { botId: string; detail: string }[];
   teamwork?: TeamAsk[];
+  /** How a turn ended without finishing ("turn-timeline-v1"). Missing: the phone reads it from `status` and `detail`. */
+  ending?: "failed" | "timed-out" | "interrupted" | "stopped";
 };
 /**
  * A tab in the side pane a bot opened beside a chat ("side-pane-v1"; the contract is the desktop
@@ -421,11 +439,28 @@ export type FormField = {
   maximum?: number;
   format?: string;
 };
+/**
+ * One field of a secure input ("secure-input-v1"). password: masked, the phone's password
+ * autofill. code: a one-time passcode, its autofill, shown as typed. secret: masked, any token or
+ * key. text: shown as typed (a username, an account id). Whatever the kind, the value goes to the
+ * computer only and never lands in the chat.
+ */
+export type SecureField = {
+  /** The name in the answer. */
+  key: string;
+  /** The field's header, as the bot wrote it: "Password", "One-time code". */
+  label: string;
+  kind: "password" | "code" | "secret" | "text";
+  /** One short line under the label. */
+  hint?: string;
+  optional?: true;
+};
 export type AgentRequest = {
   id: string;
   chatId: string;
   botId: string;
-  kind: "permission" | "question" | "form";
+  /** "secure" needs "secure-input-v1": what is typed goes to the computer only, and the bot gets a handle it can pass to its tools, never the value. */
+  kind: "permission" | "question" | "form" | "secure";
   title: string;
   label?: string;
   preview?: string;
@@ -436,11 +471,16 @@ export type AgentRequest = {
   freeform?: boolean;
   schema?: { properties: Record<string, FormField>; required?: string[] };
   url?: string;
+  /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
+  fields?: SecureField[];
 };
 export type QueuedMessage = { id: string; text: string };
 /** What is happening right now, per chat. */
 export type Live = {
-  /** The reply so far. An empty string means the bot is still thinking. */
+  /**
+   * The reply so far. An empty string means the bot is still thinking. With "turn-timeline-v1" it
+   * holds only what came after the turn's last interim message.
+   */
   streams: Record<string, string>;
   intents: Record<string, string>;
   thinking: Record<string, string>;
@@ -448,6 +488,8 @@ export type Live = {
   queued: Record<string, QueuedMessage[]>;
   requests: AgentRequest[];
   active: string[];
+  /** Whether a message sent now steers the turn under way ("Steer now") or waits for it ("Send next"). Missing on an older link. */
+  steerable?: Record<string, boolean>;
 };
 
 export type Panel = {
@@ -696,9 +738,17 @@ export type UsageReport = {
  * choosing a folder from it), the link's own "maintenance-v1" (clear the cache, and the
  * computer's own test notification), and "screen-grant-v1" (a headless host: a phone may set what
  * phones may do with its screen), and the app's "artifacts-v1" (what a bot made or was given: a
- * list, a file in pieces, a small picture of it, and the paths written in a chat).
+ * list, a file in pieces, a small picture of it, and the paths written in a chat), and the app's
+ * "secure-input-v1" (a bot asks for a password, a code or another secret in a request of kind
+ * "secure": the value goes to the computer only, and the bot gets a handle, never the value).
+ * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
+ * as interim messages, answers to requests as messages, a time on every reply, each helper's own
+ * steps marked, and how a turn ended; docs/turn-timeline.md).
+ * "plugins-v1" (the app's: plugins from GitHub's catalogs, other marketplaces or a folder on the
+ * computer, each adding skills, tools, hooks, agents and commands to the person's bots; the part
+ * `plugins` and the calls `plugins.*`; docs/plugins.md).
  */
-export type Meta = { app: string; version: string; platform: string; name: string; serverId: string; protocol: number; capabilities: string[] };
+export type Meta ={ app: string; version: string; platform: string; name: string; serverId: string; protocol: number; capabilities: string[] };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
 export type Parts = {
@@ -728,7 +778,123 @@ export type Parts = {
   asks?: DeviceAsk[];
   /** Speech settings, shared by the computer and every phone (`voice-v1`). Never a key. */
   voice?: VoiceSettings;
+  /** The plugins installed on the computer (`plugins-v1`). A secret field says only whether it is set. */
+  plugins?: InstalledPlugin[];
 };
+
+// ---------------------------------------------------------------------------------------------
+// Plugins (capability "plugins-v1"; the contract is docs/plugins.md). A plugin adds skills, tools
+// (MCP servers), hooks, agents and commands to the person's bots. The computer reads the catalogs;
+// a phone never fetches them itself, and never receives a secret field's value.
+
+/** A catalog of plugins: one of GitHub's two (`builtIn`), or one the person added. */
+export type PluginMarketplace = {
+  /** Its name from marketplace.json, e.g. "awesome-copilot". */
+  id: string;
+  /** Shown: "GitHub", "Copilot plugins", or the catalog's own name. */
+  name: string;
+  /** "github/awesome-copilot", a URL, or "Folder on your computer". */
+  source: string;
+  /** GitHub's two; can't be removed. */
+  builtIn: boolean;
+  count?: number;
+  updatedAt?: number;
+  /** A sentence when it couldn't be read. */
+  error?: string;
+};
+
+/** A plugin in a catalog. `id` is opaque: never read anything out of it; show `name` and `marketplace`. */
+export type PluginListing = {
+  id: string;
+  name: string;
+  /** PluginMarketplace.id, or "folder". */
+  marketplace: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  /** https only. */
+  homepage?: string;
+  /** https only. */
+  repository?: string;
+  license?: string;
+  keywords?: string[];
+  installed?: true;
+};
+
+export type PluginHookEvent =
+  | "sessionStart"
+  | "userPromptSubmitted"
+  | "preToolUse"
+  | "postToolUse"
+  | "postToolUseFailure"
+  | "agentStop"
+  | "subagentStart"
+  | "subagentStop"
+  | "sessionEnd"
+  | "errorOccurred"
+  | "preCompact"
+  | "notification"
+  | "permissionRequest";
+
+/** What a plugin adds. A hook's command is as written, at most 300 characters. */
+export type PluginContents = {
+  skills: string[];
+  agents: string[];
+  commands: string[];
+  /** `serverId` (an installed plugin's tool with OAuth): the tool server to sign in with "signInMcpServer". */
+  mcpServers: { name: string; kind: "local" | "remote"; command?: string; url?: string; oauth?: true; serverId?: string }[];
+  hooks: { event: PluginHookEvent | (string & {}); command: string }[];
+  lspServers?: string[];
+};
+
+/** One of a plugin's settings: a `userConfig` entry, or a `${NAME}` in its tool and hook files. */
+export type PluginField = {
+  /** The placeholder or userConfig name, e.g. "HINDSIGHT_API_KEY". */
+  key: string;
+  /** userConfig's title, or the key made readable: "Hindsight API key". */
+  label: string;
+  description?: string;
+  secret: boolean;
+  /** userConfig's `required`; a placeholder is required. */
+  required: boolean;
+  /** Never for a secret. */
+  default?: string;
+};
+
+/** A plugin read before install: what it adds, its settings, and what it runs, in sentences. */
+export type PluginPreview = PluginListing & {
+  contents: PluginContents;
+  config: PluginField[];
+  postInstallMessage?: string;
+  /** Sentences: "Runs a command on your computer at each prompt." */
+  warnings?: string[];
+  /** What was read, as an opaque tag. Install and update send it back; the computer refuses when the plugin changed since. */
+  revision?: string;
+};
+
+/** A plugin installed on the computer, as the part `plugins` holds it. */
+export type InstalledPlugin = PluginListing & {
+  installed: true;
+  /** On at all. */
+  enabled: boolean;
+  /** Which bots use it. */
+  bots: "all" | string[];
+  contents: PluginContents;
+  /** `value` only for a field that is not secret. */
+  config: (PluginField & { set: boolean; value?: string })[];
+  status: "ready" | "needs-config" | "needs-sign-in" | "error";
+  /** A sentence for needs-sign-in and error. */
+  detail?: string;
+  /** "Hooks run only for bots on the Copilot SDK." */
+  limits?: string;
+  updateAvailable?: true;
+  /** A folder plugin's path on the computer, to show. */
+  folder?: string;
+  installedAt: number;
+};
+
+/** A plugin setting's value as a phone sends it: text, a saved credential the computer fills in, or null to clear it. */
+export type PluginConfigValue = string | CredentialRef | null;
 
 // ---------------------------------------------------------------------------------------------
 // Notifications (capability "push-v1"). The computer sends them through the relay's push route;
@@ -844,7 +1010,8 @@ export type Calls = {
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
-  send(chatId: string, text: string, options?: { quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[] }): void;
+  /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
+  send(chatId: string, text: string, options?: { quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;
@@ -958,6 +1125,27 @@ export type Calls = {
   sidePane(chatId: string, action: "select" | "remove" | "pin" | "unpin" | "closed" | "opened", panelId?: string): void;
   /** Each connected provider's plan and limits. `refresh` asks the computer to read the providers again now. */
   providerUsage(options?: { refresh?: boolean }): ProviderUsage[];
+  // ---- Plugins ("plugins-v1", docs/plugins.md)
+  "plugins.marketplaces"(): PluginMarketplace[];
+  /** `owner/repo`, `owner/repo#ref`, an https URL, or a folder path. */
+  "plugins.addMarketplace"(source: string): PluginMarketplace;
+  /** Not a built-in one. Installed plugins stay. */
+  "plugins.removeMarketplace"(id: string): void;
+  /** 50 a page, by name. `query` matches name, description and keywords. */
+  "plugins.browse"(query: { marketplace?: string; query?: string; cursor?: string }): { plugins: PluginListing[]; cursor?: string };
+  /** Reads the plugin's manifest and files before install. */
+  "plugins.preview"(id: string): PluginPreview;
+  /** `bots` is "all" (the default) or bot ids. `config` as in "plugins.configure". */
+  "plugins.install"(id: string, options?: { bots?: "all" | string[]; config?: Record<string, PluginConfigValue>; revision?: string }): InstalledPlugin;
+  /** A folder on the computer, chosen in the folder browser ("folders-v1"). */
+  "plugins.addFolder"(path: string): InstalledPlugin;
+  /** `null` clears a value. A secret is kept in the computer's vault. */
+  "plugins.configure"(id: string, values: Record<string, PluginConfigValue>): void;
+  "plugins.setBots"(id: string, bots: "all" | string[]): void;
+  "plugins.setEnabled"(id: string, on: boolean): void;
+  /** `revision` is the preview's the person reviewed; the computer refuses another. */
+  "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
+  "plugins.uninstall"(id: string): void;
   "link.messages"(chatId: string, before: number, limit?: number): ChatDetail | null;
   "link.unpair"(): boolean;
   /** Sends a file to the computer for the next message. `data` is base64, at most about 3 MB a call; a larger file goes in parts with the same `id`. */

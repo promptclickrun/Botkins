@@ -8,6 +8,8 @@
 //   BOTKINS_DEV_SCREEN=off|view|control   what phones may do with this computer's screen (default control here)
 //   BOTKINS_DEV_PICTURE=<file.jpg>        show this picture as the screen, and only log clicks and typing
 //   BOTKINS_DEV_PRS=1                     answer pull request lookups with made-up ones (a stand-in gh)
+//   BOTKINS_DEV_TIMELINE=off              act as an older computer, without "turn-timeline-v1" (docs/turn-timeline.md)
+//   BOTKINS_DEV_PLUGINS=off               act as an older computer, without "plugins-v1" (docs/plugins.md)
 // The pairing link is also written to <dir>/pairing-url.txt for scripts and simulators.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,6 +94,7 @@ function open() {
   const relay = host.status().relay;
   console.log("Relay         " + (relay.enabled ? relay.url + (relay.connected ? " (connected)" : " (connecting)") : "off"));
   console.log("Screen        " + host.status().screen.mode);
+  console.log("Turn timeline " + (backend.timeline ? "on (turn-timeline-v1)" : "off, as an older computer"));
   console.log("Code          " + pairing.code.replace(/(.{4})(?=.)/g, "$1-") + "\n");
 }
 host.on("paired", (device) => {

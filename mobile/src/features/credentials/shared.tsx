@@ -40,13 +40,13 @@ function localAuth(): typeof LocalAuth | null {
   }
 }
 
-async function verifyOwner(): Promise<boolean> {
+async function verifyOwner(reason: string): Promise<boolean> {
   const auth = localAuth();
   if (!auth) return true;
   try {
     const level = await auth.getEnrolledLevelAsync();
     if (level === auth.SecurityLevel.NONE) return true;
-    const result = await auth.authenticateAsync({ promptMessage: "Open your credentials", cancelLabel: "Cancel" });
+    const result = await auth.authenticateAsync({ promptMessage: reason, cancelLabel: "Cancel" });
     if (result.success) return true;
     // A phone with nothing to check with can't lock anyone out.
     return result.error === "not_enrolled" || result.error === "passcode_not_set" || result.error === "not_available";
@@ -55,12 +55,24 @@ async function verifyOwner(): Promise<boolean> {
   }
 }
 
-export async function checkOwner() {
+/**
+ * Asks the phone's owner to confirm it is them: once per app session, for everything that uses this
+ * check. `reason` is what the phone's question says. Resolves true when they are confirmed (a check
+ * that is already running resolves false; follow it with `useOwnerCheck`).
+ */
+export async function checkOwner(reason = "Open your credentials"): Promise<boolean> {
   const { owner } = useOwner.getState();
-  if (owner === "checking" || owner === "open") return;
+  if (owner === "open") return true;
+  if (owner === "checking") return false;
   useOwner.setState({ owner: "checking" });
-  useOwner.setState({ owner: (await verifyOwner()) ? "open" : "locked" });
+  const confirmed = await verifyOwner(reason);
+  useOwner.setState({ owner: confirmed ? "open" : "locked" });
+  return confirmed;
 }
+
+/** Where the owner check stands, without starting one: "unknown" until something asked. */
+export type OwnerCheck = Owner;
+export const useOwnerCheck = (): OwnerCheck => useOwner((state) => state.owner);
 
 export type Gate = "loading" | "unsupported" | "checking" | "locked" | "open";
 

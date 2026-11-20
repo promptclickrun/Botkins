@@ -1,7 +1,8 @@
-// One row of the chat: a person's bubble, a bot's reply on the canvas, its work line, cards and suggested replies.
+// One row of the chat: a person's bubble, a bot's reply on the canvas, its work line, cards and suggested replies,
+// and the line for a turn that ended without finishing. Which rows there are, in which order, is turn.ts.
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
-import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, FileText, FolderKanban, LayoutGrid, Square, Volume2 } from "lucide-react-native";
+import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, FileText, FolderKanban, LayoutGrid, Square, TimerOff, Volume2 } from "lucide-react-native";
 import { memo, type ReactNode } from "react";
 import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
@@ -15,13 +16,10 @@ import { ArtifactChips } from "@/features/artifacts/ArtifactBits";
 import { useMessageLinks } from "@/features/artifacts/data";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
+import { answerText, type Ending, type Item, workSummary } from "./turn";
 import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
 
-export type Item =
-  | { kind: "message"; key: string; message: Message; /** Its place in the whole chat, for Fork from here. */ index: number; run?: Run; /** The run's last reply: its work line and cards go under it. */ end: boolean; /** The newest message in the chat. */ latest: boolean }
-  | { kind: "failed"; key: string; run: Run }
-  | { kind: "stopped"; key: string }
-  | { kind: "live"; key: string };
+export type { Item };
 
 /** What a message's menu can do beyond copying and selecting: quote it in a reply, and fork the chat from it. */
 export type MessageActions = { onReply: (text: string) => void; /** Missing in a group chat, which can't be forked. */ onFork?: (index: number) => void; /** A turn is under way, so forking waits. */ busy: boolean };
@@ -41,22 +39,27 @@ function runExtra(event: string, message: Message, index: number, actions: Messa
 
 const failedSteps = (run: Run) => (run.steps ?? []).filter((step) => step.status === "Failed").length;
 
-/** Where a reply's work is shown: "Worked for 9s · 2 steps ›". */
-function WorkLine({ chatId, run, mode }: { chatId: string; run: Run; mode: ChatPrefs["steps"] }) {
-  const { colors } = useTheme();
+/** A group chat's work line, under its turn's last reply. */
+function GroupWorkLine({ chatId, run, mode }: { chatId: string; run: Run; mode: ChatPrefs["steps"] }) {
   const steps = run.steps?.length ?? 0;
   const failed = failedSteps(run);
   if (mode === "hide" || (mode === "failed" && failed === 0)) return null;
-  const label = mode === "failed" ? (failed === 1 ? "1 step failed" : failed + " steps failed") : run.summary || (steps === 1 ? "1 step" : steps + " steps");
+  const label = mode === "failed" ? (failed === 1 ? "1 step failed" : failed + " steps failed") : run.summary || workSummary(run.steps ?? []) || (steps === 1 ? "1 step" : steps + " steps");
+  return <WorkLine chatId={chatId} runId={run.id} label={label} failed={mode === "failed"} />;
+}
+
+/** Where a turn's work is shown: "Ran 2 commands ›". A tap opens the turn's activity. */
+export function WorkLine({ chatId, runId, label, failed }: { chatId: string; runId: string; label: string; failed?: boolean }) {
+  const { colors } = useTheme();
   return (
     <Tap
-      onPress={() => router.push({ pathname: "/chat/activity", params: { chatId, runId: run.id } })}
+      onPress={() => router.push({ pathname: "/chat/activity", params: { chatId, runId } })}
       feel="select"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       accessibilityLabel={label + ", show activity"}
       style={{ alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 2, minHeight: 32 }}
     >
-      <T variant="footnote" color={mode === "failed" ? "danger" : "muted"} numberOfLines={1}>
+      <T variant="footnote" color={failed ? "danger" : "muted"} numberOfLines={1}>
         {label}
       </T>
       <ChevronRight size={14} color={colors.faint} strokeWidth={2.4} />
@@ -137,15 +140,17 @@ function UserBubble({ message, index, timestamps, id, actions, paths, media }: {
   const quoted = splitBoardQuote(message.text ?? "");
   const record = message.mentions?.find((mention) => mention.kind === "board");
   const card = record?.kind === "board" ? { kind: boardKindLabel(record.board ?? "feed"), title: record.label, body: record.body ?? "" } : quoted.card;
-  const rest = record ? (message.text ?? "") : quoted.rest;
+  const rest = message.answer ? answerText(message) : record ? (message.text ?? "") : quoted.rest;
   const chips = (message.mentions ?? []).filter((mention) => mention.kind !== "board");
+  // An answer to a bot's request shows the request it answered above it, as a quote does.
+  const above = message.quote || message.answer?.title;
   return (
     <View style={{ alignItems: "flex-end", gap: 4, paddingLeft: "16%" }}>
-      {!!message.quote && (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" }}>
+      {!!above && (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" }} accessibilityLabel={(message.answer ? "Answered: " : "Replying to: ") + above}>
           <CornerDownRight size={13} color={colors.faint} strokeWidth={2.2} />
-          <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
-            {message.quote}
+          <T variant="footnote" color="muted" numberOfLines={message.answer ? 2 : 1} style={{ flexShrink: 1 }}>
+            {above}
           </T>
         </View>
       )}
@@ -309,7 +314,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
   if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
   if (message.role === "command") return <CommandBlock message={message} />;
-  const worked = end && run && run.status !== "Working" && (!!run.summary || !!run.steps?.length);
+  // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).
+  const worked = item.workUnder && run && run.status !== "Working";
   return (
     <View style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
@@ -322,34 +328,40 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
         </View>
       )}
       {!message.text.trim() && timestamps && <Stamp time={message.time} align="flex-start" />}
-      {worked && <WorkLine chatId={chatId} run={run} mode={steps} />}
+      {worked && <GroupWorkLine chatId={chatId} run={run} mode={steps} />}
       {end && run && <Cards run={run} latest={latest} rich={rich} onSend={onSend} onDraft={onDraft} />}
     </View>
   );
 });
 
-/** A turn that ended without a reply: what went wrong, and a way to try again. */
-export function FailedNote({ run }: { run: Run }) {
+/**
+ * A turn that ended without finishing, in one line: how it ended and why, in the desktop app's
+ * words ("Needs you · …", "Interrupted · …", "Stopped · Reply stopped."), or "Timed out". The
+ * newest such turn offers Try again, which sends its message again.
+ */
+export function EndedNote({ run, ending, retry }: { run: Run; ending: Ending; retry: boolean }) {
   const { colors } = useTheme();
+  const line = ending.label + " · " + ending.detail;
+  if (ending.kind === "stopped")
+    return (
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 32 }} accessibilityLabel={line}>
+        <CirclePause size={14} color={colors.faint} strokeWidth={2.3} />
+        <T variant="footnote" color="faint" numberOfLines={2} style={{ flexShrink: 1 }}>
+          {ending.label}
+        </T>
+        {retry && <Button title="Try again" size="sm" variant="ghost" onPress={() => void attempt(api.retry(run.id))} />}
+      </View>
+    );
+  const soft = ending.kind === "failed" ? colors.dangerSoft : colors.warningSoft;
+  const tone = ending.kind === "failed" ? "danger" : "warning";
+  const Icon = ending.kind === "timed-out" ? TimerOff : CircleAlert;
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, paddingLeft: space.lg, borderRadius: radius.lg, backgroundColor: colors.dangerSoft }}>
-      <CircleAlert size={18} color={colors.danger} strokeWidth={2.3} />
-      <T variant="subhead" color="danger" numberOfLines={3} style={{ flex: 1 }}>
-        {run.detail || "Something went wrong."}
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, paddingLeft: space.lg, borderRadius: radius.lg, backgroundColor: soft }} accessible={!retry} accessibilityLabel={line}>
+      <Icon size={18} color={colors[tone]} strokeWidth={2.3} />
+      <T variant="subhead" color={tone} numberOfLines={3} style={{ flex: 1 }}>
+        {line}
       </T>
-      <Button title="Try again" size="sm" variant="secondary" onPress={() => void attempt(api.retry(run.id))} />
-    </View>
-  );
-}
-
-export function StoppedNote() {
-  const { colors } = useTheme();
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }} accessibilityLabel="Stopped">
-      <CirclePause size={14} color={colors.faint} strokeWidth={2.3} />
-      <T variant="footnote" color="faint">
-        Stopped
-      </T>
+      {retry && <Button title="Try again" size="sm" variant="secondary" onPress={() => void attempt(api.retry(run.id))} />}
     </View>
   );
 }

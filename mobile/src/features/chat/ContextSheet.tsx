@@ -44,7 +44,8 @@ export default function ContextSheet() {
   const view = useWatchedChat(chatId);
   const recent = usePart("runs");
   const live = usePart("live");
-  const running = useApp((state) => !!state.running[chatId]);
+  // The chat's run part is also its newest turn when that ended without a reply: only a working one is running.
+  const running = useApp((state) => state.running[chatId]?.status === "Working");
   const settings = useSettings();
   const models = useModels();
   const providers = useProviders();

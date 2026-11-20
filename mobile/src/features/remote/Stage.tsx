@@ -1,5 +1,4 @@
 // The picture of the computer's screen, the pointer drawn over it, and the touch surface.
-import { Image } from "expo-image";
 import { type ReactNode, useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { GestureDetector, useManualGesture } from "react-native-gesture-handler";
@@ -7,6 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanima
 import Svg, { Path } from "react-native-svg";
 import { chrome } from "./chrome";
 import { type Fit, fitPicture, type GestureValues, NO_FIT, type ScreenGestures } from "./gestures";
+import { PictureSlots } from "./Picture";
 import type { Pictures, SlotName } from "./useFeed";
 
 const ARROW = 24;
@@ -75,24 +75,7 @@ export function Stage({
       >
         {fit.imageWidth > 0 && (
           <Animated.View style={[{ position: "absolute", left: fit.left, top: fit.top, width: fit.imageWidth, height: fit.imageHeight }, zoomed]} pointerEvents="none">
-            {(["a", "b"] as const).map((slot) => {
-              const picture = pictures[slot];
-              if (!picture) return null;
-              return (
-                <Image
-                  key={slot}
-                  source={{ uri: picture.uri }}
-                  style={[StyleSheet.absoluteFill, { zIndex: pictures.front === slot ? 1 : 0 }]}
-                  contentFit="contain"
-                  cachePolicy="none"
-                  transition={null}
-                  priority="high"
-                  accessible={false}
-                  onDisplay={() => drawn(slot, picture.id)}
-                  onError={() => drawn(slot, picture.id, false)}
-                />
-              );
-            })}
+            <PictureSlots pictures={pictures} drawn={drawn} />
           </Animated.View>
         )}
         {showPointer && (

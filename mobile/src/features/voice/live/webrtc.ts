@@ -2,8 +2,14 @@
 // offer; the computer takes it to the provider and hands back the answer, so no secret reaches the
 // phone. The bot's sound plays by itself from the remote track; events go both ways as JSON on the
 // `oai-events` data channel.
+//
+// The phone has no level for the microphone here, only the provider's events. While the provider
+// sends the bot's sound (`output_audio_buffer.started` to `.stopped`) and for its echo after, the
+// microphone track is off, so the bot can't hear itself; the person stops it with a tap. Push to
+// talk turns turn detection off and the track is on only while the button is held.
 import type { LiveSession } from "@/link/types";
-import { OpenAIRealtime, TRANSCRIBE_MODEL } from "./openai";
+import { MIN_TURN_MS, RELEASE_TAIL_MS } from "./input";
+import { OpenAIRealtime, TRANSCRIBE_MODEL, turnsByHand } from "./openai";
 import { LiveBase, type ToolRunner } from "./types";
 
 type WebRTC = typeof import("react-native-webrtc");
@@ -20,6 +26,17 @@ export class WebRTCTransport extends LiveBase {
   private channel: Channel | null = null;
   private stream: Stream | null = null;
   private protocol: OpenAIRealtime;
+  private muted = false;
+  /** A response is under way, so there is one to cancel. */
+  private responding = false;
+  /** The provider is sending the bot's sound, so there is some to clear. */
+  private sounding = false;
+  /** The provider confirmed turn detection is off: a release commits the turn and asks for the answer. */
+  private manual = false;
+  private reopen: ReturnType<typeof setTimeout> | null = null;
+  private sending: ReturnType<typeof setTimeout> | null = null;
+  /** How long the button has been held in this turn (a quick press again goes on with it). */
+  private turnMs = 0;
 
   constructor(
     private readonly webrtc: WebRTC,
@@ -35,7 +52,24 @@ export class WebRTCTransport extends LiveBase {
       tool: (name, args) => this.tool(name, args),
       error: (message) => this.emit("error", message),
       // The provider cuts the bot's unplayed sound itself when the person talks over it.
+      responding: (on) => (this.responding = on),
+      playing: (on) => {
+        this.sounding = on;
+        this.gate.playing(on);
+        this.apply();
+      },
+      session: (session) => (this.manual = turnsByHand(session)),
     });
+  }
+
+  /** Turns the microphone track on or off for what the gate says now, and again when that changes by itself. */
+  private apply() {
+    if (this.reopen) clearTimeout(this.reopen);
+    this.reopen = null;
+    const on = !this.muted && !this.ended && this.gate.open();
+    for (const track of this.stream?.getAudioTracks() ?? []) track.enabled = on;
+    const wait = this.gate.wait();
+    if (wait !== null && !this.ended) this.reopen = setTimeout(() => this.apply(), wait + 5);
   }
 
   private send(event: Record<string, unknown>) {
@@ -55,6 +89,8 @@ export class WebRTCTransport extends LiveBase {
       return;
     }
     this.stream = stream;
+    // In push to talk nothing goes until the button is held.
+    this.apply();
     const peer = new RTCPeerConnection({});
     this.peer = peer;
     for (const track of stream.getAudioTracks()) peer.addTrack(track, stream);
@@ -62,8 +98,10 @@ export class WebRTCTransport extends LiveBase {
     const channel = peer.createDataChannel("oai-events");
     this.channel = channel;
     channel.addEventListener("open", () => {
-      // The person's words are written down only when the session asks for it.
-      this.send({ type: "session.update", session: { type: "realtime", audio: { input: { transcription: { model: TRANSCRIBE_MODEL } } } } });
+      // The person's words are written down only when the session asks for it. Push to talk turns
+      // the provider's turn detection off (the Realtime conversations guide, "push-to-talk").
+      const input = { transcription: { model: TRANSCRIBE_MODEL }, ...(this.input === "push" && { turn_detection: null }) };
+      this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
       this.setStatus("listening");
     });
     channel.addEventListener("message", (event: { data: unknown }) => this.protocol.handle(event.data));
@@ -85,7 +123,57 @@ export class WebRTCTransport extends LiveBase {
   }
 
   mute(muted: boolean) {
-    for (const track of this.stream?.getAudioTracks() ?? []) track.enabled = !muted;
+    this.muted = muted;
+    this.apply();
+  }
+
+  interrupt() {
+    if (this.ended) return;
+    // Over WebRTC the provider plays the sound: clearing its buffer stops it and cuts the item there.
+    if (this.responding) this.send({ type: "response.cancel" });
+    if (this.sounding) this.send({ type: "output_audio_buffer.clear" });
+    this.responding = false;
+    this.sounding = false;
+    this.gate.cut();
+    this.apply();
+    this.setStatus("listening");
+  }
+
+  press() {
+    if (this.input !== "push" || this.ended || this.gate.holding) return;
+    if (this.sending) {
+      // Pressed again before the last turn was sent: it goes on as the same turn.
+      clearTimeout(this.sending);
+      this.sending = null;
+    } else {
+      this.turnMs = 0;
+      if (this.responding || this.sounding) this.interrupt();
+      this.send({ type: "input_audio_buffer.clear" });
+    }
+    this.gate.press();
+    this.apply();
+    this.setStatus("listening");
+  }
+
+  release() {
+    if (!this.gate.holding) return;
+    this.turnMs += this.gate.release();
+    const held = this.turnMs;
+    // The track stays on a moment (apply's timer turns it off), so the last word gets there first.
+    this.apply();
+    this.sending = setTimeout(() => {
+      this.sending = null;
+      this.apply();
+      // Where the provider kept its own turn detection, it hears the silence and answers by itself.
+      if (this.ended || !this.manual) return;
+      if (held < MIN_TURN_MS) {
+        this.send({ type: "input_audio_buffer.clear" });
+        return;
+      }
+      this.send({ type: "input_audio_buffer.commit" });
+      this.send({ type: "response.create" });
+      this.setStatus("thinking");
+    }, RELEASE_TAIL_MS + 10);
   }
 
   setSpeaker(on: boolean) {
@@ -93,6 +181,10 @@ export class WebRTCTransport extends LiveBase {
   }
 
   protected close() {
+    if (this.reopen) clearTimeout(this.reopen);
+    if (this.sending) clearTimeout(this.sending);
+    this.reopen = null;
+    this.sending = null;
     try {
       this.channel?.close();
     } catch {

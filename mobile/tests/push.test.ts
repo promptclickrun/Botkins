@@ -211,6 +211,21 @@ test("a bot's request is urgent and names what it needs", async () => {
   }
 });
 
+test("a secure input's notification says what it is, and never asks a question", async () => {
+  const { call, until, done, sent, paired } = await setup();
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production" });
+    await call("send", "chat-auth", "secure password");
+    await until(() => sent.some((item) => item.payload.aps?.category === "botkins_request"), "the secure input's notification");
+    const alert = sent.find((item) => item.payload.aps?.category === "botkins_request")!;
+    const content = unseal(paired, alert.payload.b);
+    assert.match(content.t, /needs a secure input$/);
+    assert.equal(content.k, "request");
+  } finally {
+    await done();
+  }
+});
+
 test("a Live Activity is started for a turn begun elsewhere, follows it, and is marked done when the turn ends", async () => {
   // A turn that lasts long enough to be seen under way.
   const { link, call, until, done, sent } = await setup(0.6);

@@ -729,6 +729,9 @@ function demoArtifacts(state) {
 }
 const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
 /** Words in a message that make the demo bot use the person's phone, and the tool it calls. */
+// The demo turns of docs/turn-timeline.md (MockBackend.timelineTurn).
+const TIMELINE_TURN = /long turn|ask midway|time ?out|interrupt me/i;
+
 const PHONE_ASKS = [
   { when: /calendar|schedule|meeting/i, tool: "phone_calendar_events", label: "Reading your calendar", args: () => ({ from: today(), to: today(), limit: 10 }) },
   { when: /contact/i, tool: "phone_contacts_search", label: "Searching your contacts", args: () => ({ query: "a", limit: 5 }) },
@@ -745,8 +748,168 @@ function delivery(value) {
   return { to: value.to, ...(value.to === "chat" && typeof value.chatId === "string" && { chatId: value.chatId }) };
 }
 
+// ── Plugins ("plugins-v1", docs/plugins.md) ──────────────────────────────────────────────────────
+// Two made-up catalogs in GitHub's shape, read from nowhere: the demo never fetches GitHub. A plugin's
+// `revision` is a hash of what it holds, so a phone that reviewed one version can't install another.
+// BOTKINS_DEV_PLUGINS=off leaves the capability out, as an older computer would.
+const PLUGIN_PAGE = 50;
+const pluginField = (key, label, { secret = false, required = true, ...rest } = {}) => ({ key, label, secret, required, ...rest });
+const contents = ({ skills = [], agents = [], commands = [], mcpServers = [], hooks = [], lspServers } = {}) => ({ skills, agents, commands, mcpServers, hooks, ...(lspServers && { lspServers }) });
+const DEMO_MARKETPLACES = [
+  { id: "awesome-copilot", name: "GitHub", source: "github/awesome-copilot", builtIn: true },
+  { id: "copilot-plugins", name: "Copilot plugins", source: "github/copilot-plugins", builtIn: true },
+];
+const demoPlugin = (marketplace, name, entry) => ({ id: name + "@" + marketplace, name, marketplace, version: "1.0.0", license: "MIT", config: [], ...entry, contents: contents(entry.contents) });
+const DEMO_PLUGINS = [
+  demoPlugin("awesome-copilot", "keepsake-memory", {
+    description: "Long-term memory for your bots: recalls what matters before each message and keeps what was learned after each reply.",
+    version: "0.9.2",
+    author: "Keepsake",
+    homepage: "https://keepsake.example.com",
+    repository: "https://github.com/example/keepsake-memory",
+    keywords: ["memory", "recall", "context"],
+    contents: {
+      skills: ["memory-hygiene"],
+      mcpServers: [{ name: "keepsake", kind: "remote", url: "https://memory.example.com/mcp/${MEMORY_BANK_ID}/" }],
+      hooks: [
+        { event: "sessionStart", command: 'node "${PLUGIN_ROOT}/hooks/brief.mjs"' },
+        { event: "userPromptSubmitted", command: 'node "${PLUGIN_ROOT}/hooks/recall.mjs"' },
+        { event: "agentStop", command: 'node "${PLUGIN_ROOT}/hooks/retain.mjs"' },
+      ],
+    },
+    config: [
+      pluginField("MEMORY_API_KEY", "Memory API key", { secret: true, description: "From your Keepsake account." }),
+      pluginField("MEMORY_BANK_ID", "Memory bank ID", { description: "One bank per person or team." }),
+    ],
+    postInstallMessage: "Your bots now remember across chats. Start a new chat to try it.",
+  }),
+  demoPlugin("awesome-copilot", "writing-skills", {
+    description: "Skills for clear writing: plain summaries, release notes and friendly emails.",
+    version: "1.2.0",
+    author: "GitHub",
+    repository: "https://github.com/github/awesome-copilot",
+    keywords: ["writing", "docs"],
+    contents: { skills: ["plain-summary", "release-notes", "friendly-email"] },
+    // After it is installed the catalog moves on once, so "Update" has something new to show.
+    later: { version: "1.3.0", contents: { skills: ["plain-summary", "release-notes", "friendly-email", "headlines"] } },
+  }),
+  demoPlugin("awesome-copilot", "tracker", {
+    description: "Read and update issues in your team's tracker.",
+    author: "Tracker Inc.",
+    homepage: "https://tracker.example.com",
+    keywords: ["issues", "project management"],
+    contents: { mcpServers: [{ name: "tracker", kind: "remote", url: "https://mcp.tracker.example.com/mcp", oauth: true }], commands: ["triage"] },
+  }),
+  demoPlugin("awesome-copilot", "sqlite-explorer", {
+    description: "Look inside SQLite databases on your computer and ask questions of them.",
+    version: "2.1.0",
+    author: "Data Folks",
+    repository: "https://github.com/example/sqlite-explorer",
+    keywords: ["database", "sql"],
+    contents: { mcpServers: [{ name: "sqlite", kind: "local", command: "npx -y @example/sqlite-mcp ${DATABASE_PATH}" }], skills: ["sql-help"] },
+    config: [pluginField("DATABASE_PATH", "Database path", { default: "~/Documents/data.db" })],
+  }),
+  demoPlugin("awesome-copilot", "legacy-formatter", {
+    description: "Formats code on save. An old plugin whose hooks file no longer reads.",
+    version: "0.3.1",
+    author: "Someone",
+    keywords: ["format"],
+    contents: { commands: ["format"] },
+    readError: "Its hooks file couldn't be read: hooks/hooks.json isn't valid JSON.",
+  }),
+  demoPlugin("awesome-copilot", "code-review", {
+    description: "A reviewer agent and commands to review a change before it merges.",
+    author: "GitHub",
+    keywords: ["review", "git"],
+    contents: { agents: ["reviewer", "security-reviewer"], commands: ["review", "review-pr"] },
+  }),
+  demoPlugin("awesome-copilot", "git-guard", {
+    description: "Stops a bot before it force-pushes or rewrites history.",
+    author: "Safe Ops",
+    keywords: ["git", "safety"],
+    contents: { hooks: [{ event: "preToolUse", command: "sh ${PLUGIN_ROOT}/guard.sh" }] },
+  }),
+  demoPlugin("awesome-copilot", "test-runner", {
+    description: "Runs the tests after a bot edits a file, and tells it what failed.",
+    author: "Test Lab",
+    keywords: ["testing"],
+    contents: { skills: ["fix-failing-test"], hooks: [{ event: "postToolUse", command: "npm test --silent" }, { event: "postToolUseFailure", command: "node ${PLUGIN_ROOT}/explain.mjs" }] },
+  }),
+  demoPlugin("awesome-copilot", "cloud-docs", {
+    description: "Search a cloud provider's documentation while you work.",
+    author: "Cloud Docs",
+    keywords: ["docs", "cloud"],
+    contents: { mcpServers: [{ name: "cloud-docs", kind: "remote", url: "https://docs.cloud.example.com/mcp" }] },
+  }),
+  demoPlugin("awesome-copilot", "frontend-design", {
+    description: "A designer agent and skills for accessible, good-looking web pages.",
+    author: "Pixel Co.",
+    keywords: ["design", "css", "accessibility"],
+    contents: { skills: ["accessible-forms", "color-contrast"], agents: ["designer"] },
+  }),
+  demoPlugin("awesome-copilot", "typescript-lsp", {
+    description: "TypeScript language smarts for bots: go to definition, find references, type errors.",
+    author: "Lang Tools",
+    keywords: ["typescript", "lsp"],
+    contents: { lspServers: ["typescript-language-server"] },
+  }),
+  demoPlugin("awesome-copilot", "notify-me", {
+    description: "Sends a note to your chat app when a long turn ends.",
+    author: "Ping",
+    keywords: ["notifications", "slack"],
+    contents: { hooks: [{ event: "sessionEnd", command: "curl -s -X POST ${WEBHOOK_URL}" }, { event: "notification", command: "curl -s -X POST ${WEBHOOK_URL}" }] },
+    config: [pluginField("WEBHOOK_URL", "Webhook URL"), pluginField("SLACK_TOKEN", "Slack token", { secret: true, required: false })],
+  }),
+  demoPlugin("copilot-plugins", "actions-helper", {
+    description: "Write and fix GitHub Actions workflows.",
+    author: "GitHub",
+    keywords: ["ci", "actions"],
+    contents: { skills: ["workflow-syntax", "fix-workflow"], commands: ["new-workflow"] },
+  }),
+  demoPlugin("copilot-plugins", "dependency-doctor", {
+    description: "Finds outdated and vulnerable packages and proposes upgrades.",
+    author: "GitHub",
+    keywords: ["dependencies", "security"],
+    contents: { agents: ["upgrader"], mcpServers: [{ name: "advisories", kind: "remote", url: "https://api.advisories.example.com/mcp" }] },
+  }),
+  demoPlugin("copilot-plugins", "spark-docs", {
+    description: "Keeps a project's README and docs in step with its code.",
+    author: "GitHub",
+    keywords: ["docs"],
+    contents: { skills: ["readme"], hooks: [{ event: "agentStop", command: "node ${PLUGIN_ROOT}/check-docs.mjs" }] },
+  }),
+];
+/** What a folder on the demo computer holds as a plugin. Any other made-up folder holds one skill. */
+const DEMO_FOLDER_PLUGINS = {
+  "/Users/demo/team-skills": { description: "Our team's own skills.", contents: { skills: ["release-checklist", "standup-summary"], hooks: [{ event: "sessionStart", command: 'node "${PLUGIN_ROOT}/hooks/today.mjs"' }] } },
+};
+const pluginRevision = (entry) => hash(JSON.stringify({ version: entry.version, contents: entry.contents, config: entry.config }));
+const STALE_INSTALL = "This plugin changed since you looked at it. Look at it again before you install it.";
+const STALE_UPDATE = "This plugin changed since you looked at it. Look at it again before you update it.";
+const LISTING_KEYS = ["id", "name", "marketplace", "description", "version", "author", "homepage", "repository", "license", "keywords"];
+const listingOf = (entry) => Object.fromEntries(LISTING_KEYS.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]));
+const HOOK_SENTENCES = {
+  sessionStart: "when a chat starts",
+  userPromptSubmitted: "at each message you send",
+  preToolUse: "before a tool runs",
+  postToolUse: "after a tool runs",
+  postToolUseFailure: "after a tool fails",
+  agentStop: "when a reply ends",
+  sessionEnd: "when a chat ends",
+  notification: "when a bot sends a notification",
+};
+/** What a plugin runs on the computer, in sentences. */
+function pluginWarnings(entry) {
+  const out = [];
+  for (const event of [...new Set(entry.contents.hooks.map((hook) => hook.event))]) out.push("Runs a command on your computer " + (HOOK_SENTENCES[event] ?? "at " + event) + ".");
+  for (const server of entry.contents.mcpServers) if (server.kind === "local") out.push("Starts " + server.name + " on your computer.");
+  return out;
+}
+
 export class MockBackend {
-  constructor({ state = seed(), speed = 1 } = {}) {
+  constructor({ state = seed(), speed = 1, timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
+    // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
+    this.timeline = timeline;
     // A computer nobody has set up yet: no bots, and nothing that belongs to one.
     if (process.env.BOTKINS_DEV_EMPTY === "1") Object.assign(state, { bots: [], chats: [], runs: [], routines: [], tasks: [], board: [], panels: [], sections: [], requests: [] });
     Object.assign(this, { state, speed, listeners: new Set(), turns: new Map(), waiting: new Map(), memory: new Map(), skillList: SKILLS.map((s) => ({ ...s })) });
@@ -754,7 +917,16 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "artifacts-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    if (this.timeline) this.capabilities.push("turn-timeline-v1");
+    // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
+    this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
+    this.pluginPage = pluginPage;
+    this.plugins = { marketplaces: DEMO_MARKETPLACES.map((market) => ({ ...market, updatedAt: now() - 20 * MIN })), catalog: structuredClone(DEMO_PLUGINS), installed: [] };
+    if (this.pluginsOn) {
+      this.capabilities.push("plugins-v1");
+      this.installPlugin("writing-skills@awesome-copilot");
+    }
     this.cache = { bytes: 48_340_992, catalogs: 6 };
     state.artifacts = { revision: 1 };
     this.artifacts = demoArtifacts(state);
@@ -789,7 +961,99 @@ export class MockBackend {
     return { app: "botkins", version: "0.8.0-demo", platform: process.platform };
   }
   snapshot() {
+    // The installed plugins as a phone sees them: a secret setting says only that it is set.
+    if (this.pluginsOn) this.state.plugins = this.plugins.installed.map((record) => this.pluginView(record));
     return this.state;
+  }
+  // ── Plugins ──
+  pluginEntry(id) {
+    const entry = this.plugins.catalog.find((item) => item.id === id);
+    if (!entry) throw new Error("That plugin isn't in any marketplace any more.");
+    return entry;
+  }
+  /** What a folder plugin's folder holds now, as a preview with its revision. */
+  folderPreview(record) {
+    const made = DEMO_FOLDER_PLUGINS[record.folder] ?? { contents: { skills: [slug(posix.basename(record.folder)) || "skill"] } };
+    const now = contents(made.contents);
+    const warnings = pluginWarnings({ contents: now });
+    return { ...record.listing, installed: true, contents: now, config: structuredClone(record.config), revision: hash(JSON.stringify(now)), ...(warnings.length && { warnings }) };
+  }
+  installedPlugin(id) {
+    const record = this.plugins.installed.find((item) => item.id === id);
+    if (!record) throw new Error("That plugin isn't installed.");
+    return record;
+  }
+  /** "all", or bot ids that exist. */
+  pluginBots(bots) {
+    if (bots === undefined || bots === "all") return "all";
+    if (!Array.isArray(bots) || !bots.length) throw new Error("Choose which bots use it.");
+    for (const id of bots) this.bot(id);
+    return [...new Set(bots)];
+  }
+  /** Settings into a record. A secret is kept nowhere: the demo notes only that it is set, as a vault would hold it apart. */
+  applyPluginValues(record, values) {
+    for (const [key, value] of Object.entries(values ?? {})) {
+      const field = record.config.find((item) => item.key === key);
+      if (!field) throw new Error("That plugin has no setting called " + key + ".");
+      if (value === null || value === "") delete record.values[key];
+      else if (typeof value === "string" || (value && typeof value === "object" && typeof value.$credential === "string")) record.values[key] = field.secret || typeof value !== "string" ? { set: true } : { set: true, value };
+      else throw new Error("That value can't be saved.");
+    }
+  }
+  /** A tool server for each of the plugin's tools that signs in with OAuth, so "Sign in on your computer" has one to sign in. */
+  pluginServers(record) {
+    record.serverIds ??= {};
+    for (const server of record.contents.mcpServers) {
+      if (!server.oauth || record.serverIds[server.name]) continue;
+      const id = "mcp-plugin-" + slug(record.listing.name + "-" + server.name);
+      this.state.mcpServers.push({ id, name: server.name, type: "http", enabled: true, url: server.url, auth: { type: "oauth", signedIn: false, signingIn: false, canRenew: false, clientSecret: false } });
+      record.serverIds[server.name] = id;
+    }
+  }
+  pluginView(record) {
+    const entry = record.folder ? null : this.plugins.catalog.find((item) => item.id === record.id);
+    const mcpServers = record.contents.mcpServers.map((server) => (record.serverIds?.[server.name] ? { ...server, serverId: record.serverIds[server.name] } : { ...server }));
+    const config = record.config.map((field) => ({ ...field, set: !!record.values[field.key]?.set, ...(!field.secret && record.values[field.key]?.value !== undefined && { value: record.values[field.key].value }) }));
+    const signIn = mcpServers.find((server) => server.serverId && !this.state.mcpServers.find((item) => item.id === server.serverId)?.auth?.signedIn);
+    const [status, detail] = record.readError
+      ? ["error", record.readError]
+      : config.some((field) => field.required && !field.set)
+        ? ["needs-config"]
+        : signIn
+          ? ["needs-sign-in", "Sign in to " + signIn.name + " on your computer."]
+          : ["ready"];
+    const { skills, ...rest } = record.contents;
+    const more = Object.values(rest).some((list) => Array.isArray(list) && list.length > 0);
+    return {
+      ...record.listing,
+      installed: true,
+      enabled: record.enabled,
+      bots: record.bots === "all" ? "all" : [...record.bots],
+      contents: { ...structuredClone(record.contents), mcpServers },
+      config,
+      status,
+      ...(detail && { detail }),
+      ...(more && skills && { limits: "Bots on Claude, Codex, OpenCode or ACP get only this plugin's skills." }),
+      ...(entry && pluginRevision(entry) !== record.revision && { updateAvailable: true }),
+      ...(record.folder && { folder: record.folder }),
+      installedAt: record.installedAt,
+    };
+  }
+  installPlugin(id, { bots, config, revision } = {}) {
+    const entry = this.pluginEntry(id);
+    if (this.plugins.installed.some((item) => item.id === id)) throw new Error("That plugin is already installed.");
+    if (revision !== undefined && revision !== pluginRevision(entry)) throw new Error(STALE_INSTALL);
+    const record = { id, listing: listingOf(entry), contents: structuredClone(entry.contents), config: structuredClone(entry.config), values: {}, enabled: true, bots: this.pluginBots(bots), installedAt: now(), revision: pluginRevision(entry), ...(entry.readError && { readError: entry.readError }) };
+    for (const field of record.config) if (!field.secret && field.default !== undefined) record.values[field.key] = { set: true, value: field.default };
+    this.applyPluginValues(record, config);
+    this.pluginServers(record);
+    this.plugins.installed.push(record);
+    // The catalog moves on once after this install, so "Update" has a new version to show.
+    if (entry.later) {
+      Object.assign(entry, entry.later, { contents: contents(entry.later.contents) });
+      delete entry.later;
+    }
+    return this.pluginView(record);
   }
   subscribe(fn) {
     this.listeners.add(fn);
@@ -829,8 +1093,206 @@ export class MockBackend {
     this.changed();
     return new Promise((resolve) => this.waiting.set(id, resolve));
   }
+  /**
+   * The turns of docs/turn-timeline.md. "long turn": thinking, text, steps and two helpers, and it
+   * takes a steer while it runs. "ask midway": a question in the middle, and more work after the
+   * answer. "time out" and "interrupt me": some text and steps, then the turn ends without a reply.
+   * With "turn-timeline-v1" the text before a step, a steer or a question becomes an interim message,
+   * an answer becomes a message, each helper's own steps are marked, and a turn that ends without a
+   * reply keeps what it wrote. As an older computer (BOTKINS_DEV_TIMELINE=off) it does what the
+   * desktop app does today: one growing text, the reply is only the last part of it and has no time,
+   * and a turn that ends without a reply drops its text.
+   */
+  async timelineTurn(chat, run, prompt) {
+    const id = chat.id;
+    const timeline = this.timeline;
+    const turn = { stopped: false, steers: [] };
+    this.turns.set(id, turn);
+    const live = () => !turn.stopped;
+    const kind = /long turn/i.test(prompt) ? "long" : /ask midway/i.test(prompt) ? "ask" : /interrupt me/i.test(prompt) ? "interrupt" : "timeout";
+    this.state.steerable ??= {};
+    this.state.steerable[id] = kind === "long";
+    this.state.streams[id] = "";
+    this.state.thinking[id] = "";
+    this.state.intents[id] = "Thinking it through";
+    run.steps = [];
+    this.changed();
+    // The text since the last interim message, and when its first words came.
+    let said = "";
+    let began = 0;
+    const commit = () => {
+      if (!said.trim()) return;
+      if (timeline) {
+        chat.messages.push({ role: "assistant", text: said.trim(), runId: run.id, time: began, interim: true });
+        this.state.streams[id] = "";
+      }
+      said = "";
+      this.changed();
+    };
+    const say = async (words) => {
+      const pieces = words.split(/(?<=\s)/);
+      for (let i = 0; i < pieces.length && live(); i += 2) {
+        if (!said) {
+          began = now();
+          // An older computer keeps one text: a new part starts a new paragraph, as the desktop app does.
+          if (this.state.streams[id]) this.state.streams[id] += "\n\n";
+        }
+        const piece = pieces.slice(i, i + 2).join("");
+        said += piece;
+        this.state.streams[id] += piece;
+        this.changed();
+        await this.sleep(60);
+      }
+    };
+    const think = async (words) => {
+      const thought = { id: randomUUID(), text: "", started: now() };
+      (run.reasoning ??= []).push(thought);
+      for (const piece of words.split(/(?<=\s)/)) {
+        if (!live()) break;
+        thought.text += piece;
+        this.state.thinking[id] = run.reasoning.map((entry) => entry.text).join("\n\n");
+        this.changed();
+        await this.sleep(35);
+      }
+      thought.finished = now();
+    };
+    const step = async (name, label, input, ms, output, agentId) => {
+      // The turn's own step ends the text before it; a helper's step doesn't.
+      if (!agentId) commit();
+      const entry = { id: randomUUID(), name, label, status: "Running", started: now(), input: JSON.stringify(input, null, 2), ...(agentId && timeline && { agentId }) };
+      run.steps.push(entry);
+      if (!agentId) this.state.intents[id] = label;
+      this.changed();
+      await this.sleep(ms);
+      if (!live()) return entry;
+      Object.assign(entry, { status: "Done", finished: now(), ...(output && { output }) });
+      this.changed();
+      return entry;
+    };
+    // A helper: the step that starts it has its id, and its own steps run beside the turn's.
+    const helper = (name, description, asked, intent, work, result) => {
+      commit();
+      const helperId = "task-" + randomUUID().slice(0, 8);
+      const task = { id: helperId, name: "task", label: description, status: "Running", started: now(), input: JSON.stringify({ description, prompt: asked }, null, 2) };
+      run.steps.push(task);
+      const agent = { id: helperId, name, description, status: "Running", started: now(), ...(timeline && { prompt: asked, intent }) };
+      (run.agents ??= []).push(agent);
+      this.changed();
+      return (async () => {
+        for (const [tool, label, input, ms, output] of work) {
+          if (!live()) break;
+          await step(tool, label, input, ms, output, helperId);
+        }
+        const finished = now();
+        if (!live()) Object.assign(agent, { status: "Failed", detail: "Stopped with the reply", finished });
+        else {
+          Object.assign(agent, { status: "Done", finished, ...(timeline && { result }) });
+          delete agent.intent;
+          Object.assign(task, { status: "Done", finished, output: result });
+        }
+        this.changed();
+      })();
+    };
+    // What the person sent while the turn ran, said back in the next words.
+    const steered = async () => {
+      while (turn.steers.length && live()) await say("Noted: " + turn.steers.shift().replace(/[.!?\s]+$/, "") + ". ");
+    };
+
+    let reply = "";
+    let ended = null;
+    if (kind === "long") {
+      // A steer is delivered at once, as the desktop app delivers it to a provider that takes one.
+      turn.steer = (words) => {
+        if (!live()) return false;
+        commit();
+        chat.messages.push({ role: "user", text: words, steeredRunId: run.id, time: now() });
+        turn.steers.push(words);
+        this.changed();
+        return true;
+      };
+      await think("A long job: read the code, run the tests, write it up. Two helpers can look in parallel. ");
+      await say("I'll start by looking at how the project is laid out. ");
+      await step("view", "Reading README.md", { path: "README.md" }, 900, "# Botkins\nThe phone app for the Botkins app on your computer.");
+      await step("grep", "Searching for open sockets", { query: "new WebSocket" }, 900, "4 matches in 3 files");
+      await say("Two places need a closer look, so I'm asking two helpers to dig in while I run the tests. ");
+      const helpers = [
+        helper("Explore", "Find tests that open sockets", "Find every test in tests/ that opens a socket, and say which ones close it again.", "Reading the tests", [["grep", "Searching tests/ for listen(", { query: "listen(" }, 1200, "6 matches"], ["view", "Reading tests/link.test.ts", { path: "tests/link.test.ts" }, 1500, "…"], ["view", "Reading tests/relay.test.ts", { path: "tests/relay.test.ts" }, 1500, "…"]], "Six tests open a socket. All of them close it in a finally block, except relay.test.ts at line 88."),
+        helper("Review", "Check the relay's limits", "Read relay/README.md and check that the limits there match the code.", "Comparing the limits", [["view", "Reading relay/README.md", { path: "relay/README.md" }, 1800, "…"], ["grep", "Searching relay/src for MAX_", { query: "MAX_" }, 1400, "5 matches"]], "The limits match, except the frame size: the README says 1 MiB and the code allows 2 MiB."),
+      ];
+      await think("While they work I can run the tests. ");
+      await step("bash", "npm test", { command: "npm test" }, 2600, "360 passing");
+      await steered();
+      await step("bash", "npx tsc --noEmit", { command: "npx tsc --noEmit" }, 1600, "");
+      await steered();
+      await say("The tests pass. Waiting for the helpers to finish. ");
+      await Promise.all(helpers);
+      await steered();
+      await step("edit", "Editing relay/README.md", { path: "relay/README.md" }, 1100, "1 line changed");
+      await steered();
+      reply = "All done. The tests pass, the typecheck is clean, and I fixed the frame size in relay/README.md. One test (relay.test.ts, line 88) leaves a socket open; tell me if you'd like me to close it.";
+    } else if (kind === "ask") {
+      await think("I need to know where this goes before I deploy it. ");
+      await say("I'll get the build ready first. ");
+      await step("bash", "npm run build", { command: "npm run build" }, 1400, "Built in 12s");
+      await say("The build is ready. Before I deploy it, I need to know where to. ");
+      commit();
+      const title = "Where should I deploy the build?";
+      const asking = this.ask({ chatId: id, botId: chat.botId, kind: "question", title, choices: ["Staging", "Production"], freeform: true });
+      const requestId = this.state.requests.at(-1)?.id;
+      this.state.intents[id] = "Waiting for you";
+      const answer = await asking;
+      const value = typeof answer.value === "string" ? answer.value.trim() : "";
+      if (answer.action !== "answer" || !value || !live()) reply = "No problem. I'll leave the build where it is.";
+      else {
+        // What the person answered is an entry of the chat, in its place (never a secret: this question asks for none).
+        if (timeline) chat.messages.push({ role: "user", text: value, time: now(), answer: { runId: run.id, requestId, kind: "question", title } });
+        this.changed();
+        await step("bash", "Deploying to " + value, { command: "npm run deploy -- --env " + value.toLowerCase() }, 1600, "Deployed");
+        await step("web_fetch", "Checking the site", { url: "https://example.com/" }, 900, "200 OK");
+        reply = "Deployed to **" + value + "**, and the site answers.";
+      }
+    } else {
+      await think("Three config files to compare. ");
+      await say("I'm comparing the three config files now. ");
+      await step("view", "Reading config/base.json", { path: "config/base.json" }, 800, "{ … }");
+      await step("view", "Reading config/production.json", { path: "config/production.json" }, 800, "{ … }");
+      await say("The base and production files differ in two places: the log level and the cache size. Next I'll check the staging file and");
+      // Nothing more comes: the computer gives up on the turn after a while.
+      await this.sleep(3000);
+      ended =
+        kind === "interrupt"
+          ? { status: "Interrupted", detail: "Botkins closed during this reply.", ending: "interrupted" }
+          : { status: "Needs you", detail: "Copilot session stalled without an event for 600 seconds.", ending: "timed-out" };
+    }
+
+    if (!ended && live()) await say(reply);
+    if (!ended && turn.stopped) ended = { status: "Stopped", detail: "", ending: "stopped" };
+    const finished = now();
+    if (ended) {
+      // With the capability, what the bot wrote before the turn ended stays in the chat.
+      commit();
+      for (const entry of run.steps) if (entry.status === "Running") entry.status = "Interrupted";
+      for (const agent of run.agents ?? []) if (agent.status === "Running") Object.assign(agent, { status: "Failed", detail: "Stopped with the reply", finished });
+      Object.assign(run, { status: ended.status, detail: ended.detail, finished, ...(timeline && { ending: ended.ending }) });
+    } else {
+      Object.assign(run, { status: "Completed", finished, usage: { input: 5200, output: 640 } });
+      // The reply is what came after the last interim message. An older computer sends it without a time.
+      chat.messages.push({ role: "assistant", text: said.trim() || reply, runId: run.id, ...(timeline && { time: began }) });
+    }
+    for (const key of ["streams", "thinking", "intents", "steerable"]) delete this.state[key][id];
+    this.turns.delete(id);
+    chat.time = finished;
+    chat.unread = true;
+    this.changed();
+    const next = this.state.queued[id]?.shift();
+    if (next) {
+      if (!this.state.queued[id].length) delete this.state.queued[id];
+      this.handlers.send.call(this, id, next.text);
+    }
+  }
   /** A scripted turn: thinking, a tool step, an approval or question when asked for, then the reply. */
   async turn(chat, run, prompt) {
+    if (TIMELINE_TURN.test(prompt)) return this.timelineTurn(chat, run, prompt);
     const id = chat.id;
     const turn = { stopped: false };
     this.turns.set(id, turn);
@@ -870,6 +1332,16 @@ export class MockBackend {
         Object.assign(step, { status: "Failed", finished: now(), output: error.message });
         reply = "I couldn't use your phone for that. " + error.message;
       }
+      this.changed();
+    } else if (live() && /show me the screen/i.test(prompt)) {
+      // The bot shows the computer's screen: a side pane tab of kind "screen", and an ask to show it.
+      // The chat draws a card for each such tab at the time it was made.
+      const chatNow = this.chat(id);
+      const before = chatNow.pane ?? { panels: [], active: null };
+      const at = now();
+      const screen = { id: randomUUID(), kind: "screen", title: "Screen", botId: chat.botId, createdAt: at, updatedAt: at };
+      chatNow.pane = { panels: [...before.panels, screen].slice(-8), active: screen.id, ask: { seq: (before.ask?.seq ?? 0) + 1, panelId: screen.id, runId: run.id, botId: chat.botId, at } };
+      reply = "Here is your computer's screen. Tap it to see it larger.";
       this.changed();
     } else if (live() && /side pane/i.test(prompt)) {
       // The bot opens the pane beside this chat (the desktop app's docs/SIDE_PANE.md): a table, a
@@ -918,9 +1390,34 @@ export class MockBackend {
       const bot = this.bot(chat.botId);
       const answer = await this.ask({ chatId: id, botId: bot.id, kind: "permission", title: "Run a command", label: "npm run deploy", preview: "npm run deploy -- --env production", detail: "Deploys the website to production.", remember: "npm run deploy" });
       reply = answer.action === "deny" || answer.action === "cancel" ? "Okay, I won't run that. Tell me if you'd like another way." : "Done. The deploy finished without errors.";
+    } else if (live() && /long question/i.test(prompt)) {
+      // Three choices of a full sentence each, and a free answer, for the request card's layout.
+      const choices = [
+        "Ship the release tonight and watch the error rate closely, rolling back at the first sign of trouble.",
+        "Wait until tomorrow morning, when the whole team is online and can step in if something goes wrong.",
+        "Ship only the server changes tonight, and hold the app update until the store review comes back.",
+      ];
+      const answer = await this.ask({ chatId: id, botId: chat.botId, kind: "question", title: "The release is ready, but two tests are flaky. How should we go ahead?", choices, freeform: true });
+      reply = answer.action === "answer" && typeof answer.value === "string" ? "Okay. " + answer.value : "No problem. Ask again when you're ready.";
     } else if (live() && /which/i.test(prompt)) {
       const answer = await this.ask({ chatId: id, botId: chat.botId, kind: "question", title: "Which environment should I use?", choices: ["Staging", "Production"], freeform: true });
       reply = answer.action === "answer" ? "Got it: **" + answer.value + "**. I'll use that from here on." : "No problem. Ask again when you're ready.";
+    } else if (live() && /secure (password|login)/i.test(prompt)) {
+      // A secure input ("secure-input-v1"): "secure password" asks for one value, "secure login" for
+      // three. The values go to the computer only. The demo reads which fields came back, names them
+      // by their labels, and keeps no value anywhere (tests/secure-input.test.ts proves it).
+      const login = /login/i.test(prompt);
+      const fields = login
+        ? [
+            { key: "username", label: "Username", kind: "text" },
+            { key: "password", label: "Password", kind: "password" },
+            { key: "code", label: "One-time code", kind: "code", hint: "From your authenticator app", optional: true },
+          ]
+        : [{ key: "password", label: "Password", kind: "password" }];
+      const answer = await this.ask({ chatId: id, botId: chat.botId, kind: "secure", title: login ? "Sign in to the registry" : "The registry's password", detail: "So I can publish the package. I'll use it for this sign-in only.", fields });
+      const got = answer.action === "accept" ? fields.filter((field) => answer.content?.[field.key] !== undefined).map((field) => field.label) : [];
+      const one = got.length === 1;
+      reply = got.length ? "I have " + got.length + (one ? " value: " : " values: ") + got.join(", ") + ". I can use " + (one ? "it" : "them") + " without seeing " + (one ? "it" : "them") + "." : "No problem. I'll leave it for now.";
     } else if (live() && /sign in|password|api key/i.test(prompt)) {
       // A form with a secret in it: the phone masks the key and may send a saved credential instead.
       const answer = await this.ask({
@@ -1138,11 +1635,13 @@ export class MockBackend {
       chat.projectId = projectId;
       chat.mode = project.folder ? (mode ?? "default") : "default";
     },
-    // The options (quote, mentions, attachments) are accepted and ignored.
-    send(id, value, _options) {
+    // The quote, mentions and attachments are accepted and ignored. `delivery: "steer"` hands the
+    // message to a turn that takes one ("long turn"); any other turn keeps it for after.
+    send(id, value, options) {
       const chat = this.chat(id);
       const prompt = text(value, 32000, "message");
       if (this.turns.has(id)) {
+        if (options?.delivery === "steer" && this.turns.get(id).steer?.(prompt)) return;
         (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt });
         return;
       }
@@ -1172,8 +1671,10 @@ export class MockBackend {
       if (!this.state.queued[chatId].length) delete this.state.queued[chatId];
     },
     sendNow(chatId, itemId) {
+      // "Steer now" on a turn that takes a steer; otherwise the demo stops the turn so the message goes next.
+      const item = this.state.queued[chatId]?.find((queued) => queued.id === itemId);
+      if (item && this.turns.get(chatId)?.steer?.(item.text)) return this.handlers.unqueue.call(this, chatId, itemId);
       this.handlers.stop.call(this, chatId);
-      void itemId;
     },
     retry() {},
     compact() {},
@@ -1716,6 +2217,107 @@ export class MockBackend {
       byBot: this.state.bots.map((bot, i) => ({ botId: bot.id, name: bot.name, turns: 60 - i * 11, input: 300_000, output: 20_000, cacheRead: 100_000, cost: 3 - i * 0.5, priced: 30 })),
     }),
     // What the person does with a chat's side pane (the tabs a bot opened beside the chat).
+    // Plugins ("plugins-v1", docs/plugins.md). Nothing here reaches the network.
+    "plugins.marketplaces"() {
+      return this.plugins.marketplaces.map((market) => ({ ...market, ...(!market.error && { count: this.plugins.catalog.filter((entry) => entry.marketplace === market.id).length }) }));
+    },
+    "plugins.addMarketplace"(source) {
+      const text = String(source ?? "").trim();
+      let id;
+      let shown = text;
+      if (/^[\w.-]+\/[\w.-]+(#[\w./-]+)?$/.test(text)) id = text.split("#")[0].split("/")[1];
+      else if (/^https:\/\/[^\s/]+(\/\S*)?$/.test(text)) id = slug(text.replace(/\/+$/, "").split("/").pop().replace(/\.json$/, "")) || "catalog";
+      else if (text.startsWith("/")) {
+        id = posix.basename(chosenFolder(text));
+        shown = "Folder on your computer";
+      } else throw new Error("Enter owner/repo, a web address or a folder.");
+      id = slug(id);
+      if (this.plugins.marketplaces.some((market) => market.id === id)) throw new Error("That marketplace is already added.");
+      const market = { id, name: humanize(id), source: shown, builtIn: false, updatedAt: now(), ...(/broken/i.test(text) && { error: "Its marketplace.json couldn't be read." }) };
+      this.plugins.marketplaces.push(market);
+      if (!market.error)
+        for (const [name, description] of [["starter", "A starter skill pack."], ["helper", "A helpful agent."], ["checks", "Checks a bot's work when a reply ends."]])
+          this.plugins.catalog.push(demoPlugin(id, id + "-" + name, { description, author: humanize(id), contents: name === "helper" ? { agents: [id + "-helper"] } : name === "checks" ? { hooks: [{ event: "agentStop", command: "sh ${PLUGIN_ROOT}/check.sh" }] } : { skills: [id + "-starter"] } }));
+      return { ...market, ...(!market.error && { count: 3 }) };
+    },
+    "plugins.removeMarketplace"(id) {
+      const market = this.plugins.marketplaces.find((item) => item.id === id);
+      if (!market) throw new Error("That marketplace isn't added any more.");
+      if (market.builtIn) throw new Error("GitHub's catalogs can't be removed.");
+      this.plugins.marketplaces = this.plugins.marketplaces.filter((item) => item !== market);
+      // Installed plugins stay; only the catalog's other entries go.
+      this.plugins.catalog = this.plugins.catalog.filter((entry) => entry.marketplace !== id);
+    },
+    "plugins.browse"({ marketplace, query, cursor } = {}) {
+      if (marketplace !== undefined && !this.plugins.marketplaces.some((market) => market.id === marketplace)) throw new Error("That marketplace isn't added any more.");
+      const readable = new Set(this.plugins.marketplaces.filter((market) => !market.error).map((market) => market.id));
+      const words = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+      const found = this.plugins.catalog
+        .filter((entry) => readable.has(entry.marketplace) && (marketplace === undefined || entry.marketplace === marketplace))
+        .filter((entry) => words.every((word) => [entry.name, entry.description ?? "", ...(entry.keywords ?? [])].some((part) => part.toLowerCase().includes(word))))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const from = cursor === undefined ? 0 : Number(cursor);
+      if (!Number.isInteger(from) || from < 0) throw new Error("That list can't be shown.");
+      const installed = new Set(this.plugins.installed.map((record) => record.id));
+      const page = found.slice(from, from + this.pluginPage).map((entry) => ({ ...listingOf(entry), ...(installed.has(entry.id) && { installed: true }) }));
+      return { plugins: page, ...(from + page.length < found.length && { cursor: String(from + page.length) }) };
+    },
+    "plugins.preview"(id) {
+      const record = this.plugins.installed.find((item) => item.id === id);
+      if (record?.folder) return this.folderPreview(record);
+      const entry = this.pluginEntry(id);
+      const warnings = pluginWarnings(entry);
+      return { ...listingOf(entry), ...(record && { installed: true }), contents: structuredClone(entry.contents), config: structuredClone(entry.config), ...(entry.postInstallMessage && { postInstallMessage: entry.postInstallMessage }), ...(warnings.length && { warnings }), revision: pluginRevision(entry) };
+    },
+    "plugins.install"(id, options) {
+      return this.installPlugin(id, options ?? {});
+    },
+    // A folder plugin is added turned off: the person looks at what it runs and turns it on.
+    "plugins.addFolder"(path) {
+      chosenFolder(path);
+      if (this.plugins.installed.some((record) => record.folder === path)) throw new Error("That folder is already added.");
+      const name = posix.basename(path);
+      const made = DEMO_FOLDER_PLUGINS[path] ?? { contents: { skills: [slug(name) || "skill"] } };
+      const record = { id: name + "@folder", listing: { id: name + "@folder", name, marketplace: "folder", ...(made.description && { description: made.description }) }, contents: contents(made.contents), config: [], values: {}, enabled: false, bots: "all", installedAt: now(), folder: path };
+      record.revision = hash(JSON.stringify(record.contents));
+      if (this.plugins.installed.some((item) => item.id === record.id)) throw new Error("A plugin called " + name + " is already installed.");
+      this.plugins.installed.push(record);
+      return this.pluginView(record);
+    },
+    "plugins.configure"(id, values) {
+      this.applyPluginValues(this.installedPlugin(id), values);
+    },
+    "plugins.setBots"(id, bots) {
+      const record = this.installedPlugin(id);
+      record.bots = this.pluginBots(bots);
+    },
+    "plugins.setEnabled"(id, on) {
+      this.installedPlugin(id).enabled = on === true;
+    },
+    "plugins.update"(id, { revision } = {}) {
+      const record = this.installedPlugin(id);
+      // A folder plugin is a copy of the folder taken when it was added (the folder itself can change): an
+      // update takes a fresh copy, the one the person looked at.
+      if (record.folder) {
+        const now = this.folderPreview(record);
+        if (revision !== undefined && revision !== now.revision) throw new Error(STALE_UPDATE);
+        Object.assign(record, { contents: structuredClone(now.contents), revision: now.revision });
+        return this.pluginView(record);
+      }
+      const entry = this.pluginEntry(id);
+      if (revision !== undefined && revision !== pluginRevision(entry)) throw new Error(STALE_UPDATE);
+      const kept = new Set(entry.config.map((field) => field.key));
+      Object.assign(record, { listing: listingOf(entry), contents: structuredClone(entry.contents), config: structuredClone(entry.config), revision: pluginRevision(entry) });
+      for (const key of Object.keys(record.values)) if (!kept.has(key)) delete record.values[key];
+      this.pluginServers(record);
+      return this.pluginView(record);
+    },
+    "plugins.uninstall"(id) {
+      const record = this.installedPlugin(id);
+      const servers = new Set(Object.values(record.serverIds ?? {}));
+      this.state.mcpServers = this.state.mcpServers.filter((server) => !servers.has(server.id));
+      this.plugins.installed = this.plugins.installed.filter((item) => item !== record);
+    },
     sidePane(chatId, action, panelId) {
       const chat = this.chat(chatId);
       const pane = chat.pane ?? (chat.pane = { panels: [], active: null });

@@ -1,6 +1,13 @@
 // ElevenLabs Agents over its signed WebSocket. The computer made the agent and the first message
 // (`init`). Shapes are from the Agents WebSocket guide and its AsyncAPI reference, read 2026-11-19.
 // The real sound formats come in the server's first message; the session's rates are the fallback.
+//
+// ElevenLabs takes turns by itself and has no client event that ends a turn (its client-to-server
+// events are `contextual_update`, `user_message` and `user_activity`). So the phone always sends a
+// steady stream: the microphone when it is open, and silence of the same length while the agent's
+// sound plays (and for its echo after) or, in push to talk, while the button is up. Its own turn
+// taking then hears the person stop and answers.
+import { MicGate, pcmMs } from "./input";
 import { type Connect, type DuplexLike, LiveBase, obj, OPEN, OutputLevel, parseJson, type SocketLike, str, type ToolRunner } from "./types";
 
 export type ElevenLabsSession = { url: string; init: Record<string, unknown>; input: { sampleRate: number }; output: { sampleRate: number } };
@@ -20,6 +27,8 @@ export class ElevenLabsTransport extends LiveBase {
   private lastBot = "";
   /** Sound from before the last interruption is dropped. */
   private cutAt = -1;
+  /** The person cut the agent off: its sound is dropped until ElevenLabs takes their turn. */
+  private cutting = false;
   private speaker = true;
   private muted = false;
   private ready: ((rates?: { input: number; output: number } | Error) => void) | null = null;
@@ -30,9 +39,11 @@ export class ElevenLabsTransport extends LiveBase {
     private readonly connect: Connect,
     runTool: ToolRunner,
     private readonly waitForFormats = 4000,
+    now: () => number = Date.now,
   ) {
     super(runTool);
     this.rates = { input: session.input.sampleRate, output: session.output.sampleRate };
+    this.gate = new MicGate("conversation", now, "silence");
   }
 
   private send(message: Record<string, unknown>) {
@@ -79,9 +90,16 @@ export class ElevenLabsTransport extends LiveBase {
   private async startAudio() {
     this.subscriptions.push(
       this.audio.addListener("frame", (frame) => {
-        if (!this.muted) this.send({ user_audio_chunk: frame.data });
+        if (this.muted) return;
+        const { send, barge } = this.gate.frame(frame.data, frame.level);
+        // The person talked clearly over the agent: it stops here, and ElevenLabs hears them.
+        if (barge) this.interrupt();
+        for (const data of send) this.send({ user_audio_chunk: data });
       }),
-      this.audio.addListener("output", (event) => this.talking.level(event.level)),
+      this.audio.addListener("output", (event) => {
+        this.gate.level(event.level);
+        this.talking.level(event.level);
+      }),
       // The phone could not keep the sound going (the microphone or the speaker was taken away for good).
       this.audio.addListener("interrupted", (event) => {
         if (event.failed && !this.ended) this.fail("The phone's sound stopped. End the call and try again.");
@@ -110,20 +128,26 @@ export class ElevenLabsTransport extends LiveBase {
       case "audio": {
         const event = obj(message.audio_event);
         const id = typeof event.event_id === "number" ? event.event_id : Number.MAX_SAFE_INTEGER;
-        if (id <= this.cutAt) return;
+        if (id <= this.cutAt || this.cutting) return;
         const sound = str(event.audio_base_64);
-        if (sound) this.audio.play(sound);
+        if (!sound) return;
+        this.gate.queued(pcmMs(sound, this.rates.output));
+        this.audio.play(sound);
         return;
       }
       case "interruption": {
         const event = obj(message.interruption_event);
         if (typeof event.event_id === "number") this.cutAt = event.event_id;
+        this.cutting = false;
         this.audio.flush();
+        this.gate.cut();
         this.setStatus("listening");
         return;
       }
       case "user_transcript": {
         const text = str(obj(message.user_transcription_event).user_transcript);
+        // ElevenLabs took the person's turn: what it says next is the new answer.
+        this.cutting = false;
         if (text) this.line("you-" + ++this.count, "you", text, { final: true });
         return;
       }
@@ -168,6 +192,30 @@ export class ElevenLabsTransport extends LiveBase {
   mute(muted: boolean) {
     this.muted = muted;
     this.audio.setMuted(muted);
+  }
+
+  interrupt() {
+    if (this.ended) return;
+    // ElevenLabs has no call to stop the agent; what is left of its answer is dropped here.
+    this.cutting = true;
+    this.audio.flush();
+    this.gate.cut();
+    this.talking.stop();
+    this.setStatus("listening");
+  }
+
+  press() {
+    if (this.input !== "push" || this.ended || this.gate.holding) return;
+    if (this.gate.botSounding()) this.interrupt();
+    // "User activity events serve as indicators to prevent interrupts from the agent."
+    this.send({ type: "user_activity" });
+    this.gate.press();
+    this.setStatus("listening");
+  }
+
+  /** The sound stops (silence goes instead) and ElevenLabs answers once its turn taking hears the pause. */
+  release() {
+    this.gate.release();
   }
 
   setSpeaker(on: boolean) {
