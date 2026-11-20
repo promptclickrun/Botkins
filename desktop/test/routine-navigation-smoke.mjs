@@ -49,12 +49,19 @@ try {
   // Explicitly opening the inbox changes the choice. The user can always navigate to a result.
   await page.locator("aside nav").getByRole("button", { name: "Chats", exact: true }).click();
   await page.getByRole("button", { name: /Routine inbox/ }).first().click();
+  // The person sees the inbox open before they go on, and so does the test.
+  await expect(page.locator("#message-" + inbox + "-0")).toBeVisible();
   await page.locator("aside nav").getByRole("button", { name: "Home", exact: true }).click();
   await pip().click();
   await expect(page.locator("#message-" + inbox + "-0")).toBeVisible();
   await page.evaluate((id) => window.botkins.setChatFlags(id, { archived: true }), inbox);
-  await pip().click();
-  await expect(page.locator("#message-" + working + "-0")).toBeVisible();
+  // The call above answers before the window has heard that the chat is archived (the app tells
+  // the window a moment later). A click in that moment still opens the inbox, so the click is made
+  // again until the window knows; a person could not click that soon.
+  await expect(async () => {
+    await pip().click();
+    await expect(page.locator("#message-" + working + "-0")).toBeVisible({ timeout: 1500 });
+  }).toPass({ timeout: 20000 });
   await page.locator("aside nav").getByRole("button", { name: "Work", exact: true }).click();
   const main = page.locator("main");
   await main.getByRole("button", { name: "Routines", exact: true }).click();
