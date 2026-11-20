@@ -1,6 +1,7 @@
 // Files for a window that can't show a save or an open dialog (desktop/phonefiles.mjs, capability
 // "files-v1"): a template and the usage report as text, a wiki export in the desktop's three
 // formats, and the folder check on a project's folder sent by a paired device.
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -13,7 +14,7 @@ import { usageCsv } from "../desktop/usage.mjs";
 import { FILES, MAX_FILE, fileAnswer, usageFile, wikiExportName, wikiFile } from "../desktop/phonefiles.mjs";
 import { Folders, deviceArgs } from "../desktop/folders.mjs";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const layout = () => import("../desktop/generated/wiki-export-doc.mjs");
 
 test("the compiled export layout was made from the window's sources as they are now", () => {

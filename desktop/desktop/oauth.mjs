@@ -125,7 +125,7 @@ export class McpOAuth {
     }
   }
   write(server, data) {
-    this.vault.put(JSON.stringify(data), { label: server.name + " sign-in", kind: "oauth", owner: "mcp:" + server.id }, this.entry(server));
+    this.vault.put(JSON.stringify(data), { label: server.name + " sign-in", kind: "oauth", owner: server.vaultOwner ?? "mcp:" + server.id }, this.entry(server));
   }
   /** What the app's page shows about a server's sign-in. */
   status(server) {

@@ -161,6 +161,10 @@ export class SavedCredentials {
    * value, read now on this computer. An answer without one is passed on as it is (a phone's answer
    * arrives with its values already in). A reference anywhere else in the answer is refused.
    */
+  async pluginArgs(method, args) {
+    if (!holdsReference(args)) return args;
+    return this.run(async store => (await store.resolve(method, args)).args);
+  }
   async respondArgs(args) {
     if (!holdsReference(args)) return args;
     return this.run(async (store) => (await store.resolve("respond", args)).args);

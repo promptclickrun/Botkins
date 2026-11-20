@@ -2,6 +2,7 @@
 // link host in this process: pairing, the credential, switching hosts, the host's state in the
 // window's shape, calls, and several clients on one host. The only sockets are to this computer
 // itself; the relay is never used.
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,7 +14,7 @@ import { LinkHost } from "../desktop/link/index.mjs";
 import { HERE, REMOTE_HOSTS, RemoteHosts, snapshotOf } from "../desktop/remotehosts.mjs";
 import * as lib from "../desktop/remote/link-client.mjs";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const digest = (folder) => {
   const hash = createHash("sha256");
   for (const name of readdirSync(folder).filter((file) => file.endsWith(".ts")).sort()) hash.update(name + "\n").update(readFileSync(join(folder, name)));

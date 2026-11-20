@@ -22,6 +22,12 @@
 import { basename } from "node:path";
 import { safeName } from "./uploads.mjs";
 
+/** The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs. */
+export const PLUGIN_METHODS = [
+  "plugins.marketplaces", "plugins.addMarketplace", "plugins.removeMarketplace", "plugins.browse", "plugins.preview",
+  "plugins.install", "plugins.addFolder", "plugins.configure", "plugins.setBots", "plugins.setEnabled", "plugins.update", "plugins.uninstall",
+];
+
 export const REMOTE_METHODS = new Set([
   // Preferences
   "setPreferences", "appInfo",
@@ -63,6 +69,8 @@ export const REMOTE_METHODS = new Set([
   "artifacts.list", "artifacts.read", "artifacts.thumbnail", "artifacts.resolve",
   // The side pane a bot opened beside a chat: what the person does with it (the desktop app's docs/SIDE_PANE.md)
   "sidePane",
+  // Plugins ("plugins-v1", docs/plugins.md): catalogs, installing, settings, bots, on and off
+  ...PLUGIN_METHODS,
 ]);
 
 const MAX_ATTACHMENTS = 10;
@@ -175,6 +183,104 @@ function fileArgs(method, args) {
   }
 }
 
+// Plugins (docs/plugins.md). Ids are opaque: only their length and shape are checked here.
+export const PLUGIN_LIMITS = { id: 300, source: 300, query: 200, values: 32, value: 4000, bots: 200 };
+const plain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const pluginText = (value, limit) => typeof value === "string" && value.length > 0 && value.length <= limit && !value.includes("\0");
+const pluginId = (value) => {
+  if (!pluginText(value, PLUGIN_LIMITS.id)) refuse("That plugin can't be found.");
+  return value;
+};
+const revisionOf = (value) => {
+  if (value === undefined) return undefined;
+  if (!pluginText(value, PLUGIN_LIMITS.id)) refuse("That plugin can't be found.");
+  return value;
+};
+/** "all", or bot ids: at least one, at most 200, each once. */
+function pluginBots(value) {
+  if (value === "all") return "all";
+  if (!Array.isArray(value) || value.length < 1 || value.length > PLUGIN_LIMITS.bots || !value.every((id) => pluginText(id, PLUGIN_LIMITS.id))) refuse("Choose which bots use it.");
+  return [...new Set(value)];
+}
+/**
+ * A plugin's settings: at most 32, each text (4,000 characters at most), a saved credential
+ * (`{ $credential: id }`, which the link fills in: credentials.mjs) or null to clear it. These are
+ * the only places in a plugin call that may hold a credential.
+ */
+function pluginValues(value) {
+  if (!plain(value)) refuse("Those settings can't be saved.");
+  const keys = Object.keys(value);
+  if (keys.length > PLUGIN_LIMITS.values) refuse("Those settings can't be saved.");
+  const out = {};
+  for (const key of keys) {
+    const item = value[key];
+    if (!pluginText(key, PLUGIN_LIMITS.id) || key === "__proto__") refuse("Those settings can't be saved.");
+    if (item === null) out[key] = null;
+    else if (typeof item === "string") {
+      if (item.length > PLUGIN_LIMITS.value || item.includes("\0")) refuse("A setting is up to 4,000 characters.");
+      out[key] = item;
+    } else if (plain(item) && only(item, ["$credential"]) && pluginText(item.$credential, PLUGIN_LIMITS.id)) out[key] = { $credential: item.$credential };
+    else refuse("Those settings can't be saved.");
+  }
+  return out;
+}
+
+/** Whether a saved credential's reference is anywhere in `value`. */
+const holdsRef = (value, depth = 0) => depth <= 8 && value !== null && typeof value === "object" && (Object.hasOwn(value, "$credential") || Object.values(value).some((inner) => holdsRef(inner, depth + 1)));
+
+/** The arguments of a plugin call, cut to its shape, or null when `method` is not one. */
+function pluginArgs(method, args) {
+  if (!PLUGIN_METHODS.includes(method)) return null;
+  // A saved credential may stand only for a setting's value: nowhere else in a plugin call.
+  const rest = method === "plugins.configure" ? [args[0]] : method === "plugins.install" && plain(args[1]) ? [args[0], { ...args[1], config: undefined }, ...args.slice(2)] : args;
+  if (holdsRef(rest)) refuse("A credential can't be used there.");
+  const first = args[0];
+  const second = plain(args[1]) ? args[1] : {};
+  switch (method) {
+    case "plugins.marketplaces":
+      return [];
+    case "plugins.addMarketplace": {
+      const source = typeof first === "string" ? first.trim() : "";
+      if (!pluginText(source, PLUGIN_LIMITS.source)) refuse("Enter owner/repo, a web address or a folder.");
+      return [source];
+    }
+    case "plugins.removeMarketplace":
+      if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("That marketplace can't be found.");
+      return [first];
+    case "plugins.browse": {
+      const query = plain(first) ? first : {};
+      if (query.marketplace !== undefined && !pluginText(query.marketplace, PLUGIN_LIMITS.id)) refuse("That marketplace can't be found.");
+      if (query.query !== undefined && (typeof query.query !== "string" || query.query.length > PLUGIN_LIMITS.query)) refuse("That search is too long.");
+      if (query.cursor !== undefined && !pluginText(query.cursor, PLUGIN_LIMITS.id)) refuse("That list can't be shown.");
+      const words = typeof query.query === "string" ? query.query.trim() : "";
+      return [{ ...(query.marketplace !== undefined && { marketplace: query.marketplace }), ...(words && { query: words }), ...(query.cursor !== undefined && { cursor: query.cursor }) }];
+    }
+    case "plugins.preview":
+    case "plugins.uninstall":
+      return [pluginId(first)];
+    case "plugins.update": {
+      const revision = revisionOf(second.revision);
+      return [pluginId(first), revision === undefined ? {} : { revision }];
+    }
+    case "plugins.install": {
+      const revision = revisionOf(second.revision);
+      return [pluginId(first), { ...(second.bots !== undefined && { bots: pluginBots(second.bots) }), ...(second.config !== undefined && { config: pluginValues(second.config) }), ...(revision !== undefined && { revision }) }];
+    }
+    case "plugins.addFolder":
+      if (!folderPath(first)) refuse("Choose a folder.");
+      return [first];
+    case "plugins.configure":
+      return [pluginId(first), pluginValues(args[1])];
+    case "plugins.setBots":
+      return [pluginId(first), pluginBots(args[1])];
+    case "plugins.setEnabled":
+      if (typeof args[1] !== "boolean") refuse("Choose on or off.");
+      return [pluginId(first), args[1]];
+    default:
+      return null;
+  }
+}
+
 /**
  * Arguments as a phone may send them. A call that stands in for a file or folder dialog is cut to
  * the shape above and refused with a sentence when it has another. A message can attach only files this phone uploaded itself
@@ -192,5 +298,5 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
-  return fileArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? args;
 }

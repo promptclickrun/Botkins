@@ -165,7 +165,12 @@ export function sessionOptions(spec, turn) {
         },
       }),
     },
-    plugins: { directories: [...(spec.plugins ?? [])] },
+    plugins: {
+      directories: [...(spec.plugins?.directories ?? spec.plugins ?? [])],
+    },
+    // Plugin file hooks are projected and run by Botkins so their settings stay scoped and the
+    // native plugin directory cannot register the same hook a second time.
+    ...(spec.pluginHooks && { hooks: spec.pluginHooks }),
     // `context` is the part that changes often (such as the bot's memory). A warm session keeps
     // the one it opened with; see signatureOf.
     systemMessage: { mode: "append", content: spec.instructions + (spec.context ?? "") },
@@ -188,6 +193,7 @@ const signatureOf = (spec) =>
         spec.skills ?? null,
         spec.mcpServers ?? null,
         spec.plugins ?? null,
+        spec.pluginRevision ?? null,
         spec.inference ?? null,
       ]),
     )

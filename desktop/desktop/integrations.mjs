@@ -28,7 +28,7 @@ const MAX_SERVERS = 50;
 const MAX_SKILL_TEXT = 60000;
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const PLUGIN_MANIFESTS = ["plugin.json", ".github/plugin.json", ".github/plugin/plugin.json", ".claude-plugin/plugin.json"];
+const PLUGIN_MANIFESTS = [".plugin/plugin.json", ".codex-plugin/plugin.json", "plugin.json", ".github/plugin.json", ".github/plugin/plugin.json", ".claude-plugin/plugin.json"];
 
 const text = (value, max, name) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("Enter a " + name + " of up to " + max + " characters.");
