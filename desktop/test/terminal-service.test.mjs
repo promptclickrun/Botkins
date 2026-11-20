@@ -207,6 +207,7 @@ test("bots are added, changed and removed by name, and a bot answers in a chat a
     if (!view.working && view.messages.some((message) => message.role === "assistant")) break;
   }
   assert.equal(view.run.title, "And of Italy?");
+  assert.deepEqual((await client.call("runs.list", 5)).map((run) => [run.title, run.status, run.bot]), [["And of Italy?", "Completed", "Nova II"], ["What is the capital of France?", "Completed", "Nova II"]]);
 });
 
 test("a provider signs in from the terminal: its own sign-in is followed, and a pasted token is kept sealed", { skip }, async (t) => {
