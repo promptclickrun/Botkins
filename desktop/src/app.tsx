@@ -1,3 +1,4 @@
+import { CompletionScroll } from "./completionScroll";
 import { chatDisplayEvent, readChatDisplay, settleChatDisplay } from "./chatDisplay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -51,10 +52,23 @@ const personalChat = (chat: Chat) =>
   !chat.archived && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
-  const [snapshot, setState] = useState<State>();
+  const [snapshot, setSnapshot] = useState<State>();
+  const [completionByHost] = useState(() => new Map<string, CompletionScroll>());
   const [display, setDisplay] = useState(readChatDisplay);
+  const position = useRef(settleChatDisplay(display).completionPosition);
+  function receiveSnapshot(next: State) {
+    const hostId = next.remote?.using?.id ?? "local";
+    const scroll = completionByHost.get(hostId) ?? new CompletionScroll();
+    completionByHost.set(hostId, scroll);
+    scroll.observe(next.chats, next.runs, position.current);
+    setSnapshot(next);
+  }
   useEffect(() => {
-    const read = () => setDisplay(readChatDisplay());
+    const read = () => {
+      const saved = readChatDisplay();
+      position.current = settleChatDisplay(saved).completionPosition;
+      setDisplay(saved);
+    };
     window.addEventListener(chatDisplayEvent, read);
     window.addEventListener("storage", read);
     return () => {
@@ -138,8 +152,8 @@ function App() {
   const fail = (e: unknown) =>
     setError(e instanceof Error ? e.message : String(e));
   useEffect(() => {
-    const off = api.subscribe(setState);
-    api.snapshot().then(setState).catch(fail);
+    const off = api.subscribe(receiveSnapshot);
+    api.snapshot().then(receiveSnapshot).catch(fail);
     const shortcut = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
@@ -294,7 +308,7 @@ function App() {
   }, []);
   async function newChat(id: string) {
     const key = await api.createChat(id);
-    setState(await api.snapshot());
+    receiveSnapshot(await api.snapshot());
     open(key);
     return key;
   }
@@ -382,7 +396,7 @@ function App() {
         return;
       }
       await api.send(id, prompt, options);
-      setState(await api.snapshot());
+      receiveSnapshot(await api.snapshot());
       clear();
       return true;
     } catch (e) {
@@ -470,7 +484,7 @@ function App() {
     );
   // A workspace with no bots opens on the first-run step: the person's existing agents, or Create a bot.
   if (!state.bots.length && !state.remote?.using?.member && !memberTeam(state))
-    return <FirstBot saved={state.templates} created={async () => setState(await api.snapshot())} />;
+    return <FirstBot saved={state.templates} created={async () => receiveSnapshot(await api.snapshot())} />;
   const stream = state.streams[chatId];
   const elsewhere = state.requests.find((r) => r.chatId !== chatId);
   const actions: PageActions = {
@@ -625,6 +639,8 @@ function App() {
         )}
         {chat && bot ? (
           <ChatView
+            completions={completionByHost.get(host)!}
+            onScreen={onScreen === chat.id}
             state={state}
             chat={chat}
             bot={bot}
@@ -823,7 +839,7 @@ function App() {
             state={state}
             fail={fail}
             open={async (id) => {
-              setState(await api.snapshot());
+              receiveSnapshot(await api.snapshot());
               open(id);
             }}
           />
@@ -835,7 +851,7 @@ function App() {
             saved={state.templates}
             taken={state.bots.map((b) => b.look)}
             created={async () => {
-              setState(await api.snapshot());
+              receiveSnapshot(await api.snapshot());
               setModal("");
             }}
           />

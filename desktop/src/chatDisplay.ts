@@ -1,5 +1,6 @@
 // Chat display is a preference of the viewer, including when it connects to another host.
 export type ChatDisplay = {
+  completionPosition: "latest" | "beginning";
   steps: "folded" | "every" | "failed" | "hidden";
   thinking: "open" | "folded" | "hidden";
 };
@@ -7,6 +8,7 @@ type Saved = Partial<ChatDisplay> & { stepsPicked?: boolean };
 const key = "botkins.chatDisplay";
 export function settleChatDisplay(saved: Saved, showThinking = true): ChatDisplay {
   return {
+    completionPosition: saved?.completionPosition === "beginning" ? "beginning" : "latest",
     steps: saved?.stepsPicked && ["folded","every","failed","hidden"].includes(saved.steps ?? "") ? saved.steps! : "folded",
     thinking: ["open","folded","hidden"].includes(saved?.thinking ?? "") ? saved.thinking! : showThinking ? "folded" : "hidden",
   };

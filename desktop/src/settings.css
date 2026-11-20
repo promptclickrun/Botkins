@@ -194,6 +194,9 @@ section.set-group + section.set-group {
   color: inherit;
   font-family: inherit;
 }
+.set-control select.completion-position {
+  max-width: 100%;
+}
 .set-control input:not([type="checkbox"]):not([type="color"]) {
   height: 32px;
   width: 260px;

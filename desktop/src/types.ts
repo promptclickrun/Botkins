@@ -112,6 +112,8 @@ export type Message = {
   author?: { memberId: string; name: string };
 };
 export type Chat = {
+  /** Latest message count advertised by a paired computer, even before its chat page arrives. */
+  count?: number;
   loaded?: { from: number; total: number } | null;
   id: string;
   /** Set on a group chat: its 2 to 6 members, in answer order. `botId` is the first. */
@@ -1436,6 +1438,7 @@ export type MacToolsStatus = {
 export type Preferences = {
   model: ModelChoice;
   appearance: Appearance;
+  completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
   steps?: "folded" | "every" | "failed" | "hidden";
   thinking?: "open" | "folded" | "hidden";
   foldTools: boolean;
