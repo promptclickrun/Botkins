@@ -9,6 +9,11 @@
 # in for a download or a signature: the installer and the updater check the release's signed
 # checksums against the Botkins release key, as they do for anyone.
 #
+# The program that installs <to> is always <from>'s own updater: the old version installs the
+# new one. So what the update leaves behind is what <from> leaves, and this asks for no more
+# than that. A <from> up to 0.16.5 leaves no record of the install for the service to show, so
+# for those the record is not asked for, and one line says so. Every other check stays.
+#
 # The update goes the whole way a phone's request goes: the service's own user asks the service,
 # the service leaves its request, systemd's watch starts the root job, and the root job installs
 # the latest signed release and restarts the service. `botkins update` typed by root would skip
@@ -40,6 +45,8 @@
 set -eu
 
 REPO="promptclickrun/Botkins"
+# The last release whose updater leaves no record of an install (<install folder>/last-update.json).
+NO_RECORD_UNTIL="0.16.5"
 from=""
 to=""
 require_credential=0
@@ -55,11 +62,13 @@ while [ $# -gt 0 ]; do
     --from) [ $# -ge 2 ] || fail "--from needs a version (or an empty one)."; from=${2#v}; shift ;;
     --to) [ $# -ge 2 ] || fail "--to needs a version."; to=${2#v}; shift ;;
     --require-credential) require_credential=1 ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) fail "Unknown option $1." ;;
   esac
   shift
 done
+# newer_than <a> <b>: release a is newer than release b.
+newer_than() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)" = "$1" ]; }
 version_like() { printf '%s' "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 [ -n "$to" ] || fail "Say which release must be running at the end: --to <version>."
 version_like "$to" || fail "$to is not a release version."
@@ -222,12 +231,19 @@ run journalctl -u botkins-update.service --no-pager -n 12 || true
 step "The service runs on Botkins $to"
 running_on "$to" 90
 key_source
-last_ok=$(status_field '.update.last?.ok')
-say "The last install, as the service tells a phone: from $(status_field '.update.last?.from') to $(status_field '.update.last?.to'), ok: ${last_ok:-not recorded}"
-[ "$last_ok" = true ] || fail "The service does not say that its last install went well (ok: ${last_ok:-not recorded}). A phone that asked for this update would not learn how it ended."
-[ "$(status_field '.update.last?.to')" = "$to" ] || fail "The service's record of its last install is not about Botkins $to."
 [ -d "/opt/botkins/botkins-terminal-$from-linux-$arch" ] || fail "The old version was not kept on disk."
-[ "$(stat -c '%U %a' /opt/botkins/last-update.json 2>/dev/null)" = "root 644" ] || fail "The record of the install is not root's own file beside the versions."
+last_ok=$(status_field '.update.last?.ok')
+if newer_than "$from" "$NO_RECORD_UNTIL"; then
+  say "The last install, as the service tells a phone: from $(status_field '.update.last?.from') to $(status_field '.update.last?.to'), ok: ${last_ok:-not recorded}"
+  [ "$last_ok" = true ] || fail "The service does not say that its last install went well (ok: ${last_ok:-not recorded}). A phone that asked for this update would not learn how it ended."
+  [ "$(status_field '.update.last?.to')" = "$to" ] || fail "The service's record of its last install is not about Botkins $to."
+  [ "$(stat -c '%U %a' /opt/botkins/last-update.json 2>/dev/null)" = "root 644" ] || fail "The record of the install is not root's own file beside the versions."
+else
+  # Botkins <from>'s updater did the install, and it is from before the record. No record is the
+  # right answer here; a record that says the install failed is still a failure.
+  say "The record of the install was not asked for: Botkins $from's own updater did this install, and releases up to $NO_RECORD_UNTIL leave no record. (The service says: ok: ${last_ok:-not recorded}.)"
+  [ "$last_ok" != false ] || fail "The service says that its last install failed."
+fi
 
 step "Doctor"
 run botkins doctor || true
