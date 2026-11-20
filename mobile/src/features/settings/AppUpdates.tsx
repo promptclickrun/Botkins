@@ -107,14 +107,16 @@ export function AppUpdates({ name }: { name: string }) {
   const last = lastLine(update?.last);
   const line = problem ?? (restarting && !updateBusy(update) ? "Restarting to install " + (restarting.to ?? "the update") + "…" : updateLine(update));
 
+  // The two rows below can carry the computer's own sentences (up to 300 characters, after
+  // "Updated from …"): nothing a person must read is cut, so they have no line limit (0).
   return (
     <View style={{ gap: space.md }}>
       <View>
         <Label>Updates</Label>
         <Group>
-          <Row leading={<IconTile icon={Download} color={colors.ink2} />} title={update ? "Botkins " + update.current : "Botkins"} subtitle={line || " "} subtitleLines={4} />
+          <Row leading={<IconTile icon={Download} color={colors.ink2} />} title={update ? "Botkins " + update.current : "Botkins"} subtitle={line || " "} subtitleLines={0} />
           {!!last && update?.last && (
-            <Row leading={<IconTile icon={History} color={update.last.ok ? colors.ink2 : colors.danger} />} title="Last update" subtitle={last} subtitleLines={6} />
+            <Row leading={<IconTile icon={History} color={update.last.ok ? colors.ink2 : colors.danger} />} title="Last update" subtitle={last} subtitleLines={0} />
           )}
           {typeof update?.auto === "boolean" && (
             <Row

@@ -105,6 +105,18 @@ test("while a restart is pending the banner says so for two minutes, then its us
   assert.deepEqual(restartStep(pending, undefined, since + 1000), { kind: "drop" });
 });
 
+test("the computer's own sentences are shown whole, the longest note too", () => {
+  // The form the terminal host sends with ok: true (#55), at the 300 characters a record allows.
+  const reason = "x".repeat(160);
+  const note = ("The service's files could not be brought up to date with Botkins 0.16.6 (" + reason + "). On the computer, `botkins doctor` says what to do.").slice(0, 300);
+  const line = lastLine({ at: "2026-11-20T20:00:00Z", from: "0.16.5", to: "0.16.6", ok: true, message: note });
+  assert.equal(line, "Updated from 0.16.5 to 0.16.6. " + note);
+  // On the page, the status row and the "Last update" row have no line limit.
+  const page = readFileSync(new URL("../src/features/settings/AppUpdates.tsx", import.meta.url), "utf8");
+  assert.match(page, /subtitle=\{line \|\| " "\} subtitleLines=\{0\}/);
+  assert.match(page, /title="Last update" subtitle=\{last\} subtitleLines=\{0\}/);
+});
+
 test("the computer's page starts afresh for each computer", () => {
   // Desktop.tsx keeps the switcher and the Updates section on one page: keyed by the computer, the
   // section never shows the last computer's state, or its "Update and restart", after a switch.
