@@ -12,6 +12,7 @@ import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
 import { BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTheme } from "@/ui";
+import { BotArtifacts } from "@/features/artifacts/ArtifactBits";
 import { sectionOf } from "@/features/home/arrange";
 import { grantSummary } from "./projectAccess";
 import { moveToSection, runSectionChoice, toggleHidden } from "./menus";
@@ -155,6 +156,8 @@ function BotDetail({ bot }: { bot: Bot }) {
           <Row leading={<IconTile icon={Plus} />} title="New routine" tone="accent" onPress={() => router.push({ pathname: "/routine/[id]", params: { id: "new", botId: bot.id } })} />
         </Group>
       </View>
+
+      <BotArtifacts botId={bot.id} />
 
       {recent.length > 0 && (
         <View>

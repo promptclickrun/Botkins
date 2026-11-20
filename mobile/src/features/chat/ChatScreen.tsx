@@ -186,7 +186,8 @@ function Hello({ chat, bot, bots, projects, settings, onPick }: { chat: ChatSumm
 export default function ChatScreen() {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
-  const { id: chatId, draft, board } = useLocalSearchParams<{ id: string; draft?: string; board?: string }>();
+  // `at` lands on one message (its place in the whole chat, from 0): Open chat on an artifact.
+  const { id: chatId, draft, board, at } = useLocalSearchParams<{ id: string; draft?: string; board?: string; at?: string }>();
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
   // A bot's request leaves room for the bar above it and the composer below it, also over the keyboard.
@@ -264,6 +265,34 @@ export default function ChatScreen() {
     return out.reverse();
   }, [view, runningId]);
   const data = useMemo(() => (streaming ? [LIVE_ITEM, ...messages] : messages), [streaming, messages]);
+
+  // Going to one message: earlier pages are loaded until it is there, then the list scrolls to it.
+  const target = at !== undefined && /^\d{1,7}$/.test(at) ? Number(at) : undefined;
+  const loads = useRef(0);
+  const scrollTries = useRef(0);
+  const from = view?.from;
+  const loadingEarlier = !!view?.loadingEarlier;
+  useEffect(() => {
+    if (target === undefined || from === undefined || loadingEarlier) return;
+    if (from > target) {
+      // Each page is 60 messages; a page that fails to load is tried again, a few times at most.
+      if (loads.current++ < 40) void loadEarlier(chatId);
+      else router.setParams({ at: undefined });
+      return;
+    }
+    const index = data.findIndex((item) => item.kind === "message" && item.index === target);
+    if (index < 0) {
+      // Not in this chat (any more): the chat opens as it is.
+      router.setParams({ at: undefined });
+      return;
+    }
+    const timer = setTimeout(() => {
+      scrollTries.current = 0;
+      list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
+      router.setParams({ at: undefined });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [target, from, loadingEarlier, data, chatId]);
 
   const askSide = (command: string, question: string) => {
     if (!question) {
@@ -459,6 +488,11 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
           maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
           onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
+          // A message not drawn yet: go near it by the rows' average height, then to it.
+          onScrollToIndexFailed={(info) => {
+            list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+            if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: 0.5, animated: true }), 160);
+          }}
           onEndReachedThreshold={0.6}
           ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
           initialNumToRender={12}

@@ -8,6 +8,10 @@
 // person's home folder and nothing else (no files, no contents). The desktop app decides what each
 // may read; this file checks the shape of what a phone sends.
 //
+// What a bot made or was given is read through "artifacts.list", "artifacts.read",
+// "artifacts.thumbnail" and "artifacts.resolve". The app keeps the index and reads only what is in
+// it, checked again at each read: none of these is a way to read any file on the computer.
+//
 // What is listed still acts on the computer, as the person's own app would: it changes bots,
 // projects, skills, the wiki and tool (MCP) servers, and a tool server may name a program to run.
 // Pairing is a full-trust step, and the desktop app checks the arguments of each call. In
@@ -55,6 +59,8 @@ export const REMOTE_METHODS = new Set([
   "usage", "exportUsageText", "cacheInfo", "clearCache", "providerUsage", "testNotification",
   // The computer's folders, by name only, and the two calls that take one a person chose there
   "listFolders", "addProjectFolder", "addSkillFolderAt",
+  // What a bot made or was given ("artifacts-v1"): the app keeps an index, and these read only what is in it
+  "artifacts.list", "artifacts.read", "artifacts.thumbnail", "artifacts.resolve",
   // The side pane a bot opened beside a chat: what the person does with it (the desktop app's docs/SIDE_PANE.md)
   "sidePane",
 ]);
@@ -67,6 +73,15 @@ const MAX_WIKI_PATHS = 2000;
 const MAX_DAYS = 3660;
 const WIKI_FORMATS = ["zip", "html", "pdf"];
 const WIKI_SCOPES = ["all", "project", "page"];
+/** An artifact is read in pieces of at most this many bytes. */
+export const MAX_ARTIFACT_CHUNK = 512 * 1024;
+/** How many paths of one message the app is asked about at once. */
+export const MAX_RESOLVE_PATHS = 20;
+const MAX_THUMBNAIL = 512;
+const ARTIFACT_KINDS = ["files", "media"];
+// A path as it stands in a message, or an artifact's id: text of a sensible length that never climbs.
+const artifactRef = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096 && !value.includes("\0") && !climbs(value);
+const whole = (value, low, high) => Number.isInteger(value) && value >= low && value <= high;
 
 const clean = (value) => typeof value === "string" && value.length > 0 && value.length <= 1024 && !value.includes("\0");
 const only = (object, keys) => Object.keys(object).length === keys.length && keys.every((key) => Object.hasOwn(object, key));
@@ -122,6 +137,30 @@ function fileArgs(method, args) {
       const path = object.path;
       if (!WIKI_SCOPES.includes(object.scope) || (path !== undefined && !(clean(path) && inWiki(path)))) refuse("Those pages can't be exported.");
       return [{ scope: object.scope, ...(path !== undefined && { path }) }];
+    }
+    case "artifacts.list": {
+      if (!clean(object.botId)) refuse("Choose a bot.");
+      for (const name of ["chatId", "folder", "cursor"]) if (object[name] !== undefined && !clean(object[name])) refuse("That list can't be shown.");
+      if (object.kind !== undefined && !ARTIFACT_KINDS.includes(object.kind)) refuse("That list can't be shown.");
+      return [{ botId: object.botId, ...(object.chatId !== undefined && { chatId: object.chatId }), ...(object.kind !== undefined && { kind: object.kind }), ...(object.folder !== undefined && { folder: object.folder }), ...(object.cursor !== undefined && { cursor: object.cursor }) }];
+    }
+    case "artifacts.read": {
+      if (!artifactRef(first)) refuse("That file can't be opened.");
+      const options = args[1] !== null && typeof args[1] === "object" && !Array.isArray(args[1]) ? args[1] : {};
+      if (options.offset !== undefined && !whole(options.offset, 0, Number.MAX_SAFE_INTEGER)) refuse("That file can't be opened.");
+      if (options.length !== undefined && !whole(options.length, 1, MAX_ARTIFACT_CHUNK)) refuse("That file can't be opened.");
+      return [first, { ...(options.offset !== undefined && { offset: options.offset }), ...(options.length !== undefined && { length: options.length }) }];
+    }
+    case "artifacts.thumbnail": {
+      if (!artifactRef(first)) refuse("That file can't be opened.");
+      const size = args[1] !== null && typeof args[1] === "object" ? args[1].size : undefined;
+      if (size !== undefined && !whole(size, 16, MAX_THUMBNAIL)) refuse("That picture can't be shown at that size.");
+      return [first, size === undefined ? {} : { size }];
+    }
+    case "artifacts.resolve": {
+      const paths = object.paths;
+      if (!clean(object.chatId) || !Array.isArray(paths) || paths.length < 1 || paths.length > MAX_RESOLVE_PATHS || !paths.every(artifactRef)) refuse("Those paths can't be looked up.");
+      return [{ chatId: object.chatId, paths: [...paths] }];
     }
     case "listFolders":
       if (first === undefined || first === null) return [];

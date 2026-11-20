@@ -10,6 +10,9 @@ const PREFIX = "/botkins/v1/";
 export const PROTOCOL = 1;
 
 /** What the phone keeps (in its keychain) about the computer it is paired with. */
+/** What a phone signs to turn the screen on, as text: the computer builds exactly the same (link-host/grant.mjs). */
+export const grantMessage = (serverId: string, deviceId: string, level: "view" | "control", ticket: string) => JSON.stringify(["botkins-screen-grant-v1", serverId, deviceId, level, ticket]);
+
 export type Pairing = {
   serverId: string;
   /** The computer's public key. */
@@ -20,6 +23,8 @@ export type Pairing = {
   /** Addresses to find the computer at, best first. */
   hosts: string[];
   name: string;
+  /** The name this phone keeps its presence key under, when it made one for this pairing. Never sent anywhere. */
+  presenceTag?: string;
 };
 
 /** How the phone reaches the computer: on its own network, or through the relay. */
@@ -146,7 +151,13 @@ function mergeHosts(worked: string, fresh: string[], saved: string[], limit: num
  * Pairs this device with a computer. `kind` says what this device is: a phone (the default), or
  * "desktop" for another computer's Botkins app that uses this one (docs/link-contract.md).
  */
-export async function pair(fetcher: FetchLike, target: PairTarget, device: { name: string; platform: string; kind?: "phone" | "desktop" }): Promise<Pairing> {
+/**
+ * `device.presenceKey` is a phone's second public key (P-256, SPKI as base64url) whose private half
+ * can be used only after Face ID, Touch ID or the passcode. A computer keeps it only from a pairing
+ * that reached it directly, and asks for a signature made with it before a phone may turn the screen
+ * on ("screen-grant-v1"). `grantMessage` is what gets signed.
+ */
+export async function pair(fetcher: FetchLike, target: PairTarget, device: { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string }): Promise<Pairing> {
   const { host, hello: found } = await findHost(fetcher, target.hosts, { serverKey: target.serverKey, serverId: target.serverId });
   if (found.botkins !== PROTOCOL) throw new LinkError("protocol", "Update Botkins and your computer's app to the same version.");
   if (found.pairing === false) throw new LinkError("closed", "That code has expired. Show a new one on your computer.");
@@ -198,12 +209,16 @@ export type LinkOptions = {
   /** Parts that changed on the computer, by name. A chat's detail is "chat:<id>", its running turn "run:<id>". */
   onParts(parts: Record<string, unknown>): void;
   onState(state: LinkState): void;
+  /** Each failed attempt while offline, even when the state stayed the same. */
+  onUnreachable?(): void;
   /** The computer reported the addresses it can be reached on now. */
   onHosts?(hosts: string[]): void;
   /** How the phone is connected changed: null while there is no session. */
   onRoute?(route: LinkRoute | null): void;
-  /** While connected through the relay, how often to look for a direct address (default 60 s). */
+  /** While connected through the relay, the first wait before looking for a direct address (default 60 s). */
   probeMs?: number;
+  /** The longest wait between direct probes (default 5 minutes). */
+  probeMaxMs?: number;
   /** Called when the link wakes: the transport proves its open connections are alive (the relay's sockets). */
   check?(): void;
   /** After a wake, how long the first answer may take before the path is given up (default 4 s). */
@@ -222,15 +237,20 @@ export class LinkClient {
   private have: Record<string, number> = {};
   private watching: string[] = [];
   private running = false;
+  // A late answer belongs to the lifetime that asked, even after a stop and restart.
+  private lifetime: object | null = {};
   private poll: AbortController | null = null;
   private wakeUp: (() => void) | null = null;
   private deviceKey: Uint8Array;
   /** How the current session reaches the computer. */
   route: LinkRoute | null = null;
-  private probing = false;
+  private probing: Session | null = null;
   /** Direct addresses that answered the hello and then failed to open a session, and until when to leave them be. */
   private distrusted = new Map<string, number>();
-  private probeTimer: ReturnType<typeof setInterval> | null = null;
+  private probeTimer: ReturnType<typeof setTimeout> | undefined;
+  private probeDelay: number;
+  private readonly probeMs: number;
+  private readonly probeMaxMs: number;
   /** Set by a wake: the path in use may have died while the phone was away, so the next sync proves it quickly. */
   private suspect = false;
 
@@ -239,16 +259,26 @@ export class LinkClient {
     private options: LinkOptions,
   ) {
     this.deviceKey = deviceKeyOf(pairing);
+    this.probeMs = options.probeMs ?? 60_000;
+    this.probeMaxMs = Math.max(this.probeMs, options.probeMaxMs ?? 300_000);
+    this.probeDelay = this.probeMs;
   }
 
   /** Starts following the computer. Keeps trying while it can't be reached. */
   start() {
     if (this.running) return;
     this.running = true;
-    void this.follow();
+    this.lifetime ??= {};
+    this.scheduleProbe();
+    void this.follow(this.lifetime);
   }
   stop() {
     this.running = false;
+    this.lifetime = null;
+    this.opening = null;
+    this.probing = null;
+    clearTimeout(this.probeTimer);
+    this.probeDelay = this.probeMs;
     this.poll?.abort();
     this.wakeUp?.();
     this.session = null;
@@ -261,6 +291,8 @@ export class LinkClient {
    * phone that was away comes back in seconds, not when a 40-second wait runs out.
    */
   wake(reason?: "network") {
+    if (!this.lifetime) return;
+    this.probeDelay = this.probeMs;
     // On another network, an address that failed on the last one gets a fresh try.
     if (reason === "network") this.distrusted.clear();
     this.suspect = true;
@@ -269,7 +301,7 @@ export class LinkClient {
     this.wakeUp?.();
     // The waiting sync may be on a path that just died (the phone left the network).
     this.poll?.abort();
-    if (this.route === "relay") void this.probeDirect();
+    if (this.route === "relay") void this.probeDirect(false);
   }
   /**
    * An address for this computer that was found another way (it announced itself on the network).
@@ -277,7 +309,15 @@ export class LinkClient {
    * has to prove who it is at that address, as at any other.
    */
   learn(host: string) {
-    if (isRelayHost(host) || this.pairing.hosts[0] === host) return;
+    if (!this.lifetime || isRelayHost(host)) return;
+    if (this.pairing.hosts[0] === host) {
+      if (this.state !== "online") this.wake();
+      else {
+        this.probeDelay = this.probeMs;
+        this.scheduleProbe();
+      }
+      return;
+    }
     const hosts = mergeHosts(host, [], this.pairing.hosts, 8);
     this.pairing = { ...this.pairing, hosts };
     this.distrusted.delete(host);
@@ -302,11 +342,17 @@ export class LinkClient {
   private setRoute(route: LinkRoute | null) {
     if (this.route === route) return;
     this.route = route;
+    if (route === "direct") this.probeDelay = this.probeMs;
+    this.scheduleProbe();
     this.options.onRoute?.(route);
-    // Through the relay, a direct address is looked for now and then.
-    if (this.probeTimer) clearInterval(this.probeTimer);
-    this.probeTimer = null;
-    if (route === "relay") this.probeTimer = setInterval(() => void this.probeDirect(), this.options.probeMs ?? 60_000);
+  }
+
+  private scheduleProbe() {
+    clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    if (this.running && this.route === "relay" && this.probing !== this.session) {
+      this.probeTimer = setTimeout(() => void this.probeDirect(), this.probeDelay);
+    }
   }
 
   /**
@@ -314,24 +360,30 @@ export class LinkClient {
    * right computer, drops the session so the next request opens a direct one. A call in flight keeps
    * the session it started with; only the waiting sync request is cut short. True when it switched.
    */
-  async probeDirect(): Promise<boolean> {
+  async probeDirect(backOff = true): Promise<boolean> {
     const seen = this.session;
-    if (this.probing || !this.running || !seen || routeOf(seen) !== "relay") return false;
-    const direct = this.trusted(this.pairing.hosts.filter((host) => !isRelayHost(host)));
-    if (!direct.length) return false;
-    this.probing = true;
+    if (!this.running || !seen || this.probing === seen || routeOf(seen) !== "relay") return false;
+    this.probing = seen;
+    clearTimeout(this.probeTimer);
+    // Keep this wait if a direct hello answers but the next session still needs the relay.
+    if (backOff) this.probeDelay = Math.min(this.probeDelay * 2, this.probeMaxMs);
     try {
+      const direct = this.trusted(this.pairing.hosts.filter((host) => !isRelayHost(host)));
+      if (!direct.length) return false;
       await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, 1500);
+      if (this.session !== seen || this.opening) return false;
+      this.useSession(null);
+      this.poll?.abort();
+      this.wakeUp?.();
+      return true;
     } catch {
       return false;
     } finally {
-      this.probing = false;
+      if (this.probing === seen) {
+        this.probing = null;
+        if (this.session === seen) this.scheduleProbe();
+      }
     }
-    if (!this.running || this.session !== seen || this.opening) return false;
-    this.useSession(null);
-    this.poll?.abort();
-    this.wakeUp?.();
-    return true;
   }
 
   private setState(state: LinkState) {
@@ -341,6 +393,9 @@ export class LinkClient {
   }
 
   private async openSession(): Promise<Session> {
+    const lifetime = this.lifetime;
+    // A stopped client opens nothing more: the phone has moved on to another computer, or to none.
+    if (!lifetime) throw new LinkError("offline", "Your computer can't be reached right now.");
     if (this.session) return this.session;
     this.opening ??= (async () => {
       const { pairing } = this;
@@ -351,18 +406,18 @@ export class LinkClient {
       const { host } = await findHost(this.options.fetch, hosts, expect);
       try {
         // A direct address gets little time when the relay is there to take over.
-        return await this.openAt(host, relays.length && !isRelayHost(host) ? 4000 : 10_000);
+        return await this.openAt(lifetime, host, relays.length && !isRelayHost(host) ? 4000 : 10_000);
       } catch (error) {
         // A direct address answered the hello and then failed. The hello is public, so anything on
         // the network can play it back: that must not keep the phone off the relay, now or at the
         // next look for a direct path.
         if (isRelayHost(host) || !relays.length || (error instanceof LinkError && error.code === "revoked")) throw error;
-        this.distrusted.set(host, Date.now() + DISTRUST_MS);
+        if (this.lifetime === lifetime) this.distrusted.set(host, Date.now() + DISTRUST_MS);
         const found = await findHost(this.options.fetch, relays, expect);
-        return await this.openAt(found.host);
+        return await this.openAt(lifetime, found.host);
       }
     })().finally(() => {
-      this.opening = null;
+      if (this.lifetime === lifetime) this.opening = null;
     });
     return this.opening;
   }
@@ -375,7 +430,7 @@ export class LinkClient {
   }
 
   /** Opens a session at one address that answered as this phone's computer. */
-  private async openAt(host: string, timeout = 10_000): Promise<Session> {
+  private async openAt(lifetime: object, host: string, timeout = 10_000): Promise<Session> {
     {
       const { pairing } = this;
       const base = "http://" + host;
@@ -397,7 +452,7 @@ export class LinkClient {
       if (response.status === 403 && body.error === "unknown_device") throw new LinkError("revoked", "This phone was removed from " + pairing.name + ".");
       if (!response.ok || !body.box) throw new LinkError("protocol", "Your computer refused the connection.");
       const reply = unbox<{ session: string; eph: string; nonce: string; epoch: string; hosts?: string[] }>(this.deviceKey, body.box, "session-ok:" + pairing.serverId);
-      if (Array.isArray(reply.hosts) && reply.hosts.length) {
+      if (this.lifetime === lifetime && Array.isArray(reply.hosts) && reply.hosts.length) {
         // The address that just worked stays first; the computer's current ones follow.
         const hosts = mergeHosts(host, reply.hosts, pairing.hosts, 8);
         if (hosts.join() !== pairing.hosts.join()) {
@@ -407,19 +462,20 @@ export class LinkClient {
       }
       const salt = concat(nonce, unb64u(reply.nonce));
       const master = hkdf(concat(agree(eph.secretKey, unb64u(reply.eph)), this.deviceKey), salt, INFO.session);
-      if (reply.epoch !== this.epoch) {
+      if (this.lifetime === lifetime && reply.epoch !== this.epoch) {
         // The computer's app restarted: nothing we hold is known to be current.
         this.epoch = reply.epoch;
         this.have = {};
       }
       const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, base };
-      this.useSession(session);
+      if (this.lifetime === lifetime) this.useSession(session);
       return session;
     }
   }
 
   private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal): Promise<T> {
     const session = await this.openSession();
+    if (signal?.aborted) throw new Error("The request was cancelled");
     const seq = ++session.seq;
     const sealed = seal(session.toHost, seqNonce(seq), utf8(JSON.stringify({ m: method, a: args })), "rpc:" + session.id);
     const response = await timed(timeout, signal, (inner) =>
@@ -444,11 +500,12 @@ export class LinkClient {
 
   /** One of the computer's calls. Rejects with a LinkError: "remote" carries the computer's own message. */
   async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
+    const lifetime = this.lifetime;
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.request<T>(method, args, 60_000);
       } catch (error) {
-        if (error instanceof Retry && attempt < 2) continue;
+        if (this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;
         throw new LinkError("offline", "Your computer can't be reached right now.");
       }
@@ -467,9 +524,9 @@ export class LinkClient {
     });
   }
 
-  private async follow() {
+  private async follow(lifetime: object) {
     let failures = 0;
-    while (this.running) {
+    while (this.lifetime === lifetime) {
       const poll = new AbortController();
       this.poll = poll;
       try {
@@ -477,8 +534,10 @@ export class LinkClient {
         const quick = this.suspect;
         this.suspect = false;
         const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: this.watching, wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
+        if (this.lifetime !== lifetime) break;
         failures = 0;
         this.setState("online");
+        if (this.lifetime !== lifetime) break;
         if (news.epoch !== this.epoch) {
           this.epoch = news.epoch;
           this.have = {};
@@ -488,14 +547,18 @@ export class LinkClient {
           this.options.onParts(news.parts);
         }
       } catch (error) {
-        if (!this.running) break;
+        if (this.lifetime !== lifetime) break;
         // Cut short on purpose (the watched chats changed), or a session to renew: go again.
         if (poll.signal.aborted || error instanceof Retry) continue;
         this.useSession(null);
+        if (this.lifetime !== lifetime) break;
         const revoked = error instanceof LinkError && error.code === "revoked";
         // One missed answer after being in step is a blip; a second one means the computer is away.
         const blip = this.state === "online" && failures === 0;
         this.setState(revoked ? "revoked" : blip ? "connecting" : "offline");
+        if (this.lifetime !== lifetime) break;
+        if (!revoked && !blip) this.options.onUnreachable?.();
+        if (this.lifetime !== lifetime) break;
         failures++;
         // After a blip the computer is looked for again at once: the old path died, another may be up.
         if (blip) continue;

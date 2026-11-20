@@ -177,6 +177,17 @@ test("each kind can be switched off, previews can be hidden, and a quiet routine
     await call("runRoutine", id);
     await until(() => sent.length === 2, "the routine's notification");
     assert.equal(unseal(paired, sent[1].payload.b).k, "routine");
+
+    // A routine set to "No output" publishes nothing, so a run that completes says nothing either,
+    // also with "Notify me" left on. (The run is marked `noOutput` by the computer's app.)
+    await call("updateRoutine", id, { deliver: { to: "none" }, notify: true });
+    await call("runRoutine", id);
+    await delay(900);
+    assert.equal(sent.length, 2, "a no-output run sends no notification");
+    // Back to a destination: it notifies again.
+    await call("updateRoutine", id, { deliver: { to: "routine" } });
+    await call("runRoutine", id);
+    await until(() => sent.length === 3, "the routine's notification again");
   } finally {
     await done();
   }

@@ -2,6 +2,8 @@
 
 Botkins runs your bots on your computer. Pair the mobile app to chat with them and manage their work from your phone.
 
+Download the desktop app for macOS, Windows, or Linux from [GitHub Releases](https://github.com/promptclickrun/Botkins/releases/latest). Join the [iOS or Android beta](https://botkins.app/downloads) to use Botkins on your phone.
+
 | Component | Getting started |
 | --- | --- |
 | [Desktop](desktop/README.md) · Electron | In `desktop/`, run `npm ci`, then `npm start`. |

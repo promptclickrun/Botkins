@@ -5,15 +5,17 @@ import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, File
 import { memo, type ReactNode } from "react";
 import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
-import type { Bot, Message, Run } from "@/link/types";
+import type { Artifact, Bot, Message, Run } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { clockTime } from "@/state/time";
 import { speakText, stopSpeech, useSpeakingNow } from "@/features/voice/tts";
+import { ArtifactChips } from "@/features/artifacts/ArtifactBits";
+import { useMessageLinks } from "@/features/artifacts/data";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
-import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
 
 export type Item =
   | { kind: "message"; key: string; message: Message; /** Its place in the whole chat, for Fork from here. */ index: number; run?: Run; /** The run's last reply: its work line and cards go under it. */ end: boolean; /** The newest message in the chat. */ latest: boolean }
@@ -127,7 +129,7 @@ function Stamp({ time, align }: { time?: number; align: "flex-start" | "flex-end
   );
 }
 
-function UserBubble({ message, index, timestamps, id, actions }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions }) {
+function UserBubble({ message, index, timestamps, id, actions, paths, media }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[] }) {
   const { colors } = useTheme();
   const selecting = useSelecting((state) => state.id === id);
   // A Today item the person chose to discuss is a card here: it comes as a record the computer kept
@@ -209,11 +211,12 @@ function UserBubble({ message, index, timestamps, id, actions }: { message: Mess
           >
             <DoubleTap id={id}>
               <View style={{ backgroundColor: colors.bubble, borderRadius: 20, borderBottomRightRadius: 6, paddingHorizontal: 15, paddingVertical: 10 }}>
-                <Markdown text={rest} inline color={colors.onBubble} />
+                <Markdown text={rest} inline color={colors.onBubble} paths={paths} />
               </View>
             </DoubleTap>
           </HoldMenu>
         ))}
+      {media.length > 0 && <ArtifactChips items={media} align="flex-end" />}
       {timestamps && <Stamp time={message.time} align="flex-end" />}
     </View>
   );
@@ -258,7 +261,7 @@ function ReadAloud({ id, text }: { id: string; text: string }) {
 }
 
 /** A bot's reply. A long press offers Copy, Select text, Read aloud (or Stop reading), Share, Reply and Fork from here. */
-function Reply({ message, index, id, markdown, actions }: { message: Message; index: number; id: string; markdown: boolean; actions?: MessageActions }) {
+function Reply({ message, index, id, markdown, actions, paths }: { message: Message; index: number; id: string; markdown: boolean; actions?: MessageActions; paths?: PathLinks }) {
   const reading = useSpeakingNow((state) => state.id === id);
   const selecting = useSelecting((state) => state.id === id);
   // While its text is being selected the message is one native text view, outside the menu: a
@@ -289,7 +292,7 @@ function Reply({ message, index, id, markdown, actions }: { message: Message; in
       }}
     >
       <DoubleTap id={id}>
-        <Markdown text={message.text} plain={!markdown} />
+        <Markdown text={message.text} plain={!markdown} paths={paths} />
       </DoubleTap>
     </HoldMenu>
   );
@@ -301,13 +304,17 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
   const { message, run, end, latest } = item;
-  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} />;
+  // Paths the computer knows become links, and MEDIA: attachments show under the text. A reply still
+  // being written is left alone until it ends, so half a path is never asked about.
+  const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
+  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
   if (message.role === "command") return <CommandBlock message={message} />;
   const worked = end && run && run.status !== "Working" && (!!run.summary || !!run.steps?.length);
   return (
     <View style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      <Reply message={message} index={item.index} id={chatId + ":" + item.key} markdown={markdown} actions={actions} />
+      <Reply message={message} index={item.index} id={chatId + ":" + item.key} markdown={markdown} actions={actions} paths={links.paths} />
+      {links.media.length > 0 && <ArtifactChips items={links.media} align="flex-start" />}
       {!!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} />

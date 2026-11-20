@@ -115,6 +115,42 @@ The host's app reads the same registry without a session, for its own Settings â
 - `link.removeDevice(id)`, `link.renameDevice(id, name)`.
 - Events: `"paired"` (with the device) and `"status"` (after any change).
 
+## The screen's level, set from a phone (`screen-grant-v1`)
+
+What paired devices may do with a host's screen is one setting: `"off"`, `"view"` or `"control"`. A host with a window sets it in its own Settings â€º Phone, and no client can change it. A **headless host** (a server with no window) has nobody at a window, so there, and only there, a phone may set it. It is the one call that widens what clients can do, and it asks for more than a paired session.
+
+**What a headless host says.** Its app passes `backend.headless === true` and `backend.displayStatus()` (the display as it is now, read at each rebuild of the parts; the app calls `link.changed()` when it changes). The host then names `screen-grant-v1` in `meta.capabilities`, and the `host` part is:
+
+```ts
+type HostPart = {
+  screen: "off" | "view" | "control";
+  relay?: boolean;
+  headless?: true;                                              // only a headless host
+  display?: { available: boolean; kind?: string; note?: string }; // with headless: the display now ("xvfb"); note is one sentence for a person
+  screenSetBy?: { deviceId: string; name: string; at: number }; // the phone that last set the level; absent when it was set on the host
+};
+```
+
+A host with its own window says neither `headless` nor the capability, and refuses the calls below ("Change this on the computer itself."). `phones[deviceId].presence` is `true` for a device whose presence key the host keeps.
+
+**The presence key.** When a phone pairs, it sends a second public key in the pairing's sealed hello: `presenceKey`, P-256, SPKI as base64url. The private half stays on the phone and can be used only after Face ID, Touch ID or the passcode, each time (`modules/botkins-presence`: the Secure Enclave where the phone has one). The host keeps the key on the device's record **only when the pairing request reached it directly over HTTP**, never through the relay. There is no way to add a key later: a device paired without one (an older build, a pairing through the relay, a phone with no passcode) pairs again to get one.
+
+**The calls.** All three are the link's own calls. Each is refused unless the host is headless, the call arrived directly (the transport is checked on every call, also in a session that was opened directly), and the device is a phone.
+
+| Call | Answer |
+| --- | --- |
+| `link.screen.grant.begin(level)`, `level` `"view"` or `"control"` | `{ ticket, expiresAt }` |
+| `link.screen.grant.confirm(ticket, signature)` | `{ screen }`, the level now in force |
+| `link.screen.revoke()` | `{ screen: "off" }` |
+
+- A **ticket** is 32 random bytes as base64url. It lasts 60 seconds, works once (a refused `confirm` uses it up), and belongs to one session, one device, one level and this host. A device has one open ticket; asking again ends the one before. Any change of the level, the session ending and the device being removed end it.
+- The **signature** proves a person confirmed on that phone. The phone signs the UTF-8 bytes of `JSON.stringify(["botkins-screen-grant-v1", serverId, deviceId, level, ticket])` with its presence key: ECDSA P-256 with SHA-256, the signature as DER in base64url. `grantMessage` in `src/link/client.ts` and in `link-host/grant.mjs` builds that text, and a test holds the two equal.
+- `revoke` needs no ticket and no signature: taking access away is one step. A phone without a presence key can still revoke.
+- The level and `screenSetBy` are kept in `link.json` until changed, over a restart too. The host's own setting (`setScreenMode`) clears `screenSetBy`.
+- The sentences a client may get: "Change this on the computer itself." / "This can't be changed through the relay. Connect to the computer's own network and try again." / "Only a paired phone can change this." / "Pair this phone with the computer again to change this from the phone." / "That confirmation ran out. Try again." / "This phone couldn't confirm it was you. Try again."
+
+**No bot can reach it.** These calls are answered only inside a paired device's sealed session. They are not among the app's calls a client may make (`REMOTE_METHODS`), no tool a bot has on the host or on a phone touches them, and the host's app registers no remote method, command-line tool, bot tool or MCP tool for grants. On the headless host the link and its pairing store run in a container of their own, apart from the one that runs the bots, their tools and the display; the bots' container holds no grant method and can't read the host's identity or the owner's pairing file. On the phone only the Screen section of the computer's page makes the calls, from a tap by the person, after a question that says what the level grants; nothing a bot sends (a message, a custom view, a notification, a phone tool) can start it. `tests/screen-grant.test.ts` checks the host's rules, the phone's states and that these are the only callers.
+
 ## What differs for a desktop client
 
 - **Notifications.** A desktop client does not register for push (`link.push.register` is for phones). It should call `link.push.presence(active, chatId?)` when its window comes to the front, goes away, or shows another chat. While a desktop client is in front, the host treats it like its own window: a reply in the chat on that screen sends no notification to a phone.

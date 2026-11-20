@@ -9,17 +9,22 @@ import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useShare
 import type { Bot } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { useApp } from "@/state/store";
-import { BotAvatar, Markdown, radius, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Markdown, radius, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { StepMark } from "./bits";
 
 const SHOWN_STEPS = 4;
 
 function Dot({ delay }: { delay: number }) {
   const { colors } = useTheme();
-  const still = useReducedMotion();
+  const seen = useOnShow();
+  const still = useReducedMotion() || !seen;
   const lift = useSharedValue(0);
   useEffect(() => {
-    if (still) return;
+    if (still) {
+      cancelAnimation(lift);
+      lift.value = 0;
+      return;
+    }
     lift.value = withDelay(delay, withRepeat(withSequence(withTiming(1, { duration: 320 }), withTiming(0, { duration: 320 }), withTiming(0, { duration: 260 })), -1));
     return () => cancelAnimation(lift);
   }, [delay, lift, still]);

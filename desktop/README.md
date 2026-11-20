@@ -128,7 +128,7 @@ For Windows, select the signing account with `BOTKINS_SIGN_ACCOUNT`. Set `BOTKIN
 
 Open **Settings → About → Check for updates**. The installed app also checks GitHub Releases shortly after launch and every six hours. A newer stable version triggers a desktop notification. On a Mac with a matching ZIP, **Update and restart** downloads the release, verifies it and relaunches Botkins. Your workspace stays on disk. A bot can use `check_app_update` and, when you ask it to update, `install_app_update`. The restart waits for that chat turn to finish. On platforms distributed as portable archives, About links to the release downloads.
 
-The release repository is private. Sign in to GitHub CLI on the computer with an account that can read `promptclickrun/Botkins` (`gh auth login --hostname github.com`). Botkins uses the CLI's existing sign-in when it contacts GitHub. Trial data folders skip automatic checks.
+You can download releases and check for updates without signing in to GitHub. Trial data folders skip automatic checks.
 
 Publish a stable desktop release as `v<version>`. Upload the signed, notarized Mac ZIP produced by electron-builder together with its corresponding `latest-mac.yml` and blockmap before making the release latest. The updater compares semantic versions and checks the release tag against the installer manifest before downloading.
 

@@ -92,9 +92,12 @@ export function baseParts(state, info, looks = {}, link = {}) {
     mcp: state.mcpServers ?? [],
     skills: state.skills ?? { folders: [], plugins: [], disabled: [] },
     templates: state.templates ?? [],
-    revs: { wiki: state.wiki?.revision ?? 0, providers: state.providers?.revision ?? 0 },
+    // `artifacts` goes up when the index of what bots made changes, so an open list can ask again. An app without that index says nothing.
+    revs: { wiki: state.wiki?.revision ?? 0, providers: state.providers?.revision ?? 0, ...(Number.isFinite(state.artifacts?.revision) && { artifacts: state.artifacts.revision }) },
     credentials: link.credentials ?? [],
-    host: { screen: link.screen ?? "off", relay: link.relay === true },
+    // A host with no window of its own says so, with whether it has a display now; and a level that was
+    // set from a phone says which phone and when (grant.mjs). A computer with its own settings page says neither.
+    host: { screen: link.screen ?? "off", relay: link.relay === true, ...(link.headless && { headless: true, display: link.display ?? { available: false } }), ...(link.screenSetBy && { screenSetBy: link.screenSetBy }) },
   };
 }
 

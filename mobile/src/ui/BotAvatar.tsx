@@ -15,6 +15,7 @@ import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, M
 import { lookOf, type ResolvedLook, resolveLook } from "@/data/botLook";
 import type { BotkinLook } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
+import { useOnShow } from "./useOnShow";
 
 const CLIP_FOR: Record<AvatarState, BotkinState> = {
   idle: "idle",
@@ -51,7 +52,10 @@ export type BotAvatarProps = {
   size?: number;
   /** Kept so older callers compile. Avatars are always drawn bare, with nothing behind them. */
   tile?: boolean;
-  /** Every avatar moves. Pass false only for a picture that must hold still; the phone's Reduce Motion stills them all. */
+  /**
+   * Every avatar that can be seen moves. Pass false only for a picture that must hold still; the
+   * phone's Reduce Motion stills them all, and an avatar whose screen can't be seen holds still by itself.
+   */
   animated?: boolean;
   /** The state's badge at the corner. On by default from 40 points up. */
   badge?: boolean;
@@ -87,6 +91,9 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const inner = size;
   const unit = inner / 256;
   const still = useReducedMotion() || !animated;
+  // Under another page, or in a tab that isn't selected, the head holds the pose it has: nothing
+  // jumps while the next screen slides over it, and it starts its clip again when it is seen.
+  const seen = useOnShow();
 
   // The head moves through the clip's poses; `step` runs from 0 to the last pose.
   const step = useSharedValue(0);
@@ -95,18 +102,20 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const last = poses.length - 1;
   useEffect(() => {
     cancelAnimation(step);
+    if (!seen) return;
     step.value = 0;
     if (still || last < 1) return;
     const each = clip.durationMs / last;
     const moves = poses.slice(1).map((_, index) => withTiming(index + 1, { duration: each, easing: Easing.inOut(Easing.ease) }));
     step.value = clip.loop ? withRepeat(withSequence(...moves, withTiming(0, { duration: 0 })), -1) : withSequence(...moves);
     return () => cancelAnimation(step);
-  }, [clip, still, step, poses, last]);
+  }, [clip, still, seen, step, poses, last]);
 
   // Each character blinks on its own beat (3.8 to 5 seconds), so a screen of them never blinks in step.
   const blinks = eyes !== "smile" && eyes !== "sleepy";
   useEffect(() => {
     cancelAnimation(lids);
+    if (!seen) return;
     lids.value = 1;
     if (still || !blinks) return;
     const seed = hash(head.name);
@@ -117,7 +126,7 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
       withRepeat(withSequence(withTiming(1, { duration: period * 0.92 }), withTiming(0.09, { duration: period * 0.02, ...ease }), withTiming(0.09, { duration: period * 0.006 }), withTiming(1, { duration: period * 0.024, ...ease }), withTiming(1, { duration: period * 0.03 })), -1),
     );
     return () => cancelAnimation(lids);
-  }, [still, blinks, head.name, lids]);
+  }, [still, seen, blinks, head.name, lids]);
 
   const range = useMemo(() => poses.map((_, index) => index), [poses]);
   const xs = useMemo(() => poses.map((pose) => pose[0] * unit), [poses, unit]);
