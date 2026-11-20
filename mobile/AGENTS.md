@@ -1,6 +1,6 @@
 # Botkins
 
-Botkins is the phone app for the Botkins app on the person's computer (the desktop app, which used to be called Commander; some code and paths still say "commander" and `desktop/`). A phone pairs with a computer (or with several, using one at a time), then chats with the person's bots and manages everything about them: bots, chats, routines, tasks, tools (MCP servers), skills, model providers, credentials, the wiki and settings. It can also show the computer's screen, tell the person when a bot needs them, let bots use the phone's calendar, contacts and more, and talk with a bot out loud. The Marketplace connects apps through the person's own Composio account.
+Botkins is the phone app for the Botkins app on the person's computer (the desktop app, in `../desktop`; it was renamed during development, so a few code names and paths still use the earlier name, and the phone's code says `desktop/` for it). A phone pairs with a computer (or with several, using one at a time), then chats with the person's bots and manages everything about them: bots, chats, routines, tasks, tools (MCP servers), skills, model providers, credentials, the wiki and settings. It can also show the computer's screen, tell the person when a bot needs them, let bots use the phone's calendar, contacts and more, and talk with a bot out loud. The Marketplace connects apps through the person's own Composio account.
 
 ## Stack and commands
 
@@ -96,7 +96,7 @@ A standing rule from the owner (2026-11-19): every setting and control the app o
 - Most settings are fields of `Preferences` and are saved with `api.setPreferences({ … })`; the computer checks each one. A new field usually needs only the type in `src/link/types.ts`, a row or page in `src/features/settings/`, and the same field in `link-host/mock-backend.mjs`.
 - **Where the pieces of the first full pass (2026-11-19) are**, so the next control lands beside its kind: the computer's own settings in `src/features/settings/` (`Desktop.tsx` Background and Storage, `ComputerAlerts.tsx`, `Access.tsx`, `Window.tsx` for its theme, font and side menu, with their plain logic in `computer.ts`); bots in `src/features/bots/` (`Access.tsx`, sections and filters in `src/features/home/arrange.ts`); chats in `src/features/chat/` (`Changes.tsx`, `ChatProject.tsx`, `side.ts` for `/btw`); Today, routines and projects in `src/features/today/` (`PanelRoutine.tsx`, `NewPanel.tsx`), `src/features/work/` (`Cadence.tsx` is the one schedule picker, `cron.ts` its math) and `src/features/projects/logic.ts`.
 - Never put an `eslint-disable` for the hooks rules in a component: the React Compiler then skips that component.
-- Before a release, compare the two apps: the computer's Settings pages (`Commander-Con/src`, start at its Settings navigation) and its per-bot, per-chat, routine, task, tool, skill and provider controls, against `src/features/` here.
+- Before a release, compare the two apps: the computer's Settings pages (`../desktop/src`, start at its Settings navigation in `Settings.tsx`) and its per-bot, per-chat, routine, task, tool, skill and provider controls, against `src/features/` here.
 
 ### What the phone can't do
 
