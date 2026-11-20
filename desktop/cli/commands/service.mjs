@@ -96,7 +96,7 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
   const folder = installFolder?.();
   if (folder) {
     const words = folder.problem && notRootOwnedWords(folder.problem, folder.root);
-    checks.push(check("Install folder", !folder.problem, folder.problem ? words.replace(/ On the computer: .*$/, "") + " No update is installed until it is put right." : folder.root + " and every folder above it are root's own, so updates can be installed.", folder.problem ? /On the computer: `(.*)`\.$/.exec(words)[1] : undefined));
+    checks.push(check("Install folder", !folder.problem, folder.problem ? words.replace(/ On the computer: .*$/, "") + " No update is installed until it is put right." : folder.root + " and every folder above it are root's own, so updates can be installed.", folder.problem ? /On the computer: `(.*)`\.$/.exec(words)?.[1] : undefined));
   }
   // The relay: whether this computer can reach it at all. Nothing of the workspace is sent.
   if (config) {

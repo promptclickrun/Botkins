@@ -364,6 +364,8 @@ test("an install folder that is not root's alone is found, said in words with th
   assert.equal(notRootOwnedWords({ path: "/opt", uid: 0, mode: 0o777 }, "/opt/botkins"), "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in /opt/botkins. On the computer: `sudo chown root /opt && sudo chmod go-w /opt`.");
   assert.equal(notRootOwnedWords({ path: "/srv/my apps", uid: 1000, mode: 0o755 }, "/srv/my apps/botkins"), "The folder /srv/my apps does not belong to root, so Botkins can't be updated in /srv/my apps/botkins. On the computer: `sudo chown root '/srv/my apps' && sudo chmod go-w '/srv/my apps'`.");
   assert.ok(notRootOwnedWords({ path: "/opt", uid: 0, mode: 0o777 }, "/opt/botkins").length < 300, "it fits in the record a phone is shown");
+  // A folder that couldn't be looked at: said as that, with no command that might not help.
+  assert.equal(notRootOwnedWords(notRootOwned(join(dir, "nothing", "here")), join(dir, "nothing", "here")), "The folder " + join(dir, "nothing", "here") + " is not there or can't be read, so Botkins can't be updated in " + join(dir, "nothing", "here") + ".");
   // The updater says it before it downloads anything, and it is an install that failed, with that reason.
   const { entry } = installed(dir, "1.2.3");
   const reports = [];
@@ -716,6 +718,7 @@ test("the installer and the launcher are plain sh, and the installer checks befo
   assert.equal(notRoots("/usr"), "");
   assert.equal(notRoots("/usr/no such folder/botkins"), "", "a folder that is not there yet is made by root, under one that is root's");
   assert.equal(notRoots("/tmp/botkins"), realpathSync("/tmp"));
+  assert.match(look, /dir=\$\(cd "\$dir" 2>\/dev\/null && pwd -P\) \|\| \{ printf '%s\\n' "\$1"; return 0; \}/, "a folder that can't be entered is named, not passed over without a word");
   const mine = realpathSync(mkdtempSync(join(tmpdir(), "bk-own-")));
   try {
     mkdirSync(join(mine, "opt"));
@@ -739,6 +742,8 @@ test("`botkins doctor` says when the whole computer's install folder is one no u
   assert.deepEqual(await look(() => ({ root: "/opt/botkins", problem: null })), { name: "Install folder", ok: true, detail: "/opt/botkins and every folder above it are root's own, so updates can be installed." });
   assert.deepEqual(await look(() => ({ root: "/opt/botkins", problem: { path: "/opt", uid: 0, mode: 0o777 } })), { name: "Install folder", ok: false, detail: "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in /opt/botkins. No update is installed until it is put right.", fix: "sudo chown root /opt && sudo chmod go-w /opt" });
   // One person's own service, or a checkout: there is no such folder to ask about.
+  const gone = await look(() => ({ root: "/opt/botkins", problem: { path: "/opt/botkins", uid: -1, mode: 0 } }));
+  assert.deepEqual([gone.ok, gone.detail, gone.fix], [false, "The folder /opt/botkins is not there or can't be read, so Botkins can't be updated in /opt/botkins. No update is installed until it is put right.", undefined]);
   assert.equal(await look(() => null), undefined);
   assert.equal(await look(undefined), undefined);
 });

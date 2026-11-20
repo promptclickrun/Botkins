@@ -102,51 +102,86 @@ test("the latest release is found from the release page, which GitHub does not l
   const sums = ["a".repeat(64) + "  botkins-terminal-0.17.0-linux-x64.tar.gz", "b".repeat(64) + "  botkins-desktop-0.17.0.tar.gz", "not a line of the list", ""].join("\n");
   const there = ["SHA256SUMS.asc", "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip"];
   // GitHub as it answers: the page sends its reader on to the release, and a file that is there sends on to where it is kept.
-  const github = ({ api = 403, page = "v0.17.0" } = {}) => {
+  // `files` says how one file answers instead: a status, or "down" for no answer at all.
+  const github = ({ api = 403, page = "v0.17.0", files = {}, leads = "https://github.com/promptclickrun/Botkins/releases/tag/" } = {}) => {
     const asked = [];
     const fetcher = async (url, options = {}) => {
       asked.push((options.method ?? "GET") + " " + url.replace("https://github.com/promptclickrun/Botkins/", "").replace("https://api.github.com/repos/promptclickrun/Botkins/", "api:") + (options.headers?.Authorization ? " (signed in)" : ""));
       if (url.startsWith("https://api.github.com/")) return typeof api === "number" ? new Response(null, { status: api }) : Response.json(api);
-      if (url.endsWith("/releases/latest")) return page ? new Response(null, { status: 302, headers: { location: "https://github.com/promptclickrun/Botkins/releases/tag/" + page } }) : new Response("<html>", { status: 200 });
+      if (url.endsWith("/releases/latest")) return page ? new Response(null, { status: 302, headers: { location: leads + page } }) : new Response("<html>", { status: 200 });
       const name = url.split("/").at(-1);
+      if (files[name] === "down") throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ETIMEDOUT" } });
+      if (files[name]) return new Response(null, { status: files[name] });
       if (name === "SHA256SUMS") return new Response(sums);
       return new Response(null, { status: there.includes(name) ? 302 : 404 });
     };
     return { asked, fetcher };
   };
+  const listed = ["botkins-terminal-0.17.0-linux-x64.tar.gz", "botkins-desktop-0.17.0.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"];
+  const fromApi = { tag_name: "v0.17.0", draft: false, prerelease: false, assets: [{ name: "from-the-api" }] };
   // No sign-in (a server, the terminal host): the page says which release, its own list says what it holds, and the API is never asked.
   const plain = github();
-  assert.deepEqual(await latestRelease({ fetcher: plain.fetcher, token: "" }), { version: "0.17.0", assets: ["botkins-terminal-0.17.0-linux-x64.tar.gz", "botkins-desktop-0.17.0.tar.gz", "SHA256SUMS", "SHA256SUMS.asc", "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip"] });
-  assert.deepEqual(plain.asked.slice(0, 2), ["GET releases/latest", "GET releases/download/v0.17.0/SHA256SUMS"]);
-  assert.ok(plain.asked.every((line) => !line.includes("api:")), "the API, which refuses a busy address, was not asked");
-  assert.ok(plain.asked.slice(2).every((line) => line.startsWith("HEAD releases/download/v0.17.0/")), "the files the desktop app takes are asked for by name, and not downloaded");
+  assert.deepEqual(await latestRelease({ fetcher: plain.fetcher, token: "" }), { version: "0.17.0", assets: listed });
+  assert.deepEqual(plain.asked, ["GET releases/latest", "GET releases/download/v0.17.0/SHA256SUMS", "HEAD releases/download/v0.17.0/SHA256SUMS.asc"], "three small questions, none of them to the API, and none about files only a Mac takes");
+  // The Mac app says it is one, and the files its own updater takes are asked for by name, and not downloaded.
+  const mac = github();
+  assert.deepEqual(await latestRelease({ fetcher: mac.fetcher, token: "", mac: true }), { version: "0.17.0", assets: [...listed, "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip"] });
+  assert.deepEqual(mac.asked.slice(2).sort(), ["SHA256SUMS.asc", "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip", "Botkins-0.17.0-x64-mac.zip", "Botkins-0.17.0-universal-mac.zip"].map((name) => "HEAD releases/download/v0.17.0/" + name).sort());
   // The page not leading anywhere (GitHub changed, or is half down): the API is the second try.
   const second = github({ page: null, api: { tag_name: "v0.17.1", draft: false, prerelease: false, assets: [{ name: "latest-mac.yml" }] } });
   assert.deepEqual(await latestRelease({ fetcher: second.fetcher, token: "" }), { version: "0.17.1", assets: ["latest-mac.yml"] });
   assert.deepEqual(second.asked, ["GET releases/latest", "GET api:releases/latest"]);
   // With a sign-in (the desktop app, where GitHub CLI is signed in) the API is asked first, and the page when it fails.
-  const signed = github({ api: { tag_name: "v0.17.0", draft: false, prerelease: false, assets: [{ name: "from-the-api" }] } });
+  const signed = github({ api: fromApi });
   assert.deepEqual(await latestRelease({ fetcher: signed.fetcher, token: "t" }), { version: "0.17.0", assets: ["from-the-api"] });
   assert.deepEqual(signed.asked, ["GET api:releases/latest (signed in)"]);
   const expired = github({ api: 401 });
   assert.equal((await latestRelease({ fetcher: expired.fetcher, token: "old" })).version, "0.17.0");
   assert.equal(expired.asked[1], "GET releases/latest");
-  // A page that leads to something that is no stable release is not followed: a pre-release, a tag that is no version, another site's words.
-  for (const page of ["v0.18.0-beta.1", "nightly", "0.17.0", "v0.17"]) await assert.rejects(latestRelease({ fetcher: github({ page, api: 404 }).fetcher, token: "" }), /GitHub names no published release/);
-  // Both ways refused or unreachable: what is said is true, and names nothing to sign in to.
-  await assert.rejects(latestRelease({ fetcher: github({ page: null, api: 403 }).fetcher, token: "" }), (error) => error.message === "GitHub is not answering this address for now: it limits how often one address may ask about releases. Try again later.");
+
+  // A failure that passes is never an answer. The list of the release's files not coming (GitHub
+  // busy, a timeout) is not an empty list: the page way gives up, and the API has its turn.
+  for (const failure of [429, 500, 503, "down"]) {
+    const busy = github({ api: fromApi, files: { SHA256SUMS: failure } });
+    assert.deepEqual(await latestRelease({ fetcher: busy.fetcher, token: "" }), { version: "0.17.0", assets: ["from-the-api"] }, "the list answered " + failure);
+    assert.equal(busy.asked.at(-1), "GET api:releases/latest");
+  }
+  // The same for a file asked for by name: only GitHub saying 404 means it isn't there.
+  for (const failure of [429, 500, 502, "down"]) {
+    const busy = github({ api: fromApi, files: { "latest-mac.yml": failure } });
+    assert.deepEqual(await latestRelease({ fetcher: busy.fetcher, token: "", mac: true }), { version: "0.17.0", assets: ["from-the-api"] }, "latest-mac.yml answered " + failure);
+    const signature = github({ api: fromApi, files: { "SHA256SUMS.asc": failure } });
+    assert.deepEqual(await latestRelease({ fetcher: signature.fetcher, token: "" }), { version: "0.17.0", assets: ["from-the-api"] }, "SHA256SUMS.asc answered " + failure);
+  }
+  // And when the API can't answer either, nothing is made up: the lookup fails, and says both reasons.
+  await assert.rejects(latestRelease({ fetcher: github({ api: 403, files: { SHA256SUMS: 503 } }).fetcher, token: "" }), (error) => error.message === "GitHub did not say which release is the latest: the list of what Botkins 0.17.0 holds did not come (HTTP 503); its API is not answering this address for now (it limits how often one address may ask). Try again later.");
+  await assert.rejects(latestRelease({ fetcher: github({ api: 403, files: { "latest-mac.yml": 500 } }).fetcher, token: "", mac: true }), /it did not say whether Botkins 0\.17\.0 has latest-mac\.yml \(HTTP 500\); its API is not answering/);
+  // 404 is GitHub saying "not there", and is an answer: a release with no list of its own, a file it doesn't have.
+  const bare = github({ files: { SHA256SUMS: 404 } });
+  assert.deepEqual(await latestRelease({ fetcher: bare.fetcher, token: "", mac: true }), { version: "0.17.0", assets: ["SHA256SUMS.asc", "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip"] });
+  assert.ok(bare.asked.every((line) => !line.includes("api:")));
+
+  // A page that leads to something that is no stable release of this project is not followed: a
+  // pre-release, a tag that is no version, and the same path at another address (a network's own sign-in page, say).
+  for (const page of ["v0.18.0-beta.1", "nightly", "0.17.0", "v0.17", "v0.17.0/../../x"]) await assert.rejects(latestRelease({ fetcher: github({ page, api: 404 }).fetcher, token: "" }), /its release page did not lead to a stable release of Botkins \(HTTP 302\); its API names no published release of Botkins/);
+  for (const leads of ["https://example.com/promptclickrun/Botkins/releases/tag/", "https://github.com/someone-else/Botkins/releases/tag/", "/releases/tag/"]) {
+    const elsewhere = github({ leads, api: 404 });
+    await assert.rejects(latestRelease({ fetcher: elsewhere.fetcher, token: "" }), /its release page did not lead to a stable release/);
+    assert.ok(elsewhere.asked.every((line) => !line.includes("download")), "nothing is asked of a release found that way");
+  }
+  // Both ways refused or unreachable: what is said is true, names each cause once, and names nothing to sign in to.
+  await assert.rejects(latestRelease({ fetcher: github({ page: null, api: 403 }).fetcher, token: "" }), (error) => error.message === "GitHub did not say which release is the latest: its release page did not lead to a stable release of Botkins (HTTP 200); its API is not answering this address for now (it limits how often one address may ask). Try again later.");
   await assert.rejects(latestRelease({ fetcher: github({ page: null, api: 429 }).fetcher, token: "" }), /limits how often one address may ask/);
-  await assert.rejects(latestRelease({ fetcher: github({ page: null, api: 503 }).fetcher, token: "" }), /GitHub could not check for updates \(HTTP 503\)\. Try again later\./);
-  await assert.rejects(latestRelease({ fetcher: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); }, token: "" }), (error) => error.message === "GitHub could not be reached to look for a new release (ENOTFOUND). Try again later.");
-  for (const status of [401, 403, 404, 429, 503]) await latestRelease({ fetcher: github({ page: null, api: status }).fetcher, token: "" }).catch((error) => assert.doesNotMatch(error.message, /GitHub CLI|[Ss]ign in/));
-  // A release with no list of its own (none published yet for it): the files asked for by name are still found.
-  const bare = github();
-  const without = await latestRelease({ fetcher: async (url, options) => (url.endsWith("/SHA256SUMS") ? new Response(null, { status: 404 }) : bare.fetcher(url, options)), token: "" });
-  assert.deepEqual(without, { version: "0.17.0", assets: ["SHA256SUMS.asc", "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip"] });
+  await assert.rejects(latestRelease({ fetcher: github({ page: null, api: 503 }).fetcher, token: "" }), /its API answered HTTP 503\. Try again later\./);
+  await assert.rejects(latestRelease({ fetcher: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); }, token: "" }), (error) => error.message === "GitHub did not say which release is the latest: it could not be reached (ENOTFOUND). Try again later.");
+  // A sign-in that GitHub no longer accepts is said as that, beside what the page did, and not hidden by it.
+  await assert.rejects(latestRelease({ fetcher: github({ page: null, api: 401 }).fetcher, token: "old" }), (error) => error.message === "GitHub did not say which release is the latest: its API did not accept the sign-in from GitHub CLI; its release page did not lead to a stable release of Botkins (HTTP 200). Try again later.");
+  for (const status of [403, 404, 429, 503]) await latestRelease({ fetcher: github({ page: null, api: status }).fetcher, token: "" }).catch((error) => assert.doesNotMatch(error.message, /GitHub CLI|[Ss]ign in/));
+  for (const status of [401, 403, 404, 429, 503]) await latestRelease({ fetcher: github({ page: null, api: status }).fetcher, token: "" }).catch((error) => assert.ok(error.message.length < 300, "it fits where a phone shows it"));
 });
 
 test("untrusted tags, missing assets, and unavailable private releases never install", async () => {
-  await assert.rejects(latestRelease({ token: "", fetcher: async () => new Response(null, { status: 404 }) }), /GitHub names no published release of Botkins\. Try again later\./);
+  await assert.rejects(latestRelease({ token: "", fetcher: async () => new Response(null, { status: 404 }) }), /its API names no published release of Botkins\. Try again later\./);
   for (const data of [{ tag_name: "whatever" }, { tag_name: "v1.0.0", prerelease: true }, { tag_name: "v1.0.0", draft: true }])
     await assert.rejects(latestRelease({ token: "", fetcher: async () => Response.json(data) }));
   const u = new AppUpdates({ current: "1.0.0", mac: true, arch: "arm64", latest: async () => ({ version: "1.1.0", assets: [] }), stage: assert.fail });

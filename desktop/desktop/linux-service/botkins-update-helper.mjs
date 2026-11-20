@@ -112,7 +112,9 @@ async function main() {
   // no fault of its own. /releases/latest leads to the latest release that is neither a draft
   // nor a pre-release. What is installed is decided below, by the signature on its checksums.
   const page = await fetch(repo + "/releases/latest", {headers, redirect:"manual", signal:AbortSignal.timeout(30_000)});
-  const version = /\/releases\/tag\/v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(page.headers.get("location") ?? "")?.[1];
+  // Only the project's own address counts as an answer.
+  const location = page.headers.get("location") ?? "";
+  const version = location.startsWith(repo + "/releases/tag/") ? /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(location.slice((repo + "/releases/tag/").length))?.[1] : undefined;
   if (!version) fail("Cannot read the latest public Botkins release. Try again later.");
   const name = directoryName(version,process.arch) + ".tar.gz";
   const dir = mkdtempSync(join(tmpdir(), "botkins-download-"));

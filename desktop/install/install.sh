@@ -95,7 +95,8 @@ not_roots_own() {
   dir=$1
   # The folder may not be there yet: the look starts at the nearest one that is.
   while [ ! -d "$dir" ]; do dir=$(dirname "$dir"); done
-  dir=$(cd "$dir" && pwd -P)
+  # A folder that can't be entered can't be looked at: it is the one named.
+  dir=$(cd "$dir" 2>/dev/null && pwd -P) || { printf '%s\n' "$1"; return 0; }
   while :; do
     line=$(ls -ldn "$dir" 2>/dev/null) || { printf '%s\n' "$dir"; return 0; }
     case ${line%% *} in
@@ -108,7 +109,7 @@ not_roots_own() {
 }
 if [ "$scope" = system ]; then
   unsafe=$(not_roots_own "$prefix")
-  [ -z "$unsafe" ] || fail "The folder $unsafe does not belong to root alone ($(ls -ldn "$unsafe" | awk '{ print $1 ", owner " $3 }')). Botkins for the whole computer is installed into $prefix, and it is updated only where that folder and every folder above it are root's own. Nothing was installed. Put it right, then run this again:
+  [ -z "$unsafe" ] || fail "The folder $unsafe does not belong to root alone ($(ls -ldn "$unsafe" 2>/dev/null | awk '{ print $1 ", owner " $3 }')). Botkins for the whole computer is installed into $prefix, and it is updated only where that folder and every folder above it are root's own. Nothing was installed. Put it right, then run this again:
   sudo chown root '$unsafe' && sudo chmod go-w '$unsafe'"
 fi
 

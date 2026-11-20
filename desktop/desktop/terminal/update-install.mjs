@@ -190,6 +190,8 @@ export function notRootOwned(path, top = "/") {
 /** What to say of a folder `notRootOwned` found, with the commands that put it right. One or two sentences: a phone shows them as they are. */
 export function notRootOwnedWords(found, installRoot) {
   const quoted = /^[A-Za-z0-9_./-]+$/.test(found.path) ? found.path : "'" + found.path.replace(/'/g, "'\\''") + "'";
+  // A folder that could not be looked at: nothing is known of whose it is, so no command is offered that might not help.
+  if (found.uid === -1) return "The folder " + found.path + " is not there or can't be read, so Botkins can't be updated in " + installRoot + ".";
   const why = found.uid !== 0 ? "does not belong to root" : "can be changed by users other than root (its mode is " + found.mode.toString(8) + ")";
   return "The folder " + found.path + " " + why + ", so Botkins can't be updated in " + installRoot + ". On the computer: `sudo chown root " + quoted + " && sudo chmod go-w " + quoted + "`.";
 }

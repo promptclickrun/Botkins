@@ -27,12 +27,18 @@ export async function githubToken() {
 // own SHA256SUMS (the list an install checks the signature of anyway). So that is the way
 // taken first, and the API is the second try. With a sign-in (the desktop app, where GitHub CLI
 // is signed in) the API is asked first: it is not limited that way, and names every file.
-const reach = (error) => new Error("GitHub could not be reached to look for a new release (" + (error.cause?.code ?? error.name ?? "no answer") + "). Try again later.");
+//
+// Each way either answers or says why not (`cause` below). An answer is never made out of a
+// failure: a list that did not come is not an empty list, and a file that could not be asked
+// about is not a file that isn't there. Only GitHub saying 404 means "not there".
+
+/** A way that did not answer, with the reason as a clause that fits after "GitHub did not say which release is the latest:". */
+const cause = (clause) => Object.assign(new Error("GitHub did not say which release is the latest: " + clause + ". Try again later."), { clause });
 const ask = async (fetcher, url, options) => {
   try {
     return await fetcher(url, { signal: AbortSignal.timeout(20000), ...options });
   } catch (error) {
-    throw reach(error);
+    throw cause("it could not be reached (" + (error.cause?.code ?? error.name ?? "no answer") + ")");
   }
 };
 
@@ -42,50 +48,65 @@ async function latestFromApi({ fetcher, token }) {
     headers: { Accept: "application/vnd.github+json", ...(token && { Authorization: "Bearer " + token }) },
     redirect: "follow",
   });
-  if ([403, 429].includes(response.status)) throw new Error("GitHub is not answering this address for now: it limits how often one address may ask about releases. Try again later.");
-  if (response.status === 401) throw new Error("GitHub did not accept the sign-in it was given, so the latest release could not be read. Try again later.");
-  if (response.status === 404) throw new Error("GitHub names no published release of Botkins. Try again later.");
-  if (!response.ok) throw new Error("GitHub could not check for updates (HTTP " + response.status + "). Try again later.");
+  if ([403, 429].includes(response.status)) throw cause("its API is not answering this address for now (it limits how often one address may ask)");
+  if (response.status === 401) throw cause("its API did not accept the sign-in from GitHub CLI");
+  if (response.status === 404) throw cause("its API names no published release of Botkins");
+  if (!response.ok) throw cause("its API answered HTTP " + response.status);
   const data = await response.json();
   const version = semver.valid(data.tag_name);
-  if (!version || data.draft || data.prerelease || semver.prerelease(version)) throw new Error("The latest release has no stable desktop version.");
+  if (!version || data.draft || data.prerelease || semver.prerelease(version)) throw cause("the latest release has no stable desktop version");
   return { version, assets: (data.assets ?? []).map(a => a.name) };
 }
 
 /**
  * The same without the API: the version from where /releases/latest leads, and the files from
- * the release's SHA256SUMS. The files the desktop app's own updater takes are not in that list,
- * so each is asked for by name.
+ * the release's SHA256SUMS. The files the Mac app's own updater takes are not in that list, so
+ * the Mac app (`mac`) has each asked for by name; nobody else needs them, and nobody else asks.
  */
-async function latestFromPage({ fetcher }) {
+async function latestFromPage({ fetcher, mac }) {
   const page = await ask(fetcher, releasePage, { redirect: "manual" });
-  const tag = /\/releases\/tag\/([^/?#]+)$/.exec(page.headers.get("location") ?? "")?.[1];
-  const version = tag ? semver.valid(tag) : null;
-  if (!version || tag !== "v" + version || semver.prerelease(version)) throw new Error("GitHub's release page did not lead to a stable release of Botkins (HTTP " + page.status + "). Try again later.");
+  // Only the project's own address counts: a page somebody put in the way (a sign-in page of a network, say) leads elsewhere.
+  const tags = releasePage.replace(/latest$/, "tag/");
+  const location = page.headers.get("location") ?? "";
+  const tag = location.startsWith(tags) ? location.slice(tags.length) : "";
+  const version = /^v[0-9A-Za-z.+-]+$/.test(tag) ? semver.valid(tag) : null;
+  if (!version || tag !== "v" + version || semver.prerelease(version)) throw cause("its release page did not lead to a stable release of Botkins (HTTP " + page.status + ")");
   const base = "https://github.com/promptclickrun/Botkins/releases/download/" + tag + "/";
   const sums = await ask(fetcher, base + "SHA256SUMS", { redirect: "follow" });
+  if (!sums.ok && sums.status !== 404) throw cause("the list of what Botkins " + version + " holds did not come (HTTP " + sums.status + ")");
   const listed = sums.ok ? (await sums.text()).split(/\r?\n/).map((line) => /^[a-f0-9]{64} [ *](.+)$/.exec(line)?.[1]).filter(Boolean) : [];
-  const others = ["SHA256SUMS.asc", "latest-mac.yml", ...["arm64", "x64", "universal"].map((arch) => "Botkins-" + version + "-" + arch + "-mac.zip")];
+  const others = ["SHA256SUMS.asc", ...(mac ? ["latest-mac.yml", ...["arm64", "x64", "universal"].map((arch) => "Botkins-" + version + "-" + arch + "-mac.zip")] : [])];
   // A file that is there answers with a redirect to where it is kept; one that is not, with 404.
-  const there = await Promise.all(others.map((name) => ask(fetcher, base + name, { method: "HEAD", redirect: "manual" }).then((response) => response.status >= 200 && response.status < 400, () => false)));
+  // Any other answer says nothing about the file, so it is not taken for one.
+  const there = await Promise.all(
+    others.map(async (name) => {
+      const response = await ask(fetcher, base + name, { method: "HEAD", redirect: "manual" });
+      if (response.status === 404) return false;
+      if (response.status >= 200 && response.status < 400) return true;
+      throw cause("it did not say whether Botkins " + version + " has " + name + " (HTTP " + response.status + ")");
+    }),
+  );
   return { version, assets: [...listed, ...(sums.ok ? ["SHA256SUMS"] : []), ...others.filter((_, at) => there[at])] };
 }
 
 /**
  * The latest stable release: { version, assets: [file names] }.
  * @param options.token  A GitHub sign-in, when there is one (the desktop app asks GitHub CLI).
+ * @param options.mac    True for the Mac app, which installs from files that only it needs to hear of.
  */
-export async function latestRelease({ fetcher = fetch, token }) {
+export async function latestRelease({ fetcher = fetch, token, mac = false }) {
   const ways = token ? [latestFromApi, latestFromPage] : [latestFromPage, latestFromApi];
-  let failure;
+  const clauses = [];
   for (const way of ways) {
     try {
-      return await way({ fetcher, token });
+      return await way({ fetcher, token, mac });
     } catch (error) {
-      failure = error;
+      // Both reasons are said, in the order they were met: either one alone could name the wrong cause.
+      const clause = error.clause ?? String(error.message ?? error).replace(/\.$/, "");
+      if (!clauses.includes(clause)) clauses.push(clause);
     }
   }
-  throw failure;
+  throw cause(clauses.join("; "));
 }
 
 export class AppUpdates {

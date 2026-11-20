@@ -14,7 +14,8 @@ export function desktopUpdates({ app, native, notify, mac = app.isPackaged && pr
   let driver;
   const service = new AppUpdates({
     current: app.getVersion(), mac, arch: process.arch, notify,
-    latest: async () => latestRelease({ token: await githubToken() }),
+    // The Mac app installs from files only it needs: it says so, and they are looked for.
+    latest: async () => latestRelease({ token: await githubToken(), mac: process.platform === "darwin" }),
     stage: async version => {
       if (!driver) {
         const { default: library } = await import("electron-updater");
