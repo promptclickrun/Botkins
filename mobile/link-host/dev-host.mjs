@@ -8,6 +8,7 @@
 //   BOTKINS_DEV_SCREEN=off|view|control   what phones may do with this computer's screen (default control here)
 //   BOTKINS_DEV_PICTURE=<file.jpg>        show this picture as the screen, and only log clicks and typing
 //   BOTKINS_DEV_PRS=1                     answer pull request lookups with made-up ones (a stand-in gh)
+//   BOTKINS_DEV_APPENDS=off               act as an older computer, with full-string streaming replies and thinking
 //   BOTKINS_DEV_TIMELINE=off              act as an older computer, without "turn-timeline-v1" (docs/turn-timeline.md)
 //   BOTKINS_DEV_PLUGINS=off               act as an older computer, without "plugins-v1" (docs/plugins.md)
 //   BOTKINS_DEV_AUTO_APPROVE=1            approve team join requests after a short wait

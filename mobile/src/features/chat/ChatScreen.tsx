@@ -1,17 +1,18 @@
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { ChevronRight, Ellipsis, Repeat, X } from "lucide-react-native";
-import { type ComponentRef, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
+import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Bot, ChatSummary, Preferences, Project, QueuedMessage } from "@/link/types";
+import type { Bot, ChatSummary, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
-import { showToast, useApp } from "@/state/store";
+import { type ChatView, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
 import { BotAvatar, Chip, EmptyState, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
@@ -203,6 +204,229 @@ function Hello({ chat, bot, bots, projects, settings, onPick }: { chat: ChatSumm
 /** How long the list must stay unchanged after a reply finishes before it is shown from its beginning. */
 const SETTLE_MS = 350;
 
+type RowProps = {
+  chatId: string;
+  group: boolean;
+  bot?: Bot;
+  bots: Map<string, Bot>;
+  sendText: (text: string) => void;
+  draftText: (text: string) => void;
+  messageActions: MessageActions;
+  openPanel: (id: string) => void;
+};
+
+const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold }: RowProps & { item: Item; holdFold: FoldHold }) {
+  return item.kind === "message" ? (
+    <MessageRow item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
+  ) : item.kind === "work" ? (
+    <WorkPart chatId={chatId} item={item} />
+  ) : item.kind === "text" ? (
+    <TurnText item={item} />
+  ) : item.kind === "screen" ? (
+    <ScreenCard chatId={chatId} panel={item.panel} onOpen={() => openPanel(item.panel.id)} />
+  ) : item.kind === "ended" ? (
+    <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
+  ) : item.kind === "fold" ? (
+    <FoldRow chatId={chatId} bot={bot} group={group} bots={bots} item={item} hold={holdFold} />
+  ) : item.kind === "thought" ? (
+    <View style={workWidth}>
+      <Aside kind="thinking" text={item.text} />
+    </View>
+  ) : (
+    <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
+  );
+});
+
+/** Keep text and legacy turn marks at the list that orders them with messages and steps. */
+function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, at, list, parked, setParked, sendText, draftText, messageActions, openPanel, emptyView }: RowProps & {
+  view: ChatView;
+  runPart?: Run | null;
+  streaming: boolean;
+  at?: string;
+  list: RefObject<FlatList<Item> | null>;
+  /**
+   * After a finished reply was shown from its beginning ("Position after response completes"), the
+   * list stops following new content to the bottom until the person goes back to it.
+   */
+  parked: boolean;
+  setParked: (parked: boolean) => void;
+  emptyView?: ReactNode;
+}) {
+  const { colors } = useTheme();
+  // The newest message is out of view: the button that goes back to it shows.
+  const away = useRef(false);
+  const [awayNow, setAway] = useState(false);
+  // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
+  const viewPosition = useRef(0.5);
+  // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
+  const scrolled = useRef(0);
+  const listBox = useRef<ComponentRef<typeof View>>(null);
+  const frame = useRef({ top: 0, height: 0 });
+  const measureList = () => listBox.current?.measureInWindow((_x, top, _w, height) => (frame.current = { top, height }));
+  // The list is inverted: a larger offset shows older rows, so content moves down by as much.
+  const holdFold = useCallback<FoldHold>(({ was, top, bottom }) => {
+    const box = frame.current;
+    if (!box.height || !Number.isFinite(was + top + bottom)) return;
+    // Keep the line where it was tapped, as long as the fold's end stays in view; never push the line out of the top.
+    let shift = was - top;
+    shift = Math.min(shift, box.top + box.height - bottom);
+    shift = Math.max(shift, box.top - top);
+    if (Math.abs(shift) < 1) return;
+    list.current?.scrollToOffset({ offset: Math.max(0, scrolled.current + shift), animated: false });
+  }, [list]);
+
+  // The chat in the order things happened (turn.ts): steps, thinking and text in place, a steer or
+  // an answer where it came, and how a turn ended when it didn't finish. Newest first for the inverted list.
+  const timeline = useCapability(TIMELINE_V1);
+  const panesOn = useCapability("side-pane-v1");
+  const marks = useTurnMarks(useShallow((all) => Object.fromEntries(
+    Object.entries(all).filter(([id]) => id === runPart?.id || Object.hasOwn(view.runs, id)),
+  )));
+  const stepsPref = useChatPrefs((prefs) => prefs.steps);
+  const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
+  const textBody = useApp((state) => state.texts[chatId]);
+  const stream = streaming ? textBody?.stream : undefined;
+  const liveThinking = textBody?.thinking;
+  const panels = view.pane?.panels;
+  const data = useMemo(() => {
+    const screens = panesOn ? panels?.filter((panel) => panel.kind === "screen") : undefined;
+    const items = chatTimeline({
+      messages: view.messages,
+      from: view.from,
+      runs: view.runs,
+      running: runPart,
+      live: { stream, thinking: liveThinking },
+      marks,
+      timeline,
+      group,
+      screens,
+      prefs: { steps: stepsPref, thinking: thinkingPref },
+    });
+    return steady(chatId, items).reverse();
+  }, [view, runPart, stream, liveThinking, marks, timeline, group, panesOn, panels, stepsPref, thinkingPref, chatId]);
+  useEffect(() => () => forgetDrawn(chatId), [chatId]);
+  // Going to one message: earlier pages are loaded until it is there, then the list scrolls to it.
+  const target = at !== undefined && /^\d{1,7}$/.test(at) ? Number(at) : undefined;
+  const loads = useRef(0);
+  const scrollTries = useRef(0);
+  const from = view.from;
+  const loadingEarlier = !!view.loadingEarlier;
+  useEffect(() => {
+    if (target === undefined || loadingEarlier) return;
+    if (from > target) {
+      // Each page is 60 messages; a page that fails to load is tried again, a few times at most.
+      if (loads.current++ < 40) void loadEarlier(chatId);
+      else router.setParams({ at: undefined });
+      return;
+    }
+    const index = data.findIndex((item) => item.kind === "message" && item.index === target);
+    if (index < 0) {
+      // Not in this chat (any more): the chat opens as it is.
+      router.setParams({ at: undefined });
+      return;
+    }
+    const timer = setTimeout(() => {
+      scrollTries.current = 0;
+      viewPosition.current = 0.5;
+      list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
+      router.setParams({ at: undefined });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [target, from, loadingEarlier, data, chatId, list]);
+
+  // "Show beginning of completed response": once a reply this phone saw under way has finished and
+  // is drawn, the list scrolls once so the reply's top is at the top of the view (completion.ts has
+  // the rules). Each change waits a moment again, so a refresh right after the reply lands first.
+  const completionPosition = useChatPrefs((prefs) => prefs.completionPosition);
+  const onShow = useOnShow();
+  const [inFront, setInFront] = useState(AppState.currentState === "active");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => setInFront(next === "active"));
+    return () => subscription.remove();
+  }, []);
+  const still = useReducedMotion();
+  useEffect(() => {
+    const step = completions.check(chatId, {
+      mode: completionPosition,
+      running: runPart,
+      messages: view.messages,
+      from: view.from,
+      runs: view.runs,
+      visible: onShow && inFront,
+      // Read while the reply streams (completion.ts keeps it with the run): a reply that lands all at once moves the list too.
+      following: !awayNow,
+      drawn: !data.some((item) => item.kind === "live"),
+    });
+    if (step.kind !== "jump") return;
+    const timer = setTimeout(() => {
+      completions.done(chatId, step.runId);
+      const index = data.findIndex((item) => item.kind === "message" && item.index === step.index);
+      if (index < 0) return;
+      setParked(true);
+      scrollTries.current = 0;
+      viewPosition.current = 1;
+      list.current?.scrollToIndex({ index, viewPosition: 1, animated: !still });
+    }, SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [view, runPart, data, completionPosition, onShow, inFront, awayNow, chatId, still, list, setParked]);
+
+  if (emptyView) return emptyView;
+  return (
+    <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
+      <FlatList
+        ref={list}
+        inverted
+        // How far the newest message is out of view. While a reply is written and the person has
+        // scrolled up to read, the list stays where they are (maintainVisibleContentPosition
+        // below), and the button offers the way back.
+        onScroll={(event) => {
+          scrolled.current = event.nativeEvent.contentOffset.y;
+          const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
+          if (next !== away.current) {
+            away.current = next;
+            setAway(next);
+          }
+        }}
+        scrollEventThrottle={64}
+        // Back at the newest content by their own hand: the list follows it again.
+        onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
+        data={data}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) => (
+          <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
+            draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} />
+        )}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: space.lg }}
+        ItemSeparatorComponent={Gap}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        showsVerticalScrollIndicator={false}
+        maintainVisibleContentPosition={parked ? { minIndexForVisible: 0 } : { minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+        onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
+        // A message not drawn yet: go near it by the rows' average height, then to it.
+        onScrollToIndexFailed={(info) => {
+          list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+          if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, animated: !still }), 160);
+        }}
+        onEndReachedThreshold={0.6}
+        ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
+        initialNumToRender={12}
+        windowSize={11}
+      />
+      <ScrollToLatest
+        shown={awayNow}
+        onPress={() => {
+          setParked(false);
+          list.current?.scrollToOffset({ offset: 0, animated: true });
+          away.current = false;
+          setAway(false);
+        }}
+      />
+    </View>
+  );
+}
+
 export default function ChatScreen() {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
@@ -250,31 +474,9 @@ export default function ChatScreen() {
   const projects = usePart("projects");
   const input = useRef<ComponentRef<typeof TextInput>>(null);
   const list = useRef<FlatList<Item>>(null);
-  // The newest message is out of view: the button that goes back to it shows.
-  const away = useRef(false);
-  const [awayNow, setAway] = useState(false);
   // After a finished reply was shown from its beginning ("Position after response completes"), the
   // list stops following new content to the bottom until the person goes back to it.
   const [parked, setParked] = useState(false);
-  // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
-  const viewPosition = useRef(0.5);
-  // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
-  const scrolled = useRef(0);
-  const listBox = useRef<ComponentRef<typeof View>>(null);
-  const frame = useRef({ top: 0, height: 0 });
-  const measureList = () => listBox.current?.measureInWindow((_x, top, _w, height) => (frame.current = { top, height }));
-  // The list is inverted: a larger offset shows older rows, so content moves down by as much.
-  const holdFold: FoldHold = ({ was, top, bottom }) => {
-    const box = frame.current;
-    if (!box.height || !Number.isFinite(was + top + bottom)) return;
-    // Keep the line where it was tapped, as long as the fold's end stays in view; never push the line out of the top.
-    let shift = was - top;
-    shift = Math.min(shift, box.top + box.height - bottom);
-    shift = Math.max(shift, box.top - top);
-    if (Math.abs(shift) < 1) return;
-    list.current?.scrollToOffset({ offset: Math.max(0, scrolled.current + shift), animated: false });
-  };
-
   // Opening a chat wakes its bot up and marks it read.
   useEffect(() => {
     if (chatId) api.warmChat(chatId).catch(() => {});
@@ -292,65 +494,8 @@ export default function ChatScreen() {
     effort: choice?.reasoningEffort ? effortLabel(choice.reasoningEffort) : undefined,
   };
 
-  // The chat in the order things happened (turn.ts): steps, thinking and text in place, a steer or
-  // an answer where it came, and how a turn ended when it didn't finish. Newest first for the inverted list.
-  const timeline = useCapability(TIMELINE_V1);
-  const panesOn = useCapability("side-pane-v1");
-  const marks = useTurnMarks();
-  const stepsPref = useChatPrefs((prefs) => prefs.steps);
-  const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
-  const stream = streaming ? live?.streams[chatId] : undefined;
-  const liveThinking = live?.thinking[chatId];
-  const panels = view?.pane?.panels;
-  const data = useMemo(() => {
-    if (!view) return [];
-    const screens = panesOn ? panels?.filter((panel) => panel.kind === "screen") : undefined;
-    const items = chatTimeline({
-      messages: view.messages,
-      from: view.from,
-      runs: view.runs,
-      running: runPart,
-      live: { stream, thinking: liveThinking },
-      marks,
-      timeline,
-      group,
-      screens,
-      prefs: { steps: stepsPref, thinking: thinkingPref },
-    });
-    return steady(chatId, items).reverse();
-  }, [view, runPart, stream, liveThinking, marks, timeline, group, panesOn, panels, stepsPref, thinkingPref, chatId]);
-  useEffect(() => () => forgetDrawn(chatId), [chatId]);
   // The helpers of the chat's newest turn, above the composer.
   const newest = view ? latestTurn(runPart, view.messages, view.runs) : undefined;
-
-  // Going to one message: earlier pages are loaded until it is there, then the list scrolls to it.
-  const target = at !== undefined && /^\d{1,7}$/.test(at) ? Number(at) : undefined;
-  const loads = useRef(0);
-  const scrollTries = useRef(0);
-  const from = view?.from;
-  const loadingEarlier = !!view?.loadingEarlier;
-  useEffect(() => {
-    if (target === undefined || from === undefined || loadingEarlier) return;
-    if (from > target) {
-      // Each page is 60 messages; a page that fails to load is tried again, a few times at most.
-      if (loads.current++ < 40) void loadEarlier(chatId);
-      else router.setParams({ at: undefined });
-      return;
-    }
-    const index = data.findIndex((item) => item.kind === "message" && item.index === target);
-    if (index < 0) {
-      // Not in this chat (any more): the chat opens as it is.
-      router.setParams({ at: undefined });
-      return;
-    }
-    const timer = setTimeout(() => {
-      scrollTries.current = 0;
-      viewPosition.current = 0.5;
-      list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
-      router.setParams({ at: undefined });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [target, from, loadingEarlier, data, chatId]);
 
   const askSide = (command: string, question: string) => {
     if (!question) {
@@ -457,43 +602,6 @@ export default function ChatScreen() {
     if (useTalk.getState().chatId === chatId) return;
     if (readAloud && lastMessage?.role === "assistant" && lastMessage.text) speakText(chatId + ":" + lastKey, lastMessage.text, { queue: true, quiet: true });
   }, [view, lastKey, lastMessage, readAloud, chatId]);
-  // "Show beginning of completed response": once a reply this phone saw under way has finished and
-  // is drawn, the list scrolls once so the reply's top is at the top of the view (completion.ts has
-  // the rules). Each change waits a moment again, so a refresh right after the reply lands first.
-  const completionPosition = useChatPrefs((prefs) => prefs.completionPosition);
-  const onShow = useOnShow();
-  const [inFront, setInFront] = useState(AppState.currentState === "active");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (next) => setInFront(next === "active"));
-    return () => subscription.remove();
-  }, []);
-  const still = useReducedMotion();
-  useEffect(() => {
-    if (!view || !chatId) return;
-    const step = completions.check(chatId, {
-      mode: completionPosition,
-      running: runPart,
-      messages: view.messages,
-      from: view.from,
-      runs: view.runs,
-      visible: onShow && inFront,
-      // Read while the reply streams (completion.ts keeps it with the run): a reply that lands all at once moves the list too.
-      following: !awayNow,
-      drawn: !data.some((item) => item.kind === "live"),
-    });
-    if (step.kind !== "jump") return;
-    const timer = setTimeout(() => {
-      completions.done(chatId, step.runId);
-      const index = data.findIndex((item) => item.kind === "message" && item.index === step.index);
-      if (index < 0) return;
-      setParked(true);
-      scrollTries.current = 0;
-      viewPosition.current = 1;
-      list.current?.scrollToIndex({ index, viewPosition: 1, animated: !still });
-    }, SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [view, runPart, data, completionPosition, onShow, inFront, awayNow, chatId, still]);
-
   // Leaving the chat ends what is being read, and a talk in this chat.
   useEffect(
     () => () => {
@@ -544,80 +652,16 @@ export default function ChatScreen() {
         <View style={{ flex: 1, justifyContent: "center" }}>
           <Loading />
         </View>
-      ) : empty ? (
-        <View style={{ flex: 1 }}>
-          <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
-        </View>
       ) : (
-        <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
-        <FlatList
-          ref={list}
-          inverted
-          // How far the newest message is out of view. While a reply is written and the person has
-          // scrolled up to read, the list stays where they are (maintainVisibleContentPosition
-          // below), and the button offers the way back.
-          onScroll={(event) => {
-            scrolled.current = event.nativeEvent.contentOffset.y;
-            const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
-            if (next !== away.current) {
-              away.current = next;
-              setAway(next);
-            }
-          }}
-          scrollEventThrottle={64}
-          // Back at the newest content by their own hand: the list follows it again.
-          onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
-          data={data}
-          keyExtractor={(item) => item.key}
-          renderItem={({ item }) =>
-            item.kind === "message" ? (
-              <MessageRow item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
-            ) : item.kind === "work" ? (
-              <WorkPart chatId={chatId} item={item} />
-            ) : item.kind === "text" ? (
-              <TurnText item={item} />
-            ) : item.kind === "screen" ? (
-              <ScreenCard chatId={chatId} panel={item.panel} onOpen={() => pane.show(item.panel.id)} />
-            ) : item.kind === "ended" ? (
-              <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
-            ) : item.kind === "fold" ? (
-              <FoldRow chatId={chatId} bot={bot} group={group} bots={bots} item={item} hold={holdFold} />
-            ) : item.kind === "thought" ? (
-              <View style={workWidth}>
-                <Aside kind="thinking" text={item.text} />
-              </View>
-            ) : (
-              <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
-            )
-          }
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: space.lg }}
-          ItemSeparatorComponent={Gap}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          showsVerticalScrollIndicator={false}
-          maintainVisibleContentPosition={parked ? { minIndexForVisible: 0 } : { minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
-          onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
-          // A message not drawn yet: go near it by the rows' average height, then to it.
-          onScrollToIndexFailed={(info) => {
-            list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-            if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, animated: !still }), 160);
-          }}
-          onEndReachedThreshold={0.6}
-          ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
-          initialNumToRender={12}
-          windowSize={11}
+        <ChatTimelineList
+          chatId={chatId} view={view} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
+          at={at} list={list} parked={parked} setParked={setParked} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
+          emptyView={empty && (
+            <View style={{ flex: 1 }}>
+              <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
+            </View>
+          )}
         />
-        <ScrollToLatest
-          shown={awayNow}
-          onPress={() => {
-            setParked(false);
-            list.current?.scrollToOffset({ offset: 0, animated: true });
-            away.current = false;
-            setAway(false);
-          }}
-        />
-        </View>
       )}
       {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
       <View style={{ paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>

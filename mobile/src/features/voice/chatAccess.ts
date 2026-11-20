@@ -20,7 +20,9 @@ export function chatAccess(chatId: string): ChatAccess {
         after: (from) => (view ? view.messages.slice(Math.max(0, from - view.from)) : []),
       };
     },
-    subscribe: (listener) => useApp.subscribe(listener),
+    subscribe: (listener) => useApp.subscribe((state, before) => {
+      if (state.parts.live !== before.parts.live || state.parts.chats !== before.parts.chats || state.chats !== before.chats) listener();
+    }),
   };
 }
 

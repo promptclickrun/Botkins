@@ -7,14 +7,14 @@
 // pivot, open eyes blink, and the badge stays put. The bot's own eye style takes the place of the
 // kit's open "oval" eyes; a state with an expression of its own (curious, smiling, sleepy) keeps it.
 import { Image } from "expo-image";
-import { memo, type ReactNode, useEffect, useMemo } from "react";
-import { type StyleProp, View, type ViewStyle } from "react-native";
-import Animated, { cancelAnimation, Easing, interpolate, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
+import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { AccessibilityInfo, Animated, Easing, type StyleProp, useAnimatedValue, View, type ViewStyle } from "react-native";
 import Svg, { Circle, Ellipse, G, Path } from "react-native-svg";
 import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, MOUTHS } from "@/data/botkinMotion";
 import { lookOf, type ResolvedLook, resolveLook } from "@/data/botLook";
 import type { BotkinLook } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
+import { avatarBeat, avatarMotion, schedulePasses, scheduleRestPasses } from "./avatarRest";
 import { useOnShow } from "./useOnShow";
 
 const CLIP_FOR: Record<AvatarState, BotkinState> = {
@@ -42,7 +42,28 @@ const CLIP_FOR: Record<AvatarState, BotkinState> = {
 
 const fill = { position: "absolute", left: 0, top: 0, right: 0, bottom: 0 } as const;
 const BOX = "0 0 256 256";
-const hash = (text: string) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 0);
+const nativeTiming = { useNativeDriver: true, isInteraction: false };
+const ease = Easing.inOut(Easing.ease);
+
+/** Hold still until the phone answers, and follow changes while the avatar or dot is mounted. */
+export function useReducedMotion() {
+  const [reduced, setReduced] = useState(true);
+  useEffect(() => {
+    let acceptInitial = true;
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", (value) => {
+      acceptInitial = false;
+      setReduced(value);
+    });
+    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
+      if (acceptInitial) setReduced(value);
+    }, () => {});
+    return () => {
+      acceptInitial = false;
+      subscription.remove();
+    };
+  }, []);
+  return reduced;
+}
 
 export type BotAvatarProps = {
   /** A bot (its saved look, or its default character), or a look by itself. */
@@ -96,47 +117,69 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const seen = useOnShow();
 
   // The head moves through the clip's poses; `step` runs from 0 to the last pose.
-  const step = useSharedValue(0);
-  const lids = useSharedValue(1);
+  const step = useAnimatedValue(0);
+  const lids = useAnimatedValue(1);
   const poses = clip.poses;
   const last = poses.length - 1;
-  useEffect(() => {
-    cancelAnimation(step);
+  const motion = avatarMotion[state];
+  const { blinkMs, firstBlinkMs } = avatarBeat(head.name);
+  useLayoutEffect(() => {
     if (!seen) return;
-    step.value = 0;
+    step.setValue(0);
     if (still || last < 1) return;
-    const each = clip.durationMs / last;
-    const moves = poses.slice(1).map((_, index) => withTiming(index + 1, { duration: each, easing: Easing.inOut(Easing.ease) }));
-    step.value = clip.loop ? withRepeat(withSequence(...moves, withTiming(0, { duration: 0 })), -1) : withSequence(...moves);
-    return () => cancelAnimation(step);
-  }, [clip, still, seen, step, poses, last]);
+    // Ease each equal-length segment within one timing so a working loop repeats entirely natively.
+    const pass = Animated.timing(step, {
+      ...nativeTiming,
+      duration: clip.durationMs,
+      toValue: last,
+      easing: (t) => {
+        const position = t * last;
+        const segment = Math.floor(position);
+        return (segment + ease(position - segment)) / last;
+      },
+    });
+    if (motion === "rest") {
+      const stop = scheduleRestPasses(head.name, () => {
+        step.setValue(0);
+        pass.start();
+      });
+      return () => {
+        stop();
+        pass.stop();
+      };
+    }
+    const animation = motion === "loop" ? Animated.loop(pass) : pass;
+    animation.start();
+    return () => animation.stop();
+  }, [clip, motion, still, seen, step, last, head.name]);
 
-  // Each character blinks on its own beat (3.8 to 5 seconds), so a screen of them never blinks in step.
   const blinks = eyes !== "smile" && eyes !== "sleepy";
-  useEffect(() => {
-    cancelAnimation(lids);
+  useLayoutEffect(() => {
     if (!seen) return;
-    lids.value = 1;
+    lids.setValue(1);
     if (still || !blinks) return;
-    const seed = hash(head.name);
-    const period = 3800 + (seed % 1201);
-    const ease = { easing: Easing.inOut(Easing.ease) };
-    lids.value = withDelay(
-      seed % 2200,
-      withRepeat(withSequence(withTiming(1, { duration: period * 0.92 }), withTiming(0.09, { duration: period * 0.02, ...ease }), withTiming(0.09, { duration: period * 0.006 }), withTiming(1, { duration: period * 0.024, ...ease }), withTiming(1, { duration: period * 0.03 })), -1),
-    );
-    return () => cancelAnimation(lids);
-  }, [still, seen, blinks, head.name, lids]);
+    const blink = Animated.sequence([
+      Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.02, easing: ease }),
+      Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.006 }),
+      Animated.timing(lids, { ...nativeTiming, toValue: 1, duration: blinkMs * 0.024, easing: ease }),
+    ]);
+    const stop = schedulePasses(firstBlinkMs, blinkMs, () => blink.start());
+    return () => {
+      stop();
+      blink.stop();
+    };
+  }, [still, seen, blinks, blinkMs, firstBlinkMs, lids]);
 
-  const range = useMemo(() => poses.map((_, index) => index), [poses]);
-  const xs = useMemo(() => poses.map((pose) => pose[0] * unit), [poses, unit]);
-  const ys = useMemo(() => poses.map((pose) => pose[1] * unit), [poses, unit]);
-  const turns = useMemo(() => poses.map((pose) => pose[2]), [poses]);
-  const pose = useAnimatedStyle(() => {
-    if (range.length < 2) return { transform: [] };
-    return { transform: [{ translateX: interpolate(step.value, range, xs) }, { translateY: interpolate(step.value, range, ys) }, { rotate: `${interpolate(step.value, range, turns)}deg` }] };
-  });
-  const blink = useAnimatedStyle(() => ({ transform: [{ scaleY: lids.value }] }));
+  const pose = useMemo(() => {
+    if (poses.length < 2) return undefined;
+    const inputRange = poses.map((_, index) => index);
+    return { transform: [
+      { translateX: step.interpolate({ inputRange, outputRange: poses.map(([x]) => x * unit) }) },
+      { translateY: step.interpolate({ inputRange, outputRange: poses.map(([, y]) => y * unit) }) },
+      { rotate: step.interpolate({ inputRange, outputRange: poses.map(([, , angle]) => `${angle}deg`) }) },
+    ] };
+  }, [poses, step, unit]);
+  const blink = { transform: [{ scaleY: lids }] };
 
   // Eyes: open ones go on the blinking layer, drawn lids and the mouth stay on the head.
   const { left, right, y } = head;

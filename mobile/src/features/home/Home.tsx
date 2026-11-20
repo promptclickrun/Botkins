@@ -210,7 +210,7 @@ export default function Home() {
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
   const computers = useApp((state) => state.pairings);
   const inUse = useApp((state) => state.pairing?.serverId);
-  const requests = usePart("live")?.requests;
+  const requests = useApp((state) => state.parts.live?.requests);
   const board = usePart("board");
   const panels = usePart("panels");
   const canCreate = useCan("agents", "create");

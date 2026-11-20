@@ -775,6 +775,7 @@ export type UsageReport = {
  * list, a file in pieces, a small picture of it, and the paths written in a chat), and the app's
  * "secure-input-v1" (a bot asks for a password, a code or another secret in a request of kind
  * "secure": the value goes to the computer only, and the bot gets a handle, never the value).
+ * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
  * as interim messages, answers to requests as messages, a time on every reply, each helper's own
  * steps marked, and how a turn ended; docs/turn-timeline.md).
