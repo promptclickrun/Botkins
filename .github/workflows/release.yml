@@ -1,8 +1,16 @@
 # Runs when a release is published, and by hand for one version.
 #
-# Every copy of Botkins takes its update from the latest release. This workflow checks that the
-# release has every file each of them needs (desktop/scripts/check-release.mjs). The same check
-# is run on the draft before it is published; this run is the alarm if that was skipped.
+# Every copy of Botkins takes its update from the latest release. This workflow:
+#
+#   check    makes sure the release has every file each of them needs
+#            (desktop/scripts/check-release.mjs). The same check is run on the draft before it is
+#            published; this run is the alarm if that was skipped.
+#   update   installs the release before this one on a clean Linux machine with the real
+#            installer, runs `botkins update`, and fails unless the service then runs on this
+#            release. It runs on x64 and on arm64.
+#   image    publishes the terminal host's Docker image for this version.
+#
+# `update` and `image` run only when `check` passed.
 name: Release
 
 on:
@@ -17,6 +25,9 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/botkins
+
 jobs:
   check:
     name: The release is whole
@@ -24,14 +35,127 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      previous: ${{ steps.release.outputs.previous }}
+      latest: ${{ steps.release.outputs.latest }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Name this release, the one before it, and whether this one is the latest
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version || github.event.release.tag_name }}
+        run: |
+          version="${VERSION#v}"
+          previous=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 200 --json tagName --jq '.[].tagName' \
+            | sed 's/^v//' | sort -V | awk -v this="$version" '$0 == this { print before } { before = $0 }')
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          {
+            echo "version=$version"
+            echo "previous=$previous"
+            if [ "$latest" = "v$version" ]; then echo "latest=true"; else echo "latest=false"; fi
+          } >> "$GITHUB_OUTPUT"
+          echo "This release: $version. Before it: ${previous:-none}. The latest on GitHub: $latest."
       - name: Check the release's files, checksums and signature
         working-directory: desktop
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || github.event.release.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: node scripts/check-release.mjs "$VERSION"
+
+  update:
+    name: Install and update on Linux ${{ matrix.arch }}
+    needs: check
+    # `botkins update` takes the latest release, so this proves something only for that one.
+    if: needs.check.outputs.latest == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: ubuntu-latest
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    steps:
+      # The script is the default branch's own: it tests published releases from the outside.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      # The runner is a real machine with systemd, so the installer and the service run as they
+      # do on a server. When the release before this one has no terminal host build, the script
+      # installs this one fresh and says that the update was not tried.
+      - name: Install ${{ needs.check.outputs.previous || 'this release' }}, then update to ${{ needs.check.outputs.version }}
+        env:
+          FROM: ${{ needs.check.outputs.previous }}
+          TO: ${{ needs.check.outputs.version }}
+        run: sudo sh desktop/test/terminal-e2e/from-release.sh --from "$FROM" --to "$TO" --require-credential
+
+  image:
+    name: Publish the Docker image
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      # The image is built from the source the release was cut from.
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ needs.check.outputs.version }}
+      - name: The tag's source is this version
+        run: test "$(jq -r .version desktop/package.json)" = "$VERSION"
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the image for this machine
+        uses: docker/build-push-action@v7
+        with:
+          context: desktop
+          target: terminal
+          load: true
+          tags: botkins:check
+          cache-to: type=gha,mode=max
+          cache-from: type=gha
+      - name: The image serves, and reports this version
+        run: sh .github/scripts/check-image.sh botkins:check "$VERSION"
+      - name: Name the tags and the commit
+        id: tags
+        env:
+          LATEST: ${{ needs.check.outputs.latest }}
+        run: |
+          {
+            echo "revision=$(git rev-parse HEAD)"
+            echo "tags<<END"
+            echo "$IMAGE:$VERSION"
+            if [ "$LATEST" = "true" ]; then echo "$IMAGE:latest"; fi
+            echo "END"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build for x64 and arm64, and publish
+        uses: docker/build-push-action@v7
+        with:
+          context: desktop
+          target: terminal
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Botkins
+            org.opencontainers.image.description=The Botkins terminal host: your bots as a service, with no display
+            org.opencontainers.image.version=${{ needs.check.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.tags.outputs.revision }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
