@@ -29,7 +29,7 @@ import Usage from "./Usage";
 import { OtherComputers } from "./RemoteHosts";
 import AccessSettings from "./AccessSettings";
 import { BotAvatar } from "./Avatar";
-import { Group, Row, SwitchRow, ValueRow } from "./SettingsRows";
+import { Group, Row, SwitchRow, ValueRow, errorText } from "./SettingsRows";
 import ProviderSettings from "./ProviderSettings";
 import SkillsSettings from "./SkillsSettings";
 import McpSettings, { CredentialsSettings } from "./McpSettings";
@@ -603,7 +603,8 @@ function About() {
     setWorking(true);
     setProblem("");
     try { setUpdate(await (install ? api.installAppUpdate() : api.checkAppUpdate())); }
-    catch (error) { setProblem(error instanceof Error ? error.message : String(error)); }
+    // The reason as the app said it, without the words the window's bridge puts in front of an error.
+    catch (error) { setProblem(errorText(error)); }
     finally { setWorking(false); }
   }
   const status = update?.status;
