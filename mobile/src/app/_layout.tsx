@@ -7,10 +7,10 @@ import { Appearance } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { boot } from "@/state/link";
-import { readKept } from "@/state/keep";
+import { forget, readKept } from "@/state/keep";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { JOIN_ATTEMPT_KEY } from "@/features/pair/joinLogic";
+import { JOIN_ATTEMPT_KEY, resumeDecision } from "@/features/pair/joinLogic";
 import { ToastHost, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
@@ -35,18 +35,23 @@ export default function RootLayout() {
   useEffect(() => {
     if (booted) void SplashScreen.hideAsync();
   }, [booted]);
+  // A join request that waits for a team's owner is picked up again at launch, on top of Welcome or
+  // Home so it can always be closed. One that is old or unreadable is dropped (resumeDecision).
+  // Read once, when the keychain answers: the first screen changes meanwhile ("/" leads to Welcome
+  // or Home), and that must not cancel it. A person already on Join (an invite link) stays there.
+  const where = useRef(pathname);
+  useEffect(() => {
+    where.current = pathname;
+  }, [pathname]);
   useEffect(() => {
     if (!booted || resumeChecked.current) return;
     resumeChecked.current = true;
-    if (pathname === "/join") return;
-    let live = true;
     void readKept(JOIN_ATTEMPT_KEY).then((saved) => {
-      if (live && saved) router.replace({ pathname: "/join", params: { resume: "1" } });
+      const next = resumeDecision(saved, Date.now());
+      if (next.kind === "drop") void forget(JOIN_ATTEMPT_KEY).catch(() => {});
+      if (next.kind === "resume" && where.current !== "/join") router.push({ pathname: "/join", params: { resume: "1" } });
     }, () => {});
-    return () => {
-      live = false;
-    };
-  }, [booted, pathname]);
+  }, [booted]);
   if (!booted) return null;
 
   const base = theme.dark ? DarkTheme : DefaultTheme;
@@ -72,10 +77,11 @@ export default function RootLayout() {
         <ThemeProvider value={navigation}>
           <StatusBar style={theme.dark ? "light" : "dark"} />
           <Stack screenOptions={page}>
-            <Stack.Protected guard={!paired}>
+            {/* Each guard names where it leads. Without it, a phone with no computer was sent to the first open route by file name, which is the team join sheet. */}
+            <Stack.Protected guard={!paired} redirectTo="/">
               <Stack.Screen name="welcome" options={{ headerShown: false, animation: "fade" }} />
             </Stack.Protected>
-            <Stack.Protected guard={paired}>
+            <Stack.Protected guard={paired} redirectTo="/welcome">
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="chat/[id]" />
               <Stack.Screen name="chat/new" options={tall} />
