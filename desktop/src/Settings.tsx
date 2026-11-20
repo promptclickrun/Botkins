@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import type { AppUpdate, AppInfo, Bot, Catalog, Preferences, State, NotificationSettings } from "./types";
 import ModelPicker from "./ModelPicker";
-import { AppearanceSettings, BehaviorSettings, BackgroundSettings, HarnessSettings } from "./Preferences";
+import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings } from "./Preferences";
 import Usage from "./Usage";
 import { OtherComputers } from "./RemoteHosts";
 import AccessSettings from "./AccessSettings";
@@ -178,7 +178,7 @@ export default function Settings({
     if (item.id === "skills") return teamCan(state, "skills");
     if (item.id === "marketplace") return teamCan(state, "plugins");
     if (item.id === "mcp") return teamCan(state, "mcp");
-    if (item.id === "notifications" || item.id === "chats") return teamCan(state, "settings", "manage");
+    if (item.id === "notifications") return teamCan(state, "settings", "manage");
     return true;
   });
   // Shown at once as the person changes them, and brought in step whenever the saved settings
@@ -308,7 +308,10 @@ export default function Settings({
             <AppearanceSettings settings={preferences} change={changePreferences} fail={fail} />
           )}
           {section === "sidebar" && <SidebarSettings settings={state.settings} fail={fail} />}
-          {section === "chats" && <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />}
+          {section === "chats" && <>
+            <ChatDisplaySettings settings={settings} />
+            {(!memberHost || teamCan(state, "settings", "manage")) && <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />}
+          </>}
           {section === "notifications" && (
             <NotificationPreferences
               value={preferences.notifications}

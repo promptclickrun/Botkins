@@ -220,6 +220,29 @@ const approvalHelp: Record<Values["approval"], string> = {
   all: "Approves every request, commands and file changes too. Managed policies still apply.",
 };
 
+export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
+  return (
+    <Group title="Chat">
+      <Row label="Steps" help={({folded:"Every step while it works; one line when it's done", every:"Each step, thought and update in order", failed:"Only steps that failed", hidden:"Hide steps"})[settings.steps ?? "folded"]}>
+        {(id, desc) => <select id={id} aria-describedby={desc} value={settings.steps ?? "folded"} onChange={e => saveChatDisplay({steps:e.target.value as Values["steps"], stepsPicked:true})}>
+          <option value="folded">Folded</option><option value="every">Every step</option><option value="failed">Failed only</option><option value="hidden">Hidden</option>
+        </select>}
+      </Row>
+      <Row label="Position after response completes">
+        {(id) => <select className="completion-position" id={id} value={settings.completionPosition ?? "latest"} onChange={e => saveChatDisplay({ completionPosition: e.target.value === "beginning" ? "beginning" : "latest" })}>
+          <option value="latest">Keep at latest content</option>
+          <option value="beginning">Show beginning of completed response</option>
+        </select>}
+      </Row>
+      <Row label="Thinking and updates" help="Its reasoning and notes while it works">
+        {(id, desc) => <select id={id} aria-describedby={desc} value={settings.thinking ?? "folded"} onChange={e => saveChatDisplay({thinking:e.target.value as Values["thinking"]})}>
+          <option value="open">Open</option><option value="folded">Folded</option><option value="hidden">Hidden</option>
+        </select>}
+      </Row>
+    </Group>
+  );
+}
+
 /** Settings › Chats & approvals: the global tool approval level and when bots ask clarifying questions. */
 export function BehaviorSettings({ settings, change, fail }: Props) {
   const [instructions, setInstructions] = useState(settings.clarificationInstructions),
@@ -227,18 +250,6 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
   const update = (p: Patch) => change(p).catch(fail);
   return (
     <>
-      <Group title="Chat">
-        <Row label="Steps" help={({folded:"Every step while it works; one line when it's done", every:"Each step, thought and update in order", failed:"Only steps that failed", hidden:"Hide steps"})[settings.steps ?? "folded"]}>
-          {(id, desc) => <select id={id} aria-describedby={desc} value={settings.steps ?? "folded"} onChange={e => saveChatDisplay({steps:e.target.value as Values["steps"], stepsPicked:true})}>
-            <option value="folded">Folded</option><option value="every">Every step</option><option value="failed">Failed only</option><option value="hidden">Hidden</option>
-          </select>}
-        </Row>
-        <Row label="Thinking and updates" help="Its reasoning and notes while it works">
-          {(id, desc) => <select id={id} aria-describedby={desc} value={settings.thinking ?? "folded"} onChange={e => saveChatDisplay({thinking:e.target.value as Values["thinking"]})}>
-            <option value="open">Open</option><option value="folded">Folded</option><option value="hidden">Hidden</option>
-          </select>}
-        </Row>
-      </Group>
       <Group title="Tool approvals">
         <Row label="Approval level" help={approvalHelp[settings.approval]}>
           {(id, d) => (
