@@ -168,6 +168,80 @@ test("with BOTKINS_RELAY_URL the headless server pairs a phone through a self-ho
   }
 });
 
+test("with BOTKINS_RELAY_OWN a phone that only has the server's own relay sets the screen level and sees the display", async () => {
+  const { createRelay } = await import("../../mobile/relay/node/server.mjs");
+  const relay = createRelay({ limits: false, pushUpstream: "off" });
+  await new Promise((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const relayUrl = "http://127.0.0.1:" + relay.address().port;
+  const dir = mkdtempSync(join(tmpdir(), "bk-"));
+  const owner = join(dir, "owner", "pairing.json");
+  const actions = workspaceActions(stubWorkspace().backend, () => {});
+  const socket = join(dir, "backend.sock");
+  const close = await listenWorkspace(socket, actions.dispatch);
+  const start = (own) =>
+    spawn(process.execPath, [fileURLToPath(new URL("../desktop/headless/host.mjs", import.meta.url))], {
+      env: { ...process.env, BOTKINS_DATA_DIR: join(dir, own ? "own" : "other"), BOTKINS_OWNER_PAIRING_FILE: owner, BOTKINS_WORKSPACE_SOCKET: socket, BOTKINS_PAIR_ADDRESS: "", BOTKINS_LINK_PORT: "0", BOTKINS_RELAY_URL: relayUrl, ...(own && { BOTKINS_RELAY_OWN: "1" }) },
+      stdio: "ignore",
+    });
+  const away = () => Promise.reject(new TypeError("Network request failed"));
+  /** Pairs through the relay alone, with a presence key, and opens a session. */
+  const meet = async (child) => {
+    let value;
+    for (let i = 0; i < 400 && child.exitCode === null; i++) {
+      if (existsSync(owner)) {
+        value = JSON.parse(readFileSync(owner, "utf8"));
+        if (value.relay?.connected) break;
+      }
+      await delay(25);
+    }
+    assert.equal(value?.relay?.connected, true, "the server reached the relay");
+    const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const fetcher = relayFetch(away, { idleMs: 500 });
+    const pairing = await pair(fetcher, parsePairingUrl(value.url), { name: "Away phone", platform: "ios", presenceKey: key.publicKey.export({ type: "spki", format: "der" }).toString("base64url") });
+    const parts = {};
+    const phone = new LinkClient(pairing, { fetch: fetcher, onState() {}, onParts: (next) => Object.assign(parts, next) });
+    phone.start();
+    for (let i = 0; i < 400 && !(parts.meta && parts.host); i++) await delay(25);
+    return { phone, parts, pairing, key };
+  };
+  const stop = async (child) => {
+    const exit = once(child, "exit");
+    child.kill("SIGTERM");
+    await exit;
+    rmSync(owner, { force: true });
+  };
+  let child = start(true);
+  try {
+    const { phone, parts, pairing, key } = await meet(child);
+    assert.equal(phone.route, "relay");
+    assert.ok(parts.meta.capabilities.includes("screen-grant-v1") && parts.meta.capabilities.includes("screen-grant-relay-v1"));
+    assert.deepEqual(parts.host.display, { available: true, kind: "xvfb" });
+    assert.equal((await phone.call("link.screen.info")).canView, false);
+    const { ticket } = await phone.call("link.screen.grant.begin", "view");
+    const challenge = JSON.stringify(["botkins-screen-grant-v1", pairing.serverId, pairing.deviceId, "view", ticket]);
+    assert.deepEqual(await phone.call("link.screen.grant.confirm", ticket, sign("sha256", Buffer.from(challenge), key.privateKey).toString("base64url")), { screen: "view" });
+    const shot = await phone.call("link.screen.frame", { display: "1" });
+    assert.equal(shot.jpeg, Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64"));
+    assert.deepEqual(await phone.call("link.screen.revoke"), { screen: "off" });
+    phone.stop();
+    await stop(child);
+
+    // Without it the same relay is only a relay: the level can't be set through it.
+    child = start(false);
+    const plain = await meet(child);
+    assert.equal(plain.parts.meta.capabilities.includes("screen-grant-relay-v1"), false);
+    await assert.rejects(plain.phone.call("link.screen.grant.begin", "view"), /can't be changed through the relay/);
+    plain.phone.stop();
+  } finally {
+    await stop(child);
+    close();
+    actions.unsubscribe();
+    await new Promise((resolve) => relay.close(resolve));
+    relay.closeAllConnections?.();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("agent tools, generic calls, the workspace socket and the virtual desktop cannot enable the public screen", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "bk-"));
   const socket = join(dir, "work.sock");

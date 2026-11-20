@@ -15,10 +15,14 @@ const version = JSON.parse(readFileSync(new URL("../../package.json", import.met
 // BOTKINS_RELAY_URL: the relay phones reach this server through (https, such as a self-hosted one).
 // Unset, the relay stays off and phones need BOTKINS_PAIR_ADDRESS to reach the server directly.
 const relayUrl = process.env.BOTKINS_RELAY_URL?.trim() || "";
+// BOTKINS_RELAY_OWN=1: that relay is this server's own and the only way phones reach it (a cloud
+// server behind its own relay). A phone can then set the screen's level through it, with the same
+// ticket and Face ID signature as on the server's own network (link/grant.mjs).
+const relayOwn = !!relayUrl && process.env.BOTKINS_RELAY_OWN === "1";
 // How long a pairing code stays open. A deployment hands its link to a person who may open it later.
 const ttl = Math.min(Math.max(Number(process.env.BOTKINS_PAIR_TTL_MS) || 5 * 60_000, 60_000), 24 * 60 * 60_000);
 const { backend, refresh, screenInput } = headlessBackend((method, args) => workspaceRequest(socket, method, args), version);
-const host = new LinkHost({ dir, backend, screenInput, port, relay: relayUrl ? { url: relayUrl } : false, log: (s) => console.error(s) });
+const host = new LinkHost({ dir, backend, screenInput, port, relay: relayUrl ? { url: relayUrl, own: relayOwn } : false, log: (s) => console.error(s) });
 const hostName = process.env.BOTKINS_HOST_NAME?.trim();
 if (hostName || !host.store.data.name) host.setName(hostName || "Botkins server");
 mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

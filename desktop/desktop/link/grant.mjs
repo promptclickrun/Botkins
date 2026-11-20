@@ -7,7 +7,10 @@
 //
 //   - the host is headless (the app says so: `backend.headless === true`);
 //   - the call arrived straight over HTTP, never through the relay, also in a session that was
-//     opened directly;
+//     opened directly. One host is different: a server that runs its own relay, where phones have
+//     no other way in. Its app says so (`relay.own`), the host then names "screen-grant-relay-v1",
+//     and these calls and a phone's presence key are taken through that relay too. The relay still
+//     can't make a grant: it carries sealed messages, and a grant needs the phone's signature;
 //   - the device is a phone;
 //   - the phone proves a person is holding it. When it paired (directly, with the code the owner
 //     was shown) it gave a second public key, P-256, whose private half the phone keeps where it
@@ -26,6 +29,8 @@ import { createPublicKey, randomBytes, timingSafeEqual, verify } from "node:cryp
 import { Failure } from "./tools.mjs";
 
 export const GRANT_CAPABILITY = "screen-grant-v1";
+/** A headless host that takes the grant calls through its own relay as well ("relay.own"). */
+export const GRANT_RELAY_CAPABILITY = "screen-grant-relay-v1";
 export const GRANT_LEVELS = ["view", "control"];
 export const TICKET_MS = 60_000;
 const TICKET_BYTES = 32;
@@ -69,10 +74,12 @@ export class ScreenGrants {
    * @param options.device    (deviceId) => the paired device's record, or undefined.
    * @param options.headless  () => whether the app says this host has no window of its own.
    * @param options.apply     (level, by) sets the level and who set it, and tells every phone.
+   * @param options.overRelay () => whether a call through the relay is taken too: only where the
+   *                          relay is the host's own. Without it, never.
    * @param options.now       The clock (tests).
    */
-  constructor({ serverId, device, headless, apply, now = Date.now }) {
-    Object.assign(this, { serverId, device, headless, apply, now });
+  constructor({ serverId, device, headless, apply, overRelay = () => false, now = Date.now }) {
+    Object.assign(this, { serverId, device, headless, apply, overRelay, now });
     /** The one open ticket of each device: deviceId → { ticket, sessionId, level, expiresAt }. */
     this.tickets = new Map();
   }
@@ -80,7 +87,7 @@ export class ScreenGrants {
   /** The device behind a call that may change the level, or a sentence that says why it may not. */
   allowed(session, via) {
     if (!this.headless()) throw new Failure(NOT_HEADLESS);
-    if (via !== "http") throw new Failure(NOT_DIRECT);
+    if (via !== "http" && !(via === "relay" && this.overRelay() === true)) throw new Failure(NOT_DIRECT);
     const device = this.device(session.deviceId);
     if (!device || device.kind !== "phone") throw new Failure(NOT_A_PHONE);
     return device;

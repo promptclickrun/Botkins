@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
-import { cleanPresenceKey, GRANT_CAPABILITY, ScreenGrants } from "./grant.mjs";
+import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
 import { baseParts, CHAT_PAGE, chatPart, runPart, runsByChat } from "./parts.mjs";
@@ -186,7 +186,9 @@ export class LinkHost extends EventEmitter {
    * @param options.fetch  Replaces the fetch notifications are sent with (tests pass one, so nothing leaves the machine).
    * @param options.relay  `false` keeps the relay off for this instance, whatever is saved (tests and the demo
    *   computer). An object { url?, WebSocket?, timers? } overrides the saved address, the socket class and the
-   *   clock. Without it the saved settings apply (see setRelay and relay.mjs).
+   *   clock. Without it the saved settings apply (see setRelay and relay.mjs). `own: true` says the relay at
+   *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
+   *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
   constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, log = () => {} }) {
     super();
@@ -312,6 +314,7 @@ export class LinkHost extends EventEmitter {
       device: (id) => this.store.device(id),
       headless: () => this.headless(),
       apply: (level, by) => this.applyScreen(level, by),
+      overRelay: () => this.ownRelay(),
     });
     this.epoch = b64u(random(6));
     this.sessions = new Map();
@@ -515,6 +518,10 @@ export class LinkHost extends EventEmitter {
     } catch {
       return null;
     }
+  }
+  /** Whether the relay in use is this server's own (`relay.own`), so reaching the host through it counts as reaching the host. */
+  ownRelay() {
+    return this.relayOptions?.own === true && !!this.relaySettings();
   }
   /** The relay address to show: the one in use, or the saved one as it stands. */
   relayUrl() {
@@ -1191,7 +1198,9 @@ export class LinkHost extends EventEmitter {
         if (route === "pair" || route === "join") {
           // Pairing (and a session for a device this computer doesn't know) is what a flood from many sources aims at.
           if (failures.tripped()) throw new Refused(429, "slow_down");
-          return json(200, route === "pair" ? this.pair(message, via + ":" + from, via === "http") : this.join(message, via + ":" + from, via === "http"));
+          // A presence key is kept from a request that came straight here, or through this server's own relay.
+          const direct = via === "http" || (via === "relay" && this.ownRelay());
+          return json(200, route === "pair" ? this.pair(message, via + ":" + from, direct) : this.join(message, via + ":" + from, direct));
         }
         return json(200, this.session(message, gate));
       } catch (error) {
@@ -1221,7 +1230,7 @@ export class LinkHost extends EventEmitter {
       ...(join && { join: true }),
     };
   }
-  /** `direct`: the request came straight over HTTP, not through the relay. Only then is a phone's presence key kept. */
+  /** `direct`: the request came straight over HTTP, or through this server's own relay. Only then is a phone's presence key kept. */
   pair(message, source = "", direct = false) {
     const pairing = this.activePairing();
     if (!pairing) throw new Refused(403, "pair_closed");
@@ -1495,7 +1504,7 @@ export class LinkHost extends EventEmitter {
       protocol: PROTOCOL,
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
-      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES, ...(this.headless() ? [GRANT_CAPABILITY] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"])])],
+      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES, ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"])])],
     };
   }
   /** The desktop changed: wake the phones that are waiting, at most once per PUMP_MS. */

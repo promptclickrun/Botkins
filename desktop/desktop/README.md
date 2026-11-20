@@ -29,6 +29,8 @@ The phone reports whether the virtual display is available and which device last
 
 The public `host` service owns the pairing credentials and the saved screen level in `/var/lib/botkins-link/link.json`. It accepts a grant only over a direct, sealed session with a paired phone. It checks a single-use, 60-second challenge signed by the presence key enrolled during pairing. The signature binds the host, phone, requested level and ticket. Desktop clients, the relay and the ordinary workspace RPC have no grant operation.
 
+A server in the cloud may have no network that a phone can join: phones reach it only through a relay that runs on the server itself. For that case, set `BOTKINS_RELAY_URL` to that relay and `BOTKINS_RELAY_OWN=1` on the `host` service. The host then keeps the presence key of a phone that paired through that relay, and accepts the same signed grant through it. The relay itself cannot make a grant, because it carries only sealed messages. The [Azure deployment](../../deploy/azure/README.md) with Screen access does this. On any other relay the host accepts a grant only directly.
+
 The phone and host message shapes are documented in the [link contract](link/CONTRACT.md).
 
 Electron, model tools and their shell processes run in the `workspace` service. That service owns the X11 display and answers capture and input requests on a Unix socket. Only the public host can read the owner pairing file and write the link volume. Docker operators control both services. Keep the Docker socket, host home directory and link volume outside the workspace container.
