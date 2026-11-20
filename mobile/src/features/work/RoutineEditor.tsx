@@ -3,33 +3,23 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Bell, MessageCircle, Play, Send, Trash2 } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Alert, View } from "react-native";
-import type { RoutineDelivery } from "@/link/types";
 import { type RoutineEntry, useBots, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { EmptyState, Field, Group, IconTile, Label, Loading, Row, Sheet, space, T, useTheme } from "@/ui";
 import { BotChips, routineName } from "./bits";
 import { type CadenceDraft, CadenceFields, cadenceOf, draftOfCadence, phoneZone, scheduleOk, usePreview } from "./Cadence";
+import { canNotify, DELIVERY, deliveryToSave, firstPlace, notifyLine, type Place, placeOf, placesFor } from "./delivery";
 
 const zone = phoneZone;
 
-type Place = RoutineDelivery["to"];
-/** Where a result can land. The chat's label names the bot when one is chosen. */
-const PLACES: { value: Place; label: string; hint: string; image: string }[] = [
-  { value: "routine", label: "Routine chat", hint: "Kept with its past runs", image: "clock.arrow.circlepath" },
-  { value: "chat", label: "Chat", hint: "A message from the bot", image: "bubble.left" },
-  { value: "feed", label: "Feed", hint: "On Today", image: "newspaper" },
-  { value: "idea", label: "Ideas", hint: "On Today", image: "lightbulb" },
-  { value: "goal", label: "Goals", hint: "On Today", image: "target" },
-];
-
 type Draft = CadenceDraft & { botId: string | null; name: string; prompt: string; place: Place; notify: boolean };
 
-function draftOf(routine: RoutineEntry | undefined, botId: string | null): Draft {
-  const base: Draft = { ...draftOfCadence(undefined), botId, name: "", prompt: "", place: "routine", notify: true };
+function draftOf(routine: RoutineEntry | undefined, botId: string | null, capabilities: string[] | undefined): Draft {
+  const base: Draft = { ...draftOfCadence(undefined), botId, name: "", prompt: "", place: firstPlace(undefined, true, capabilities), notify: true };
   if (!routine) return base;
   const { entry } = routine;
-  const place = PLACES.some((item) => item.value === entry.deliver?.to) ? entry.deliver!.to : "routine";
+  const place = firstPlace(entry.deliver, false, capabilities);
   return { ...base, ...draftOfCadence(entry.cadence ?? { kind: "custom", cron: entry.cron ?? "" }), botId: routine.chat.botId, name: routineName(routine), prompt: entry.prompt, place, notify: entry.notify !== false };
 }
 
@@ -48,13 +38,16 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
   const { colors } = useTheme();
   const bots = useBots();
   const shownBots = useMemo(() => bots.filter((bot) => !bot.hidden), [bots]);
-  const [draft, setDraft] = useState<Draft>(() => draftOf(routine, botId ?? (shownBots.length === 1 ? shownBots[0].id : null)));
+  const capabilities = usePart("meta")?.capabilities;
+  const [draft, setDraft] = useState<Draft>(() => draftOf(routine, botId ?? (shownBots.length === 1 ? shownBots[0].id : null), capabilities));
   const [saving, setSaving] = useState(false);
   const set = (patch: Partial<Draft>) => setDraft((last) => ({ ...last, ...patch }));
   // An older computer keeps every result in the routine's own chat.
-  const canDeliver = !!usePart("meta")?.capabilities?.includes("routine-delivery-v1");
+  const canDeliver = !!capabilities?.includes(DELIVERY);
+  // "No output" is offered only where the computer takes it; a routine that has it keeps it.
+  const places = placesFor(capabilities, routine?.entry.deliver?.to);
   const botName = bots.find((bot) => bot.id === draft.botId)?.name;
-  const placeLabel = (place: Place) => (place === "chat" && botName ? "Chat with " + botName : PLACES.find((item) => item.value === place)!.label);
+  const placeLabel = (place: Place) => (place === "chat" && botName ? "Chat with " + botName : placeOf(place).label);
 
   const cadence = cadenceOf(draft);
   const preview = usePreview(cadence, zone());
@@ -63,9 +56,7 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
   const save = async () => {
     if (!ready || !draft.botId) return;
     setSaving(true);
-    // A chat picked on the computer stays picked while the result still goes to a chat.
-    const kept = routine?.entry.deliver?.to === "chat" && draft.place === "chat" ? routine.entry.deliver.chatId : undefined;
-    const fields = { name: draft.name.trim(), prompt: draft.prompt.trim(), cadence, timezone: zone(), ...(canDeliver && { deliver: { to: draft.place, ...(kept && { chatId: kept }) }, notify: draft.notify }) };
+    const fields = { name: draft.name.trim(), prompt: draft.prompt.trim(), cadence, timezone: zone(), ...(canDeliver && { deliver: deliveryToSave(draft.place, routine?.entry.deliver), notify: canNotify(draft.place) && draft.notify }) };
     const ok = routine ? await attempt(api.updateRoutine(routine.id, fields).then(() => true), "Saved") : await attempt(api.createRoutine({ botId: draft.botId, ...fields }), "Routine created");
     setSaving(false);
     if (ok) router.back();
@@ -118,12 +109,12 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
           <Label>Send result to</Label>
           <Group>
             <MenuView
-              actions={PLACES.map((place) => ({ id: place.value, title: placeLabel(place.value), subtitle: place.hint, image: place.image, state: draft.place === place.value ? ("on" as const) : ("off" as const) }))}
+              actions={places.map((place) => ({ id: place.value, title: placeLabel(place.value), subtitle: place.hint, image: place.image, state: draft.place === place.value ? ("on" as const) : ("off" as const) }))}
               onPressAction={({ nativeEvent }) => set({ place: nativeEvent.event as Place })}
             >
-              <Row leading={<IconTile icon={Send} color={colors.ink2} />} title={placeLabel(draft.place)} subtitle={PLACES.find((item) => item.value === draft.place)!.hint} chevron />
+              <Row leading={<IconTile icon={Send} color={colors.ink2} />} title={placeLabel(draft.place)} subtitle={placeOf(draft.place).hint} chevron />
             </MenuView>
-            <Row key="notify" leading={<IconTile icon={Bell} color={colors.ink2} />} title="Notify me" subtitle={draft.notify ? "When a run finishes" : "This routine is quiet"} toggled={draft.notify} onToggle={(notify) => set({ notify })} />
+            <Row key="notify" leading={<IconTile icon={Bell} color={colors.ink2} />} title="Notify me" subtitle={notifyLine(draft.place, draft.notify)} subtitleLines={2} toggled={canNotify(draft.place) && draft.notify} disabled={!canNotify(draft.place)} onToggle={(notify) => set({ notify })} />
           </Group>
         </View>
       )}

@@ -1,7 +1,7 @@
 // Screen: see the computer's screen from the phone and, when the computer allows it, use its
 // pointer and keyboard. Full screen, on black whatever the theme.
 import * as LocalAuthentication from "expo-local-authentication";
-import { useKeepAwake } from "expo-keep-awake";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { router } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
@@ -34,6 +34,7 @@ const messageOf = (error: unknown, fallback: string) => (error instanceof Error 
 export default function Remote() {
   const meta = usePart("meta");
   const mode = usePart("host")?.screen ?? "off";
+  const headless = usePart("host")?.headless === true;
   const supported = !!meta?.capabilities.includes("screen-v1");
   const needsCheck = supported && mode !== "off";
   const [owner, setOwner] = useState<"checking" | "ok" | "failed">("checking");
@@ -72,7 +73,8 @@ export default function Remote() {
 
   if (!meta) return <Waiting />;
   if (!supported) return <Gate title="Update the app on your computer to use Screen." />;
-  if (mode === "off") return <Gate title="Screen is off for phones" text="Turn it on in the app on your computer, under Phone." icon />;
+  // A headless host has no window to turn it on in: there the phone does it, on the computer's page.
+  if (mode === "off") return <Gate title="Screen is off for phones" text={headless ? "Turn it on in Settings, on this computer's page, under Screen." : "Turn it on in the app on your computer, under Phone."} icon />;
   if (owner === "failed") return <Gate title="Couldn't check it's you" action="Try again" onAction={() => setOwner("checking")} />;
   if (owner === "checking") return <Waiting />;
   return <Viewer mode={mode} meta={meta} />;
@@ -107,7 +109,6 @@ function CloseCorner({ themed }: { themed?: boolean }) {
 }
 
 function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
-  useKeepAwake();
   const insets = useSafeAreaInsets();
   const link = useApp((state) => state.link);
   const keyboardShown = useKeyboardState((state) => state.isVisible);
@@ -162,6 +163,17 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
   const preset = QUALITY[quality];
   const feed = useFeed({ enabled: !!info && canView && awake, display: display?.id, maxWidth: preset.maxWidth, quality: preset.quality });
   const target = display?.id ?? feed.size?.display ?? "";
+
+  // The phone stays awake only while a picture is being followed. Once the loop has given up, or the
+  // computer can't be reached, it may sleep again: a phone left on this page must not stay lit.
+  const following = !!info && canView && awake && feed.state !== "failed";
+  useEffect(() => {
+    if (!following) return;
+    void activateKeepAwakeAsync("remote-screen").catch(() => {});
+    return () => {
+      void deactivateKeepAwake("remote-screen").catch(() => {});
+    };
+  }, [following]);
 
   // The app in the background: the loop stops, and the computer is told.
   useEffect(() => {

@@ -780,3 +780,120 @@ test("check() leaves a healthy relay socket alone", async () => {
   answerLater!();
   assert.equal((await pending).status, 200);
 });
+
+test("every offline attempt reports unreachable, but a recovered blip stays quiet", async () => {
+  const s = scene();
+  const states: LinkState[] = [];
+  const misses: LinkState[] = [];
+  let blip = false;
+  const client = new LinkClient({ ...s.pairing, hosts: [DIRECT] }, {
+    fetch: (url, init) => {
+      if (blip && url.endsWith("/rpc")) {
+        blip = false;
+        return Promise.reject(new Error("missed answer"));
+      }
+      return s.fetcher(url, init);
+    },
+    onParts() {},
+    onState: (state) => states.push(state),
+    onUnreachable: () => misses.push(client.state),
+  });
+  client.start();
+  try {
+    await until(() => s.direct.length >= 2, "two failed attempts");
+    assert.deepEqual(misses, ["offline", "offline"]);
+    s.mode.state = "up";
+    client.learn(DIRECT);
+    await until(() => client.state === "online", "the known address to wake the link", 600);
+    blip = true;
+    await until(() => states.filter(state => state === "online").length === 2, "the recovered blip");
+    assert.deepEqual(misses, ["offline", "offline"]);
+  } finally {
+    client.stop();
+  }
+});
+
+test("a late session answers its caller without publishing after stop", async () => {
+  const s = scene();
+  let resume!: () => void;
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  let opening = false;
+  const reports: unknown[] = [];
+  const client = new LinkClient(s.pairing, {
+    fetch: async (url, init) => {
+      if (url.endsWith("/session")) {
+        opening = true;
+        await gate;
+      }
+      return s.fetcher(url, init);
+    },
+    onParts: parts => reports.push(parts), onState: state => reports.push(state),
+    onHosts: hosts => reports.push(hosts), onRoute: route => reports.push(route),
+  });
+  client.start();
+  try {
+    const answer = client.call("echo", "done");
+    await until(() => opening, "session POST");
+    client.stop();
+    resume();
+    assert.equal(await answer, "done");
+    assert.equal(client.route, null);
+    assert.deepEqual(reports, []);
+    client.start();
+    await until(() => client.state === "online", "restart");
+  } finally {
+    resume();
+    client.stop();
+  }
+});
+
+test("a one-call relay client neither syncs nor schedules probes", async (t) => {
+  const s = scene();
+  const delay = 12_345;
+  const interval = t.mock.method(globalThis, "setInterval");
+  const timeout = t.mock.method(globalThis, "setTimeout");
+  const client = new LinkClient(s.pairing, { fetch: s.fetcher, onParts() {}, onState() {}, probeMs: delay });
+  try {
+    assert.equal(await client.call("echo", "once"), "once");
+    assert.deepEqual(s.computer.seen.filter(item => item.method).map(item => item.method), ["echo"]);
+    assert.ok(![...interval.mock.calls, ...timeout.mock.calls].some(call => call.arguments[1] === delay));
+  } finally {
+    client.stop();
+  }
+});
+
+test("relay probes back off to the limit and wake restarts the short wait", async (t) => {
+  const s = scene();
+  const hellos: number[] = [];
+  const timeout = t.mock.method(globalThis, "setTimeout");
+  const waits = () => timeout.mock.calls.map(call => call.arguments[1]).filter(ms => [83, 166, 241].includes(ms));
+  const client = new LinkClient(s.pairing, {
+    fetch: (url, init) => {
+      if (url.includes(DIRECT) && url.endsWith("/hello")) hellos.push(performance.now());
+      return s.fetcher(url, init);
+    },
+    onParts() {}, onState() {}, probeMs: 83, probeMaxMs: 241,
+  });
+  client.start();
+  try {
+    await until(() => hellos.length >= 5, "four probes after the initial hello");
+    for (const [i, gap] of [83, 166, 241, 241].entries()) {
+      const elapsed = hellos[i + 1] - hellos[i];
+      assert.ok(elapsed >= gap - 3, "gap of " + elapsed + " ms, expected " + gap);
+    }
+    assert.deepEqual(waits().slice(0, 4), [83, 166, 241, 241]);
+    s.computer.sessions.clear();
+    assert.equal(await client.call("echo", "renew"), "renew");
+    assert.equal(waits().at(-1), 241, "renewing on the relay keeps the longer wait");
+
+    const count = hellos.length;
+    client.wake();
+    assert.equal(hellos.length, count + 1);
+    await until(() => hellos.length >= count + 2, "short wait after wake");
+    const elapsed = hellos[count + 1] - hellos[count];
+    assert.ok(elapsed >= 80, "gap after wake: " + elapsed);
+    assert.deepEqual(waits().slice(-2), [83, 166]);
+  } finally {
+    client.stop();
+  }
+});

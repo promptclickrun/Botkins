@@ -42,6 +42,8 @@ const config: ExpoConfig = {
   },
   android: {
     package: "app.botkins.mobile",
+    // Each upload to Google Play needs a higher number: scripts/android-play.sh passes it in.
+    versionCode: Number(process.env.BOTKINS_BUILD ?? "1"),
     adaptiveIcon: {
       backgroundColor: "#A83519",
       foregroundImage: "./assets/images/adaptive-foreground.png",
@@ -109,9 +111,10 @@ const config: ExpoConfig = {
     ],
     "expo-secure-store",
     ["expo-image-picker", { photosPermission: "Botkins attaches the photos you choose to a message, and shows your bots the photos they ask for when you turn on Photos under Device access.", cameraPermission: "Botkins uses the camera to scan the pairing code and to take a photo for a message.", microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot." }],
-    ["expo-local-authentication", { faceIDPermission: "Botkins checks it is you before showing your computer's screen or your credentials." }],
+    ["expo-local-authentication", { faceIDPermission: "Botkins checks it is you before showing your computer's screen or your credentials, and before letting phones use a computer's screen." }],
     "expo-screen-orientation",
-    ["expo-build-properties", { android: { usesCleartextTraffic: true } }],
+    // WebRTC refers to a decoder class it does not ship; R8 fails a release build without these rules.
+    ["expo-build-properties", { android: { usesCleartextTraffic: true, extraProguardRules: "-keep class org.webrtc.** { *; }\n-dontwarn org.webrtc.**" } }],
     "@react-native-community/datetimepicker",
     "expo-web-browser",
     // Notifications. A build for TestFlight (scripts/testflight.sh sets BOTKINS_BUILD) uses Apple's production service.
@@ -130,6 +133,8 @@ const config: ExpoConfig = {
     ["@config-plugins/react-native-webrtc", { cameraPermission: "Botkins uses the camera to scan the pairing code and to take a photo for a message.", microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot." }],
     // The Live Activity and the notification extension (targets/).
     "@bacons/apple-targets",
+    // Android release signing with the Play upload key (plugins/withAndroidRelease.js).
+    "./plugins/withAndroidRelease.js",
   ],
   experiments: { typedRoutes: true, reactCompiler: true },
 };

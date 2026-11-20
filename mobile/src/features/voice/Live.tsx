@@ -62,6 +62,7 @@ export default function Live() {
   const [lines, setLines] = useState<Line[]>([]);
   const [muted, setMuted] = useState(false);
   const [speaker, setSpeaker] = useState(true);
+  const [callStarted, setCallStarted] = useState(false);
   const transport = useRef<LiveTransport | null>(null);
 
   // One session per visit. It is set up once the settings are known, and always ended on the computer.
@@ -83,7 +84,7 @@ export default function Live() {
     const held: { current: LiveTransport | null } = { current: null };
     const offs: (() => void)[] = [];
     stopSpeech();
-    void keepAwakeModule()?.activateKeepAwakeAsync("live-voice").catch(() => {});
+    setCallStarted(true);
 
     const attach = (next: LiveTransport) => {
       held.current = next;
@@ -141,10 +142,22 @@ export default function Live() {
       // A session the computer set up is ended there too, however the screen closed.
       const id = sessionId ?? (held.current as { sessionId?: string | null } | null)?.sessionId;
       if (id) void api["link.voice.endLive"](id).catch(() => {});
-      void keepAwakeModule()?.deactivateKeepAwake("live-voice").catch(() => {});
+      setCallStarted(false);
       void audioModule()?.setAudioModeAsync({ allowsRecording: false, shouldRouteThroughEarpiece: false }).catch(() => {});
     };
   }, [ready, chatId, botId, provider]);
+
+  // The phone stays awake while a call is being set up or is on. A call that ended or never started
+  // leaves the screen open with its message, and the phone may sleep.
+  const keepAwake = ready && callStarted && status !== "ended";
+  useEffect(() => {
+    if (!keepAwake) return;
+    const module = keepAwakeModule();
+    void module?.activateKeepAwakeAsync("live-voice").catch(() => {});
+    return () => {
+      void module?.deactivateKeepAwake("live-voice").catch(() => {});
+    };
+  }, [keepAwake]);
 
   // In the background for long, the call ends.
   useEffect(() => {

@@ -223,6 +223,22 @@ export type CredentialRef = { $credential: string; prefix?: string };
 // The computer's screen.
 /** off: phones can't see the screen. view: they can watch. control: they can also click and type. Set on the computer. */
 export type ScreenMode = "off" | "view" | "control";
+/** Whether a headless host has a display to show now. `kind` says what it is ("xvfb"); `note` is one sentence a person reads. */
+export type HostDisplay = { available: boolean; kind?: string; note?: string };
+/** What the person lets phones do with the computer, and what kind of computer it is. */
+export type HostPart = {
+  screen: ScreenMode;
+  /** The computer uses a relay (see `relay-v1`). */
+  relay?: boolean;
+  /** The computer has no window of its own (a server). Only then can a phone set `screen` ("screen-grant-v1"). */
+  headless?: true;
+  /** With `headless`: the display, as it is now. */
+  display?: HostDisplay;
+  /** The phone that last set `screen` from afar, and when. Missing when it was set on the computer itself. */
+  screenSetBy?: { deviceId: string; name: string; at: number };
+};
+/** A ticket to turn the screen on: the phone signs it and sends it back within the minute it lasts. */
+export type ScreenTicket = { ticket: string; expiresAt: number };
 export type ScreenDisplay = { id: string; label: string; width: number; height: number; primary: boolean };
 export type ScreenInfo = { mode: ScreenMode; displays: ScreenDisplay[]; canView: boolean; canControl: boolean; /** Why it can't, in one line ("Allow screen recording for Botkins on your computer"). */ problem?: string };
 /** One picture of a display. `jpeg` (base64) is left out when nothing changed since frame `after`. */
@@ -264,9 +280,10 @@ export type ChatSchedule = {
  * Where a routine's result lands when a run finishes. "routine" (and nothing) keeps it in the
  * routine's own chat; "chat" also posts it as a message from the bot in the person's chat with it
  * (`chatId` names one, else the bot's main chat); the rest post it to Today as that kind of item.
- * Needs the capability "routine-delivery-v1".
+ * Needs the capability "routine-delivery-v1". "none" (the routine runs and keeps its history, and
+ * publishes no reply and no notification) needs "routine-no-output-v1" as well.
  */
-export type RoutineDelivery = { to: "routine" | "chat" | "feed" | "idea" | "goal"; chatId?: string; /** For "goal": which kind of goal. */ category?: string };
+export type RoutineDelivery = { to: "none" | "routine" | "chat" | "feed" | "idea" | "goal"; chatId?: string; /** For "goal": which kind of goal. */ category?: string };
 /** `notify: false` keeps a routine quiet: no notification when a run finishes, on the computer or a phone. */
 export type RoutineInput = { botId: string; name: string; prompt: string; cadence: Cadence; timezone?: string; deliver?: RoutineDelivery; notify?: boolean };
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
@@ -629,6 +646,31 @@ export type WikiExportFormat = "zip" | "html" | "pdf";
  * `more` says the list was cut.
  */
 export type FolderList = { path: string; parent: string | null; folders: { name: string; path: string }[]; more?: true; roots?: { name: string; path: string }[] };
+/**
+ * Something a bot made or was given ("artifacts-v1"): a file it wrote, a picture or sound it sent,
+ * an upload the person gave it, an export. The computer keeps the index. `chatId`, `chatTitle` and
+ * `messageIndex` are there only when it belongs to a chat; `messageIndex` (from 0) only when the
+ * message is known. `size` is null for a folder.
+ */
+export type Artifact = {
+  id: string;
+  botId: string;
+  chatId?: string;
+  chatTitle?: string;
+  /** Where it is on the computer. Shown, never used to read it: reading goes by `id`. */
+  path: string;
+  name: string;
+  kind: "file" | "folder" | "image" | "video" | "audio";
+  mime: string;
+  size: number | null;
+  time: number;
+  source: "tool" | "media" | "upload" | "export";
+  messageIndex?: number;
+};
+/** A page of artifacts, newest first. `nextCursor` asks for the page after it; null at the end. */
+export type ArtifactPage = { items: Artifact[]; nextCursor: string | null };
+/** A piece of a file, as base64. `nextOffset` is where the next piece starts; null at the end. A folder has no data. */
+export type ArtifactChunk = { artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null };
 export type UsageTotals = { turns: number; input: number; output: number; cacheRead: number; cost: number; priced: number };
 export type UsageReport = {
   days: number;
@@ -651,8 +693,10 @@ export type UsageReport = {
  * "routine-delivery-v1" (where a routine's result lands, and whether it notifies), "models-v2"
  * (context window and other model details), "files-v1" (a file out or in without a dialog on the
  * computer: a template, the usage table, a wiki export), "folders-v1" (the folder browser, and
- * choosing a folder from it), and the link's own "maintenance-v1" (clear the cache, and the
- * computer's own test notification).
+ * choosing a folder from it), the link's own "maintenance-v1" (clear the cache, and the
+ * computer's own test notification), and "screen-grant-v1" (a headless host: a phone may set what
+ * phones may do with its screen), and the app's "artifacts-v1" (what a bot made or was given: a
+ * list, a file in pieces, a small picture of it, and the paths written in a chat).
  */
 export type Meta = { app: string; version: string; platform: string; name: string; serverId: string; protocol: number; capabilities: string[] };
 
@@ -672,11 +716,12 @@ export type Parts = {
   mcp: McpServer[];
   skills: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
   templates: BotTemplate[];
-  revs: { wiki: number; providers: number };
+  /** Each number goes up when what it names changes. `artifacts` (what bots made, "artifacts-v1") is missing on a computer without that index. */
+  revs: { wiki: number; providers: number; artifacts?: number };
   /** The credentials saved or linked on the computer (never their values). */
   credentials?: Credential[];
   /** Choices made on the computer about what phones may do. */
-  host?: { screen: ScreenMode; /** The computer uses a relay (see `relay-v1`). */ relay?: boolean };
+  host?: HostPart;
   /** What the computer keeps for each paired phone, by the phone's device id (`push-v1`, `device-v1`). */
   phones?: Record<string, PhoneRecord>;
   /** What bots are asking phones for right now (`device-v1`). A phone answers the ones addressed to it. */
@@ -705,6 +750,8 @@ export type PhoneRecord = {
   /** What the device is. Missing on an older computer, where every paired device is a phone. */
   kind?: "phone" | "desktop";
   platform?: string;
+  /** The computer keeps this phone's presence key: it paired directly, with a build that has one ("screen-grant-v1"). */
+  presence?: true;
   /** Notifications are set up for this phone. */
   push?: PushPrefs;
   /** What bots may use on this phone, by source. */
@@ -893,6 +940,14 @@ export type Calls = {
   /** Makes the wiki page for a project that has none yet; answers the page's path. */
   createWikiPageFor(record: { kind: "project"; id: string }): string;
   cacheInfo(): { bytes: number; catalogs: number };
+  /** A bot's artifacts, newest first, 50 a page. `folder` (a folder artifact's id) lists what is directly in it. Needs "artifacts-v1". */
+  "artifacts.list"(query: { botId: string; chatId?: string; kind?: "files" | "media"; folder?: string; cursor?: string }): ArtifactPage;
+  /** A piece of an artifact (512 KiB at most), by its id. */
+  "artifacts.read"(id: string, options?: { offset?: number; length?: number }): ArtifactChunk;
+  /** A small picture of an image or a video (its long edge `size`, 160 unless said, 512 at most), or null when the computer can't make one. */
+  "artifacts.thumbnail"(id: string, options?: { size?: number }): { data: string; mime: string } | null;
+  /** The artifacts behind paths written in a chat's messages, in the order asked (20 at most). Null: not available. */
+  "artifacts.resolve"(query: { chatId: string; paths: string[] }): { items: (Artifact | null)[] };
   /** Clears the workspace cache. Chats, bots, panels and routines stay. Needs "maintenance-v1". */
   clearCache(): void;
   /** Shows a test notification on the computer. Needs "maintenance-v1". */
@@ -938,6 +993,14 @@ export type Calls = {
   "link.screen.input"(display: string, events: ScreenInput[]): void;
   /** The phone stopped watching. */
   "link.screen.stop"(): void;
+  /**
+   * Setting what phones may do with the screen, from a phone ("screen-grant-v1": a headless host only,
+   * a phone only, over a direct connection only). `begin` answers a ticket; `confirm` takes it back
+   * with the phone's signature over it, made after Face ID or the passcode; `revoke` turns the screen off.
+   */
+  "link.screen.grant.begin"(level: "view" | "control"): ScreenTicket;
+  "link.screen.grant.confirm"(ticket: string, signature: string): { screen: ScreenMode };
+  "link.screen.revoke"(): { screen: "off" };
   /** Saves the Botkin a bot is shown as. It is kept on the computer, so every paired phone sees it. */
   "link.setLook"(botId: string, look: BotkinLook): void;
   // ---- Notifications ("push-v1")

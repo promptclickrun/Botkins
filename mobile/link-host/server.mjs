@@ -15,6 +15,7 @@ import { createServer } from "node:http";
 import { Credentials, scrub } from "./credentials.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
+import { cleanPresenceKey, GRANT_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
 import { baseParts, CHAT_PAGE, chatPart, runPart, runsByChat } from "./parts.mjs";
@@ -279,7 +280,17 @@ export class LinkHost extends EventEmitter {
       "link.screen.frame": (session, a, gone) => this.screen.frame(session.deviceId, a[0], gone),
       "link.screen.input": (session, a) => this.screen.input(session.deviceId, a[0], a[1]),
       "link.screen.stop": async (session) => this.screen.stop(session.deviceId),
+      // Setting the level from a phone, on a headless host only (grant.mjs). `via` is how the call arrived.
+      "link.screen.grant.begin": async (session, a, _gone, via) => this.grants.begin(session, via, a[0]),
+      "link.screen.grant.confirm": async (session, a, _gone, via) => this.grants.confirm(session, via, a[0], a[1]),
+      "link.screen.revoke": async (session, _a, _gone, via) => this.grants.revoke(session, via),
     };
+    this.grants = new ScreenGrants({
+      serverId: this.store.data.serverId,
+      device: (id) => this.store.device(id),
+      headless: () => this.headless(),
+      apply: (level, by) => this.applyScreen(level, by),
+    });
     this.epoch = b64u(random(6));
     this.sessions = new Map();
     this.deviceKeys = new Map();
@@ -536,17 +547,39 @@ export class LinkHost extends EventEmitter {
       // The phones that get notifications, and what each allows bots to use.
       push: this.push.status(),
       sources: Object.fromEntries(this.store.data.devices.map((device) => [device.id, this.store.sources(device.id)])),
-      screen: { mode: this.store.data.screen, viewers: this.screen.viewers().map(({ deviceId, since }) => ({ deviceId, name: this.store.device(deviceId)?.name ?? "Phone", since })) },
+      screen: { mode: this.store.data.screen, ...(this.store.data.screenSetBy && { setBy: this.store.data.screenSetBy }), viewers: this.screen.viewers().map(({ deviceId, since }) => ({ deviceId, name: this.store.device(deviceId)?.name ?? "Phone", since })) },
     };
   }
-  /** What phones may do with the screen: "off", "view" or "control". The desktop's page offers the choice. */
+  /**
+   * What phones may do with the screen: "off", "view" or "control". The desktop's page offers the
+   * choice. Set here, on the computer itself, it carries no phone's name.
+   */
   setScreenMode(mode) {
     if (!SCREEN_MODES.includes(mode)) throw new Error("The screen can be off, view or control.");
-    this.store.set({ screen: mode });
+    this.applyScreen(mode, null);
+  }
+  /** Sets the level and who set it (`by`: a phone, on a headless host; null: this computer). Every open ticket ends. */
+  applyScreen(mode, by) {
+    this.store.set({ screen: mode, screenSetBy: by });
+    this.grants.clear();
     this.screen.modeChanged();
     this.dirty = true;
     this.changed();
     this.emit("status");
+  }
+  /** Whether the app says this computer has no window of its own (a server). Only then may a phone set the screen's level. */
+  headless() {
+    return this.backend.headless === true;
+  }
+  /** Whether a headless host has a display now, as the app says it: { available, kind?, note? }. */
+  display() {
+    let said;
+    try {
+      said = this.backend.displayStatus?.();
+    } catch {
+      said = null;
+    }
+    return { available: said?.available === true, ...(typeof said?.kind === "string" && said.kind && { kind: said.kind.slice(0, 24) }), ...(typeof said?.note === "string" && said.note && { note: said.note.slice(0, 200) }) };
   }
   setName(name) {
     this.store.set({ name: String(name ?? "").trim().slice(0, 60) });
@@ -653,6 +686,7 @@ export class LinkHost extends EventEmitter {
     this.uploads.forget(id);
     this.push.forget(id);
     this.device.forget(id);
+    this.grants.forget(id);
     for (const [sid, session] of this.sessions) if (session.deviceId === id) this.sessions.delete(sid);
     for (const waiter of [...this.waiters]) if (waiter.session.deviceId === id) waiter.end();
     if (removed) this.emit("status");
@@ -725,7 +759,7 @@ export class LinkHost extends EventEmitter {
         // The phone may have been removed while its call was on the way.
         const session = this.knownSession(sessionId);
         if (body.length > limit) throw new Refused(413, "too_large");
-        return { status: 200, body: await this.rpc(session, body, gone), json: false };
+        return { status: 200, body: await this.rpc(session, body, gone, via), json: false };
       }
       // Each way in has its own failure counts: the relay can never use up HTTP's allowance, or the other way round.
       const failures = this.failures[via === "relay" ? "relay" : "http"];
@@ -748,7 +782,7 @@ export class LinkHost extends EventEmitter {
         if (route === "pair") {
           // Pairing (and a session for a device this computer doesn't know) is what a flood from many sources aims at.
           if (failures.tripped()) throw new Refused(429, "slow_down");
-          return json(200, this.pair(message, via + ":" + from));
+          return json(200, this.pair(message, via + ":" + from, via === "http"));
         }
         return json(200, this.session(message, gate));
       } catch (error) {
@@ -776,7 +810,8 @@ export class LinkHost extends EventEmitter {
       pairing: !!this.activePairing(),
     };
   }
-  pair(message, source = "") {
+  /** `direct`: the request came straight over HTTP, not through the relay. Only then is a phone's presence key kept. */
+  pair(message, source = "", direct = false) {
     const pairing = this.activePairing();
     if (!pairing) throw new Refused(403, "pair_closed");
     // A source that has used its tries for this code is told to wait, even with the right code (429 "pair_wait", so
@@ -805,8 +840,11 @@ export class LinkHost extends EventEmitter {
     }
     // A phone that pairs again replaces its earlier entry.
     for (const old of this.store.data.devices.filter((d) => d.publicKey === b64u(theirs))) this.removeDevice(old.id);
-    const device = this.store.addDevice({ name: hello?.name, platform: hello?.platform, kind: hello?.kind, publicKey: theirs });
+    const device = this.store.addDevice({ name: hello?.name, platform: hello?.platform, kind: hello?.kind, publicKey: theirs, presenceKey: direct ? cleanPresenceKey(hello?.presenceKey) : null });
     this.cancelPairing();
+    // The list of paired devices is part of what phones are sent: it has one more now.
+    this.dirty = true;
+    this.changed();
     this.emit("paired", device);
     this.emit("status");
     return { box: box(key, { device: device.id, serverId, name: this.store.name, hosts: this.hosts() }, "paired:" + serverId) };
@@ -886,9 +924,10 @@ export class LinkHost extends EventEmitter {
   /** Ends a session and whatever it has waiting. */
   dropSession(session) {
     this.sessions.delete(session.id);
+    this.grants.dropSession(session.id);
     for (const waiter of [...this.waiters]) if (waiter.session === session) waiter.end();
   }
-  async rpc(session, body, gone) {
+  async rpc(session, body, gone, via = "http") {
     if (body.length < 24) throw new Refused(400, "short");
     const seq = Number(body.readBigUInt64BE(0));
     // Each number is taken once, so a recorded message can't be played again.
@@ -908,7 +947,7 @@ export class LinkHost extends EventEmitter {
 
     let text;
     try {
-      const result = await this.dispatch(session, message, gone);
+      const result = await this.dispatch(session, message, gone, via);
       text = result instanceof Json ? '{"r":' + result.text + "}" : JSON.stringify({ r: result ?? null });
     } catch (error) {
       text = JSON.stringify({ e: { message: plain(error).slice(0, 600) } });
@@ -918,7 +957,8 @@ export class LinkHost extends EventEmitter {
 
   // ── Calls ───────────────────────────────────────────────────────────────────────────────────
 
-  async dispatch(session, message, gone) {
+  /** `via` is how the call arrived: "http" straight to this computer, or "relay". */
+  async dispatch(session, message, gone, via = "http") {
     const method = String(message?.m ?? "");
     const args = Array.isArray(message?.a) ? message.a : [];
     if (method === "link.sync") return this.sync(session, args[0] ?? {}, gone);
@@ -948,7 +988,7 @@ export class LinkHost extends EventEmitter {
     }
     if (Object.hasOwn(this.calls, method)) {
       try {
-        return await this.calls[method](session, args, gone);
+        return await this.calls[method](session, args, gone, via);
       } catch (error) {
         // What the link answers itself is either a plain sentence of its own or "didn't work".
         if (error instanceof Failure) throw error;
@@ -1025,7 +1065,7 @@ export class LinkHost extends EventEmitter {
       protocol: PROTOCOL,
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
-      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES, ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"])])],
+      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES, ...(this.headless() ? [GRANT_CAPABILITY] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"])])],
     };
   }
   /** The desktop changed: wake the phones that are waiting, at most once per PUMP_MS. */
@@ -1053,9 +1093,9 @@ export class LinkHost extends EventEmitter {
     const state = this.backend.snapshot();
     const ownLooks = typeof this.backend.setLook === "function";
     if (!ownLooks) this.store.syncLooks((state.bots ?? []).map((bot) => bot.id));
-    const next = baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings() });
+    const next = baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings(), ...(this.headless() && { headless: true, display: this.display() }), screenSetBy: this.store.data.screenSetBy });
     // What each phone set up (never a token), and what bots are asking phones for right now.
-    next.phones = Object.fromEntries(this.store.data.devices.map((device) => [device.id, { name: device.name, kind: device.kind, platform: device.platform, ...(this.push.view(device.id) && { push: this.push.view(device.id) }), sources: this.store.sources(device.id) }]));
+    next.phones = Object.fromEntries(this.store.data.devices.map((device) => [device.id, { name: device.name, kind: device.kind, platform: device.platform, ...(device.presenceKey && { presence: true }), ...(this.push.view(device.id) && { push: this.push.view(device.id) }), sources: this.store.sources(device.id) }]));
     next.asks = this.device.asks();
     next.voice = this.voice.settings();
     const ids = new Set(watching);

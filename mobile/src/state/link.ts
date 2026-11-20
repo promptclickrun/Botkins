@@ -13,8 +13,10 @@ import type { PairTarget } from "@/link/pairing";
 import { relayFetch } from "@/link/relay";
 import type { Calls, ChatDetail } from "@/link/types";
 import { loadPrefs } from "./prefs";
+import { newPresenceKey, removePresenceKey } from "./presence";
 import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
 import { applyParts, forgetComputer, mergeChat, showToast, useApp } from "./store";
+import { canBrowse, NearbyPace } from "./reconnect";
 import { findNearby } from "./nearby";
 
 // One pairing, as versions before several computers saved it. It is read once and moved to the list.
@@ -38,8 +40,9 @@ function follow(pairing: Pairing) {
     onParts: applyParts,
     onState: (link) => {
       useApp.setState({ link });
-      if (link === "offline") void lookNearby(pairing.serverId);
+      if (link === "online") nearbyPace.reset();
     },
+    onUnreachable: () => void lookNearby(pairing.serverId),
     onRoute: (route) => useApp.setState({ route }),
     check: () => fetcher.check(),
     onHosts: (hosts) => {
@@ -58,14 +61,21 @@ function follow(pairing: Pairing) {
 // A computer whose address changed (a new one from the router, another network at home) is found
 // again by its announcement, so a new address never needs a new pairing.
 let looking = false;
-let lookedAt = 0;
+const nearbyPace = new NearbyPace();
 async function lookNearby(serverId: string) {
-  if (looking || Date.now() - lookedAt < 20_000 || AppState.currentState !== "active") return;
+  if (looking || !nearbyPace.allowed(Date.now()) || AppState.currentState !== "active") return;
   looking = true;
-  lookedAt = Date.now();
+  const current = client;
   try {
-    const host = await findNearby(serverId);
-    if (host && useApp.getState().pairing?.serverId === serverId) client?.learn(host);
+    const network = await Network.getNetworkStateAsync().catch(() => undefined);
+    if (!canBrowse(network) || AppState.currentState !== "active" || current !== client || current?.state !== "offline") return;
+    nearbyPace.started(Date.now());
+    const host = await findNearby(serverId).catch(() => null);
+    if (!host) nearbyPace.missed(Date.now());
+    else if (current === client) {
+      nearbyPace.reset();
+      current.learn(host);
+    }
   } finally {
     looking = false;
   }
@@ -78,6 +88,7 @@ const EMPTY = { route: null, synced: false, parts: {}, chats: {}, running: {}, m
  * of it stays in the store or in a cache.
  */
 function startOver() {
+  nearbyPace.reset();
   const pairing = currentOf(kept);
   client?.stop();
   client = null;
@@ -128,7 +139,12 @@ export async function boot() {
   // both use this file.
   void import("./push").then((push) => push.startPush()).catch(() => {});
   void import("./device").then((device) => device.startDeviceAnswers()).catch(() => {});
-  AppState.addEventListener("change", (state) => state === "active" && client?.wake());
+  AppState.addEventListener("change", (state) => {
+    if (state === "active") {
+      nearbyPace.reset();
+      client?.wake();
+    }
+  });
   // Leaving Wi-Fi, or coming back to it, changes how the computer is reached: look again at once.
   try {
     // Only a real change counts (the kind of network, or whether it is up), and a burst of them is one.
@@ -138,6 +154,7 @@ export async function boot() {
       const now = [state.type, state.isConnected, state.isInternetReachable].join();
       if (now === last) return;
       last = now;
+      nearbyPace.reset();
       clearTimeout(soon);
       soon = setTimeout(() => AppState.currentState === "active" && client?.wake("network"), 1500);
     });
@@ -154,9 +171,22 @@ export const deviceName = () => Device.deviceName || Device.modelName || (Platfo
  */
 export async function pairWith(target: PairTarget) {
   if (!hasRoom(kept, target.serverId)) throw new LinkError("closed", TOO_MANY);
-  const pairing = await pair(fetcher, target, { name: deviceName(), platform: Platform.OS });
-  // A typed address names its computer only now.
-  if (!hasRoom(kept, pairing.serverId)) throw new LinkError("closed", TOO_MANY);
+  // A key that proves a person is holding this phone, made for this pairing. A computer with no
+  // window of its own asks for its signature before a phone may turn its screen on, and keeps the
+  // public half only from a pairing that reaches it directly. A phone that can't keep one pairs without.
+  const presence = await newPresenceKey();
+  let pairing: Pairing;
+  try {
+    pairing = await pair(fetcher, target, { name: deviceName(), platform: Platform.OS, ...(presence && { presenceKey: presence.publicKey }) });
+    // A typed address names its computer only now.
+    if (!hasRoom(kept, pairing.serverId)) throw new LinkError("closed", TOO_MANY);
+  } catch (error) {
+    removePresenceKey(presence?.tag);
+    throw error;
+  }
+  if (presence) pairing = { ...pairing, presenceTag: presence.tag };
+  // Pairing again with a computer the phone has: the key of the pairing before goes with it.
+  removePresenceKey(kept.list.find((item) => item.serverId === pairing.serverId)?.presenceTag);
   const next = withPairing(kept, pairing);
   await savePairing(pairing);
   kept = next;
@@ -184,7 +214,6 @@ export async function tellOthers(method: string, ...args: unknown[]) {
   await Promise.all(
     others.map(async (pairing) => {
       const other = new LinkClient(pairing, { fetch: fetcher, onParts() {}, onState() {} });
-      other.start();
       try {
         await Promise.race([other.call(method, ...args), new Promise((_resolve, reject) => setTimeout(() => reject(new Error("late")), 12_000))]);
       } catch {
@@ -202,6 +231,7 @@ export async function unpair() {
   const old = client;
   if (old && useApp.getState().link === "online") await old.call("link.unpair").catch(() => {});
   if (pairing) {
+    removePresenceKey(pairing.presenceTag);
     kept = without(kept, pairing.serverId);
     await forget(pairingKey(pairing.serverId)).catch(() => {});
     await saveIndex().catch(() => {});

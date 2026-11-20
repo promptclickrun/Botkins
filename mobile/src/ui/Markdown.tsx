@@ -9,7 +9,7 @@ import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
 import { Check, ChevronDown, Copy, Info, Lightbulb, type LucideIcon, MessageSquareWarning, OctagonAlert, TriangleAlert } from "lucide-react-native";
 import { Marked, type Token, type Tokens } from "marked";
-import { memo, type ReactNode, useMemo, useState } from "react";
+import { Fragment, memo, type ReactNode, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, type TextStyle, View } from "react-native";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { haptic } from "./haptics";
@@ -92,8 +92,41 @@ function fenceClosed(raw: string): boolean {
 // ---------------------------------------------------------------------------------------------
 // Rendering
 
+/**
+ * Paths in a message that open something on a tap (a bot's artifacts, "artifacts-v1"). The chat
+ * decides which; this only draws them. `find` gives the linked paths in a run of text, `has` says
+ * whether a whole piece of code or a whole line in a code block is one.
+ */
+export type PathLinks = { has: (path: string) => boolean; find: (text: string) => { start: number; end: number; path: string }[]; open: (path: string) => void };
+
 /** `scale` is the type scale at the person's text size and in their font. */
-type Ctx = { colors: Colors; scale: TypeScale; base: TextStyle; highlight: boolean; wrap: boolean; notes: Map<string, number>; onLink: (url: string) => void };
+type Ctx = { colors: Colors; scale: TypeScale; base: TextStyle; highlight: boolean; wrap: boolean; notes: Map<string, number>; onLink: (url: string) => void; paths?: PathLinks };
+
+/** Text with the paths in it that open something drawn as links. Without any, the text as it is. */
+function withPaths(text: string, paths: PathLinks | undefined, color: string, k: string): ReactNode {
+  if (!paths || !text) return text;
+  let spans: { start: number; end: number; path: string }[];
+  try {
+    spans = paths.find(text);
+  } catch {
+    return text;
+  }
+  if (spans.length === 0) return text;
+  const out: ReactNode[] = [];
+  let last = 0;
+  for (const span of spans) {
+    if (span.start < last || span.end > text.length) continue;
+    if (span.start > last) out.push(text.slice(last, span.start));
+    out.push(
+      <Text key={k + "p" + span.start} style={{ color, textDecorationLine: "underline" }} onPress={() => paths.open(span.path)} accessibilityRole="link">
+        {text.slice(span.start, span.end)}
+      </Text>,
+    );
+    last = span.end;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
 
 function openLink(url: string) {
   if (!/^https?:\/\//i.test(url)) return;
@@ -124,13 +157,21 @@ function inline(tokens: Token[] | undefined, ctx: Ctx, key = "i"): ReactNode[] {
             {inline((token as Tokens.Del).tokens, ctx, k)}
           </Text>
         );
-      case "codespan":
+      case "codespan": {
+        const code = unescape((token as Tokens.Codespan).text);
+        // Code that is one whole path the chat links opens it.
+        const linked = !!ctx.paths?.has(code);
         return (
-          <Text key={k} style={[ctx.scale.mono, { fontSize: (ctx.base.fontSize ?? ctx.scale.callout.fontSize) - 2, lineHeight: undefined, backgroundColor: ctx.colors.sunken, color: ctx.colors.ink }]}>
+          <Text
+            key={k}
+            style={[ctx.scale.mono, { fontSize: (ctx.base.fontSize ?? ctx.scale.callout.fontSize) - 2, lineHeight: undefined, backgroundColor: ctx.colors.sunken, color: linked ? ctx.colors.accentText : ctx.colors.ink }, linked && { textDecorationLine: "underline" }]}
+            {...(linked && { onPress: () => ctx.paths?.open(code), accessibilityRole: "link" as const })}
+          >
             {/* No-break spaces: an ordinary one is left behind as an empty box when the code wraps to the next line. */}
-            {"\u00A0" + unescape((token as Tokens.Codespan).text) + "\u00A0"}
+            {"\u00A0" + code + "\u00A0"}
           </Text>
         );
+      }
       case "link": {
         const link = token as Tokens.Link;
         return (
@@ -159,7 +200,7 @@ function inline(tokens: Token[] | undefined, ctx: Ctx, key = "i"): ReactNode[] {
         return "\n";
       case "text": {
         const text = token as Tokens.Text;
-        return text.tokens ? inline(text.tokens, ctx, k) : unescape(text.text);
+        return text.tokens ? inline(text.tokens, ctx, k) : withPaths(unescape(text.text), ctx.paths, ctx.colors.accentText, k);
       }
       case "escape":
         return (token as Tokens.Escape).text;
@@ -191,7 +232,28 @@ function firstLines(runs: CodeRun[], lines: number): CodeRun[] {
   return out;
 }
 
-const CodeBlock = memo(function CodeBlock({ code, lang, closed, highlight, wrap, colors }: { code: string; lang?: string; closed: boolean; highlight: boolean; wrap: boolean; colors: Colors }) {
+/** The colored runs of some code, line by line. */
+function runsByLine(runs: CodeRun[] | null, text: string): CodeRun[][] {
+  if (!runs) return text.split("\n").map((line) => [{ text: line }]);
+  const lines: CodeRun[][] = [[]];
+  for (const run of runs) {
+    run.text.split("\n").forEach((part, index) => {
+      if (index > 0) lines.push([]);
+      if (part) lines[lines.length - 1]!.push({ text: part, scope: run.scope });
+    });
+  }
+  return lines;
+}
+
+/** A line of a code block that is nothing but a path the chat links (without white space or quotes around it). */
+function linkedLine(line: string, paths: PathLinks): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const path = /^(["'`]).+\1$/.test(trimmed) ? trimmed.slice(1, -1) : trimmed;
+  return paths.has(path) ? path : null;
+}
+
+const CodeBlock = memo(function CodeBlock({ code, lang, closed, highlight, wrap, colors, paths }: { code: string; lang?: string; closed: boolean; highlight: boolean; wrap: boolean; colors: Colors; paths?: PathLinks }) {
   const scale = useTheme().type;
   const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
@@ -201,15 +263,38 @@ const CodeBlock = memo(function CodeBlock({ code, lang, closed, highlight, wrap,
   const runs = useMemo(() => (highlight && closed ? highlightCode(text, lang) : null), [text, lang, highlight, closed]);
   const paint = useMemo(() => codePalette(colors), [colors]);
   const shown = folded ? (runs ? firstLines(runs, FOLD_LINES) : text.split("\n").slice(0, FOLD_LINES).join("\n")) : (runs ?? text);
+  // Lines that are a path the chat links open it; the rest of the block is drawn as always.
+  const links = useMemo(() => (paths && closed ? text.split("\n").map((line) => linkedLine(line, paths)) : null), [paths, closed, text]);
+  const lines = useMemo(() => (links?.some(Boolean) ? runsByLine(runs, text) : null), [links, runs, text]);
   const body = (
     <Text selectable style={[scale.mono, { color: colors.ink }]}>
-      {typeof shown === "string"
-        ? shown
-        : shown.map((run, index) => (
-            <Text key={index} style={paint(run.scope)}>
-              {run.text}
-            </Text>
-          ))}
+      {lines && links
+        ? (folded ? lines.slice(0, FOLD_LINES) : lines).map((line, index) => {
+            const path = links[index];
+            return (
+              <Fragment key={index}>
+                {index > 0 ? "\n" : null}
+                {path ? (
+                  <Text style={{ color: colors.accentText, textDecorationLine: "underline" }} onPress={() => paths?.open(path)} accessibilityRole="link">
+                    {line.map((run) => run.text).join("")}
+                  </Text>
+                ) : (
+                  line.map((run, at) => (
+                    <Text key={at} style={paint(run.scope)}>
+                      {run.text}
+                    </Text>
+                  ))
+                )}
+              </Fragment>
+            );
+          })
+        : typeof shown === "string"
+          ? shown
+          : shown.map((run, index) => (
+              <Text key={index} style={paint(run.scope)}>
+                {run.text}
+              </Text>
+            ))}
     </Text>
   );
   return (
@@ -355,7 +440,7 @@ function block(token: Token, ctx: Ctx, k: string): ReactNode {
     }
     case "code": {
       const code = token as Tokens.Code;
-      return <CodeBlock key={k} code={code.text} lang={code.lang?.split(/\s/)[0]} closed={fenceClosed(code.raw)} highlight={ctx.highlight} wrap={ctx.wrap} colors={colors} />;
+      return <CodeBlock key={k} code={code.text} lang={code.lang?.split(/\s/)[0]} closed={fenceClosed(code.raw)} highlight={ctx.highlight} wrap={ctx.wrap} colors={colors} paths={ctx.paths} />;
     }
     case "blockquote": {
       const quote = token as Tokens.Blockquote;
@@ -442,19 +527,26 @@ const Footnotes = memo(function Footnotes({ notes, ctx }: { notes: Footnote[]; c
 
 const INLINE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]])/g;
 
-function InlineOnly({ text, base }: { text: string; base: TextStyle }) {
+function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; paths?: PathLinks }) {
   const scale = useTheme().type;
+  // A person's bubble has its own text color; a path in it is underlined in that color.
+  const linkColor = String(base.color ?? "");
   const parts = useMemo(() => {
     const out: ReactNode[] = [];
     let last = 0;
     INLINE.lastIndex = 0;
     for (let match = INLINE.exec(text); match; match = INLINE.exec(text)) {
-      if (match.index > last) out.push(text.slice(last, match.index));
+      if (match.index > last) out.push(withPaths(text.slice(last, match.index), paths, linkColor, "t" + last));
       const k = "u" + match.index;
-      if (match[3] !== undefined)
+      const code = match[3];
+      if (code !== undefined)
         out.push(
-          <Text key={k} style={[scale.mono, { fontSize: (base.fontSize ?? scale.callout.fontSize) - 2, lineHeight: undefined, color: base.color }]}>
-            {match[3]}
+          <Text
+            key={k}
+            style={[scale.mono, { fontSize: (base.fontSize ?? scale.callout.fontSize) - 2, lineHeight: undefined, color: base.color }, !!paths?.has(code) && { textDecorationLine: "underline" }]}
+            {...(paths?.has(code) && { onPress: () => paths.open(code), accessibilityRole: "link" as const })}
+          >
+            {code}
           </Text>,
         );
       else {
@@ -467,9 +559,9 @@ function InlineOnly({ text, base }: { text: string; base: TextStyle }) {
       }
       last = match.index + match[0].length;
     }
-    if (last < text.length) out.push(text.slice(last));
+    if (last < text.length) out.push(withPaths(text.slice(last), paths, linkColor, "t" + last));
     return out;
-  }, [text, base]);
+  }, [text, base, paths, linkColor]);
   return (
     <Text selectable maxFontSizeMultiplier={1.35} style={base}>
       {parts}
@@ -493,10 +585,12 @@ export type MarkdownProps = {
   highlight?: boolean;
   /** Wraps long code lines instead of scrolling sideways. Defaults to the chat setting. */
   wrapCode?: boolean;
+  /** Paths that open something on a tap (a chat's artifacts). */
+  paths?: PathLinks;
 };
 
 /** Renders Markdown. Safe to re-render while a reply streams in. */
-export const Markdown = memo(function Markdown({ text, color, size = "body", plain, inline: inlineOnly, highlight, wrapCode }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, color, size = "body", plain, inline: inlineOnly, highlight, wrapCode, paths }: MarkdownProps) {
   const { colors, type: scale } = useTheme();
   const prefHighlight = useChatPrefs((prefs) => prefs.highlight);
   const prefWrap = useChatPrefs((prefs) => prefs.wrapCode);
@@ -513,14 +607,14 @@ export const Markdown = memo(function Markdown({ text, color, size = "body", pla
   const noteKey = parsed ? [...parsed.numbers.keys()].join("\u0000") : "";
   const ctx = useMemo<Ctx>(() => {
     const notes = new Map<string, number>(noteKey ? noteKey.split("\u0000").map((id, index) => [id, index + 1]) : []);
-    return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink };
-  }, [colors, scale, base, doHighlight, wrap, noteKey]);
+    return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink, paths };
+  }, [colors, scale, base, doHighlight, wrap, noteKey, paths]);
 
-  if (inlineOnly) return <InlineOnly text={text} base={base} />;
+  if (inlineOnly) return <InlineOnly text={text} base={base} paths={paths} />;
   if (!parsed)
     return (
       <Text selectable maxFontSizeMultiplier={1.35} style={base}>
-        {text}
+        {withPaths(text, paths, colors.accentText, "plain")}
       </Text>
     );
   return (

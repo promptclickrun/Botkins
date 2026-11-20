@@ -3,6 +3,7 @@
 // scripted reply: thinking, one tool step, then streamed text. A message with "approve" in it asks
 // for an approval first; one with "which" asks a question.
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -666,6 +667,66 @@ function tinyPdf(lines) {
   out += "trailer\n<< /Size " + (objects.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n";
   return Buffer.from(out, "latin1");
 }
+/** One second of a quiet tone as a .wav file: something real for the demo to play. */
+function tinyWav() {
+  const rate = 8000;
+  const samples = Buffer.alloc(rate * 2);
+  for (let i = 0; i < rate; i++) samples.writeInt16LE(Math.round(Math.sin((i / rate) * 2 * Math.PI * 440) * 6000 * Math.min(1, i / 400, (rate - i) / 400)), i * 2);
+  const head = Buffer.alloc(44);
+  head.write("RIFF", 0);
+  head.writeUInt32LE(36 + samples.length, 4);
+  head.write("WAVEfmt ", 8);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(rate, 24);
+  head.writeUInt32LE(rate * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write("data", 36);
+  head.writeUInt32LE(samples.length, 40);
+  return Buffer.concat([head, samples]);
+}
+const ARTIFACT_PAGE = 50;
+const ARTIFACT_CHUNK = 512 * 1024;
+const MEDIA_KINDS = ["image", "video", "audio"];
+
+/**
+ * What the demo's bots "made": pictures from this repo, text, code, a PDF, a sound, a folder with
+ * files in it, and enough reports to need a second page. Every path is made up (under /Users/demo);
+ * what is read comes from memory or from this repo's own files, never from the path.
+ */
+function demoArtifacts(state) {
+  const t = now();
+  const chatOf = (botId) => state.chats.find((chat) => chat.botId === botId && !chat.botIds);
+  const repoFile = (path) => (existsSync(REPO + "/" + path) ? readFileSync(REPO + "/" + path) : Buffer.from("(missing in this copy of the repo)\n"));
+  const items = [];
+  const add = (botId, path, kind, mime, bytes, source, ago, more = {}) => {
+    const chat = more.noChat ? undefined : chatOf(botId);
+    const data = bytes === null ? null : Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, "utf8");
+    const item = { id: "art-" + createHash("sha256").update(botId + path).digest("hex").slice(0, 12), botId, ...(chat && { chatId: chat.id, chatTitle: chat.title, ...(more.messageIndex !== undefined && { messageIndex: more.messageIndex }) }), path, name: posix.basename(path), kind, mime, size: data ? data.length : null, time: t - ago * MIN, source };
+    items.push({ item, data, parent: more.parent });
+    return item;
+  };
+  for (const [botId, head] of [["bot-mira", "beacon"], ["bot-patch", "patch"], ["bot-scout", "scout"]]) {
+    if (!state.bots.some((bot) => bot.id === botId)) continue;
+    const picture = ["original", "honey", "fern"].map((palette) => "assets/botkins/" + head + "-" + palette + ".webp").filter((path) => existsSync(REPO + "/" + path));
+    picture.forEach((path, index) => add(botId, "/Users/demo/Pictures/botkins/" + posix.basename(path), "image", "image/webp", repoFile(path), "media", 12 + index * 30, { messageIndex: 1 }));
+    add(botId, "/Users/demo/Code/website/README.md", "file", "text/markdown", repoFile("README.md"), "tool", 45, { messageIndex: 1 });
+    add(botId, "/Users/demo/Code/website/src/grant.mjs", "file", "text/javascript", repoFile("link-host/grant.mjs"), "tool", 70);
+    add(botId, "/Users/demo/Documents/Plans/launch plan.pdf", "file", "application/pdf", tinyPdf(["Launch plan", "", "1. Pricing page", "2. Changelog", "3. Walkthrough"]), "export", 95, { noChat: true });
+    add(botId, "/Users/demo/Documents/Notes/prices.csv", "file", "text/csv", "plan,price\nTeam,18\nSolo,12\nStudio,20\n", "upload", 130);
+    add(botId, "/Users/demo/Music/standup tone.wav", "audio", "audio/wav", tinyWav(), "media", 150);
+    add(botId, "/Users/demo/Downloads/archive.bin", "file", "application/octet-stream", Buffer.from([0, 1, 2, 3, 254, 255]), "upload", 200);
+    const folder = add(botId, "/Users/demo/Code/website/out", "folder", "inode/directory", null, "tool", 20);
+    add(botId, "/Users/demo/Code/website/out/index.html", "file", "text/html", "<!doctype html><title>Demo</title><h1>Built page</h1>\n", "tool", 20, { parent: folder.id });
+    add(botId, "/Users/demo/Code/website/out/notes.txt", "file", "text/plain", "Built by the demo bot.\n", "tool", 20, { parent: folder.id });
+    add(botId, "/Users/demo/Code/website/out/assets", "folder", "inode/directory", null, "tool", 20, { parent: folder.id });
+    // Enough of them for a second page.
+    for (let n = 1; n <= 55; n++) add(botId, "/Users/demo/Documents/Reports/report-" + String(n).padStart(2, "0") + ".md", "file", "text/markdown", "# Report " + n + "\n\nMade up by the demo computer.\n", "tool", 300 + n * 60);
+  }
+  return items;
+}
 const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
 /** Words in a message that make the demo bot use the person's phone, and the tool it calls. */
 const PHONE_ASKS = [
@@ -677,7 +738,7 @@ const PHONE_ASKS = [
   { when: /email|mail /i, tool: "phone_mail_compose", label: "Opening an email on your phone", args: () => ({ to: ["someone@example.com"], subject: "Hello from Botkins", body: "Written by your bot, for you to send." }) },
 ];
 
-const DELIVER_TO = ["routine", "chat", "feed", "idea", "goal"];
+const DELIVER_TO = ["none", "routine", "chat", "feed", "idea", "goal"];
 /** A routine's destination as it may be saved. */
 function delivery(value) {
   if (!DELIVER_TO.includes(value?.to)) throw new Error("That destination isn't one a routine can use.");
@@ -692,8 +753,17 @@ export class MockBackend {
     this.wiki = new MockWiki(state);
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
-    this.capabilities = ["routine-delivery-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
+    this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "artifacts-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.cache = { bytes: 48_340_992, catalogs: 6 };
+    state.artifacts = { revision: 1 };
+    this.artifacts = demoArtifacts(state);
+    // A server with no window of its own: a phone may set what phones do with its screen (grant.mjs).
+    // BOTKINS_DEV_DISPLAY=off says its display isn't running.
+    if (process.env.BOTKINS_DEV_HEADLESS === "1") {
+      this.headless = true;
+      this.displayStatus = () => (process.env.BOTKINS_DEV_DISPLAY === "off" ? { available: false, kind: "xvfb", note: "The virtual display isn't running. Start it on the server." } : { available: true, kind: "xvfb" });
+    }
     /** How many test notifications the demo computer was asked to show. */
     this.tested = 0;
     // Custom views (html blocks): the pages, kept apart from the state a phone is sent, as the desktop app does.
@@ -823,6 +893,13 @@ export class MockBackend {
         chatNow.pane = { panels: [...before.panels.filter((panel) => panel.pinned), ...panels].slice(-8), active: table.id, ask: { seq, panelId: table.id, runId: run.id, botId: chat.botId, at } };
         reply = "I opened the side pane with a table, a chart, a website and the screen.";
       }
+      this.changed();
+    } else if (live() && /artifact|what did you make|show.*files/i.test(prompt)) {
+      // Paths and a MEDIA: attachment in the reply, for the links a chat makes of them. One path is not in the index.
+      const mine = this.artifacts.filter((entry) => entry.item.botId === chat.botId && !entry.parent).map((entry) => entry.item);
+      const picture = mine.find((item) => item.kind === "image");
+      reply = ["Here is what I made.", "", "- The notes: /Users/demo/Code/website/README.md", "- The plan: \"/Users/demo/Documents/Plans/launch plan.pdf\"", "- The build folder: /Users/demo/Code/website/out/", "- The prices: ~/Documents/Notes/prices.csv", "- Not something I can show: /Users/demo/secret/keys.txt", "", ...(picture ? ["MEDIA:" + picture.path, ""] : []), "```", "/Users/demo/Code/website/src/grant.mjs", "cat /Users/demo/Code/website/README.md", "```"].join("\n");
+      this.state.artifacts.revision++;
       this.changed();
     } else if (live() && /sandbox/i.test(prompt)) {
       const frame = randomUUID();
@@ -1072,7 +1149,7 @@ export class MockBackend {
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
       const scheduled = this.scheduled;
       this.scheduled = null;
-      const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
+      const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
       chat.messages.push({ role: "user", text: prompt, runId: run.id, time: now() });
       if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
@@ -1290,6 +1367,8 @@ export class MockBackend {
       this.scheduled = null;
       // The result also lands where the routine sends it (the real app does this when the run ends).
       const to = entry.deliver?.to ?? "routine";
+      // "No output": the run is kept in the routine's history and nothing is published anywhere.
+      if (to === "none") return;
       const result = entry.name + ": done. Nothing needs you right now.";
       if (to === "chat") {
         const target = this.state.chats.find((c) => c.id === entry.deliver.chatId) ?? this.state.chats.find((c) => c.botId === chat.botId && !c.schedules?.length && !c.botIds);
@@ -1653,6 +1732,41 @@ export class MockBackend {
       else if (action === "closed") pane.closed = { runId: this.state.runs.find((run) => run.chatId === chatId && run.status === "Working")?.id ?? null, at: now() };
       else if (action === "opened") delete pane.closed;
       else throw new Error("That can't be done with the side pane.");
+    },
+    // What the bots made or were given. Only what is in the index can be listed or read.
+    "artifacts.list"(query) {
+      const { botId, chatId, kind, folder, cursor } = query ?? {};
+      let found = this.artifacts.filter((entry) => entry.item.botId === botId);
+      if (folder) {
+        if (!found.some((entry) => entry.item.id === folder && entry.item.kind === "folder")) throw new Error("That folder isn't available.");
+        found = found.filter((entry) => entry.parent === folder);
+      } else found = found.filter((entry) => !entry.parent);
+      if (chatId) found = found.filter((entry) => entry.item.chatId === chatId);
+      if (kind === "media") found = found.filter((entry) => MEDIA_KINDS.includes(entry.item.kind));
+      if (kind === "files") found = found.filter((entry) => !MEDIA_KINDS.includes(entry.item.kind));
+      const sorted = found.map((entry) => entry.item).sort((a, b) => b.time - a.time || a.id.localeCompare(b.id));
+      const from = cursor ? Number(cursor) || 0 : 0;
+      return { items: sorted.slice(from, from + ARTIFACT_PAGE), nextCursor: from + ARTIFACT_PAGE < sorted.length ? String(from + ARTIFACT_PAGE) : null };
+    },
+    "artifacts.read"(id, options) {
+      const entry = this.artifacts.find((each) => each.item.id === id || each.item.path === id);
+      if (!entry) throw new Error("That file isn't available any more.");
+      const data = entry.data ?? Buffer.alloc(0);
+      const offset = Math.min(options?.offset ?? 0, data.length);
+      const end = Math.min(data.length, offset + Math.min(options?.length ?? ARTIFACT_CHUNK, ARTIFACT_CHUNK));
+      return { artifact: entry.item, data: data.subarray(offset, end).toString("base64"), encoding: "base64", offset, nextOffset: end < data.length ? end : null };
+    },
+    // The demo hands a picture back whole (they are small); it makes no poster for anything else.
+    "artifacts.thumbnail"(id) {
+      const entry = this.artifacts.find((each) => each.item.id === id);
+      return entry?.item.kind === "image" && entry.data ? { data: entry.data.toString("base64"), mime: entry.item.mime } : null;
+    },
+    "artifacts.resolve"(query) {
+      const chat = this.chat(query?.chatId);
+      const bots = new Set(chat.botIds ?? [chat.botId]);
+      // "~/" is this computer's home folder, and a folder written with its slash is the same folder.
+      const home = (path) => (path.startsWith("~/") ? "/Users/demo/" + path.slice(2) : path).replace(/(?<=.)\/+$/, "");
+      return { items: (query.paths ?? []).map((path) => this.artifacts.find((entry) => bots.has(entry.item.botId) && entry.item.path === home(path))?.item ?? null) };
     },
     // The usage table as the text of a .csv file ("Export CSV" without a save dialog).
     exportUsageText(days) {

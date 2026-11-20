@@ -5,6 +5,7 @@ import { test } from "node:test";
 import type { Bot, ProjectTodo, WikiTree } from "../src/link/types";
 import { cadenceFromCron, cronFromCadence, cronLabel, everyLabel, scheduleLabel } from "../src/features/work/cron";
 import { ACCESS_REASON, accessVia, moveSteps, orderedTodos } from "../src/features/projects/logic";
+import { canNotify, deliveryToSave, firstPlace, notifyLine, placeOf, placesFor } from "../src/features/work/delivery";
 import { pagesIn, renamedFolder, suggestedLine } from "../src/features/wiki/model";
 
 test("cron reads back into the simple cadences, and anything else stays custom", () => {
@@ -78,4 +79,40 @@ test("a wiki folder renames beside itself, and the suggested projects read as on
   assert.equal(suggestedLine(tree), "One, Two, Three and 2 more");
   assert.equal(suggestedLine({ ...tree, suggested: { projects: [{ id: "a", name: "Website" }] } }), "Website");
   assert.equal(suggestedLine({ ...tree, suggested: undefined as unknown as WikiTree["suggested"] }), "");
+});
+
+// ---- where a routine's result goes (src/features/work/delivery.ts)
+
+test("a routine's destination: No output only where the computer takes it, and never lost by editing", () => {
+  const old = ["routine-delivery-v1"];
+  const now = ["routine-delivery-v1", "routine-no-output-v1"];
+  // The choices, in the computer's order.
+  assert.deepEqual(placesFor(now).map((place) => place.value), ["none", "routine", "chat", "feed", "idea", "goal"]);
+  assert.deepEqual(placesFor(old).map((place) => place.value), ["routine", "chat", "feed", "idea", "goal"]);
+  assert.deepEqual(placesFor(undefined).map((place) => place.value), ["routine", "chat", "feed", "idea", "goal"]);
+  // A routine that already has it keeps it in the list, whatever the computer says now.
+  assert.equal(placesFor(old, "none")[0]!.value, "none");
+  assert.equal(placeOf("none").label, "No output");
+
+  // A new routine starts on No output where it can, as on the computer; an existing one keeps what it has.
+  assert.equal(firstPlace(undefined, true, now), "none");
+  assert.equal(firstPlace(undefined, true, old), "routine");
+  assert.equal(firstPlace(undefined, false, now), "routine", "nothing said on an existing routine means its own chat");
+  assert.equal(firstPlace({ to: "none" }, false, now), "none");
+  assert.equal(firstPlace({ to: "none" }, false, old), "none");
+  assert.equal(firstPlace({ to: "feed" }, false, now), "feed");
+  assert.equal(firstPlace({ to: "somewhere" as never }, false, now), "routine");
+
+  // What is saved: the value as it is, and a chat picked on the computer stays with "chat" only.
+  assert.deepEqual(deliveryToSave("none", { to: "none" }), { to: "none" });
+  assert.deepEqual(deliveryToSave("none", { to: "chat", chatId: "c1" }), { to: "none" });
+  assert.deepEqual(deliveryToSave("chat", { to: "chat", chatId: "c1" }), { to: "chat", chatId: "c1" });
+  assert.deepEqual(deliveryToSave("chat", { to: "feed" }), { to: "chat" });
+
+  // No output never notifies.
+  assert.equal(canNotify("none"), false);
+  assert.equal(canNotify("routine"), true);
+  assert.equal(notifyLine("none", true), "No-output routines never publish or notify");
+  assert.equal(notifyLine("chat", true), "When a run finishes");
+  assert.equal(notifyLine("chat", false), "This routine is quiet");
 });

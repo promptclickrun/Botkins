@@ -118,6 +118,8 @@ export default function RootLayout() {
               <Stack.Screen name="wiki/page" />
               <Stack.Screen name="wiki/edit" options={tall} />
               <Stack.Screen name="wiki/export" options={tall} />
+              <Stack.Screen name="artifacts/index" />
+              <Stack.Screen name="artifacts/view" />
             </Stack.Protected>
             <Stack.Screen name="pair/index" options={{ ...sheet, sheetAllowedDetents: [0.5] }} />
             <Stack.Screen name="pair/scan" options={{ presentation: "fullScreenModal", headerShown: false, animation: "slide_from_bottom" }} />

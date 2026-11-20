@@ -37,6 +37,12 @@ export async function shareFile(file: SharedFile): Promise<boolean> {
   return result.action !== Share.dismissedAction;
 }
 
+/** Hands a file already on the phone (a `file://` uri) to the share sheet. Resolves true when the person did something with it. */
+export async function shareLocalFile(uri: string): Promise<boolean> {
+  const result = await Share.share({ url: uri });
+  return result.action !== Share.dismissedAction;
+}
+
 /** Asks the computer for a file and shares it. A failure is shown as a toast; `done` is said when the person saved or sent it. */
 export async function shareFrom(work: Promise<SharedFile>, done?: string): Promise<void> {
   try {

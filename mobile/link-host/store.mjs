@@ -8,6 +8,12 @@ import { b64u, newKeyPair, random, unb64u } from "./crypto.mjs";
 import { DEFAULT_RELAY_URL, newRelayKey, validRelayKey } from "./relay.mjs";
 
 export const DEFAULT_PORT = 47610;
+/** Who set the screen's level from a phone, as it is saved: { deviceId, name, at }, or null when it is not that. */
+export function setBy(value) {
+  if (value === null || typeof value !== "object" || typeof value.deviceId !== "string" || !value.deviceId || !Number.isFinite(value.at)) return null;
+  return { deviceId: value.deviceId.slice(0, 40), name: String(value.name ?? "Phone").slice(0, 60), at: value.at };
+}
+
 /** What phones may do with this computer's screen: nothing, watch it, or watch and use it. */
 export const SCREEN_MODES = ["off", "view", "control"];
 const MAX_DEVICES = 20;
@@ -85,6 +91,8 @@ export class LinkStore {
           devices: Array.isArray(saved.devices) ? saved.devices.filter((d) => d?.id && d.publicKey).map((d) => ({ ...d, kind: deviceKind(d.kind, d.platform) })) : [],
           looks: saved.looks && typeof saved.looks === "object" ? saved.looks : {},
           screen: SCREEN_MODES.includes(saved.screen) ? saved.screen : "off",
+          // The phone that last set the level from afar (a headless host), or nothing when it was set here.
+          screenSetBy: setBy(saved.screenSetBy),
           relay: this.loadRelay(saved),
           // What each phone set up, by device id: where its notifications go, and what bots may use on it.
           push: saved.push && typeof saved.push === "object" ? saved.push : {},
@@ -124,7 +132,7 @@ export class LinkStore {
   save() {
     // A store that couldn't open its key never overwrites the file it failed to read.
     if (this.data.locked) return;
-    const { keys, serverId, port, enabled, name, devices, looks, screen, relay, push, sources } = this.data;
+    const { keys, serverId, port, enabled, name, devices, looks, screen, screenSetBy, relay, push, sources } = this.data;
     const secret = b64u(keys.privateKey);
     const body = {
       version: 1,
@@ -138,6 +146,7 @@ export class LinkStore {
       devices,
       looks,
       screen,
+      ...(screenSetBy && { screenSetBy }),
       push,
       sources,
       // The relay's private key is wrapped like the link's own.
@@ -154,7 +163,11 @@ export class LinkStore {
   device(id) {
     return this.data.devices.find((d) => d.id === id) ?? null;
   }
-  addDevice({ name, platform, kind, publicKey }) {
+  /**
+   * `presenceKey` is the phone's second public key (P-256, SPKI as base64url), kept only when the
+   * phone paired straight with this computer: what it signs with to turn the screen on (grant.mjs).
+   */
+  addDevice({ name, platform, kind, publicKey, presenceKey }) {
     if (this.data.devices.length >= MAX_DEVICES) throw new Error("Too many paired devices. Remove one first.");
     const is = deviceKind(kind, platform);
     const device = {
@@ -163,6 +176,7 @@ export class LinkStore {
       platform: String(platform || "").slice(0, 20),
       kind: is,
       publicKey: b64u(publicKey),
+      ...(presenceKey && { presenceKey }),
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
     };

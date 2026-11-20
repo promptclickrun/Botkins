@@ -10,7 +10,7 @@ export { haptic } from "./haptics";
 export { HoldMenu } from "./HoldMenu";
 export { HtmlFrame } from "./HtmlFrame";
 export { Group, type GroupProps, IconTile, Label, Row, switchColors } from "./List";
-export { Markdown } from "./Markdown";
+export { Markdown, type PathLinks } from "./Markdown";
 export { Mascot, MascotPair } from "./Mascot";
 export { ProviderIcon } from "./ProviderIcon";
 export { LinkBanner, Loading, Page, Sheet, TAB_BAR_ROOM } from "./Screen";
@@ -22,3 +22,4 @@ export { badgeColors, BODY_FONT, brand, type ControlMetrics, type ControlSize, C
 export { DEFAULT_FONT, type FontId, fontsFor } from "./fonts";
 export { type Colors, THEMES, type ThemeDef, themeById } from "./themes";
 export { ToastHost } from "./Toast";
+export { useOnShow } from "./useOnShow";

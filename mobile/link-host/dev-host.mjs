@@ -67,8 +67,9 @@ backend.phone = { call: (name, args, options) => host.callDeviceTool(name, args,
 host.setName(process.env.BOTKINS_DEV_NAME ?? "Demo Mac");
 // The real app starts with the screen off. The demo host starts with it fully on, so the phone's screen
 // pages can be tried; with no capture adapter, macOS uses its own screencapture tool.
-const screen = process.env.BOTKINS_DEV_SCREEN ?? "control";
-host.setScreenMode(["off", "view", "control"].includes(screen) ? screen : "control");
+// A headless demo keeps the level a phone set (it is saved); any other starts at BOTKINS_DEV_SCREEN.
+const screen = process.env.BOTKINS_DEV_SCREEN ?? (process.env.BOTKINS_DEV_HEADLESS === "1" ? undefined : "control");
+if (screen !== undefined) host.setScreenMode(["off", "view", "control"].includes(screen) ? screen : "control");
 // Two made-up credentials, so the phone's credentials page has something to show.
 if (!host.credentials.locked && !host.credentials.list().length) {
   await host.credentials.save({ name: "Demo API key", kind: "api-key", value: "demo-key-not-a-real-secret" });

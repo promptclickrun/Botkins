@@ -1,0 +1,380 @@
+{
+  "about": "Which file and folder paths in a chat message become links. Both Botkins apps test their detector against these cases. A detected path is only a candidate: it becomes a link after the computer says it can show it (artifacts.resolve).",
+  "how": "For each case, the detector is run on `text`. It must find exactly the entries of `links`, in order: `text` is the exact part of the message that becomes the link, `path` is what the computer is asked about, and `media: true` marks a MEDIA: attachment.",
+  "rules": [
+    "A path is linked when it is absolute: POSIX with at least two parts (/Users/sam), in the home folder (~/notes.md), or Windows with a drive (C:\\Users\\sam, D:/work).",
+    "A bare path starts at the start of the text, after white space, or after an opening bracket or quote, and runs to the next white space.",
+    "Punctuation after a bare path belongs to the sentence: . , ; : ! ? ) ] } > and closing quotes are left out of the link. A slash at the end stays (a folder).",
+    "A path with spaces is linked only when it is written in quotes or backticks, or is a whole line of a code block. The quotes or backticks are not part of the link.",
+    "MEDIA: before a path (bare, or in quotes or backticks, with at most one space between) is an attachment: the link covers MEDIA: and the path.",
+    "Inline code is a link only when the code is one whole path. Any other inline code is left alone, with whatever is in it.",
+    "In a code block (between ``` or ~~~ lines) a line is a link only when the whole line is one path.",
+    "Never linked: web and file URLs, network paths (//host/share, \\\\host\\share), relative paths, a slash inside a word (and/or, 1/2, km/h), a path with a . or .. part, a single-part POSIX path (/model, /tmp), and the target of a Markdown link."
+  ],
+  "cases": [
+    {
+      "name": "a POSIX path in a sentence",
+      "text": "I wrote the report to /Users/sam/work/report.md for you.",
+      "links": [
+        {
+          "text": "/Users/sam/work/report.md",
+          "path": "/Users/sam/work/report.md"
+        }
+      ]
+    },
+    {
+      "name": "a path at the very start",
+      "text": "/Users/sam/work/report.md is ready",
+      "links": [
+        {
+          "text": "/Users/sam/work/report.md",
+          "path": "/Users/sam/work/report.md"
+        }
+      ]
+    },
+    {
+      "name": "a path at the very end, with the sentence's full stop",
+      "text": "Saved to /Users/sam/work/report.md.",
+      "links": [
+        {
+          "text": "/Users/sam/work/report.md",
+          "path": "/Users/sam/work/report.md"
+        }
+      ]
+    },
+    {
+      "name": "a comma and a closing bracket are not part of the path",
+      "text": "Two files (/Users/sam/a.txt, /Users/sam/b.txt) changed.",
+      "links": [
+        {
+          "text": "/Users/sam/a.txt",
+          "path": "/Users/sam/a.txt"
+        },
+        {
+          "text": "/Users/sam/b.txt",
+          "path": "/Users/sam/b.txt"
+        }
+      ]
+    },
+    {
+      "name": "a folder keeps its slash",
+      "text": "Everything is in /Users/sam/work/out/ now.",
+      "links": [
+        {
+          "text": "/Users/sam/work/out/",
+          "path": "/Users/sam/work/out/"
+        }
+      ]
+    },
+    {
+      "name": "a colon after a path",
+      "text": "See /Users/sam/log.txt: it has the error.",
+      "links": [
+        {
+          "text": "/Users/sam/log.txt",
+          "path": "/Users/sam/log.txt"
+        }
+      ]
+    },
+    {
+      "name": "a home path",
+      "text": "Put it in ~/Documents/plan.md please",
+      "links": [
+        {
+          "text": "~/Documents/plan.md",
+          "path": "~/Documents/plan.md"
+        }
+      ]
+    },
+    {
+      "name": "a home path with one part",
+      "text": "It is at ~/notes.md",
+      "links": [
+        {
+          "text": "~/notes.md",
+          "path": "~/notes.md"
+        }
+      ]
+    },
+    {
+      "name": "a Windows path with backslashes",
+      "text": "Open C:\\Users\\sam\\report.docx when you can.",
+      "links": [
+        {
+          "text": "C:\\Users\\sam\\report.docx",
+          "path": "C:\\Users\\sam\\report.docx"
+        }
+      ]
+    },
+    {
+      "name": "a Windows path with forward slashes",
+      "text": "The build is in D:/work/out/app.exe",
+      "links": [
+        {
+          "text": "D:/work/out/app.exe",
+          "path": "D:/work/out/app.exe"
+        }
+      ]
+    },
+    {
+      "name": "a quoted path with spaces",
+      "text": "I saved \"/Users/sam/My Files/final draft.pdf\" there.",
+      "links": [
+        {
+          "text": "/Users/sam/My Files/final draft.pdf",
+          "path": "/Users/sam/My Files/final draft.pdf"
+        }
+      ]
+    },
+    {
+      "name": "a single-quoted path with spaces",
+      "text": "Look at '/Users/sam/My Files/a b.txt'.",
+      "links": [
+        {
+          "text": "/Users/sam/My Files/a b.txt",
+          "path": "/Users/sam/My Files/a b.txt"
+        }
+      ]
+    },
+    {
+      "name": "inline code that is one path",
+      "text": "The file is `/Users/sam/src/app.ts`.",
+      "links": [
+        {
+          "text": "/Users/sam/src/app.ts",
+          "path": "/Users/sam/src/app.ts"
+        }
+      ]
+    },
+    {
+      "name": "inline code that is one path with spaces",
+      "text": "See `/Users/sam/My Files/a.txt` for it.",
+      "links": [
+        {
+          "text": "/Users/sam/My Files/a.txt",
+          "path": "/Users/sam/My Files/a.txt"
+        }
+      ]
+    },
+    {
+      "name": "a MEDIA attachment, bare",
+      "text": "Here it is: MEDIA:/Users/sam/out/chart.png",
+      "links": [
+        {
+          "text": "MEDIA:/Users/sam/out/chart.png",
+          "path": "/Users/sam/out/chart.png",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a MEDIA attachment with a space after the colon",
+      "text": "MEDIA: /Users/sam/out/clip.mp4",
+      "links": [
+        {
+          "text": "MEDIA: /Users/sam/out/clip.mp4",
+          "path": "/Users/sam/out/clip.mp4",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a MEDIA attachment in quotes, with spaces",
+      "text": "MEDIA:\"/Users/sam/My Pictures/sun set.jpg\" as asked",
+      "links": [
+        {
+          "text": "MEDIA:\"/Users/sam/My Pictures/sun set.jpg\"",
+          "path": "/Users/sam/My Pictures/sun set.jpg",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a MEDIA attachment at the end of a sentence",
+      "text": "I made MEDIA:/Users/sam/out/voice.m4a.",
+      "links": [
+        {
+          "text": "MEDIA:/Users/sam/out/voice.m4a",
+          "path": "/Users/sam/out/voice.m4a",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a MEDIA attachment and a path in one message",
+      "text": "MEDIA:/Users/sam/out/a.png and the source is /Users/sam/src/a.py",
+      "links": [
+        {
+          "text": "MEDIA:/Users/sam/out/a.png",
+          "path": "/Users/sam/out/a.png",
+          "media": true
+        },
+        {
+          "text": "/Users/sam/src/a.py",
+          "path": "/Users/sam/src/a.py"
+        }
+      ]
+    },
+    {
+      "name": "a whole-line path in a code block",
+      "text": "Files:\n```\n/Users/sam/out/a.csv\n/Users/sam/out/b.csv\n```",
+      "links": [
+        {
+          "text": "/Users/sam/out/a.csv",
+          "path": "/Users/sam/out/a.csv"
+        },
+        {
+          "text": "/Users/sam/out/b.csv",
+          "path": "/Users/sam/out/b.csv"
+        }
+      ]
+    },
+    {
+      "name": "a whole-line path with spaces in a code block",
+      "text": "```\n  /Users/sam/My Files/a b.txt\n```",
+      "links": [
+        {
+          "text": "/Users/sam/My Files/a b.txt",
+          "path": "/Users/sam/My Files/a b.txt"
+        }
+      ]
+    },
+    {
+      "name": "in a code block, a path inside a command is not linked",
+      "text": "```sh\ncat /Users/sam/out/a.csv | head\ncd /Users/sam/work\n```",
+      "links": []
+    },
+    {
+      "name": "after a code block ends, ordinary rules are back",
+      "text": "```\nls\n```\nThen open /Users/sam/out/a.csv",
+      "links": [
+        {
+          "text": "/Users/sam/out/a.csv",
+          "path": "/Users/sam/out/a.csv"
+        }
+      ]
+    },
+    {
+      "name": "inline code that is a command is left alone",
+      "text": "Run `cat /Users/sam/out/a.csv` to see it.",
+      "links": []
+    },
+    {
+      "name": "a web URL is never a path",
+      "text": "Read https://example.com/Users/sam/a.txt and http://localhost:3000/api/items",
+      "links": []
+    },
+    {
+      "name": "a file URL is never a path",
+      "text": "It opened file:///Users/sam/a.txt in the browser.",
+      "links": []
+    },
+    {
+      "name": "a network path is never linked",
+      "text": "It is on //fileserver/share/a.txt or \\\\fileserver\\share\\a.txt",
+      "links": []
+    },
+    {
+      "name": "a relative path is never linked",
+      "text": "Edit src/app/main.ts and ./scripts/build.sh and ../other/x.md",
+      "links": []
+    },
+    {
+      "name": "a slash inside a word is not a path",
+      "text": "Use it and/or skip it; 1/2 cup at 60 km/h on 11/19/2026.",
+      "links": []
+    },
+    {
+      "name": "a ratio that starts a word",
+      "text": "The split was 3/4 and a/b testing won.",
+      "links": []
+    },
+    {
+      "name": "a single-part POSIX path is not linked",
+      "text": "Type /model or /compact, or look in /tmp.",
+      "links": []
+    },
+    {
+      "name": "a lone slash or tilde",
+      "text": "Use / or ~ or ~/ as you like.",
+      "links": []
+    },
+    {
+      "name": "a path with a .. part is not linked",
+      "text": "Not /Users/sam/../other/a.txt or /Users/sam/./a.txt",
+      "links": []
+    },
+    {
+      "name": "a Markdown link's target is the writer's own link",
+      "text": "See [the report](/Users/sam/work/report.md) and /Users/sam/work/data.csv",
+      "links": [
+        {
+          "text": "/Users/sam/work/data.csv",
+          "path": "/Users/sam/work/data.csv"
+        }
+      ]
+    },
+    {
+      "name": "a path right after an opening bracket",
+      "text": "[/Users/sam/a.txt] and </Users/sam/b.txt>",
+      "links": [
+        {
+          "text": "/Users/sam/a.txt",
+          "path": "/Users/sam/a.txt"
+        },
+        {
+          "text": "/Users/sam/b.txt",
+          "path": "/Users/sam/b.txt"
+        }
+      ]
+    },
+    {
+      "name": "a path with brackets in it is cut at the white space",
+      "text": "Saved /Users/sam/a (1).txt",
+      "links": [
+        {
+          "text": "/Users/sam/a",
+          "path": "/Users/sam/a"
+        }
+      ]
+    },
+    {
+      "name": "text that only looks like a drive",
+      "text": "The ratio is A:B and the time is 10:30/11:00.",
+      "links": []
+    },
+    {
+      "name": "an apostrophe is not an opening quote for what follows",
+      "text": "It's in /Users/sam/a.txt and that's all.",
+      "links": [
+        {
+          "text": "/Users/sam/a.txt",
+          "path": "/Users/sam/a.txt"
+        }
+      ]
+    },
+    {
+      "name": "several lines",
+      "text": "First /Users/sam/a.txt\nthen ~/b.txt\nand C:\\temp\\c.txt.",
+      "links": [
+        {
+          "text": "/Users/sam/a.txt",
+          "path": "/Users/sam/a.txt"
+        },
+        {
+          "text": "~/b.txt",
+          "path": "~/b.txt"
+        },
+        {
+          "text": "C:\\temp\\c.txt",
+          "path": "C:\\temp\\c.txt"
+        }
+      ]
+    },
+    {
+      "name": "no path at all",
+      "text": "Nothing to open here.",
+      "links": []
+    }
+  ]
+}

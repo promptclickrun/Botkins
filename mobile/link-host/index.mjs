@@ -4,4 +4,5 @@ export { REMOTE_METHODS } from "./methods.mjs";
 export { qrModules, qrPath, qrSvg, qrText } from "./qr.mjs";
 export { reachable } from "./net.mjs";
 export { DEFAULT_PORT } from "./store.mjs";
+export { GRANT_CAPABILITY, GRANT_LEVELS, grantMessage } from "./grant.mjs";
 export { DEFAULT_RELAY_URL, RelayLink } from "./relay.mjs";
