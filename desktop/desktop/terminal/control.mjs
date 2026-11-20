@@ -171,7 +171,7 @@ export function controlApi(service) {
         },
         secrets: keys ? { source: keys.source, where: keys.where } : { source: "file", where: "key files in the data folder (a trial run)" },
         vault: { locked: workspace.vault.locked === true, entries: workspace.vault.list().length },
-        update: runtime.updates?.state ?? { status: "unavailable" },
+        update: runtime.updates?.status() ?? { status: "unavailable" },
       };
     },
     "logs.read": ([options = {}], { signal }) => {
@@ -389,14 +389,16 @@ export function controlApi(service) {
     },
 
     // ── Updates ──────────────────────────────────────────────────────────────────────────────
-    "update.status": () => runtime.updates?.state ?? { status: "unavailable", message: "This copy of Botkins doesn't update itself." },
+    "update.status": () => runtime.updates?.status() ?? { status: "unavailable", message: "This copy of Botkins doesn't update itself." },
     "update.check": async () => {
       if (!runtime.updates) throw new ControlError("This copy of Botkins doesn't update itself. Install the new release the way this one was installed.", "UNSUPPORTED");
-      return runtime.updates.check();
+      await runtime.updates.check();
+      return runtime.updates.status();
     },
     "update.install": async () => {
       if (!runtime.updates) throw new ControlError("This copy of Botkins doesn't update itself. Install the new release the way this one was installed.", "UNSUPPORTED");
-      return runtime.updates.install();
+      await runtime.updates.install();
+      return runtime.updates.status();
     },
 
     // ── Everything else the workspace can do ─────────────────────────────────────────────────

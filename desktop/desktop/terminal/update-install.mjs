@@ -17,7 +17,7 @@
 // restarts the service and watches it for a while. If the new one doesn't stay up, `current` goes
 // back to the old version and that one is started again. The old version stays on disk.
 import { execFile, execFileSync } from "node:child_process";
-import { createWriteStream, existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { chownSync, createWriteStream, existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -30,6 +30,38 @@ const RELEASES = "https://github.com/promptclickrun/Botkins/releases/download/";
 const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const FOLDER = /^botkins-terminal-(\d+\.\d+\.\d+)-(linux|macos)-(x64|arm64)$/;
 const run = promisify(execFile);
+
+/**
+ * How the last install ended, kept in the data folder: <root>/last-update.json. The install runs
+ * in a process of its own (a root job, for the whole computer's service) and restarts the
+ * service, so this file is the only way the service, and a phone that asked for the update,
+ * learns afterwards that it worked, failed, or was put back.
+ */
+export const lastUpdateFile = (root) => join(root, "last-update.json");
+/** { at, from, to, ok, message? }, or null when there is none or it can't be read. */
+export function readLastUpdate(root) {
+  try {
+    const record = JSON.parse(readFileSync(lastUpdateFile(root), "utf8"));
+    if (typeof record?.at !== "string" || typeof record.from !== "string" || typeof record.to !== "string" || typeof record.ok !== "boolean") return null;
+    return { at: record.at, from: record.from, to: record.to, ok: record.ok, ...(typeof record.message === "string" && record.message && { message: record.message.slice(0, 500) }) };
+  } catch {
+    return null;
+  }
+}
+/** Writes the record as the data folder's own user, whoever runs the install (root, for the whole computer's service). */
+export function writeLastUpdate(root, record, { own = chownSync } = {}) {
+  const file = lastUpdateFile(root);
+  try {
+    const folder = statSync(root);
+    writeFileSync(file + ".tmp", JSON.stringify(record) + "\n", { mode: 0o600 });
+    if (process.getuid?.() === 0 && folder.uid !== 0) own(file + ".tmp", folder.uid, folder.gid);
+    renameSync(file + ".tmp", file);
+    return true;
+  } catch {
+    // No data folder to write to (an install that isn't a service's): nothing reads it either.
+    return false;
+  }
+}
 
 /** "linux" or "macos", as a release names the system. */
 export const systemName = (platform = process.platform) => (platform === "darwin" ? "macos" : "linux");
@@ -157,13 +189,28 @@ export async function switchTo({ archive, installRoot, version, platform = proce
  * @param options.entry    This copy's own cli/botkins.mjs.
  * @param options.manager  The installed service (desktop/terminal/manager.mjs), or nothing.
  * @param options.say      (line) → what is happening.
+ * @param options.report   ({ at, from, to, ok, message? }) → how an install ended, a failed or
+ *   undone one included. Not called when there was nothing newer to install.
  * @returns { status: "current" | "installed", current, latest?, previous? }
  */
-export async function applyUpdate({ entry, manager, say = () => {}, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), fetcher = fetch, verifier, healthMs }) {
-  const layout = installLayout(entry);
+export async function applyUpdate({ report = () => {}, now = () => new Date(), ...options }) {
+  const layout = installLayout(options.entry);
+  let to;
+  try {
+    const result = await install({ ...options, layout, found: (version) => (to = version) });
+    if (result.status === "installed") report({ at: now().toISOString(), from: result.previous, to: result.current, ok: true });
+    return result;
+  } catch (error) {
+    // A copy that doesn't update itself has no install to report. Anything else is an install that didn't end well.
+    if (layout) report({ at: now().toISOString(), from: layout.version, to: to ?? layout.version, ok: false, message: error.message });
+    throw error;
+  }
+}
+async function install({ entry, layout, found, manager, say = () => {}, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), fetcher = fetch, verifier, healthMs }) {
   if (!layout) throw Object.assign(new Error("This copy of Botkins wasn't installed from a release, so it doesn't update itself. Update it the way it was installed (a checkout: `git pull`; Docker: pull the new image)."), { code: "UNMANAGED" });
   const { version, assets } = await latest();
   if (!semver.gt(version, layout.version)) return { status: "current", current: layout.version };
+  found(version);
   const name = assetName(version, platform, arch);
   for (const file of [name, "SHA256SUMS", "SHA256SUMS.asc"]) if (!assets.includes(file)) throw Object.assign(new Error("Botkins " + version + " has no signed terminal host build for this system yet (" + file + " is not in the release)."), { code: "NO_BUILD" });
   const dir = mkdtempSync(join(tmpdir(), "botkins-update-"));

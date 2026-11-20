@@ -13,7 +13,8 @@ import { ownCommand } from "../cli/commands/install.mjs";
 import { keyFrom } from "../desktop/host/keystore.mjs";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
 import { launchdJob, systemUnit, updateUnits, userUnit } from "../desktop/terminal/units.mjs";
-import { applyUpdate, assetName, folderName, installLayout, switchTo } from "../desktop/terminal/update-install.mjs";
+import { applyUpdate, assetName, folderName, installLayout, lastUpdateFile, readLastUpdate, switchTo, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
+import { defaults } from "../desktop/terminal/config.mjs";
 import { terminalUpdates } from "../desktop/terminal/updates.mjs";
 import { AppUpdates } from "../desktop/updates.mjs";
 
@@ -379,7 +380,8 @@ test("the running service can only ask for an update: a request file for the roo
   const runDir = join(dir, "run");
   mkdirSync(runDir);
   const lines = [];
-  const service = { version: "1.2.3", paths: { runDir, root: dir }, log: { info: (line) => lines.push(line) } };
+  let config = defaults();
+  const service = { version: "1.2.3", paths: { runDir, root: dir }, log: { info: (line) => lines.push(line), error: (line) => lines.push(line) }, config: () => config, setConfig: async (next) => void (config = next) };
   const latest = async () => ({ version: "1.3.0", assets: ["botkins-terminal-1.3.0-linux-arm64.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"] });
   const launched = [];
   const launch = (file, args) => (launched.push([file, ...args]), { unref() {} });
@@ -387,7 +389,7 @@ test("the running service can only ask for an update: a request file for the roo
   assert.ok(system instanceof AppUpdates);
   const state = await system.check();
   assert.deepEqual([state.status, state.latest, state.canInstall], ["available", "1.3.0", true]);
-  assert.match(lines[0], /Botkins 1\.3\.0 is available \(this is 1\.2\.3\)\. Install it with `botkins update`\./);
+  assert.match(lines[0], /Botkins 1\.3\.0 is available \(this is 1\.2\.3\)\. Install it with `botkins update`, or from a paired phone\./);
   await system.install();
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(lstatSync(join(runDir, "update-requested")).size, 0, "the request says nothing but that it is there");
@@ -400,10 +402,116 @@ test("the running service can only ask for an update: a request file for the roo
   // Not installed as a service, or not from a release: it says so and installs nothing.
   const loose = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => null }, launch });
   assert.deepEqual([(await loose.check()).canInstall, /botkins service install/.test((await loose.check()).message)], [false, true]);
-  await assert.rejects(loose.install(), /Run `botkins update` at a terminal/);
+  await assert.rejects(loose.install(), /can't install this release by itself/);
   const checkout = terminalUpdates(service, { entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)), platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch });
   assert.equal((await checkout.check()).canInstall, false);
   await assert.rejects(checkout.install(), /wasn't installed from a release/);
+});
+
+test("how an install ended is kept for the service to read: installed, failed, or put back", { skip }, async (t) => {
+  const dir = tempDir(t);
+  const { installRoot, entry } = installed(dir, "1.2.3");
+  const root = join(dir, "data-root");
+  mkdirSync(root);
+  assert.equal(readLastUpdate(root), null);
+  const next = release(dir, "1.3.0");
+  const assets = [next.name + ".tar.gz", "SHA256SUMS", "SHA256SUMS.asc"];
+  const reports = [];
+  const at = new Date("2026-01-02T03:04:05Z");
+  const options = { entry, platform: "linux", arch: "arm64", latest: async () => ({ version: "1.3.0", assets }), fetcher: async (url) => new Response(url.endsWith(".tar.gz") ? readFileSync(next.archive) : "x"), verifier: async () => {}, healthMs: 20, now: () => at, report: (record) => (reports.push(record), writeLastUpdate(root, record)) };
+  // The key the installed copy came with has to be a real one for the check to start.
+  writeFileSync(join(installRoot, folderName("1.2.3", "linux", "arm64"), "desktop/linux-service/botkins-release.asc"), readFileSync(new URL("../desktop/linux-service/botkins-release.asc", import.meta.url)));
+  let gpg = true;
+  try {
+    execFileSync("gpg", ["--version"], { stdio: "ignore" });
+  } catch {
+    gpg = false;
+  }
+  if (!gpg) {
+    // Nothing can be checked, so nothing is installed, and that is what is recorded.
+    await assert.rejects(applyUpdate(options), /GnuPG is needed/);
+    assert.deepEqual([reports[0].ok, reports[0].from, reports[0].to], [false, "1.2.3", "1.3.0"]);
+    return t.diagnostic("GnuPG is not installed here: the rest needs it to read the release key.");
+  }
+  // A new version that doesn't stay up: the old one is put back, and the record says so in words for a person.
+  const dying = { restart: async () => {}, status: async () => ({ active: false }) };
+  await assert.rejects(applyUpdate({ ...options, manager: dying }), /was put back/);
+  assert.deepEqual(reports.at(-1), { at: "2026-01-02T03:04:05.000Z", from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." });
+  assert.deepEqual(readLastUpdate(root), reports.at(-1));
+  assert.equal(statSync(lastUpdateFile(root)).mode & 0o777, 0o600);
+  // A release that can't be reached at all is an install that didn't end well, too.
+  await assert.rejects(applyUpdate({ ...options, latest: async () => { throw new Error("GitHub could not check for updates (HTTP 503)."); } }), /HTTP 503/);
+  assert.deepEqual([reports.at(-1).ok, reports.at(-1).from, reports.at(-1).to, reports.at(-1).message], [false, "1.2.3", "1.2.3", "GitHub could not check for updates (HTTP 503)."]);
+  // One that works.
+  await applyUpdate({ ...options, manager: { restart: async () => {}, status: async () => ({ active: true, pid: 5 }) } });
+  assert.deepEqual(readLastUpdate(root), { at: "2026-01-02T03:04:05.000Z", from: "1.2.3", to: "1.3.0", ok: true });
+  // Nothing newer, and a copy that doesn't update itself: there was no install, so nothing is recorded.
+  const before = reports.length;
+  assert.equal((await applyUpdate({ ...options, entry: join(installRoot, "current", "cli", "botkins.mjs") })).status, "current");
+  await assert.rejects(applyUpdate({ ...options, entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)) }), { code: "UNMANAGED" });
+  assert.equal(reports.length, before);
+  // A record that isn't one is no record; a folder that isn't there takes none.
+  writeFileSync(lastUpdateFile(root), '{"at":5}');
+  assert.equal(readLastUpdate(root), null);
+  assert.equal(writeLastUpdate(join(dir, "nowhere"), reports[0]), false);
+});
+
+test("a host that can install tells how it stands, installs by itself only when asked to, and never during a turn", { skip }, async (t) => {
+  const dir = tempDir(t);
+  const { entry } = installed(dir, "1.2.3");
+  const runDir = join(dir, "run");
+  mkdirSync(runDir);
+  const lines = [];
+  let config = defaults();
+  let active = 1;
+  let changes = 0;
+  const service = { version: "1.2.3", paths: { runDir, root: dir }, log: { info: (line) => lines.push(line), error: (line) => lines.push(line) }, config: () => config, setConfig: async (next) => void (config = next), runtime: { workspace: { active: { get size() { return active; } } } }, changed: () => changes++ };
+  let found = "1.2.3";
+  const latest = async () => ({ version: found, assets: ["botkins-terminal-" + found + "-linux-arm64.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"] });
+  const updates = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch: assert.fail, env: {}, pollMs: 10, heardMs: 200, autoPollMs: 10 });
+  t.after(() => updates.stopAuto());
+  const requested = () => existsSync(join(runDir, "update-requested"));
+  // What a phone is shown: the state, and the choice, off until someone switches it on.
+  assert.deepEqual(updates.status(), { status: "idle", current: "1.2.3", canInstall: false, auto: false });
+  assert.equal((await updates.check()).status, "current");
+  found = "1.3.0";
+  await updates.check();
+  assert.deepEqual(updates.status(), { status: "available", current: "1.2.3", latest: "1.3.0", canInstall: true, installer: "linux-tarball", auto: false });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(requested(), false, "nothing is installed without being asked while the choice is off");
+  // Switched on: saved as the setting, and the release waits for the turn under way to end.
+  assert.equal(updates.setAuto(true).auto, true);
+  assert.equal(config.updates.auto, true);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(requested(), false, "a turn is never cut short for an update nobody asked for just now");
+  active = 0;
+  for (let tries = 0; tries < 100 && !requested(); tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(requested(), true);
+  assert.equal(updates.status().status, "restarting");
+  assert.ok(lines.some((line) => /Installing Botkins 1\.3\.0 by itself/.test(line)));
+  // The install job failed before it could restart the service: the service hears of it and says so in the job's own words.
+  writeLastUpdate(dir, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." });
+  for (let tries = 0; tries < 100 && updates.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  const status = updates.status();
+  assert.deepEqual([status.status, status.message, status.last.ok, status.last.to], ["error", "The new version didn't stay running. Botkins 1.2.3 was put back.", false, "1.3.0"]);
+  assert.ok(changes > 0, "a dashboard that waits is told");
+  assert.equal(updates.setAuto(false).auto, false);
+  assert.equal(config.updates.auto, false);
+  assert.throws(() => updates.setAuto("yes"), /Say on or off/);
+  // An install that never starts is said too, after a while.
+  const quiet = terminalUpdates({ ...service, paths: { runDir, root: join(dir, "other") } }, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, heardMs: 50 });
+  await quiet.install();
+  for (let tries = 0; tries < 100 && quiet.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(quiet.status().message, /The update did not start/);
+  // The bots' tools speak of a host, not of a desktop app.
+  assert.match(updates.words.check, /Botkins on this host/);
+  assert.doesNotMatch(updates.words.check + updates.words.install, /desktop|the app/);
+  // A copy that can't install by itself has no such choice, and says what it is.
+  const checkout = terminalUpdates(service, { entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)), latest, manager: { installed: () => null }, env: {} });
+  assert.equal("auto" in checkout.status(), false);
+  assert.throws(() => checkout.setAuto(true), /doesn't install updates by itself/);
+  const container = terminalUpdates(service, { entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)), latest, manager: { installed: () => null }, env: { BOTKINS_IMAGE: "ghcr.io/promptclickrun/botkins" } });
+  await assert.rejects(container.install(), /runs from a Docker image.*pull the new image \(ghcr\.io\/promptclickrun\/botkins\)/);
 });
 
 test("the installer and the launcher are plain sh, and the installer checks before it installs", { skip }, () => {

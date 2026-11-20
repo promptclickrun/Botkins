@@ -138,6 +138,34 @@ test("the workspace's calls reach a dialog, the clipboard and the window only th
   assert.equal(handlers.snapshot().phones.revision, runtime.phoneRevision());
 });
 
+test("a computer that looks for updates says so to its phones, tells them of a new one once, and answers their calls", async (t) => {
+  let found = "9.9.9";
+  const { AppUpdates } = await import("../desktop/updates.mjs");
+  const updates = new AppUpdates({ current: "9.9.9", mac: true, arch: "arm64", latest: async () => ({ version: found, assets: ["Botkins-" + found + "-arm64-mac.zip", "latest-mac.yml"] }), stage: async () => {}, restart: () => {} });
+  const host = { ...fakeHost(), updates: () => updates };
+  const runtime = await runtimeOn(t, host);
+  const { handlers, link, linkBackend } = runtime;
+  assert.ok(linkBackend.capabilities.includes("app-update-v1"));
+  // The link's own way of telling the owner's phones (desktop/link/push.mjs), stood in for here.
+  const told = [];
+  link.push.updateAvailable = (version) => told.push(version);
+  assert.deepEqual(await handlers.checkAppUpdate(), { status: "current", current: "9.9.9", latest: "9.9.9", canInstall: false });
+  assert.deepEqual(told, []);
+  found = "9.10.0";
+  assert.deepEqual(await handlers.checkAppUpdate(), { status: "available", current: "9.9.9", latest: "9.10.0", canInstall: true });
+  await handlers.checkAppUpdate();
+  assert.deepEqual(told, ["9.10.0"], "once for each version");
+  assert.deepEqual(handlers.appUpdateStatus(), { status: "available", current: "9.9.9", latest: "9.10.0", canInstall: true });
+  assert.equal((await handlers.installAppUpdate()).status, "restarting");
+  // The desktop app has no choice to install by itself: the status has no `auto`, and the call is refused.
+  assert.throws(() => handlers.setAppUpdateAuto(true), /doesn't install updates by itself/);
+  // A copy with no update service names no such capability, and its calls say so.
+  const plain = await runtimeOn(t, headlessHost({ version: "1.2.3" }));
+  assert.equal(plain.linkBackend.capabilities.includes("app-update-v1"), false);
+  assert.throws(() => plain.handlers.appUpdateStatus(), /doesn't look for updates/);
+  await assert.rejects(plain.handlers.checkAppUpdate(), /doesn't look for updates/);
+});
+
 test("a setting the host refuses goes back to what it was", async (t) => {
   const host = fakeHost({
     background: (background) => {

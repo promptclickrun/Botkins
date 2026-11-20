@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { latestRelease } from "../../desktop/updates.mjs";
 import { serviceManager } from "../../desktop/terminal/manager.mjs";
-import { applyUpdate, assetName, installLayout } from "../../desktop/terminal/update-install.mjs";
+import { applyUpdate, assetName, installLayout, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
 import { REQUEST } from "../../desktop/terminal/updates.mjs";
 
 /**
@@ -142,7 +142,8 @@ export const settings = {
       }
       let result;
       try {
-        result = await applyUpdate({ entry, manager: installed ? manager : undefined, say: (line) => context.note(line) });
+        // How it ends is left where the service reads it when it is back, for a phone that asked and for `botkins status`.
+        result = await applyUpdate({ entry, manager: installed ? manager : undefined, say: (line) => context.note(line), report: (record) => void writeLastUpdate(context.paths.root, record) });
       } catch (error) {
         throw new CliError(error.message, EXIT.failed, error.code);
       }

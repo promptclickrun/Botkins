@@ -82,6 +82,8 @@ const hostOf = (url) => {
 // What this app supports that a phone has to ask about by name (the link adds them to its own):
 // model details in the catalog, a Botkin's eyes and own colors, where a routine's result goes and
 // whether it notifies, and a Today item carried by a message.
+/** A paired phone can read how up to date this computer is, look for a release and start its install. */
+export const APP_UPDATE = "app-update-v1";
 export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS];
 
 /**
@@ -216,6 +218,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // null, and the key is kept in a file in the run's own data folder.
   const keys = await host.keys({ dataDir, trial });
   const updates = host.updates();
+  /** The update service, for a call that needs one. A copy that can't look for updates says so. */
+  const updating = () => {
+    if (!updates) throw new Error("This copy of Botkins doesn't look for updates.");
+    return updates;
+  };
   workspace = new Workspace(dataDir, providers, notify, {
     updates,
     team: () => link?.team(),
@@ -674,9 +681,19 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       await provider.disconnectService(String(serviceId));
       await workspace.providerChanged(provider.id);
     },
-    appUpdateStatus: () => updates.state,
-    checkAppUpdate: () => updates.check(),
-    installAppUpdate: () => updates.install(),
+    // Updates, for the window and for the owner's phones ("app-update-v1"). None takes a version,
+    // an address or a channel: what is installed is the latest signed release, and nothing else.
+    appUpdateStatus: () => updating().status(),
+    checkAppUpdate: async () => {
+      await updating().check();
+      return updates.status();
+    },
+    installAppUpdate: async () => {
+      await updating().install();
+      return updates.status();
+    },
+    // Installing by itself, on a host that has the choice. Refused where it has none.
+    setAppUpdateAuto: (on) => updating().setAuto(on),
     openAppRelease: () => host.shell.openExternal(releasePage),
     appInfo: () => host.info(),
     // Phone access (Settings › Phone, desktop/phonepage.mjs). Only this window may call these:
@@ -796,7 +813,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // told whether there is a display to show at all (desktop/link/server.mjs, headless()).
     ...(host.headless && { headless: true, displayStatus: () => host.displayStatus() }),
     // What this app supports beyond the link's own calls, by the names the phone looks for.
-    capabilities: CAPABILITIES,
+    capabilities: updates ? [...CAPABILITIES, APP_UPDATE] : CAPABILITIES,
     // The person is looking at this window, and at that chat: a reply there needs no ping on a phone.
     attention: () => {
       const focused = host.window.focused();
@@ -865,6 +882,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     notifier.show({ title: name + " is viewing this screen", body: "Stop it in Settings › Phone." });
   });
   link.on("joinRequest", (request) => notifier.consider({ type: "joinRequest", request }));
+  // A newer Botkins is out: the owner's phones are told, once for each version (the link keeps
+  // count for each phone, and a phone that switched these off hears nothing).
+  updates?.onAvailable?.((version) => void link.push.updateAvailable?.(version));
   // Until the person names this computer for their phones, it goes by the system's own name for
   // it (on a Mac the one in Sharing), not by a network host name such as a tailnet's.
   if (!link.store.data.locked && !link.store.data.name) {
