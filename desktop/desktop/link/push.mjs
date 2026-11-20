@@ -28,7 +28,10 @@ import { Failure } from "./tools.mjs";
 
 export const PUSH_INFO = "botkins/push/v1";
 export const PUSH_AAD = "botkins-push-v1";
-export const DEFAULT_PREFS = { replies: true, requests: true, routines: true, previews: true, activities: true };
+/** `updates`: a newer Botkins for this computer is out ("app-update-v1"). A phone registered before it existed counts as wanting it. */
+export const DEFAULT_PREFS = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true };
+/** A version the computer may name in an update notice ("0.16.5", "1.0.0-beta.2"). */
+const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,40})?$/;
 /** The Swift type the phone's Live Activity is declared with. Apple matches a push to it by this name. */
 export const ACTIVITY_TYPE = "BotkinActivityAttributes";
 
@@ -105,6 +108,7 @@ export class Push {
     this.working = null; // run id → whether it was still working, for every run seen at the last look
     this.asked = new Set(); // request ids seen
     this.sent = new Map(); // "device:chat" → { at, text } of the last Live Activity update
+    this.updating = new Set(); // "device version": an update notice on its way, not yet taken by the relay
     this.timer = null;
   }
 
@@ -112,7 +116,8 @@ export class Push {
 
   register(deviceId, target, prefs) {
     const before = this.store.push(deviceId);
-    this.store.setPush(deviceId, { ...cleanTarget(target), prefs: cleanPrefs(prefs, before?.prefs), activities: before?.activities ?? {} });
+    // The newest version this phone was told about stays: registering again doesn't tell it twice.
+    this.store.setPush(deviceId, { ...cleanTarget(target), prefs: cleanPrefs(prefs, before?.prefs), activities: before?.activities ?? {}, ...(before?.updateSeen && { updateSeen: before.updateSeen }) });
     this.changed();
   }
   setPrefs(deviceId, prefs) {
@@ -274,7 +279,10 @@ export class Push {
   }
 
   wants(device, kind) {
-    return this.store.push(device.id)?.prefs[kind] === true;
+    const record = this.store.push(device.id);
+    if (!record) return false;
+    // A choice a phone never made (one added since it registered) is the default.
+    return (record.prefs[kind] ?? DEFAULT_PREFS[kind]) === true;
   }
   maySeeChat(device, chat) {
     return !device.memberId || chat?.createdBy === device.memberId;
@@ -420,7 +428,9 @@ export class Push {
     return Buffer.concat([nonce, seal(key, nonce, Buffer.from(JSON.stringify(content), "utf8"), PUSH_AAD)]).toString("base64");
   }
 
-  alert(deviceId, record, content, { urgent = false, expiration = 900 } = {}) {
+  alert(deviceId, record, content, { urgent = false, expiration = 900, group } = {}) {
+    // A chat's alerts share a banner and a thread; `group` gives others one of their own.
+    const thread = group ?? content.c ?? "botkins";
     return {
       token: record.token,
       env: record.env,
@@ -428,13 +438,13 @@ export class Push {
       priority: 10,
       expiration,
       // One banner per chat: a newer one replaces an older one that was not read.
-      collapse: b64u(hkdf(Buffer.from(content.c ?? "botkins", "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)),
+      collapse: b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)),
       payload: {
         aps: {
-          alert: { title: "Botkins", body: content.k === "request" ? "A bot needs you" : "New message" },
+          alert: { title: "Botkins", body: content.k === "request" ? "A bot needs you" : content.k === "update" ? "An update is available" : "New message" },
           sound: "default",
           "mutable-content": 1,
-          "thread-id": b64u(hkdf(Buffer.from(content.c ?? "botkins", "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),
+          "thread-id": b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),
           "interruption-level": urgent ? "time-sensitive" : "active",
           category: content.k === "request" ? "botkins_request" : content.k === "team" ? "botkins_team" : "botkins_message",
         },
@@ -522,6 +532,41 @@ export class Push {
       if (record) sends.push(this.alert(device.id, record, content, { urgent: true, expiration: 300 }));
     }
     if (sends.length) void this.send(sends);
+  }
+  /**
+   * A newer Botkins is out for this computer ("app-update-v1"; docs/link-contract.md). The
+   * computer's app calls this when it learns of one. Each owner device whose notifications and
+   * `updates` choice are on gets one sealed alert for that version, titled with this computer's
+   * name; a member device never does. Answers how many alerts it sent now (the relay may still
+   * refuse one; that phone is told at a later call).
+   */
+  updateAvailable(version) {
+    const named = String(version ?? "").replace(/^v/, "");
+    if (!VERSION.test(named)) return 0;
+    const content = { t: this.store.name || "Botkins", m: "Botkins " + named + " is available.", k: "update" };
+    let told = 0;
+    for (const device of this.store.data.devices) {
+      if (device.memberId || !this.wants(device, "updates")) continue;
+      const record = this.store.push(device.id);
+      const sending = device.id + " " + named;
+      if (!record || record.updateSeen === named || this.updating.has(sending)) continue;
+      const item = this.alert(device.id, record, content, { expiration: 24 * 60 * 60, group: "update" });
+      // Without a sealed body nothing is sent (see `send`), so it isn't counted.
+      if (!item.payload.b) continue;
+      this.updating.add(sending);
+      told++;
+      // The version is seen only once the relay has taken the alert for this phone: a send that
+      // fails is tried again at the next check. Until then, a second call doesn't send it twice.
+      void this.send([item])
+        .then((results) => {
+          if (results[0]?.status !== 200) return;
+          const now = this.store.push(device.id);
+          if (now?.token === record.token) this.store.setPush(device.id, { ...now, updateSeen: named });
+        })
+        .catch((error) => this.log("push: " + (error?.message ?? error)))
+        .finally(() => this.updating.delete(sending));
+    }
+    return told;
   }
   /** Sends one notification and answers with what the relay said, so the phone's settings can show a failure. */
   async test(deviceId) {

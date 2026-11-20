@@ -24,6 +24,10 @@ export const MEMBER_PREFERENCE_FIELDS = Object.freeze(["appearance", "foldTools"
 const POLICY = {
   setPreferences: ["settings", "manage"],
   appInfo: ["settings", "view"],
+  appUpdateStatus: "owner",
+  checkAppUpdate: "owner",
+  installAppUpdate: "owner",
+  setAppUpdateAuto: "owner",
   addBot: ["agents", "create"],
   updateBot: ["agents", "manage"],
   setBotFlags: ["agents", "manage"],

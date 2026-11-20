@@ -31,6 +31,9 @@ export const PLUGIN_METHODS = [
 export const REMOTE_METHODS = new Set([
   // Preferences
   "setPreferences", "appInfo",
+  // The computer's own updates ("app-update-v1"). Where a release comes from is fixed on the computer:
+  // no call takes a version, an address or a channel (appUpdateArgs).
+  "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto",
   // Bots
   "addBot", "updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
   "importableAgents", "importAgents", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory",
@@ -298,5 +301,13 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? appUpdateArgs(method, args) ?? args;
+}
+
+/** The update calls ("app-update-v1"), cut to their shape: nothing at all, or exactly one boolean. Null for any other call. */
+function appUpdateArgs(method, args) {
+  if (method === "appUpdateStatus" || method === "checkAppUpdate" || method === "installAppUpdate") return [];
+  if (method !== "setAppUpdateAuto") return null;
+  if (args.length !== 1 || typeof args[0] !== "boolean") throw new Error("Say on or off, and nothing else.");
+  return [args[0]];
 }
