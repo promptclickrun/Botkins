@@ -108,6 +108,7 @@ export class Push {
     this.working = null; // run id → whether it was still working, for every run seen at the last look
     this.asked = new Set(); // request ids seen
     this.sent = new Map(); // "device:chat" → { at, text } of the last Live Activity update
+    this.updating = new Set(); // "device version": an update notice on its way, not yet taken by the relay
     this.timer = null;
   }
 
@@ -536,22 +537,36 @@ export class Push {
    * A newer Botkins is out for this computer ("app-update-v1"; docs/link-contract.md). The
    * computer's app calls this when it learns of one. Each owner device whose notifications and
    * `updates` choice are on gets one sealed alert for that version, titled with this computer's
-   * name; a member device never does. Answers how many were told.
+   * name; a member device never does. Answers how many alerts it sent now (the relay may still
+   * refuse one; that phone is told at a later call).
    */
   updateAvailable(version) {
     const named = String(version ?? "").replace(/^v/, "");
     if (!VERSION.test(named)) return 0;
     const content = { t: this.store.name || "Botkins", m: "Botkins " + named + " is available.", k: "update" };
-    const sends = [];
+    let told = 0;
     for (const device of this.store.data.devices) {
       if (device.memberId || !this.wants(device, "updates")) continue;
       const record = this.store.push(device.id);
-      if (!record || record.updateSeen === named) continue;
-      this.store.setPush(device.id, { ...record, updateSeen: named });
-      sends.push(this.alert(device.id, record, content, { expiration: 24 * 60 * 60, group: "update" }));
+      const sending = device.id + " " + named;
+      if (!record || record.updateSeen === named || this.updating.has(sending)) continue;
+      const item = this.alert(device.id, record, content, { expiration: 24 * 60 * 60, group: "update" });
+      // Without a sealed body nothing is sent (see `send`), so it isn't counted.
+      if (!item.payload.b) continue;
+      this.updating.add(sending);
+      told++;
+      // The version is seen only once the relay has taken the alert for this phone: a send that
+      // fails is tried again at the next check. Until then, a second call doesn't send it twice.
+      void this.send([item])
+        .then((results) => {
+          if (results[0]?.status !== 200) return;
+          const now = this.store.push(device.id);
+          if (now?.token === record.token) this.store.setPush(device.id, { ...now, updateSeen: named });
+        })
+        .catch((error) => this.log("push: " + (error?.message ?? error)))
+        .finally(() => this.updating.delete(sending));
     }
-    if (sends.length) void this.send(sends);
-    return sends.length;
+    return told;
   }
   /** Sends one notification and answers with what the relay said, so the phone's settings can show a failure. */
   async test(deviceId) {

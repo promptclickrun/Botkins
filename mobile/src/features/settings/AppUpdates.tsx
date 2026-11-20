@@ -76,14 +76,26 @@ export function AppUpdates({ name }: { name: string }) {
         onPress: async () => {
           setWorking(true);
           setProblem(undefined);
+          const from = update?.current;
+          const to = update?.latest;
+          const before = update?.last?.at;
           try {
             const next = await api.installAppUpdate();
             setUpdate(next);
             haptic.success();
-            if (serverId) markRestarting(serverId, next.current, next.latest ?? update?.latest);
+            if (serverId) markRestarting(serverId, next.current, next.latest ?? to, before);
           } catch (error) {
-            haptic.warn();
-            setProblem(messageOf(error));
+            // The restart can cut the reply short although the install began: ask where it stands
+            // before calling it a failure, and if the computer is already gone, it is restarting.
+            const now = await api.appUpdateStatus().catch(() => undefined);
+            if (!now || updateBusy(now)) {
+              if (now) setUpdate(now);
+              if (serverId && from) markRestarting(serverId, from, now?.latest ?? to, before);
+            } else {
+              haptic.warn();
+              setUpdate(now);
+              setProblem(messageOf(error));
+            }
           } finally {
             setWorking(false);
           }

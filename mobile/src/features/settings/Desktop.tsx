@@ -191,7 +191,8 @@ export default function Desktop() {
         </Group>
       )}
 
-      {!member && <AppUpdates name={name} />}
+      {/* Keyed by the computer: after a switch, nothing of the last computer's update shows. */}
+      {!member && <AppUpdates key={pairing?.serverId} name={name} />}
 
       {!member && <ScreenAccess />}
 

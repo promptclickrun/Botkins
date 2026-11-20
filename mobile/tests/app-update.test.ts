@@ -2,7 +2,7 @@
 // computer's page says and offers, the link's calls and their shape, the owner-only rule, the
 // "a newer Botkins is out" notification (link-host/push.mjs), and the demo computer end to end.
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -11,8 +11,8 @@ import { remoteArgs, REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { DEMO_LATEST, DEMO_VERSION } from "../link-host/mock-update.mjs";
 import { authorize, TEAM_METHODS } from "../link-host/team.mjs";
-import { afterRestart, installQuestion, lastLine, restartPending, RESTART_MS, updateButton, updateLine } from "../src/features/settings/updates";
-import { type FetchLike, LinkClient, pair, type Pairing } from "../src/link/client";
+import { afterRestart, gaveUpLine, installQuestion, lastLine, RESTART_BANNER_MS, restartPending, RESTART_MS, restartStep, updateButton, updateLine } from "../src/features/settings/updates";
+import { checkJoin, type FetchLike, LinkClient, pair, type Pairing, startJoin } from "../src/link/client";
 import { agree, fromUtf8, hkdf, open, unb64u, utf8 } from "../src/link/crypto";
 import type { AppUpdate } from "../src/link/types";
 
@@ -57,15 +57,20 @@ test("how the last install ended is said once the computer is back, a rollback t
   assert.equal(lastLine(undefined), null);
 
   const since = Date.parse("2026-11-20T20:00:00Z");
-  const pending = { serverId: "s1", since, from: "0.16.4", to: "0.16.5" };
+  const old = { at: "2026-11-01T00:00:00Z", from: "0.16.2", to: "0.16.3", ok: true };
+  const pending = { serverId: "s1", since, from: "0.16.4", to: "0.16.5", before: old.at };
   // While it downloads or restarts there is nothing to say yet.
-  assert.deepEqual(afterRestart(pending, update({ status: "restarting" })), { done: false });
+  assert.deepEqual(afterRestart(pending, update({ status: "restarting", last: old })), { done: false });
   assert.deepEqual(afterRestart(pending, update({ status: "current", current: "0.16.5", last: { at: "2026-11-20T20:01:00Z", from: "0.16.4", to: "0.16.5", ok: true } })), { done: true, ok: true, text: "Updated from 0.16.4 to 0.16.5." });
   assert.deepEqual(afterRestart(pending, update({ status: "idle", last: { at: "2026-11-20T20:01:00Z", from: "0.16.4", to: "0.16.5", ok: false, message: "Rolled back." } })), { done: true, ok: false, text: "Rolled back." });
-  // An older `last` says nothing about this install: the version running decides.
-  const old = { at: "2026-11-01T00:00:00Z", from: "0.16.2", to: "0.16.3", ok: true };
+  // The two clocks are never compared: a computer whose clock is an hour behind the phone's still
+  // has its rollback told in its own words.
+  assert.deepEqual(afterRestart(pending, update({ status: "idle", last: { at: "2026-11-20T19:00:00Z", from: "0.16.4", to: "0.16.5", ok: false, message: "Rolled back." } })), { done: true, ok: false, text: "Rolled back." });
+  // The `last` shown before this install says nothing about it: the version running decides.
   assert.deepEqual(afterRestart(pending, update({ status: "current", current: "0.16.5", last: old })), { done: true, ok: true, text: "Botkins is now 0.16.5." });
   assert.deepEqual(afterRestart(pending, update({ status: "error", current: "0.16.4", last: old, message: "The update could not be installed." })), { done: true, ok: false, text: "The update could not be installed." });
+  // With no `last` before, any `last` is this install's.
+  assert.deepEqual(afterRestart({ ...pending, before: undefined }, update({ status: "current", current: "0.16.5", last: { ...old, from: "0.16.4", to: "0.16.5" } })), { done: true, ok: true, text: "Updated from 0.16.4 to 0.16.5." });
   // The restart counts only for the computer it was started on, and not for ever.
   assert.equal(restartPending(pending, "s1", since + 1000), true);
   assert.equal(restartPending(pending, "s2", since + 1000), false);
@@ -76,6 +81,30 @@ test("how the last install ended is said once the computer is back, a rollback t
   const never = "The update did not start. On the computer, `botkins update` says why.";
   assert.equal(restartPending(pending, "s1", since + 10 * 60_000 + 5000), true);
   assert.deepEqual(afterRestart(pending, update({ status: "error", current: "0.16.4", message: never })), { done: true, ok: false, text: never });
+});
+
+test("while a restart is pending the banner says so for two minutes, then its usual words, and the phone gives up at the end", () => {
+  const since = Date.parse("2026-11-20T20:00:00Z");
+  const pending = { serverId: "s1", since, from: "0.16.4", to: "0.16.5" };
+  assert.deepEqual(restartStep(pending, "s1", since + 1000), { kind: "wait", stage: "restarting" });
+  assert.deepEqual(restartStep(pending, "s1", since + RESTART_BANNER_MS - 1), { kind: "wait", stage: "restarting" });
+  // After a couple of minutes the banner is "Can't reach … Retry" again.
+  assert.deepEqual(restartStep(pending, "s1", since + RESTART_BANNER_MS), { kind: "wait", stage: "waiting" });
+  assert.deepEqual(restartStep(pending, "s1", since + RESTART_MS - 1), { kind: "wait", stage: "waiting" });
+  // When the wait runs out, the phone says so instead of falling silent.
+  assert.deepEqual(restartStep(pending, "s1", since + RESTART_MS), { kind: "gave-up" });
+  assert.equal(gaveUpLine("Studio server", false), "Botkins on Studio server hasn't come back since the update started.");
+  assert.equal(gaveUpLine("Studio server", true), "The update on Studio server hasn't finished yet.");
+  // Another computer in use: the restart is forgotten, and nothing of it shows there.
+  assert.deepEqual(restartStep(pending, "s2", since + 1000), { kind: "drop" });
+  assert.deepEqual(restartStep(pending, undefined, since + 1000), { kind: "drop" });
+});
+
+test("the computer's page starts afresh for each computer", () => {
+  // Desktop.tsx keeps the switcher and the Updates section on one page: keyed by the computer, the
+  // section never shows the last computer's state, or its "Update and restart", after a switch.
+  const page = readFileSync(new URL("../src/features/settings/Desktop.tsx", import.meta.url), "utf8");
+  assert.match(page, /<AppUpdates key=\{pairing\?\.serverId\}/);
 });
 
 test("the link lets the owner's devices make the four calls, with nothing in them but one switch", () => {
@@ -102,7 +131,9 @@ async function withPush() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "botkins-update-")));
   folders.push(dir);
   const sent: any[] = [];
+  let down = false;
   const relay = (async (_url: string, init: any) => {
+    if (down) return new Response("", { status: 503 });
     const items = JSON.parse(JSON.parse(init.body).sends);
     sent.push(...items);
     return new Response(JSON.stringify({ results: items.map(() => ({ status: 200 })) }), { status: 200 });
@@ -114,7 +145,7 @@ async function withPush() {
   const paired = await pair(real, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "Owner phone", platform: "ios" });
   const client = new LinkClient(paired, { fetch: real, onParts() {}, onState() {} });
   await client.call("link.push.register", { token: "ab".repeat(32), env: "production" }, {});
-  return { link, client, paired, sent, settle: () => delay(80), stop: async () => (client.stop(), await link.stop()) };
+  return { link, client, paired, sent, relayDown: (on: boolean) => void (down = on), settle: () => delay(80), stop: async () => (client.stop(), await link.stop()) };
 }
 function unseal(paired: Pairing, b: string) {
   const deviceKey = hkdf(agree(unb64u(paired.secretKey), unb64u(paired.serverKey)), utf8(paired.deviceId), "botkins/device/v1");
@@ -161,6 +192,48 @@ test("a team member's device never hears of an update", async () => {
     await settle();
     assert.deepEqual(sent.map((item) => item.token), ["ab".repeat(32)]);
   } finally {
+    await stop();
+  }
+});
+
+test("a notice the relay didn't take is sent again at the next check, and two checks close together send it once", async () => {
+  const { link, paired, sent, relayDown, settle, stop } = await withPush();
+  try {
+    relayDown(true);
+    assert.equal(link.push.updateAvailable("0.16.5"), 1);
+    // Still on its way: a second check sends nothing more.
+    assert.equal(link.push.updateAvailable("0.16.5"), 0);
+    await settle();
+    assert.equal(sent.length, 0);
+    assert.equal(link.store.push(paired.deviceId).updateSeen, undefined, "not seen: the relay refused it");
+    relayDown(false);
+    assert.equal(link.push.updateAvailable("0.16.5"), 1);
+    await settle();
+    assert.equal(sent.length, 1);
+    assert.equal(link.store.push(paired.deviceId).updateSeen, "0.16.5");
+    assert.equal(link.push.updateAvailable("0.16.5"), 0);
+  } finally {
+    await stop();
+  }
+});
+
+test("a team member's device is refused the four calls by the computer itself", async () => {
+  const { link, client, stop } = await withPush();
+  let member: LinkClient | undefined;
+  try {
+    const invite = await client.call<any>("link.team.createInvite", { groupId: "g_everyone", days: 7, maxUses: 1 });
+    const target = { hosts: ["127.0.0.1:" + link.port], code: invite.code, serverId: link.status().serverId, serverKey: Buffer.from(link.store.data.keys.publicKey).toString("base64url"), name: link.status().name };
+    const started = await startJoin(real, target, { name: "Sam's phone", platform: "ios", kind: "phone" });
+    if (started.result.status !== "pending") throw new Error("not pending");
+    await client.call("link.team.approve", started.result.requestId);
+    const checked = await checkJoin(real, started.attempt);
+    if (checked.status !== "approved") throw new Error("not approved");
+    member = new LinkClient(checked.pairing, { fetch: real, onParts() {}, onState() {} });
+    for (const method of CALLS) await assert.rejects(member.call(method, ...(method === "setAppUpdateAuto" ? [true] : [])), /owner/i, method);
+    // The owner's own phone is let through.
+    assert.equal((await client.call<AppUpdate>("appUpdateStatus")).current, DEMO_VERSION);
+  } finally {
+    member?.stop();
     await stop();
   }
 });
