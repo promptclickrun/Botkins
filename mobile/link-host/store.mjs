@@ -25,6 +25,8 @@ const DESKTOP_PLATFORMS = ["darwin", "macos", "mac", "win32", "windows", "linux"
 /** The kind a device says it is, else the kind its platform makes it. A phone when nothing says otherwise, as before. */
 export const deviceKind = (kind, platform) => (DEVICE_KINDS.includes(kind) ? kind : DESKTOP_PLATFORMS.includes(String(platform ?? "").toLowerCase()) ? "desktop" : "phone");
 const deviceName = (name, kind) => String(name || (kind === "desktop" ? "Computer" : "Phone")).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60) || (kind === "desktop" ? "Computer" : "Phone");
+/** The name of the person a device belongs to ("Jordan"), cleaned; "" when there is none. A device's `name` stays its model. */
+export const personName = (value) => (typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60).trim() : "");
 // The Botkins characters, by id. A bot without a look is given the least used one.
 const HEADS = ["beacon", "crumb", "fathom", "goggle", "luna", "morel", "muse", "oakley", "pearl", "pip", "posy", "pounce", "ramble", "skiff", "spool", "sprig", "tinker", "toast", "wick", "wicket"];
 const hash = (text) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 7);
@@ -185,14 +187,16 @@ export class LinkStore {
    * `presenceKey` is the phone's second public key (P-256, SPKI as base64url), kept only when the
    * phone paired straight with this computer: what it signs with to turn the screen on (grant.mjs).
    */
-  addDevice({ name, platform, kind, publicKey, presenceKey, memberId }) {
+  addDevice({ name, platform, kind, publicKey, presenceKey, memberId, person }) {
     const member = typeof memberId === "string" && memberId ? memberId : null;
     const count = this.data.devices.filter((device) => (member ? device.memberId : !device.memberId)).length;
     if (count >= (member ? MAX_MEMBER_DEVICES : MAX_OWNER_DEVICES)) throw new Error(member ? "Too many member devices. Remove one first." : "Too many paired owner devices. Remove one first.");
     const is = deviceKind(kind, platform);
+    const who = personName(person);
     const device = {
       id: b64u(random(9)),
       name: deviceName(name, is),
+      ...(who && { person: who }),
       platform: String(platform || "").slice(0, 20),
       kind: is,
       publicKey: b64u(publicKey),
@@ -232,6 +236,24 @@ export class LinkStore {
     if (!device) return false;
     if (typeof name !== "string" || !name.trim()) throw new Error("Give the device a name.");
     device.name = deviceName(name, device.kind);
+    this.save();
+    return true;
+  }
+  /**
+   * Names the person a paired device belongs to. False when there is no such device. A team
+   * member's device names the member: the member and all of their devices take the name.
+   */
+  setPerson(id, person) {
+    const device = this.device(id);
+    if (!device) return false;
+    const who = personName(person);
+    if (!who) throw new Error("Give the person a name.");
+    if (device.memberId) {
+      const member = this.data.team?.members?.find((item) => item.id === device.memberId);
+      if (member) member.name = who;
+      for (const other of this.data.devices) if (other.memberId === device.memberId) other.person = who;
+    }
+    device.person = who;
     this.save();
     return true;
   }

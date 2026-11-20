@@ -144,7 +144,7 @@ export type Role = {
   bots: "all" | string[];
 };
 export type Group = { id: string; name: string; roleId: string };
-export type MemberDevice = { id: string; name: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
+export type MemberDevice = { id: string; name: string; person?: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
 export type Member = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices?: MemberDevice[] };
 export type Invite = {
   id: string;
@@ -158,7 +158,7 @@ export type Invite = {
   published?: boolean;
   link?: string;
 };
-export type JoinRequest = { id: string; name: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
+export type JoinRequest = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
 export type TeamPart =
   | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[] }
   | {
@@ -762,7 +762,8 @@ export type UsageReport = {
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
  * "frames-v1" (custom views: the page of an html block, for the phone to draw),
  * "provider-usage-v1" (each provider's plan and what is left of its limits),
- * "devices-v1" (the list of paired devices, and renaming and removing one),
+ * "devices-v1" (the list of paired devices, and renaming and removing one), "device-person-v1" (the
+ * name of the person each device belongs to, and "link.devices.setPerson"),
  * "side-pane-v1" (a bot can open a pane beside a chat: a custom view, a table, a website, the screen),
  * "adoptMcpSignIn", and what the computer's app supports itself: "looks-v2" (eyes and custom colors),
  * "routine-delivery-v1" (where a routine's result lands, and whether it notifies), "models-v2"
@@ -953,8 +954,10 @@ export type PushTarget = { token: string; env: "production" | "sandbox"; start?:
  * A device paired with the computer (`devices-v1`, "link.devices.list"): a phone, or another
  * computer's Botkins app that uses this one. `connected` is true while it was heard from in the last
  * minute and a half. `current` marks the device that asked. Never a key or a notification address.
+ * `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"), given when
+ * it paired or set by the owner ("device-person-v1"). A device paired before has none.
  */
-export type PairedDevice = { id: string; name: string; platform: string; kind: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean; current?: boolean };
+export type PairedDevice = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean; current?: boolean };
 export type PhoneRecord = {
   name: string;
   /** What the device is. Missing on an older computer, where every paired device is a phone. */
@@ -1202,6 +1205,8 @@ export type Calls = {
   "link.devices.list"(): PairedDevice[];
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
+  /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */
+  "link.devices.setPerson"(id: string, person: string): PairedDevice[];
   /** Removes a paired device: it can't reach the computer any more. Removing this device is unpairing. Answers the devices that are left. */
   "link.devices.remove"(id: string): PairedDevice[];
   // ---- Teams ("teams-v1")

@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, AppState, View } from "react-native";
 import type { JoinAttempt, JoinTarget, Pairing } from "@/link/client";
 import { checkTeamJoin, findTeamInvite, joinWithPairing, startTeamJoin } from "@/state/link";
 import { forget, keep, readKept } from "@/state/keep";
+import { askPersonName } from "./askName";
 import { useApp } from "@/state/store";
 import { Button, EmptyState, Field, haptic, IconTile, Sheet, space, T, useOnShow, useTheme } from "@/ui";
 import {
@@ -85,9 +86,12 @@ export default function Join() {
   async function send() {
     if (!target || view.phase === "sending") return;
     const begin = async () => {
+      // The owner approves a person, not "iPhone": the name goes with the request.
+      const person = await askPersonName();
+      if (!person) return;
       setView({ phase: "sending" });
       try {
-        const outcome = await startTeamJoin(target);
+        const outcome = await startTeamJoin(target, person);
         setAttempt(outcome.attempt);
         if (outcome.result.status === "pending") await keep(JOIN_ATTEMPT_KEY, JSON.stringify(outcome.attempt));
         await receive(joinState(outcome.result));

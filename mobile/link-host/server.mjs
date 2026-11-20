@@ -24,7 +24,7 @@ import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
-import { cleanLook, deviceKind, LinkStore, SCREEN_MODES } from "./store.mjs";
+import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { authorize, cleanGroup, cleanRole, filterParts, inviteLink, inviteLookup, newInviteCode, normalizeCode } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
@@ -56,7 +56,7 @@ const PUMP_MS = 60;
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "maintenance-v1", "teams-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 const MAX_FRAME_HTML = 300_000;
 const MAX_FRAME_DATA = 200_000;
@@ -270,6 +270,7 @@ export class LinkHost extends EventEmitter {
       // the list, rename one and remove one, as the person can in the app on this computer.
       "link.devices.list": async (session) => this.devices(session.deviceId),
       "link.devices.rename": async (session, a) => this.renameDevice(a[0], a[1], session.deviceId),
+      "link.devices.setPerson": async (session, a) => this.setDevicePerson(a[0], a[1], session.deviceId),
       "link.devices.remove": async (session, a) => this.revokeDevice(a[0], session.deviceId),
       "link.frame.page": async (_session, a) => this.framePage(a[0]),
       "link.frame.chat": async (_session, a) => this.frameChat(a[0]),
@@ -690,6 +691,7 @@ export class LinkHost extends EventEmitter {
     return this.store.data.devices.map((device) => ({
       id: device.id,
       name: device.name,
+      ...(device.person && { person: device.person }),
       platform: device.platform,
       kind: device.kind,
       createdAt: device.createdAt,
@@ -704,6 +706,18 @@ export class LinkHost extends EventEmitter {
     this.store.renameDevice(id, name);
     this.dirty = true;
     this.changed();
+    this.emit("status");
+    return this.devices(asking);
+  }
+  /** Names the person a paired device belongs to ("Jordan"); its `name` stays the device's. A member's device names the member. */
+  setDevicePerson(id, person, asking) {
+    const device = typeof id === "string" ? this.store.device(id) : null;
+    if (!device) throw new Failure("That device is no longer paired.");
+    if (typeof person !== "string" || !personName(person) || person.length > 200) throw new Failure("Give the person a name.");
+    this.store.setPerson(id, person);
+    this.dirty = true;
+    this.changed();
+    if (device.memberId) this.teamChanged();
     this.emit("status");
     return this.devices(asking);
   }
@@ -749,6 +763,7 @@ export class LinkHost extends EventEmitter {
         devices: this.store.data.devices.filter((device) => device.memberId === member.id).map((device) => ({
           id: device.id,
           name: device.name,
+          ...(device.person && { person: device.person }),
           kind: device.kind,
           platform: device.platform,
           connected: live.has(device.id),
@@ -758,6 +773,7 @@ export class LinkHost extends EventEmitter {
       requests: team.requests.filter((request) => request.status === "pending").map((request) => ({
         id: request.id,
         name: request.name,
+        ...(request.person && { person: request.person }),
         platform: request.platform,
         kind: request.kind,
         at: request.at,
@@ -987,6 +1003,7 @@ export class LinkHost extends EventEmitter {
         publicKey,
         code: invite.code,
         name: String(hello?.name || "Team member").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60) || "Team member",
+        ...(personName(hello?.person) && { person: personName(hello?.person) }),
         platform: String(hello?.platform || "").slice(0, 20),
         kind: deviceKind(hello?.kind, hello?.platform),
         presenceKey: direct ? cleanPresenceKey(hello?.presenceKey) : null,
@@ -997,7 +1014,7 @@ export class LinkHost extends EventEmitter {
       this.store.set({ team: { ...this.store.data.team, requests: [...this.store.data.team.requests, request] } });
       this.joinTries.delete(source);
       this.teamChanged();
-      this.emit("joinRequest", { id: request.id, name: request.name, platform: request.platform, kind: request.kind, at, inviteId: invite.id });
+      this.emit("joinRequest", { id: request.id, name: request.name, ...(request.person && { person: request.person }), platform: request.platform, kind: request.kind, at, inviteId: invite.id });
       this.push.teamJoin?.(request);
     }
     if (request.status === "denied") return { box: box(key, { status: "denied" }, "joined:" + serverId) };
@@ -1016,8 +1033,8 @@ export class LinkHost extends EventEmitter {
     const invite = team.invites.find((item) => item.id === request.inviteId);
     if (invite && invite.uses >= invite.maxUses) throw new Failure("That invite has already been used up.");
     const memberId = "m_" + newInviteCode();
-    const member = { id: memberId, name: request.name, groupId: chosen, joinedAt: Date.now(), deviceIds: [] };
-    const device = this.store.addDevice({ name: request.name, platform: request.platform, kind: request.kind, publicKey: unb64u(request.publicKey), presenceKey: request.presenceKey, memberId });
+    const member = { id: memberId, name: request.person || request.name, groupId: chosen, joinedAt: Date.now(), deviceIds: [] };
+    const device = this.store.addDevice({ name: request.name, platform: request.platform, kind: request.kind, publicKey: unb64u(request.publicKey), presenceKey: request.presenceKey, memberId, person: request.person });
     member.deviceIds.push(device.id);
     team.members.push(member);
     Object.assign(request, { status: "approved", approvedAt: Date.now(), memberId, deviceId: device.id });
@@ -1234,7 +1251,7 @@ export class LinkHost extends EventEmitter {
     }
     // A phone that pairs again replaces its earlier entry.
     for (const old of this.store.data.devices.filter((d) => d.publicKey === b64u(theirs))) this.removeDevice(old.id);
-    const device = this.store.addDevice({ name: hello?.name, platform: hello?.platform, kind: hello?.kind, publicKey: theirs, presenceKey: direct ? cleanPresenceKey(hello?.presenceKey) : null });
+    const device = this.store.addDevice({ name: hello?.name, platform: hello?.platform, kind: hello?.kind, publicKey: theirs, presenceKey: direct ? cleanPresenceKey(hello?.presenceKey) : null, person: hello?.person });
     this.cancelPairing();
     // The list of paired devices is part of what phones are sent: it has one more now.
     this.dirty = true;

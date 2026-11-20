@@ -168,13 +168,18 @@ export async function boot() {
   }
 }
 
-export const deviceName = () => Device.deviceName || Device.modelName || (Platform.OS === "ios" ? "iPhone" : "Android phone");
+/**
+ * What the computer calls this phone: its model ("iPhone 17 Pro"). Since iOS 16 the phone's own name
+ * is the bare word "iPhone" without an entitlement, so the person's name goes apart, in `person`.
+ */
+export const deviceName = () => Device.modelName || Device.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone");
 
 /**
  * Pairs with the computer a code was scanned or typed for, and starts using it. The computers the
  * phone already has stay paired; pairing again with one of them replaces only that pairing.
+ * `person` is the name the person gave ("Your name"), sent beside the phone's model.
  */
-export async function pairWith(target: PairTarget) {
+export async function pairWith(target: PairTarget, person?: string) {
   if (!hasRoom(kept, target.serverId)) throw new LinkError("closed", TOO_MANY);
   // A key that proves a person is holding this phone, made for this pairing. A computer with no
   // window of its own asks for its signature before a phone may turn its screen on, and keeps the
@@ -182,7 +187,7 @@ export async function pairWith(target: PairTarget) {
   const presence = await newPresenceKey();
   let pairing: Pairing;
   try {
-    pairing = await pair(fetcher, target, { name: deviceName(), platform: Platform.OS, ...(presence && { presenceKey: presence.publicKey }) });
+    pairing = await pair(fetcher, target, { name: deviceName(), platform: Platform.OS, ...(person && { person }), ...(presence && { presenceKey: presence.publicKey }) });
     // A typed address names its computer only now.
     if (!hasRoom(kept, pairing.serverId)) throw new LinkError("closed", TOO_MANY);
   } catch (error) {
@@ -228,10 +233,10 @@ export async function findTeamInvite(code: string, expectedServerKey?: string) {
   return { target, computerName: hello.name };
 }
 
-/** Starts a join request for this phone, keeping the same encrypted client key for later checks. */
-export function startTeamJoin(target: JoinTarget) {
+/** Starts a join request for this phone, keeping the same encrypted client key for later checks. `person` names the member. */
+export function startTeamJoin(target: JoinTarget, person?: string) {
   if (!hasRoom(kept, target.serverId)) return Promise.reject(new LinkError("closed", TOO_MANY));
-  return startJoin(fetcher, target, { name: deviceName(), platform: Platform.OS, kind: "phone" });
+  return startJoin(fetcher, target, { name: deviceName(), platform: Platform.OS, kind: "phone", ...(person && { person }) });
 }
 
 export function checkTeamJoin(attempt: JoinAttempt) {

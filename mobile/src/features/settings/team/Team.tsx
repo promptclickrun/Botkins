@@ -71,7 +71,7 @@ function Requests({ requests, invites, groups, online }: { requests: JoinRequest
           const group = groups.find((item) => item.id === groupId);
           return (
             <Group key={request.id}>
-              <Row leading={<IconTile icon={UserPlus} />} title={request.name} subtitle={[request.platform, ago(request.at)].filter(Boolean).join(" · ")} trailing={<Badge label="Waiting" tone="warning" />} />
+              <Row leading={<IconTile icon={UserPlus} />} title={request.person || request.name} subtitle={[request.person ? request.name : request.platform, ago(request.at)].filter(Boolean).join(" · ")} trailing={<Badge label="Waiting" tone="warning" />} />
               <Row title="Group" value={group?.name ?? "Choose a group"} chevron disabled={!online} onPress={() => pickGroup(groups, "Approve into group", groupId, (id) => setPicked((current) => ({ ...current, [request.id]: id })))} />
               <View style={{ flexDirection: "row", gap: space.sm, padding: space.lg }}>
                 <Button title="Deny" variant="secondary" style={{ flex: 1 }} disabled={!online} onPress={() => void attempt(api["link.team.deny"](request.id), "Request denied")} />

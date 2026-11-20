@@ -37,7 +37,8 @@ A desktop client copies this folder as it is and keeps it in step with the phone
    const pairing = await pair(fetch, target, { name: "Studio Mac", platform: process.platform, kind: "desktop" });
    ```
 
-   - `name` is what the host shows for this device (60 characters at most). The person can rename it later.
+   - `name` is what the host shows for this device (60 characters at most). The person can rename it later. A phone sends its model ("iPhone 17 Pro"): since iOS 16 its own name is the bare word "iPhone".
+   - `person` (optional, `device-person-v1`) is who the device belongs to ("Jordan"), asked before pairing. The host cleans it (no control characters, trimmed, 60 characters at most) and keeps it beside `name`; an empty one is left out. A host from before ignores it and pairs as it did. A team join (`startJoin`) sends the same field, and the member is named by it.
    - `platform` is free text (`"ios"`, `"android"`, `"darwin"`, `"win32"`, `"linux"`).
    - `kind` is `"phone"` or `"desktop"`. When it is missing the host derives it from `platform` (a desktop platform makes a desktop, everything else a phone). A desktop client must send `"desktop"`.
 4. `pair()` returns the client's credential, a `Pairing`: `{ serverId, serverKey, deviceId, secretKey, hosts, name }`.
@@ -86,12 +87,14 @@ Any paired client may read the list of paired devices, rename one and remove one
 | --- | --- |
 | `link.devices.list()` | `PairedDevice[]` |
 | `link.devices.rename(id, name)` | `PairedDevice[]` as it is afterwards |
+| `link.devices.setPerson(id, person)` (`device-person-v1`, owner only) | `PairedDevice[]` as it is afterwards |
 | `link.devices.remove(id)` | `PairedDevice[]` that are left |
 
 ```ts
 type PairedDevice = {
   id: string;
-  name: string;
+  name: string;          // the device ("iPhone 17 Pro")
+  person?: string;       // who it belongs to ("Jordan"; device-person-v1). Absent until someone gives one
   platform: string;
   kind: "phone" | "desktop";
   createdAt: number;     // when it was paired (ms)
@@ -105,14 +108,15 @@ type PairedDevice = {
 - `remove(id)` ends that device's sessions at once. Its next request is refused and its client goes to `"revoked"`. Its notification addresses, device-access choices, uploads and screen sharing go with it. The other devices keep their sessions.
 - Removing the device that asks is unpairing (the same as `link.unpair`).
 - An id that is not paired answers "That device is no longer paired."
+- Show `person` first and `name` under it; with no `person`, `name` alone. `setPerson` refuses an empty name ("Give the person a name."). On a team member's device it renames the member too, and every device of that member.
 - The `phones` part has one entry for each paired device, by id: `{ name, kind, platform, push?, sources? }`. It changes when a device is paired, renamed or removed, so a client's list can stay in step without asking.
 
 ### On the host itself
 
 The host's app reads the same registry without a session, for its own Settings › Phone page:
 
-- `link.status().devices`: each device with `id`, `name`, `platform`, `kind`, `createdAt`, `lastSeenAt`, `connected`.
-- `link.removeDevice(id)`, `link.renameDevice(id, name)`.
+- `link.status().devices`: each device with `id`, `name`, `person` (when it has one), `platform`, `kind`, `createdAt`, `lastSeenAt`, `connected`.
+- `link.removeDevice(id)`, `link.renameDevice(id, name)`, `link.setDevicePerson(id, person)`.
 - Events: `"paired"` (with the device) and `"status"` (after any change).
 
 ## The screen's level, set from a phone (`screen-grant-v1`)
@@ -167,4 +171,5 @@ Away from the host's network a client goes through the relay (`relay.botkins.app
 
 - `link.json` is version 1 and has not changed shape. A device paired before `kind` existed gets its kind from its platform when the file is read. No device has to pair again.
 - A host without `devices-v1` has no `link.devices.*` calls and no `kind` in `phones`. A client then shows only itself.
+- A host without `device-person-v1` ignores `person` and has no `link.devices.setPerson`; a client offers only Rename. A device paired before has no `person` until the owner adds one.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.

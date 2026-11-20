@@ -150,6 +150,13 @@ function mergeHosts(worked: string, fresh: string[], saved: string[], limit: num
   return cut;
 }
 
+/**
+ * What a device tells the computer it pairs with, sealed with the code's key (the relay never reads
+ * it). `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"). A
+ * computer from before "device-person-v1" ignores `person` and pairs as before.
+ */
+export type PairDevice = { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string; person?: string };
+
 /** Pairs this phone with a computer that is showing a pairing code. */
 /**
  * Pairs this device with a computer. `kind` says what this device is: a phone (the default), or
@@ -161,7 +168,7 @@ function mergeHosts(worked: string, fresh: string[], saved: string[], limit: num
  * that reached it directly, and asks for a signature made with it before a phone may turn the screen
  * on ("screen-grant-v1"). `grantMessage` is what gets signed.
  */
-export async function pair(fetcher: FetchLike, target: PairTarget, device: { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string }): Promise<Pairing> {
+export async function pair(fetcher: FetchLike, target: PairTarget, device: PairDevice): Promise<Pairing> {
   const { host, hello: found } = await findHost(fetcher, target.hosts, { serverKey: target.serverKey, serverId: target.serverId });
   if (found.botkins !== PROTOCOL) throw new LinkError("protocol", "Update Botkins and your computer's app to the same version.");
   if (found.pairing === false) throw new LinkError("closed", "That code has expired. Show a new one on your computer.");
@@ -202,7 +209,7 @@ export type JoinTarget = {
   serverId?: string;
   name?: string;
 };
-export type JoinDevice = { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string };
+export type JoinDevice = PairDevice;
 export type JoinKeyPair = { publicKey: string; secretKey: string };
 export type JoinAttempt = { target: JoinTarget; device: JoinDevice; keys: JoinKeyPair; serverId?: string };
 export type JoinResult =
