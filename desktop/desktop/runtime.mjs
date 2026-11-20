@@ -32,6 +32,7 @@ import { performSecureUse } from "./secure-input.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
 import { liveContextFor } from "./live-context.mjs";
+import { PHONE_PATIENCE_MS, SignIns } from "./terminal/signin.mjs";
 import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
 import { zip } from "./zip.mjs";
@@ -86,7 +87,9 @@ const hostOf = (url) => {
 const REPLY_MS = 1500;
 /** A paired phone can read how up to date this computer is, look for a release and start its install. */
 export const APP_UPDATE = "app-update-v1";
-export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS];
+/** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
+export const PROVIDER_SIGNIN = "provider-signin-v1";
+export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN];
 
 /**
  * Builds the workspace, its calls and the phone link on `host`.
@@ -105,6 +108,9 @@ export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "r
  */
 export async function createRuntime({ host, dataDir, trial = false, pushed = () => {}, link: linkOptions = {}, copilot: copilotOptions = {} }) {
   let workspace,
+    // Signing a provider in without a browser here, and installing its tool: from a phone, or the
+    // terminal host's command line (desktop/terminal/signin.mjs). A token pasted there is kept in the vault.
+    signIns,
     // The model providers (desktop/providers). To add one, construct it here and list it below.
     providers,
     providerUsage,
@@ -178,7 +184,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     baseDirectory: join(dataDir, "copilot"),
     // The person's Copilot sign-in is in the keychain. A trial run is given a token instead
     // (BOTKINS_COPILOT_TOKEN, else the GitHub CLI's), or runs signed out.
-    ...(copilotOptions.github ? { github: copilotOptions.github } : trial && env("COPILOT_SIGNIN") !== "keychain" && { github: trialGitHub }),
+    // A Copilot token pasted on a phone or at the command line wins over that (signIns.copilotGitHub()).
+    github: copilotOptions.github ?? (() => signIns?.copilotGitHub() ?? (trial && env("COPILOT_SIGNIN") !== "keychain" ? trialGitHub() : undefined)),
     userHome: process.env.COPILOT_HOME || join(homedir(), ".copilot"),
     workingDirectory: dataDir,
     // A chat's session stays open for half an hour after its last use, so follow-ups start at once
@@ -257,6 +264,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     openSettings: (tab) => host.window.openSettings(tab),
   });
   // A sign-in page a provider asks for opens in the person's browser, and only a web page does.
+  signIns = new SignIns({ providers: () => providers, vault: () => workspace.vault, changed: (id) => workspace.providerChanged(id) });
+  // Tokens kept from an earlier start go where the tools read them.
+  signIns.restore();
   const openSignIn = (url) => {
     if (new URL(url).protocol !== "https:") throw new Error("That sign-in page can't be opened.");
     return host.shell.openExternal(url);
@@ -650,14 +660,28 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       }
     },
     cancelSignIn: (providerId) => providers.get(providerId).cancelSignIn(),
+    // A token kept for the provider goes too (signIns.signOut), then the provider's own sign-in.
     signOut: async (providerId) => {
-      const provider = providers.get(providerId);
-      await provider.signOut();
-      await provider.releaseSessions({ busy: true }).catch(() => {});
-      await workspace.providerChanged(provider.id);
+      await signIns.signOut(providers.get(providerId).id);
     },
-    // Every model provider with its status, and switching one on or off (Settings › Model providers).
-    providers: (refresh) => workspace.providerStatuses(refresh === true),
+    // Every model provider with its status, and how a phone can sign each in (signInWays), and
+    // switching one on or off (Settings › Model providers).
+    providers: async (refresh) => {
+      const statuses = await workspace.providerStatuses(refresh === true);
+      return statuses.map((status) => {
+        const provider = providers.byId.get(status.id);
+        return provider && status.installed ? { ...status, signInWays: signIns.ways(provider) } : status;
+      });
+    },
+    // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;
+    // the sign-in or the install command is this computer's own (desktop/terminal/signin.mjs).
+    providerSignInStart: (id, options) =>
+      signIns.start(String(id), { service: typeof options?.service === "string" ? options.service : undefined, method: typeof options?.method === "string" ? options.method : undefined, patience: PHONE_PATIENCE_MS }),
+    providerSignInRead: (session, after) => signIns.read(String(session), { after: Number(after) || 0, ms: 10_000 }),
+    providerSignInInput: (session, text) => void signIns.input(String(session), text),
+    providerSignInCancel: (session) => signIns.cancel(String(session)),
+    providerUseToken: (id, token, options) => signIns.useToken(String(id), token, { service: typeof options?.service === "string" ? options.service : undefined }),
+    installProvider: (id) => signIns.install(String(id), { patience: PHONE_PATIENCE_MS }),
     setProviderEnabled: (id, enabled) => workspace.setProviderEnabled(id, enabled),
     // A provider that holds several model services (OpenCode): look one up, connect it, remove it.
     providerServices: (id, query) => providers.require(id).services(typeof query === "string" ? query.slice(0, 100) : ""),
@@ -953,6 +977,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   return {
     workspace,
     providers,
+    signIns,
     providerUsage,
     folders,
     bridge,
@@ -998,7 +1023,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);
       voiceDesk.close();
-      return Promise.allSettled([providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]);
+      return Promise.allSettled([signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]);
     },
   };
 }

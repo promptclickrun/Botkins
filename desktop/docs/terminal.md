@@ -142,6 +142,10 @@ Botkins keeps a pasted Claude or Copilot token in its credential vault and gives
 
 To sign a provider out, run `botkins providers logout <provider>`. To see the models, run `botkins models`.
 
+### From the Botkins phone app
+
+A paired phone does all of this too, from the provider's page in Settings › Models. It shows the code with a button that copies it and opens the page on the phone, asks for a code when the tool waits for one, takes a pasted token, and signs a provider out. When a provider's tool is missing, **Install on your computer** runs the install command that the provider names (for example `npm install -g @openai/codex`, which goes to `~/.npm-global` of the `botkins` user, so it needs no root). Only the owner's phone can do this. A sign-in started on the phone and one started in a terminal are the same kind, so a second one for the same provider waits until the first ends.
+
 ## Make a bot and talk to it
 
 ```sh

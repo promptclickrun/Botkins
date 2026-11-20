@@ -14,6 +14,10 @@
 //                      vault, sealed under the host key (desktop/host/keystore.mjs), and handed
 //                      to the tool in its environment when it starts.
 //
+// A phone does the same through the link ("provider-signin-v1", desktop/runtime.mjs): the page
+// opens on the phone, and the code or a pasted token is typed there. A phone can also install a
+// provider's command-line tool, with the command the provider names for it (`install`).
+//
 // A sign-in is a session with a numbered list of events the command line reads as they come:
 //   { type: "code", url, code }     open the page, type the code
 //   { type: "open", url }           open the page on any device
@@ -23,13 +27,20 @@
 // who asked, and are gone when the session ends.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { cliEnv, run } from "../providers/cli.mjs";
 
 const MAX_EVENTS = 400;
 const SESSION_MS = 15 * 60_000;
-// A sign-in nobody reads any more (its command line was closed) is ended after this long.
+// A sign-in nobody reads any more (its command line was closed) is ended after this long. A phone
+// is given longer: the person is on the provider's page, and the app may be in the background.
 const ABANDONED_MS = 45_000;
+export const PHONE_PATIENCE_MS = 10 * 60_000;
+/** The providers whose sign-in a token can stand in for (useToken), and those with a sign-in of their own here (flow). */
+const TOKEN_PROVIDERS = new Set(["codex", "claude", "copilot"]);
+const GUIDED_PROVIDERS = new Set(["codex", "claude", "copilot"]);
 const KEEP_MS = 60_000;
 /** Where a pasted token is kept in the vault, by provider. */
 const vaultId = (provider) => "terminal-provider-" + provider;
@@ -46,9 +57,18 @@ export class SignIns {
    * @param options.env        The service's own environment, which the tools it starts inherit.
    * @param options.launch     For tests: replaces spawn.
    */
-  constructor({ providers, vault, changed = async () => {}, env = process.env, launch = spawn, runTool = run }) {
-    Object.assign(this, { providers, vault, changed, env, launch, runTool });
+  constructor({ providers, vault, changed = async () => {}, env = process.env, launch = spawn, runTool = run, platform = process.platform, home = homedir() }) {
+    Object.assign(this, { providers, vault, changed, env, launch, runTool, platform, home });
     this.sessions = new Map();
+  }
+
+  /**
+   * How this provider can be signed in from here without a browser on this computer: `guided`,
+   * its own sign-in followed step by step (start); `token`, a pasted token or key (useToken).
+   * OpenCode signs in one model service at a time (its services), so it has neither here.
+   */
+  ways(provider) {
+    return { guided: GUIDED_PROVIDERS.has(provider.id) || !!provider.signInCommand, token: TOKEN_PROVIDERS.has(provider.id) };
   }
 
   // ── Pasted tokens ───────────────────────────────────────────────────────────────────────────
@@ -93,7 +113,7 @@ export class SignIns {
     } else if (provider.id === "opencode") {
       if (!service) throw new Error("Name the model service the key is for, with --service (see `botkins providers services opencode`).");
       await provider.connectService(String(service), { key: secret });
-    } else throw new Error(provider.name + " doesn't take a pasted token. Run `botkins providers login " + provider.id + "` and follow its own sign-in.");
+    } else throw new Error(provider.name + " doesn't take a pasted token. Use its own sign-in instead.");
     await this.changed(provider.id);
     const status = await this.providers().status(provider.id);
     if (!status?.connected) {
@@ -132,17 +152,62 @@ export class SignIns {
    * Starts a sign-in that needs the person: a one-time code, or the tool's own questions.
    * @returns { session }: the id to read events from.
    */
-  async start(id, { service, method } = {}) {
+  async start(id, { service, method, patience } = {}) {
     const provider = this.providers().require(id);
+    return this.begin(provider, "sign-in", (session) => this.flow(provider, session, { service, method }), {
+      patience,
+      settle: async (status) => {
+        if (!status?.connected && !service) throw new Error("The sign-in ended, and " + provider.name + " is still signed out." + (status?.message ? " " + status.message : ""));
+        return { connected: true, account: status?.account ?? null, plan: status?.plan ?? null };
+      },
+    });
+  }
+
+  /**
+   * Installs a provider's command-line tool with the command the provider names for it
+   * (status().install.command), in a shell, as this computer's own user. What it prints is
+   * followed like a sign-in. An npm global install goes to ~/.npm-global (one of the folders
+   * tools are looked for in, desktop/providers/cli.mjs), so it needs no administrator.
+   * @returns { session }
+   */
+  async install(id, { patience } = {}) {
+    const provider = this.providers().require(id);
+    const status = await this.providers().status(provider.id);
+    if (status?.installed) throw new Error(provider.name + " is already installed.");
+    const command = typeof status?.install?.command === "string" ? status.install.command : "";
+    const guide = status?.install?.url ? " Its guide: " + status.install.url : "";
+    if (!command) throw new Error(provider.name + " can't be installed from Botkins." + guide);
+    if (this.platform === "win32") throw new Error("Installing from a phone works on macOS and Linux. Install " + provider.name + " on this computer." + guide);
+    return this.begin(provider, "install", (session) => this.installFlow(session, command), {
+      patience,
+      settle: async (now) => {
+        if (!now?.installed) throw new Error("The install finished, but " + provider.name + " still isn't found on this computer." + (now?.message ? " " + now.message : ""));
+        return { installed: true, version: now.version ?? null };
+      },
+    });
+  }
+  async installFlow(session, command) {
+    session.emit({ type: "output", text: "$ " + command });
+    const npm = /^\s*npm\s+(?:i|install)\s+(?:-g|--global)\b/.test(command);
+    // Last on the path: the folder of the Node this runs on, whose npm a terminal host has even when the system has none.
+    const env = { PATH: (await cliEnv({}, this.env)).PATH + delimiter + dirname(process.execPath), ...(npm && { NPM_CONFIG_PREFIX: join(this.home, ".npm-global") }) };
+    return this.tool(session, "/bin/sh", ["-c", command], { env, failure: "The install didn't finish. " });
+  }
+
+  /**
+   * A run that needs the person (a sign-in or an install), followed through its events. `settle`
+   * turns the provider's status once the run is over into its result, or throws why it failed.
+   */
+  async begin(provider, what, run, { patience = ABANDONED_MS, settle }) {
     for (const other of this.sessions.values()) {
       if (other.provider !== provider.id || other.done) continue;
-      // One whose command line went away is ended; one somebody is still following is theirs.
-      if (other.waiting.size || Date.now() - other.read < 3000) throw new Error("A sign-in to " + provider.name + " is already in progress in another terminal. Finish it there, or cancel it with Ctrl-C.");
+      // One nobody follows any more is ended; one somebody is still following is theirs.
+      if (other.waiting.size || Date.now() - other.read < 3000) throw new Error("A" + (what === "install" ? "n install of " : " sign-in to ") + provider.name + " is already in progress somewhere else (a terminal or a phone). Finish it there, or cancel it.");
       await this.cancel(other.id);
     }
-    const session = { id: randomUUID(), provider: provider.id, events: [], next: 0, done: false, error: null, waiting: new Set(), input: null, cancel: async () => {}, read: Date.now() };
+    const session = { id: randomUUID(), provider: provider.id, kind: what, events: [], next: 0, done: false, error: null, waiting: new Set(), input: null, cancel: async () => {}, read: Date.now() };
     const watch = setInterval(() => {
-      if (!session.waiting.size && Date.now() - session.read > ABANDONED_MS) void this.cancel(session.id);
+      if (!session.waiting.size && Date.now() - session.read > patience) void this.cancel(session.id);
     }, 5000);
     watch.unref?.();
     session.emit = (event) => {
@@ -153,13 +218,10 @@ export class SignIns {
     this.sessions.set(session.id, session);
     const limit = setTimeout(() => void this.cancel(session.id), SESSION_MS);
     limit.unref?.();
-    const flow = this.flow(provider, session, { service, method });
-    flow
+    run(session)
       .then(async () => {
         await this.changed(provider.id);
-        const status = await this.providers().status(provider.id);
-        if (!status?.connected && !service) throw new Error("The sign-in ended, and " + provider.name + " is still signed out." + (status?.message ? " " + status.message : ""));
-        session.result = { connected: true, account: status?.account ?? null, plan: status?.plan ?? null };
+        session.result = await settle(await this.providers().status(provider.id));
       })
       .catch((error) => {
         session.error = String(error?.message ?? error);
@@ -207,7 +269,7 @@ export class SignIns {
   }
   async located(provider) {
     const file = await provider.locate?.();
-    if (!file) throw new Error(provider.name + "'s command-line tool isn't installed on this host. Run `botkins doctor` to see what is missing.");
+    if (!file) throw new Error(provider.name + "'s command-line tool isn't installed on this computer. Install it first (`botkins doctor` lists what is missing).");
     return file;
   }
   /** Waits for one line from the person. */
@@ -230,9 +292,9 @@ export class SignIns {
    * a line is also said on its own, so the command line can show it as the page to open. What the
    * person types goes to the tool's input.
    */
-  async tool(session, file, args) {
+  async tool(session, file, args, { env: extra = {}, failure = "The sign-in didn't finish. " } = {}) {
     // No colors, no pager, and nothing that would look for a browser on this computer.
-    const env = await cliEnv({ NO_COLOR: "1", TERM: "dumb", BROWSER: "/bin/false", CI: undefined });
+    const env = await cliEnv({ NO_COLOR: "1", TERM: "dumb", BROWSER: "/bin/false", CI: undefined, ...extra });
     const child = this.launch(file, args, { env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     child.stdin.on("error", () => {});
     session.input = (line) => void child.stdin.write(String(line) + "\n");
@@ -273,7 +335,7 @@ export class SignIns {
         child.on("close", resolve);
       });
       if (rest.trim()) say(rest);
-      if (code !== 0) throw new Error(session.cancelled ? "Sign-in cancelled." : "The sign-in didn't finish. " + last.replace(/https:\/\/\S+/g, "").slice(0, 300));
+      if (code !== 0) throw new Error(session.cancelled ? (session.kind === "install" ? "Install cancelled." : "Sign-in cancelled.") : failure + last.replace(/https:\/\/\S+/g, "").slice(0, 300));
     } finally {
       clearInterval(idle);
       session.input = null;
