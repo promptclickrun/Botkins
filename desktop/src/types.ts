@@ -810,6 +810,11 @@ declare global {
        * State.providers.revision goes up when the answer may have changed.
        */
       providers(refresh?: boolean): Promise<ProviderStatus[]>;
+      installProvider(id: string): Promise<{ session: string }>;
+      providerSignInRead(session: string, after: number): Promise<ProviderSignInView>;
+      providerSignInCancel(session: string): Promise<unknown>;
+      providerSignInInput(session: string, text: string): Promise<void>;
+      providerUseToken(id: string, token: string, options?: { service?: string }): Promise<{ connected: boolean }>;
       /** Switches a provider on or off. At least one stays on. */
       setProviderEnabled(id: string, enabled: boolean): Promise<void>;
       /** For a provider whose signIn is "services" (OpenCode): the model services it can connect, best matches first. */
@@ -1324,8 +1329,22 @@ export type AuthStatus = {
   type?: string;
   host?: string;
 };
+export type ProviderSignInView = {
+  events: (
+    | { n: number; type: "output"; text: string }
+    | { n: number; type: "prompt"; text: string }
+    | { n: number; type: "open"; url: string }
+    | { n: number; type: "code"; url: string; code: string }
+  )[];
+  next: number;
+  done: boolean;
+  wantsInput: boolean;
+  error?: string;
+  result?: { installed?: boolean; connected?: boolean; version?: string | null; account?: string | null; plan?: string | null };
+};
 /** A model provider as Settings › Model providers shows it (desktop/providers). */
 export type ProviderStatus = {
+  signInWays?: { guided: boolean; token: boolean };
   id: string;
   name: string;
   /** One line under the name. */

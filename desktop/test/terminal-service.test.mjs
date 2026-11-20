@@ -258,8 +258,10 @@ test("a provider signs in from the terminal: its own sign-in is followed, and a 
   delete env.ANTHROPIC_API_KEY;
   delete env.CLAUDE_CODE_OAUTH_TOKEN;
   const vault = running.runtime.workspace.vault;
+  assert.equal(signIns.hasToken("claude"), false);
   vault.put("sk-ant-oat01-fixture-token-000000000000", { label: "Claude", kind: "provider-token", owner: "terminal:provider:claude" }, "terminal-provider-claude");
   signIns.restore();
+  assert.equal(signIns.hasToken("claude"), true);
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-fixture-token-000000000000");
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
   vault.put("sk-ant-api03-fixture-key-0000000000000000", {}, "terminal-provider-claude");
