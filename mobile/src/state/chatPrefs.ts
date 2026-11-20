@@ -1,5 +1,6 @@
 // How chats look and behave on this phone: steps, thinking, rich cards, Markdown, code, typing and
 // reading aloud. Saved on the phone only; the computer keeps its own two (Show thinking, Fold steps).
+import { type CompletionPosition, completionPositionOf } from "@/features/chat/completion";
 import { settleSteps, type StepsChoice } from "@/features/chat/fold";
 import { keep, readKept } from "@/state/keep";
 import { Platform } from "react-native";
@@ -25,6 +26,8 @@ export type ChatPrefs = {
   wrapCode: boolean;
   /** A small time under each message. */
   timestamps: boolean;
+  /** Where a chat lands once a reply has finished: at its end (latest) or its beginning (src/features/chat/completion.ts). */
+  completionPosition: CompletionPosition;
   /** Return sends; off makes Return a new line. */
   enterSends: boolean;
   /** Each finished reply in the open chat is read aloud. */
@@ -41,6 +44,7 @@ export const chatPrefDefaults: ChatPrefs = {
   highlight: true,
   wrapCode: false,
   timestamps: false,
+  completionPosition: "latest",
   // A phone has no Shift key, so Return makes a new line unless asked otherwise. A tablet with a keyboard may prefer sending.
   enterSends: Platform.OS === "ios" && Platform.isPad,
   readAloud: false,
@@ -57,7 +61,7 @@ export function loadChatPrefs(): Promise<void> {
       const saved = await readKept(KEY);
       if (saved) {
         const read = JSON.parse(saved) as Partial<ChatPrefs>;
-        useChatPrefs.setState({ ...chatPrefDefaults, ...read, steps: settleSteps(read) });
+        useChatPrefs.setState({ ...chatPrefDefaults, ...read, steps: settleSteps(read), completionPosition: completionPositionOf(read.completionPosition) });
       }
     } catch {
       // Unreadable choices fall back to the defaults.

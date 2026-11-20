@@ -2,9 +2,9 @@ import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { ChevronRight, Ellipsis, Repeat, X } from "lucide-react-native";
 import { type ComponentRef, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
-import Animated, { FadeIn, useAnimatedStyle } from "react-native-reanimated";
+import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Preferences, Project, QueuedMessage } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
@@ -13,10 +13,11 @@ import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { BotAvatar, Chip, EmptyState, LinkBanner, Loading, radius, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Chip, EmptyState, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
-import { showsAt } from "./scroll";
+import { completions } from "./completion";
+import { HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
 import { MAX_MENTIONS, withBoardQuote } from "./compose";
@@ -199,6 +200,9 @@ function Hello({ chat, bot, bots, projects, settings, onPick }: { chat: ChatSumm
   );
 }
 
+/** How long the list must stay unchanged after a reply finishes before it is shown from its beginning. */
+const SETTLE_MS = 350;
+
 export default function ChatScreen() {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
@@ -249,6 +253,11 @@ export default function ChatScreen() {
   // The newest message is out of view: the button that goes back to it shows.
   const away = useRef(false);
   const [awayNow, setAway] = useState(false);
+  // After a finished reply was shown from its beginning ("Position after response completes"), the
+  // list stops following new content to the bottom until the person goes back to it.
+  const [parked, setParked] = useState(false);
+  // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
+  const viewPosition = useRef(0.5);
   // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
   const scrolled = useRef(0);
   const listBox = useRef<ComponentRef<typeof View>>(null);
@@ -336,6 +345,7 @@ export default function ChatScreen() {
     }
     const timer = setTimeout(() => {
       scrollTries.current = 0;
+      viewPosition.current = 0.5;
       list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
       router.setParams({ at: undefined });
     }, 300);
@@ -387,6 +397,7 @@ export default function ChatScreen() {
       setQuote("");
     }
     setText("");
+    setParked(false);
     list.current?.scrollToOffset({ offset: 0, animated: true });
     // While the chat works, the message steers the turn where the provider takes one, as on the desktop app.
     return api.send(chatId, message, working ? { ...sent, delivery: "steer" } : sent).then(
@@ -446,6 +457,43 @@ export default function ChatScreen() {
     if (useTalk.getState().chatId === chatId) return;
     if (readAloud && lastMessage?.role === "assistant" && lastMessage.text) speakText(chatId + ":" + lastKey, lastMessage.text, { queue: true, quiet: true });
   }, [view, lastKey, lastMessage, readAloud, chatId]);
+  // "Show beginning of completed response": once a reply this phone saw under way has finished and
+  // is drawn, the list scrolls once so the reply's top is at the top of the view (completion.ts has
+  // the rules). Each change waits a moment again, so a refresh right after the reply lands first.
+  const completionPosition = useChatPrefs((prefs) => prefs.completionPosition);
+  const onShow = useOnShow();
+  const [inFront, setInFront] = useState(AppState.currentState === "active");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => setInFront(next === "active"));
+    return () => subscription.remove();
+  }, []);
+  const still = useReducedMotion();
+  useEffect(() => {
+    if (!view || !chatId) return;
+    const step = completions.check(chatId, {
+      mode: completionPosition,
+      running: runPart,
+      messages: view.messages,
+      from: view.from,
+      runs: view.runs,
+      visible: onShow && inFront,
+      // Read while the reply streams (completion.ts keeps it with the run): a reply that lands all at once moves the list too.
+      following: !awayNow,
+      drawn: !data.some((item) => item.kind === "live"),
+    });
+    if (step.kind !== "jump") return;
+    const timer = setTimeout(() => {
+      completions.done(chatId, step.runId);
+      const index = data.findIndex((item) => item.kind === "message" && item.index === step.index);
+      if (index < 0) return;
+      setParked(true);
+      scrollTries.current = 0;
+      viewPosition.current = 1;
+      list.current?.scrollToIndex({ index, viewPosition: 1, animated: !still });
+    }, SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [view, runPart, data, completionPosition, onShow, inFront, awayNow, chatId, still]);
+
   // Leaving the chat ends what is being read, and a talk in this chat.
   useEffect(
     () => () => {
@@ -517,6 +565,8 @@ export default function ChatScreen() {
             }
           }}
           scrollEventThrottle={64}
+          // Back at the newest content by their own hand: the list follows it again.
+          onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
           data={data}
           keyExtractor={(item) => item.key}
           renderItem={({ item }) =>
@@ -546,12 +596,12 @@ export default function ChatScreen() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
-          maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+          maintainVisibleContentPosition={parked ? { minIndexForVisible: 0 } : { minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
           onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
           // A message not drawn yet: go near it by the rows' average height, then to it.
           onScrollToIndexFailed={(info) => {
             list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-            if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: 0.5, animated: true }), 160);
+            if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, animated: !still }), 160);
           }}
           onEndReachedThreshold={0.6}
           ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
@@ -561,6 +611,7 @@ export default function ChatScreen() {
         <ScrollToLatest
           shown={awayNow}
           onPress={() => {
+            setParked(false);
             list.current?.scrollToOffset({ offset: 0, animated: true });
             away.current = false;
             setAway(false);

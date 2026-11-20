@@ -73,6 +73,40 @@ const MADE_UP_DIFFS = {
   "src/pricing/copy.ts": ["--- /dev/null", "+++ b/src/pricing/copy.ts", "@@ -0,0 +1,4 @@", "+export const copy = {", "+  title: \"Simple pricing\",", "+  lede: \"One plan for every team. Cancel any time.\",", "+};"].join("\n"),
 };
 
+// "long answer": a reply taller than a phone's screen, with its heading at the top, for Settings ›
+// Chat › Position after response completes.
+const LONG_ANSWER = [
+  "## Moving the team to the new relay",
+  "",
+  "Here is the whole plan, from the first check to the last switch. It's long, so it starts with what matters most.",
+  "",
+  "**The short version:** move one computer at a time, keep the old path open for a day, and watch the error count after each move. Nothing needs a new phone build.",
+  "",
+  "### Before the move",
+  "",
+  "1. Check that every computer runs the release from this week. An older one keeps working, but it can't hold two sockets, so a restart of the relay drops its phones for a few seconds.",
+  "2. Write down which phones each computer serves. The list on each computer's page is enough; there's no need to export it.",
+  "3. Pick a quiet hour. Routines that run on the hour are the busiest moment, so half past is better.",
+  "",
+  "### The move itself",
+  "",
+  "For each computer, turn the relay off and on again in its settings. It opens its new pair of sockets at once, and phones that were connected stay on the same session. Watch the computer's page: the relay line should say connected within a few seconds. If it doesn't, leave it for a minute before you try again, because the relay counts quick retries from one place.",
+  "",
+  "Then send a message from a phone that is away from home, on cellular. A reply within a few seconds means the path works end to end. If the reply is slow, look at the relay line again before anything else.",
+  "",
+  "### After the move",
+  "",
+  "- Keep the old path open for a day. Phones that were asleep during the move find the new one by themselves when they wake.",
+  "- Look at the error count the next morning. A handful of retries is normal; dozens from one computer means its clock is off, and the relay refuses a computer whose clock is more than five minutes out.",
+  "- Tell the team when it's done, so nobody restarts a computer halfway through the day just in case.",
+  "",
+  "### If something goes wrong",
+  "",
+  "Turn the relay off on the computer that misbehaves. Its phones fall back to the home network, which is slower to find away from home but keeps working. Nothing is lost: chats, routines and settings live on the computer, not on the relay.",
+  "",
+  "That's everything. Tell me which computer you'd like to start with, and I'll walk you through it.",
+].join("\n");
+
 const REPLY = [
   "Here's a quick plan for the launch week:\n\n",
   "1. **Monday:** freeze the copy and send it to review.\n",
@@ -1401,6 +1435,8 @@ export class MockBackend {
       reply = ["Here is what I made.", "", "- The notes: /Users/demo/Code/website/README.md", "- The plan: \"/Users/demo/Documents/Plans/launch plan.pdf\"", "- The build folder: /Users/demo/Code/website/out/", "- The prices: ~/Documents/Notes/prices.csv", "- Not something I can show: /Users/demo/secret/keys.txt", "", ...(picture ? ["MEDIA:" + picture.path, ""] : []), "```", "/Users/demo/Code/website/src/grant.mjs", "cat /Users/demo/Code/website/README.md", "```"].join("\n");
       this.state.artifacts.revision++;
       this.changed();
+    } else if (live() && /long answer/i.test(prompt)) {
+      reply = LONG_ANSWER;
     } else if (live() && /sandbox/i.test(prompt)) {
       const frame = randomUUID();
       this.pages.set(frame, { html: SANDBOX_VIEW, data: null, chatId: id });

@@ -3,6 +3,7 @@ import { MenuView } from "@react-native-menu/menu";
 import { ChevronsUpDown } from "lucide-react-native";
 import { View } from "react-native";
 import { useCan, useOnline, useSettings } from "@/state/hooks";
+import { COMPLETION_POSITIONS } from "@/features/chat/completion";
 import { api, attempt } from "@/state/link";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { Group, Label, Page, Row, useTheme } from "@/ui";
@@ -19,8 +20,8 @@ const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string 
   { value: "hide", label: "Hidden", subtitle: "Not in the chat; the activity has it" },
 ];
 
-/** A row whose value opens a short list of choices. */
-function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle: string }[]; onChange: (value: V) => void }) {
+/** A row whose value opens a short list of choices. `stacked` puts a long choice under the title instead of beside it. */
+function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
   const { colors } = useTheme();
   const current = options.find((option) => option.value === value) ?? options[0];
   return (
@@ -31,7 +32,7 @@ function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChang
       isAnchoredToRight
     >
       <View accessible accessibilityRole="button" accessibilityLabel={title + ", " + current.label} accessibilityHint="Opens the choices">
-        <Row title={title} subtitle={subtitle} value={current.label} trailing={<ChevronsUpDown size={16} color={colors.faint} strokeWidth={2.2} />} />
+        <Row title={title} subtitle={stacked ? current.label : subtitle} value={stacked ? undefined : current.label} trailing={<ChevronsUpDown size={16} color={colors.faint} strokeWidth={2.2} />} />
       </View>
     </MenuView>
   );
@@ -51,6 +52,19 @@ export default function Chat() {
           <ChoiceMenu title="Thinking and updates" subtitle="Its reasoning and notes while it works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />
+        </Group>
+      </View>
+
+      <View>
+        <Label>Scrolling</Label>
+        <Group>
+          <ChoiceMenu
+            title="Position after response completes"
+            value={prefs.completionPosition}
+            options={COMPLETION_POSITIONS}
+            onChange={(completionPosition) => setChatPrefs({ completionPosition })}
+            stacked
+          />
         </Group>
       </View>
 
