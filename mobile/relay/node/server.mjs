@@ -4,6 +4,11 @@
 //
 // It runs behind a TLS proxy (Caddy in deploy/azure). Rooms live in memory: a restart drops sockets, and
 // computers and phones reconnect on their own. Invite cards are kept in DATA_DIR/invites.json.
+//
+// It speaks both host protocols, as the Worker does. A botkins.host.v3 room has an active and a standby
+// socket from one runtime group, keeps a bounded set of opaque requests so a host socket reset loses
+// nothing, and acknowledges each answer to the host with 0x06. The Worker keeps that state in Durable
+// Object storage and wakes on an alarm; here it is the room's own fields and one timer.
 // Push notifications are forwarded, signed by the computer and unchanged, to PUSH_UPSTREAM, because only
 // the Botkins relay holds the Apple key. Set PUSH_UPSTREAM=off to send none.
 //
@@ -16,28 +21,40 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
-import { HOST_PROTOCOL, PHONE_PROTOCOL, hex, hostProof, networkOf, sha256, unhex } from "../src/pure.ts";
+import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "../src/pure.ts";
 import {
   BASE64URL_43,
   INVITE_ROUTE,
   MAX_MESSAGE,
+  MAX_PENDING_BYTES,
+  MAX_PENDING_REQUESTS,
   MAX_PER_FROM,
   MAX_PHONES,
   MAX_PHONE_MESSAGE,
+  MAX_V3_HOSTS,
+  NOTICE_ANSWER_ACCEPTED,
   NOTICE_HOST_CLOSED,
   NOTICE_OFFLINE,
   NOTICE_PHONE_CLOSED,
   PAGE_CSS,
+  PENDING_LIFE,
   REQUEST,
   ROOM_NAME,
   ROUTE,
+  V3_FAST_HEARTBEAT,
+  V3_FAST_SILENCE,
+  V3_LEGACY_SILENCE,
+  V3_RECONNECT_WINDOW,
+  V3_RESEAT_CLOSE,
   checkInviteDelete,
   checkInvitePut,
   joinPage,
   plain,
   prefixed,
   readCappedText,
+  readU32,
   securePage,
+  u32Bytes,
 } from "../src/shared.ts";
 
 const MAX_PUSH_BODY = 64 * 1024;
@@ -192,10 +209,11 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
   const limiters = { sockets: new Limiter(LIMITS.sockets), requests: new Limiter(LIMITS.requests), invites: new Limiter(LIMITS.invites) };
   const allowed = (kind, network) => !limits || limiters[kind].allow(network);
   const qrSource = loadQrSource(qrFile ?? fileURLToPath(new URL("../../link-host/vendor/qrcode.mjs", import.meta.url)));
-  /** room → { host, phones: Map<connHex, phone> } */
+  /** name → Room. A room is dropped once it has no socket and nothing left to remember. */
   const rooms = new Map();
-  const hosts = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE, handleProtocols: () => HOST_PROTOCOL });
+  const hosts = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE, handleProtocols: (_offered, req) => req.relayProtocol });
   const phones = new WebSocketServer({ noServer: true, maxPayload: MAX_PHONE_MESSAGE, handleProtocols: () => PHONE_PROTOCOL });
+  const GROUP = new RegExp(`^[A-Za-z0-9_-]{${HOST_GROUP_LENGTH}}$`);
 
   const networkFor = (req) => {
     const header = clientIpHeader && req.headers[clientIpHeader.toLowerCase()];
@@ -203,97 +221,425 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     const address = value ? value.split(",").at(-1).trim() : req.socket.remoteAddress;
     return networkOf(address || "local");
   };
-  const roomFor = (name) => {
-    let room = rooms.get(name);
-    if (!room) rooms.set(name, (room = { host: null, phones: new Map() }));
-    return room;
-  };
-  const forget = (name, room) => {
-    if (!room.host && !room.phones.size && rooms.get(name) === room) rooms.delete(name);
-  };
   const send = (ws, data) => {
-    if (ws.readyState === ws.OPEN) ws.send(data, { binary: typeof data !== "string" });
-  };
-
-  /** Tells the other side, once, that a socket is gone. */
-  function ended(name, room, side) {
-    if (side.notified) return;
-    side.notified = true;
-    if (side.kind === "phone") {
-      room.phones.delete(side.conn);
-      if (room.host) send(room.host.ws, prefixed(side.ids, Uint8Array.of(NOTICE_PHONE_CLOSED)));
-    } else {
-      if (room.host === side) room.host = null;
-      for (const phone of room.phones.values()) send(phone.ws, Uint8Array.of(NOTICE_HOST_CLOSED));
-    }
-    forget(name, room);
-  }
-  function end(name, room, side, code, reason) {
-    log("drop", { kind: side.kind, code, reason });
-    ended(name, room, side);
+    if (ws.readyState !== ws.OPEN) return false;
     try {
-      side.ws.close(code, reason);
+      ws.send(data, { binary: typeof data !== "string" });
+      return true;
     } catch {
-      side.ws.terminate();
+      // The socket closed between the check and the send.
+      return false;
     }
-  }
+  };
+  const isRequest = (bytes) => bytes.length >= 5 && bytes[0] === REQUEST;
+  const offline = (requestId) => prefixed(Uint8Array.of(NOTICE_OFFLINE), u32Bytes(requestId));
 
-  function attach(ws, name, room, side) {
-    side.ws = ws;
-    ws.on("message", (data, binary) => {
-      if (!binary) {
-        if (data.toString() === "ping") ws.send("pong");
-        return;
+  /**
+   * One room: the Worker's Room (../src/index.ts), with its storage as plain fields. Every method runs
+   * to its end without waiting, so no two events interleave. The method names and their order of work
+   * follow the Worker's, so the two can be read side by side.
+   */
+  class Room {
+    constructor(name) {
+      this.name = name;
+      /** Host sockets: { kind, ws, version, group, role, openedAt, lastBinaryAt, lastPingAt, heartbeat, notified, closing }. */
+      this.hosts = [];
+      /** conn (hex) → { kind, ws, conn, from, ids, at, notified }. */
+      this.phones = new Map();
+      /** The v3 reconnect window: { group, until, phones: [ids hex] }, or null. */
+      this.recovery = null;
+      /** The runtime group that last took the seat with v3, or null. */
+      this.seat = null;
+      /** Opaque requests kept for replay, and the ones already answered: the Worker's PendingState. */
+      this.next = 1;
+      this.total = 0;
+      this.items = [];
+      this.done = [];
+      this.timer = null;
+      this.due = Infinity;
+    }
+
+    openHosts() {
+      return this.hosts.filter((side) => side.ws.readyState === side.ws.OPEN);
+    }
+    openPhones() {
+      return [...this.phones.values()].filter((side) => side.ws.readyState === side.ws.OPEN);
+    }
+    openPhone(conn) {
+      const side = this.phones.get(conn);
+      return side && side.ws.readyState === side.ws.OPEN ? side : null;
+    }
+    activeHost() {
+      const open = this.openHosts();
+      return open.find((side) => side.role === "active") ?? open[0] ?? null;
+    }
+
+    /**
+     * When a v3 host socket was last heard, and when it counts as silent. The Worker has to sample its
+     * runtime's auto-response time at an alarm; this relay sees every ping, so it reads the cadence directly.
+     */
+    activity(side) {
+      const last = Math.max(side.openedAt, side.lastBinaryAt ?? 0, side.lastPingAt ?? 0);
+      return { last, deadline: last + (side.heartbeat === "fast" ? V3_FAST_SILENCE : V3_LEGACY_SILENCE) };
+    }
+
+    pinged(side) {
+      if (side.kind !== "host" || side.version !== "v3") return;
+      const now = Date.now();
+      const interval = side.lastPingAt ? now - side.lastPingAt : 0;
+      if (interval > 0 && !side.heartbeat) side.heartbeat = interval <= V3_FAST_HEARTBEAT ? "fast" : "legacy";
+      side.lastPingAt = now;
+    }
+
+    acceptHost(ws, version, group) {
+      const now = Date.now();
+      const oldHosts = this.openHosts();
+      let recovery = this.recovery;
+      if (!oldHosts.length && !recovery && this.seat) recovery = this.beginRecovery(this.seat.group);
+      const resume = version === "v3" && recovery?.group === group && recovery.until > now;
+      const sameGroup = version === "v3" && oldHosts.length > 0 && oldHosts.every((side) => side.version === "v3" && side.group === group);
+      let role = "active";
+      let replayPending = resume;
+      if (!sameGroup) {
+        // v2 keeps its one-seat behavior. A v3 group may replace v2 or a distinct v3 runtime, but
+        // sockets from one v3 group are active/standby peers and stay together.
+        const replacingV3 = oldHosts.some((side) => side.version === "v3");
+        const staleRecovery = !!recovery && (version !== "v3" || recovery.group !== group || recovery.until <= now);
+        // A new incarnation must not inherit opaque requests from the old one.
+        if (replacingV3 || staleRecovery) this.failRecovery(!(staleRecovery && !replacingV3 && oldHosts.length > 0));
+        for (const old of oldHosts) this.end(old, 4000, "replaced");
+      } else {
+        // A reconnect from the same proven runtime is not a competing computer.
+        const reseat = this.reseatSameGroup(oldHosts, now);
+        role = reseat.role;
+        replayPending ||= reseat.replay;
       }
-      const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      const side = { kind: "host", ws, version, group: version === "v3" ? group : undefined, role: version === "v3" ? role : "active", openedAt: now, notified: false, closing: false };
+      this.hosts.push(side);
+      if (version === "v3") {
+        this.seat = { group };
+        this.recovery = null;
+        if (replayPending) {
+          for (const ids of recovery?.phones ?? []) {
+            if (!this.openPhone(ids.slice(0, 16))) send(ws, prefixed(unhex(ids), Uint8Array.of(NOTICE_PHONE_CLOSED)));
+          }
+          this.drainPending(side, true);
+        }
+      } else {
+        this.seat = null;
+        this.recovery = null;
+        this.clearPending();
+      }
+      this.attach(side);
+    }
+
+    acceptPhone(ws, from) {
+      // A new phone is never turned away. Its address's oldest socket makes room first, then the room's.
+      const list = this.openPhones().sort((a, b) => a.at - b.at);
+      const closing = new Set();
+      const same = list.filter((phone) => phone.from === from);
+      if (same.length >= MAX_PER_FROM) closing.add(same[0]);
+      if (list.length - closing.size >= MAX_PHONES) closing.add(list.find((phone) => !closing.has(phone)));
+      for (const phone of closing) this.end(phone, 4008, "replaced");
+      const conn = crypto.getRandomValues(new Uint8Array(8));
+      const side = { kind: "phone", ws, conn: hex(conn), from, ids: prefixed(conn, unhex(from)), at: Date.now(), notified: false };
+      this.phones.set(side.conn, side);
+      this.attach(side);
+    }
+
+    attach(side) {
+      const { ws } = side;
+      ws.on("message", (data, binary) => {
+        if (!binary) {
+          // Any other text is ignored.
+          if (data.toString() !== "ping") return;
+          this.pinged(side);
+          send(ws, "pong");
+        } else {
+          this.message(side, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+        }
+        this.settle();
+      });
+      ws.on("close", (code) => {
+        log("close", { kind: side.kind, code });
+        this.closed(side);
+      });
+      ws.on("error", () => {
+        log("error", { kind: side.kind });
+        this.closed(side);
+      });
+      log("open", { kind: side.kind, phones: this.openPhones().length });
+      this.settle();
+    }
+
+    message(side, bytes) {
+      if (side.ws.readyState !== side.ws.OPEN) return;
       if (side.kind === "phone") {
-        if (!room.host) {
-          if (bytes.length >= 5 && bytes[0] === REQUEST) send(ws, prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+        const host = this.activeHost();
+        if (!host) {
+          // A v3 host has a short reconnect window. Keep opaque requests for that window; a v2 room
+          // still gets the immediate per-request offline answer.
+          if (!this.recovery && this.seat) this.beginRecovery(this.seat.group);
+          const held = this.recovery && this.recovery.until > Date.now() ? this.storePending(side.ids, bytes) : null;
+          if (!held && isRequest(bytes)) send(side.ws, offline(readU32(bytes, 1)));
           return;
         }
-        send(room.host.ws, prefixed(side.ids, bytes));
-      } else {
-        if (bytes.length < 9) return;
-        const phone = room.phones.get(hex(bytes.subarray(0, 8)));
-        if (phone) send(phone.ws, bytes.subarray(8));
+        if (host.version !== "v3") {
+          send(host.ws, prefixed(side.ids, bytes));
+          return;
+        }
+        if (!isRequest(bytes)) return;
+        // If a reconnect just drained held requests, they keep their arrival order before a new one.
+        this.drainPending(host);
+        const pending = this.storePending(side.ids, bytes);
+        if (!pending) send(side.ws, offline(readU32(bytes, 1)));
+        else if (send(host.ws, prefixed(side.ids, bytes))) pending.sent = true;
+        return;
       }
-    });
-    ws.on("close", (code) => {
-      log("close", { kind: side.kind, code });
-      ended(name, room, side);
-    });
-    ws.on("error", () => {
-      log("error", { kind: side.kind });
-      ended(name, room, side);
-    });
-    log("open", { kind: side.kind, phones: room.phones.size });
+      if (side.closing) return;
+      if (side.version === "v3") side.lastBinaryAt = Date.now();
+      // [conn 8] + the answer. A short message, or a phone that is gone, is dropped.
+      if (bytes.length < 9) return;
+      if (side.version === "v3" && bytes.length >= 13 && bytes[8] === 0x02) {
+        const accepted = this.ackPending(bytes.subarray(0, 8), readU32(bytes, 9));
+        if (!accepted) return;
+        // The host can now evict its replay cache; a duplicate answer gets the same acknowledgement.
+        send(side.ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), u32Bytes(accepted.requestId))));
+        if (accepted.duplicate) return;
+      }
+      const phone = this.openPhone(hex(bytes.subarray(0, 8)));
+      if (phone) send(phone.ws, bytes.subarray(8));
+    }
+
+    /** A socket is gone, by its own close or by an error. `ws` reports both, so the second call finds nothing to do. */
+    closed(side) {
+      const first = !side.notified && !side.closing;
+      if (side.kind === "host") this.hosts = this.hosts.filter((entry) => entry !== side);
+      else if (this.phones.get(side.conn) === side) this.phones.delete(side.conn);
+      this.ended(side);
+      if (side.kind === "host" && first) this.hostEnded(side);
+      if (side.kind === "phone") this.dropPendingFor(side.ids);
+      this.settle();
+    }
+
+    /**
+     * Same-group replacement repairs one runtime's two-seat transport; it is not a takeover. With two
+     * seats, the newest proven socket is always active and the survivor is standby. The close code is
+     * not 4000, which tells a host that a different computer took the room.
+     */
+    reseatSameGroup(hosts, now) {
+      const ordered = hosts.map((side) => ({ side, ...this.activity(side) }));
+      if (!ordered.length) return { role: "active", replay: true };
+      const active = ordered.find((entry) => entry.side.role === "active") ?? ordered[0];
+      const staleActive = active.deadline <= now;
+      // The first standby joins before either ping has fired. That alone is not evidence of a dead active.
+      if (ordered.length < MAX_V3_HOSTS && !staleActive) return { role: "standby", replay: false };
+      // Two open seats are a full re-seat, even when both recently answered a ping: the new proven
+      // socket must be the active route. The least recently heard seat goes, the survivor is standby.
+      const leastRecent = [...ordered].sort((a, b) => a.last - b.last || a.side.openedAt - b.side.openedAt)[0];
+      this.end(leastRecent.side, V3_RESEAT_CLOSE, "replaced");
+      for (const entry of ordered) if (entry !== leastRecent) entry.side.role = "standby";
+      return { role: "active", replay: true };
+    }
+
+    /** The room's one timer fired: the Worker's alarm. */
+    expire() {
+      this.timer = null;
+      this.due = Infinity;
+      const now = Date.now();
+      this.reapStaleHosts(now);
+      if (this.recovery && this.activeHost()) this.recovery = null;
+      // The old runtime did not return. Fail both queued and in-flight phones once.
+      else if (this.recovery && this.recovery.until <= now) this.failRecovery();
+      this.expirePending(now);
+      this.settle();
+    }
+
+    reapStaleHosts(now) {
+      const entries = this.openHosts().filter((side) => side.version === "v3");
+      const stale = entries.filter((side) => this.activity(side).deadline <= now);
+      if (!stale.length) return;
+      const active = entries.find((side) => side.role === "active") ?? entries[0];
+      const staleActive = stale.includes(active);
+      const victims = staleActive ? stale : stale.filter((side) => side !== active);
+      for (const victim of victims) this.end(victim, V3_RESEAT_CLOSE, "replaced");
+      const survivors = entries.filter((side) => !victims.includes(side));
+      if (staleActive && survivors.length) {
+        survivors.forEach((side, at) => (side.role = at === 0 ? "active" : "standby"));
+        this.drainPending(survivors[0], true);
+      } else if (!survivors.length && stale[0].group) {
+        this.beginRecovery(stale[0].group);
+      }
+    }
+
+    beginRecovery(group, leaving) {
+      if (this.openHosts().length) return null;
+      if (this.recovery?.group === group) return this.recovery;
+      // Every phone the computer has not been told about. One whose close has begun counts too: `ws`
+      // reports a close only when the connection is gone, so a phone and the computer leaving together
+      // can arrive here in either order.
+      const ids = [...this.phones.values()].filter((side) => !side.notified).map((side) => hex(side.ids));
+      if (leaving && !ids.includes(hex(leaving))) ids.push(hex(leaving));
+      this.recovery = { group, until: Date.now() + V3_RECONNECT_WINDOW, phones: ids };
+      return this.recovery;
+    }
+
+    hostEnded(side) {
+      const other = this.openHosts();
+      if (other.length) {
+        if (side.version !== "v3") return;
+        const currentActive = other.find((entry) => entry.role === "active");
+        const standby = side.role === "active" || !currentActive ? (other.find((entry) => entry.role !== "active") ?? other[0]) : null;
+        if (standby) {
+          standby.role = "active";
+          this.drainPending(standby, true);
+        }
+        return;
+      }
+      if (side.version === "v3" && side.group) {
+        this.beginRecovery(side.group);
+      } else {
+        this.seat = null;
+        this.clearPending(true);
+        this.recovery = null;
+      }
+    }
+
+    /** Ends a v3 reconnect window or an explicit cross-runtime takeover. */
+    failRecovery(notify = true) {
+      this.clearPending(true);
+      this.recovery = null;
+      this.seat = null;
+      if (notify) for (const phone of this.openPhones()) send(phone.ws, Uint8Array.of(NOTICE_HOST_CLOSED));
+    }
+
+    pruneDone(now = Date.now()) {
+      this.done = this.done.filter((entry) => entry.at + PENDING_LIFE > now).slice(-128);
+    }
+
+    storePending(ids, body) {
+      if (!isRequest(body) || body.length > MAX_PHONE_MESSAGE) return null;
+      if (this.items.length >= MAX_PENDING_REQUESTS || this.total + body.length > MAX_PENDING_BYTES) return null;
+      const conn = hex(ids);
+      const requestId = readU32(body, 1);
+      const now = Date.now();
+      this.pruneDone(now);
+      const same = (entry) => entry.ids === conn && entry.requestId === requestId;
+      if (this.items.some(same) || this.done.some(same)) return null;
+      // A copy: the bytes the socket handed over belong to its read buffer.
+      const item = { id: this.next, ids: conn, requestId, size: body.length, at: now, sent: false, body: body.slice() };
+      this.next = this.next < 2_000_000_000 ? this.next + 1 : 1;
+      this.items.push(item);
+      this.total += item.size;
+      return item;
+    }
+
+    removePending(item) {
+      this.items = this.items.filter((entry) => entry !== item);
+      this.total -= item.size;
+      this.done.push({ ids: item.ids, requestId: item.requestId, at: Date.now() });
+    }
+
+    drainPending(host, force = false) {
+      for (const item of [...this.items]) {
+        if (item.sent && !force) continue;
+        if (!send(host.ws, prefixed(unhex(item.ids), item.body))) break;
+        item.sent = true;
+      }
+    }
+
+    ackPending(conn, requestId) {
+      this.pruneDone();
+      const prefix = hex(conn);
+      const same = (entry) => entry.requestId === requestId && entry.ids.startsWith(prefix);
+      const item = this.items.find(same);
+      if (!item) {
+        const done = this.done.find(same);
+        return done ? { ...done, duplicate: true } : null;
+      }
+      this.removePending(item);
+      return { ids: item.ids, requestId, duplicate: false };
+    }
+
+    dropPendingFor(ids) {
+      const prefix = hex(ids);
+      this.items = this.items.filter((item) => item.ids !== prefix);
+      this.total = this.items.reduce((sum, item) => sum + item.size, 0);
+      this.done = this.done.filter((item) => item.ids !== prefix);
+    }
+
+    clearPending(keepDone = false) {
+      this.items = [];
+      this.total = 0;
+      if (!keepDone) this.done = [];
+    }
+
+    expirePending(now) {
+      for (const item of this.items.filter((entry) => entry.at + PENDING_LIFE <= now)) {
+        const phone = this.openPhone(item.ids.slice(0, 16));
+        if (phone) send(phone.ws, offline(item.requestId));
+        this.removePending(item);
+      }
+      this.pruneDone(now);
+    }
+
+    /** Tells the other side, once, that a socket is gone: the computer about a phone, every phone about the computer. */
+    ended(side) {
+      if (side.notified) return;
+      side.notified = true;
+      if (side.kind === "phone") {
+        const host = this.activeHost();
+        if (host) send(host.ws, prefixed(side.ids, Uint8Array.of(NOTICE_PHONE_CLOSED)));
+        else if (this.seat) this.beginRecovery(this.seat.group, side.ids);
+      } else if (side.version !== "v3") {
+        // What the phones still wait for will not be answered; they can try again at once. A v3
+        // standby is already a usable seat, so its active peer disappearing is silent.
+        for (const phone of this.openPhones()) send(phone.ws, Uint8Array.of(NOTICE_HOST_CLOSED));
+      }
+    }
+
+    /** Closes a socket from this side, to make room for another. The reason is one of our own fixed words. */
+    end(side, code, reason) {
+      log("drop", { kind: side.kind, code, reason });
+      if (side.kind === "host") side.closing = true;
+      try {
+        side.ws.close(code, reason);
+      } catch {
+        side.ws.terminate();
+      }
+      this.ended(side);
+    }
+
+    /** After every event: set the timer for the next deadline, and drop the room when nothing is left. */
+    settle() {
+      const times = [
+        this.recovery?.until ?? Infinity,
+        ...this.openHosts().map((side) => (side.version === "v3" ? this.activity(side).deadline : Infinity)),
+        ...this.items.map((item) => item.at + PENDING_LIFE),
+        ...this.done.map((item) => item.at + PENDING_LIFE),
+      ];
+      const due = Math.min(...times);
+      if (due !== this.due) {
+        clearTimeout(this.timer);
+        this.timer = null;
+        this.due = due;
+        if (Number.isFinite(due)) {
+          // Never sooner than a few milliseconds, so a deadline that is not yet due cannot spin.
+          this.timer = setTimeout(() => this.expire(), Math.max(5, due - Date.now()));
+          this.timer.unref();
+        }
+      }
+      if (!this.hosts.length && !this.phones.size && !this.recovery && !this.seat && !this.items.length && !this.done.length && rooms.get(this.name) === this) {
+        rooms.delete(this.name);
+      }
+    }
   }
 
-  function acceptHost(ws, name) {
-    const room = roomFor(name);
-    // One computer socket per room: a new one replaces the old.
-    if (room.host) end(name, room, room.host, 4000, "replaced");
-    const side = { kind: "host", notified: false };
-    room.host = side;
-    attach(ws, name, room, side);
-  }
-
-  function acceptPhone(ws, name, from) {
-    const room = roomFor(name);
-    // A new phone is never turned away. Its address's oldest socket makes room first, then the room's.
-    const list = [...room.phones.values()].sort((a, b) => a.at - b.at);
-    const closing = new Set();
-    const same = list.filter((phone) => phone.from === from);
-    if (same.length >= MAX_PER_FROM) closing.add(same[0]);
-    if (list.length - closing.size >= MAX_PHONES) closing.add(list.find((phone) => !closing.has(phone)));
-    for (const phone of closing) end(name, room, phone, 4008, "replaced");
-    const conn = crypto.getRandomValues(new Uint8Array(8));
-    const side = { kind: "phone", conn: hex(conn), from, ids: prefixed(conn, unhex(from)), at: Date.now(), notified: false };
-    // The room may have been forgotten while the oldest sockets closed; keep the live one.
-    const live = roomFor(name);
-    live.phones.set(side.conn, side);
-    attach(ws, name, live, side);
-  }
+  const roomFor = (name) => {
+    let room = rooms.get(name);
+    if (!room) rooms.set(name, (room = new Room(name)));
+    return room;
+  };
 
   async function forwardPush(request) {
     if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });
@@ -404,13 +750,20 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
         .map((entry) => entry.trim())
         .filter(Boolean);
       if (route[1] === "host") {
-        if (!(await hostProof(offered, room, Math.floor(Date.now() / 1000)))) return refuse(socket, plain("Unauthorized", 401));
-        hosts.handleUpgrade(req, socket, head, (ws) => acceptHost(ws, room));
+        // The computer proves it owns the room by signing with the key the room is a hash of.
+        const now = Math.floor(Date.now() / 1000);
+        const v3 = offered.includes(HOST_PROTOCOL_V3);
+        const group = v3 ? (offered.find((entry) => entry.startsWith("g."))?.slice(2) ?? "") : "";
+        if (v3 ? !(await hostProofV3(offered, room, now)) || !GROUP.test(group) : !(await hostProof(offered, room, now))) {
+          return refuse(socket, plain("Unauthorized", 401));
+        }
+        req.relayProtocol = v3 ? HOST_PROTOCOL_V3 : HOST_PROTOCOL;
+        hosts.handleUpgrade(req, socket, head, (ws) => roomFor(room).acceptHost(ws, v3 ? "v3" : "v2", group));
       } else {
         if (!offered.includes(PHONE_PROTOCOL)) return refuse(socket, plain("Bad request", 400));
         // `from` stands for the client's network without revealing it, and differs per room.
         const from = hex((await sha256(room + ":" + network)).subarray(0, 8));
-        phones.handleUpgrade(req, socket, head, (ws) => acceptPhone(ws, room, from));
+        phones.handleUpgrade(req, socket, head, (ws) => roomFor(room).acceptPhone(ws, from));
       }
     } catch {
       socket.destroy();

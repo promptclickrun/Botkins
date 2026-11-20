@@ -985,6 +985,8 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
       replacement.send(bytes(replay.subarray(0, 8), reply));
       assert.deepEqual(await p.next(), reply);
     }
+    // The Node relay keeps the held requests in memory: there is no hibernation to wake from.
+    if (NODE_RELAY) return;
     assert.ok((output.match(/"event":"wake"/g) ?? []).length > wakesBefore, "the room must wake during recovery");
   });
 
