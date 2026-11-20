@@ -17,7 +17,6 @@ import { createRuntime } from "../runtime.mjs";
 import { loadConfig, saveConfig } from "./config.mjs";
 import { controlApi, dispatcher } from "./control.mjs";
 import { createLog } from "./logs.mjs";
-import { SignIns } from "./signin.mjs";
 import { listenControl } from "./socket.mjs";
 
 /** Makes a folder the service's own: there, and closed to everyone else. */
@@ -117,12 +116,11 @@ export async function startService({ paths, version, trial = false, out, console
       // server's address for this start, and BOTKINS_LINK_PORT sets the port, which has to be the
       // one the container publishes (a phone uses the link's own port at every address).
       link: { port: /^\d{1,5}$/.test(env.BOTKINS_LINK_PORT ?? "") ? Number(env.BOTKINS_LINK_PORT) : config.link.port, extraHosts: [...config.link.addresses, ...(env.BOTKINS_PAIR_ADDRESS ? [env.BOTKINS_PAIR_ADDRESS.replace(/:\d+$/, "")] : [])], announce: trial ? false : config.link.announce },
-      copilot: { github: () => signIns?.copilotGitHub() },
     });
     service.runtime = runtime;
     runtime.subscribe(bump);
-    signIns = new SignIns({ providers: () => runtime.providers, vault: () => runtime.workspace.vault, changed: (id) => runtime.workspace.providerChanged(id), env });
-    signIns.restore();
+    // The runtime's own: a phone signs providers in and installs them through the same sessions (desktop/runtime.mjs).
+    signIns = runtime.signIns;
     service.signIns = signIns;
     /** Makes the running link agree with the settings. What only a start picks up is left for the next one. */
     const apply = async (next) => {

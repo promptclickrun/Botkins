@@ -206,6 +206,14 @@ for (const name of [
   "finishProviderService",
   "cancelProviderService",
   "disconnectProviderService",
+  // Signing a provider in and installing its tool without a browser here ("provider-signin-v1";
+  // a phone uses these, and the app can too).
+  "providerSignInStart",
+  "providerSignInRead",
+  "providerSignInInput",
+  "providerSignInCancel",
+  "providerUseToken",
+  "installProvider",
   "appInfo",
   "appUpdateStatus",
   "checkAppUpdate",
