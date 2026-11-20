@@ -1358,7 +1358,9 @@ export class LinkHost extends EventEmitter {
   async dispatch(session, message, gone, via = "http") {
     const method = String(message?.m ?? "");
     const args = Array.isArray(message?.a) ? message.a : [];
-    const principal = this.principal(session.deviceId) ?? session.principal ?? { kind: "owner" };
+    // Only the host's own calls come without a device. A device whose member record is gone gets
+    // nothing, never the owner's rights.
+    const principal = session.deviceId === undefined ? { kind: "owner" } : this.principal(session.deviceId);
     if (!principal) throw new Failure("This device is no longer on the team.");
     session.principal = principal;
     const state = this.backend.snapshot();
@@ -1533,7 +1535,8 @@ export class LinkHost extends EventEmitter {
   viewParts(session, watching) {
     const principal = this.principal(session.deviceId);
     if (principal?.kind === "owner") return this.parts;
-    const key = principal?.kind === "member" ? "member:" + principal.memberId : "owner";
+    if (principal?.kind !== "member") return new Map();
+    const key = "member:" + principal.memberId;
     const previous = this.partViews.get(key) ?? new Map();
     const raw = Object.fromEntries([...this.parts].map(([name, part]) => [name, JSON.parse(part.json)]));
     const values = filterParts(raw, principal, this.store.data.team);
