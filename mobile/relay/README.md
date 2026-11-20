@@ -74,6 +74,22 @@ Under `wrangler dev` a local client can set `CF-Connecting-IP` itself, and the W
 
 None of this logs in to Cloudflare or changes anything in an account.
 
+## Self-hosted relay on Node
+
+`node/server.mjs` is the same relay on plain Node, for a server that should not depend on `relay.botkins.app`. The Azure one-click deployment runs it behind Caddy (`deploy/azure`).
+
+```sh
+npm run start:node   # PORT (8080), HOST, DATA_DIR, CLIENT_IP_HEADER, PUSH_UPSTREAM, RATE_LIMITS
+npm run test:node    # the relay tests above against it (RELAY_TARGET=node), and test/node.test.mjs
+```
+
+- It speaks `botkins.host.v3` and `botkins.host.v2` as the Worker does: the active and standby host sockets, the bounded request cache and its replay, the `0x06` acknowledgements, the silent-seat rules and the 4001 repair close. The checks and limits are the Worker's own code (`src/pure.ts`, `src/shared.ts`). The whole of `test/relay.test.mjs` passes against it. Only the two assertions that count Durable Object wakes are skipped, because Node has nothing to hibernate.
+- Rooms and held requests are in memory. A restart drops the sockets, and computers and phones connect again on their own. Invite cards are kept in `DATA_DIR/invites.json`.
+- It runs behind a TLS proxy. `CLIENT_IP_HEADER` names the header in which that proxy gives the client's address. Without it the relay uses the address of the socket.
+- It has no Apple key. It forwards `POST /v1/push` unchanged to `PUSH_UPSTREAM` (`https://relay.botkins.app` by default). The computer already signed the request, so the relay adds nothing. `PUSH_UPSTREAM=off` sends none.
+- It serves `/pair`: a page that draws a QR code of the `botkins://pair` link in the URL fragment. The browser does not send the fragment to the relay.
+- It keeps the logging rule above: event kinds, counts, close codes and fixed reasons only.
+
 ## Deploy
 
 ```sh

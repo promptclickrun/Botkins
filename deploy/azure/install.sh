@@ -41,7 +41,13 @@ trap 'fail "line $LINENO"' ERR
 
 say "Installing Docker"
 export DEBIAN_FRONTEND=noninteractive
-if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
+if command -v docker >/dev/null && ! docker compose version >/dev/null 2>&1 && dpkg -s docker.io >/dev/null 2>&1; then
+  # A machine that already runs Ubuntu's own Docker keeps it, and whatever it runs: only Compose
+  # and Buildx are added. Docker's packages would replace the engine and restart its containers.
+  for i in $(seq 1 30); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 5; done
+  apt-get update -q
+  apt-get install -yq ca-certificates curl git docker-compose-v2 docker-buildx
+elif ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
   for i in $(seq 1 30); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 5; done
   apt-get update -q
   apt-get install -yq ca-certificates curl git
@@ -53,6 +59,7 @@ if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; t
   apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 systemctl enable --now docker
+command -v git >/dev/null || { apt-get update -q; apt-get install -yq git; }
 
 say "Fetching Botkins ($REF)"
 SRC=/opt/botkins/src

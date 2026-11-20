@@ -29,9 +29,13 @@ FQDN=$(setting BOTKINS_FQDN)
 MODE=$(setting BOTKINS_MODE)
 if [ "$MODE" = terminal ]; then PROFILE=terminal; else MODE=screen; PROFILE=display; fi
 
+# A server's own changes to the deployment, if it has any: one more Compose file, laid over the two.
+OVERRIDE=/etc/botkins/docker-compose.override.yml
 compose() {
+  local more=()
+  [ -f "$OVERRIDE" ] && more=(-f "$OVERRIDE")
   docker compose --project-directory "$SRC/desktop" --env-file "$ENV" --profile "$PROFILE" \
-    -f "$SRC/desktop/docker-compose.yml" -f "$SRC/deploy/azure/docker-compose.azure.yml" "$@"
+    -f "$SRC/desktop/docker-compose.yml" -f "$SRC/deploy/azure/docker-compose.azure.yml" "${more[@]}" "$@"
 }
 
 # ── The terminal host ─────────────────────────────────────────────────────────────────────────

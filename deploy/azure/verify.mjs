@@ -8,7 +8,7 @@
 //   2. pairs through the relay with the code in the link,
 //   3. opens a session and makes calls,
 //   4. with --screen, turns the screen on the way the phone app does (a ticket, signed by the
-//      phone's presence key) and reads one picture of the server's display.
+//      phone's presence key), reads one picture of the server's display, and turns it off again.
 // The pairing code works once, so each run needs a new link (`botkins pair` on the server).
 // It uses the app's own link client, and needs no `npm install`.
 import assert from "node:assert/strict";
@@ -72,12 +72,16 @@ try {
   const devices = await phone.call("link.devices.list");
   assert.ok(devices.some((device) => device.id === pairing.deviceId), "the server lists this device");
   step("link.devices.list names this device among " + devices.length);
-  const info = await phone.call("link.screen.info");
-  step("link.screen.info: " + JSON.stringify(info));
+  await until("what the server says about itself", () => !!parts.host && !!parts.meta);
+  step("the server says: " + JSON.stringify(parts.host));
 
   if (screen) {
-    assert.equal(info.available, true, "the server reports a display");
-    assert.equal(info.canView, false, "nothing is granted before the phone confirms");
+    assert.equal(parts.host.headless, true);
+    assert.equal(parts.host.display?.available, true, "the server reports its display as available");
+    assert.ok(parts.meta.capabilities.includes("screen-grant-v1") && parts.meta.capabilities.includes("screen-grant-relay-v1"), "the server takes a screen grant through its own relay");
+    assert.equal(parts.phones?.[pairing.deviceId]?.presence, true, "the server kept this phone's presence key");
+    if (parts.host.screen !== "off") await phone.call("link.screen.revoke");
+    assert.equal((await phone.call("link.screen.info")).canView, false, "nothing is granted before the phone confirms");
     // What ScreenAccess.tsx does after Face ID: a ticket from the server, signed by the presence key.
     const level = "view";
     const { ticket } = await phone.call("link.screen.grant.begin", level);
@@ -95,8 +99,9 @@ try {
     step("link.screen.frame returned a JPEG of display " + display + ": " + jpeg.length + " bytes" + (shot.width ? ", " + shot.width + "x" + shot.height : "") + (frameFile ? ", saved to " + frameFile : ""));
     await phone.call("link.screen.revoke");
     step("screen access revoked");
-  } else if (info.available === false) {
-    step("the server has no screen, as a terminal host should");
+  } else {
+    const info = await phone.call("link.screen.info");
+    step("link.screen.info: " + JSON.stringify(info));
   }
   console.log("\nAll checks passed. Direct requests refused here: " + direct + ". Device id on the server: " + pairing.deviceId);
 } catch (error) {

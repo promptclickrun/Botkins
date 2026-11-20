@@ -26,7 +26,10 @@ services:
   host:
     environment:
       BOTKINS_RELAY_URL: "https://${BOTKINS_FQDN:?}"
-      # Phones reach this server through its relay only.
+      # Phones reach this server through its relay only. So the relay counts as the server's own:
+      # a phone sets the screen's level through it, with the same ticket and Face ID signature
+      # as on the server's own network (desktop/desktop/link/grant.mjs).
+      BOTKINS_RELAY_OWN: "1"
       BOTKINS_PAIR_ADDRESS: ""
       BOTKINS_PAIR_TTL_MS: "${BOTKINS_PAIR_TTL_MS:-3600000}"
     depends_on: [caddy]
