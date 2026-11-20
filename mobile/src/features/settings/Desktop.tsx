@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { Check, Eraser, HardDrive, LogIn, Monitor, MonitorCog, Plus, QrCode, RefreshCw, SquareSlash, Unplug } from "lucide-react-native";
+import { Check, Eraser, HardDrive, LogIn, Monitor, MonitorCog, Plus, QrCode, RefreshCw, SquareSlash, Unplug, Users } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import { isRelayHost } from "@/link/relay";
@@ -105,6 +105,7 @@ function Computers() {
           );
         })}
         <Row leading={<IconTile icon={Plus} />} title="Add a computer" tone="accent" chevron onPress={addComputer} />
+        <Row leading={<IconTile icon={Users} />} title="Join a team with a code" tone="accent" chevron onPress={() => router.push("/join")} />
       </Group>
     </View>
   );
@@ -118,6 +119,9 @@ export default function Desktop() {
   const link = useApp((state) => state.link);
   const route = useApp((state) => state.route);
   const meta = usePart("meta");
+  const member = meta?.you?.kind === "member";
+  const teamPart = usePart("team");
+  const teamName = teamPart && "me" in teamPart ? teamPart.team.name : undefined;
   const name = pairing?.name ?? "Your computer";
   const others = useApp((state) => state.pairings.length > 1);
   const status = LINK_STATUS[link];
@@ -127,9 +131,9 @@ export default function Desktop() {
   const label = linkLabel(link, route);
 
   const confirmUnpair = () =>
-    Alert.alert("Unpair from " + name + "?", others ? "Your other computers stay paired." : undefined, [
+    Alert.alert(member ? "Leave this team?" : "Unpair from " + name + "?", member ? "This phone will be disconnected from the team." : others ? "Your other computers stay paired." : undefined, [
       { text: "Cancel", style: "cancel" },
-      { text: "Unpair", style: "destructive", onPress: () => void unpair() },
+      { text: member ? "Leave" : "Unpair", style: "destructive", onPress: () => void unpair() },
     ]);
 
   return (
@@ -186,16 +190,16 @@ export default function Desktop() {
         </Group>
       )}
 
-      <ScreenAccess />
+      {!member && <ScreenAccess />}
 
-      <Devices />
+      {!member && <Devices />}
 
-      <Background name={name} />
+      {!member && <Background name={name} />}
 
-      <Storage />
+      {!member && <Storage />}
 
       <Group>
-        <Row leading={<IconTile icon={Unplug} color={colors.danger} />} title={"Unpair from " + name} titleLines={2} tone="danger" onPress={confirmUnpair} />
+        <Row leading={<IconTile icon={Unplug} color={colors.danger} />} title={member ? "Leave " + (teamName ?? "team") : "Unpair from " + name} titleLines={2} tone="danger" onPress={confirmUnpair} />
       </Group>
     </Page>
   );

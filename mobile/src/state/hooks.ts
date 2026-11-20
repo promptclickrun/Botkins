@@ -1,9 +1,10 @@
 // How screens read the computer's state.
 import { useEffect, useMemo } from "react";
 import type { BotkinState } from "@/data/botkinMotion";
-import type { Bot, ChatSchedule, ChatSummary, Live, ModelInfo, Parts, ProviderStatus, SkillInfo } from "@/link/types";
+import type { Bot, ChatSchedule, ChatSummary, Live, ModelInfo, Parts, ProviderStatus, Scope, SkillInfo } from "@/link/types";
 import { api, watchChat } from "./link";
 import { type ChatView, useApp } from "./store";
+import { can } from "./team";
 
 const NONE: never[] = [];
 
@@ -16,6 +17,8 @@ export const useChats = (): ChatSummary[] => usePart("chats") ?? NONE;
 export const useChat = (id: string | undefined) => useApp((state) => state.parts.chats?.find((chat) => chat.id === id));
 export const useSettings = () => usePart("settings");
 export const useOnline = () => useApp((state) => state.link === "online");
+export const useCan = (scope: Scope, action: string) => useApp((state) => can(state.parts, scope, action));
+export const useMember = () => useApp((state) => state.parts.meta?.you?.kind === "member");
 /** Whether the computer's app names a capability (`meta.capabilities`). False until the computer has answered. */
 export const useCapability = (name: string) => useApp((state) => state.parts.meta?.capabilities.includes(name) ?? false);
 

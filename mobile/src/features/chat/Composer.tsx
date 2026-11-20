@@ -10,7 +10,7 @@ import { Alert, Linking, ScrollView, Text, TextInput, View } from "react-native"
 import Svg, { Circle } from "react-native-svg";
 import type { BoardItem, Bot, MentionInput } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { usePart, useSettings } from "@/state/hooks";
+import { useCan, usePart, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
@@ -184,6 +184,7 @@ export function Composer({
   model: ModelPill;
   inputRef: RefObject<ComponentRef<typeof TextInput> | null>;
 }) {
+  const canManage = useCan("agents", "manage");
   const { colors, dark, type } = useTheme();
   const enterSends = useChatPrefs((prefs) => prefs.enterSends);
   const capabilities = usePart("meta")?.capabilities;
@@ -295,8 +296,9 @@ export function Composer({
     if (!trigger) return;
     if (option.action) {
       replace(value.slice(0, trigger.start) + value.slice(trigger.end).replace(/^ /, ""), trigger.start);
-      if (option.action === "model") router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } });
-      else void attempt(api.compact(chatId), "Compacting");
+      if (option.action === "model") {
+        if (canManage) router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } });
+      } else void attempt(api.compact(chatId), "Compacting");
       return;
     }
     const mention = option.mention;
@@ -547,7 +549,8 @@ export function Composer({
           <View style={{ flex: 1 }} />
           {/* The model: only its provider's mark, beside the main button. The chat's header names the model. */}
           <Tap
-            onPress={() => router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } })}
+            onPress={canManage ? () => router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } }) : undefined}
+            disabled={!canManage}
             feel="select"
             sink={0.9}
             hitSlop={6}

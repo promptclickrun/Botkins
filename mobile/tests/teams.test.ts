@@ -228,8 +228,11 @@ test("an approved member is authorized, sees only their chat, and is revoked wit
     assert.equal(chat.createdBy, link.team().members[0].id);
     assert.ok(!parts.chats.some((item: any) => item.id !== chatId));
     const memberId = link.team().members[0].id;
-    await owner.call("link.team.removeMember", memberId);
-    await until(() => states.includes("revoked"), "revocation");
+    // A member may leave on their own; leaving from their last device takes them off the team.
+    assert.equal(await client.call("link.unpair"), true);
+    await until(() => !link.team().members.some((item: any) => item.id === memberId), "member left");
+    assert.ok(!link.store.data.devices.some((device: any) => device.memberId === memberId));
+    await assert.rejects(owner.call("link.team.removeMember", memberId), /no longer on the team/);
   } finally {
     for (const client of clients) client.stop();
     await link.stop();

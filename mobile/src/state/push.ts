@@ -179,19 +179,32 @@ function hostOf(response: import("expo-notifications").NotificationResponse): st
   const host = payload?.host ?? (request.content.data as Record<string, unknown> | undefined)?.host;
   return typeof host === "string" && host ? host : undefined;
 }
+function kindOf(response: import("expo-notifications").NotificationResponse): string | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const kind = payload?.kind ?? (request.content.data as Record<string, unknown> | undefined)?.kind;
+  if (typeof kind === "string" && kind) return kind;
+  return request.content.categoryIdentifier === "botkins_team" ? "team" : undefined;
+}
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
   if (!response || !native) return;
   const chatId = chatOf(response);
   const host = hostOf(response);
+  const kind = kindOf(response);
   native.Notifications.clearLastNotificationResponse();
-  if (!chatId) return;
+  if (!chatId && kind !== "team") return;
   // The app may still be starting: the chat opens once the pairing is read. An alert from another
   // paired computer makes the phone use that computer first.
   const go = () => {
     const state = useApp.getState();
     const other = !!host && host !== state.pairing?.serverId && state.pairings.some((pairing) => pairing.serverId === host);
     if (other) void switchComputer(host);
-    else if (chatOnScreen() === chatId) return;
+    if (kind === "team") {
+      router.push({ pathname: "/settings/team", params: { section: "requests" } });
+      return;
+    }
+    if (!chatId) return;
+    if (chatOnScreen() === chatId) return;
     router.push({ pathname: "/chat/[id]", params: { id: chatId } });
   };
   if (useApp.getState().booted && useApp.getState().pairing) go();

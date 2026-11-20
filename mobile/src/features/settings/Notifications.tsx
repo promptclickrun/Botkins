@@ -6,7 +6,7 @@ import { Bell, BellRing, CircleHelp, Eye, MessageCircle, Repeat, Smartphone } fr
 import { useState } from "react";
 import { Linking, View } from "react-native";
 import type { PushPrefs } from "@/link/types";
-import { useOnline, usePart } from "@/state/hooks";
+import { useMember, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { disablePush, enablePush, pushDefaults, usePush, usePushPrefs } from "@/state/push";
 import { showToast } from "@/state/store";
@@ -17,6 +17,7 @@ export default function Notifications() {
   const { colors } = useTheme();
   const online = useOnline();
   const supported = usePart("meta")?.capabilities.includes("push-v1");
+  const member = useMember();
   const { wanted, status, problem } = usePush();
   const saved = usePushPrefs();
   const [busy, setBusy] = useState(false);
@@ -49,7 +50,7 @@ export default function Notifications() {
         <T variant="subhead" color="muted">
           Update the app to get notifications.
         </T>
-        <ComputerAlerts />
+        {!member && <ComputerAlerts />}
       </Page>
     );
 
@@ -90,13 +91,13 @@ export default function Notifications() {
             </T>
           </View>
 
-          <Group>
+          {!member && <Group>
             <Row title="Send a test" tone="accent" disabled={!online} onPress={() => void attempt(api["link.push.test"](), "Sent")} />
-          </Group>
+          </Group>}
         </>
       )}
 
-      <ComputerAlerts />
+      {!member && <ComputerAlerts />}
     </Page>
   );
 }

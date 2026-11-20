@@ -165,7 +165,7 @@ const POLICY = {
   "link.sync": ["agents", "view"],
   "link.messages": ["agents", "chat"],
   "link.setLook": ["agents", "manage"],
-  "link.unpair": "owner",
+  "link.unpair": ["settings", "view"],
   "link.push.register": ["settings", "view"],
   "link.push.prefs": ["settings", "view"],
   "link.push.unregister": ["settings", "view"],
@@ -309,6 +309,8 @@ const SELF_METHODS = new Set([
   "link.push.presence",
   "link.push.activity",
   "link.sync",
+  // A member may always leave: it removes only their own device.
+  "link.unpair",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
 const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive"]);

@@ -1389,7 +1389,10 @@ export class LinkHost extends EventEmitter {
       // Answered first; the phone is forgotten right after.
       setImmediate(() => {
         try {
+          const memberId = this.store.device(session.deviceId)?.memberId;
           this.removeDevice(session.deviceId);
+          // A member who leaves from their last device leaves the team.
+          if (memberId && !this.store.data.devices.some((device) => device.memberId === memberId) && this.store.data.team.members.some((member) => member.id === memberId)) this.removeMember(memberId);
         } catch (error) {
           this.log("link: " + (error?.message ?? error));
         }

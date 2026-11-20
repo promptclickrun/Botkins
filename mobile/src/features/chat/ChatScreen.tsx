@@ -8,7 +8,7 @@ import Animated, { FadeIn, useAnimatedStyle } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Preferences, Project, QueuedMessage } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { activityLabel, type AvatarState, useBot, useBots, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
+import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { showToast, useApp } from "@/state/store";
@@ -74,6 +74,7 @@ function ChatTitle({ chat, bot, bots, state, model, room }: { chat: ChatSummary;
 
 function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, panes = 0, onPane }: { /** How many tabs the chat's side pane has, and opening it. */ panes?: number; onPane?: () => void; chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; /** The chat has messages: its project and mode are settled. */ started: boolean; projects?: Project[]; settings?: Preferences; onDelete: () => void }) {
   const { colors } = useTheme();
+  const canManage = useCan("agents", "manage");
   const project = projects?.find((p) => p.id === chat.projectId);
   const rename = () =>
     Alert.prompt(
@@ -88,7 +89,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     );
   const actions = [
     ...(bot && !chat.botIds ? [{ id: "new", title: "New chat with " + bot.name, image: "square.and.pencil" }] : []),
-    { id: "model", title: "Model…", image: "cpu" },
+    ...(canManage ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
     // Before the first message the chat can still change its project and mode.
     ...(started ? [] : projectActions({ chat, projects, settings, bots })),
     ...(project?.folder ? [{ id: "changes", title: "Changes", image: "plus.forwardslash.minus" }] : []),
@@ -227,6 +228,7 @@ export default function ChatScreen() {
   const queued = live?.queued[chatId];
   const working = streaming || !!turnRun;
   const group = !!chat?.botIds && chat.botIds.length > 1;
+  const canChat = useCan("agents", "chat");
 
   const [text, setText] = useState(draft ?? "");
   const [pinnedId, setPinnedId] = useState(board);
@@ -569,7 +571,7 @@ export default function ChatScreen() {
       {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
       <View style={{ paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
         {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
-        {requests.length > 0 && (
+        {canChat && requests.length > 0 && (
           <View style={{ paddingHorizontal: space.md }}>
             <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} count={requests.length} />
           </View>
@@ -579,29 +581,35 @@ export default function ChatScreen() {
             <SideAnswer side={side} onDismiss={() => setSide(null)} />
           </View>
         )}
-        {!!queued?.length && <Queued chatId={chatId} items={queued} steerable={!!live?.steerable?.[chatId]} />}
-        <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
-          <TalkBar chatId={chatId} />
-          <Composer
-            chatId={chatId}
-            botId={chat.botId}
-            group={group}
-            members={chat.botIds}
-            bots={bots}
-            pinned={pinned}
-            onUnpin={unpin}
-            quote={quote}
-            onUnquote={() => setQuote("")}
-            value={text}
-            onChange={setText}
-            onSend={(options) => send(text, options)}
-            onStop={() => void attempt(api.stop(chatId))}
-            working={working}
-            placeholder={"Message " + (group ? chat.title || "the group" : (bot?.name ?? "your bot"))}
-            model={model}
-            inputRef={input}
-          />
-        </View>
+        {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={!!live?.steerable?.[chatId]} />}
+        {canChat ? (
+          <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
+            <TalkBar chatId={chatId} />
+            <Composer
+              chatId={chatId}
+              botId={chat.botId}
+              group={group}
+              members={chat.botIds}
+              bots={bots}
+              pinned={pinned}
+              onUnpin={unpin}
+              quote={quote}
+              onUnquote={() => setQuote("")}
+              value={text}
+              onChange={setText}
+              onSend={(options) => send(text, options)}
+              onStop={() => void attempt(api.stop(chatId))}
+              working={working}
+              placeholder={"Message " + (group ? chat.title || "the group" : (bot?.name ?? "your bot"))}
+              model={model}
+              inputRef={input}
+            />
+          </View>
+        ) : (
+          <T variant="footnote" color="muted" center style={{ paddingVertical: space.md }}>
+            You can view, not chat
+          </T>
+        )}
       </View>
       <Animated.View style={spacer} />
     </View>

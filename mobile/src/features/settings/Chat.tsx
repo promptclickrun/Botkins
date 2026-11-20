@@ -2,7 +2,7 @@
 import { MenuView } from "@react-native-menu/menu";
 import { ChevronsUpDown } from "lucide-react-native";
 import { View } from "react-native";
-import { useOnline, useSettings } from "@/state/hooks";
+import { useCan, useOnline, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { Group, Label, Page, Row, useTheme } from "@/ui";
@@ -41,6 +41,7 @@ export default function Chat() {
   const prefs = useChatPrefs();
   const settings = useSettings();
   const online = useOnline();
+  const canManage = useCan("settings", "manage");
   return (
     <Page title="Chat">
       <View>
@@ -83,14 +84,14 @@ export default function Chat() {
             title="Show thinking"
             subtitle="In its app; here, the row above decides"
             toggled={settings?.showThinking ?? true}
-            disabled={!settings || !online}
+            disabled={!settings || !online || !canManage}
             onToggle={(showThinking) => void attempt(api.setPreferences({ showThinking }))}
           />
           <Row
             title="Fold finished steps"
             subtitle="In its app; here, Steps above decides"
             toggled={settings?.foldTools ?? true}
-            disabled={!settings || !online}
+            disabled={!settings || !online || !canManage}
             onToggle={(foldTools) => void attempt(api.setPreferences({ foldTools }))}
           />
         </Group>

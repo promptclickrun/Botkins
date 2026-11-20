@@ -5,7 +5,7 @@ import { Pause, Play, Trash2 } from "lucide-react-native";
 import { useState } from "react";
 import { View } from "react-native";
 import type { Panel } from "@/link/types";
-import { usePart } from "@/state/hooks";
+import { useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { EmptyState, Field, Group, IconTile, Loading, Row, Sheet, space, T, useTheme } from "@/ui";
@@ -29,6 +29,8 @@ export default function PanelRoutine() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const panel = usePart("panels")?.find((item) => item.id === id);
   const synced = useApp((state) => state.synced);
+  const canManage = useCan("today", "manage");
+  if (!canManage) return <Sheet title="Panel routine"><EmptyState title="Your team role can't manage panel routines" /></Sheet>;
   if (!panel) return <Sheet title="Panel routine">{synced ? <EmptyState title="This panel is gone" action="Close" onAction={() => router.back()} /> : <Loading />}</Sheet>;
   return <Form key={panel.id} panel={panel} />;
 }
@@ -43,6 +45,7 @@ function Form({ panel }: { panel: Panel }) {
   const [zone, setZone] = useState(routine?.timezone || phoneZone());
   const [prompt, setPrompt] = useState(routine?.prompt || DEFAULT_PROMPT);
   const [saving, setSaving] = useState(false);
+  const canDelete = useCan("today", "delete");
   const set = (patch: Partial<CadenceDraft>) => setDraft((last) => ({ ...last, ...patch }));
 
   const cadence = cadenceOf(draft);
@@ -89,7 +92,7 @@ function Form({ panel }: { panel: Panel }) {
           ) : (
             <Row leading={<IconTile icon={Play} />} title="Resume routine" onPress={() => act("resume", "Routine resumed")} />
           )}
-          <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Remove routine" tone="danger" onPress={() => act("remove", "Routine removed")} />
+          {canDelete && <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Remove routine" tone="danger" onPress={() => act("remove", "Routine removed")} />}
         </Group>
       )}
     </Sheet>

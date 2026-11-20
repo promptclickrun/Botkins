@@ -1,7 +1,7 @@
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { Keyboard, QrCode } from "lucide-react-native";
+import { Keyboard, QrCode, Users } from "lucide-react-native";
 import { useState } from "react";
 import { useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
@@ -40,6 +40,7 @@ export default function Welcome() {
         </T>
         <Button title="Scan pairing code" icon={QrCode} size="lg" wide onPress={() => router.push("/pair/scan")} />
         <Button title="Enter a code instead" icon={Keyboard} variant="ghost" size="lg" wide onPress={() => router.push("/pair/manual")} />
+        <Button title="Join a team with a code" icon={Users} variant="ghost" size="lg" wide onPress={() => router.push("/join")} />
       </View>
     </View>
   );

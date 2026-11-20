@@ -5,7 +5,7 @@ import { FolderPlus, Puzzle, Store } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import type { PluginListing } from "@/link/types";
-import { useCapability, useOnline } from "@/state/hooks";
+import { useCan, useCapability, useMember, useOnline } from "@/state/hooks";
 import { attempt } from "@/state/link";
 import { Button, Chip, EmptyState, Group, Loading, Page, space, T } from "@/ui";
 import { SearchField } from "../parts";
@@ -18,18 +18,21 @@ type Listing = { key: string; plugins: PluginListing[]; cursor?: string; error?:
 
 export function PluginsPage({ switcher }: { switcher: ReactNode }) {
   const can = usePluginsReady();
-  if (can) return <Plugins switcher={switcher} />;
+  const allowed = useCan("plugins", "view");
+  if (can && allowed) return <Plugins switcher={switcher} />;
   return (
     <Page tab title="Marketplace">
       {switcher}
-      <EmptyState icon={Puzzle} title="Update the app on your computer" />
+      <EmptyState icon={Puzzle} title={allowed ? "Update the app on your computer" : "Your team role can't view plugins"} />
     </Page>
   );
 }
 
 function Plugins({ switcher }: { switcher: ReactNode }) {
   const online = useOnline();
-  const folders = useCapability("folders-v1");
+  const member = useMember();
+  const folders = !member && useCapability("folders-v1");
+  const canManage = useCan("plugins", "manage");
   const markets = usePluginMarketplaces();
   const installed = useInstalledPlugins();
   const [chip, setChip] = useState("all");
@@ -148,9 +151,9 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
       </ScrollView>
       {body}
       <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.xs }}>
-        <Button title="Add a marketplace" icon={Store} variant="ghost" size="sm" disabled={!online} onPress={() => router.push(addMarketplaceHref)} />
-        {folders && <Button title="Add from your computer" icon={FolderPlus} variant="ghost" size="sm" disabled={!online} onPress={() => router.push(addFolderHref)} />}
-        {!!market && !market.builtIn && <Button title={"Remove " + market.name} variant="ghost" size="sm" disabled={!online} onPress={remove} />}
+        {canManage && <Button title="Add a marketplace" icon={Store} variant="ghost" size="sm" disabled={!online} onPress={() => router.push(addMarketplaceHref)} />}
+        {canManage && folders && <Button title="Add from your computer" icon={FolderPlus} variant="ghost" size="sm" disabled={!online} onPress={() => router.push(addFolderHref)} />}
+        {canManage && !!market && !market.builtIn && <Button title={"Remove " + market.name} variant="ghost" size="sm" disabled={!online} onPress={remove} />}
       </View>
     </Page>
   );

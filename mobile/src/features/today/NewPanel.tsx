@@ -3,12 +3,19 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import { View } from "react-native";
-import { useBots } from "@/state/hooks";
+import { useBots, useCan } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Field, Label, Sheet, space, T } from "@/ui";
+import { EmptyState, Field, Label, Sheet, space, T } from "@/ui";
 import { BotChips } from "@/features/work/bits";
 
 export default function NewPanel() {
+  const canCreate = useCan("today", "create");
+  const canChat = useCan("agents", "chat");
+  if (!canCreate || !canChat) return <Sheet title="Create a panel"><EmptyState title="Your team role can't create panels" /></Sheet>;
+  return <CreatePanel />;
+}
+
+function CreatePanel() {
   const { botId } = useLocalSearchParams<{ botId?: string }>();
   const bots = useBots();
   const shown = useMemo(() => bots.filter((bot) => !bot.hidden || bot.id === botId), [bots, botId]);

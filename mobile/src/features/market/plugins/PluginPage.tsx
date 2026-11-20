@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import { CredentialPicker } from "@/features/credentials/CredentialPicker";
 import type { InstalledPlugin, PluginContents } from "@/link/types";
-import { useBots, useOnline } from "@/state/hooks";
+import { useBots, useCan, useOnline } from "@/state/hooks";
 import { attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { BotAvatar, Button, EmptyState, Field, Group, IconTile, Label, Loading, Page, Row, space, T, useTheme } from "@/ui";
@@ -29,6 +29,8 @@ export default function PluginPage() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const can = usePluginsReady();
   const online = useOnline();
+  const canView = useCan("plugins", "view");
+  const canInstall = useCan("plugins", "install");
   const installed = useInstalledPlugin(id);
   const loaded = usePreview(id);
   const markets = usePluginMarketplaces((state) => state.list);
@@ -39,7 +41,7 @@ export default function PluginPage() {
     if (id && can && online) void loadPreview(id);
   }, [id, can, online, tries]);
 
-  if (!id || !can) return <Page title="Plugin">{!can ? <EmptyState icon={Puzzle} title="Update the app on your computer" /> : <EmptyState icon={Puzzle} title="This plugin is gone" />}</Page>;
+  if (!id || !can || !canView) return <Page title="Plugin">{!canView ? <EmptyState icon={Puzzle} title="Your team role can't view this plugin" /> : !can ? <EmptyState icon={Puzzle} title="Update the app on your computer" /> : <EmptyState icon={Puzzle} title="This plugin is gone" />}</Page>;
   const preview = loaded?.preview;
   const about = installed ?? preview;
   if (!about) {
@@ -68,7 +70,7 @@ export default function PluginPage() {
       {installed ? (
         <Installed plugin={installed} />
       ) : (
-        <Button title="Install" wide disabled={!online || !preview} onPress={() => preview && askToRun(preview.contents, "install", () => router.push(installHref(id)))} />
+        canInstall ? <Button title="Install" wide disabled={!online || !preview} onPress={() => preview && askToRun(preview.contents, "install", () => router.push(installHref(id)))} /> : null
       )}
 
       <WhatItAdds contents={installed?.contents ?? preview!.contents} installed={!!installed} />
@@ -94,6 +96,7 @@ export default function PluginPage() {
 /** What an installed plugin's page adds: on and off, Update, settings, bots, limits. */
 function Installed({ plugin }: { plugin: InstalledPlugin }) {
   const online = useOnline();
+  const canManage = useCan("plugins", "manage");
   const names = Object.fromEntries(useBots().map((bot) => [bot.id, bot.name]));
   const [busy, setBusy] = useState(false);
   const turn = (on: boolean) => {
@@ -107,14 +110,14 @@ function Installed({ plugin }: { plugin: InstalledPlugin }) {
   };
   return (
     <>
-      {plugin.enabled ? (
+      {canManage && (plugin.enabled ? (
         <Group>
           <Row title="On" subtitle={botsLine(plugin.bots, names)} toggled disabled={!online || busy} onToggle={turn} />
         </Group>
       ) : (
         <Button title="Turn on" wide loading={busy} disabled={!online} onPress={() => turn(true)} />
-      )}
-      {(plugin.updateAvailable || !!plugin.folder) && <Button title={plugin.folder ? "Update from folder" : "Update"} variant="secondary" wide disabled={!online} onPress={() => router.push(updateHref(plugin.id))} />}
+      ))}
+      {canManage && (plugin.updateAvailable || !!plugin.folder) && <Button title={plugin.folder ? "Update from folder" : "Update"} variant="secondary" wide disabled={!online} onPress={() => router.push(updateHref(plugin.id))} />}
       {!!plugin.folder && (
         <View style={{ gap: 2, paddingHorizontal: space.xs }}>
           <T variant="footnote" color="muted">
@@ -125,8 +128,8 @@ function Installed({ plugin }: { plugin: InstalledPlugin }) {
           </T>
         </View>
       )}
-      <Settings plugin={plugin} />
-      <Bots plugin={plugin} />
+      {canManage && <Settings plugin={plugin} />}
+      {canManage && <Bots plugin={plugin} />}
       {!!plugin.limits && (
         <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, marginTop: -space.md }}>
           {plugin.limits}
@@ -235,6 +238,8 @@ function Bots({ plugin }: { plugin: InstalledPlugin }) {
 
 function RemoveRow({ plugin }: { plugin: InstalledPlugin }) {
   const online = useOnline();
+  const canRemove = useCan("plugins", "uninstall");
+  if (!canRemove) return null;
   const remove = () =>
     Alert.alert("Remove " + plugin.name + "?", "Your bots stop using it. Its settings are removed from your computer.", [
       { text: "Cancel", style: "cancel" },

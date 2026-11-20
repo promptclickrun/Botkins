@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from "react-native";
 import { searchToolkits } from "@/composio/catalog";
 import { type BotsAccess, type Toolkit, useBotsAccess, useComposio } from "@/composio/store";
-import { useOnline } from "@/state/hooks";
+import { useCan, useOnline } from "@/state/hooks";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { AppLogo, Button, EmptyState, Group, IconTile, Label, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { AppRow, AppTile, RowSkeleton, SearchField, TileSkeleton } from "./parts";
@@ -174,8 +174,10 @@ const VIEWS: { value: "apps" | "plugins"; label: string }[] = [
 
 /** The tab: Apps (Composio) or Plugins, with the last choice remembered on this phone. */
 export default function Market() {
-  const view = usePrefs((prefs) => prefs.marketView);
-  const switcher = <Segmented options={VIEWS} value={view} onChange={(marketView) => setPrefs({ marketView })} />;
+  const canPlugins = useCan("plugins", "view");
+  const savedView = usePrefs((prefs) => prefs.marketView);
+  const view = canPlugins ? savedView : "apps";
+  const switcher = canPlugins ? <Segmented options={VIEWS} value={view} onChange={(marketView) => setPrefs({ marketView })} /> : undefined;
   return view === "plugins" ? <PluginsPage switcher={switcher} /> : <Apps switcher={switcher} />;
 }
 

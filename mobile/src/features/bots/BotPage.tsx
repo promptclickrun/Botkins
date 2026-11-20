@@ -7,7 +7,7 @@ import { newBotChat, openBotChat } from "@/features/chat/open";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Bot } from "@/link/types";
 import { shareFrom } from "@/state/files";
-import { isConversation, useBot, useBotActivity, useBots, useCapability, useChats, useModels, usePart, useRoutines, useSettings, useSkills } from "@/state/hooks";
+import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability, useChats, useMember, useModels, usePart, useRoutines, useSettings, useSkills } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
@@ -52,6 +52,13 @@ function BotDetail({ bot }: { bot: Bot }) {
   const sections = usePart("sections");
   const projects = usePart("projects");
   const section = sectionOf(bot, sections);
+  const canChat = useCan("agents", "chat");
+  const canCreate = useCan("agents", "create");
+  const canManage = useCan("agents", "manage");
+  const canDelete = useCan("agents", "delete");
+  const canSeeToday = useCan("today", "view");
+  const canCreateToday = useCan("today", "create");
+  const member = useMember();
 
   const model = describeChoice(bot.model ?? settings?.model, models, defaultProvider);
   const firstLine = bot.instructions.split("\n").find((line) => line.trim())?.trim();
@@ -83,7 +90,7 @@ function BotDetail({ bot }: { bot: Bot }) {
 
   return (
     <Page>
-      <Stack.Screen options={{ headerRight: () => <EditButton id={bot.id} /> }} />
+      <Stack.Screen options={{ headerRight: canManage ? () => <EditButton id={bot.id} /> : undefined }} />
 
       <View style={{ alignItems: "center", gap: space.lg }}>
         <BotAvatar bot={bot} state={state} size={136} />
@@ -102,10 +109,12 @@ function BotDetail({ bot }: { bot: Bot }) {
             </T>
           )}
         </View>
-        <View style={{ flexDirection: "row", gap: space.md, alignSelf: "stretch" }}>
-          <Button title="Chat" icon={MessageCircle} onPress={() => void openBotChat(bot.id)} style={{ flex: 1 }} accessibilityLabel={"Chat with " + bot.name} />
-          <Button title="New chat" icon={SquarePen} variant="secondary" onPress={() => void newBotChat(bot.id)} style={{ flex: 1 }} />
-        </View>
+        {canChat && (
+          <View style={{ flexDirection: "row", gap: space.md, alignSelf: "stretch" }}>
+            <Button title="Chat" icon={MessageCircle} onPress={() => void openBotChat(bot.id)} style={{ flex: 1 }} accessibilityLabel={"Chat with " + bot.name} />
+            <Button title="New chat" icon={SquarePen} variant="secondary" onPress={() => void newBotChat(bot.id)} style={{ flex: 1 }} />
+          </View>
+        )}
       </View>
 
       <Group>
@@ -115,32 +124,32 @@ function BotDetail({ bot }: { bot: Bot }) {
           subtitle={bot.model ? undefined : "Default"}
           value={models ? model.label : undefined}
           chevron
-          onPress={() => router.push({ pathname: "/chat/model", params: { scope: "bot", id: bot.id } })}
+          onPress={canManage ? () => router.push({ pathname: "/chat/model", params: { scope: "bot", id: bot.id } }) : undefined}
         />
-        <Row leading={<IconTile icon={ScrollText} color={colors.info} />} title="Instructions" subtitle={firstLine ?? "None yet"} chevron onPress={() => router.push({ pathname: "/bot/[id]/instructions", params: { id: bot.id } })} />
-        <Row leading={<IconTile icon={Palette} color={colors.accent} />} title="Look" chevron onPress={() => router.push({ pathname: "/bot/[id]/look", params: { id: bot.id } })} />
-        <Row leading={<IconTile icon={Wrench} color={colors.success} />} title="Skills & tools" value={capabilities} chevron onPress={() => router.push({ pathname: "/bot/[id]/capabilities", params: { id: bot.id } })} />
-        <Row leading={<IconTile icon={Brain} color={colors.warning} />} title="Memory" chevron onPress={() => router.push({ pathname: "/bot/[id]/memory", params: { id: bot.id } })} />
+        {canManage && <Row leading={<IconTile icon={ScrollText} color={colors.info} />} title="Instructions" subtitle={firstLine ?? "None yet"} chevron onPress={() => router.push({ pathname: "/bot/[id]/instructions", params: { id: bot.id } })} />}
+        {canManage && <Row leading={<IconTile icon={Palette} color={colors.accent} />} title="Look" chevron onPress={() => router.push({ pathname: "/bot/[id]/look", params: { id: bot.id } })} />}
+        {!member && <Row leading={<IconTile icon={Wrench} color={colors.success} />} title="Skills & tools" value={capabilities} chevron onPress={() => router.push({ pathname: "/bot/[id]/capabilities", params: { id: bot.id } })} />}
+        {!member && <Row leading={<IconTile icon={Brain} color={colors.warning} />} title="Memory" chevron onPress={() => router.push({ pathname: "/bot/[id]/memory", params: { id: bot.id } })} />}
         {/* The route is new: typed routes learn it the next time Metro starts. */}
-        <Row leading={<IconTile icon={FolderKanban} color={colors.info} />} title="Access" value={projects ? grantSummary(settings, bot, projects) : undefined} chevron onPress={() => router.push(("/bot/access?id=" + encodeURIComponent(bot.id)) as Href)} />
+        {!member && <Row leading={<IconTile icon={FolderKanban} color={colors.info} />} title="Access" value={projects ? grantSummary(settings, bot, projects) : undefined} chevron onPress={() => router.push(("/bot/access?id=" + encodeURIComponent(bot.id)) as Href)} />}
       </Group>
 
-      <Group>
-        <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />
-        <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />
-        {sections && (
+      {(canManage || !member) && <Group>
+        {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
+        {canManage && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
+        {canManage && sections && (
           <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event)}>
             <View accessible accessibilityRole="button" accessibilityLabel={"Section, " + (section?.name ?? "None")} accessibilityHint="Moves the bot to a section">
               <Row leading={<IconTile icon={Folder} color={colors.ink2} />} title="Section" value={section?.name ?? "None"} chevron />
             </View>
           </MenuView>
         )}
-        {settings?.teamwork !== false && (
+        {canManage && settings?.teamwork !== false && (
           <Row leading={<IconTile icon={Users} color={colors.ink2} />} title="Teamwork" subtitle="Other bots can ask it for help" toggled={bot.teamwork !== false} onToggle={(teamwork) => void attempt(api.setBotFlags(bot.id, { teamwork }))} />
         )}
-      </Group>
+      </Group>}
 
-      <View>
+      {canSeeToday && <View>
         <Label>Routines</Label>
         <Group>
           {mine.slice(0, 3).map((routine) => (
@@ -153,11 +162,11 @@ function BotDetail({ bot }: { bot: Bot }) {
               onPress={() => router.push({ pathname: "/routine/[id]", params: { id: routine.id } })}
             />
           ))}
-          <Row leading={<IconTile icon={Plus} />} title="New routine" tone="accent" onPress={() => router.push({ pathname: "/routine/[id]", params: { id: "new", botId: bot.id } })} />
+          {canCreateToday && <Row leading={<IconTile icon={Plus} />} title="New routine" tone="accent" onPress={() => router.push({ pathname: "/routine/[id]", params: { id: "new", botId: bot.id } })} />}
         </Group>
-      </View>
+      </View>}
 
-      <BotArtifacts botId={bot.id} />
+      {!member && <BotArtifacts botId={bot.id} />}
 
       {recent.length > 0 && (
         <View>
@@ -170,26 +179,26 @@ function BotDetail({ bot }: { bot: Bot }) {
         </View>
       )}
 
-      <Group>
-        <Row leading={<IconTile icon={Copy} color={colors.ink2} />} title="Duplicate" onPress={() => void duplicate()} />
-        <Row leading={<IconTile icon={BookmarkPlus} color={colors.ink2} />} title="Save as template" onPress={() => void attempt(api.saveTemplate(bot.id), "Saved as a template")} />
-        <Row
+      {(canCreate || canManage || canDelete || !member) && <Group>
+        {canCreate && <Row leading={<IconTile icon={Copy} color={colors.ink2} />} title="Duplicate" onPress={() => void duplicate()} />}
+        {!member && <Row leading={<IconTile icon={BookmarkPlus} color={colors.ink2} />} title="Save as template" onPress={() => void attempt(api.saveTemplate(bot.id), "Saved as a template")} />}
+        {!member && <Row
           leading={<IconTile icon={Download} color={colors.ink2} />}
           title="Export template…"
           subtitle={canFiles ? undefined : "Update the app on your computer"}
           disabled={!canFiles}
           onPress={() => void shareFrom(api.exportTemplateText({ botId: bot.id }), "Template exported. Anyone with Botkins can import it.")}
-        />
-        {!primary && <Row leading={<IconTile icon={Star} color={colors.ink2} />} title="Make primary" subtitle="Shown first on Home" onPress={() => void attempt(api.makePrimary(bot.id), bot.name + " is first now")} />}
-        <Row
+        />}
+        {canManage && !primary && <Row leading={<IconTile icon={Star} color={colors.ink2} />} title="Make primary" subtitle="Shown first on Home" onPress={() => void attempt(api.makePrimary(bot.id), bot.name + " is first now")} />}
+        {canManage && <Row
           leading={<IconTile icon={bot.hidden ? Eye : EyeOff} color={colors.ink2} />}
           title={bot.hidden ? "Show" : "Hide"}
           subtitle={primary && !bot.hidden ? "The primary bot can't be hidden" : bot.hidden ? "Hidden from the bot list" : undefined}
           disabled={primary && !bot.hidden}
           onPress={() => toggleHidden(bot)}
-        />
-        <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Delete bot" tone="danger" onPress={remove} />
-      </Group>
+        />}
+        {canDelete && <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Delete bot" tone="danger" onPress={remove} />}
+      </Group>}
     </Page>
   );
 }

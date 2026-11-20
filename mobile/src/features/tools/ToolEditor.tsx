@@ -4,7 +4,7 @@ import { Check, ChevronDown, Copy, FlaskConical, LogIn, LogOut, Trash2 } from "l
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, View } from "react-native";
 import type { McpServer, McpServerInput } from "@/link/types";
-import { usePart } from "@/state/hooks";
+import { useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { Badge, Button, EmptyState, Field, Group, IconTile, Loading, Row, Segmented, Sheet, space, T, Tap, useTheme } from "@/ui";
@@ -137,9 +137,35 @@ export default function ToolEditor() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const server = usePart("mcp")?.find((item) => item.id === id);
   const synced = useApp((state) => state.synced);
+  const canView = useCan("mcp", "view");
+  const canCreate = useCan("mcp", "create");
+  const canManage = useCan("mcp", "manage");
+  if (!canView || (id === "new" && !canCreate)) return <Sheet title="Tool"><EmptyState title="Your team role can't use this tool screen" action="Close" onAction={() => router.back()} /></Sheet>;
   if (id !== "new" && !server)
     return <Sheet title="Tool">{synced ? <EmptyState title="This tool is gone" action="Go back" onAction={() => router.back()} /> : <Loading />}</Sheet>;
+  if (server && !(canManage && canCreate)) return <ReadOnly server={server} />;
   return <Editor key={id} server={server} />;
+}
+
+function ReadOnly({ server }: { server: McpServer }) {
+  const canUse = useCan("mcp", "use");
+  const canDelete = useCan("mcp", "delete");
+  const [test, setTest] = useState<string>();
+  const run = async () => setTest((await attempt(api.testMcpServer(server.id)))?.status ?? "Couldn't test this tool");
+  const remove = () => Alert.alert("Remove " + server.name + "?", undefined, [
+    { text: "Cancel", style: "cancel" },
+    { text: "Remove", style: "destructive", onPress: () => void attempt(api.removeMcpServer(server.id), "Tool removed").then(() => router.back()) },
+  ]);
+  return (
+    <Sheet title={server.name}>
+      <Group>
+        <Row title="Type" value={server.type} />
+        <Row title="Status" value={server.enabled ? "On" : "Off"} />
+        {canUse && <Row title="Test" value={test} onPress={() => void run()} />}
+        {canDelete && <Row title="Remove tool" tone="danger" onPress={remove} />}
+      </Group>
+    </Sheet>
+  );
 }
 
 function FormLabel({ children }: { children: string }) {
