@@ -1,0 +1,10 @@
+# Written by `botkins service install`.
+[Unit]
+Description=Watch for the Botkins terminal host asking to be updated
+
+[Path]
+PathExists=/var/lib/botkins/run/update-requested
+Unit=botkins-update.service
+
+[Install]
+WantedBy=multi-user.target

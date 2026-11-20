@@ -204,7 +204,9 @@ test("an update's new service files are root's own, and writing them touches not
   assert.equal(readFileSync(unit, "utf8"), fresh);
   assert.match(fresh, /^User=botkins$/m);
   assert.match(fresh, /^ReadWritePaths=\/var\/lib\/botkins \/srv\/projects$/m);
-  for (const path of result.changed) assert.deepEqual([statSync(root + path).uid, statSync(root + path).mode & 0o777], [0, 0o644], path);
+  // Each new file, and the copy of what it replaced, is root's own; and nothing is left of the writing.
+  for (const path of result.changed.flatMap((path) => [path, path + ".bak"])) assert.deepEqual([lstatSync(root + path).isFile(), statSync(root + path).uid, statSync(root + path).mode & 0o777], [true, 0, 0o644], path);
+  assert.deepEqual(readdirSync(root + UNITS).sort(), ["botkins-update.path", "botkins-update.service", "botkins-update.service.bak", "botkins.service", "botkins.service.bak"]);
   assert.deepEqual(listing(data), before, "nothing in the data folder was made, changed or removed");
   assert.equal(readFileSync(secret, "utf8"), "root's own\n");
   assert.ok(!calls.some((call) => call.includes(data) || /restart botkins|stop/.test(call)), calls.join("; "));
@@ -229,7 +231,10 @@ test("a link under a service file's name is not written through, by the new file
   symlinkSync(victim, watch);
   const unit = root + UNITS + "botkins.service";
   writeFileSync(unit, readFileSync(unit, "utf8").replace("\nProtectClock=true\n", "\n"));
+  // A link under the name of the copy that is kept, too: it is replaced, and what it pointed at is left alone.
+  symlinkSync(victim, unit + ".bak");
   assert.deepEqual((await manager.refresh()).changed, [UNITS + "botkins.service"]);
+  assert.equal(lstatSync(unit + ".bak").isFile(), true);
   assert.equal(lstatSync(watch).isSymbolicLink(), true);
   assert.equal(readFileSync(victim, "utf8"), "the system's own file\n");
   assert.deepEqual([statSync(victim).uid, statSync(victim).mode & 0o777], [0, 0o600]);

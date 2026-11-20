@@ -247,7 +247,7 @@ botkins logs -f
 
 `botkins service install` installs the service again. It is safe to run it more than one time. It writes the service file again and does not change the data folder, the paired phones or the host key. Give it the same options as the first time, because it writes the file from the options that you give.
 
-`botkins service refresh` writes the service files as this version of Botkins writes them, and restarts the service if a file changed. It keeps what you chose at installation: the user, the data folder, the `--allow-path` folders and the source of the host key. It reads these from the installed file. An update does this step for you. `botkins doctor` tells you if the files are from an earlier version.
+`botkins service refresh` writes the service files as this version of Botkins writes them, and restarts the service if a file changed. It keeps what you chose at installation: the user, the data folder, the `--allow-path` folders and the source of the host key. It reads these from the installed file. An update does this step for you. `botkins doctor` tells you if the files are from an earlier version. The section "The service files after an update" tells you what the command keeps of your own changes.
 
 On Linux the service is `botkins.service`. You can also use `systemctl` and `journalctl -u botkins`. To change the unit, use `systemctl edit botkins.service`, because the next install keeps that change.
 
@@ -282,14 +282,31 @@ The command unpacks the new version next to the old version. Then it restarts th
 
 ### The service files after an update
 
-A release can change the service files: the systemd units on Linux, or the launchd job on macOS. Before the restart, the update lets the new version write its own service files. It keeps what you chose at installation. If the new version does not stay in operation, the update puts the earlier files back together with the old version.
+A release can change the service files: the systemd units on Linux, or the launchd job on macOS. Before the restart, the update lets the new version write its own service files. If the new version does not stay in operation, the update puts the earlier files back together with the old version.
+
+The update keeps these things from the installed file:
+
+- What you chose at installation: the user, the data folder, the `--allow-path` folders and the source of the host key.
+- Each environment variable that you added to the file, for example a proxy. On macOS, the job file is the only place for such a variable.
+- Each folder that you added for the bots to write to, also on a line of its own.
+- A copy of each file that it replaces, as `<name>.bak` in the same folder. There is one copy. The next update replaces it.
+
+The update does not change these things:
+
+- The changes that you made with `systemctl edit botkins.service`. Use that command for all other settings, because each update keeps them.
+- A unit that you masked, and a service that you disabled.
+- A service file with a setting that Botkins did not write and that the update cannot keep. Examples are a changed `RestartSec=` and an added `MemoryMax=`. The update does not replace that file, because a new file would lose your setting. `botkins doctor` names the file and the setting. That file then stays as an earlier version wrote it.
+
+The update cannot see a line that you removed from the file. The new file has that line again. To switch a setting off, use `systemctl edit`.
+
+When the files are not up to date:
 
 - The program that does an update is the old version. Botkins 0.16.5 and earlier do not have this step. After an update that such a version did, the service files stay as they were.
-- If the new version cannot write its files, the update continues with the earlier files and tells you.
+- If the new version cannot write its files, the update puts the earlier files back and continues. `botkins status` and the log tell you.
 - In these two cases, `botkins doctor` shows the line `Service files` as a failure. Run `sudo botkins service refresh` for the service of the whole computer, or `botkins service refresh` for your own service.
-- The update does not change a unit that you masked, or the changes that you made with `systemctl edit`.
-- If you changed the service file itself and the update cannot read your choices from it, the update does not change it.
-- On macOS, launchd reads a job file only when it loads the job. A changed job file makes the update unload the job and load it again.
+- If the new version cannot write its files and the update cannot put the earlier files back, the update stops. It puts the old version back and tells you.
+
+On macOS, launchd reads a job file only when it loads the job. A changed job file makes the update unload the job and load it again.
 
 ### Updates from a phone
 

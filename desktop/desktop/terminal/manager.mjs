@@ -17,12 +17,12 @@
 // folder of their own and nothing on the computer changes.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { CREDENTIAL } from "../host/keystore.mjs";
 import { INSTALL_RECORD, SERVICE_USER, systemRoot, userRoot } from "./paths.mjs";
-import { LABEL, launchdJob, readLaunchdJob, readSystemUnit, readUserUnit, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit } from "./units.mjs";
+import { LABEL, launchdJob, readLaunchdJob, readSystemUnit, readUserUnit, strange, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit } from "./units.mjs";
 import { asOwnerOf } from "./update-install.mjs";
 
 /** What is at a path, without following a link there; null when nothing is. */
@@ -259,46 +259,93 @@ export function serviceManager({ command, platform = process.platform, uid = pro
     await run("launchctl", ["enable", target]);
   }
 
-  /** The files this version would write for the installed service, from what its own file says was chosen: { path: text }. */
+  /**
+   * Puts a whole file under a name in one step: written beside it, then renamed. systemd or
+   * launchd, reading the folder at that moment, finds the old file or the new one, never half
+   * of one; and a link under the name is replaced, not written through.
+   */
+  const replace = (path, text) => {
+    const temp = join(dirname(at(path)), "." + basename(path) + "." + randomBytes(6).toString("hex"));
+    try {
+      writeFileSync(temp, text, { mode: 0o644, flag: "wx" });
+      chmodSync(temp, 0o644);
+      renameSync(temp, at(path));
+    } finally {
+      rmSync(temp, { force: true });
+    }
+  };
+
+  /**
+   * The files this version would write for the installed service, from what its own file says
+   * was chosen: { texts: { path: text }, kept: [{ file, lines }] }. `kept` are the files that
+   * hold a setting no version of Botkins wrote: the person's own, which a new text would lose.
+   * They are left as they are, and are not in `texts`.
+   */
   function wanted(found) {
     const text = read(found.file);
     if (text === null) throw Object.assign(new Error("The installed service file " + found.file + " can't be read."), { code: "UNREADABLE_UNIT" });
+    let texts;
     if (found.kind === "launchd") {
       const chosen = readLaunchdJob(text);
-      return { [found.file]: launchdJob(chosen), ...(found.scope === "system" && chosen.user && { [INSTALL_RECORD]: installRecordText(chosen) }) };
+      texts = { [found.file]: launchdJob(chosen), ...(found.scope === "system" && chosen.user && { [INSTALL_RECORD]: installRecordText(chosen) }) };
+    } else if (found.scope === "user") texts = { [found.file]: userUnit(readUserUnit(text)) };
+    else {
+      const chosen = readSystemUnit(text);
+      texts = { [found.file]: systemUnit(chosen), ...Object.fromEntries(Object.entries(updateUnits(chosen)).map(([name, unit]) => ["/etc/systemd/system/" + name, unit])), [INSTALL_RECORD]: installRecordText(chosen) };
     }
-    if (found.scope === "user") return { [found.file]: userUnit(readUserUnit(text)) };
-    const chosen = readSystemUnit(text);
-    return { [found.file]: systemUnit(chosen), ...Object.fromEntries(Object.entries(updateUnits(chosen)).map(([name, unit]) => ["/etc/systemd/system/" + name, unit])), [INSTALL_RECORD]: installRecordText(chosen) };
+    const kept = [];
+    for (const path of Object.keys(texts)) {
+      const now = path === INSTALL_RECORD ? null : read(path);
+      if (now === null || now === texts[path]) continue;
+      let lines;
+      try {
+        lines = strange(found.kind, now, texts[path]);
+      } catch {
+        // Not a file of the kind Botkins writes at all.
+        lines = ["(it can't be read as a service file)"];
+      }
+      if (!lines.length) continue;
+      kept.push({ file: path, lines });
+      delete texts[path];
+    }
+    return { texts, kept };
   }
 
   /**
    * Brings the installed service's files up to date with this version.
+   *
+   * A file that is replaced is kept once more beside it, as <name>.bak. A file that holds a
+   * setting of the person's own that can't be carried into the new text is not replaced at all.
+   *
    * @param options.write    false only says which files differ, and changes nothing.
    * @param options.restart  Restart the service when a file changed, so it runs with the new one.
    *   (On macOS a changed job is loaded again either way, which starts it.)
-   * @returns { kind, scope, file, changed: [paths] }
+   * @returns { kind, scope, file, changed: [paths], kept: [{ file, lines }] }
    */
   async function refresh({ write: writing = true, restart = false } = {}) {
     const found = installed();
     if (!found) throw Object.assign(new Error("Botkins isn't installed as a service here. Install it with `botkins service install`."), { code: "NOT_INSTALLED" });
-    const texts = wanted(found);
+    const { texts, kept } = wanted(found);
     const before = Object.fromEntries(Object.keys(texts).map((path) => [path, read(path)]));
     // Where something other than a plain file is under a name (a unit the person masked is a link), it is theirs and stays.
     const changed = Object.keys(texts).filter((path) => before[path] !== texts[path] && (before[path] !== null || !existing(at(path))));
-    if (!writing || !changed.length) return { ...found, changed };
+    if (!writing || !changed.length) return { ...found, changed, kept };
     if (found.scope === "system" && uid !== 0) throw Object.assign(new Error("The Botkins service belongs to the whole computer: run this as root (with sudo)."), { code: "NEEDS_ROOT" });
     const put = () => {
-      for (const path of changed) write(path, texts[path], 0o644);
+      for (const path of changed) {
+        mkdirSync(dirname(at(path)), { recursive: true });
+        if (before[path] !== null) replace(path + ".bak", before[path]);
+        replace(path, texts[path]);
+      }
     };
     if (found.kind === "launchd") {
       // Only the job's own file needs launchd to load it again.
       if (changed.includes(found.file)) await loadAgain(found.scope, found.file, put);
       else put();
-      return { ...found, changed };
+      return { ...found, changed, kept };
     }
     const ctl = systemctl(found.scope);
-    const names = changed.filter((path) => path !== INSTALL_RECORD).map((path) => path.slice(path.lastIndexOf("/") + 1));
+    const names = changed.filter((path) => path !== INSTALL_RECORD).map((path) => basename(path));
     // What the person switched off stays off: only a unit that starts with the computer now is linked again.
     const enabled = [];
     for (const name of names) if (before[dirname(found.file) + "/" + name] !== null && (await run(...ctl(["is-enabled", name]))).stdout.trim() === "enabled") enabled.push(name);
@@ -313,7 +360,7 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       }
       if (restart) await must(...ctl(["restart", UNIT]), "Restarting the service");
     }
-    return { ...found, changed };
+    return { ...found, changed, kept };
   }
 
   /** What the service's own files hold now: { kind, scope, file, dir, files: { path: text } }, or null when no service is installed. */
@@ -329,22 +376,21 @@ export function serviceManager({ command, platform = process.platform, uid = pro
 
   /**
    * Puts the service's files back as a snapshot has them: what changed since is written as it
-   * was, and a file of the service's that was not there is removed.
+   * was. A file that was not there is removed only when it is one the refresh said it wrote
+   * (`written`) and has a name of the service's own: a unit somebody else added meanwhile is
+   * not this update's to take away.
    * @returns true when something was put back.
    */
-  async function restore(saved) {
+  async function restore(saved, written = []) {
     if (!saved) return false;
     const now = snapshot() ?? { files: {} };
-    const added = Object.keys(now.files).filter((path) => !(path in saved.files));
+    const added = Object.keys(now.files).filter((path) => !(path in saved.files) && written.includes(path));
     const back = Object.keys(saved.files).filter((path) => now.files[path] !== saved.files[path]);
     if (!added.length && !back.length) return false;
     const put = () => {
       for (const path of added) rmSync(at(path), { force: true });
-      for (const path of back) {
-        // Whatever is under the name now goes first: a link there is replaced, never written through.
-        rmSync(at(path), { force: true });
-        write(path, saved.files[path], 0o644);
-      }
+      // Whatever is under the name now goes: a link there is replaced, never written through.
+      for (const path of back) replace(path, saved.files[path]);
     };
     if (saved.kind === "launchd") {
       if ([...added, ...back].some((path) => path !== INSTALL_RECORD)) await loadAgain(saved.scope, saved.file, put);
@@ -352,12 +398,13 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       return true;
     }
     const ctl = systemctl(saved.scope);
-    const name = (path) => path.slice(path.lastIndexOf("/") + 1);
     // A unit the newer version added is stopped and unlinked before its file goes.
-    for (const path of added) if (path !== INSTALL_RECORD) await run(...ctl(["disable", "--now", name(path)]));
+    for (const path of added) if (path !== INSTALL_RECORD) await run(...ctl(["disable", "--now", basename(path)]));
     put();
     await must(...ctl(["daemon-reload"]), "Reloading systemd");
-    if (back.some((path) => name(path) === UPDATE_PATH_UNIT)) await run(...ctl(["try-restart", UPDATE_PATH_UNIT]));
+    // The newer version may have linked a unit to start somewhere else: the links are made again from the file that is back.
+    for (const path of back) if (path !== INSTALL_RECORD && (await run(...ctl(["is-enabled", basename(path)]))).stdout.trim() === "enabled") await run(...ctl(["reenable", basename(path)]));
+    if (back.some((path) => basename(path) === UPDATE_PATH_UNIT)) await run(...ctl(["try-restart", UPDATE_PATH_UNIT]));
     return true;
   }
 

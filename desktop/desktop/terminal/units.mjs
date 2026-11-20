@@ -249,6 +249,22 @@ export function launchdJob({ command, dataDir, logFile, user, env = {} }) {
 // in no other place than the installed file, so it is read from there, and the new text is made
 // from it by the functions above. Nothing is guessed: a file that doesn't say one of these, as
 // `botkins service install` wrote it, is not read at all (UNREADABLE_UNIT), and is left as it is.
+//
+// A person may have put lines of their own into the file. What can be carried into the new text
+// is carried: every environment variable the file sets beyond the ones written here (a proxy, a
+// provider's variable: on a Mac the job's file is the only place for one), and every folder
+// named for bots to write to. Anything else of theirs can't be carried, because the new text is
+// made, not edited. So a file that holds a line no version of Botkins wrote is left as it is
+// (`strange` below finds such lines), and `botkins doctor` says so.
+//
+// WHEN YOU CHANGE WHAT A FUNCTION ABOVE WRITES: a line that this version stops writing, or
+// writes differently, is still in the files of every computer that installed an earlier version.
+// Add the earlier line to ONCE_WRITTEN, or those files look changed by hand and are never
+// brought up to date. test/terminal-refresh.test.mjs holds the files each release wrote
+// (test/fixtures/service-files) and fails when one of them is no longer read as Botkins' own.
+
+/** Lines an earlier version wrote that this one doesn't, by the kind of file. For launchd: "<key> <value as JSON>". */
+export const ONCE_WRITTEN = { systemd: [], launchd: [] };
 
 const unreadable = (what) => Object.assign(new Error("The installed service file doesn't say " + what + " the way `botkins service install` writes it, so it is left as it is."), { code: "UNREADABLE_UNIT" });
 
@@ -280,14 +296,15 @@ function unitSettings(text) {
   }
   return settings;
 }
+/** Every variable a unit sets, in order; a line may set several. */
 const unitEnvironment = (settings) =>
   Object.fromEntries(
-    (settings.Environment ?? []).map((value) => {
-      const [pair = ""] = unitWords(value);
+    (settings.Environment ?? []).flatMap(unitWords).map((pair) => {
       const cut = pair.indexOf("=");
-      return [pair.slice(0, cut), pair.slice(cut + 1)];
+      return cut > 0 ? [pair.slice(0, cut), pair.slice(cut + 1)] : [pair, ""];
     }),
   );
+const without = (env, names) => Object.fromEntries(Object.entries(env).filter(([name]) => !names.includes(name)));
 /** The command a unit starts, without the word it ends with ("serve"). */
 function unitCommand(settings, last) {
   const words = unitWords(settings.ExecStart?.[0] ?? "");
@@ -295,32 +312,35 @@ function unitCommand(settings, last) {
   return words.slice(0, -1);
 }
 
-/** What was chosen for the whole computer's service: the options of `systemUnit`. */
+/** What was chosen for the whole computer's service: the options of `systemUnit`. `env` is what the person added. */
 export function readSystemUnit(text) {
   const settings = unitSettings(text);
-  const env = unitEnvironment(settings);
+  const all = unitEnvironment(settings);
   const user = settings.User?.[0];
   if (!user) throw unreadable("which user the service runs as");
-  const dataDir = env.BOTKINS_DATA_DIR;
-  if (!dataDir || !env.HOME) throw unreadable("where the data folder is");
-  const [first, ...allowPaths] = unitWords(settings.ReadWritePaths?.[0] ?? "");
+  const dataDir = all.BOTKINS_DATA_DIR;
+  if (!dataDir || !all.HOME) throw unreadable("where the data folder is");
+  // Every folder named for writing, on however many lines; the data folder comes first.
+  const [first, ...allowPaths] = (settings.ReadWritePaths ?? []).flatMap(unitWords);
   if (first !== dataDir) throw unreadable("which folders bots may write to");
   const credential = (line) => {
     const found = /^botkins-key:(\/.+)$/.exec(line ?? "");
     if (!found) throw unreadable("where the host key comes from");
     return found[1];
   };
-  const key = settings.LoadCredentialEncrypted ? { encrypted: credential(settings.LoadCredentialEncrypted[0]) } : settings.LoadCredential ? { file: credential(settings.LoadCredential[0]) } : env.BOTKINS_KEY_SOURCE === "file" && env.BOTKINS_KEY_FILE ? { groupFile: env.BOTKINS_KEY_FILE } : undefined;
+  const group = all.BOTKINS_KEY_SOURCE === "file" && all.BOTKINS_KEY_FILE ? { groupFile: all.BOTKINS_KEY_FILE } : undefined;
+  const key = settings.LoadCredentialEncrypted ? { encrypted: credential(settings.LoadCredentialEncrypted[0]) } : settings.LoadCredential ? { file: credential(settings.LoadCredential[0]) } : group;
   if (!key) throw unreadable("where the host key comes from");
-  return { command: unitCommand(settings, "serve"), dataDir, user, group: settings.Group?.[0] ?? user, home: env.HOME, key, allowPaths };
+  const env = without(all, ["BOTKINS_DATA_DIR", "HOME", "NODE_ENV", "BOTKINS_KEY_SOURCE", ...(group ? ["BOTKINS_KEY_FILE"] : [])]);
+  return { command: unitCommand(settings, "serve"), dataDir, user, group: settings.Group?.[0] ?? user, home: all.HOME, key, allowPaths: allowPaths.filter((path, at) => path !== dataDir && allowPaths.indexOf(path) === at), env };
 }
 
-/** What was chosen for one person's service: the options of `userUnit`. */
+/** What was chosen for one person's service: the options of `userUnit`. `env` is their PATH and what they added. */
 export function readUserUnit(text) {
   const settings = unitSettings(text);
-  const env = unitEnvironment(settings);
-  if (!env.BOTKINS_DATA_DIR) throw unreadable("where the data folder is");
-  return { command: unitCommand(settings, "serve"), dataDir: env.BOTKINS_DATA_DIR, ...(env.BOTKINS_KEY_FILE && { keyFile: env.BOTKINS_KEY_FILE }), env: env.PATH ? { PATH: env.PATH } : {} };
+  const all = unitEnvironment(settings);
+  if (!all.BOTKINS_DATA_DIR) throw unreadable("where the data folder is");
+  return { command: unitCommand(settings, "serve"), dataDir: all.BOTKINS_DATA_DIR, ...(all.BOTKINS_KEY_FILE && { keyFile: all.BOTKINS_KEY_FILE }), env: without(all, ["BOTKINS_DATA_DIR", "BOTKINS_KEY_FILE", "NODE_ENV"]) };
 }
 
 const unxml = (text) => text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -343,7 +363,10 @@ function plist(text) {
     }
     if (token === "<array>") {
       const list = [];
-      while (tokens[at] !== "</array>") list.push(value());
+      while (tokens[at] !== "</array>") {
+        if (at >= tokens.length) throw unreadable("what it starts");
+        list.push(value());
+      }
       at++;
       return list;
     }
@@ -356,7 +379,7 @@ function plist(text) {
   return value();
 }
 
-/** What was chosen for the launchd job: the options of `launchdJob`. */
+/** What was chosen for the launchd job: the options of `launchdJob`. `env` is what the install added (a PATH, or the daemon's key file and home) and what the person added. */
 export function readLaunchdJob(text) {
   const job = plist(text);
   const words = job.ProgramArguments;
@@ -364,7 +387,38 @@ export function readLaunchdJob(text) {
   const vars = job.EnvironmentVariables ?? {};
   if (typeof vars.BOTKINS_DATA_DIR !== "string" || !vars.BOTKINS_DATA_DIR) throw unreadable("where the data folder is");
   if (typeof job.StandardOutPath !== "string" || !job.StandardOutPath) throw unreadable("where its log goes");
-  // What an install adds for the person or for the daemon's user; the rest is this version's own.
-  const env = Object.fromEntries(["PATH", "BOTKINS_KEY_FILE", "HOME"].filter((name) => typeof vars[name] === "string").map((name) => [name, vars[name]]));
+  const env = Object.fromEntries(Object.entries(without(vars, ["BOTKINS_DATA_DIR", "BOTKINS_QUIET", "NODE_ENV"])).filter(([, value]) => typeof value === "string"));
   return { command: words.slice(0, -1), dataDir: vars.BOTKINS_DATA_DIR, logFile: job.StandardOutPath, ...(typeof job.UserName === "string" && { user: job.UserName }), env };
+}
+
+/** A unit's settings as lines that can be compared: one variable to a line, and no line for the folders bots may write to (they are read, and written anew as one line). */
+function unitLines(text) {
+  const lines = [];
+  for (const [name, values] of Object.entries(unitSettings(text))) {
+    if (name === "ReadWritePaths") continue;
+    for (const value of values) {
+      if (name === "Environment") for (const pair of unitWords(value)) lines.push("Environment=" + unitValue(pair));
+      else lines.push(name + "=" + value);
+    }
+  }
+  return lines;
+}
+/** A job's settings as lines that can be compared: "<key> <value as JSON>", and one line for each variable. */
+function jobLines(text) {
+  const job = plist(text);
+  if (job === null || typeof job !== "object" || Array.isArray(job)) throw unreadable("what it starts");
+  return Object.entries(job).flatMap(([name, value]) => (name === "EnvironmentVariables" && value && typeof value === "object" ? Object.entries(value).map(([variable, set]) => "EnvironmentVariables." + variable + " " + JSON.stringify(set)) : [name + " " + JSON.stringify(value)]));
+}
+
+/**
+ * The settings in an installed file that no version of Botkins wrote: not in the text this
+ * version makes from what the file itself says was chosen (`made`), and not a line an earlier
+ * version wrote. A setting the person changed is one, and so is one they added that can't be
+ * carried. [] for a file that is Botkins' own, whichever version wrote it.
+ * @param kind  "systemd" or "launchd"
+ */
+export function strange(kind, installed, made) {
+  const lines = kind === "launchd" ? jobLines : unitLines;
+  const known = new Set([...lines(made), ...ONCE_WRITTEN[kind]]);
+  return lines(installed).filter((line) => !known.has(line));
 }

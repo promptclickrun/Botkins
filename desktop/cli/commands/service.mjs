@@ -103,7 +103,10 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
   if (units) {
     try {
       const state = await units();
-      checks.push(check("Service files", state.changed.length === 0, state.changed.length ? "Not the ones this version of Botkins writes: " + state.changed.join(", ") + ". The service runs under what an earlier version wrote." : state.file + " is as this version of Botkins writes it.", state.changed.length ? "`" + (state.scope === "system" ? "sudo " : "") + "botkins service refresh` writes them and keeps what was chosen at install." : undefined));
+      const kept = state.kept ?? [];
+      if (state.changed.length || !kept.length) checks.push(check("Service files", state.changed.length === 0, state.changed.length ? "Not the ones this version of Botkins writes: " + state.changed.join(", ") + ". The service runs under what an earlier version wrote." : state.file + " is as this version of Botkins writes it.", state.changed.length ? "`" + (state.scope === "system" ? "sudo " : "") + "botkins service refresh` writes them and keeps what was chosen at install." : undefined));
+      // A file with a setting of the person's own is theirs to keep: no update replaces it, so it may be an earlier version's.
+      for (const entry of kept) checks.push(check("Service file " + entry.file, null, "It holds settings that Botkins did not write (" + entry.lines.slice(0, 3).join("; ") + (entry.lines.length > 3 ? "; and " + (entry.lines.length - 3) + " more" : "") + "), so no update replaces it, and it may be as an earlier version wrote it.", state.kind === "systemd" ? "Environment variables and folders for bots are kept by an update. Put anything else in `systemctl " + (state.scope === "user" ? "--user " : "") + "edit botkins.service`, which every update keeps, take it out of the file, and run `" + (state.scope === "system" ? "sudo " : "") + "botkins service refresh`." : "Environment variables are kept by an update. For anything else: `botkins service install` writes the file anew."));
     } catch (error) {
       if (error.code !== "NOT_INSTALLED") checks.push(check("Service files", null, error.message, "`botkins service install`, with the options it was first installed with, writes it anew."));
     }
@@ -194,6 +197,8 @@ export const service = {
             ["Workspace", status.workspace.bots + " bots, " + status.workspace.chats + " chats, " + status.workspace.routines + " routines" + (status.workspace.working ? ", " + status.workspace.working + " working" : "") + (status.workspace.waiting ? ", " + status.workspace.waiting + " waiting for an answer" : "")],
             ["Secrets", status.vault.locked ? color.red("vault locked") : "wrapped by the " + status.secrets.where],
             ["Memory", status.memory.rssMb + " MB"],
+            // How the install that left this version ended, with what it had to say.
+            ...(status.update?.last ? [["Last update", status.update.last.ok ? "from " + status.update.last.from + " to " + status.update.last.to + (status.update.last.message ? ". " + status.update.last.message : "") : (status.update.last.message ?? "The update to " + status.update.last.to + " didn't finish, so " + status.update.last.from + " is back.")]] : []),
             ["Data folder", status.dataDir],
           ]).split("\n").slice(1).join("\n"),
         ].join("\n");

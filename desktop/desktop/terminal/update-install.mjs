@@ -230,7 +230,16 @@ export async function verify({ dir, name, keyFile, verifier = verifyRelease }) {
  * runs is the new version's own, from the folder its verified tarball was unpacked into: this
  * updater is the old version's, and can't know what the new one's files say.
  */
-const refreshWith = (exec) => (folder) => exec(join(folder, "bin", "botkins"), ["service", "refresh", "--no-restart", "--json"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+const refreshWith = (exec) => async (folder) => {
+  const { stdout } = await exec(join(folder, "bin", "botkins"), ["service", "refresh", "--no-restart", "--json"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+  // The files it wrote, so that undoing the update takes away the ones it added and no others.
+  try {
+    const { changed } = JSON.parse(stdout);
+    return Array.isArray(changed) ? changed.filter((path) => typeof path === "string") : [];
+  } catch {
+    return [];
+  }
+};
 
 /**
  * Puts a verified tarball in place and makes it the one in use.
@@ -238,12 +247,14 @@ const refreshWith = (exec) => (folder) => exec(join(folder, "bin", "botkins"), [
  * Between the switch and the restart, the service's files are brought up to date with the new
  * version, so the service starts under them. What they held is kept first, and is put back with
  * the old version when the new one doesn't stay up. When the files can't be brought up to date
- * they are left as they were and the update goes on: the new version under the earlier files is
- * what every update before this did, and `botkins doctor` says that they differ.
+ * they are put back as they were and the update goes on: the new version under the earlier files
+ * is what every update before this did, and `botkins doctor` says that they differ. When they
+ * can't be put back either, nobody knows what the service would start under, so the update is
+ * undone as a whole.
  *
  * @param options.manager  { restart(), status() → { active, pid? }, snapshot?(), restore?(saved) }
  *   for the installed service, or nothing when there is none (the caller restarts by hand).
- * @param options.refresh  (folder) → brings the service's files up to date with the version in `folder`.
+ * @param options.refresh  (folder) → brings the service's files up to date with the version in `folder`; answers with the files it wrote.
  * @returns { version, folder, previous, note? }  `note` says what a person should know about an install that went well.
  */
 export async function switchTo({ archive, installRoot, version, platform = process.platform, arch = process.arch, manager, healthMs = 30_000, pollMs = 1000, checkOwner = process.getuid?.() === 0, exec = run, refresh = refreshWith(exec) }) {
@@ -265,6 +276,7 @@ export async function switchTo({ archive, installRoot, version, platform = proce
   let switched = false;
   // What the service's files held before the new version wrote its own, and why it couldn't, if it couldn't.
   let saved = null;
+  let written = [];
   let problem;
   try {
     await exec("tar", ["--no-same-owner", "--no-same-permissions", "-xzf", archive, "-C", temp]);
@@ -282,12 +294,19 @@ export async function switchTo({ archive, installRoot, version, platform = proce
       if (manager.snapshot && manager.restore) {
         try {
           saved = manager.snapshot();
-          await refresh(target);
+          written = (await refresh(target)) ?? [];
         } catch (error) {
-          problem = "The service's files could not be brought up to date with Botkins " + version + " (" + String(error.stderr || error.message || error).trim().split("\n").at(-1).replace(/^botkins: /, "").slice(0, 160) + ").";
-          // Half-written is worse than old: whatever was changed goes back.
-          await manager.restore(saved).catch(() => {});
+          const failed = "The service's files could not be brought up to date with Botkins " + version + " (" + String(error.stderr || error.message || error).trim().split("\n").at(-1).replace(/^botkins: /, "").slice(0, 160) + ").";
+          // Half-written is worse than old: whatever was changed goes back, and the update goes
+          // on under the earlier files. When they don't go back, the update doesn't go on: this
+          // throws, and what follows below puts the old version back and tries the files again.
+          try {
+            await manager.restore(saved, written);
+          } catch {
+            throw new Error(failed);
+          }
           saved = null;
+          problem = failed;
         }
       }
       await manager.restart();
@@ -303,12 +322,12 @@ export async function switchTo({ archive, installRoot, version, platform = proce
         await new Promise((done) => setTimeout(done, pollMs));
       }
     }
-    return { version, folder: target, previous: priorVersion, ...(problem && { note: problem + " `botkins doctor` says what to do." }) };
+    return { version, folder: target, previous: priorVersion, ...(problem && { note: problem + " On the computer, `botkins doctor` says what to do." }) };
   } catch (error) {
     if (switched) {
       renameSync(join(temp, "previous"), current);
       // The old version runs under the files it had. When they can't be put back, that is said: it then runs under the newer ones.
-      if (saved) await manager.restore(saved).catch((failure) => void (problem = "The service's files could not be put back as Botkins " + priorVersion + " had them (" + String(failure.message).slice(0, 160) + "); `botkins doctor` says what to do."));
+      if (saved) await manager.restore(saved, written).catch((failure) => void (problem = "The service's files could not be put back as Botkins " + priorVersion + " had them (" + String(failure.message).slice(0, 160) + "). On the computer, `botkins doctor` says what to do."));
       await manager?.restart().catch(() => {});
     }
     if (placed) rmSync(target, { recursive: true, force: true });

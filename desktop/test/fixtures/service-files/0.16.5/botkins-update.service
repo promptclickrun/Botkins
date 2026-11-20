@@ -1,0 +1,13 @@
+# Written by `botkins service install`.
+[Unit]
+Description=Install the latest signed Botkins terminal host release
+Documentation=https://github.com/promptclickrun/Botkins/blob/main/desktop/docs/terminal.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=BOTKINS_DATA_DIR=/var/lib/botkins
+ExecStart=/opt/botkins/current/bin/botkins update --apply
+UMask=0022
+PrivateTmp=true
