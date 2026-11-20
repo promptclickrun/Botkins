@@ -4,8 +4,12 @@
 import type { AppUpdate } from "@/link/types";
 
 export const UPDATE_CAPABILITY = "app-update-v1";
-/** How long the phone treats the computer as restarting for an update it started, at most. */
-export const RESTART_MS = 10 * 60_000;
+/**
+ * How long the phone treats the computer as restarting for an update it started, at most. The
+ * computer gives up on an install that never started after 10 minutes and says why; this is longer,
+ * so the phone is still waiting when that sentence comes.
+ */
+export const RESTART_MS = 12 * 60_000;
 
 /** The update is under way or being looked for: the buttons wait. */
 export const updateBusy = (update: AppUpdate | undefined) => !!update && (update.status === "checking" || update.status === "downloading" || update.status === "restarting");

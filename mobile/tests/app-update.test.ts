@@ -71,6 +71,11 @@ test("how the last install ended is said once the computer is back, a rollback t
   assert.equal(restartPending(pending, "s2", since + 1000), false);
   assert.equal(restartPending(pending, "s1", since + RESTART_MS + 1), false);
   assert.equal(restartPending(null, "s1", since), false);
+  // An install that never starts ends in an error after 10 minutes on the computer, with no `last`:
+  // the phone is still waiting then, and says the computer's sentence.
+  const never = "The update did not start. On the computer, `botkins update` says why.";
+  assert.equal(restartPending(pending, "s1", since + 10 * 60_000 + 5000), true);
+  assert.deepEqual(afterRestart(pending, update({ status: "error", current: "0.16.4", message: never })), { done: true, ok: false, text: never });
 });
 
 test("the link lets the owner's devices make the four calls, with nothing in them but one switch", () => {
