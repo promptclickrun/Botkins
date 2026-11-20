@@ -1,0 +1,217 @@
+/* Teamwork: a turn's asks to other bots, as compact rows outside the tool fold, and their detail.
+   Uses Botkins' tokens from style.css only. */
+
+.team-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin: 0 0 14px;
+  min-width: 0;
+}
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: auto;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 4px 10px 4px 8px;
+  margin-left: -8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.team-row:hover {
+  background: var(--hover);
+  color: var(--ink);
+  filter: none;
+}
+.team-row.live strong {
+  color: var(--ink-2);
+}
+.team-row > svg {
+  flex: none;
+}
+.team-text + * {
+  margin-left: 6px;
+}
+.team-row > .activity-pulse {
+  animation: team-pulse 1.4s ease-in-out infinite;
+}
+.team-row.failed > svg:first-of-type {
+  color: var(--danger);
+}
+.team-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.team-text strong,
+.team-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-text strong {
+  font-weight: 600;
+}
+.team-text small {
+  font-size: calc(12px * var(--text-scale));
+}
+@keyframes team-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .team-row > .activity-pulse {
+    animation: none;
+  }
+}
+
+/* Two overlapping faces: the asker behind, the teammate in front. */
+.team-faces {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.team-faces > .team-face + .team-face {
+  margin-left: -4px;
+}
+/* Bare avatars: nothing behind them. */
+.team-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.team-face.neutral {
+  color: var(--muted);
+  box-sizing: border-box;
+}
+.team-face .bot-avatar,
+.team-face .avatar {
+  flex: none;
+}
+
+/* The detail dialog. */
+dialog.team-detail {
+  width: min(600px, calc(100vw - 48px));
+  max-height: min(80vh, 720px);
+  padding: 20px 22px 22px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+dialog.team-detail::backdrop {
+  background: var(--scrim);
+}
+.team-detail .sectionhead {
+  justify-content: flex-start;
+  gap: 10px;
+}
+.team-detail .sectionhead h2 {
+  margin: 0;
+  font-size: calc(17px * var(--text-scale));
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.team-detail .sectionhead button {
+  padding: 5px;
+  border-radius: 7px;
+  flex: none;
+}
+.team-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.team-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.team-ask .slash-heading {
+  padding: 0;
+}
+.team-msg {
+  padding: 10px 14px 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: calc(14px * var(--text-scale));
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.team-msg.reply {
+  background: transparent;
+  padding-inline: 0;
+}
+.team-msg p {
+  margin: 0;
+}
+.team-msg > * + * {
+  margin-top: 6px;
+}
+.team-msg > :last-child,
+.team-msg > :last-child > :last-child {
+  margin-bottom: 0;
+}
+.team-speaker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.team-text-body {
+  white-space: pre-wrap;
+  user-select: text;
+}
+.team-expect {
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.team-expect strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.team-error,
+.team-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.team-error svg {
+  flex: none;
+  color: var(--danger);
+}
+.team-did {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-did h3 {
+  margin: 4px 0 0;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.team-did > small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.team-steps.tool-trail {
+  margin: 0;
+}
+.team-steps ol {
+  padding-top: 2px;
+}
+.team-steps li:first-child {
+  border-top: 0;
+}

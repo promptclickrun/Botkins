@@ -1,0 +1,504 @@
+/* The pane beside a chat (src/SidePane.tsx): Details, then the tabs of panels bots opened.
+   As narrow as Details by itself; wider while a panel is in front. In a narrow window, a drawer
+   over the conversation. Tokens only. */
+
+.side-pane {
+  flex: none;
+  width: 272px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--canvas);
+  transition: width 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.side-pane.wide {
+  width: clamp(360px, 38vw, 640px);
+}
+/* Details as before: the panel's own content, now inside the pane. */
+.side-pane .chat-side {
+  display: flex;
+  flex: 1;
+  width: auto;
+  border-left: 0;
+}
+
+/* The tabs, and the button that closes the pane. */
+.pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 48px;
+  padding: 6px 6px 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.pane-head-title {
+  flex: 1;
+  padding: 0 8px;
+  font-weight: 600;
+  font-size: calc(14px * var(--text-scale));
+}
+.pane-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  align-self: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  /* The strip fades at its ends, so a tab cut by the edge reads as more to scroll to. */
+  mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%);
+  padding: 0 4px;
+}
+.pane-tabs::-webkit-scrollbar {
+  display: none;
+}
+.pane-tab {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  max-width: 190px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--muted);
+}
+.pane-tab > [role="tab"] {
+  min-width: 0;
+  max-width: 100%;
+  height: 36px;
+  gap: 6px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: calc(13px * var(--text-scale));
+  color: inherit;
+}
+/* The tab in front keeps room for its close button; on another tab it shows over the end on hover. */
+.pane-tab.selected:has(.pane-tab-close) > [role="tab"] {
+  padding-right: 26px;
+}
+.pane-tab > [role="tab"]:focus-visible {
+  outline-offset: -2px;
+}
+.pane-tab:hover {
+  color: var(--ink);
+}
+.pane-tab.selected {
+  color: var(--ink);
+}
+/* The tab in front sits on the line under the strip, marked by the accent. */
+.pane-tab.selected::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.pane-tab.selected > [role="tab"] {
+  font-weight: 600;
+}
+.pane-tab.selected > [role="tab"]:hover {
+  background: none;
+}
+.pane-tab .pane-kind {
+  flex: none;
+}
+.pane-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-tab .bot-avatar {
+  flex: none;
+}
+.pane-pinned {
+  flex: none;
+  color: var(--muted);
+}
+/* Something a bot added while the person couldn't see it: a quiet dot until they look. */
+.pane-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--info);
+}
+.pane-tab-close {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  opacity: 0;
+}
+.pane-tab:hover .pane-tab-close,
+.pane-tab.selected .pane-tab-close {
+  opacity: 1;
+}
+.pane-tab:not(.selected) .pane-tab-close {
+  background: var(--canvas);
+  box-shadow: -6px 0 6px var(--canvas);
+}
+.pane-tab:not(.selected) .pane-tab-close:hover {
+  background: color-mix(in srgb, var(--ink) 6%, var(--canvas));
+}
+.pane-tab-close:hover {
+  color: var(--ink);
+}
+.side-pane .pane-close {
+  width: 32px;
+  height: 32px;
+  align-self: center;
+}
+.side-pane .pane-close:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+/* Who opened the panel in front, and pin and close for it. */
+.pane-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 8px 4px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.pane-meta .bot-avatar {
+  flex: none;
+}
+.pane-opener {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-opener strong {
+  display: inline;
+  color: var(--ink);
+  font-weight: 600;
+}
+.pane-tool {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.pane-tool:hover:not(:disabled) {
+  color: var(--ink);
+}
+.pane-tool:disabled {
+  opacity: 0.4;
+}
+.pane-tool:disabled:hover {
+  background: none;
+}
+.pane-tool.on {
+  color: var(--ink);
+  background: var(--active);
+}
+
+/* One body at a time fills the rest; a website behind another tab stays loaded, out of sight. */
+.pane-bodies {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane-body.away {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.pane-body.screen {
+  overflow-y: auto;
+}
+
+/* A page a bot wrote fills the pane; a page taller than that scrolls inside its frame. */
+.pane-rich {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane-rich .html-frame {
+  flex: 1;
+  min-height: 0;
+  --frame-cap: none;
+}
+.pane-rich .html-frame iframe,
+.pane-rich .html-frame.loading iframe {
+  /* HtmlFrame sizes its frame to the page; here the pane decides. */
+  height: 100% !important;
+  max-height: none;
+}
+.pane-rich .html-frame.failed {
+  flex: none;
+  margin: 14px;
+}
+
+/* A table scrolls both ways inside the pane, with its header kept in view. */
+.pane-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.pane-table:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.pane-table table {
+  border-collapse: separate;
+  border-spacing: 0;
+  /* Each column as wide as its text, up to a cap: a wide table scrolls sideways. */
+  width: max-content;
+  min-width: 100%;
+  font-size: calc(13px * var(--text-scale));
+}
+.pane-table th,
+.pane-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  min-width: 72px;
+  max-width: 300px;
+  overflow-wrap: break-word;
+}
+.pane-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--rail);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pane-table th:first-child,
+.pane-table td:first-child {
+  padding-left: 14px;
+}
+.pane-empty {
+  padding: 14px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* The website viewer: its bar, then the page. */
+.pane-web {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane-webbar {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--rail);
+}
+.pane-address {
+  flex: 1;
+  min-width: 0;
+  margin: 0 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.pane-loading-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: pane-loading 1.2s ease-in-out infinite;
+}
+@keyframes pane-loading {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+.pane-web-page {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--canvas);
+}
+.pane-web-page webview {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.pane-web-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: var(--canvas);
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.pane-web-state.failed svg {
+  color: var(--warning);
+}
+.pane-web-state .secondary {
+  gap: 6px;
+}
+
+/* The Screen panel: the rows of Settings › Phone, with one line above. */
+.pane-screen {
+  padding: 16px 14px 24px;
+}
+.pane-screen-note {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  margin: 0 0 12px;
+}
+
+/* The header button: a dot when the pane is closed and a panel is new. */
+.chathead-details {
+  position: relative;
+}
+.chathead-details .pane-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px var(--canvas);
+}
+
+/* A narrow window: the pane is a drawer over the conversation, with a scrim behind it. */
+.conversation.with-drawer {
+  position: relative;
+}
+.pane-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: var(--scrim);
+  animation: pane-fade 0.18s ease;
+}
+.side-pane.drawer,
+.side-pane.drawer.wide {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 21;
+  width: min(560px, calc(100% - 48px));
+  box-shadow: var(--shadow);
+  animation: pane-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.side-pane.drawer:not(.wide):not(:has(.pane-tabs)) {
+  width: min(320px, calc(100% - 48px));
+}
+@keyframes pane-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+@keyframes pane-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (max-width: 1079px) {
+  .side-pane .chat-side {
+    display: flex;
+  }
+  /* The header button is there in a narrow window once the chat has panels. */
+  .chathead-details.has-panels {
+    display: inline-flex;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .side-pane,
+  .side-pane.drawer,
+  .pane-scrim {
+    transition: none;
+    animation: none;
+  }
+  .pane-loading-line {
+    animation: none;
+    background-size: 100% 100%;
+    opacity: 0.5;
+  }
+}
+.artifacts-panel { border-top: 1px solid var(--line, #e5e7eb); margin-top: 1rem; padding: 1rem 0 0; }
+.artifacts-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.artifacts-head h3 { margin: 0; font-size: .9rem; }
+.artifacts-controls { display: flex; gap: .5rem; align-items: center; margin: .65rem 0; flex-wrap: wrap; }
+.artifacts-controls select { max-width: 100%; border: 1px solid var(--line, #ddd); border-radius: 6px; padding: .25rem .35rem; background: var(--surface, white); color: inherit; }
+.artifacts-filters { display: flex; gap: 2px; }
+.artifacts-filters button { border: 0; border-radius: 5px; padding: .25rem .45rem; background: transparent; color: inherit; font-size: .75rem; }
+.artifacts-filters button.selected { background: var(--surface-2, #eee); font-weight: 600; }
+.artifact-list { list-style: none; margin: 0; padding: 0; }
+.artifact-list > li { border-radius: 7px; padding: .15rem; }
+.artifact-list > li.selected { background: var(--surface-2, #f2f3f5); }
+.artifact-row { width: 100%; display: flex; align-items: center; gap: .6rem; text-align: left; border: 0; background: transparent; color: inherit; padding: .4rem; cursor: pointer; }
+.artifact-icon, .artifact-thumb { width: 28px; height: 28px; flex: 0 0 28px; object-fit: cover; border-radius: 4px; }
+.artifact-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.artifact-copy strong { font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-copy small { color: var(--muted, #68707d); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-actions { display: flex; gap: .4rem; padding: 0 .4rem .4rem 2.9rem; flex-wrap: wrap; }
+.artifact-actions button, .artifact-back { border: 0; background: transparent; color: var(--accent, #3568d4); font-size: .72rem; padding: 0; cursor: pointer; }
+.artifact-back { margin: .1rem 0 .45rem; }
+.artifact-back span { color: var(--muted, #68707d); }
+.artifact-more { border: 0; background: transparent; color: var(--accent, #3568d4); font-size: .75rem; padding: .45rem; cursor: pointer; }
+.artifact-menu { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 160px; padding: .25rem; border: 1px solid var(--line, #ddd); border-radius: 7px; background: var(--surface, white); box-shadow: 0 8px 24px #0002; }
+.artifact-menu button { border: 0; border-radius: 4px; background: transparent; color: inherit; text-align: left; padding: .35rem .5rem; font-size: .75rem; cursor: pointer; }
+.artifact-menu button:hover, .artifact-menu button:focus-visible { background: var(--surface-2, #f2f3f5); }
+.artifact-preview { margin-top: .6rem; max-height: 180px; overflow: auto; border-radius: 6px; background: var(--surface-2, #f2f3f5); padding: .6rem; font-size: .72rem; }
+.artifact-preview-image { display: block; max-width: 100%; max-height: 160px; margin: 0 auto; object-fit: contain; }
+.artifact-preview-media { width: 100%; max-height: 160px; }
+.artifact-text { white-space: pre-wrap; overflow-wrap: anywhere; }

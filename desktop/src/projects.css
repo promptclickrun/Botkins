@@ -1,0 +1,180 @@
+/* Projects and Project Changes. Colors come from the tokens in tokens.css. */
+.project-picker {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+.project-picker > label {
+  display: grid;
+  gap: 5px;
+}
+.project-picker select {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+}
+.project-picker > .textbutton {
+  justify-self: start;
+}
+.mode-picker {
+  margin: 2px 0 0;
+}
+.mode-hint {
+  color: var(--muted);
+}
+.project-changes {
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  max-height: 60vh;
+  overflow: auto;
+}
+.pc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pc-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+.pc-actions button,
+.pc-head > button {
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.pc-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 14px;
+  font-size: calc(13px * var(--text-scale));
+}
+.pc-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pc-summary small {
+  color: var(--muted);
+}
+.pc-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+}
+.pc-files button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+}
+.pc-path {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-kind {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--sunken);
+  flex-shrink: 0;
+}
+/* A file's change kind: a soft fill with its mark in the status color. */
+.pc-kind.added,
+.pc-kind.untracked {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.pc-kind.deleted {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.pc-kind.modified {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.pc-kind.renamed {
+  color: var(--info);
+  background: var(--info-soft);
+}
+.diff-add {
+  color: var(--success);
+}
+.diff-del {
+  color: var(--danger);
+}
+.diff-view {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font: calc(12px * var(--text-scale))/1.5 var(--font-mono);
+  overflow: auto;
+  max-height: 46vh;
+  white-space: pre;
+}
+.diff-view .diff-add {
+  display: inline;
+  background: var(--success-soft);
+}
+.diff-view .diff-del {
+  background: var(--danger-soft);
+}
+.diff-view .diff-hunk {
+  color: var(--info);
+}
+.diff-view .diff-file {
+  color: var(--muted);
+  font-weight: 600;
+}
+.pc-commit {
+  display: grid;
+  gap: 8px;
+}
+.pc-commit small {
+  color: var(--muted);
+}
+/* A chat whose bot lost access to its project (src/access.ts). */
+.access-blocked {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.4;
+}
+.access-blocked svg {
+  color: var(--danger);
+  margin-top: 1px;
+}

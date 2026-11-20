@@ -1,0 +1,784 @@
+/* The chat: header, thinking, work summary, tasks, helpers, queue, attachments, message actions.
+   Tokens only (src/tokens.css). Quiet by default: muted text, space instead of lines. */
+
+.messages-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.messages-wrap .messages {
+  flex: 1;
+}
+
+/* Header: back, the bot, one quiet line, and small tools at the right. */
+.chathead-back {
+  width: 36px;
+  height: 36px;
+  margin-left: -8px;
+  border-radius: 50%;
+  color: var(--muted);
+  flex: none;
+}
+.chathead-back:hover,
+.chathead-icon:hover {
+  color: var(--ink);
+  background: var(--hover);
+  filter: none;
+}
+.chathead > .bot-avatar {
+  flex: none;
+}
+.chathead-title h2 {
+  font-size: calc(17px * var(--text-scale));
+  line-height: 1.25;
+}
+.chathead-title small {
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.35;
+}
+.chathead-title small.doing {
+  color: var(--info);
+}
+.chathead-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: var(--muted);
+  flex: none;
+}
+.chathead-icon[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--active);
+}
+.chathead-icon:disabled {
+  opacity: 0.45;
+}
+.chathead .chathead-tools .chat-model {
+  margin-left: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.chathead .chathead-tools .chat-model:hover {
+  color: var(--ink);
+  background: var(--hover);
+  filter: none;
+}
+/* Details opens the side panel, which only fits in a wide window. */
+@media (max-width: 1079px) {
+  .chathead-details {
+    display: none;
+  }
+}
+
+/* Replies: the bot's small avatar and name on the first reply of a run. */
+article.assistant > b.speaker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: calc(13px * var(--text-scale));
+}
+article .command-label {
+  font-weight: 600;
+}
+article.live .typing {
+  color: var(--muted);
+}
+
+/* Thinking */
+.reasoning {
+  margin: 0 0 12px;
+  min-width: 0;
+}
+.reasoning-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: auto;
+  justify-content: flex-start;
+  padding: 6px 8px;
+  margin-left: -8px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.reasoning-head:hover {
+  color: var(--ink);
+  filter: none;
+}
+.reasoning-head > svg:last-child {
+  transition: transform 0.15s;
+}
+.reasoning-head[aria-expanded="false"] > svg:last-child {
+  transform: rotate(-90deg);
+}
+.reasoning.live .reasoning-head span {
+  color: var(--ink-2);
+}
+.reasoning-text {
+  margin: 2px 0 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.6;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.reasoning-text.folded {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.show-more {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+  padding: 2px 6px;
+  margin: -4px 0 8px 10px;
+  border-radius: 6px;
+}
+
+/* Work summary */
+.tool-trail .trail-toggle {
+  justify-content: flex-start;
+}
+.trail-toggle > svg:last-child {
+  flex-shrink: 0;
+}
+.work-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-align: left;
+}
+.trail-toggle .work-title {
+  margin-left: 0;
+  color: inherit;
+  font-size: calc(13px * var(--text-scale));
+}
+.work-title small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 400;
+}
+.work-live .trail-toggle {
+  color: var(--ink-2);
+}
+.work-live .trail-toggle strong {
+  min-width: 0;
+}
+.work-live .trail-toggle > .bot-avatar {
+  flex: none;
+}
+.spin {
+  animation: canvas-spin 1s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes canvas-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* Failed turn */
+.chat-column .run-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--ink);
+  font-size: calc(13px * var(--text-scale));
+}
+.run-error .secondary {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-color: transparent;
+}
+
+/* Message actions: quiet icons under a reply, or under a person's bubble. */
+article {
+  position: relative;
+}
+.msg-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+article.assistant > .msg-actions,
+article.command > .msg-actions {
+  margin: 4px 0 0 -6px;
+}
+article.user > .msg-actions {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  padding-top: 2px;
+}
+article:hover .msg-actions,
+article:focus-within .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msg-actions button {
+  color: var(--muted);
+  padding: 5px;
+  border-radius: var(--radius-sm);
+  min-width: 28px;
+  min-height: 28px;
+}
+.msg-actions button:hover {
+  color: var(--ink);
+  background: var(--hover);
+  filter: none;
+}
+.msg-actions button:disabled {
+  opacity: 0.4;
+}
+.msg-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 170px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+.msg-menu button {
+  justify-content: flex-start;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+}
+.msg-menu button:disabled {
+  opacity: 0.45;
+}
+.msg-quote {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid color-mix(in srgb, currentColor 30%, transparent);
+  font-size: calc(13px * var(--text-scale));
+  opacity: 0.8;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.fork-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  margin: 0 0 18px;
+}
+
+/* Attachments */
+.attach-chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+.attach-chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 3px 4px 3px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: calc(12px * var(--text-scale));
+}
+.attach-chips span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-chips button {
+  padding: 3px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.attach-chips.sent {
+  margin-top: 8px;
+}
+.attach-chips.sent li {
+  padding-right: 9px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  color: inherit;
+}
+.composer-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.reply-quote {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 6px 6px 6px 10px;
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.reply-quote > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.reply-quote span {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.reply-quote button {
+  padding: 3px;
+  border-radius: 5px;
+}
+.attach-error {
+  color: var(--danger);
+}
+.composer-shell.dragging .composer {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface));
+}
+.composer .composer-attach {
+  align-self: flex-end;
+}
+.send.stop-quiet {
+  background: var(--sunken);
+  color: var(--ink);
+}
+
+/* Queue */
+.queued {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 0 0 18px;
+}
+.queued-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 85%;
+  padding: 7px 8px 7px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--sunken);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.queued-row > svg {
+  flex-shrink: 0;
+}
+.queued-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.queued-text > small:first-child {
+  display: block;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.queued-row button {
+  flex-shrink: 0;
+}
+.queued-row > button:last-child {
+  padding: 5px;
+  border-radius: 6px;
+}
+
+/* Scrolling: Scroll to latest message, a round glass button centered just above the composer.
+   It sits in the messages' frame, so it moves up as the composer grows. It fades and grows in
+   when the end is out of view, and stays out of reach while hidden. */
+.to-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--ink);
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0.5px solid var(--glass-edge);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  z-index: 4;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-50%) scale(0.8);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease,
+    visibility 0s linear 0.18s;
+}
+.to-latest.shown {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(-50%) scale(1);
+  transition:
+    opacity 0.2s ease,
+    transform 0.24s cubic-bezier(0.34, 1.4, 0.64, 1),
+    visibility 0s;
+}
+.to-latest:hover,
+.to-latest.shown:hover {
+  background: color-mix(in srgb, var(--glass-fill), var(--ink) 5%);
+}
+.to-latest.shown:active {
+  transform: translateX(-50%) scale(0.94);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .to-latest,
+  .to-latest:hover {
+    background: var(--glass-fill-solid);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .to-latest,
+  .to-latest.shown,
+  .to-latest.shown:active {
+    transform: translateX(-50%);
+    transition:
+      opacity 0.15s ease,
+      visibility 0s linear 0.15s;
+  }
+  .to-latest.shown {
+    transition: opacity 0.15s ease;
+  }
+}
+.canvas-notice {
+  position: absolute;
+  right: clamp(16px, 4vw, 40px);
+  bottom: 12px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--canvas);
+  font-size: calc(12px * var(--text-scale));
+  box-shadow: var(--shadow);
+  z-index: 4;
+}
+
+/* Chips and drawers above the composer */
+.canvas-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.canvas-chip {
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  background: var(--sunken);
+  color: var(--ink-2);
+  gap: 6px;
+  min-height: 28px;
+}
+.canvas-chip[aria-expanded="true"] {
+  background: var(--active);
+  color: var(--ink);
+}
+.canvas-drawer {
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: 8px;
+  max-height: min(30vh, 260px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.canvas-drawer ol {
+  list-style: none;
+  margin: 0;
+  padding: 4px 14px;
+}
+.canvas-drawer li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 0;
+  font-size: calc(13px * var(--text-scale));
+}
+.canvas-drawer li > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.canvas-drawer li > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.canvas-drawer li small {
+  display: block;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.canvas-drawer em {
+  font-style: normal;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+  white-space: nowrap;
+}
+.todo.done > span {
+  color: var(--muted);
+}
+.todo.cancelled > span,
+.todo.blocked > span {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.todo.done > svg {
+  color: var(--success);
+}
+.todo.blocked > em {
+  color: var(--warning);
+}
+.todo.in_progress > span {
+  font-weight: 600;
+}
+.helper.done > svg {
+  color: var(--success);
+}
+.helper.failed > svg,
+.helper.error > svg {
+  color: var(--danger);
+}
+
+/* Context meter: a small muted chip in the header. */
+.context-meter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.context-meter small {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.meter {
+  display: block;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.meter i {
+  display: block;
+  height: 100%;
+  background: var(--muted);
+}
+.meter i.high {
+  background: var(--warning);
+}
+@media (max-width: 1000px) {
+  .context-meter .meter,
+  .context-words {
+    display: none;
+  }
+}
+.context-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 999px;
+}
+.context-open:hover {
+  background: var(--hover);
+  filter: none;
+}
+.context-details {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: left;
+  /* The header doesn't wrap; the popup's text does. */
+  white-space: normal;
+  grid-template-columns: minmax(0, 1fr);
+  color: var(--ink);
+  font-weight: 400;
+}
+.context-details > * {
+  min-width: 0;
+}
+.context-details:focus {
+  outline: none;
+}
+.cd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cd-head button {
+  padding: 4px;
+  border-radius: 6px;
+}
+.cd-total {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.cd-total b {
+  font-size: calc(26px * var(--text-scale));
+  letter-spacing: -0.5px;
+}
+.cd-total span {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.cd-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--sunken);
+}
+.cd-bar i {
+  display: block;
+  height: 100%;
+}
+.cd-system {
+  background: var(--info);
+}
+.cd-tools {
+  background: var(--warning);
+}
+.cd-conversation {
+  background: var(--accent);
+}
+.cd-other {
+  background: var(--faint);
+}
+.cd-parts {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: calc(13px * var(--text-scale));
+}
+.cd-parts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cd-parts dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+}
+.cd-parts dt i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.cd-parts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cd-parts .cd-section {
+  margin-top: 6px;
+  font-weight: 600;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--ink);
+}
+.cd-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+}
+.cd-actions small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  flex: 1;
+}
+
+/* Empty chat: the bot large, its name, one line, and quiet suggestions. */
+.starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 600px;
+  margin: 22px auto 0;
+}
+.starters button {
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: var(--ink-2);
+  font-size: calc(13px * var(--text-scale));
+  min-height: 40px;
+}
+.starters button:hover {
+  background: var(--hover);
+  color: var(--ink);
+  filter: none;
+}

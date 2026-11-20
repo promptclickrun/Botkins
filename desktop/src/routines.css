@@ -1,0 +1,706 @@
+/* Routines, the Work page additions and Usage. Colors come from the tokens in tokens.css. */
+
+.routines-head {
+  margin-bottom: 6px;
+}
+.routines-lede {
+  max-width: 640px;
+}
+.routines .filters {
+  flex-wrap: wrap;
+}
+.routine-group {
+  margin-top: 28px;
+}
+.routine-group > h2,
+.work-upcoming > h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: calc(17px * var(--text-scale));
+  margin-bottom: 6px;
+}
+.routine-group > h2 small,
+.work-upcoming > h2 small {
+  display: inline;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.routine-group > p.muted {
+  font-size: calc(13px * var(--text-scale));
+  margin-bottom: 4px;
+}
+.routines-empty {
+  margin-top: 22px;
+}
+
+/* A row is a wide button plus a control on the right, so the control isn't nested in the button. */
+/* Rows sit on the canvas, separated by space rather than lines. */
+.routine-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.routine-open {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 10px 8px;
+  text-align: left;
+  border-radius: var(--radius);
+}
+.routine-open .rowtext strong {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(16px * var(--text-scale));
+}
+.routine-open .rowtext small {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.routine-when {
+  text-align: right;
+  white-space: nowrap;
+  flex: none;
+}
+.routine-when small {
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.2;
+  color: var(--muted);
+}
+/* Paused is a state, not a problem: a quiet word. */
+.routine-when small.paused {
+  color: var(--muted);
+  font-weight: 600;
+}
+.routine-when time {
+  color: var(--ink);
+  font-size: calc(13px * var(--text-scale));
+}
+.routine-row-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+/* The last run, as a quiet word in a status color. */
+.run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 96px;
+  justify-content: flex-end;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.run-chip.ok {
+  color: var(--success);
+}
+.run-chip.failed {
+  color: var(--danger);
+}
+.run-chip.working {
+  color: var(--info);
+}
+.run-chip.working svg {
+  animation: routine-spin 1.1s linear infinite;
+}
+@keyframes routine-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-chip.working svg {
+    animation: none;
+  }
+}
+
+/* Switch: a real checkbox with role=switch, drawn as a track. 44px wide hit area. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  cursor: pointer;
+}
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.switch i {
+  pointer-events: none;
+  width: 36px;
+  height: 21px;
+  border-radius: 99px;
+  background: var(--line-strong);
+  position: relative;
+  transition: background 0.15s;
+}
+.switch i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 25%, transparent);
+  transition: transform 0.15s;
+}
+.switch input:checked + i {
+  background: var(--accent);
+}
+.switch input:checked + i::after {
+  transform: translateX(15px);
+  background: var(--on-accent);
+}
+.switch input:focus-visible + i {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.switch input:disabled + i {
+  opacity: 0.45;
+}
+.switch:has(input:disabled) {
+  cursor: default;
+}
+
+/* Detail */
+.routine-hero {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+}
+.routine-hero > div {
+  min-width: 0;
+}
+.routine-hero h1,
+.routine-editor h1 {
+  font-size: calc(34px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+.routine-state {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.routine-state .paused {
+  color: var(--muted);
+}
+.routine-next {
+  margin-top: 6px;
+  font-weight: 600;
+  font-size: calc(14px * var(--text-scale));
+}
+.routine-actions button:not(.primary) {
+  border-color: transparent;
+  background: var(--sunken);
+}
+.routine-copy {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+.routine-copy label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.routine-copy select,
+.routine-form select {
+  height: 38px;
+  background: var(--surface);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  font: inherit;
+  max-width: 100%;
+}
+.routine-instructions {
+  margin-top: 8px;
+}
+.routine-instructions p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 8px;
+  font-size: calc(14px * var(--text-scale));
+}
+.routine-detail .row {
+  padding: 10px 8px;
+  border-bottom: 0;
+  border-radius: var(--radius);
+}
+
+/* Editor */
+.routine-editor {
+  max-width: 720px;
+}
+.routine-editor h1 {
+  margin: 12px 0 18px;
+}
+.routine-form label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  margin: 0 0 16px;
+}
+.routine-form label small {
+  font-weight: 400;
+  font-size: calc(12px * var(--text-scale));
+}
+.routine-form .counter {
+  text-align: right;
+  margin: -12px 0 12px;
+  font-size: calc(12px * var(--text-scale));
+}
+.cadence {
+  border: 0;
+  padding: 0;
+  margin: 0 0 16px;
+  min-width: 0;
+}
+.cadence legend {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 6px;
+}
+/* The segmented control used across the app: a sunken track, the chosen segment raised on the surface. */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  gap: 2px;
+  background: var(--sunken);
+  max-width: 100%;
+}
+.segmented button {
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 6px 13px;
+  font-size: calc(13px * var(--text-scale));
+  min-height: 32px;
+  color: var(--muted);
+}
+.segmented button[aria-checked="true"],
+.segmented button[aria-selected="true"],
+.segmented button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--line);
+}
+.daypicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.daypicker button {
+  width: 44px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.daypicker button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
+}
+.cadence-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.cadence-fields label {
+  margin: 0;
+  min-width: 140px;
+}
+.cadence-fields label.wide {
+  flex: 1;
+  min-width: 220px;
+}
+.cadence-fields input {
+  font-variant-numeric: tabular-nums;
+}
+.routine-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  background: var(--sunken);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+.routine-preview.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.routine-form > p.muted {
+  font-size: calc(13px * var(--text-scale));
+}
+.routine-form .profile-save {
+  margin-top: 16px;
+}
+
+/* Today panel routine form reuses the picker inside the panel settings dialog. */
+.panel-settings .cadence {
+  margin: 12px 0;
+}
+.panel-settings .cadence-fields label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+
+/* Bot page card */
+.bot-routine {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 10px;
+  padding: 8px 4px;
+  border-radius: var(--radius-sm);
+}
+.bot-routine svg {
+  color: var(--muted);
+}
+.bot-routines .secondary {
+  margin-top: 6px;
+}
+.bot-routines .sectionhead .textbutton {
+  font-size: calc(12px * var(--text-scale));
+}
+
+/* Work */
+.work-head {
+  margin-bottom: 0;
+}
+.work-doors {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.work-doors button {
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.work-doors button svg {
+  color: var(--muted);
+}
+.work-doors .count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 99px;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  line-height: 18px;
+  background: var(--accent);
+  color: var(--on-accent);
+  text-align: center;
+}
+/* Filters as quiet chips: no outline, the chosen one on the selected fill. */
+.filters.chips button {
+  border: 0;
+  border-radius: 99px;
+  padding: 6px 13px;
+  font-size: calc(14px * var(--text-scale));
+  color: var(--ink-2);
+}
+.filters.chips button[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--ink);
+  font-weight: 600;
+}
+.filters .count {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 2px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.work-upcoming {
+  margin-top: 30px;
+}
+/* Work rows: on the canvas, no rule between them; the status is a small dot and word in its color. */
+.row.work-row {
+  border-bottom: 0;
+  padding: 11px 8px;
+  border-radius: var(--radius);
+  gap: 12px;
+}
+.row.work-row > svg:first-child {
+  color: var(--muted);
+}
+.row.work-row time {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.row.work-row > svg:last-child {
+  color: var(--faint);
+}
+.work-dot {
+  width: 8px;
+  height: 8px;
+  margin: 0 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+}
+.work-dot.working {
+  background: var(--info);
+}
+.work-dot.needs {
+  background: var(--danger);
+}
+.work-dot.done {
+  background: var(--success);
+}
+.status-word {
+  font-weight: 600;
+}
+.status-word.working {
+  color: var(--info);
+}
+.status-word.needs {
+  color: var(--danger);
+}
+.status-word.done {
+  color: var(--success);
+}
+.row .danger,
+.routines .danger {
+  color: var(--danger);
+}
+
+/* Usage */
+.usage-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.usage-top .filters {
+  margin: 14px 0;
+}
+.usage-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.usage-totals .metric strong {
+  font-size: calc(26px * var(--text-scale));
+  margin: 2px 0;
+}
+.usage-totals .metric small {
+  font-size: calc(12px * var(--text-scale));
+}
+.usage h3 {
+  font-size: calc(15px * var(--text-scale));
+  margin: 22px 0 10px;
+}
+.usage-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 150px;
+  padding: 8px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.usage-bars.d90 {
+  gap: 1px;
+}
+.usage-bars > span {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+.usage-bars > span > i {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 3px 3px 0 0;
+  background: var(--accent);
+  overflow: hidden;
+}
+.usage-bars > span > i > i {
+  display: block;
+  background: var(--ink);
+  opacity: 0.75;
+}
+.usage-bars > span:hover > i {
+  filter: brightness(1.08);
+}
+.usage-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.usage-legend {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+}
+.usage-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  background: var(--accent);
+}
+.usage-legend i.out {
+  background: var(--ink);
+  opacity: 0.75;
+  margin-left: 6px;
+}
+.usage-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 28px;
+}
+.usage-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(60px, 34%);
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.usage-name {
+  min-width: 0;
+}
+.usage-name strong,
+.usage-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-name small {
+  font-size: calc(12px * var(--text-scale));
+}
+.usage-line > i {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sunken);
+  display: block;
+}
+.usage-line > i > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.usage-page h1 + .usage {
+  margin-top: 6px;
+}
+/* Inside the Settings dialog the page is narrow. */
+.settings-body .usage-totals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.settings-body .usage-bars {
+  height: 110px;
+}
+.notify-settings .pref-columns input[type="time"] {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .routine-open .run-chip {
+    display: none;
+  }
+  .routine-hero h1,
+  .routine-editor h1 {
+    font-size: calc(28px * var(--text-scale));
+  }
+}
+.notify-settings label.check-row {
+  align-items: flex-start;
+}
+.notify-settings label.check-row input {
+  margin-top: 4px;
+}
+.notify-settings label.check-row small {
+  font-weight: 400;
+}
+.routine-form input,
+.routine-form textarea,
+.routine-form select,
+.routine-copy select,
+.cadence-fields input,
+.notify-settings input {
+  font-weight: 400;
+}
+.usage-columns > section,
+.usage > section {
+  margin-top: 0;
+}
+.usage-top {
+  margin-bottom: 10px;
+}
+.settings-body .usage-top .filters {
+  margin: 0;
+}
+.routine-deliver small {
+  display: block;
+  margin-top: 8px;
+}
+.routine-deliver-field {
+  display: block;
+  margin: 12px 0 0;
+  max-width: 320px;
+}
+
+/* Whether a routine notifies when a run finishes. */
+.routine-notify {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: calc(13.5px * var(--text-scale));
+  cursor: pointer;
+}
+.routine-notify input {
+  margin-top: 3px;
+}
+.routine-notify span {
+  display: grid;
+  gap: 2px;
+}

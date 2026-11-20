@@ -1,0 +1,166 @@
+/* Bighelp Cards v1 elements in panels and chat cards: progress, badges and line charts. */
+.block-progress {
+  display: grid;
+  gap: 6px;
+}
+.block-progress > span {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.block-progress > i {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.block-progress > i > i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+}
+.block-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.badge {
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  background: var(--sunken);
+}
+.badge.tone-positive {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.badge.tone-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.badge.tone-negative {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.badge.tone-accent {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.block-line {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.block-line figcaption {
+  font-weight: 600;
+  font-size: calc(13px * var(--text-scale));
+}
+.block-line svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.block-line .axis {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.line-axis,
+.line-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.line-legend {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.line-legend small {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.line-legend i {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/* ------------------------------------------------------------ html blocks (src/HtmlFrame.tsx) */
+/* The page sits flush in its panel or card: full width, no border of its own, as tall as its content
+   up to a cap, past which the page scrolls inside. */
+.html-frame {
+  position: relative;
+  min-width: 0;
+  --frame-cap: 560px;
+}
+.live-panel .html-frame {
+  --frame-cap: 400px;
+}
+.live-panel.tall .html-frame {
+  --frame-cap: 760px;
+}
+.html-frame iframe {
+  display: block;
+  width: 100%;
+  max-height: var(--frame-cap);
+  border: 0;
+  margin: 0;
+  background: transparent;
+  transition: opacity 0.18s ease;
+}
+.html-frame.loading iframe {
+  opacity: 0;
+  max-height: min(var(--frame-start, 160px), var(--frame-cap));
+}
+.html-frame-wait {
+  position: absolute;
+  inset: 0;
+  border-radius: 9px;
+  background: linear-gradient(
+    100deg,
+    var(--sunken) 30%,
+    color-mix(in srgb, var(--line) 55%, var(--sunken)) 50%,
+    var(--sunken) 70%
+  );
+  background-size: 300% 100%;
+  animation: html-frame-wait 1.6s ease-in-out infinite;
+}
+@keyframes html-frame-wait {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+.html-frame.failed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.html-frame.failed .secondary {
+  margin-left: auto;
+  gap: 5px;
+}
+/* A panel or card that holds a page lets the page decide its height, so there is one scrollbar at most. */
+.panel-blocks:has(> .html-frame) {
+  max-height: none;
+  overflow: visible;
+}
+@media (prefers-reduced-motion: reduce) {
+  .html-frame-wait {
+    animation: none;
+  }
+  .html-frame iframe {
+    transition: none;
+  }
+}

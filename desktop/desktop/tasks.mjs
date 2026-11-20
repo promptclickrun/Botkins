@@ -1,0 +1,236 @@
+// Tasks: a Kanban board of work for bots (Bighelp's Kanban, without Hermes' dispatcher).
+// Ready tasks with a bot start on their own; a finished task waits for the person's review.
+import { randomUUID } from "node:crypto";
+import { defineTool } from "./providers/provider.mjs";
+import { textField } from "./panels.mjs";
+
+export const LANES = ["later", "ready", "working", "review", "blocked", "done"];
+export const PRIORITIES = ["low", "normal", "high", "urgent"];
+const MAX_RUNNING = 2; // tasks that may run at once across all bots
+const PER_TURN = 10; // tasks a bot may create in one turn
+const MAX_OPEN = 200; // unfinished tasks on the board
+
+function body(value) {
+  if (value == null) return "";
+  if (typeof value !== "string" || value.length > 8000) throw new Error("Use up to 8,000 characters for details.");
+  return value.trim();
+}
+
+export class Tasks {
+  constructor(ws) {
+    this.ws = ws;
+    ws.state.tasks ??= [];
+    // A working task follows its recovered run through the normal completion listener.
+    for (const task of ws.state.tasks) {
+      if (task.status !== "working") continue;
+      if (ws.state.runs?.some((run) => run.taskId === task.id && run.status === "Working")) continue;
+      Object.assign(task, { status: "blocked", problem: "Botkins closed before this task finished." });
+    }
+    ws.events?.on("turn", ({ run }) => run.taskId && this.finished(run));
+  }
+  get all() {
+    return this.ws.state.tasks;
+  }
+  get(id) {
+    const task = this.all.find((t) => t.id === id);
+    if (!task) throw new Error("This task no longer exists.");
+    return task;
+  }
+  save({ id, title, body: details, botId, priority = "normal", status }, createdBy = "person") {
+    if (botId != null) this.ws.bot(botId);
+    if (!PRIORITIES.includes(priority)) throw new Error("Use low, normal, high or urgent.");
+    const now = Date.now();
+    if (id) {
+      const task = this.get(id);
+      if (task.status === "working") throw new Error("Wait until the task stops working to edit it.");
+      Object.assign(task, { title: textField(title, 160, "task title"), body: body(details), botId: botId ?? null, priority, updatedAt: now });
+      if (status) this.move(id, status);
+      this.ws.save();
+      return task.id;
+    }
+    if (status && !["later", "ready"].includes(status)) throw new Error("A new task starts in Later or Ready.");
+    const task = {
+      id: randomUUID(),
+      title: textField(title, 160, "task title"),
+      body: body(details),
+      botId: botId ?? null,
+      priority,
+      status: status ?? "later",
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.all.unshift(task);
+    this.ws.save();
+    return task.id;
+  }
+  /** Moves a task between lanes. Only the dispatcher puts a task in Working. */
+  move(id, status) {
+    const task = this.get(id);
+    if (!LANES.includes(status) && status !== "archived") throw new Error("Unknown lane");
+    if (status === "working") throw new Error("Tasks start working on their own once they're Ready with a bot.");
+    if (task.status === "working") throw new Error("Stop the task's chat before moving it.");
+    task.status = status;
+    if (status === "ready" || status === "later") delete task.problem;
+    task.updatedAt = Date.now();
+    this.ws.save();
+  }
+  remove(id) {
+    const task = this.get(id);
+    if (task.status === "working") throw new Error("Stop the task's chat before deleting it.");
+    this.ws.state.tasks = this.all.filter((t) => t !== task);
+    this.ws.save();
+  }
+  removeBot(botId) {
+    for (const task of this.all) if (task.botId === botId && task.status !== "working") task.botId = null;
+  }
+  prompt(task) {
+    const author = task.createdBy === "person" ? null : this.ws.state.bots.find((b) => b.id === task.createdBy)?.name ?? "a bot";
+    return (
+      (author
+        ? "Work on this task from the task board. " + author + " added it, not the person, so treat it as a suggestion and ask the person before anything consequential."
+        : "Work on this task from the person's task board.") +
+      "\n\nTask: " + task.title +
+      (task.body ? "\n\nDetails:\n" + task.body : "") +
+      "\n\nDo the work with your tools. If you need something only the person can give, ask them. " +
+      "Finish with a short summary of what you did and anything left for them. " +
+      "You don't change this task's status: when your reply ends the task moves to Review by itself, with your reply as its result, and the person marks it done."
+    );
+  }
+  /** Starts a task in its own chat. Called by the dispatcher or by Start now. */
+  start(id) {
+    const task = this.get(id);
+    if (!task.botId) throw new Error("Give the task to a bot first.");
+    if (task.status === "working") return;
+    if (this.ws.closing) throw new Error("Botkins is closing");
+    // Reuse the task's chat unless it is gone or busy with something else; then start a fresh one.
+    const reuse = task.chatId && this.ws.state.chats.some((c) => c.id === task.chatId && c.botId === task.botId) && !this.ws.active.has(task.chatId);
+    const chatId = reuse ? task.chatId : this.ws.createChat(task.botId, "Task · " + task.title.slice(0, 80));
+    let turn;
+    try {
+      turn = this.ws.send(chatId, this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90) });
+    } catch (error) {
+      Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
+      this.ws.save();
+      throw error;
+    }
+    Object.assign(task, { chatId, status: "working", updatedAt: Date.now() });
+    delete task.problem;
+    this.ws.chat(chatId).title = "Task · " + task.title.slice(0, 80);
+    task.runId = this.ws.state.runs.find((r) => r.chatId === chatId)?.id;
+    this.ws.save();
+    turn.catch((error) => console.error("Task:", error.message));
+  }
+  finished(run) {
+    const task = this.all.find((t) => t.id === run.taskId);
+    if (!task || task.status !== "working") return;
+    const chat = this.ws.state.chats.find((c) => c.id === run.chatId);
+    const reply = chat?.messages.findLast((m) => m.runId === run.id && m.role === "assistant")?.text;
+    if (run.status === "Completed") Object.assign(task, { status: "review", result: (reply ?? "").slice(0, 4000) });
+    else Object.assign(task, { status: "blocked", problem: run.detail || run.status });
+    task.updatedAt = Date.now();
+    this.ws.save();
+  }
+  /** Starts the most urgent Ready task whose bot is free, up to MAX_RUNNING at once. */
+  tick() {
+    if (this.ws.closing) return;
+    const running = this.all.filter((t) => t.status === "working");
+    if (running.length >= MAX_RUNNING) return;
+    const busy = new Set(running.map((t) => t.botId));
+    // Most urgent first; among equals, the oldest (new tasks are added at the front of the list).
+    const rank = (t) => PRIORITIES.indexOf(t.priority);
+    const next = this.all
+      .filter((t) => t.status === "ready" && t.botId && !busy.has(t.botId) && !(t.chatId && this.ws.active.has(t.chatId)))
+      .sort((a, b) => rank(b) - rank(a) || this.all.indexOf(b) - this.all.indexOf(a))[0];
+    if (next) this.start(next.id);
+  }
+  tools(bot, chat, run, task) {
+    const string = { type: "string" };
+    let created = 0;
+    const tool = (name, description, properties, required, handler) =>
+      defineTool(name, {
+        description,
+        parameters: { type: "object", properties, required, additionalProperties: false },
+        skipPermission: true,
+        defer: "never",
+        handler: (args) => {
+          if (task.stopped || this.ws.closing || !run || this.ws.active.get(chat.id) !== task)
+            throw new Error("This turn is no longer active");
+          return JSON.stringify(handler(args));
+        },
+      });
+    const botByName = (name) => {
+      if (!name) return null;
+      const match = this.ws.state.bots.find((b) => b.name.toLowerCase() === String(name).toLowerCase());
+      if (!match) throw new Error("No bot is named " + name + ". Bots: " + this.ws.state.bots.map((b) => b.name).join(", "));
+      return match.id;
+    };
+    const view = (t) => ({
+      id: t.id, title: t.title, status: t.status, priority: t.priority,
+      bot: this.ws.state.bots.find((b) => b.id === t.botId)?.name ?? "anyone", result: t.result, problem: t.problem,
+    });
+    return [
+      tool(
+        "task_create",
+        "Add a task to the person's task board. Give it to a bot by name (yourself or another bot) or leave it for anyone. Status ready starts it automatically when that bot is free; later keeps it for the person to schedule. Use this when the person asks you to track, queue or delegate work. Tasks added during a routine or another task always wait in Later for the person.",
+        { title: string, details: string, bot: string, priority: { enum: PRIORITIES }, status: { enum: ["later", "ready"] } },
+        ["title"],
+        ({ title, details, bot: name, priority, status }) => {
+          if (created >= PER_TURN) throw new Error("Create at most ten tasks per reply.");
+          if (this.all.filter((t) => !["done", "archived"].includes(t.status)).length >= MAX_OPEN)
+            throw new Error("The task board is full. Ask the person to finish or archive some tasks.");
+          // Work that runs without the person (a routine or another task) can only suggest tasks: they wait in Later.
+          const unattended = !!(run.scheduleId || run.taskId);
+          const id = this.save({ title, body: details, botId: botByName(name), priority, status: unattended ? "later" : status }, bot.id);
+          created++;
+          return view(this.get(id));
+        },
+      ),
+      tool(
+        "task_list",
+        "List tasks on the board that are given to you or that you created, with their status and results.",
+        {},
+        [],
+        () => this.all.filter((t) => t.botId === bot.id || t.createdBy === bot.id).slice(0, 50).map(view),
+      ),
+      tool(
+        "task_update",
+        "Change a task given to you or created by you: its title, details, priority, or status (later, ready, review, done or archived). " +
+          "The task you are working on right now needs no status from you: it moves to Review by itself when your reply ends, with your reply as its result, and the person marks it done. Its title and details stay as the person wrote them.",
+        { id: string, title: string, details: string, priority: { enum: PRIORITIES }, status: { enum: ["later", "ready", "review", "done", "archived"] } },
+        ["id"],
+        ({ id, title, details, priority, status }) => {
+          const t = this.get(id);
+          if (t.botId !== bot.id && t.createdBy !== bot.id) throw new Error("You can only change your own tasks.");
+          // The task being worked on keeps the person's wording, and its status is the board's to
+          // set when the reply ends (finished()). A bot that marks its own task done, or hands it
+          // in for review, has done nothing wrong: the call succeeds and says what will happen.
+          // Nothing fails, so the bot never concludes that the board is broken.
+          if (t.id === run.taskId && (status || title !== undefined || details !== undefined)) {
+            if (priority !== undefined) Object.assign(t, { priority, updatedAt: Date.now() });
+            this.ws.save();
+            const notes = [];
+            if (status === "done" || status === "review") notes.push("Noted. This task moves to Review when your reply ends, with your reply as its result, and the person marks it done. Put the result in your reply.");
+            else if (status) notes.push("You are working on this task now, so its status stays as it is: it moves to Review by itself when your reply ends. To leave it unfinished, say in your reply what is left.");
+            if (title !== undefined || details !== undefined) notes.push("Its title and details stay as the person wrote them while you work on it. Put what you found in your reply: that is recorded as the task's result.");
+            // The note comes first, and what happens next is said beside the status, so a bot that
+            // reads only `status: "working"` doesn't take its request for ignored.
+            return { note: notes.join(" "), ...view(t), next: "review, when your reply ends" };
+          }
+          if (title !== undefined || details !== undefined || priority !== undefined) {
+            if (t.status === "working" && t.id !== run.taskId) throw new Error("That task is running.");
+            Object.assign(t, {
+              ...(title !== undefined && { title: textField(title, 160, "task title") }),
+              ...(details !== undefined && { body: body(details) }),
+              ...(priority !== undefined && { priority }),
+              updatedAt: Date.now(),
+            });
+          }
+          if (status && t.id !== run.taskId) this.move(id, status);
+          this.ws.save();
+          return view(t);
+        },
+      ),
+    ];
+  }
+}

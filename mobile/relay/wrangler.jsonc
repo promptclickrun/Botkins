@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "botkins-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  // One address, on a domain of our own. The workers.dev address and preview addresses stay off.
+  "routes": [{ "pattern": "relay.botkins.app", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false,
+  // Workers Logs on. Invocation logs are off because they record the request URL, which holds the room name.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "invocation_logs": false }
+  },
+  // How often one network may knock: new sockets, and everything else. Counts are per Cloudflare
+  // location and approximate; they stop a flood, they are not an exact gate. "off" is for local tests,
+  // where every socket comes from one address.
+  // APNS_TOPIC is the iPhone app's bundle id. The APNs key is not here: APNS_KEY_P8, APNS_KEY_ID and
+  // APNS_TEAM_ID are Worker secrets (see README). APNS_HOST is for tests only and stays unset.
+  "vars": { "RATE_LIMITS": "on", "APNS_TOPIC": "app.botkins.mobile" },
+  "ratelimits": [
+    { "name": "SOCKETS", "namespace_id": "47611", "simple": { "limit": 30, "period": 60 } },
+    { "name": "REQUESTS", "namespace_id": "47612", "simple": { "limit": 120, "period": 60 } },
+    // Pushes: 240 a minute for each computer key. POST /v1/push counts one for each item.
+    { "name": "PUSHES", "namespace_id": "47613", "simple": { "limit": 240, "period": 60 } }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "Room" }]
+  },
+  // SQLite-backed, the only kind the Free plan allows. The relay never uses the storage API.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+}

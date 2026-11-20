@@ -1,0 +1,125 @@
+/* Plans and limits: the cards on the Usage page (src/ProviderLimits.tsx). */
+.limits-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.usage .limits-top h3 {
+  margin: 0;
+}
+.limits-top .secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.limits-top .spin {
+  animation: limits-spin 0.9s linear infinite;
+}
+@keyframes limits-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .limits-top .spin {
+    animation: none;
+  }
+}
+.limits > small,
+.limits > p {
+  display: block;
+  margin: 10px 0 0;
+}
+.limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.limit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px 15px;
+  border-radius: 9px;
+  background: var(--rail);
+}
+.limit-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.limit-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.limit-plan {
+  margin-left: auto;
+  flex: none;
+  white-space: nowrap;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.limit-card small {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.limit-card small.limit-error {
+  color: var(--danger);
+}
+.limit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.limit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: calc(13px * var(--text-scale));
+}
+.limit-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.limit-head strong {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.limit-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.limit-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.limit-bar[data-level="some"] > i {
+  background: var(--warning);
+}
+.limit-bar[data-level="low"] > i {
+  background: var(--danger);
+}
+.limit-credits {
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.limit-card small.limit-foot {
+  margin-top: auto;
+}
+.limits + .usage-top {
+  margin-top: 22px;
+}

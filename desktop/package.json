@@ -1,0 +1,96 @@
+{
+  "license": "MIT",
+  "name": "botkins-desktop",
+  "productName": "Botkins",
+  "version": "0.15.5",
+  "private": true,
+  "type": "module",
+  "main": "desktop/start.mjs",
+  "description": "Your bots, on your computer",
+  "scripts": {
+    "start": "npm run build && node scripts/start.cjs",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test test/*.test.mjs",
+    "package": "npm run build && electron-builder --publish never",
+    "package:windows": "npm run build && node scripts/package-windows.mjs",
+    "package:linux": "npm run build && node scripts/package-linux.mjs",
+    "test:today": "node test/today-smoke.mjs",
+    "test:controls": "node test/controls-smoke.mjs"
+  },
+  "build": {
+    "appId": "app.botkins.desktop",
+    "asar": false,
+    "files": [
+      "dist/**",
+      "desktop/**",
+      "package.json",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+    ],
+    "directories": {
+      "output": "release/${version}"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon-mac.png",
+      "target": "zip",
+      "forceCodeSigning": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true,
+      "signIgnore": [
+        "/node_modules/@microsoft/"
+      ],
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Botkins lets your phone find this computer on your network.",
+        "NSMicrophoneUsageDescription": "Botkins uses the microphone when you dictate a message or talk with a bot in live voice.",
+        "NSAppleEventsUsageDescription": "Botkins asks Messages and Mail to read and send for a bot, only when you have switched those tools on.",
+        "NSBonjourServices": [
+          "_botkins._tcp"
+        ]
+      }
+    },
+    "win": {
+      "icon": "assets/icon-win.png",
+      "target": "zip"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "promptclickrun",
+      "repo": "Botkins",
+      "private": true
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.327",
+    "@microsoft/copilot-sdk": "2.0.1",
+    "@noble/ciphers": "2.4.0",
+    "bonjour-service": "1.4.4",
+    "cron-parser": "5.10.6",
+    "electron-updater": "6.8.11",
+    "mime": "2.6.0",
+    "semver": "7.8.6"
+  },
+  "devDependencies": {
+    "@milkdown/crepe": "7.23.0",
+    "@playwright/test": "1.65.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "electron": "42.11.18",
+    "electron-builder": "26.18.0",
+    "lucide-react": "1.74.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "rehype-highlight": "7.0.2",
+    "remark-gfm": "4.0.1",
+    "typescript": "7.0.2",
+    "vite": "7.3.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/promptclickrun/Botkins.git",
+    "directory": "desktop"
+  }
+}

@@ -1,0 +1,10 @@
+{
+ "serverId": "fixture-host",
+ "serverKey": "generated-in-test",
+ "deviceId": "fixture-phone",
+ "secretKey": "generated-in-test",
+ "hosts": [
+  "127.0.0.1:47610"
+ ],
+ "name": "Fixture Mac"
+}

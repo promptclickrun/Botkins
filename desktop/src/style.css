@@ -1,0 +1,1720 @@
+@import "./tokens.css";
+:root {
+  font:
+    calc(15px * var(--text-scale)) / 1.45 var(--font-body);
+  color: var(--ink);
+  background: var(--canvas);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+/* Code is set in the mono face (SF Mono on a Mac), not the browser's own. */
+pre,
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+button:hover {
+  background-color: var(--hover);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:disabled {
+  cursor: default;
+}
+input,
+select,
+textarea {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+textarea {
+  resize: vertical;
+}
+button,
+small,
+strong {
+  overflow-wrap: anywhere;
+}
+h1,
+h2,
+p {
+  margin: 0;
+}
+/* Names and short headlines are set in the serif; everything else in the sans. */
+h1,
+h2,
+.display {
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+h1 {
+  font-size: calc(30px * var(--text-scale));
+  letter-spacing: -0.4px;
+  line-height: 1.2;
+}
+h2 {
+  font-size: calc(19px * var(--text-scale));
+  letter-spacing: -0.2px;
+  line-height: 1.3;
+}
+small,
+time {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+small,
+strong {
+  display: block;
+}
+/* Markdown text keeps bold and small runs inline; the block rule above is for UI labels. */
+:where(p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6) > :is(strong, small) {
+  display: inline;
+}
+svg {
+  flex-shrink: 0;
+}
+.shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 264px 1fr;
+}
+/* The side menu sits on the rail color; the page meets it without a rule. */
+.shell > aside {
+  background: var(--rail);
+  padding: 22px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* The logo: the two Botkins and the name, as drawn. One picture for light paper, one for dark. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 0 8px;
+  min-height: 30px;
+}
+.brand-name {
+  height: 28px;
+  width: auto;
+}
+.for-dark,
+:root[data-mode="dark"] .for-light {
+  display: none;
+}
+:root[data-mode="dark"] .for-dark {
+  display: block;
+}
+nav,
+.botnav {
+  display: grid;
+  gap: 1px;
+}
+nav button {
+  padding: 10px 13px;
+  justify-content: start;
+  border-radius: 9px;
+  gap: 13px;
+  text-align: left;
+}
+nav button.selected {
+  background: var(--active);
+  font-weight: 650;
+}
+/* Places: compact quiet rows; the selected one sits on the active color. */
+aside > nav button {
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  gap: 11px;
+  color: var(--ink-2);
+  font-size: calc(14px * var(--text-scale));
+}
+aside > nav button > svg {
+  color: var(--muted);
+}
+aside > nav button.selected {
+  color: var(--ink);
+  font-weight: 400;
+}
+aside > nav button.selected > svg {
+  color: var(--ink);
+}
+nav button i,
+.dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+nav button i {
+  margin-left: auto;
+}
+.sidebarlabel {
+  padding: 0 4px 4px 10px;
+  margin-top: 20px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sidebarlabel button {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.botnav {
+  overflow: auto;
+  align-content: start;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+/* A bot's avatar stands bare: no square, ring or tint behind it. */
+.tile {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.account {
+  margin-top: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  justify-content: start;
+  gap: 11px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.account > svg:last-child {
+  margin-left: auto;
+  color: var(--muted);
+}
+.account small {
+  font-weight: 400;
+  font-size: calc(12px * var(--text-scale));
+}
+.shell main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* The top bar: the page names itself, so only the main action sits here. */
+header {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 24px;
+  flex: none;
+}
+.textbutton,
+.titleline time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(13px * var(--text-scale));
+}
+.titleline time {
+  color: var(--muted);
+}
+/* The one main action of a view: the theme's action color. */
+.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  padding: 8px 14px;
+}
+.primary:hover {
+  background: var(--accent);
+  filter: brightness(1.06);
+}
+.content {
+  overflow: auto;
+  padding: 12px clamp(24px, 4vw, 64px) 56px;
+  flex: 1;
+}
+.content > * {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.titleline,
+.sectionhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+/* Home's opening block: a headline and the message box on the canvas, the primary bot beside them. */
+.hero {
+  margin-top: 28px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 32px;
+}
+.herobody {
+  min-width: 0;
+  max-width: 640px;
+}
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.hero h2 {
+  font-size: calc(24px * var(--text-scale));
+  line-height: 1.25;
+  margin: 4px 0 16px;
+}
+.heroface {
+  display: grid;
+  place-items: center;
+  padding-right: 8px;
+}
+/* The composer: one soft pill. + at the left, model and send at the right. */
+.composer {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: flex-end;
+  padding: 7px;
+  gap: 4px;
+  min-height: 52px;
+}
+.composer:focus-within {
+  border-color: var(--line-strong);
+}
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  resize: none;
+  max-height: 160px;
+  field-sizing: content;
+  padding: 8px 6px;
+  line-height: 1.45;
+  align-self: center;
+}
+.composer textarea:focus-visible {
+  outline: none;
+}
+.composer textarea::placeholder {
+  color: var(--faint);
+}
+.send {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.send:hover {
+  background: var(--accent);
+}
+.send:disabled {
+  background: transparent;
+  color: var(--faint);
+  filter: none;
+}
+section + section,
+.content h1 + section,
+.content > section:not(.hero) {
+  margin-top: 31px;
+}
+.sectionhead {
+  margin-bottom: 14px;
+}
+.textbutton {
+  color: var(--muted);
+  padding: 4px;
+}
+.bots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 4px 12px;
+}
+/* A bot in the grid: its bare avatar, its name in the serif and its role. Hover gives the soft fill. */
+.botcard {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: start;
+  gap: 12px;
+  text-align: left;
+}
+.botcard-text {
+  min-width: 0;
+}
+.botcard strong {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(15px * var(--text-scale));
+}
+.botcard strong,
+.botcard small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row,
+.empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: var(--radius);
+  text-align: left;
+  width: 100%;
+}
+.rowtext {
+  display: block;
+  min-width: 0;
+  flex: 1;
+}
+.rowtext strong,
+.rowtext small {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.row time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+/* An empty list is one quiet line. */
+.empty {
+  padding: 8px 0;
+  color: var(--muted);
+}
+.empty > svg {
+  color: var(--muted);
+}
+.empty small {
+  margin-top: 3px;
+}
+.filters,
+.faces {
+  display: flex;
+  gap: 4px;
+  margin: 22px 0;
+}
+.filters button,
+.faces button {
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  color: var(--muted);
+}
+.filters button[aria-pressed="true"],
+.faces button[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--ink);
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.search input {
+  width: 145px;
+}
+/* A chat: the middle column (header, messages, composer) and, in a one-bot chat, the side panel. */
+.conversation {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.chat-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chathead {
+  padding: 12px clamp(16px, 3vw, 32px);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: none;
+  min-height: 60px;
+}
+.chathead-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.composewrap {
+  padding: 4px clamp(16px, 4vw, 40px) 18px;
+  display: block;
+}
+/* The composer and what sits above it share the reading column. */
+.composewrap > * {
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.messages {
+  flex: 1;
+  overflow: auto;
+  padding: 16px clamp(16px, 4vw, 40px) 28px;
+}
+/* A comfortable reading column, centered in the middle column. */
+.chat-column {
+  max-width: 760px;
+  margin: 0 auto;
+}
+article {
+  margin: 0 0 22px;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+article b {
+  display: block;
+  font-size: calc(12px * var(--text-scale));
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+article.assistant,
+article.command {
+  padding: 0;
+}
+article.user {
+  padding: 10px 16px;
+  border-radius: var(--radius-lg);
+  width: fit-content;
+  max-width: min(85%, 600px);
+  margin-left: auto;
+  line-height: 1.5;
+}
+article pre {
+  overflow: auto;
+  background: var(--sunken);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+}
+article p + p {
+  margin-top: 10px;
+}
+/* Read by screen readers, not shown. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.emptychat {
+  text-align: center;
+  padding: 6vh 0 2vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.emptychat > .bot-avatar {
+  margin-bottom: 10px;
+}
+.emptychat h2 {
+  font-size: calc(24px * var(--text-scale));
+}
+.emptychat > p {
+  color: var(--muted);
+  max-width: 460px;
+}
+.error {
+  padding: 10px 14px;
+  margin: 0 24px 8px;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  overflow-wrap: anywhere;
+  max-height: 25vh;
+  overflow: auto;
+}
+.error button {
+  float: right;
+}
+/* Dialogs float on the surface color over the scrim. */
+dialog {
+  background: var(--surface);
+  color: var(--ink);
+  border: 0;
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: min(420px, 90vw);
+  box-shadow: var(--shadow);
+}
+dialog::backdrop {
+  background: var(--scrim);
+}
+dialog form label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  margin: 15px 0;
+}
+dialog p {
+  margin: 8px 0 16px;
+}
+@media (max-width: 1000px) {
+  .shell {
+    grid-template-columns: 232px 1fr;
+  }
+}
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 212px 1fr;
+  }
+  .shell > aside {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .content {
+    padding: 8px 20px 32px;
+  }
+  .hero {
+    gap: 16px;
+  }
+  .heroface .bot-avatar {
+    width: 96px;
+    height: 96px;
+  }
+}
+.settings-link {
+  margin-top: auto;
+  justify-content: flex-start;
+  padding: 8px 10px;
+  gap: 11px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-size: calc(14px * var(--text-scale));
+}
+.settings-link > svg {
+  color: var(--muted);
+}
+.account {
+  margin-top: 0;
+}
+.composer-shell {
+  position: relative;
+  min-width: 0;
+}
+.hero:has(.slash-menu) {
+  overflow: visible;
+  z-index: 3;
+}
+.slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  max-height: min(300px, 37vh);
+  overflow: auto;
+  padding: 6px;
+}
+.below .slash-menu {
+  top: calc(100% + 4px);
+}
+.above .slash-menu {
+  bottom: calc(100% + 4px);
+}
+.slash-heading {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 8px;
+}
+.slash-menu button {
+  display: flex;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  width: 100%;
+  padding: 7px 8px;
+  justify-content: space-between;
+}
+.slash-menu button[aria-selected="true"] {
+  background: var(--active);
+}
+.slash-menu button span {
+  min-width: 0;
+}
+.slash-menu strong,
+.slash-menu small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.slash-menu small {
+  font-size: calc(12px * var(--text-scale));
+}
+.slash-menu em {
+  font: inherit;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.slash-menu p {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+dialog {
+  max-height: 85vh;
+  overflow-y: auto;
+}
+dialog select {
+  height: 38px;
+  background: var(--paper);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 9px;
+  font: inherit;
+  max-width: 100%;
+}
+.panel-settings label,
+.settings-body > label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.settings-body p,
+.muted {
+  color: var(--muted);
+  font-size: calc(14px * var(--text-scale));
+}
+.settings-body .filters {
+  margin: 4px 0 15px;
+}
+.settings-body .primary {
+  margin: 8px 0;
+}
+.settings-body small {
+  overflow-wrap: anywhere;
+}
+.actionrow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.actionrow button,
+.panel-settings > button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+}
+.settings-body .source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 0;
+}
+.source span {
+  min-width: 0;
+}
+.inventory details {
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+.inventory details[open] small {
+  padding: 4px;
+}
+.inventory summary {
+  cursor: pointer;
+}
+.settings-body h3,
+.inventory h3 {
+  font-size: calc(16px * var(--text-scale));
+  margin: 14px 0 4px;
+}
+.today-empty {
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  text-align: center;
+  padding: 55px 20px;
+  margin: 25px 0;
+}
+.today-empty .empty-icon {
+  width: 66px;
+  height: 66px;
+  border-radius: 18px;
+  background: var(--active);
+  display: inline-grid;
+  place-items: center;
+  margin-bottom: 17px;
+}
+.today-empty p {
+  color: var(--muted);
+  max-width: 375px;
+  margin: 7px auto;
+}
+.today-empty .textbutton {
+  margin: auto;
+}
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+  align-items: start;
+}
+.live-panel {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  padding: 19px;
+  min-width: 0;
+}
+.panel-grid > .live-panel {
+  margin: 0;
+}
+.live-panel.wide,
+.live-panel.tall {
+  grid-column: 1/-1;
+}
+.panel-top,
+.live-panel footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.panel-top > button,
+.live-panel footer > button {
+  margin-left: auto;
+}
+.live-panel h2 {
+  margin: 12px 0;
+}
+.panel-blocks {
+  display: grid;
+  gap: 13px;
+  max-height: 420px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.live-panel.tall .panel-blocks {
+  max-height: 780px;
+}
+.live-panel footer {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 15px;
+}
+.live-panel footer small {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: calc(11px * var(--text-scale));
+}
+.metric {
+  background: var(--rail);
+  padding: 13px 15px;
+  border-radius: 9px;
+}
+.metric strong {
+  font-size: calc(29px * var(--text-scale));
+  letter-spacing: -0.06em;
+}
+.panel-blocks ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.panel-table {
+  overflow-x: auto;
+}
+.panel-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: calc(13px * var(--text-scale));
+}
+.panel-table th,
+.panel-table td {
+  text-align: left;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-table th {
+  background: var(--rail);
+}
+.bars {
+  margin: 0;
+}
+.bars figcaption {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.bars > div {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) 2fr auto;
+  gap: 10px;
+  align-items: center;
+  font-size: calc(12px * var(--text-scale));
+}
+.bars > div > i {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--rail);
+}
+.bars i i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.panel-prose pre {
+  white-space: pre-wrap;
+}
+.panel-prose p + p {
+  margin-top: 8px;
+}
+.panel-settings {
+  display: grid;
+  gap: 7px;
+}
+.panel-settings > button {
+  justify-content: flex-start;
+}
+.panel-settings .actionrow {
+  margin: 0;
+}
+.danger {
+  color: var(--danger);
+}
+a {
+  color: inherit;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 2px;
+}
+.panel-blocks h1 {
+  font-size: calc(24px * var(--text-scale));
+}
+
+article.user {
+  background: var(--bubble-color, var(--bubble));
+  color: var(--bubble-ink, var(--on-bubble));
+}
+article.user b,
+article.user a {
+  color: var(--bubble-ink, var(--muted));
+}
+.composer-model {
+  color: var(--muted);
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+}
+.composer-model:hover,
+.composer-model:focus-visible {
+  color: var(--ink);
+  background: var(--hover);
+  filter: none;
+}
+/* The provider's mark on the model button is drawn in the text color, as on the phone. */
+.composer-model .provider-icon {
+  color: var(--ink);
+}
+.aliases {
+  display: inline !important;
+  font-weight: 400;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.settings-body .filters {
+  flex-wrap: wrap;
+}
+.preference-section {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+.preference-section h3,
+.preference-section p,
+.preference-section label,
+.model-picker label {
+  margin: 0;
+}
+.preference-section label,
+.model-picker label,
+.request-scroll label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.preference-section small,
+.thinking-control small,
+.model-save small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.preference-section label.check-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 500;
+}
+.check-row input {
+  accent-color: var(--accent);
+}
+.check-row input {
+  width: auto;
+}
+.pref-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.bubble-preview {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--canvas);
+}
+.preference-section .secondary,
+.model-save {
+  justify-self: start;
+}
+.model-picker {
+  display: grid;
+  gap: 14px;
+  margin: 7px 0;
+}
+.thinking-control {
+  background: var(--rail);
+  padding: 13px 15px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+}
+.thinking-head,
+.thinking-head span,
+.model-save {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.thinking-head {
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.model-save .primary {
+  margin: 0;
+}
+.conversation,
+.messages,
+.composewrap {
+  min-height: 0;
+  min-width: 0;
+}
+/* A turn's activity is drawn quietly: muted rows on the canvas, soft sunken blocks when opened. */
+.tool-trail,
+.chat-card,
+.side-answer,
+.request-panel {
+  border-radius: var(--radius);
+  min-width: 0;
+}
+.tool-trail {
+  margin: 0 0 14px;
+  color: var(--muted);
+}
+.chat-card {
+  margin: 0 0 18px;
+  background: var(--surface);
+}
+.trail-toggle,
+.tool-trail summary {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 6px 8px;
+  font-size: calc(13px * var(--text-scale));
+}
+.trail-toggle {
+  width: auto;
+  max-width: 100%;
+  margin-left: -8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  color: var(--muted);
+}
+.trail-toggle:hover {
+  color: var(--ink);
+  filter: none;
+}
+.trail-toggle strong {
+  font-weight: 600;
+}
+.trail-toggle span,
+.tool-trail em {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-style: normal;
+}
+.trail-toggle[aria-expanded="true"] > svg:last-child {
+  transform: rotate(180deg);
+}
+.tool-trail ol {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px 10px;
+  background: var(--sunken);
+  border-radius: var(--radius);
+}
+.tool-trail li {
+  border-top: 1px solid var(--line);
+  padding: 2px 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--ink-2);
+}
+.tool-trail li:first-child {
+  border-top: 0;
+}
+.tool-trail summary {
+  cursor: pointer;
+}
+.tool-trail summary span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tool-trail summary small {
+  display: block;
+  color: var(--muted);
+}
+.tool-trail em {
+  white-space: nowrap;
+}
+.activity-pulse {
+  border-radius: 50%;
+  background: var(--info);
+  height: 7px;
+  width: 7px;
+  flex-shrink: 0;
+}
+.step-detail,
+.live-output {
+  padding: 2px 14px 9px;
+  font-size: calc(12px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+.step-detail pre,
+.request-scroll pre {
+  font: calc(12px * var(--text-scale)) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--canvas);
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  user-select: text;
+}
+.step-detail pre {
+  max-height: 180px;
+  overflow: auto;
+}
+.live-output {
+  display: flex;
+  gap: 6px;
+  color: var(--muted);
+}
+.chat-card {
+  padding: 16px;
+}
+.chat-card h3 {
+  margin: 0 0 12px;
+}
+.request-banner {
+  background: var(--active);
+  margin: 6px 15px;
+  gap: 8px;
+  align-self: flex-start;
+}
+.side-answer {
+  background: var(--sunken);
+  padding: 10px 14px;
+  max-height: 19vh;
+  overflow: auto;
+  margin-bottom: 8px;
+  font-size: calc(13px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+.side-answer > div:first-child,
+.request-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.side-answer > div:first-child {
+  justify-content: space-between;
+}
+.side-answer small {
+  color: var(--muted);
+}
+.request-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(43vh, 390px);
+  overflow: hidden;
+  margin-bottom: 10px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+}
+.request-heading {
+  flex: none;
+  padding: 12px 16px 4px;
+  font-size: calc(13px * var(--text-scale));
+}
+.request-heading > svg {
+  color: var(--warning);
+}
+.request-heading small {
+  margin-left: auto;
+}
+.request-panel form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.request-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 6px 16px 8px;
+  overflow-wrap: anywhere;
+}
+.request-title {
+  font-weight: 600;
+  white-space: pre-wrap;
+  margin: 0 0 6px;
+}
+.request-controls,
+.answer-options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.request-controls {
+  flex: none;
+  padding: 8px 12px 12px;
+  justify-content: flex-end;
+}
+.request-controls button,
+.answer-options button,
+.secondary {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: calc(12px * var(--text-scale));
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.request-controls button {
+  max-width: 100%;
+}
+.request-scroll textarea,
+.request-scroll input:not([type="checkbox"]),
+.request-scroll select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.answer-options button[aria-pressed="true"] {
+  background: var(--active);
+  border-color: var(--line-strong);
+}
+@media (max-height: 630px) {
+  .request-panel {
+    max-height: 40vh;
+  }
+  .side-answer {
+    max-height: 15vh;
+  }
+  .request-controls {
+    padding: 4px 8px;
+  }
+}
+
+.request-label {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.request-raw {
+  margin: 7px 0;
+}
+.request-raw summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+
+article .command-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 45vh;
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* ------------------------------------------------------------ the side menu: collapse to icons */
+.sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sidebar-foot .settings-link {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-toggle {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.sidebar-toggle:hover {
+  color: var(--ink);
+}
+.shell {
+  transition: grid-template-columns 0.16s ease;
+}
+.shell.collapsed {
+  grid-template-columns: 72px 1fr;
+}
+.shell.collapsed > aside {
+  padding: 18px 12px 12px;
+  overflow: hidden;
+}
+/* Labels stay readable to screen readers; only the icons show. */
+.shell.collapsed .nav-label,
+.shell.collapsed .botnav-name,
+.shell.collapsed .botnav-label {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.shell.collapsed .brand {
+  justify-content: center;
+  margin: 0 0 14px;
+}
+.shell.collapsed .brand img {
+  display: none !important;
+}
+.shell.collapsed .brand .sidebar-toggle {
+  width: 48px;
+  height: 36px;
+}
+.shell.collapsed > aside > nav,
+.shell.collapsed .botnav,
+.shell.collapsed .botnav-group {
+  gap: 3px;
+}
+.shell.collapsed > aside > nav button,
+.shell.collapsed .botnav .botnav-item > button:first-child,
+.shell.collapsed .sidebar-foot button,
+.shell.collapsed .account {
+  position: relative;
+  justify-content: center;
+  width: 48px;
+  min-height: 40px;
+  padding: 0;
+  gap: 0;
+  border-radius: 9px;
+}
+/* A place is its icon, 24px in a 48px button; the place you are in keeps a rounded background. */
+.shell.collapsed > aside > nav button {
+  height: 48px;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+}
+.shell.collapsed > aside > nav button > svg {
+  color: inherit;
+}
+.shell.collapsed > aside > nav button.selected {
+  color: var(--ink);
+}
+/* Its name shows beside it on hover and on keyboard focus. The label stays where the button's
+   content would put it (the button's middle) and is fixed there, so the menu's edge doesn't cut
+   it off; the shift carries it past the button's right side and the menu's edge. */
+.shell.collapsed > aside > nav .nav-label {
+  position: fixed !important;
+  z-index: 30;
+  width: auto;
+  height: auto;
+  padding: 5px 9px;
+  overflow: visible;
+  clip-path: none;
+  transform: translateX(calc(50% + 44px));
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--canvas);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.shell.collapsed > aside > nav button:hover .nav-label {
+  opacity: 1;
+  transition-delay: 0.25s;
+}
+.shell.collapsed > aside > nav button:focus-visible .nav-label {
+  opacity: 1;
+  transition-delay: 0s;
+}
+.shell:not(.collapsed) .nav-note {
+  display: none;
+}
+/* The dot on Work (bots are working) and a bot's "needs you" dot sit on the icon's corner. */
+.shell.collapsed > aside > nav button i,
+.shell.collapsed .botnav-alert {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  box-shadow: 0 0 0 2px var(--rail);
+}
+.shell.collapsed > aside > nav button i {
+  top: 9px;
+  right: 9px;
+}
+.shell.collapsed > aside > nav button.selected i {
+  box-shadow: 0 0 0 2px var(--active);
+}
+.shell.collapsed .sidebarlabel {
+  justify-content: center;
+  padding: 8px 0 4px;
+  margin-top: 10px;
+}
+.shell.collapsed .sidebarlabel button {
+  width: 48px;
+  height: 30px;
+  border-radius: 8px;
+}
+.shell.collapsed .botnav .botnav-item > .menu-button {
+  display: none;
+}
+/* In the rail a bot is just its avatar; its line and time step aside. */
+.shell.collapsed .botnav-line time,
+.shell.collapsed .botnav-line {
+  display: none;
+}
+.shell.collapsed .botnav-text {
+  flex: none;
+  width: 0;
+}
+.shell.collapsed .botnav-group:not(:first-child) {
+  padding-top: 6px;
+}
+.shell.collapsed .sidebar-foot {
+  padding-top: 6px;
+}
+.shell.collapsed .sidebar-foot .settings-link {
+  flex: none;
+}
+.shell.collapsed .account {
+  margin-top: 2px;
+}
+.shell.collapsed .account > svg:last-child {
+  display: none;
+}
+/* Short windows: the places, Settings and the account stay in view, and the bots list gets the rest. */
+@media (max-height: 640px) {
+  .shell > aside {
+    padding-top: 16px;
+    padding-bottom: 10px;
+  }
+  .brand {
+    margin-bottom: 10px;
+  }
+  aside > nav button {
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+  .sidebarlabel {
+    margin-top: 10px;
+  }
+  .settings-link,
+  .account {
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .shell.collapsed > aside {
+    padding-top: 12px;
+  }
+  .shell.collapsed .brand {
+    margin-bottom: 8px;
+  }
+  .shell.collapsed .brand .sidebar-toggle {
+    height: 32px;
+  }
+  .shell.collapsed > aside > nav button,
+  .shell.collapsed .botnav .botnav-item > button:first-child,
+  .shell.collapsed .sidebar-foot .settings-link,
+  .shell.collapsed .account {
+    min-height: 35px;
+  }
+  .shell.collapsed > aside > nav button {
+    height: 40px;
+  }
+  .shell.collapsed .sidebarlabel {
+    margin-top: 6px;
+    padding-top: 6px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell {
+    transition: none;
+  }
+}
+.shell.collapsed .brand-name {
+  display: none;
+}
+/* The account line stays on one line in a narrow side menu. */
+.account > .nav-label {
+  min-width: 0;
+  white-space: nowrap;
+}
+.account > .nav-label,
+.account > .nav-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Labels don't wrap while the side menu opens or closes. */
+.shell > aside nav button,
+.shell > aside .settings-link {
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* New chat, at the top of the side menu. */
+.brand .newchat {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.brand .newchat:hover {
+  color: var(--ink);
+}
+.shell.collapsed .brand {
+  flex-direction: column;
+  gap: 4px;
+}
+.shell.collapsed .brand .newchat {
+  margin-left: 0;
+}
+/* With no bar above it, a page starts a little lower, clear of the window's edge. */
+.shell main > .content {
+  padding-top: 40px;
+}
+
+/* A short window gives its height to the bots: the places sit two to a row. */
+@media (max-height: 640px) {
+  .shell:not(.collapsed) > aside > nav {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1px 4px;
+  }
+  .shell:not(.collapsed) > aside > nav button {
+    min-width: 0;
+    gap: 7px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .shell:not(.collapsed) > aside > nav .nav-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* ------------------------------------------------------------------ Home
+   One question, the message box, the primary Botkin, then the person's Botkins in a row.
+   Search, filters and sections wait behind the tools button (and are laid out in full on Chats). */
+.hero {
+  margin-top: clamp(8px, 4vh, 44px);
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 34%);
+  gap: clamp(20px, 4vw, 56px);
+  padding-bottom: clamp(24px, 5vh, 52px);
+  border-bottom: 1px solid var(--line);
+}
+.hero h2 {
+  font-size: clamp(calc(30px * var(--text-scale)), 4.4vw, calc(52px * var(--text-scale)));
+  line-height: 1.12;
+  letter-spacing: -0.6px;
+  margin: 0 0 clamp(18px, 3vh, 30px);
+  max-width: 11em;
+}
+.heroface {
+  justify-items: center;
+  gap: 2px;
+  padding: 0;
+  text-align: center;
+}
+.heroface img {
+  width: min(176px, 100%);
+  height: auto;
+}
+.heroface strong {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: clamp(calc(19px * var(--text-scale)), 2.2vw, calc(26px * var(--text-scale)));
+  line-height: 1.2;
+}
+.heroface small {
+  font-size: calc(14px * var(--text-scale));
+  color: var(--muted);
+}
+.bots-section.home {
+  margin-top: clamp(20px, 4vh, 36px);
+}
+.bots-section.home .bots {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.bots-section.home .botcard-wrap {
+  display: block;
+}
+.bots-section.home .botcard {
+  width: 100%;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 16px 8px 14px;
+  text-align: center;
+  border-radius: var(--radius-lg);
+}
+.bots-section.home .botcard-text {
+  width: 100%;
+}
+/* A long name takes a second line here rather than being cut. */
+.bots-section.home .botcard strong,
+.bots-section.home .botcard small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.bots-section.home .botcard strong {
+  font-size: calc(16px * var(--text-scale));
+  line-height: 1.25;
+}
+/* The primary bot, the one Home asks: a soft tile, as the one that is chosen. */
+.bots-section.home .botcard-wrap:has(.botbadge) .botcard {
+  background: var(--active);
+}
+/* The word "Primary" stays for screen readers; the tile says it to the eye. */
+.bots-section.home .botbadge {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* A bot's menu is one hover, focus or right-click away. */
+.bots-section.home .botcard-wrap > .menu-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  margin: 0;
+  opacity: 0;
+}
+.bots-section.home .botcard-wrap:hover > .menu-button,
+.bots-section.home .botcard-wrap:focus-within > .menu-button,
+.bots-section.home .botcard-wrap > .menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+.bot-tools-toggle {
+  color: var(--muted);
+}
+.bot-tools-toggle[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--active);
+}
+@media (max-width: 820px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr) 150px;
+  }
+  .bots-section.home .bots {
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  }
+}

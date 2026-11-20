@@ -1,0 +1,908 @@
+// The model provider layer: the registry, the Copilot adapter's session options and warm
+// sessions, account flows, and a conversation moving to a second provider.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Workspace } from "./starter.mjs";
+import { Providers, ModelProvider, ProviderSession, defineTool } from "../desktop/providers/index.mjs";
+import { CopilotProvider, sessionOptions, spoken } from "../desktop/providers/copilot/index.mjs";
+import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
+
+/** A workspace on the Copilot adapter with warm sessions on, over a fake SDK client. */
+function warm(t, reply, options = {}) {
+  const dir = tempDir(t);
+  const fake = fakeClient(reply, options.extra);
+  const copilot = new CopilotProvider({ connect: fake.client, keepWarmMs: options.keepWarmMs ?? 60000, maxWarm: options.maxWarm ?? 6, stallTimeoutMs: options.stallTimeoutMs });
+  t.after(() => copilot.stop());
+  const ws = new Workspace(join(dir, "data"), new Providers([copilot, ...(options.more ?? [])]), () => {});
+  return { ws, dir, copilot, ...fake };
+}
+
+test("the registry falls back to the default provider and merges model lists", async () => {
+  class Fixed extends ModelProvider {
+    constructor(id, models, fails) {
+      super();
+      Object.assign(this, { id, name: id, list: models, fails });
+    }
+    async models() {
+      if (this.fails) throw new Error("offline");
+      return this.list;
+    }
+  }
+  const a = new Fixed("a", [{ id: "m1", provider: "a" }]);
+  const b = new Fixed("b", [{ id: "m2", provider: "b" }]);
+  const providers = new Providers([a, b]);
+  assert.equal(providers.default, a);
+  assert.equal(providers.for({ model: "x", provider: "b" }), b);
+  assert.equal(providers.for({ model: "x" }), a, "a selection without a provider uses the default");
+  assert.equal(providers.for({ model: "x", provider: "gone" }), a, "an unknown provider falls back to the default");
+  assert.deepEqual((await providers.models()).map((m) => m.id), ["m1", "m2"]);
+  // A provider that is down doesn't hide the others' models, whichever it is. With nothing to list, the reason is given.
+  const errors = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  try {
+    assert.deepEqual((await new Providers([a, new Fixed("b", [], true)]).models()).map((m) => m.id), ["m1"]);
+    assert.deepEqual((await new Providers([new Fixed("a", [], true), b]).models()).map((m) => m.id), ["m2"]);
+    await assert.rejects(new Providers([new Fixed("a", [], true)]).models(), /offline/);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(errors.length, 3, "each failure is logged");
+  assert.throws(() => new Providers([]), /at least one/);
+  assert.throws(() => new Providers([{ id: "x" }]), /Invalid model provider/);
+});
+
+test("a session spec becomes grouped SDK 2.0 options, with the turn's handlers behind a swap", async () => {
+  const calls = [];
+  const turn = {
+    handlers: {
+      permission: async (request) => (calls.push(["permission", request.kind, request.label]), { allow: true, interactive: true }),
+      question: async (request) => (calls.push(["question", request.question]), { answer: "Team", wasFreeform: false }),
+      planExit: async () => ({ approved: true }),
+      autoSwitch: async () => "yes",
+      form: async () => ({ action: "accept", content: {} }),
+    },
+  };
+  const options = sessionOptions(
+    {
+      sessionId: "s1",
+      folder: "/work",
+      coding: false,
+      model: { model: "gpt-x", reasoningEffort: "high" },
+      approval: "ask",
+      instructions: "You are Pip.",
+      context: "\nMemory: likes teal.",
+      tools: [defineTool("hello", { description: "Says hello", parameters: { type: "object", properties: {} }, handler: () => "hi" })],
+      skills: { directories: ["/skills"], disabled: ["old"] },
+      mcpServers: { files: { type: "stdio", command: "npx", args: ["x"], env: {}, tools: ["*"] } },
+      plugins: ["/plugin"],
+    },
+    turn,
+  );
+  assert.equal(options.model, "gpt-x");
+  assert.equal(options.workingDirectory, "/work");
+  assert.equal(options.enableConfigDiscovery, false, "nothing is picked up from the folder or the person's Copilot setup");
+  assert.deepEqual(options.inference, { reasoningEffort: "high", reasoningSummary: "detailed" });
+  assert.equal(options.events.streaming, true);
+  assert.equal(options.permissions.mode, "manual");
+  assert.deepEqual(options.tools.definitions.map((x) => [x.name, x.skipPermission, x.defer]), [["hello", true, "never"]]);
+  assert.equal(options.tools.manageScheduleEnabled, false);
+  assert.ok(options.tools.excludedTools.includes("builtin:run_dynamic_workflow"));
+  assert.ok(options.tools.excludedTools.includes("builtin:semantic_code_search"), "code search is for project folders");
+  assert.deepEqual(options.skills, { enabled: true, directories: ["/skills"], disabledSkills: ["old", "customize-cloud-agent", "github-pr-media", "pr-stack"] });
+  assert.ok(!("includedBuiltinSkills" in options.skills), "that filter makes the SDK update options after opening, which is slow");
+  assert.deepEqual(Object.keys(options.mcp.servers), ["files"]);
+  assert.deepEqual(options.plugins.directories, ["/plugin"]);
+  assert.deepEqual(options.systemMessage, { mode: "append", content: "You are Pip.\nMemory: likes teal." });
+  // The SDK's request reaches Botkins in neutral terms, and the answer goes back as an SDK result.
+  assert.deepEqual(await options.permissions.onRequest({ kind: "shell", fullCommandText: "ls" }, {}), {
+    kind: "approve-once",
+    approvedInteractively: true,
+  });
+  assert.deepEqual(calls[0], ["permission", "shell", "Shell command"]);
+  assert.deepEqual(await options.interaction.onUserInputRequest({ question: "Audience?" }), { answer: "Team", wasFreeform: false });
+  // Between turns nothing is approved and nobody can be asked.
+  turn.handlers = null;
+  assert.deepEqual(await options.permissions.onRequest({ kind: "shell", fullCommandText: "ls" }, {}), { kind: "reject" });
+  assert.throws(() => options.interaction.onUserInputRequest({ question: "?" }), /No active turn/);
+  assert.deepEqual(options.interaction.onElicitationRequest({}), { action: "cancel" });
+  assert.equal(options.interaction.onAutoModeSwitchRequest({}), "no");
+  // A coding chat keeps code search and the runtime's own skills; other approval levels map through.
+  const coding = sessionOptions({ model: { model: "m" }, approval: "all", instructions: "", coding: true, tools: [] }, {});
+  assert.ok(!coding.tools.excludedTools.includes("builtin:semantic_code_search"));
+  assert.deepEqual(coding.skills.disabledSkills, [], "a coding chat keeps the runtime's pull-request skills");
+  assert.equal(coding.permissions.mode, "allow-all");
+  assert.equal(sessionOptions({ model: { model: "m" }, approval: "assisted", instructions: "", tools: [] }, {}).permissions.mode, "assisted");
+});
+
+test("a chat's session stays warm: the next turn reuses it with that turn's tools and handlers", async (t) => {
+  const { ws, log } = warm(t);
+  const id = ws.createChat("pip");
+  await ws.send(id, "One");
+  assert.deepEqual(log.created, [id]);
+  assert.deepEqual(log.disconnected, [], "a finished turn keeps its session open");
+  const first = log.tools.get(id);
+  await ws.send(id, "Two");
+  assert.deepEqual(log.created, [id]);
+  assert.deepEqual(log.resumed, [], "the second turn neither creates nor resumes");
+  assert.notEqual(log.tools.get(id), first, "the second turn's tools replaced the first's");
+  assert.deepEqual(log.sent.map((s) => s[1]), ["One", "Two"]);
+  assert.equal(log.sessions.get(id).listeners(), 0, "no event listener is left behind");
+  // The first turn's tools are dead: they belong to a task that ended.
+  const stale = first.find((x) => x.name === "wiki_search");
+  assert.throws(() => stale.handler({}), /no longer active/);
+  // The "/" menu and a side question borrow the same warm session.
+  log.sessions.get(id).rpc.ui = { ephemeralQuery: async () => ({ answer: "Side" }) };
+  assert.equal(await ws.sideQuestion(id, "Why?"), "Side");
+  assert.deepEqual([log.created.length, log.resumed.length, log.disconnected.length], [1, 0, 0]);
+});
+
+test("model and approval changes apply to the open session; changed instructions reopen it", async (t) => {
+  const { ws, log } = warm(t, undefined, { extra: { models: [{ id: "auto" }, { id: "gpt-x", supportedReasoningEfforts: ["high"] }] } });
+  const id = ws.createChat("pip");
+  const other = ws.createChat("pip");
+  await ws.send(id, "One");
+  await ws.send(other, "Hello");
+  // Closing a session makes the next one slow to start, so these change the session in place.
+  ws.setPreferences({ approval: "all" });
+  await ws.setModel("chat", id, { model: "gpt-x", reasoningEffort: "high" });
+  await ws.send(id, "Two");
+  assert.deepEqual([log.disconnected, log.resumed], [[], []], "nothing was closed or reopened");
+  assert.deepEqual(log.modes, [[id, "allow-all"]]);
+  assert.deepEqual(log.models, [[id, "gpt-x", "high"]]);
+  ws.setPreferences({ approval: "read" });
+  await ws.send(id, "Three");
+  assert.deepEqual(log.modes, [[id, "allow-all"], [id, "manual"]], "Botkins' read level is the SDK's manual mode plus its own rule");
+  // What the bot is told is fixed when a session opens, so a change there reopens it.
+  ws.updateBot("pip", { instructions: "Answer in one sentence." });
+  await ws.send(id, "Four");
+  assert.deepEqual(log.disconnected, [id]);
+  assert.deepEqual(log.resumed, [id]);
+  assert.match(log.configs.get(id).systemMessage.content, /Answer in one sentence/);
+  assert.equal(log.configs.get(id).permissions.mode, "manual");
+  assert.equal(log.configs.get(id).model, "gpt-x");
+  log.resumed.length = 0;
+  // Memory rides outside the reuse check, so the saving chat's session survives its own save…
+  ws.active.set(id, { stopped: false });
+  log.disconnected.length = 0;
+  const entry = ws.providers.default.pool.get(id);
+  entry.busy = true;
+  ws.memory.save("pip", "Likes teal");
+  await tick();
+  // …while the bot's other open chat closes so its next turn starts with the new memory.
+  assert.deepEqual(log.disconnected, [other]);
+  entry.busy = false;
+  ws.active.delete(id);
+  await ws.send(other, "Again");
+  assert.match(log.configs.get(other).systemMessage.content, /Likes teal/);
+  assert.deepEqual(log.resumed, [other]);
+});
+
+test("warm sessions are limited, expire, are never kept for disposable or failed turns, and close on stop", async (t) => {
+  const { ws, log, copilot } = warm(t, async (_id, options) => {
+    if (options.prompt === "Fail") throw new Error("model error");
+    return { data: { content: "ok" } };
+  }, { maxWarm: 2 });
+  const chats = [ws.createChat("pip"), ws.createChat("scout"), ws.createChat("patch")];
+  for (const id of chats) await ws.send(id, "Hi");
+  assert.deepEqual(log.disconnected, [chats[0]], "the least recently used session closes when a third opens");
+  assert.deepEqual([...copilot.pool.keys()], [chats[1], chats[2]]);
+  // A failed turn's session is closed rather than reused.
+  await ws.send(chats[2], "Fail");
+  assert.equal(ws.state.runs[0].status, "Needs you");
+  assert.ok(log.disconnected.includes(chats[2]));
+  assert.ok(!copilot.pool.has(chats[2]));
+  // The "/" menu of a brand-new chat uses the bot's menu session, which stays open like any other.
+  const fresh = ws.createChat("pip");
+  await ws.catalog("pip", fresh).catch(() => {}); // the fake has no inventory RPCs; the session is still released
+  await tick(5);
+  assert.ok([...copilot.pool.keys()].some((key) => key.startsWith("menu-")));
+  assert.ok([...copilot.pool.values()].every((entry) => !entry.busy));
+  assert.equal(log.deleted.length, 0);
+  assert.ok(!ws.chat(fresh).established, "browsing the menu doesn't start the chat's conversation");
+  await copilot.stop();
+  assert.equal(copilot.pool.size, 0);
+  assert.equal(log.stopped, undefined, "a client supplied from outside is not stopped by the provider");
+});
+
+test("a warm session closes by itself after the keep-warm time", async (t) => {
+  const { ws, log, copilot } = warm(t, undefined, { keepWarmMs: 15 });
+  const id = ws.createChat("pip");
+  await ws.send(id, "One");
+  assert.ok(copilot.pool.has(id));
+  await tick(60);
+  assert.deepEqual(log.disconnected, [id]);
+  assert.ok(!copilot.pool.has(id));
+  await ws.send(id, "Two");
+  assert.deepEqual(log.resumed, [id]);
+});
+
+test("Copilot activity keeps a turn alive beyond the old wall-clock deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { ws, copilot } = warm(t, undefined, {
+    stallTimeoutMs: 600000,
+    extra: {
+      send: async (_id, _options, session) => {
+        session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
+        let count = 0;
+        const timer = setInterval(() => {
+          count++;
+          session.emit({ type: "assistant.intent", data: { intent: "working " + count } });
+          if (count === 8) {
+            clearInterval(timer);
+            session.emit({ type: "assistant.message", id: "reply", data: { originatingMessageId: "request", content: "Finished" } });
+            session.emit({ type: "session.idle", data: { mode: "interactive" } });
+          }
+        }, 100000);
+        return "request";
+      },
+    },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const reply = session.send({ prompt: "Long" }, 600000);
+  // Advance the fake clock 800 seconds: the old wall-clock deadline has passed, but each
+  // 100-second activity event resets the inactivity detector.
+  await Promise.resolve();
+  t.mock.timers.tick(800000);
+  await assert.doesNotReject(reply);
+  await session.close();
+  await copilot.stop();
+});
+
+test("a silent Copilot session still reports an inactivity stall", async (t) => {
+  const { ws, copilot } = warm(t, undefined, {
+    stallTimeoutMs: 20,
+    extra: { send: async () => "request" },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  await assert.rejects(session.send({ prompt: "Silent" }, 20), (error) => error.code === "BOTKINS_SESSION_STALL");
+  await session.close();
+  await copilot.stop();
+});
+
+test("a caller's inactivity timeout overrides the provider default", async (t) => {
+  const { ws, copilot } = warm(t, undefined, {
+    stallTimeoutMs: 1000,
+    extra: { send: async () => new Promise(() => {}) },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const send = session.send({ prompt: "Use the caller timeout" }, 20);
+  send.catch(() => {});
+  await assert.rejects(
+    Promise.race([
+      send,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("caller timeout was ignored")), 200)),
+    ]),
+    (error) => error.code === "BOTKINS_SESSION_STALL",
+  );
+  await session.close();
+  await copilot.stop();
+});
+
+test("admission activity resets the stall without retaining every delta", async (t) => {
+  const { ws, copilot } = warm(t, undefined, {
+    stallTimeoutMs: 20,
+    extra: {
+      send: async (_id, _options, session) => {
+        for (let i = 0; i < 10000; i++) session.emit({ type: "assistant.message_delta", data: { deltaContent: "x" } });
+        session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
+        return new Promise(() => {});
+      },
+    },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const send = session.send({ prompt: "Admission activity" }, 20);
+  send.catch(() => {});
+  await assert.rejects(send, (error) => error.code === "BOTKINS_SESSION_STALL");
+  assert.equal(session.sdk.listeners(), 0, "the bounded admission buffer still cleans up its listener");
+  await session.close();
+  await copilot.stop();
+});
+
+test("a Copilot turn whose admission stalls rejects and removes its event listener", async (t) => {
+  const { ws, copilot } = warm(t, undefined, {
+    stallTimeoutMs: 20,
+    extra: { send: async () => new Promise(() => {}) },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const admission = session.send({ prompt: "Never admitted" }, 20);
+  admission.catch(() => {});
+  await assert.rejects(
+    Promise.race([
+      admission,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("admission did not stall out")), 100)),
+    ]),
+    (error) => error.code === "BOTKINS_SESSION_STALL",
+  );
+  assert.equal(session.sdk.listeners(), 0, "stall cleanup removes the listener even when send() never resolves");
+  await session.close();
+  await copilot.stop();
+});
+
+test("a stalled Copilot turn recovers a final journaled reply before Needs you", async (t) => {
+  const { ws, copilot } = warm(t, undefined, {
+    stallTimeoutMs: 20,
+    extra: {
+      send: async (_id, _options, session) => {
+        session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
+        return "request";
+      },
+      events: async () => [
+        { type: "user.message", id: "user-event", data: { messageId: "request" } },
+        { type: "assistant.message", data: { originatingMessageId: "request", content: "Recovered from journal" } },
+        { type: "assistant.turn_end" },
+      ],
+    },
+  });
+  const id = ws.createChat("pip");
+  const sendTurn = ws.sendTurn.bind(ws);
+  ws.sendTurn = (session, ...args) => {
+    const send = session.send;
+    session.send = (input) => send.call(session, input, 20);
+    try {
+      return sendTurn(session, ...args);
+    } finally {
+      session.send = send;
+    }
+  };
+  await ws.send(id, "Long request");
+  assert.equal(ws.state.runs[0].status, "Completed");
+  assert.equal(ws.chat(id).messages.at(-1).text, "Recovered from journal");
+  await copilot.stop();
+});
+
+test("opening a chat readies its session; a stopped turn's session stays open", async (t) => {
+  let release;
+  const { ws, log, copilot } = warm(t, async (_id, options, session) => {
+    if (options.prompt !== "Slow") return { data: { content: "ok" } };
+    await new Promise((resolve) => {
+      release = resolve;
+      session.onAbort = resolve;
+    });
+    return { data: { content: "late" } };
+  });
+  const id = ws.createChat("pip");
+  await ws.prewarm(id);
+  assert.deepEqual(log.created, [], "a chat with no conversation yet isn't opened ahead of time");
+  await ws.send(id, "One");
+  await copilot.releaseSessions();
+  assert.deepEqual(log.disconnected, [id]);
+  await ws.prewarm(id);
+  assert.deepEqual(log.resumed, [id], "opening the chat resumes its session before any message");
+  await ws.send(id, "Two");
+  assert.deepEqual(log.resumed, [id], "the message then starts on the session that is already open");
+  const turn = ws.send(id, "Slow");
+  await tick(5);
+  await ws.stop(id);
+  await turn;
+  assert.equal(ws.state.runs[0].status, "Stopped");
+  assert.ok(copilot.pool.has(id), "Stop doesn't close the session");
+  await ws.send(id, "After stop");
+  assert.deepEqual(log.resumed, [id], "the next message uses it without reopening");
+  assert.equal(ws.chat(id).messages.at(-1).text, "ok");
+  void release;
+});
+
+test("conversations made under ~/.copilot are copied into Botkins' own Copilot state once", (t) => {
+  const dir = tempDir(t);
+  const legacy = join(dir, "home");
+  const base = join(dir, "data", "copilot");
+  for (const id of ["chat-1", "chat-2", "chat-1-pip"]) {
+    mkdirSync(join(legacy, "session-state", id, "checkpoints"), { recursive: true });
+    writeFileSync(join(legacy, "session-state", id, "events.jsonl"), id);
+  }
+  const copilot = new CopilotProvider({ baseDirectory: base, userHome: legacy, connect: async () => ({}) });
+  assert.equal(copilot.adoptSessions(["chat-1", "chat-1-pip", "missing", "../escape", 7]), 2);
+  assert.equal(readFileSync(join(base, "session-state", "chat-1", "events.jsonl"), "utf8"), "chat-1");
+  assert.ok(existsSync(join(base, "session-state", "chat-1-pip", "checkpoints")));
+  assert.ok(!existsSync(join(base, "session-state", "chat-2")), "only this workspace's conversations are copied");
+  assert.ok(existsSync(join(legacy, "session-state", "chat-1")), "the originals stay");
+  // A conversation that has moved on in Botkins is never overwritten.
+  writeFileSync(join(base, "session-state", "chat-1", "events.jsonl"), "newer");
+  assert.equal(copilot.adoptSessions(["chat-1", "chat-2"]), 1);
+  assert.equal(readFileSync(join(base, "session-state", "chat-1", "events.jsonl"), "utf8"), "newer");
+  assert.equal(new CopilotProvider({ userHome: legacy }).adoptSessions(["chat-1"]), 0, "nothing to do when Botkins shares ~/.copilot");
+});
+
+/** A fake accounts RPC on a short-lived session, as SDK 2.0 runs sign-in. */
+function accountsFixture(t, steps, auth) {
+  const calls = [];
+  let advance = 0;
+  const fake = fakeClient(undefined, {
+    auth,
+    rpc: () => ({
+      accounts: {
+        login: {
+          begin: async (params) => (calls.push(["begin", params]), { flowId: "f1", step: steps.first }),
+          advance: async () => {
+            calls.push(["advance"]);
+            const step = steps.next[Math.min(advance++, steps.next.length - 1)];
+            if (step instanceof Error) throw step;
+            if (typeof step === "function") return step();
+            return step;
+          },
+          cancel: async () => void calls.push(["cancel"]),
+        },
+        set: async (params) => (calls.push(["set", params]), { ok: true }),
+      },
+    }),
+  });
+  const copilot = new CopilotProvider({ connect: fake.client });
+  t.after(() => copilot.stop());
+  return { copilot, calls, ...fake };
+}
+
+test("sign-in opens GitHub in the browser, waits, and cleans up its session", async (t) => {
+  let signedIn = false;
+  const { copilot, calls, log } = accountsFixture(
+    t,
+    {
+      first: { kind: "open-url", url: "https://github.com/login/oauth/authorize?client_id=x" },
+      next: [{ kind: "awaiting" }, () => ((signedIn = true), { kind: "completed" })],
+    },
+    () => ({ isAuthenticated: signedIn, login: "octo", authType: "user" }),
+  );
+  const opened = [];
+  await copilot.signIn({ open: async (url) => void opened.push(url) });
+  assert.deepEqual(opened, ["https://github.com/login/oauth/authorize?client_id=x"]);
+  assert.deepEqual(calls.map((c) => c[0]), ["begin", "advance", "advance", "cancel"]);
+  assert.deepEqual(calls[0][1], { kind: "githubDotCom", method: "web" });
+  assert.deepEqual(log.configs.get(log.created[0]).tools.availableTools, [], "the sign-in session has no tools");
+  assert.deepEqual(log.disconnected, log.created);
+  assert.deepEqual(log.deleted, log.created);
+  assert.deepEqual(await copilot.auth(), { connected: true, login: "octo", type: "user", host: undefined });
+});
+
+test("sign-in refuses a link that isn't GitHub, reports failure, and can be cancelled", async (t) => {
+  const bad = accountsFixture(t, { first: { kind: "open-url", url: "https://example.com/phish" }, next: [{ kind: "completed" }] });
+  const opened = [];
+  await assert.rejects(bad.copilot.signIn({ open: async (url) => void opened.push(url) }), /run \/login/);
+  assert.deepEqual(opened, [], "nothing is opened");
+  assert.deepEqual(bad.log.deleted, bad.log.created);
+
+  const failed = accountsFixture(t, { first: { kind: "open-url", url: "https://github.com/x" }, next: [{ kind: "error", message: "Access denied" }] });
+  await assert.rejects(failed.copilot.signIn({ open: async () => {} }), /Access denied/);
+
+  let resume;
+  const waiting = accountsFixture(t, {
+    first: { kind: "open-url", url: "https://github.com/x" },
+    next: [() => new Promise((resolve) => (resume = () => resolve({ kind: "awaiting" })))],
+  });
+  const pending = waiting.copilot.signIn({ open: async () => {} });
+  await tick(5);
+  await waiting.copilot.cancelSignIn();
+  resume();
+  await assert.rejects(pending, /Sign-in cancelled/);
+  assert.ok(waiting.calls.filter((c) => c[0] === "cancel").length >= 1);
+  assert.deepEqual(waiting.log.deleted, waiting.log.created);
+  await waiting.copilot.cancelSignIn(); // nothing waiting: no error
+});
+
+test("sign-out removes a Copilot sign-in and explains the ones Botkins can't remove", async (t) => {
+  const user = accountsFixture(t, { first: {}, next: [] }, () => ({ isAuthenticated: true, authType: "user" }));
+  await user.copilot.signOut();
+  assert.deepEqual(user.calls, [["set", { command: { kind: "logout" } }]]);
+  const gh = accountsFixture(t, { first: {}, next: [] }, () => ({ isAuthenticated: true, authType: "gh-cli" }));
+  await assert.rejects(gh.copilot.signOut(), /gh auth logout/);
+  assert.deepEqual(gh.calls, []);
+  const env = accountsFixture(t, { first: {}, next: [] }, () => ({ isAuthenticated: true, authType: "env" }));
+  await assert.rejects(env.copilot.signOut(), /token from its environment/);
+});
+
+test("the Copilot model list names its provider and each model's source", async (t) => {
+  const { ws } = warm(t, undefined, {
+    extra: {
+      models: [
+        { id: "gpt-x", name: "GPT X", provider: { id: "copilot", kind: "copilot" }, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" },
+        { id: "local", policy: { state: "disabled" } },
+      ],
+    },
+  });
+  const models = await ws.models();
+  assert.deepEqual(models[0], { id: "gpt-x", name: "GPT X", provider: "copilot", providerName: "GitHub Copilot", source: "copilot", efforts: ["low", "high"], defaultEffort: "low", available: true });
+  assert.deepEqual(models[1], { id: "local", name: "Local", provider: "copilot", providerName: "GitHub Copilot", efforts: [], defaultEffort: undefined, available: false });
+  await ws.setModel("global", null, { model: "gpt-x", provider: "copilot", reasoningEffort: "high" });
+  assert.deepEqual(ws.state.settings.model, { model: "gpt-x", provider: "copilot", source: "copilot", reasoningEffort: "high" });
+  // A selection saved before sources existed still matches.
+  await ws.setModel("bot", "pip", { model: "gpt-x" });
+  await assert.rejects(ws.setModel("bot", "pip", { model: "gpt-x", provider: "elsewhere" }), /unavailable/);
+});
+
+test("a second provider serves the chats whose model belongs to it, and a chat can move to it", async (t) => {
+  // A provider with no session state of its own: it answers from the history it is handed.
+  const seen = [];
+  class EchoSession extends ProviderSession {
+    constructor(spec) {
+      super();
+      this.id = spec.sessionId;
+      this.spec = spec;
+    }
+    async send({ prompt }) {
+      seen.push({ id: this.id, prompt, instructions: this.spec.instructions, history: this.spec.history().length, tools: this.spec.tools.map((x) => x.name) });
+      return { text: "echo: " + prompt };
+    }
+  }
+  class Echo extends ModelProvider {
+    id = "echo";
+    name = "Echo";
+    deleted = [];
+    async models() {
+      return [{ id: "echo-1", name: "Echo 1", provider: "echo", efforts: [], available: true }];
+    }
+    async openSession(spec) {
+      return new EchoSession(spec);
+    }
+    async deleteSession(id) {
+      this.deleted.push(id);
+    }
+  }
+  const echo = new Echo();
+  const { ws, log } = warm(t, async (_id, options) => ({ data: { content: "copilot: " + options.prompt } }), { more: [echo] });
+  assert.deepEqual((await ws.models()).map((m) => [m.id, m.provider]), [["auto", "copilot"], ["echo-1", "echo"]]);
+  const id = ws.createChat("pip");
+  await ws.send(id, "First");
+  assert.equal(ws.chat(id).messages.at(-1).text, "copilot: First");
+  assert.equal(ws.chat(id).sessionProvider, "copilot");
+  // The chat's model moves to the other provider: its Copilot session ends and the transcript goes along.
+  await ws.setModel("chat", id, { model: "echo-1", provider: "echo" });
+  await ws.send(id, "Second");
+  const chat = ws.chat(id);
+  assert.equal(chat.messages.at(-1).text, "echo: Second");
+  assert.equal(chat.sessionProvider, "echo");
+  assert.deepEqual(log.deleted, [id], "the old provider's session is removed");
+  assert.equal(seen[0].prompt, "Second");
+  assert.match(seen[0].instructions, /earlier-conversation[\s\S]*First[\s\S]*copilot: First/);
+  assert.doesNotMatch(seen[0].instructions, /earlier-conversation[\s\S]*User: Second/, "the new message isn't repeated in the transcript");
+  assert.ok(seen[0].tools.includes("memory_save"), "Botkins' own tools work with any provider");
+  assert.equal(seen[0].history, 3);
+  // A bot whose default model is on the second provider starts there directly; deleting its chat tells that provider.
+  await ws.setModel("bot", "scout", { model: "echo-1", provider: "echo" });
+  const second = ws.createChat("scout");
+  await ws.send(second, "Hello");
+  assert.equal(ws.chat(second).messages.at(-1).text, "echo: Hello");
+  assert.deepEqual(log.created, [id], "Copilot never saw the second bot's chat");
+  await ws.agents.deleteChat(second);
+  assert.deepEqual(echo.deleted, [second]);
+});
+
+test("only the Copilot adapter folder imports the Copilot SDK", async () => {
+  const { readdirSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const offenders = [];
+  const scan = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") scan(path);
+      } else if (/\.(mjs|cjs|ts|tsx)$/.test(entry.name) && /copilot-sdk|@github\/copilot/.test(readFileSync(path, "utf8")))
+        offenders.push(path);
+    }
+  };
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  scan(join(root, "desktop"));
+  scan(join(root, "src"));
+  const adapter = join(root, "desktop", "providers", "copilot");
+  assert.deepEqual(offenders.filter((path) => !path.startsWith(adapter)), [], "a model backend's SDK stays inside its provider folder");
+  assert.ok(offenders.length >= 1);
+});
+
+/** A provider whose model list is whatever `list` holds, and that can be made to wait before it answers. */
+class Listing extends ModelProvider {
+  constructor(id, list) {
+    super();
+    Object.assign(this, { id, name: id, list, gate: null });
+  }
+  async models() {
+    if (this.gate) await this.gate;
+    return this.list;
+  }
+}
+
+test("a selection's catalog entry is unknown until its provider has listed, then it is the entry", async () => {
+  const a = new Listing("a", [{ id: "m1", provider: "a", contextWindow: 200000 }, { id: "m2", provider: "a" }]);
+  const providers = new Providers([a]);
+  assert.equal(providers.known({ model: "m1", provider: "a" }), null, "nothing was asked yet");
+  await providers.models();
+  assert.deepEqual(providers.known({ model: "m1", provider: "a" }), { id: "m1", provider: "a", contextWindow: 200000 });
+  assert.deepEqual(providers.known({ model: "m2", provider: "a" }), { id: "m2", provider: "a" });
+});
+
+test("a selection's catalog entry is looked up in the provider that serves it", async () => {
+  const a = new Listing("a", [{ id: "shared", provider: "a", contextWindow: 1000 }]);
+  const b = new Listing("b", [{ id: "shared", provider: "b", contextWindow: 2000 }]);
+  const providers = new Providers([a, b]);
+  await providers.models();
+  assert.equal(providers.known({ model: "shared", provider: "b" }).contextWindow, 2000);
+  assert.equal(providers.known({ model: "shared", provider: "a" }).contextWindow, 1000);
+  assert.equal(providers.known({ model: "shared" }).contextWindow, 1000, "a selection without a provider is the default provider's");
+});
+
+test("a model the catalog does not have, or a selection that names none, is unknown", async () => {
+  const providers = new Providers([new Listing("a", [{ id: "m1", provider: "a" }])]);
+  await providers.models();
+  assert.equal(providers.known({ model: "nope", provider: "a" }), null);
+  assert.equal(providers.known({ provider: "a" }), null);
+  assert.equal(providers.known(null), null);
+  assert.equal(providers.known(undefined), null);
+});
+
+test("a catalog entry is unknown again after the provider is forgotten", async () => {
+  const providers = new Providers([new Listing("a", [{ id: "m1", provider: "a" }])]);
+  await providers.models();
+  providers.invalidate("a");
+  assert.equal(providers.known({ model: "m1", provider: "a" }), null);
+});
+
+test("a catalog entry stays the old one while a refresh is under way, and is the new one after", async () => {
+  const a = new Listing("a", [{ id: "m1", provider: "a", contextWindow: 100000 }]);
+  const providers = new Providers([a], { modelsWait: 5 });
+  await providers.models();
+  const selection = { model: "m1", provider: "a" };
+  // Its remembered list has gone stale and the provider is slow to list again.
+  providers.modelCache.get("a").time = 0;
+  let release;
+  a.gate = new Promise((resolve) => (release = resolve));
+  a.list = [{ id: "m1", provider: "a", contextWindow: 500000 }];
+  await providers.models();
+  assert.equal(providers.modelCache.get("a").loading !== null, true, "the refresh is still under way");
+  assert.equal(providers.known(selection).contextWindow, 100000, "what was listed before still answers");
+  release();
+  await providers.modelCache.get("a").loading;
+  assert.equal(providers.known(selection).contextWindow, 500000);
+});
+
+test("a Copilot model carries the limits, abilities, maker and price class GitHub lists for it", async (t) => {
+  const fake = fakeClient(undefined, {
+    models: [
+      {
+        id: "gpt-x",
+        name: "GPT X",
+        vendor: "Example Labs",
+        modelPickerPriceCategory: "premium",
+        capabilities: { limits: { max_context_window_tokens: 400000, max_prompt_tokens: 272000, max_output_tokens: 128000 }, supports: { vision: true, tool_calls: true } },
+      },
+      { id: "plain", name: "Plain" },
+    ],
+  });
+  const copilot = new CopilotProvider({ connect: fake.client });
+  t.after(() => copilot.stop());
+  const [full, plain] = await copilot.models();
+  assert.deepEqual(
+    [full.contextWindow, full.maxPrompt, full.maxOutput, full.vision, full.tools, full.vendor, full.tier],
+    [400000, 272000, 128000, true, true, "Example Labs", "premium"],
+  );
+  for (const key of ["contextWindow", "maxPrompt", "maxOutput", "vision", "tools", "vendor", "tier", "effortNotes", "description", "knowledge"]) assert.equal(key in plain, false, "a model GitHub says nothing about has no " + key);
+});
+
+test("a Copilot model keeps the abilities GitHub says it lacks and drops limits that are not real", async (t) => {
+  const fake = fakeClient(undefined, {
+    models: [{ id: "small", capabilities: { limits: { max_context_window_tokens: 0, max_prompt_tokens: "big", max_output_tokens: 8192 }, supports: { vision: false, tool_calls: false } } }],
+  });
+  const copilot = new CopilotProvider({ connect: fake.client });
+  t.after(() => copilot.stop());
+  const [small] = await copilot.models();
+  assert.deepEqual([small.vision, small.tools, small.maxOutput], [false, false, 8192]);
+  assert.equal("contextWindow" in small || "maxPrompt" in small, false);
+});
+
+test("Copilot's model details reach the workspace's catalog and the context meter's limit", async (t) => {
+  const { ws } = warm(t, undefined, { extra: { models: [{ id: "gpt-x", name: "GPT X", capabilities: { limits: { max_context_window_tokens: 400000, max_prompt_tokens: 272000 } } }, { id: "gpt-y", name: "GPT Y", capabilities: { limits: { max_context_window_tokens: 64000 } } }] } });
+  const catalog = await ws.models();
+  assert.deepEqual([catalog[0].contextWindow, catalog[0].maxPrompt], [400000, 272000]);
+  assert.equal(ws.metered({ type: "session.usage_info", data: { currentTokens: 1, tokenLimit: 1 } }, { model: "gpt-x", provider: "copilot" }).data.tokenLimit, 272000);
+  assert.equal(ws.metered({ type: "session.usage_info", data: { currentTokens: 1, tokenLimit: 1 } }, { model: "gpt-y", provider: "copilot" }).data.tokenLimit, 64000);
+});
+
+// ---- Who asks the keychain for the Copilot sign-in (see the top of desktop/providers/copilot/index.mjs) ----
+
+/** An SDK stand-in that records how the runtime was asked for and what the client was given. */
+function runtimeSdk({ failInProcess = false, failSpawned = false } = {}) {
+  const log = [];
+  const sdk = {
+    RuntimeConnection: {
+      forInProcess: (options) => (log.push(["inprocess", options]), { kind: "inprocess" }),
+      forSpawnedStdio: (options) => (log.push(["spawned", options]), { kind: "spawned" }),
+    },
+    CopilotClient: class {
+      constructor(options) {
+        this.options = options;
+        log.push(["client", options.runtime.kind, options.github, options.mode]);
+      }
+      async start() {
+        if (this.options.runtime.kind === "inprocess" && failInProcess) throw new Error("the native library didn't load");
+        if (this.options.runtime.kind === "spawned" && failSpawned) throw new Error("the program didn't start");
+        log.push(["started", this.options.runtime.kind]);
+      }
+    },
+  };
+  return { sdk, log };
+}
+const withRuntimeEnv = async (value, run) => {
+  const before = process.env.BOTKINS_COPILOT_RUNTIME;
+  if (value === undefined) delete process.env.BOTKINS_COPILOT_RUNTIME;
+  else process.env.BOTKINS_COPILOT_RUNTIME = value;
+  try {
+    return await run();
+  } finally {
+    if (before === undefined) delete process.env.BOTKINS_COPILOT_RUNTIME;
+    else process.env.BOTKINS_COPILOT_RUNTIME = before;
+  }
+};
+
+test("on a Mac the Copilot runtime is its own program, never loaded into Botkins, so the keychain sees Copilot", async () => {
+  await withRuntimeEnv(undefined, async () => {
+    const { sdk, log } = runtimeSdk();
+    const provider = new CopilotProvider({ baseDirectory: "/data/copilot", workingDirectory: "/data", platform: "darwin", sdk });
+    await provider.client();
+    assert.deepEqual(log, [["spawned", { baseDirectory: "/data/copilot", workingDirectory: "/data" }], ["client", "spawned", undefined, "coding-agent"], ["started", "spawned"]]);
+    assert.equal(provider.inProcess(), false);
+  });
+});
+
+test("on a Mac a runtime that can't start is an error, never a quiet switch to the in-process one", async () => {
+  await withRuntimeEnv(undefined, async () => {
+    const { sdk, log } = runtimeSdk({ failSpawned: true });
+    const provider = new CopilotProvider({ baseDirectory: "/data/copilot", platform: "darwin", sdk });
+    await assert.rejects(provider.client(), /the program didn't start/);
+    assert.ok(!log.some(([kind]) => kind === "inprocess"));
+    // The next try starts again rather than remembering the failure.
+    await assert.rejects(provider.client(), /the program didn't start/);
+  });
+});
+
+test("on Windows and Linux the runtime is loaded in-process, with a child process when that can't load", async () => {
+  await withRuntimeEnv(undefined, async () => {
+    for (const platform of ["win32", "linux"]) {
+      const fine = runtimeSdk();
+      await new CopilotProvider({ baseDirectory: "/d", platform, sdk: fine.sdk }).client();
+      assert.deepEqual(fine.log, [["inprocess", { baseDirectory: "/d" }], ["client", "inprocess", undefined, "coding-agent"], ["started", "inprocess"]], platform);
+      const broken = runtimeSdk({ failInProcess: true });
+      await new CopilotProvider({ baseDirectory: "/d", workingDirectory: "/w", platform, sdk: broken.sdk }).client();
+      assert.deepEqual(broken.log.filter(([kind]) => kind === "client" || kind === "started").map((entry) => entry.slice(0, 2)), [["client", "inprocess"], ["client", "spawned"], ["started", "spawned"]], platform);
+    }
+  });
+});
+
+test("the runtime's place can be chosen for a trial, on any system", async () => {
+  await withRuntimeEnv("inprocess", async () => {
+    const { sdk, log } = runtimeSdk();
+    const provider = new CopilotProvider({ platform: "darwin", sdk });
+    assert.equal(provider.inProcess(), true);
+    await provider.client();
+    assert.deepEqual(log.at(-1), ["started", "inprocess"]);
+  });
+  await withRuntimeEnv("stdio", async () => {
+    const { sdk, log } = runtimeSdk();
+    await new CopilotProvider({ platform: "linux", sdk }).client();
+    assert.deepEqual(log.at(-1), ["started", "spawned"]);
+  });
+  // Asked for in-process on a Mac and it can't load: an error, with no fallback either way.
+  await withRuntimeEnv("inprocess", async () => {
+    const { sdk, log } = runtimeSdk({ failInProcess: true });
+    await assert.rejects(new CopilotProvider({ platform: "darwin", sdk }).client(), /native library/);
+    assert.ok(!log.some(([kind]) => kind === "spawned"));
+  });
+});
+
+test("a trial run's runtime is given its sign-in, so it never asks the keychain for the person's", async () => {
+  await withRuntimeEnv(undefined, async () => {
+    const withToken = runtimeSdk();
+    await new CopilotProvider({ platform: "darwin", sdk: withToken.sdk, github: () => ({ token: "token-for-the-test" }) }).client();
+    assert.deepEqual(withToken.log.find(([kind]) => kind === "client")[2], { token: "token-for-the-test" });
+    const signedOut = runtimeSdk();
+    await new CopilotProvider({ platform: "darwin", sdk: signedOut.sdk, github: () => ({ useLoggedInUser: false }) }).client();
+    assert.deepEqual(signedOut.log.find(([kind]) => kind === "client")[2], { useLoggedInUser: false });
+    // The installed app passes nothing: the runtime uses the person's saved sign-in, as GitHub's own program.
+    const own = runtimeSdk();
+    await new CopilotProvider({ platform: "darwin", sdk: own.sdk }).client();
+    assert.equal(own.log.find(([kind]) => kind === "client")[2], undefined);
+    assert.ok(!("github" in own.log.find(([kind]) => kind === "client")), "nothing is passed, not even an empty choice");
+  });
+});
+
+test("a Botkins tool that throws tells the model why, in the tool's own words, on the Copilot runtime", async () => {
+  // Thrown, the runtime tells the model only "Tool execution failed", and the bot can't learn the rule.
+  const failing = spoken("task_create", async () => {
+    throw new Error("Create at most ten tasks per reply.");
+  });
+  assert.deepEqual(await failing({}), { textResultForLlm: "Create at most ten tasks per reply.", resultType: "failure", error: "Create at most ten tasks per reply." });
+  assert.equal(await spoken("ok", async (args) => JSON.stringify(args))({ a: 1 }), '{"a":1}', "a tool that works is passed through untouched");
+  assert.equal(spoken("sync", () => "plain")(), "plain", "a tool that answers at once still does");
+  assert.equal(spoken("sync", () => { throw new Error("No."); })().textResultForLlm, "No.");
+  assert.equal((await spoken("odd", () => { throw undefined; })()).textResultForLlm, "The tool failed.");
+  assert.equal((await spoken("long", () => { throw new Error("x".repeat(5000)); })()).textResultForLlm.length, 2000);
+  // Every tool of a session goes to the runtime wrapped this way.
+  const options = sessionOptions({ sessionId: "s", tools: [{ name: "t", description: "d", parameters: { type: "object", properties: {} }, handler: () => { throw new Error("Not like that."); }, skipPermission: true }], handlers: {}, model: { model: "m" }, approval: "ask", instructions: "" }, {});
+  const tool = (options.tools?.definitions ?? options.tools ?? []).find((each) => each.name === "t");
+  assert.ok(tool, "the tool is defined for the session");
+  assert.equal((await tool.handler({}, {})).textResultForLlm, "Not like that.");
+});
+
+test("the Copilot plan and its quota come from GitHub's runtime, with the reset date of the account", async (t) => {
+  const snapshot = (more) => ({ isUnlimitedEntitlement: false, entitlementRequests: 0, usedRequests: 0, usageAllowedWithExhaustedQuota: false, overage: 0, overageAllowedWithExhaustedQuota: false, remainingPercentage: 100, resetDate: new Date().toISOString(), hasQuota: true, ...more });
+  let auth = { isAuthenticated: true, login: "octo", authType: "user", host: "https://github.com" };
+  const asked = [];
+  const fake = fakeClient(undefined, {
+    auth: () => auth,
+    client: {
+      rpc: {
+        sessions: { fork: async () => ({ sessionId: null }) },
+        account: {
+          getQuota: async (params) => (asked.push(params), { quotaSnapshots: { chat: snapshot({ isUnlimitedEntitlement: true }), premium_interactions: snapshot({ entitlementRequests: 1500, usedRequests: 570, remainingPercentage: 62 }) } }),
+          getCurrentAuth: async () => ({ authInfo: { type: "user", host: "https://github.com", copilotUser: { login: "octo", copilot_plan: "individual_pro", quota_reset_date_utc: "2099-01-01T00:00:00.000Z", organization_login_list: ["octo-org"] } } }),
+        },
+      },
+    },
+  });
+  const copilot = new CopilotProvider({ connect: fake.client });
+  t.after(() => copilot.stop());
+  const usage = await copilot.usage();
+  assert.deepEqual(asked, [{}], "the quota of the account that is signed in: no token is handed over");
+  assert.deepEqual(usage, {
+    account: "subscription",
+    plan: "GitHub Copilot Pro+",
+    limits: [
+      { id: "premium", label: "Premium requests", window: "month", percentRemaining: 62, resetAt: Date.parse("2099-01-01T00:00:00Z"), used: 570, limit: 1500, unit: "requests" },
+      { id: "chat", label: "Chat", window: "month", unlimited: true },
+    ],
+    source: "GitHub Copilot",
+  });
+  assert.ok(!JSON.stringify(usage).includes("octo"), "no login or organization is in the answer");
+  auth = { isAuthenticated: true, authType: "api-key" };
+  assert.deepEqual(await copilot.usage(), { account: "api-key", limits: [], source: "GitHub Copilot" });
+  auth = { isAuthenticated: false };
+  await assert.rejects(copilot.usage(), /isn't signed in/);
+  // A runtime without the quota call can't say: null, which the app shows as "not available".
+  const old = new CopilotProvider({ connect: fakeClient().client });
+  t.after(() => old.stop());
+  assert.equal(await old.usage(), null);
+});
+
+test("a restarted plan gateway reopens the same session with the new listener and one Work row", async (t) => {
+  const plan = Object.assign(new ModelProvider(), { id: "codex", name: "ChatGPT" });
+  let oldListener;
+  const { ws, log } = warm(t, async (_id, options) => {
+    if (!oldListener) {
+      oldListener = ws.harness.gateway.server;
+      await ws.harness.gateway.stop();
+      throw new Error("The model stream ended");
+    }
+    assert.notEqual(ws.harness.gateway.server, oldListener);
+    assert.match(options.prompt, /Continue the unfinished reply/);
+    return { data: { content: "Recovered" } };
+  }, { more: [plan] });
+  t.after(() => ws.harness.stop());
+  const id = ws.createChat("pip");
+  ws.chat(id).model = { provider: "codex", model: "plan-model" };
+  await ws.send(id, "Make a list");
+  assert.deepEqual(log.resumed, [id]);
+  assert.deepEqual(ws.state.runs.map((r) => r.status), ["Completed"]);
+  assert.deepEqual(ws.chat(id).messages.map((m) => m.text), ["Make a list", "Recovered"]);
+});
+
+test("a transport disconnect recovers a journaled final reply without sending another prompt", async (t) => {
+  const { ws, sdk, log } = warm(t, async (_id, _options, session) => {
+    session.emit({ type: "user.message", id: "event", data: { messageId: "request" } });
+    throw new Error("Session disconnected while waiting for a response");
+  });
+  const resume = sdk.resumeSession;
+  sdk.resumeSession = async (...args) => Object.assign(await resume(...args), {
+    getEvents: async () => [
+      { type: "user.message", id: "event", data: { messageId: "request" } },
+      { type: "assistant.message", data: { originatingMessageId: "request", content: "Already finished" } },
+      { type: "assistant.turn_end" },
+    ],
+  });
+  const id = ws.createChat("pip");
+  await ws.send(id, "Check once");
+  assert.equal(ws.state.runs[0].status, "Completed");
+  assert.equal(ws.chat(id).messages.at(-1).text, "Already finished");
+  assert.equal(log.sent.length, 1);
+});

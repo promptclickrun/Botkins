@@ -1,0 +1,331 @@
+// The computer's screen, for a phone that is allowed to see it (and, in "control" mode, to use it).
+//
+// The person chooses on the computer: off, view or control (LinkHost.setScreenMode). Pictures come
+// from an adapter the desktop app passes as backend.screen:
+//   displays()                                   → [{ id, label, width, height, primary }]
+//   capture({ display, maxWidth, quality })      → { jpeg: Buffer, width, height }
+//   permissions?()                               → { screenRecording, accessibility }
+// With no adapter, macOS falls back on its own screencapture and sips tools (one display).
+//
+// A phone asks for frames one after another. Each picture has a number that goes up when it
+// changes, so a phone that already has number N asks "after N" and is told "nothing new" instead of
+// being sent the same picture again. A device that asked for a frame in the last 5 seconds is a viewer.
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { cleanEvents, injectorFor, macScript, MAX_EXPANDED, NEED_ACCESSIBILITY } from "./input.mjs";
+import { Failure, runTool, toolEnv } from "./tools.mjs";
+
+export const MODES = ["off", "view", "control"];
+const NEED_RECORDING = "Allow screen recording for this app in System Settings › Privacy & Security.";
+const NO_VIEWING = "Viewing the screen isn't available in this app yet.";
+const POLL_MS = 300;
+const WAIT_MS = 1500;
+const VIEWER_MS = 5000;
+const DISPLAYS_TTL = 5000;
+const LOOKUP_TTL = 5000; // how long info() reuses what it learned about permissions
+const MAX_PENDING = 8; // input calls waiting their turn
+const MAX_JPEG = 3 * 1024 * 1024;
+
+const clamp = (value, low, high, fallback) => (typeof value === "number" && Number.isFinite(value) ? Math.min(high, Math.max(low, Math.round(value))) : fallback);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The size of a JPEG, read from its header. */
+export function jpegSize(bytes) {
+  let at = 2;
+  while (at + 9 < bytes.length) {
+    if (bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1];
+    // The frame header: every start-of-frame marker except the table ones (C4, C8, CC).
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { height: bytes.readUInt16BE(at + 5), width: bytes.readUInt16BE(at + 7) };
+    at += 2 + bytes.readUInt16BE(at + 2);
+  }
+  return null;
+}
+
+/** macOS without an adapter: the system's own tools, one display. */
+function macAdapter(dirs) {
+  const env = toolEnv(dirs);
+  return {
+    async displays() {
+      const info = await macScript({ action: "info" }, dirs).catch(() => ({}));
+      return [{ id: "1", label: "Main display", width: info.width ?? 0, height: info.height ?? 0, primary: true }];
+    },
+    async capture({ display, maxWidth, quality }) {
+      if (!/^[1-9]$/.test(display)) throw new Failure("That display isn't available.");
+      const folder = mkdtempSync(join(tmpdir(), "botkins-screen-"));
+      const file = join(folder, "screen.jpg");
+      try {
+        try {
+          await runTool("Screen capture", "/usr/sbin/screencapture", ["-x", "-t", "jpg", "-D", display, file], { env, timeout: 15_000 });
+        } catch (error) {
+          // "Busy" and "too slow" are not about permission, and are said as they are.
+          if (error?.kind === "busy" || error?.kind === "timeout") throw error;
+          throw new Failure(NEED_RECORDING);
+        }
+        await runTool("Screen capture", "/usr/bin/sips", ["-Z", String(maxWidth), "-s", "formatOptions", String(quality), file], { env, timeout: 15_000 });
+        const jpeg = readFileSync(file);
+        const size = jpegSize(jpeg);
+        if (!size) throw new Failure(NEED_RECORDING);
+        return { jpeg, ...size };
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
+      }
+    },
+    async permissions() {
+      const info = await macScript({ action: "info" }, dirs).catch(() => ({}));
+      // Screen recording can't be asked for ahead of time here: a capture says so when it is refused.
+      return { screenRecording: true, accessibility: info.accessibility === true };
+    },
+  };
+}
+
+export class Screen {
+  /**
+   * @param options.adapter  () → the desktop's adapter, or undefined.
+   * @param options.mode     () → "off", "view" or "control".
+   * @param options.inject   Replaces the system's input injector (tests use it, so nothing is clicked).
+   * @param options.emit     (deviceId, started) when a device starts or stops viewing.
+   * @param options.paired   (deviceId) → whether that phone is still paired.
+   * @param options.log      Where a failure in a timer is written. Timers never throw.
+   */
+  constructor({ adapter = () => undefined, mode, inject, emit = () => {}, paired = () => true, log = () => {}, dirs, platform = process.platform, idleMs = VIEWER_MS }) {
+    Object.assign(this, { adapter, mode, emit, paired, log, dirs, platform, idleMs });
+    this.held = null; // { deviceId, display, x, y } while a phone holds the mouse button down
+    this.pending = 0;
+    this.lookups = null;
+    this.override = inject;
+    this.fallback = platform === "darwin" ? macAdapter(dirs) : null;
+    this.shots = new Map(); // display → { seq, hash, inflight }
+    this.viewing = new Map(); // deviceId → { since, timer }
+    this.displayCache = null;
+    this.queue = Promise.resolve();
+  }
+
+  source() {
+    return this.adapter() ?? this.fallback;
+  }
+  need(mode) {
+    const now = this.mode();
+    if (now === "off") throw new Failure("Screen sharing is off. Turn it on in the app on your computer.");
+    if (mode === "control" && now !== "control") throw new Failure("Controlling the screen is off. Turn it on in the app on your computer.");
+  }
+  async displays() {
+    if (this.displayCache && Date.now() - this.displayCache.at < DISPLAYS_TTL) return this.displayCache.list;
+    const source = this.source();
+    if (!source) throw new Failure(NO_VIEWING);
+    const raw = await source.displays();
+    const list = (Array.isArray(raw) ? raw : []).map((d) => ({ id: String(d.id), label: String(d.label ?? "Display " + d.id).slice(0, 80), width: Number(d.width) || 0, height: Number(d.height) || 0, primary: d.primary === true }));
+    this.displayCache = { at: Date.now(), list };
+    return list;
+  }
+  async pick(id) {
+    const list = await this.displays();
+    const display = id == null ? (list.find((d) => d.primary) ?? list[0]) : list.find((d) => d.id === String(id));
+    if (!display) throw new Failure("That display isn't available.");
+    return display;
+  }
+  /** Why a phone can't control the screen, or null. */
+  async controlProblem() {
+    if (this.override) return null;
+    return injectorFor(this.platform, this.dirs).problem ?? null;
+  }
+  /** What info() learns about permissions, reused for 5 seconds so a phone asking again and again costs one lookup. */
+  async lookup(source) {
+    if (this.lookups && this.lookups.source === source && Date.now() - this.lookups.at < LOOKUP_TTL) return this.lookups.value;
+    const raw = source.permissions ? await source.permissions().catch(() => null) : null;
+    const value = { screenRecording: raw?.screenRecording, accessibility: await this.accessibility(source, raw) };
+    this.lookups = { at: Date.now(), source, value };
+    return value;
+  }
+  /** Whether this app may post clicks and keys: the adapter knows, else macOS is asked, else it is assumed. */
+  async accessibility(source, known) {
+    const raw = known !== undefined ? known : source?.permissions ? await source.permissions().catch(() => null) : undefined;
+    if (raw) return raw.accessibility !== false;
+    // An adapter that can't say is trusted; so is a test's injector.
+    if (source?.permissions || this.override) return true;
+    return this.platform === "darwin" ? (await macScript({ action: "info" }, this.dirs).catch(() => ({}))).accessibility === true : true;
+  }
+
+  // ── What the phone is told about the screen ────────────────────────────────────────────────
+
+  async info() {
+    const mode = this.mode();
+    const off = (problem) => ({ mode, displays: [], canView: false, canControl: false, problem });
+    if (mode === "off") return off("Screen sharing is off. Turn it on in the app on your computer.");
+    const source = this.source();
+    if (!source) return off(NO_VIEWING);
+    let displays;
+    try {
+      displays = await this.displays();
+    } catch (error) {
+      return off(error instanceof Failure ? error.message : "The computer's displays couldn't be read.");
+    }
+    const permissions = await this.lookup(source);
+    if (permissions.screenRecording === false) return { mode, displays, canView: false, canControl: false, problem: NEED_RECORDING };
+    const canView = displays.length > 0;
+    if (mode !== "control") return { mode, displays, canView, canControl: false, ...(!canView && { problem: "No display was found." }) };
+    const problem = (await this.controlProblem()) ?? (permissions.accessibility ? null : NEED_ACCESSIBILITY);
+    return { mode, displays, canView, canControl: canView && !problem, ...(problem && { problem }) };
+  }
+
+  // ── Pictures ───────────────────────────────────────────────────────────────────────────────
+
+  /** One capture at a time per display: a caller with the same wishes shares it, another waits its turn. */
+  async grab(display, size) {
+    const key = size.maxWidth + "x" + size.quality;
+    let entry = this.shots.get(display);
+    if (!entry) this.shots.set(display, (entry = { seq: Math.floor(Math.random() * 1e6), hash: null, inflight: null }));
+    while (entry.inflight) {
+      if (entry.inflight.key === key) return entry.inflight.promise;
+      await entry.inflight.promise.catch(() => {});
+    }
+    const promise = this.capture(display, size, entry).finally(() => {
+      entry.inflight = null;
+    });
+    entry.inflight = { key, promise };
+    return promise;
+  }
+  async capture(display, size, entry) {
+    let shot;
+    try {
+      shot = await this.source().capture({ display, ...size });
+    } catch (error) {
+      throw error instanceof Failure ? error : new Failure(typeof error?.message === "string" && error.message.length <= 200 ? error.message : "The screen couldn't be captured.");
+    }
+    const jpeg = Buffer.from(shot?.jpeg ?? []);
+    if (!jpeg.length) throw new Failure("The screen couldn't be captured.");
+    // Only a picture that is a JPEG, and not huge, goes to a phone.
+    if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8 || jpeg.length > MAX_JPEG) throw new Failure("The screen's picture couldn't be used.");
+    const hash = createHash("sha1").update(jpeg).digest("hex");
+    if (hash !== entry.hash) {
+      entry.hash = hash;
+      entry.seq++;
+    }
+    return { seq: entry.seq, jpeg, width: Number(shot.width) || 0, height: Number(shot.height) || 0 };
+  }
+  /**
+   * The newest picture. With `after` equal to the newest number it looks again every 300 ms for up to
+   * 1.5 s and answers without `jpeg` when nothing changed. `gone` ends the wait early (the phone left).
+   */
+  async frame(deviceId, options, gone) {
+    this.need("view");
+    const o = options && typeof options === "object" ? options : {};
+    const size = { maxWidth: clamp(o.maxWidth, 480, 1920, 1280), quality: clamp(o.quality, 30, 85, 60) };
+    const after = typeof o.after === "number" && Number.isFinite(o.after) ? o.after : null;
+    const display = await this.pick(o.display);
+    this.watch(deviceId);
+    let left = false;
+    gone?.then(() => (left = true));
+    let shot = await this.grab(display.id, size);
+    if (after === shot.seq) {
+      const until = Date.now() + WAIT_MS;
+      while (shot.seq === after && !left && Date.now() < until && this.mode() !== "off") {
+        await sleep(Math.min(POLL_MS, Math.max(0, until - Date.now())));
+        shot = await this.grab(display.id, size);
+      }
+      if (shot.seq === after) {
+        this.stillAllowed(deviceId);
+        return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height };
+      }
+    }
+    this.stillAllowed(deviceId);
+    return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height, jpeg: shot.jpeg.toString("base64") };
+  }
+
+  /** The mode may have been turned off, or the phone removed, while the picture was being taken: then it isn't sent. */
+  stillAllowed(deviceId) {
+    this.need("view");
+    if (!this.paired(deviceId)) throw new Failure("This phone isn't paired.");
+  }
+
+  // ── Viewers ────────────────────────────────────────────────────────────────────────────────
+
+  /** A device asked for a frame: it is viewing until 5 seconds pass without another. */
+  watch(deviceId) {
+    let viewer = this.viewing.get(deviceId);
+    if (viewer) clearTimeout(viewer.timer);
+    else {
+      viewer = { since: Date.now() };
+      this.viewing.set(deviceId, viewer);
+      this.emit(deviceId, true);
+    }
+    viewer.timer = setTimeout(() => {
+      try {
+        this.stop(deviceId);
+      } catch (error) {
+        this.log("screen: " + (error?.message ?? error));
+      }
+    }, this.idleMs);
+    viewer.timer.unref?.();
+  }
+  stop(deviceId) {
+    // A phone that lets go of the screen lets go of the mouse button too.
+    if (this.held?.deviceId === deviceId) this.release();
+    const viewer = this.viewing.get(deviceId);
+    if (!viewer) return;
+    clearTimeout(viewer.timer);
+    this.viewing.delete(deviceId);
+    this.emit(deviceId, false);
+  }
+  stopAll() {
+    for (const id of [...this.viewing.keys()]) this.stop(id);
+  }
+  viewers() {
+    return [...this.viewing].map(([deviceId, viewer]) => ({ deviceId, since: viewer.since }));
+  }
+  /** The person changed the mode. */
+  modeChanged() {
+    this.displayCache = null;
+    this.lookups = null;
+    this.release();
+    if (this.mode() === "off") this.stopAll();
+  }
+  /** Lets go of a mouse button a phone is holding, so it isn't left down. */
+  release() {
+    const held = this.held;
+    if (!held) return;
+    this.held = null;
+    const inject = this.override ?? injectorFor(this.platform, this.dirs).inject;
+    if (!inject) return;
+    this.queue = this.queue
+      .then(() => inject({ display: held.display, displays: [held.display], events: [{ type: "up", x: held.x, y: held.y }] }))
+      .catch((error) => this.log("screen: " + (error?.message ?? error)));
+  }
+
+  // ── Input ──────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Posts a phone's clicks, scrolls and typing. Calls run one at a time, in the order they arrived, and
+   * at most 8 wait. A call whose phone is gone, or whose mode is no longer "control", is skipped.
+   */
+  input(deviceId, displayId, events) {
+    if (this.pending >= MAX_PENDING) return Promise.reject(new Failure("Too many actions are waiting. Try again in a moment."));
+    this.pending++;
+    const run = this.queue.then(() => this.post(deviceId, displayId, events));
+    this.queue = run.catch(() => {}).finally(() => this.pending--);
+    return run;
+  }
+  async post(deviceId, displayId, events) {
+    if (!this.paired(deviceId)) throw new Failure("This phone isn't paired.");
+    this.need("control");
+    // Checked before anything is posted, so a call with one bad action does nothing at all.
+    const clean = cleanEvents(events, !!this.held);
+    if (clean.events.length > MAX_EXPANDED) throw new Failure("Too much to type at once.");
+    const display = await this.pick(displayId);
+    const problem = await this.controlProblem();
+    if (problem) throw new Failure(problem);
+    if (!(await this.accessibility(this.source()))) throw new Failure(NEED_ACCESSIBILITY);
+    if (!clean.events.length) return;
+    const inject = this.override ?? injectorFor(this.platform, this.dirs).inject;
+    await inject({ display, displays: await this.displays(), events: clean.events });
+    const last = clean.events.findLast((e) => e.x !== undefined);
+    this.held = clean.pressed && last ? { deviceId, display, x: last.x, y: last.y } : null;
+    // The phone left, or control was turned off, while this was being posted: let go at once.
+    if (this.held && (this.mode() !== "control" || !this.paired(deviceId))) this.release();
+  }
+  dispose() {
+    this.stopAll();
+  }
+}

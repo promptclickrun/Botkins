@@ -1,0 +1,1722 @@
+// A stand-in for the desktop app, for developing and testing the phone app without it.
+// It keeps a small workspace in memory, shaped like the desktop's, and answers a message with a
+// scripted reply: thinking, one tool step, then streamed text. A message with "approve" in it asks
+// for an approval first; one with "which" asks a question.
+import { createHash, randomUUID } from "node:crypto";
+import { posix } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const now = () => Date.now();
+// The two seeded projects work in this repository, so pull requests have a folder to look in.
+const REPO = fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]$/, "");
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+
+const MODELS = [
+  { id: "auto", name: "Auto", provider: "copilot", providerName: "GitHub Copilot", efforts: [], available: true, recommended: true },
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "copilot", providerName: "GitHub Copilot", efforts: ["low", "medium", "high"], defaultEffort: "medium", available: true },
+  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", provider: "copilot", providerName: "GitHub Copilot", efforts: ["low", "medium", "high"], defaultEffort: "medium", available: true },
+  { id: "gpt-5.5-codex", name: "GPT-5.5 Codex", provider: "codex", providerName: "ChatGPT", description: "Best for coding and long tasks", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "medium", available: true, recommended: true },
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "codex", providerName: "ChatGPT", efforts: ["minimal", "low", "medium", "high"], defaultEffort: "medium", available: true },
+  { id: "claude-fable-5-2", name: "Claude Fable 5.2", provider: "claude", providerName: "Claude", description: "Most capable", efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high", available: true, recommended: true },
+  { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "claude", providerName: "Claude", efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", available: true },
+  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", provider: "claude", providerName: "Claude", description: "Fast and capable", efforts: ["low", "medium", "high"], defaultEffort: "medium", available: true },
+  { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", provider: "claude", providerName: "Claude", efforts: [], available: true },
+  { id: "big-pickle", name: "Big Pickle", provider: "opencode", providerName: "OpenCode", group: "OpenCode Zen", efforts: ["low", "medium", "high"], available: true },
+  { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "opencode", providerName: "OpenCode", group: "Google", efforts: ["low", "high"], available: false },
+];
+
+const PROVIDERS = [
+  { id: "copilot", name: "GitHub Copilot", description: "Your GitHub Copilot plan, or Copilot Free.", default: true, installed: true, connected: true, account: "octocat", plan: "Copilot Pro", signIn: "browser", signOut: true },
+  { id: "codex", name: "ChatGPT", description: "Your ChatGPT plan, through the Codex CLI.", default: false, installed: true, version: "0.98.0", connected: true, account: "you@example.com", plan: "Plus", signIn: "browser", signOut: true },
+  { id: "claude", name: "Claude", description: "Your Claude plan, through Claude Code.", default: false, installed: true, version: "2.1.280", connected: true, account: "you@example.com", plan: "Max", signIn: "browser", signOut: true },
+  { id: "opencode", name: "OpenCode", description: "Free models, and the model services you connect.", default: false, installed: true, version: "2.3.1", connected: true, signIn: "services", signOut: false },
+  { id: "grok", name: "Grok", description: "Grok, through the Grok CLI.", default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://x.ai/cli" }, message: "Install the Grok CLI on your computer." },
+];
+
+const SKILLS = [
+  { name: "weekly-review", description: "Run a weekly review: wins, misses and next steps.", path: "/skills/weekly-review", origin: "commander", enabled: true, editable: true, instructions: "# Weekly review\n\n1. List what shipped.\n2. List what slipped and why.\n3. Propose three priorities for next week." },
+  { name: "meeting-notes", description: "Turn a transcript into decisions and action items.", path: "/skills/meeting-notes", origin: "commander", enabled: true, editable: true, instructions: "# Meeting notes\n\nSummarize decisions first, then action items with owners." },
+  { name: "wiki", description: "Read and keep the shared wiki.", path: "/built-in/wiki", origin: "built-in", enabled: true },
+  { name: "html-apps", description: "Show a small interactive page in a chat.", path: "/built-in/html-apps", origin: "built-in", enabled: true },
+  // From a linked folder (state.skills.folders), so the phone has more than eight skills to filter.
+  { name: "release-notes", description: "Write release notes from a list of changes.", path: "/Users/demo/team-skills/release-notes", origin: "folder", folderId: "folder-team", enabled: true, editable: false },
+  { name: "bug-triage", description: "Sort new bug reports by how bad they are.", path: "/Users/demo/team-skills/bug-triage", origin: "folder", folderId: "folder-team", enabled: true, editable: false },
+  { name: "standup", description: "Write a short standup from yesterday's work.", path: "/Users/demo/team-skills/standup", origin: "folder", folderId: "folder-team", enabled: true, editable: false },
+  { name: "pricing-check", description: "Compare our prices with the closest competitors.", path: "/Users/demo/team-skills/pricing-check", origin: "folder", folderId: "folder-team", enabled: true, editable: false },
+  { name: "brand-voice", description: "Keep copy in the brand's voice.", path: "/Users/demo/team-skills/brand-voice", origin: "folder", folderId: "folder-team", enabled: true, editable: false },
+];
+
+// What a project with a folder shows as changed (projectChanges). Made up; nothing on disk is read.
+const MADE_UP_CHANGES = [
+  { path: "src/pricing/Plans.tsx", kind: "modified", staged: false, added: 14, removed: 6 },
+  { path: "src/pricing/copy.ts", kind: "added", staged: false, added: 32, removed: 0 },
+  { path: "docs/old-pricing.md", kind: "deleted", staged: false, added: 0, removed: 21 },
+  { path: "src/hero/Hero.tsx", from: "src/Hero.tsx", kind: "renamed", staged: true, added: 2, removed: 2 },
+];
+const MADE_UP_DIFFS = {
+  "src/pricing/Plans.tsx": [
+    "--- a/src/pricing/Plans.tsx",
+    "+++ b/src/pricing/Plans.tsx",
+    "@@ -12,9 +12,17 @@ export function Plans({ annual }: { annual: boolean }) {",
+    "   const plans = usePlans();",
+    "-  const price = annual ? plan.yearly / 12 : plan.monthly;",
+    "+  // Yearly plans show their monthly price, rounded the way the checkout rounds it.",
+    "+  const price = annual ? Math.round((plan.yearly / 12) * 100) / 100 : plan.monthly;",
+    "   return (",
+    "     <section className=\"plans\">",
+    "-      <h2>Pricing</h2>",
+    "+      <h2>{copy.title}</h2>",
+    "+      <p className=\"lede\">{copy.lede}</p>",
+  ].join("\n"),
+  "src/pricing/copy.ts": ["--- /dev/null", "+++ b/src/pricing/copy.ts", "@@ -0,0 +1,4 @@", "+export const copy = {", "+  title: \"Simple pricing\",", "+  lede: \"One plan for every team. Cancel any time.\",", "+};"].join("\n"),
+};
+
+const REPLY = [
+  "Here's a quick plan for the launch week:\n\n",
+  "1. **Monday:** freeze the copy and send it to review.\n",
+  "2. **Wednesday:** publish the changelog and the walkthrough.\n",
+  "3. **Friday:** post the recap and collect feedback.\n\n",
+  "| Day | Owner | Status |\n| --- | --- | --- |\n| Mon | Mira | Ready |\n| Wed | Patch | Drafting |\n| Fri | Scout | Planned |\n\n",
+  "I can turn this into tasks on the board. Run `launch-check` any time to see where things stand.",
+].join("");
+
+export function seed() {
+  const t = now();
+  const bots = [
+    { id: "bot-mira", name: "Mira", role: "Chief of staff", summary: "Keeps the week on track.", instructions: "Help me plan the week. Keep lists short and flag risks early.", face: "idle", avatar: { body: "bighelp.biggie" }, pinned: true, access: { all: true, projects: [] } },
+    { id: "bot-patch", name: "Patch", role: "Coding partner", summary: "Reads the code first.", instructions: "Help me write, review and debug code. Keep changes small.", face: "coding", avatar: { body: "bighelp.patch" }, model: { model: "claude-fable-5-2", provider: "claude", reasoningEffort: "high" }, access: { all: false, projects: ["p1"] } },
+    { id: "bot-scout", name: "Scout", role: "Research assistant", summary: "Finds and cites sources.", instructions: "Find and summarize reliable information. Cite your sources.", face: "searching", avatar: { body: "bighelp.scout", eyes: "wide" }, model: { model: "gpt-5.5-codex", provider: "codex", reasoningEffort: "medium" }, sectionId: "sec-work" },
+    { id: "bot-quill", name: "Quill", role: "Writing partner", summary: "Plain words, tight edits.", instructions: "Help me draft and tighten writing. Match my voice.", face: "idle", avatar: { body: "pocket-curios.quill", mouth: "smile", cheeks: true } },
+    { id: "bot-tally", name: "Tally", role: "Data analyst", summary: "Shows the method.", instructions: "Analyze data and numbers. State assumptions.", face: "searching", avatar: { body: "pocket-curios.tally", main: "#14B8A6" }, sectionId: "sec-work" },
+    // Hidden: left out of the bot list until the "Hidden" filter shows it.
+    { id: "bot-echo", name: "Echo", role: "Meeting notes", summary: "Turns transcripts into decisions.", instructions: "Summarize meetings: decisions first, then action items with owners.", face: "idle", avatar: { body: "bitty-bots.hoot" }, hidden: true },
+  ];
+  const message = (role, text, minutesAgo, extra = {}) => ({ role, text, time: t - minutesAgo * MIN, ...extra });
+  const chats = [
+    {
+      id: "chat-launch", botId: "bot-mira", title: "Launch week plan", time: t - 12 * MIN, pinned: true, unread: true,
+      // What fills the model's context, as the real app measures it after each turn.
+      context: { current: 84_000, limit: 200_000, system: 12_000, tools: 30_000, conversation: 40_000, messages: 14, updatedAt: t - 12 * MIN },
+      messages: [
+        message("user", "What's left before the launch?", 14, { runId: "run-launch" }),
+        message("assistant", "Three things are still open:\n\n- **Pricing page** copy needs a final pass\n- The **changelog** is drafted but not reviewed\n- Support macros aren't written yet\n\nWant me to add them to the board?", 12, { runId: "run-launch" }),
+      ],
+    },
+    {
+      id: "chat-auth", botId: "bot-patch", title: "Token refresh bug", time: t - 3 * HOUR, projectId: "p1",
+      // Schedules made in the chat with /every and /after (Work › Routines › Chat schedules).
+      schedules: [
+        { id: 2, prompt: "Run the auth tests and tell me if anything broke", recurring: true, intervalMs: 2 * HOUR, enabled: true, nextAt: t + 70 * MIN, createdAt: t - 2 * 24 * HOUR },
+        { id: 3, prompt: "Check whether the token fix shipped", recurring: false, enabled: false, nextAt: null, createdAt: t - 5 * HOUR },
+      ],
+      messages: [
+        message("user", "The refresh token rotates twice when two tabs wake up. Can you find where?", 185, { runId: "run-auth" }),
+        message("assistant", "Found it. Both tabs call `renew()` before either writes the new token.\n\n```ts\nconst running = renewals.get(id);\nif (running) return running;\n```\n\nSharing one in-flight renewal per server fixes the race.", 180, { runId: "run-auth" }),
+      ],
+    },
+    {
+      id: "chat-market", botId: "bot-scout", title: "Competitor pricing", time: t - 26 * HOUR,
+      messages: [
+        message("user", "Compare the three closest competitors on price.", 26 * 60 + 4, { runId: "run-market" }),
+        message("assistant", "All three sit between $12 and $20 per seat. Two bill yearly only.", 26 * 60, { runId: "run-market" }),
+      ],
+    },
+    // The refreshes of the Pipeline panel, which its Manage menu opens as "Open refresh history".
+    { id: "chat-refresh-pipeline", botId: "bot-tally", title: "Pipeline · Refreshes", panelId: "panel-pipeline", time: t - 40 * MIN, messages: [message("assistant", "Refreshed the pipeline: 14 leads, 9 demos, 6 trials, 3 won.", 40)] },
+    { id: "chat-blog", botId: "bot-quill", title: "Blog post intro", time: t - 3 * 24 * HOUR, messages: [message("user", "Tighten this intro for me.", 3 * 24 * 60 + 2, { runId: "run-blog" }), message("assistant", "Here's a shorter version that leads with the result.", 3 * 24 * 60, { runId: "run-blog" })] },
+    {
+      id: "chat-routine-brief", botId: "bot-mira", title: "Routine · Morning brief", time: t - 5 * HOUR, messages: [message("assistant", "**Today:** two reviews due, launch copy freeze at noon.", 5 * 60, { runId: "run-brief" })],
+      lastScheduleId: 1,
+      schedules: [{ id: 1, routine: true, enabled: true, name: "Morning brief", prompt: "Summarize my day: meetings, deadlines and anything at risk.", cadence: { kind: "weekdays", time: "08:30" }, cron: "30 8 * * 1-5", timezone: "America/Chicago", recurring: true, nextAt: t + 15 * HOUR, createdAt: t - 9 * 24 * HOUR }],
+    },
+    {
+      id: "chat-routine-digest", botId: "bot-scout", title: "Routine · Friday digest", time: t - 4 * 24 * HOUR, messages: [],
+      lastScheduleId: 1,
+      schedules: [{ id: 1, routine: true, enabled: false, name: "Friday digest", prompt: "Collect this week's industry news in five bullets.", cadence: { kind: "weekly", time: "16:00", days: [5] }, cron: "0 16 * * 5", timezone: "America/Chicago", recurring: true, nextAt: t + 2 * 24 * HOUR, createdAt: t - 20 * 24 * HOUR }],
+    },
+  ];
+  const run = (id, chatId, title, minutesAgo, extra = {}) => ({ id, chatId, title, time: t - minutesAgo * MIN, status: "Completed", detail: "", finished: t - minutesAgo * MIN + 9000, summary: "Worked for 9s · 2 steps", ...extra });
+  const runs = [
+    run("run-launch", "chat-launch", "What's left before the launch?", 14, {
+      steps: [
+        { id: "s1", name: "wiki_search", label: "Searched the wiki for launch", status: "Done", started: t - 14 * MIN, finished: t - 14 * MIN + 1200, input: '{"query":"launch"}', output: "3 pages" },
+        { id: "s2", name: "task_list", label: "Read the task board", status: "Done", started: t - 14 * MIN + 1500, finished: t - 14 * MIN + 2100 },
+      ],
+      usage: { input: 4200, output: 310, model: "auto" },
+    }),
+    run("run-auth", "chat-auth", "The refresh token rotates twice", 185, { summary: "Worked for 41s · 5 steps", steps: [{ id: "s1", name: "grep", label: "Searched for renew(", status: "Done", started: t - 185 * MIN, finished: t - 185 * MIN + 800 }] }),
+    run("run-market", "chat-market", "Compare the three closest competitors", 26 * 60 + 4),
+    run("run-blog", "chat-blog", "Tighten this intro", 3 * 24 * 60 + 2),
+    run("run-brief", "chat-routine-brief", "Morning brief", 5 * 60, { trigger: "scheduled", scheduleId: 1 }),
+  ];
+  return {
+    bots,
+    chats,
+    runs,
+    panels: [
+      { id: "panel-goal", key: "writing", botId: "bot-quill", chatId: "chat-blog", title: "Writing goal", hidden: false, size: "small", revision: 3, updatedAt: t - 2 * HOUR, routine: null, projectId: "p1", blocks: [{ type: "metric", label: "Words this week", value: "3,420", note: "Goal 5,000" }, { type: "progress", label: "Progress", value: 3420, max: 5000 }] },
+      { id: "panel-pipeline", key: "pipeline", botId: "bot-tally", chatId: "chat-market", title: "Pipeline", hidden: false, size: "wide", revision: 8, updatedAt: t - 40 * MIN, routine: { cron: "0 9 * * 1-5", timezone: "America/Chicago", prompt: "Refresh the pipeline", nextAt: t + 16 * HOUR, enabled: true }, refreshChatId: "chat-refresh-pipeline", lastCheck: { time: t - 40 * MIN, status: "ok" }, blocks: [{ type: "bars", label: "Deals by stage", items: [{ label: "Lead", value: 14 }, { label: "Demo", value: 9 }, { label: "Trial", value: 6 }, { label: "Won", value: 3 }] }, { type: "badges", items: [{ label: "2 at risk", tone: "warning" }, { label: "On pace", tone: "positive" }] }] },
+    ],
+    streams: {},
+    intents: {},
+    thinking: {},
+    queued: {},
+    speakers: {},
+    requests: [],
+    sections: [{ id: "sec-work", name: "Work" }],
+    templates: [{ id: "tpl-standup", name: "Standup host", role: "Daily standup", summary: "Runs a two-minute standup.", instructions: "Ask each person what they did, what's next and what's in the way. Keep it to two minutes.", avatar: { body: "bighelp.tock" }, source: "saved", createdAt: t - 5 * 24 * HOUR }],
+    board: [
+      { id: "b1", botId: "bot-scout", kind: "feed", title: "Two competitors raised prices", body: "Both moved their team plan from $15 to $18 per seat this week.", status: "open", read: false, createdAt: t - 50 * MIN, updatedAt: t - 50 * MIN, links: [{ url: "https://example.com/pricing", title: "Pricing changes" }] },
+      { id: "b2", botId: "bot-mira", kind: "idea", title: "Batch the launch emails", body: "Send the three launch emails as one sequence so replies thread together.", status: "open", read: true, createdAt: t - 5 * HOUR, updatedAt: t - 5 * HOUR },
+      { id: "b3", botId: "bot-mira", kind: "goal", title: "Ship the pricing page", body: "Final copy, review, publish.", status: "open", read: true, createdAt: t - 2 * 24 * HOUR, updatedAt: t - 2 * 24 * HOUR },
+      // Finished ones, for Show finished (Reopen, Delete).
+      { id: "b4", botId: "bot-scout", kind: "feed", title: "A new pricing page teardown", body: "Someone took apart ten SaaS pricing pages.", status: "cleared", read: true, rating: "up", createdAt: t - 3 * 24 * HOUR, updatedAt: t - 2 * 24 * HOUR },
+      { id: "b5", botId: "bot-mira", kind: "idea", title: "Record a two-minute walkthrough", body: "", status: "done", answer: "goal", read: true, createdAt: t - 4 * 24 * HOUR, updatedAt: t - 3 * 24 * HOUR },
+      { id: "b6", botId: "bot-mira", kind: "goal", title: "Write the changelog", body: "", category: "career", status: "done", read: true, createdAt: t - 6 * 24 * HOUR, updatedAt: t - 24 * HOUR },
+    ],
+    tasks: [
+      { id: "t1", title: "Write support macros", body: "Five macros for the most common launch questions.", botId: "bot-quill", priority: "high", status: "ready", createdBy: "person", createdAt: t - 3 * HOUR, updatedAt: t - 3 * HOUR },
+      { id: "t2", title: "Review the changelog", body: "", botId: "bot-patch", priority: "normal", status: "review", createdBy: "person", createdAt: t - 8 * HOUR, updatedAt: t - HOUR, result: "The changelog reads well. Two entries need issue links." },
+      { id: "t3", title: "Benchmark the new parser", body: "", botId: "bot-patch", priority: "normal", status: "later", createdBy: "person", createdAt: t - 30 * HOUR, updatedAt: t - 30 * HOUR },
+      { id: "t4", title: "Collect launch metrics", body: "", botId: "bot-tally", priority: "low", status: "done", createdBy: "bot-mira", createdAt: t - 50 * HOUR, updatedAt: t - 20 * HOUR },
+    ],
+    projects: [
+      { id: "p1", name: "Website", description: "Marketing site and pricing page", color: "coral", folder: REPO, todos: [{ id: "td1", text: "Final pass on pricing copy", done: false, createdAt: t - 6 * HOUR }, { id: "td2", text: "Compress hero images", done: true, createdAt: t - 30 * HOUR, doneAt: t - 20 * HOUR }], lastUsed: t - 2 * HOUR, createdAt: t - 30 * 24 * HOUR },
+      { id: "p2", name: "Mobile app", color: "blue", folder: REPO, todos: [], lastUsed: t - 3 * 24 * HOUR, createdAt: t - 12 * 24 * HOUR },
+      // A project with no folder: no modes, nothing to unlink.
+      { id: "p3", name: "Garden plans", description: "Beds, seeds and the watering rota", color: "green", todos: [{ id: "td3", text: "Order seed potatoes", done: false, createdAt: t - 26 * HOUR }, { id: "td4", text: "Fix the rain barrel", done: false, createdAt: t - 20 * HOUR }, { id: "td5", text: "Sketch the new bed", done: false, createdAt: t - 4 * HOUR }], lastUsed: t - 6 * 24 * HOUR, createdAt: t - 40 * 24 * HOUR },
+    ],
+    mcpServers: [
+      { id: "mcp-linear", name: "linear", type: "http", enabled: true, url: "https://mcp.linear.app/mcp", auth: { type: "oauth", signedIn: true, signingIn: false, canRenew: true, clientSecret: false } },
+      { id: "mcp-files", name: "filesystem", type: "stdio", enabled: true, command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"], env: [] },
+      { id: "mcp-docs", name: "docs", type: "http", enabled: false, url: "https://docs.example.com/mcp", headers: ["Authorization"], auth: { type: "header" } },
+    ],
+    skills: { folders: [{ id: "folder-team", path: "/Users/demo/team-skills" }], plugins: [{ id: "plugin-review", path: "/Users/demo/.plugins/code-review" }], disabled: [] },
+    wiki: { revision: 1 },
+    providers: { revision: 1 },
+    settings: {
+      model: { model: "auto" },
+      appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default" },
+      foldTools: true,
+      showThinking: true,
+      linkPreviews: false,
+      readAloud: false,
+      onboarded: true,
+      approval: "ask",
+      clarify: ["missing"],
+      clarificationInstructions: "",
+      notifications: { replies: true, routines: true, requests: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
+      access: { allBots: true },
+      background: { keepRunning: true, runAtStartup: false },
+      sidebar: { order: ["Home", "Today", "Chats", "Work", "Projects", "Wiki"], collapsed: true },
+      teamwork: true,
+      harness: "copilot",
+      providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, grok: { enabled: false } },
+    },
+  };
+}
+
+// ── A small wiki, in the shapes the desktop's wiki uses (the desktop app's desktop/wiki.mjs) ───────────
+
+const GUIDE = "WIKI.md";
+const GENERATED = new Set(["index.md", "log.md"]);
+const CHANGED = "This page changed while you were editing it.";
+const hash = (value) => createHash("sha256").update(value).digest("hex").slice(0, 16);
+const slug = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const humanize = (name) => {
+  const words = name.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : name;
+};
+const clip = (value, max) => (value.length <= max ? value : value.slice(0, max - 1).replace(/\s+\S*$/, "") + "…");
+const isTemplate = (path) => posix.basename(path) === "_template.md";
+const LINK = /(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]*>|[^)\s]+)\s*\)/g;
+
+/** A path inside the wiki. Hidden names and ".." are refused, like the real one. */
+function wikiPath(value) {
+  if (typeof value !== "string") throw new Error("Give a wiki path, such as projects/website.md.");
+  const path = value.trim().replace(/\\/g, "/").replace(/^(\.?\/)+/, "").replace(/\/+$/, "");
+  const parts = path.split("/");
+  if (!path || path.length > 240 || parts.length > 6 || parts.some((p) => !p || p.startsWith(".") || /[\0-\x1f<>:"|?*]/.test(p))) throw new Error("“" + value.trim().slice(0, 80) + "” isn't a wiki path. Use one such as projects/website.md.");
+  return path;
+}
+const pagePath = (value) => (/\.md$/i.test(wikiPath(value)) ? wikiPath(value) : wikiPath(value) + ".md");
+
+class MockWiki {
+  constructor(state) {
+    this.state = state;
+    this.pages = new Map(); // path → { content, updatedAt, history: [{ id, time, by, content }] }
+    this.folders = new Set(["projects", "people", "goals"]);
+    this.log = [];
+    const t = now();
+    const put = (path, content, ago) => this.pages.set(path, { content, updatedAt: t - ago * HOUR, history: [] });
+    put(GUIDE, "# Wiki guide\n\nThis wiki holds what the team knows. Put projects in `projects/`, people in `people/` and goals in `goals/`. Link pages with ordinary Markdown links.\n", 200);
+    put("projects/_template.md", "# {{title}}\n\n## Summary\n\n## Status\n", 200);
+    put("projects/website.md", "# Website\n\nThe marketing site and pricing page. Jo owns the copy.\n\n- Owner: [Jo](../people/jo.md)\n- Goal: [Launch week](../goals/launch.md)\n- See also: [Botkins app](botkins-app.md)\n", 30);
+    put("projects/botkins-app.md", "# Botkins app\n\nThe phone app that pairs with the desktop. The next release waits on the [launch](../goals/launch.md).\n\n## Open questions\n\n- Do we ship the screen viewer in the first release? See [security notes](../goals/security.md).\n", 6);
+    put("people/jo.md", "# Jo\n\nWrites the copy and keeps the launch calendar. Prefers short lists.\n\nWorks on the [Website](../projects/website.md).\n", 72);
+    put("goals/launch.md", "# Launch week\n\nShip the pricing page, the changelog and the walkthrough by the 24th.\n\nProjects: [Website](../projects/website.md), [Botkins app](../projects/botkins-app.md).\n", 12);
+    this.pages.get("projects/website.md").history.push({ id: String(t - 40 * HOUR) + "-You", time: t - 40 * HOUR, by: "You", content: "# Website\n\nThe marketing site.\n" });
+  }
+  bump(by, what) {
+    this.state.wiki.revision++;
+    this.log.unshift({ time: now(), by, what });
+  }
+  /** Pages with what lists need: title, summary, and the links that point in and out. */
+  scan() {
+    const infos = new Map();
+    for (const [path, page] of this.pages) {
+      let title = "";
+      let summary = "";
+      for (const line of page.content.split("\n")) {
+        const trimmed = line.trim();
+        const heading = /^#\s+(.+?)\s*#*$/.exec(trimmed);
+        if (heading && !title) title = heading[1];
+        else if (trimmed && !trimmed.startsWith("#") && !summary) summary = clip(trimmed.replace(/[*_`]/g, ""), 180);
+      }
+      const links = [];
+      const missing = [];
+      for (const m of page.content.matchAll(LINK)) {
+        const target = m[3].startsWith("<") ? m[3].slice(1, -1) : m[3];
+        if (m[1] || /^([a-z][a-z0-9+.-]*:|#|\/\/)/i.test(target)) continue;
+        const resolved = posix.normalize(posix.join(posix.dirname(path), target.split("#")[0]));
+        if (resolved.startsWith("..") || !resolved.endsWith(".md")) continue;
+        if (this.pages.has(resolved)) links.push(resolved);
+        else missing.push({ path: resolved, label: m[2] });
+      }
+      infos.set(path, { path, title: title || humanize(posix.basename(path)), summary, updatedAt: page.updatedAt, links: [...new Set(links)], backlinks: [], missing, ...(isTemplate(path) && { template: true }) });
+    }
+    for (const info of infos.values()) for (const target of info.links) infos.get(target)?.backlinks.push(info.path);
+    return infos;
+  }
+  tree() {
+    const pages = [...this.scan().values()];
+    const has = (name) => pages.some((p) => !p.template && p.path.startsWith("projects/") && p.title.toLowerCase() === name.toLowerCase());
+    return {
+      folders: [...this.folders].sort(),
+      pages,
+      guide: GUIDE,
+      revision: this.state.wiki.revision,
+      suggested: { projects: (this.state.projects ?? []).filter((p) => !has(p.name)).map((p) => ({ id: p.id, name: p.name })) },
+    };
+  }
+  generated(path) {
+    const content =
+      path === "index.md"
+        ? "# Index\n\n" + [...this.scan().values()].filter((p) => !p.template).map((p) => "- [" + p.title + "](" + p.path + ")").join("\n") + "\n"
+        : "# Log\n\n" + (this.log.map((e) => "- " + new Date(e.time).toISOString().slice(0, 16).replace("T", " ") + " · " + e.by + " " + e.what).join("\n") || "Nothing yet.") + "\n";
+    return { path, title: path === "index.md" ? "Index" : "Log", summary: "", updatedAt: now(), links: [], backlinks: [], missing: [], content, base: hash(content), versions: 0, generated: true };
+  }
+  page(value) {
+    const path = pagePath(value);
+    if (GENERATED.has(path)) return this.generated(path);
+    const page = this.pages.get(path);
+    if (!page) throw new Error("There is no wiki page at " + path + ".");
+    const info = this.scan().get(path);
+    const record = path.startsWith("projects/") ? (this.state.projects ?? []).find((p) => p.name.toLowerCase() === info.title.toLowerCase()) : null;
+    return { ...info, content: page.content, base: hash(page.content), versions: page.history.length, ...(record && { record: { kind: "project", id: record.id, name: record.name } }) };
+  }
+  write(path, content, { by = "You", base } = {}) {
+    if (GENERATED.has(path)) throw new Error("Botkins keeps " + path + " itself. Change the pages and it follows.");
+    if (typeof content !== "string" || !content.trim()) throw new Error("A page needs some text. To remove a page, delete it.");
+    if (content.length > 200000) throw new Error("A page holds up to 200,000 characters. Split this one into several pages.");
+    const before = this.pages.get(path);
+    if (base !== undefined && before && hash(before.content) !== base) throw new Error(CHANGED);
+    const text = content.replace(/\r\n?/g, "\n").trimEnd() + "\n";
+    if (before && before.content === text) return path;
+    if (before) {
+      const time = now();
+      before.history.unshift({ id: String(time) + "-" + by.replace(/\W+/g, "-"), time, by, content: before.content });
+      before.history.length = Math.min(before.history.length, 20);
+    }
+    this.pages.set(path, { content: text, updatedAt: now(), history: before?.history ?? [] });
+    this.bump(by, (before ? "updated " : "created ") + path);
+    return path;
+  }
+  save(path, content, base) {
+    const page = pagePath(path);
+    this.write(page, content, { base });
+    return this.page(page);
+  }
+  create({ folder = "", title } = {}) {
+    if (typeof title !== "string" || !title.trim() || title.length > 120) throw new Error("Give the page a title of up to 120 characters.");
+    const dir = folder ? wikiPath(folder) : "";
+    if (dir && !this.folders.has(dir)) throw new Error("There is nothing in the wiki at " + dir + ".");
+    const name = slug(title) || "page";
+    let path = (dir ? dir + "/" : "") + name + ".md";
+    for (let n = 2; this.pages.has(path); n++) path = (dir ? dir + "/" : "") + name + "-" + n + ".md";
+    const template = (dir && this.pages.get(dir + "/_template.md")?.content) || "# {{title}}\n";
+    return this.write(path, template.replaceAll("{{title}}", () => title.trim()));
+  }
+  createFor({ kind, id } = {}) {
+    const project = kind === "project" ? (this.state.projects ?? []).find((p) => p.id === id) : null;
+    if (!project) throw new Error("That project no longer exists.");
+    return this.create({ folder: "projects", title: project.name });
+  }
+  createFolder({ parent = "", name } = {}) {
+    if (typeof name !== "string" || !slug(name)) throw new Error("Give the section a name.");
+    const path = wikiPath((parent ? wikiPath(parent) + "/" : "") + slug(name));
+    if (this.folders.has(path)) throw new Error("There is already a section named " + humanize(slug(name)) + " there.");
+    this.folders.add(path);
+    this.bump("You", "added the section " + path + "/");
+    return path;
+  }
+  move(from, to) {
+    const folder = this.folders.has(wikiPath(from));
+    from = folder ? wikiPath(from) : pagePath(from);
+    to = folder ? wikiPath(to) : pagePath(to);
+    if (!folder && !this.pages.has(from)) throw new Error("There is nothing in the wiki at " + from + ".");
+    if (folder && !this.folders.has(from)) throw new Error("There is nothing in the wiki at " + from + ".");
+    if ([from, to].some((p) => p === GUIDE || GENERATED.has(p))) throw new Error("The guide, the index and the log stay where they are.");
+    if (from === to) return to;
+    if (folder && (to + "/").startsWith(from + "/")) throw new Error("A section can't be moved into itself.");
+    if (folder ? this.folders.has(to) : this.pages.has(to)) throw new Error("There is already something at " + to + ". Choose another name.");
+    const map = new Map();
+    if (folder) {
+      for (const path of this.pages.keys()) if (path.startsWith(from + "/")) map.set(path, to + path.slice(from.length));
+      this.folders = new Set([...this.folders].map((f) => (f === from || f.startsWith(from + "/") ? to + f.slice(from.length) : f)));
+      if (posix.dirname(to) !== ".") this.folders.add(posix.dirname(to));
+    } else map.set(from, to);
+    const pages = new Map();
+    for (const [path, page] of this.pages) {
+      const next = map.get(path) ?? path;
+      // Links to moved pages follow them, written relative to the page that holds them.
+      const content = page.content.replace(LINK, (all, bang, label, target) => {
+        const raw = target.startsWith("<") ? target.slice(1, -1) : target;
+        if (bang || /^([a-z][a-z0-9+.-]*:|#|\/\/)/i.test(raw)) return all;
+        const resolved = posix.normalize(posix.join(posix.dirname(path), raw.split("#")[0]));
+        const moved = map.get(resolved);
+        if (!moved && next === path) return all;
+        const there = moved ?? resolved;
+        const rel = posix.relative(posix.dirname(next), there);
+        return "[" + label + "](" + (rel.startsWith("..") ? rel : posix.dirname(next) === "." ? there : "./" + rel) + ")";
+      });
+      pages.set(next, { ...page, content });
+    }
+    this.pages = pages;
+    this.bump("You", "moved " + from + " to " + to);
+    return to;
+  }
+  remove(value) {
+    const path = this.folders.has(wikiPath(value)) ? wikiPath(value) : pagePath(value);
+    if (path === GUIDE || GENERATED.has(path)) throw new Error("The guide, the index and the log can't be removed.");
+    if (this.folders.has(path)) {
+      for (const key of [...this.pages.keys()]) if (key.startsWith(path + "/")) this.pages.delete(key);
+      this.folders = new Set([...this.folders].filter((f) => f !== path && !f.startsWith(path + "/")));
+      this.bump("You", "removed the section " + path + "/");
+    } else {
+      if (!this.pages.has(path)) throw new Error("There is nothing in the wiki at " + path + ".");
+      this.pages.delete(path);
+      this.bump("You", "removed " + path);
+    }
+  }
+  search(query) {
+    if (typeof query !== "string" || !query.trim()) throw new Error("Give some words to search for.");
+    const words = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 12);
+    const hits = [];
+    for (const info of this.scan().values()) {
+      if (info.template) continue;
+      const body = this.pages.get(info.path).content.toLowerCase();
+      const title = info.title.toLowerCase();
+      if (!words.every((w) => title.includes(w) || body.includes(w) || info.path.includes(w))) continue;
+      const score = words.reduce((sum, w) => sum + (title.includes(w) ? 10 : 0) + Math.min(body.split(w).length - 1, 5), 0);
+      const line = this.pages.get(info.path).content.split("\n").find((l) => !/^#\s/.test(l.trim()) && words.some((w) => l.toLowerCase().includes(w)));
+      hits.push({ path: info.path, title: info.title, snippet: clip((line ?? info.summary).replace(/\s+/g, " ").trim(), 200), score });
+    }
+    return hits.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title)).slice(0, 12).map(({ score: _score, ...hit }) => hit);
+  }
+  history(path) {
+    const page = this.pages.get(pagePath(path));
+    return (page?.history ?? []).map(({ id, time, by }) => ({ id, time, by }));
+  }
+  version(path, id) {
+    const found = this.pages.get(pagePath(path))?.history.find((v) => v.id === id);
+    if (!found) throw new Error("That version is no longer kept.");
+    return found.content;
+  }
+  restore(path, id) {
+    const page = pagePath(path);
+    this.write(page, this.version(page, id));
+    return this.page(page);
+  }
+  /** The pages a chat may mention with "#", newest first. */
+  mentionable() {
+    return [...this.scan().values()]
+      .filter((p) => !p.template)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((p) => ({ path: p.path, title: p.title, hint: p.path.includes("/") ? humanize(p.path.split("/")[0]) : "Wiki", modified: p.updatedAt }));
+  }
+}
+
+const text = (value, limit, what) => {
+  const out = String(value ?? "").trim();
+  if (!out) throw new Error("Enter a " + what + ".");
+  if (out.length > limit) throw new Error("Use up to " + limit + " characters for the " + what + ".");
+  return out;
+};
+
+// A custom view the demo bot shows when asked for a chart: one self-contained page, as a real bot
+// writes one for the desktop app. It reads its numbers with botkins.getData(), follows the app's
+// colors, and has one button that hands text to the message box and one link.
+const DEMO_VIEW = String.raw`<style>
+  body { padding: 4px 2px; }
+  h3 { margin: 0 0 10px; font-size: 15px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+  .name { width: 96px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track { flex: 1; height: 14px; border-radius: 7px; background: var(--sunken); overflow: hidden; }
+  .bar { display: block; height: 100%; width: 0; border-radius: 7px; background: var(--accent); transition: width .7s ease; }
+  .n { width: 22px; text-align: right; font-size: 13px; font-weight: 600; }
+  .row.on .name { color: var(--ink); }
+  #note { min-height: 20px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  button { margin-top: 10px; font: inherit; font-size: 14px; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  a { color: var(--ink); margin-left: 12px; font-size: 14px; }
+</style>
+<h3 id="title"></h3>
+<div id="rows"></div>
+<div id="note">Tap a bar.</div>
+<button id="ask">Ask about the busiest</button><a href="https://example.com/issues">Open the list</a>
+<script>
+  botkins.getData().then((data) => {
+    document.getElementById("title").textContent = data.title;
+    const max = Math.max(1, ...data.items.map((item) => item.value));
+    const rows = document.getElementById("rows");
+    for (const item of data.items) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = '<span class="name"></span><span class="track"><span class="bar"></span></span><span class="n"></span>';
+      row.querySelector(".name").textContent = item.label;
+      row.querySelector(".n").textContent = item.value;
+      row.onclick = () => {
+        for (const other of rows.children) other.classList.remove("on");
+        row.classList.add("on");
+        document.getElementById("note").textContent = item.label + " was last pushed " + item.pushed + ".";
+      };
+      rows.appendChild(row);
+      requestAnimationFrame(() => requestAnimationFrame(() => (row.querySelector(".bar").style.width = (item.value / max) * 100 + "%")));
+    }
+    const top = data.items.reduce((a, b) => (b.value > a.value ? b : a));
+    document.getElementById("ask").onclick = () => botkins.sendAnswer("Tell me more about " + top.label + ".").catch((e) => (document.getElementById("note").textContent = e.message));
+  });
+</script>`;
+const DEMO_VIEW_DATA = {
+  title: "Open issues by repo",
+  items: [
+    { label: "website", value: 6, pushed: "in October" },
+    { label: "mobile", value: 4, pushed: "yesterday" },
+    { label: "relay", value: 2, pushed: "this morning" },
+    { label: "docs", value: 1, pushed: "last week" },
+  ],
+};
+
+// A view that tries to get out, for checking a phone's web view by hand ("sandbox" in a message).
+// Each line says whether one way out was blocked. It tries example.com, which is reserved, or the
+// address in BOTKINS_DEV_PROBE (a listener of your own, with a STUN port one below its port), which
+// shows for certain what left the view.
+const PROBE = process.env.BOTKINS_DEV_PROBE || "https://example.com";
+const SANDBOX_VIEW = String.raw`<pre id="out" style="font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;margin:0"></pre>
+<script>
+(() => {
+  const lines = [];
+  const log = (name, blocked) => { lines.push(name + ": " + (blocked ? "blocked" : "ALLOWED")); document.getElementById("out").textContent = lines.join("\n"); };
+  const base = __PROBE__;
+  const to = (what) => base + "/" + what;
+  const at = new URL(base);
+  const ws = (at.protocol === "https:" ? "wss://" : "ws://") + at.host + "/";
+  const stun = "stun:" + at.hostname + ":" + (at.port ? Number(at.port) - 1 : 3478);
+  try { fetch(to("fetch"), { mode: "no-cors" }).then(() => log("fetch", false), () => log("fetch", true)); } catch (e) { log("fetch", true); }
+  try { const x = new XMLHttpRequest(); x.open("GET", to("xhr")); x.onload = () => log("xhr", false); x.onerror = () => log("xhr", true); x.send(); } catch (e) { log("xhr", true); }
+  const img = new Image(); img.onload = () => log("image", false); img.onerror = () => log("image", true); img.src = to("image?" + Date.now());
+  // (sendBeacon answers true even when the policy drops the request: only a listener shows the truth.)
+  try { const said = !!navigator.sendBeacon && navigator.sendBeacon(to("beacon"), "x"); lines.push("beacon: answered " + said + ", see the listener"); } catch (e) { log("beacon", true); }
+  log("WebSocket", typeof WebSocket === "undefined");
+  log("RTCPeerConnection", typeof RTCPeerConnection === "undefined");
+  log("Worker", typeof Worker === "undefined");
+  try {
+    const f = document.createElement("iframe"); document.body.appendChild(f);
+    const w = f.contentWindow || window[0];
+    log("frame has RTCPeerConnection", !w || typeof w.RTCPeerConnection === "undefined");
+    log("frame has WebSocket", !w || typeof w.WebSocket === "undefined");
+    if (w && w.fetch) w.fetch(to("frame-fetch"), { mode: "no-cors" }).then(() => log("frame fetch", false), () => log("frame fetch", true)); else log("frame fetch", true);
+    if (w && w.WebSocket) { try { const s = new w.WebSocket(ws + "frame-ws"); s.onopen = () => log("frame WebSocket connects", false); s.onerror = () => log("frame WebSocket connects", true); } catch (e) { log("frame WebSocket connects", true); } }
+    if (w && w.RTCPeerConnection) {
+      try {
+        const pc = new w.RTCPeerConnection({ iceServers: [{ urls: stun }] });
+        pc.createDataChannel("x");
+        let found = 0;
+        pc.onicecandidate = (event) => { if (event.candidate) found++; };
+        pc.createOffer().then((offer) => pc.setLocalDescription(offer)).catch(() => {});
+        setTimeout(() => log("frame WebRTC gathers addresses (" + found + ")", found === 0), 3000);
+      } catch (e) { log("frame WebRTC gathers addresses", true); }
+    }
+  } catch (e) { log("frame", true); }
+  try { localStorage.setItem("a", "b"); log("localStorage", false); } catch (e) { log("localStorage", true); }
+  try { document.cookie = "a=b"; log("cookie", document.cookie === ""); } catch (e) { log("cookie", true); }
+  lines.push("app handle offers: " + (Object.keys(window.ReactNativeWebView || {}).join(", ") || "nothing"));
+  botkins.sendAnswer("/compact").then(() => log("slash answer", false), () => log("slash answer", true));
+  botkins.openLink("javascript:alert(1)").then((opened) => log("script link", !opened), () => log("script link", true));
+  setTimeout(() => { let w = null; try { w = window.open(to("popup")); } catch (e) {} log("window.open", !w); }, 400);
+  setTimeout(() => { const form = document.createElement("form"); form.method = "post"; form.action = to("form"); document.body.appendChild(form); try { form.submit(); } catch (e) {} setTimeout(() => log("form post", true), 900); }, 700);
+  setTimeout(() => { try { location.href = to("navigation"); } catch (e) {} setTimeout(() => log("navigation", true), 1500); }, 3500);
+})();
+</script>`.replace("__PROBE__", () => JSON.stringify(PROBE));
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+// The folders a phone can browse on the demo computer: a home folder and one plugged-in disk. All
+// made up: the demo never reads a real disk.
+const DEMO_PLACES = [
+  { name: "Home", path: "/Users/demo", folders: { "": ["Code", "Desktop", "Documents", "team-skills"], "/Code": ["mobile", "relay", "website"], "/Code/website": ["content", "src"], "/Documents": ["Notes", "Plans"] } },
+  { name: "Backup", path: "/Volumes/Backup", folders: { "": ["Archive", "Projects"], "/Projects": ["old-site"] } },
+];
+const OUTSIDE = "Only folders in your home folder or on a plugged-in disk can be chosen from here. Choose another folder, or choose this one on the computer itself.";
+const GONE = "That folder doesn't exist on the computer.";
+/** Where a path is in the made-up places, as { place, at }. Null when it is outside them, undefined when it is gone. */
+function demoFolder(path) {
+  if (typeof path !== "string") return null;
+  const place = DEMO_PLACES.find((item) => path === item.path || path.startsWith(item.path + "/"));
+  if (!place) return null;
+  let at = "";
+  for (const step of path.slice(place.path.length).split("/").filter(Boolean)) {
+    if (!(place.folders[at] ?? []).includes(step)) return undefined;
+    at += "/" + step;
+  }
+  return { place, at };
+}
+/** A folder a person chose in the browser, or the sentence that says why it can't be used. */
+function chosenFolder(path) {
+  if (typeof path !== "string" || !path) throw new Error("Choose a folder.");
+  const found = demoFolder(path);
+  if (!found) throw new Error(found === null ? OUTSIDE : GONE);
+  return path;
+}
+/** A file name from a title: nothing a file system refuses. */
+const fileName = (value, fallback) => String(value ?? "").replace(/[\\/:*?"<>|\0-\x1f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || fallback;
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+const crc32 = (bytes) => {
+  let c = 0xffffffff;
+  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+/** A .zip of text files, stored without compression: [{ path, text }]. Enough for the demo's wiki export. */
+function storedZip(files) {
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const item of files) {
+    const name = Buffer.from(item.path, "utf8");
+    const data = Buffer.from(item.text, "utf8");
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6); // names are UTF-8
+    local.writeUInt16LE(0x21, 12); // 1980-01-01
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    parts.push(local, name, data);
+    const entry = Buffer.alloc(46);
+    entry.writeUInt32LE(0x02014b50, 0);
+    entry.writeUInt16LE(20, 4);
+    entry.writeUInt16LE(20, 6);
+    entry.writeUInt16LE(0x0800, 8);
+    entry.writeUInt16LE(0x21, 14);
+    entry.writeUInt32LE(crc, 16);
+    entry.writeUInt32LE(data.length, 20);
+    entry.writeUInt32LE(data.length, 24);
+    entry.writeUInt16LE(name.length, 28);
+    entry.writeUInt32LE(offset, 42);
+    central.push(entry, name);
+    offset += local.length + name.length + data.length;
+  }
+  const size = central.reduce((sum, part) => sum + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(size, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, ...central, end]);
+}
+/** A one-page PDF that shows a few lines of plain text. The real app prints the whole document. */
+function tinyPdf(lines) {
+  const safe = (line) => String(line).replace(/[^\x20-\x7e]/g, "?").replace(/[\\()]/g, "\\$&").slice(0, 90);
+  const stream = "BT /F1 14 Tf 72 720 Td 18 TL " + lines.slice(0, 30).map((line) => "(" + safe(line) + ") Tj T*").join(" ") + " ET";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    "<< /Length " + stream.length + " >>\nstream\n" + stream + "\nendstream",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets = objects.map((body, index) => {
+    const at = out.length;
+    out += index + 1 + " 0 obj\n" + body + "\nendobj\n";
+    return at;
+  });
+  const xref = out.length;
+  out += "xref\n0 " + (objects.length + 1) + "\n0000000000 65535 f \n" + offsets.map((at) => String(at).padStart(10, "0") + " 00000 n \n").join("");
+  out += "trailer\n<< /Size " + (objects.length + 1) + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n";
+  return Buffer.from(out, "latin1");
+}
+const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+/** Words in a message that make the demo bot use the person's phone, and the tool it calls. */
+const PHONE_ASKS = [
+  { when: /calendar|schedule|meeting/i, tool: "phone_calendar_events", label: "Reading your calendar", args: () => ({ from: today(), to: today(), limit: 10 }) },
+  { when: /contact/i, tool: "phone_contacts_search", label: "Searching your contacts", args: () => ({ query: "a", limit: 5 }) },
+  { when: /where am i|location/i, tool: "phone_location", label: "Checking where you are", args: () => ({}) },
+  { when: /photo/i, tool: "phone_photos_recent", label: "Listing your photos", args: () => ({ limit: 5 }) },
+  { when: /steps|health|sleep/i, tool: "phone_health_summary", label: "Reading your Health summary", args: () => ({}) },
+  { when: /email|mail /i, tool: "phone_mail_compose", label: "Opening an email on your phone", args: () => ({ to: ["someone@example.com"], subject: "Hello from Botkins", body: "Written by your bot, for you to send." }) },
+];
+
+const DELIVER_TO = ["routine", "chat", "feed", "idea", "goal"];
+/** A routine's destination as it may be saved. */
+function delivery(value) {
+  if (!DELIVER_TO.includes(value?.to)) throw new Error("That destination isn't one a routine can use.");
+  return { to: value.to, ...(value.to === "chat" && typeof value.chatId === "string" && { chatId: value.chatId }) };
+}
+
+export class MockBackend {
+  constructor({ state = seed(), speed = 1 } = {}) {
+    // A computer nobody has set up yet: no bots, and nothing that belongs to one.
+    if (process.env.BOTKINS_DEV_EMPTY === "1") Object.assign(state, { bots: [], chats: [], runs: [], routines: [], tasks: [], board: [], panels: [], sections: [], requests: [] });
+    Object.assign(this, { state, speed, listeners: new Set(), turns: new Map(), waiting: new Map(), memory: new Map(), skillList: SKILLS.map((s) => ({ ...s })) });
+    this.wiki = new MockWiki(state);
+    // What this stand-in app supports itself, beyond the link's own list.
+    // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
+    this.capabilities = ["routine-delivery-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.cache = { bytes: 48_340_992, catalogs: 6 };
+    /** How many test notifications the demo computer was asked to show. */
+    this.tested = 0;
+    // Custom views (html blocks): the pages, kept apart from the state a phone is sent, as the desktop app does.
+    this.pages = new Map();
+    this.frames = {
+      page: (id) => {
+        const page = this.pages.get(id);
+        if (!page) throw new Error("This view no longer exists.");
+        return { html: page.html, data: page.data };
+      },
+      chatFor: (id) => this.pages.get(id)?.chatId ?? null,
+    };
+    this.extras = {
+      adoptMcpSignIn: (serverId) => {
+        const server = this.server(serverId);
+        server.auth = { type: "oauth", signedIn: true, signingIn: false, canRenew: true, clientSecret: false };
+        this.changed();
+        return { status: "connected", tools: ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL"] };
+      },
+    };
+  }
+  info() {
+    return { app: "botkins", version: "0.8.0-demo", platform: process.platform };
+  }
+  snapshot() {
+    return this.state;
+  }
+  subscribe(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+  changed() {
+    for (const fn of this.listeners) fn();
+  }
+  async call(method, args) {
+    const fn = this.handlers[method];
+    if (!fn) throw new Error("The demo computer doesn't do " + method + " yet.");
+    const result = await fn.apply(this, args);
+    this.changed();
+    return result;
+  }
+  bot(id) {
+    const bot = this.state.bots.find((b) => b.id === id);
+    if (!bot) throw new Error("This bot no longer exists.");
+    return bot;
+  }
+  chat(id) {
+    const chat = this.state.chats.find((c) => c.id === id);
+    if (!chat) throw new Error("This chat no longer exists.");
+    return chat;
+  }
+  server(id) {
+    const server = this.state.mcpServers.find((s) => s.id === id);
+    if (!server) throw new Error("Unknown MCP server");
+    return server;
+  }
+  sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms * this.speed));
+  }
+  ask(request) {
+    const id = randomUUID();
+    this.state.requests.push({ id, ...request });
+    this.changed();
+    return new Promise((resolve) => this.waiting.set(id, resolve));
+  }
+  /** A scripted turn: thinking, a tool step, an approval or question when asked for, then the reply. */
+  async turn(chat, run, prompt) {
+    const id = chat.id;
+    const turn = { stopped: false };
+    this.turns.set(id, turn);
+    const live = () => !turn.stopped;
+    this.state.streams[id] = "";
+    this.state.thinking[id] = "";
+    this.state.intents[id] = "Thinking it through";
+    this.changed();
+    for (const piece of ["The person wants a plan. ", "I should check the wiki first, ", "then keep the answer short."]) {
+      await this.sleep(260);
+      if (!live()) break;
+      this.state.thinking[id] += piece;
+      this.changed();
+    }
+    if (live()) {
+      const step = { id: randomUUID(), name: "wiki_search", label: "Searching the wiki", status: "Running", started: now(), input: JSON.stringify({ query: prompt.slice(0, 40) }) };
+      run.steps = [step];
+      this.state.intents[id] = "Searching the wiki";
+      this.changed();
+      await this.sleep(700);
+      Object.assign(step, { status: "Done", finished: now(), label: "Searched the wiki", output: "2 pages matched" });
+      this.changed();
+    }
+    let reply = REPLY;
+    // A bot that uses the person's phone: the tool runs there (device.mjs) when the phone allows it.
+    const wanted = PHONE_ASKS.find((ask) => ask.when.test(prompt));
+    if (live() && wanted && this.phone) {
+      const step = { id: randomUUID(), name: wanted.tool, label: wanted.label, status: "Running", started: now(), input: JSON.stringify(wanted.args()) };
+      run.steps = [...(run.steps ?? []), step];
+      this.state.intents[id] = wanted.label;
+      this.changed();
+      try {
+        const result = await this.phone.call(wanted.tool, wanted.args(), { botId: chat.botId, chatId: id });
+        Object.assign(step, { status: "Done", finished: now(), output: JSON.stringify(result).slice(0, 4000) });
+        reply = "Here is what your phone says:\n\n```json\n" + JSON.stringify(result, null, 2).slice(0, 1200) + "\n```";
+      } catch (error) {
+        Object.assign(step, { status: "Failed", finished: now(), output: error.message });
+        reply = "I couldn't use your phone for that. " + error.message;
+      }
+      this.changed();
+    } else if (live() && /side pane/i.test(prompt)) {
+      // The bot opens the pane beside this chat (the desktop app's docs/SIDE_PANE.md): a table, a
+      // custom view and a website as tabs, and an ask (a rising `seq`) to show the table. "close
+      // the side pane" asks for it to close instead.
+      const chatNow = this.chat(id);
+      const before = chatNow.pane ?? { panels: [], active: null };
+      const seq = (before.ask?.seq ?? 0) + 1;
+      if (/close/i.test(prompt)) {
+        chatNow.pane = { ...before, ask: { seq, close: true, runId: run.id, botId: chat.botId, at: now() } };
+        reply = "I asked for the side pane to close.";
+      } else if (before.closed?.runId === run.id) {
+        reply = "You closed the side pane, so I left it closed. The panel is there as a tab.";
+      } else {
+        const frame = randomUUID();
+        this.pages.set(frame, { html: DEMO_VIEW, data: DEMO_VIEW_DATA, chatId: id });
+        const at = now();
+        const made = (kind, title, more) => ({ id: randomUUID(), kind, title, botId: chat.botId, createdAt: at, updatedAt: at, ...more });
+        const table = made("table", "Seed order", { columns: ["Plant", "Bed", "Seeds"], rows: [["Beans", "North", "40"], ["Chard", "East", "25"], ["Marigold", "Border", "60"]] });
+        const panels = [table, made("rich_ui", "Open issues", { frame }), made("web", "Example site", { url: "https://example.com/" }), made("screen", "Screen", {})];
+        chatNow.pane = { panels: [...before.panels.filter((panel) => panel.pinned), ...panels].slice(-8), active: table.id, ask: { seq, panelId: table.id, runId: run.id, botId: chat.botId, at } };
+        reply = "I opened the side pane with a table, a chart, a website and the screen.";
+      }
+      this.changed();
+    } else if (live() && /sandbox/i.test(prompt)) {
+      const frame = randomUUID();
+      this.pages.set(frame, { html: SANDBOX_VIEW, data: null, chatId: id });
+      run.cards = [...(run.cards ?? []), { id: randomUUID(), title: "Sandbox check", blocks: [{ type: "html", frame, height: 200 }], replies: [] }];
+      reply = "Each line says whether one way out of the view was blocked.";
+      this.changed();
+    } else if (live() && /chart|graph|rich/i.test(prompt)) {
+      // A card with a custom view: the page stays here, and only the frame's id is in the state.
+      const frame = randomUUID();
+      this.pages.set(frame, { html: DEMO_VIEW, data: DEMO_VIEW_DATA, chatId: id });
+      run.cards = [...(run.cards ?? []), { id: randomUUID(), title: "Open issues by repo", blocks: [{ type: "html", frame, height: 240 }, { type: "markdown", text: "Made-up numbers from the demo computer." }], replies: [] }];
+      reply = "That's a bar chart of open issues by repo. Tap a bar to see when that repo was last pushed.";
+      this.changed();
+    } else if (live() && /approve/i.test(prompt)) {
+      const bot = this.bot(chat.botId);
+      const answer = await this.ask({ chatId: id, botId: bot.id, kind: "permission", title: "Run a command", label: "npm run deploy", preview: "npm run deploy -- --env production", detail: "Deploys the website to production.", remember: "npm run deploy" });
+      reply = answer.action === "deny" || answer.action === "cancel" ? "Okay, I won't run that. Tell me if you'd like another way." : "Done. The deploy finished without errors.";
+    } else if (live() && /which/i.test(prompt)) {
+      const answer = await this.ask({ chatId: id, botId: chat.botId, kind: "question", title: "Which environment should I use?", choices: ["Staging", "Production"], freeform: true });
+      reply = answer.action === "answer" ? "Got it: **" + answer.value + "**. I'll use that from here on." : "No problem. Ask again when you're ready.";
+    } else if (live() && /sign in|password|api key/i.test(prompt)) {
+      // A form with a secret in it: the phone masks the key and may send a saved credential instead.
+      const answer = await this.ask({
+        chatId: id,
+        botId: chat.botId,
+        kind: "form",
+        title: "Sign in to the staging server",
+        schema: { properties: { username: { type: "string", title: "Username" }, api_key: { type: "string", title: "API key" } }, required: ["username", "api_key"] },
+      });
+      const name = typeof answer.content?.username === "string" ? answer.content.username : "";
+      reply = answer.action === "accept" && answer.content ? "Thanks. I'm signed in" + (name ? " as **" + name + "**" : "") + ". The key stays on your computer." : "No problem. I'll leave it for now.";
+    }
+    this.state.intents[id] = "Writing the reply";
+    const words = reply.split(/(?<=\s)/);
+    for (let i = 0; i < words.length && live(); i += 2) {
+      this.state.streams[id] += words.slice(i, i + 2).join("");
+      this.changed();
+      await this.sleep(55);
+    }
+    const said = this.state.streams[id];
+    for (const key of ["streams", "thinking", "intents"]) delete this.state[key][id];
+    this.turns.delete(id);
+    const finished = now();
+    if (turn.stopped) Object.assign(run, { status: "Stopped", finished });
+    else Object.assign(run, { status: "Completed", finished, summary: "Worked for " + Math.max(1, Math.round((finished - run.time) / 1000)) + "s · " + (run.steps?.length ?? 0) + " step", usage: { input: 1800, output: 240 } });
+    if (said) chat.messages.push({ role: "assistant", text: said, runId: run.id, time: finished });
+    chat.time = finished;
+    chat.unread = true;
+    this.changed();
+    const next = this.state.queued[id]?.shift();
+    if (next) {
+      if (!this.state.queued[id].length) delete this.state.queued[id];
+      this.handlers.send.call(this, id, next.text);
+    }
+  }
+  handlers = {
+    appInfo: () => ({ version: "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
+    setPreferences(patch) {
+      const { appearance, ...rest } = patch ?? {};
+      if ("harness" in rest && !["copilot", "provider"].includes(rest.harness)) throw new Error("Choose a harness");
+      if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
+      if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
+      const settings = this.state.settings;
+      // The side menu and Background take part of their setting, as the desktop's do (its desktop/preferences.mjs).
+      if (rest.sidebar) {
+        const places = ["Home", "Today", "Chats", "Work", "Projects", "Wiki"];
+        const named = [...new Set((rest.sidebar.order ?? settings.sidebar.order).filter((place) => places.includes(place)))];
+        rest.sidebar = { order: [...named, ...places.filter((place) => !named.includes(place))], collapsed: rest.sidebar.collapsed ?? settings.sidebar.collapsed };
+      }
+      if (rest.background) {
+        const next = { ...settings.background, ...rest.background };
+        // BOTKINS_DEV_STARTUP=refuse: the system won't change what starts with the computer, so the choice goes back.
+        if (process.env.BOTKINS_DEV_STARTUP === "refuse" && next.runAtStartup !== settings.background.runAtStartup) throw new Error("This computer wouldn't change what starts with it.");
+        rest.background = next;
+      }
+      Object.assign(settings, rest);
+      if (appearance) Object.assign(settings.appearance, appearance, appearance.colorTheme !== undefined && { themePicked: true }, appearance.font !== undefined && { fontPicked: true });
+    },
+    // Bots
+    addBot(data) {
+      const bot = { id: "bot-" + randomUUID().slice(0, 8), name: text(data.name, 48, "name"), role: String(data.role ?? "").slice(0, 90), instructions: String(data.instructions ?? ""), face: data.face ?? "idle", ...(data.summary && { summary: data.summary }), avatar: data.avatar ?? { body: "bighelp.biggie" } };
+      this.state.bots.push(bot);
+      return bot.id;
+    },
+    updateBot(id, patch) {
+      Object.assign(this.bot(id), patch);
+    },
+    setBotFlags(id, flags) {
+      Object.assign(this.bot(id), flags);
+    },
+    makePrimary(id) {
+      const bot = this.bot(id);
+      this.state.bots = [bot, ...this.state.bots.filter((b) => b !== bot)];
+    },
+    reorderBots(ids) {
+      this.state.bots.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+    },
+    deleteBot(id) {
+      this.bot(id);
+      this.state.bots = this.state.bots.filter((b) => b.id !== id);
+      this.state.chats = this.state.chats.filter((c) => c.botId !== id);
+    },
+    duplicateBot(id) {
+      const { id: _id, pinned: _pinned, ...copy } = this.bot(id);
+      const bot = { ...structuredClone(copy), id: "bot-" + randomUUID().slice(0, 8), name: copy.name + " copy" };
+      this.state.bots.push(bot);
+      return bot.id;
+    },
+    // Made-up agents in the person's GitHub Copilot setup. A bot made from one is marked `added`.
+    importableAgents() {
+      const agents = [
+        { key: "copilot:backend-development", provider: "copilot", providerName: "GitHub Copilot", agent: "backend-development", name: "Backend", role: "Backend developer", summary: "APIs, data and services.", instructions: "Design and build backend services. Keep APIs small and document every change.", modelName: "Claude Sonnet 5.5", ownTools: true },
+        { key: "copilot:release-notes", provider: "copilot", providerName: "GitHub Copilot", agent: "release-notes", name: "Release notes", role: "Release writer", summary: "", instructions: "Write release notes from merged pull requests, grouped by area.", missingModel: "gpt-4.1" },
+        { key: "copilot:broken", provider: "copilot", providerName: "GitHub Copilot", agent: "broken", name: "Broken agent", role: "", summary: "", instructions: "", problem: "Its file has no instructions." },
+      ];
+      return agents.map((agent) => ({ ...agent, added: this.state.bots.some((bot) => bot.origin?.agent === agent.agent) }));
+    },
+    importAgents(keys) {
+      const agents = this.handlers.importableAgents.call(this);
+      return (Array.isArray(keys) ? keys : []).map((key) => {
+        const agent = agents.find((a) => a.key === key);
+        if (!agent) throw new Error("That agent is gone.");
+        if (agent.problem) throw new Error(agent.problem);
+        const bot = { id: "bot-" + randomUUID().slice(0, 8), name: agent.name, role: agent.role, instructions: agent.instructions, face: "idle", ...(agent.summary && { summary: agent.summary }), origin: { provider: agent.provider, agent: agent.agent } };
+        this.state.bots.push(bot);
+        return bot.id;
+      });
+    },
+    setBotAccess(id, grant) {
+      this.bot(id).access = grant;
+    },
+    setBotIntegrations(id, { skillsOff, mcpOff }) {
+      const bot = this.bot(id);
+      if (skillsOff) bot.skillsOff = skillsOff;
+      if (mcpOff) bot.mcpOff = mcpOff;
+    },
+    botMemory(id) {
+      return this.memory.get(id) ?? (id === "bot-mira" ? "- Prefers short lists\n- Launch is on the 24th\n- Weekly review happens on Fridays" : "");
+    },
+    setBotMemory(id, value) {
+      this.memory.set(id, String(value ?? ""));
+    },
+    addSection(name) {
+      const section = { id: "sec-" + randomUUID().slice(0, 6), name: text(name, 40, "name") };
+      this.state.sections.push(section);
+      return section.id;
+    },
+    renameSection(id, name) {
+      Object.assign(this.state.sections.find((s) => s.id === id) ?? {}, { name });
+    },
+    deleteSection(id) {
+      this.state.sections = this.state.sections.filter((s) => s.id !== id);
+    },
+    saveTemplate(botId, name) {
+      const bot = this.bot(botId);
+      const template = { id: randomUUID(), name: name || bot.name, role: bot.role, summary: bot.summary ?? "", instructions: bot.instructions, avatar: bot.avatar, source: "saved", createdAt: now() };
+      this.state.templates.push(template);
+      return template.id;
+    },
+    renameTemplate(id, name) {
+      Object.assign(this.state.templates.find((t) => t.id === id) ?? {}, { name });
+    },
+    deleteTemplate(id) {
+      this.state.templates = this.state.templates.filter((t) => t.id !== id);
+    },
+    // A template, or a bot as one, as the text of its file ("Export template…" without a save dialog).
+    exportTemplateText(target) {
+      const source = target?.templateId ? this.state.templates.find((t) => t.id === target.templateId) : this.bot(target?.botId);
+      if (!source) throw new Error("This template no longer exists.");
+      const { name, role, summary = "", instructions = "", avatar } = source;
+      return { name: fileName(name, "Bot template") + ".json", text: JSON.stringify({ botkinsTemplate: 1, name, role, summary, instructions, avatar }, null, 2) + "\n" };
+    },
+    // A template from the text of a file someone shared ("Import…" without an open dialog).
+    importTemplateText(file) {
+      let data;
+      try {
+        data = JSON.parse(file?.text);
+      } catch {
+        data = null;
+      }
+      if (!data || typeof data !== "object" || typeof data.name !== "string" || !data.name.trim()) throw new Error("That file isn't a bot template.");
+      const template = { id: randomUUID(), name: data.name.trim().slice(0, 48), role: String(data.role ?? ""), summary: String(data.summary ?? ""), instructions: String(data.instructions ?? ""), avatar: data.avatar, source: "imported", createdAt: now() };
+      this.state.templates.push(template);
+      return template.id;
+    },
+    // Chats
+    createChat(botId) {
+      this.bot(botId);
+      const chat = { id: "chat-" + randomUUID().slice(0, 8), botId, title: "New chat", time: now(), messages: [] };
+      this.state.chats.unshift(chat);
+      return chat.id;
+    },
+    createGroupChat(botIds, title) {
+      if (!Array.isArray(botIds) || botIds.length < 2 || botIds.length > 6) throw new Error("Choose two to six bots.");
+      const chat = { id: "chat-" + randomUUID().slice(0, 8), botId: botIds[0], botIds, title: title || "Group chat", time: now(), messages: [] };
+      this.state.chats.unshift(chat);
+      return chat.id;
+    },
+    setChatFlags(id, flags) {
+      Object.assign(this.chat(id), flags);
+    },
+    renameChat(id, title) {
+      this.chat(id).title = text(title, 120, "title");
+    },
+    deleteChat(id) {
+      this.chat(id);
+      this.state.chats = this.state.chats.filter((c) => c.id !== id);
+    },
+    warmChat() {},
+    // A new chat with the messages up to and including `messageIndex`.
+    forkChat(chatId, messageIndex) {
+      const from = this.chat(chatId);
+      if (from.botIds) throw new Error("A group chat can't be forked.");
+      const index = Number(messageIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= from.messages.length) throw new Error("That message is gone.");
+      const chat = { ...structuredClone({ ...from, messages: from.messages.slice(0, index + 1) }), id: "chat-" + randomUUID().slice(0, 8), title: from.title + " (fork)", time: now(), pinned: false, unread: false, forkedFrom: { chatId, messageIndex: index } };
+      delete chat.schedules;
+      delete chat.context;
+      this.state.chats.unshift(chat);
+      return chat.id;
+    },
+    // Only before the first message. A project without a folder keeps the default mode.
+    setChatProject(chatId, projectId, mode) {
+      const chat = this.chat(chatId);
+      if (chat.messages.length) throw new Error("This chat has started, so its project can't change.");
+      if (projectId == null) {
+        delete chat.projectId;
+        chat.mode = "default";
+        return;
+      }
+      const project = this.state.projects.find((p) => p.id === projectId);
+      if (!project) throw new Error("This project no longer exists.");
+      if (chat.botIds && project.folder) throw new Error("Group chats are text only, so they can't use a project with a folder.");
+      if (mode && !["default", "plan", "yolo"].includes(mode)) throw new Error("Choose Default, Plan or YOLO.");
+      chat.projectId = projectId;
+      chat.mode = project.folder ? (mode ?? "default") : "default";
+    },
+    // The options (quote, mentions, attachments) are accepted and ignored.
+    send(id, value, _options) {
+      const chat = this.chat(id);
+      const prompt = text(value, 32000, "message");
+      if (this.turns.has(id)) {
+        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt });
+        return;
+      }
+      // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
+      const scheduled = this.scheduled;
+      this.scheduled = null;
+      const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
+      this.state.runs.unshift(run);
+      chat.messages.push({ role: "user", text: prompt, runId: run.id, time: now() });
+      if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
+      chat.time = now();
+      // Today › New panel sends "/today-panel <what it should show>"; the demo bot makes one at once.
+      const asked = /^\/today-panel\s+([\s\S]+)/.exec(prompt);
+      if (asked) {
+        const what = asked[1].trim();
+        this.state.panels.push({ id: "panel-" + randomUUID().slice(0, 8), key: randomUUID().slice(0, 8), botId: chat.botId, chatId: id, title: clip(what.split("\n")[0], 40), hidden: false, size: "small", revision: 1, updatedAt: now(), routine: null, blocks: [{ type: "markdown", text: "A made-up panel for: " + what }] });
+      }
+      this.turn(chat, run, prompt).catch((error) => console.error(error));
+    },
+    stop(id) {
+      const turn = this.turns.get(id);
+      if (turn) turn.stopped = true;
+      for (const request of this.state.requests.filter((r) => r.chatId === id)) this.handlers.respond.call(this, request.id, { action: "cancel" });
+    },
+    unqueue(chatId, itemId) {
+      this.state.queued[chatId] = (this.state.queued[chatId] ?? []).filter((item) => item.id !== itemId);
+      if (!this.state.queued[chatId].length) delete this.state.queued[chatId];
+    },
+    sendNow(chatId, itemId) {
+      this.handlers.stop.call(this, chatId);
+      void itemId;
+    },
+    retry() {},
+    compact() {},
+    sideQuestion: async (_id, question) => "Short answer to “" + question + "”: yes, that fits the plan.",
+    respond(requestId, answer) {
+      this.state.requests = this.state.requests.filter((r) => r.id !== requestId);
+      this.waiting.get(requestId)?.(answer);
+      this.waiting.delete(requestId);
+    },
+    clearApprovals() {},
+    mentionables(chatId) {
+      const chat = this.state.chats.find((c) => c.id === chatId);
+      const t = now();
+      return {
+        projects: this.state.projects.map((p) => ({ id: p.id, name: p.name, hint: p.description ?? "Project", ...(chat?.projectId === p.id && { current: true }) })),
+        wiki: this.wiki.mentionable().slice(0, 8),
+        files: [
+          { path: REPO + "/README.md", name: "README.md", folder: "", where: "Project folder", modified: t - 2 * HOUR, size: 2150 },
+          { path: REPO + "/package.json", name: "package.json", folder: "", where: "Project folder", modified: t - 5 * HOUR, size: 1810 },
+          { path: REPO + "/link-host/server.mjs", name: "server.mjs", folder: "link-host", where: "Project folder", modified: t - 26 * HOUR, size: 24000 },
+        ],
+        bots: this.state.bots.slice(0, 3).map((b) => ({ id: b.id, name: b.name, hint: b.role })),
+      };
+    },
+    catalog: () => ({
+      choices: [
+        { name: "weekly-review", kind: "Skill", command: "/weekly-review", source: "Botkins", description: "Run a weekly review: wins, misses and next steps." },
+        { name: "meeting-notes", kind: "Skill", command: "/meeting-notes", source: "Botkins", description: "Turn a transcript into decisions and action items." },
+        { name: "compact", kind: "Command", command: "/compact", source: "Botkins", description: "Summarize this chat so far to free up room." },
+        { name: "btw", kind: "Command", aliases: ["ask"], command: "/btw", hint: "<question>", duringTurn: true, source: "Botkins", description: "Ask a side question about this chat without adding it to the conversation." },
+        { name: "model", kind: "Command", command: "/model", source: "Botkins", description: "Choose the model for this chat.", hint: "[name]", options: [{ name: "auto", description: "Let the app choose" }, { name: "gpt-5.5", description: "GPT-5.5" }] },
+      ],
+      servers: [{ name: "linear", status: "connected" }, { name: "filesystem", status: "connected" }],
+      plugins: [],
+    }),
+    linkPreview: () => null,
+    // Wiki. Every change bumps state.wiki.revision.
+    wikiTree() {
+      return this.wiki.tree();
+    },
+    // What an export would hold: every page, or one page with the pages around it.
+    wikiExportPlan(request) {
+      const pages = this.wiki.scan();
+      const view = (page, why) => ({ path: page.path, title: page.title, section: page.path.includes("/") ? humanize(page.path.split("/")[0]) : "General", why });
+      const sorted = (list) => list.sort((a, b) => a.section.localeCompare(b.section) || a.title.localeCompare(b.title));
+      if (request?.scope === "all") return { title: "Wiki", pages: sorted([...pages.values()].filter((p) => !p.template).map((p) => view(p, "start"))) };
+      const start = pages.get(pagePath(request?.path ?? ""));
+      if (!start || start.template) throw new Error("Choose the page to export.");
+      const around = [...new Set([...start.links, ...start.backlinks])].map((path) => pages.get(path)).filter((p) => p && !p.template && p.path !== GUIDE && p.path !== start.path);
+      return { title: start.title, pages: [view(start, "start"), ...sorted(around.map((p) => view(p, "linked")))] };
+    },
+    // The export itself, as a file for the phone to hand on: text for a web page, base64 for a zip or a PDF.
+    exportWikiFile(request) {
+      const pages = this.wiki.scan();
+      const chosen = request?.everything ? [...pages.values()] : (request?.paths ?? []).map((path) => pages.get(pagePath(path))).filter(Boolean);
+      if (!chosen.length) throw new Error("There is nothing to export.");
+      const title = fileName(request.title, "Wiki");
+      const name = title + " wiki export";
+      const body = (page) => this.wiki.pages.get(page.path).content;
+      if (request.format === "zip") return { name: name + ".zip", base64: storedZip(chosen.map((page) => ({ path: name + "/" + page.path, text: body(page) }))).toString("base64") };
+      if (request.format === "pdf") return { name: name + ".pdf", base64: tinyPdf([title, "", ...chosen.map((page) => page.title)]).toString("base64") };
+      if (request.format !== "html") throw new Error("Choose a format to export.");
+      const article = (page) => "<article><h2>" + escapeHtml(page.title) + "</h2><pre>" + escapeHtml(body(page)) + "</pre></article>";
+      return { name: name + ".html", text: '<!doctype html><html><head><meta charset="utf-8"><title>' + escapeHtml(title) + "</title></head><body><h1>" + escapeHtml(title) + "</h1>" + chosen.map(article).join("") + "</body></html>\n" };
+    },
+    wikiPage(path) {
+      return this.wiki.page(path);
+    },
+    saveWikiPage(path, content, base) {
+      return this.wiki.save(path, content, base);
+    },
+    createWikiPage(input) {
+      return this.wiki.create(input);
+    },
+    createWikiPageFor(record) {
+      return this.wiki.createFor(record);
+    },
+    createWikiFolder(input) {
+      return this.wiki.createFolder(input);
+    },
+    moveWiki(from, to) {
+      return this.wiki.move(from, to);
+    },
+    deleteWiki(path) {
+      this.wiki.remove(path);
+    },
+    searchWiki(query) {
+      return this.wiki.search(query);
+    },
+    wikiHistory(path) {
+      return this.wiki.history(path);
+    },
+    wikiVersion(path, id) {
+      return this.wiki.version(path, id);
+    },
+    restoreWikiVersion(path, id) {
+      return this.wiki.restore(path, id);
+    },
+    // Models
+    models() {
+      const on = this.state.settings.providers;
+      // Made-up details ("models-v2") for a few models, so the phone's model page has something to
+      // show. A model without an entry shows only what it has: nothing is guessed.
+      const details = {
+        "copilot/claude-sonnet-5-5": { contextWindow: 1_000_000, maxOutput: 128_000, maxPrompt: 936_000, vision: true, tools: true, vendor: "Anthropic", tier: "Premium", description: "Fast and capable, through Copilot" },
+        "claude/claude-fable-5-2": { contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", effortNotes: { low: "Quick answers", high: "Thinks it through", max: "The longest thinking" } },
+        "claude/claude-opus-5-5": { contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", description: "Deep work and long tasks" },
+        "codex/gpt-5.5-codex": { contextWindow: 400_000, maxOutput: 128_000, vision: true, tools: true, vendor: "OpenAI" },
+        "opencode/big-pickle": { contextWindow: 128_000, tools: true, tier: "Free" },
+      };
+      return MODELS.filter((m) => on[m.provider]?.enabled).map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
+    },
+    providers() {
+      return PROVIDERS.map((p) => ({ ...p, enabled: !!this.state.settings.providers[p.id]?.enabled }));
+    },
+    setModel(scope, id, value) {
+      if (scope === "global") this.state.settings.model = value ?? { model: "auto" };
+      else {
+        const target = scope === "bot" ? this.bot(id) : this.chat(id);
+        if (value) target.model = value;
+        else delete target.model;
+      }
+    },
+    setProviderEnabled(id, enabled) {
+      const next = { ...this.state.settings.providers, [id]: { enabled: !!enabled } };
+      if (!Object.values(next).some((p) => p.enabled)) throw new Error("Keep at least one model provider on.");
+      this.state.settings.providers = next;
+      this.state.providers.revision++;
+    },
+    auth: () => ({ connected: true, login: "octocat" }),
+    signIn() {},
+    cancelSignIn() {},
+    signOut() {},
+    providerServices() {
+      const on = (this.servicesOn ??= new Set(["opencode-zen"]));
+      return [
+        { id: "opencode-zen", name: "OpenCode Zen", connected: on.has("opencode-zen"), via: "opencode", methods: [{ type: "key", label: "API key" }] },
+        { id: "google", name: "Google", connected: on.has("google"), methods: [{ type: "key", label: "API key" }, { type: "oauth", id: "oauth", label: "Sign in with Google" }] },
+      ];
+    },
+    // A sign-in comes back with a code to type in, as some services' do; any code but "0000" works.
+    async connectProviderService(_id, serviceId, how) {
+      this.servicesOn ??= new Set(["opencode-zen"]);
+      if (how?.method) {
+        await this.sleep(1500);
+        return { code: { attempt: "attempt-" + randomUUID().slice(0, 6), instructions: "Sign in with Google in the browser on your computer, then type the code it shows." } };
+      }
+      if (!how?.key) throw new Error("Enter the key.");
+      this.servicesOn.add(serviceId);
+      return { done: true };
+    },
+    finishProviderService(_id, serviceId, attempt, code) {
+      if (!attempt) throw new Error("Start the sign-in again.");
+      if (!code || code === "0000") return { done: false };
+      (this.servicesOn ??= new Set(["opencode-zen"])).add(serviceId);
+      return { done: true };
+    },
+    cancelProviderService() {},
+    disconnectProviderService(_id, serviceId) {
+      (this.servicesOn ??= new Set(["opencode-zen"])).delete(serviceId);
+    },
+    // Routines
+    createRoutine(data) {
+      this.bot(data.botId);
+      const chatId = this.handlers.createChat.call(this, data.botId);
+      const chat = this.chat(chatId);
+      chat.title = "Routine · " + text(data.name, 80, "name");
+      chat.lastScheduleId = 1;
+      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt: text(data.prompt, 4000, "prompt"), cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }) }];
+      return chatId;
+    },
+    updateRoutine(id, patch) {
+      const chat = this.chat(id);
+      const entry = chat.schedules.find((s) => s.routine);
+      const { deliver, ...rest } = patch;
+      Object.assign(entry, rest);
+      if (deliver) entry.deliver = delivery(deliver);
+      chat.title = "Routine · " + entry.name;
+    },
+    setRoutineEnabled(id, enabled) {
+      this.chat(id).schedules.find((s) => s.routine).enabled = !!enabled;
+    },
+    deleteRoutine(id) {
+      this.handlers.deleteChat.call(this, id);
+    },
+    runRoutine(id) {
+      const chat = this.chat(id);
+      const entry = chat.schedules.find((s) => s.routine);
+      this.scheduled = entry;
+      this.handlers.send.call(this, id, entry.prompt);
+      this.scheduled = null;
+      // The result also lands where the routine sends it (the real app does this when the run ends).
+      const to = entry.deliver?.to ?? "routine";
+      const result = entry.name + ": done. Nothing needs you right now.";
+      if (to === "chat") {
+        const target = this.state.chats.find((c) => c.id === entry.deliver.chatId) ?? this.state.chats.find((c) => c.botId === chat.botId && !c.schedules?.length && !c.botIds);
+        if (target) {
+          target.messages.push({ role: "assistant", text: result, time: now() });
+          target.time = now();
+          target.unread = true;
+        }
+      } else if (to !== "routine") {
+        this.state.board.unshift({ id: "board-" + Math.random().toString(36).slice(2, 10), botId: chat.botId, kind: to, title: entry.name, body: result, status: "open", read: false, createdAt: now(), updatedAt: now(), ...(to === "goal" && { category: "other" }) });
+      }
+    },
+    duplicateRoutine(id, botId) {
+      const entry = this.chat(id).schedules.find((s) => s.routine);
+      return this.handlers.createRoutine.call(this, { botId, name: entry.name, prompt: entry.prompt, cadence: entry.cadence, timezone: entry.timezone });
+    },
+    previewCadence: (cadence, timezone) => ({ nextAt: now() + 20 * HOUR, summary: cadence.kind === "custom" ? "Custom · " + cadence.cron : cadence.kind[0].toUpperCase() + cadence.kind.slice(1) + (cadence.time ? " at " + cadence.time : ""), timezone: timezone || "America/Chicago" }),
+    // A schedule a bot made in a chat (/every, /after). A paused one has no next run, as on the computer.
+    changeSchedule(chatId, id, action) {
+      const chat = this.chat(chatId);
+      const entry = (chat.schedules ?? []).find((s) => s.id === id);
+      if (!entry) throw new Error("This schedule no longer exists.");
+      if (action === "delete") chat.schedules = chat.schedules.filter((s) => s !== entry);
+      else if (action === "pause" || action === "resume") Object.assign(entry, { enabled: action === "resume", nextAt: action === "resume" ? now() + (entry.intervalMs ?? HOUR) : null });
+      else throw new Error("Pause, resume or delete a schedule.");
+    },
+    // Tasks
+    saveTask(data) {
+      if (data.id) {
+        const task = this.state.tasks.find((t) => t.id === data.id);
+        Object.assign(task, { title: text(data.title, 160, "title"), body: data.body ?? "", botId: data.botId ?? null, priority: data.priority ?? "normal", updatedAt: now(), ...(data.status && { status: data.status }) });
+        return task.id;
+      }
+      const task = { id: randomUUID(), title: text(data.title, 160, "title"), body: data.body ?? "", botId: data.botId ?? null, priority: data.priority ?? "normal", status: data.status ?? "later", createdBy: "person", createdAt: now(), updatedAt: now() };
+      this.state.tasks.unshift(task);
+      return task.id;
+    },
+    moveTask(id, status) {
+      Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status, updatedAt: now() });
+    },
+    startTask(id) {
+      Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status: "working", updatedAt: now() });
+    },
+    deleteTask(id) {
+      this.state.tasks = this.state.tasks.filter((t) => t.id !== id);
+    },
+    // Today
+    refreshPanel() {},
+    changePanel(id, action) {
+      const panels = this.state.panels;
+      const i = panels.findIndex((p) => p.id === id);
+      if (i < 0) throw new Error("This panel no longer exists.");
+      const panel = panels[i];
+      if (action === "delete") this.state.panels = panels.filter((p) => p.id !== id);
+      else if (action === "hide" || action === "show") panel.hidden = action === "hide";
+      else if (["small", "wide", "tall"].includes(action)) panel.size = action;
+      else if (action === "earlier" || action === "later") {
+        const j = i + (action === "earlier" ? -1 : 1);
+        if (j >= 0 && j < panels.length) [panels[i], panels[j]] = [panels[j], panels[i]];
+      } else throw new Error("Unknown panel action");
+    },
+    // A panel's own routine, as desktop/panels.mjs keeps it (cron, time zone, refresh instructions).
+    routine(id, { action, cron, prompt, timezone } = {}) {
+      const panel = this.state.panels.find((p) => p.id === id);
+      if (!panel) throw new Error("This panel no longer exists.");
+      if (action === "set") {
+        const expression = text(cron, 160, "cron");
+        if (expression.split(/\s+/).length !== 5) throw new Error("A cron schedule has five parts: minute, hour, day, month and weekday.");
+        panel.routine = { cron: expression, timezone: timezone || "America/Chicago", prompt: text(prompt, 4000, "refresh instructions"), enabled: true, nextAt: now() + 16 * HOUR };
+      } else if (action === "remove") panel.routine = null;
+      else {
+        if (!panel.routine || !["pause", "resume"].includes(action)) throw new Error("No matching routine");
+        panel.routine.enabled = action === "resume";
+        panel.routine.nextAt = panel.routine.enabled ? now() + 16 * HOUR : null;
+      }
+      return panel.routine;
+    },
+    boardAct(id, action, value) {
+      const item = this.state.board.find((b) => b.id === id);
+      if (!item) throw new Error("This item no longer exists.");
+      item.updatedAt = now();
+      if (action === "delete") this.state.board = this.state.board.filter((b) => b !== item);
+      else if (action === "read") item.read = true;
+      else if (action === "unread") item.read = false;
+      else if (action === "clear") item.status = "cleared";
+      else if (action === "done") item.status = "done";
+      else if (action === "reopen") item.status = "open";
+      // As desktop/board.mjs: up toggles, down is set with its reason ("Less like this because…").
+      else if (action === "up") {
+        item.rating = item.rating === "up" ? undefined : "up";
+        delete item.reason;
+      } else if (action === "down") {
+        if (value != null && !["Not relevant", "Too frequent", "Already knew", "Wrong timing"].includes(value)) throw new Error("Unknown reason");
+        item.rating = "down";
+        item.reason = value ?? undefined;
+      }
+      else if (action === "yes" || action === "goal") {
+        if (item.kind !== "idea") throw new Error("Only ideas take that.");
+        item.answer = action;
+        item.status = "done";
+        if (action === "goal") {
+          const goal = { id: "board-" + randomUUID().slice(0, 8), botId: item.botId, kind: "goal", title: item.title, body: item.body, status: "open", read: true, category: typeof value === "string" ? value : "other", createdAt: now(), updatedAt: now() };
+          this.state.board.unshift(goal);
+          return goal.id;
+        }
+      } else if (action === "notToday") {
+        if (item.kind !== "goal") throw new Error("Only goals take Not today.");
+        const midnight = new Date();
+        midnight.setHours(24, 0, 0, 0);
+        item.snoozedUntil = midnight.getTime();
+      } else throw new Error("Unknown board action");
+    },
+    // Skills
+    skills() {
+      const off = new Set(this.state.skills.disabled);
+      const { folders, plugins } = this.state.skills;
+      return {
+        skills: this.skillList.map(({ instructions: _text, ...skill }) => ({ ...skill, enabled: !off.has(skill.name) })),
+        folders: folders.map((folder) => ({ ...folder, missing: false, skills: this.skillList.filter((skill) => skill.folderId === folder.id).length })),
+        plugins: plugins.map((plugin) => ({ ...plugin, missing: false })),
+      };
+    },
+    readSkill(name) {
+      const skill = this.skillList.find((s) => s.name === name);
+      if (!skill) throw new Error("Unknown skill");
+      return { name: skill.name, description: skill.description, instructions: skill.instructions ?? "" };
+    },
+    saveSkill({ name, description, instructions, original }) {
+      const clean = text(name, 64, "name").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+      const existing = this.skillList.find((s) => s.name === (original ?? clean));
+      if (existing) Object.assign(existing, { name: clean, description, instructions });
+      else this.skillList.unshift({ name: clean, description, instructions, path: "/skills/" + clean, origin: "commander", enabled: true, editable: true });
+      return clean;
+    },
+    removeSkill(name) {
+      this.skillList = this.skillList.filter((s) => s.name !== name);
+    },
+    setSkillEnabled(name, enabled) {
+      const off = new Set(this.state.skills.disabled);
+      if (enabled) off.delete(name);
+      else off.add(name);
+      this.state.skills = { ...this.state.skills, disabled: [...off] };
+    },
+    // Stops using a linked folder or plugin, and its skills with it; the folder itself is left alone.
+    // "Add from folder…" with a folder chosen in the folder browser. It stays where it is and is read from there.
+    addSkillFolderAt(path) {
+      chosenFolder(path);
+      const { folders } = this.state.skills;
+      if (folders.some((folder) => folder.path === path)) throw new Error("That folder is already added.");
+      this.state.skills = { ...this.state.skills, folders: [...folders, { id: "folder-" + randomUUID().slice(0, 6), path }] };
+      return { kind: "folder", name: posix.basename(path), count: 0 };
+    },
+    removeSkillFolder(id) {
+      const { folders, plugins } = this.state.skills;
+      if (!folders.some((folder) => folder.id === id) && !plugins.some((plugin) => plugin.id === id)) throw new Error("That folder isn't linked any more.");
+      this.state.skills = { ...this.state.skills, folders: folders.filter((folder) => folder.id !== id), plugins: plugins.filter((plugin) => plugin.id !== id) };
+      this.skillList = this.skillList.filter((skill) => skill.folderId !== id);
+    },
+    // MCP servers
+    saveMcpServer(input) {
+      const prior = input.id ? this.server(input.id).auth : undefined;
+      // A browser sign-in keeps its state and a client of the person's own; a secret is only ever "saved".
+      const oauth = input.oauth
+        ? { type: "oauth", signedIn: prior?.type === "oauth" && prior.signedIn, signingIn: false, canRenew: false, clientSecret: input.oauth.clientSecret === null ? !!prior?.clientSecret : !!input.oauth.clientSecret, ...(input.oauth.clientId && { clientId: input.oauth.clientId }), ...(input.oauth.scope && { scope: input.oauth.scope }) }
+        : input.oauth === undefined && prior?.type === "oauth" ? prior : undefined;
+      const fields = {
+        ...(input.type === "stdio" && { cwd: input.cwd || undefined }),
+        ...(oauth && { auth: oauth }),
+        name: text(input.name, 60, "name"),
+        type: input.type,
+        enabled: input.enabled ?? true,
+        ...(input.command && { command: input.command, args: input.args ?? [] }),
+        ...(input.url && { url: input.url }),
+        ...(input.env && { env: Object.keys(input.env) }),
+        ...(input.headers && { headers: Object.keys(input.headers) }),
+        ...(input.type !== "stdio" && !oauth && { auth: { type: input.headers && Object.keys(input.headers).length ? "header" : "none" } }),
+      };
+      if (input.id) {
+        Object.assign(this.server(input.id), fields);
+        return input.id;
+      }
+      const server = { id: "mcp-" + randomUUID().slice(0, 8), ...fields };
+      this.state.mcpServers.push(server);
+      return server.id;
+    },
+    setMcpServerEnabled(id, enabled) {
+      this.server(id).enabled = !!enabled;
+    },
+    removeMcpServer(id) {
+      this.server(id);
+      this.state.mcpServers = this.state.mcpServers.filter((s) => s.id !== id);
+    },
+    async testMcpServer(id) {
+      const server = this.server(id);
+      await this.sleep(600);
+      if (server.auth?.type === "oauth" && !server.auth.signedIn) return { status: "needs sign-in", tools: [] };
+      return { status: "connected", tools: ["search", "create_issue", "list_projects"] };
+    },
+    async signInMcpServer(id) {
+      const server = this.server(id);
+      server.auth = { ...server.auth, signingIn: true };
+      this.changed();
+      await this.sleep(1200);
+      server.auth = { type: "oauth", signedIn: true, signingIn: false, canRenew: true, clientSecret: false };
+      return server.auth;
+    },
+    cancelMcpSignIn: () => true,
+    signOutMcpServer(id) {
+      this.server(id).auth = { type: "oauth", signedIn: false, signingIn: false, canRenew: false, clientSecret: false };
+    },
+    // Pasted JSON in the "mcpServers" shape other apps use. A server whose name exists is skipped.
+    importMcpServers(json) {
+      let parsed;
+      try {
+        parsed = JSON.parse(String(json ?? ""));
+      } catch {
+        throw new Error("That isn't JSON. Paste the \"mcpServers\" block from another app's settings.");
+      }
+      const servers = parsed?.mcpServers ?? parsed?.servers ?? parsed;
+      if (!servers || typeof servers !== "object" || Array.isArray(servers)) throw new Error("There are no servers in that JSON.");
+      const added = [];
+      const skipped = [];
+      for (const [name, entry] of Object.entries(servers)) {
+        if (!entry || typeof entry !== "object") continue;
+        if (this.state.mcpServers.some((server) => server.name === name)) {
+          skipped.push(name);
+          continue;
+        }
+        const remote = typeof entry.url === "string";
+        this.state.mcpServers.push({
+          id: "mcp-" + randomUUID().slice(0, 8),
+          name: text(name, 60, "name"),
+          type: remote ? (entry.type === "sse" ? "sse" : "http") : "stdio",
+          enabled: true,
+          ...(remote ? { url: entry.url, auth: { type: entry.headers ? "header" : "none" }, ...(entry.headers && { headers: Object.keys(entry.headers) }) } : { command: String(entry.command ?? ""), args: Array.isArray(entry.args) ? entry.args.map(String) : [], env: Object.keys(entry.env ?? {}), ...(entry.cwd && { cwd: String(entry.cwd) }) }),
+        });
+        added.push(name);
+      }
+      return { added, skipped };
+    },
+    credentials: () => ({ protection: "keychain", redirectUrl: "http://127.0.0.1:47823/callback", entries: [] }),
+    removeCredential() {},
+    // Projects
+    createProject(input) {
+      const project = { id: "p-" + randomUUID().slice(0, 6), name: text(input.name, 80, "name"), ...(input.description && { description: input.description }), ...(input.color && { color: input.color }), todos: [], lastUsed: now(), createdAt: now() };
+      this.state.projects.push(project);
+      return project.id;
+    },
+    updateProject(id, patch) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("This project no longer exists.");
+      // A folder comes from the folder browser (`listFolders`); null unlinks it.
+      if ("folder" in patch && patch.folder !== null) chosenFolder(patch.folder);
+      const { folder, ...rest } = patch;
+      Object.assign(project, rest);
+      if (folder === null) delete project.folder;
+      else if (folder !== undefined) project.folder = folder;
+    },
+    // The folders inside the home folder or a plugged-in disk, by name: never a file, never what a file holds, nothing hidden.
+    listFolders(path) {
+      const found = demoFolder(path ?? DEMO_PLACES[0].path);
+      if (!found) throw new Error(found === null ? OUTSIDE : GONE);
+      const here = found.place.path + found.at;
+      // As a Mac does for Documents: the first look inside waits on a question on the computer's own screen.
+      if (process.env.BOTKINS_DEV_FOLDERS === "ask" && found.at === "/Documents" && !this.askedFolders) {
+        this.askedFolders = true;
+        throw new Error("The computer is still deciding whether Botkins may look in “Documents”. If it is asking, answer on the computer, then try again.");
+      }
+      return { path: here, parent: found.at ? posix.dirname(here) : null, folders: (found.place.folders[found.at] ?? []).map((name) => ({ name, path: here + "/" + name })), roots: DEMO_PLACES.map(({ name, path: top }) => ({ name, path: top })) };
+    },
+    // "Add folder…": a project for a folder, or the one already made for it.
+    addProjectFolder(path) {
+      chosenFolder(path);
+      const existing = this.state.projects.find((p) => p.folder === path);
+      if (existing) return existing.id;
+      const project = { id: "p-" + randomUUID().slice(0, 6), name: posix.basename(path), folder: path, todos: [], lastUsed: now(), createdAt: now() };
+      this.state.projects.push(project);
+      return project.id;
+    },
+    startProjectChat(botIds, projectId, mode) {
+      if (!Array.isArray(botIds) || !botIds.length) throw new Error("Choose a bot.");
+      const project = this.state.projects.find((p) => p.id === projectId);
+      if (!project) throw new Error("This project no longer exists.");
+      botIds.forEach((id) => this.bot(id));
+      const chat = { id: "chat-" + randomUUID().slice(0, 8), botId: botIds[0], ...(botIds.length > 1 && { botIds }), title: "New chat", time: now(), projectId, mode: project.folder ? (mode ?? "default") : "default", messages: [] };
+      this.state.chats.unshift(chat);
+      project.lastUsed = now();
+      return chat.id;
+    },
+    renameProject(id, name) {
+      Object.assign(this.state.projects.find((p) => p.id === id) ?? {}, { name });
+    },
+    removeProject(id) {
+      this.state.projects = this.state.projects.filter((p) => p.id !== id);
+    },
+    // A project's changes are made up (the folder itself is never read or touched). Committing clears them.
+    projectChanges(id) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("This project no longer exists.");
+      if (!project.folder) return { repo: false, files: [] };
+      const files = (this.changedFiles ??= new Map()).get(id) ?? (this.changedFiles.set(id, MADE_UP_CHANGES.map((file) => ({ ...file }))), this.changedFiles.get(id));
+      const sum = (key) => files.reduce((total, file) => total + file[key], 0);
+      return { repo: true, root: project.folder, branch: "feature/" + slug(project.name), upstream: "origin/main", ahead: 2, behind: 0, files, added: sum("added"), removed: sum("removed") };
+    },
+    projectDiff(id, file) {
+      const changed = this.handlers.projectChanges.call(this, id).files.find((f) => f.path === file);
+      if (!changed) throw new Error("That file has no changes now.");
+      return { text: MADE_UP_DIFFS[file] ?? "--- a/" + file + "\n+++ b/" + file + "\n@@ -1 +1 @@\n-old line\n+new line", truncated: false };
+    },
+    projectCommit(id, message) {
+      const changes = this.handlers.projectChanges.call(this, id);
+      text(message, 2000, "commit message");
+      if (!changes.repo || !changes.files.length) throw new Error("There is nothing to commit.");
+      this.changedFiles.set(id, []);
+      return randomUUID().replace(/-/g, "").slice(0, 7);
+    },
+    addTodo(projectId, value) {
+      const todo = { id: randomUUID(), text: text(value, 400, "to-do"), done: false, createdAt: now() };
+      this.state.projects.find((p) => p.id === projectId)?.todos.push(todo);
+      return todo.id;
+    },
+    updateTodo(projectId, todoId, patch) {
+      const todo = this.state.projects.find((p) => p.id === projectId)?.todos.find((t) => t.id === todoId);
+      if (todo) Object.assign(todo, patch, patch.done ? { doneAt: now() } : {});
+    },
+    deleteTodo(projectId, todoId) {
+      const project = this.state.projects.find((p) => p.id === projectId);
+      if (project) project.todos = project.todos.filter((t) => t.id !== todoId);
+    },
+    // One place up (-1) or down (1) in the stored order, as desktop/projects.mjs does.
+    moveTodo(projectId, todoId, delta) {
+      const project = this.state.projects.find((p) => p.id === projectId);
+      if (!project) throw new Error("This project no longer exists.");
+      const i = project.todos.findIndex((t) => t.id === todoId);
+      if (i < 0) throw new Error("This to-do no longer exists.");
+      if (delta !== -1 && delta !== 1) throw new Error("Move a to-do up or down by one.");
+      const j = i + delta;
+      if (j >= 0 && j < project.todos.length) [project.todos[i], project.todos[j]] = [project.todos[j], project.todos[i]];
+    },
+    usage: (days) => ({
+      days,
+      totals: { turns: 184, input: 1_420_000, output: 96_000, cacheRead: 610_000, cost: 12.4, priced: 120 },
+      byDay: Array.from({ length: Math.min(days, 14) }, (_, i) => ({ date: new Date(now() - i * 24 * HOUR).toISOString().slice(0, 10), turns: 6 + ((i * 7) % 11), input: 80_000, output: 6000, cacheRead: 30_000, cost: 0.7, priced: 6 })),
+      byModel: [{ model: "Claude Fable 5.2", turns: 80, input: 700_000, output: 50_000, cacheRead: 300_000, cost: 8.1, priced: 80 }, { model: "GPT-5.5 Codex", turns: 64, input: 500_000, output: 30_000, cacheRead: 200_000, cost: 4.3, priced: 40 }],
+      byBot: this.state.bots.map((bot, i) => ({ botId: bot.id, name: bot.name, turns: 60 - i * 11, input: 300_000, output: 20_000, cacheRead: 100_000, cost: 3 - i * 0.5, priced: 30 })),
+    }),
+    // What the person does with a chat's side pane (the tabs a bot opened beside the chat).
+    sidePane(chatId, action, panelId) {
+      const chat = this.chat(chatId);
+      const pane = chat.pane ?? (chat.pane = { panels: [], active: null });
+      const panel = panelId ? pane.panels.find((item) => item.id === panelId) : null;
+      if (panelId && !panel) throw new Error("That panel is gone.");
+      if (action === "select") {
+        pane.active = panel?.id ?? null;
+        if (panel) delete panel.unseen;
+      } else if (action === "remove" && panel) {
+        pane.panels = pane.panels.filter((item) => item !== panel);
+        if (pane.active === panel.id) pane.active = pane.panels.at(-1)?.id ?? null;
+      } else if (action === "pin" && panel) panel.pinned = true;
+      else if (action === "unpin" && panel) delete panel.pinned;
+      else if (action === "closed") pane.closed = { runId: this.state.runs.find((run) => run.chatId === chatId && run.status === "Working")?.id ?? null, at: now() };
+      else if (action === "opened") delete pane.closed;
+      else throw new Error("That can't be done with the side pane.");
+    },
+    // The usage table as the text of a .csv file ("Export CSV" without a save dialog).
+    exportUsageText(days) {
+      if (![7, 30, 90].includes(days)) throw new Error("Choose 7, 30 or 90 days");
+      const rows = [["time", "date", "bot", "chat", "title", "status", "trigger", "model", "input_tokens", "output_tokens", "cache_read_tokens", "cost", "duration_ms", "provider"]];
+      const cell = (value) => (/[",\n]/.test(String(value)) ? '"' + String(value).replace(/"/g, '""') + '"' : String(value));
+      this.state.chats.slice(0, Math.min(days, 12)).forEach((chat, index) => {
+        const time = now() - index * 5 * HOUR;
+        rows.push([new Date(time).toISOString(), new Date(time).toISOString().slice(0, 10), this.state.bots.find((bot) => bot.id === chat.botId)?.name ?? "", chat.id, chat.title, "Done", "message", "Claude Fable 5.2", 80_000 + index * 900, 6000 + index * 70, 30_000, (0.4 + index * 0.03).toFixed(2), 42_000 + index * 800, "claude"]);
+      });
+      return { name: "botkins-usage-" + days + "d.csv", text: rows.map((row) => row.map(cell).join(",")).join("\n") + "\n" };
+    },
+    cacheInfo() {
+      return { ...this.cache };
+    },
+    clearCache() {
+      this.cache = { bytes: 0, catalogs: 0 };
+    },
+    // The real app shows a notification on the computer. The demo only counts.
+    testNotification() {
+      this.tested++;
+    },
+    // Made-up plans and limits, one provider for each thing a phone has to show: one limit (Copilot),
+    // two limits (ChatGPT), a lookup that failed with older numbers kept and a limit without a number
+    // (Claude), and a provider that gives nothing (OpenCode). BOTKINS_DEV_USAGE=keys makes every
+    // account an API key (no plan limits), =error fails the call, =slow answers after four seconds,
+    // =off leaves the capability out.
+    async providerUsage(options) {
+      const mode = process.env.BOTKINS_DEV_USAGE;
+      if (mode === "slow") await new Promise((resolve) => setTimeout(resolve, 4000));
+      if (mode === "error") throw new Error("The providers didn't answer.");
+      const read = options?.refresh ? now() : now() - 5 * MIN;
+      // The same fields the desktop app sends (its docs/PROVIDER_USAGE.md): counts where a provider
+      // gives them, an allowance without a limit, a balance of credits, a limit for one model.
+      const shapes = {
+        copilot: {
+          plan: "GitHub Copilot Pro+", account: "subscription", source: "GitHub Copilot", updatedAt: read,
+          limits: [
+            { id: "premium", label: "Premium requests", percentRemaining: 62, percentUsed: 38, used: 570, limit: 1500, unit: "requests", window: "month", resetAt: now() + 11 * 24 * HOUR, primary: true },
+            { id: "chat", label: "Chat", unlimited: true, window: "month" },
+          ],
+        },
+        codex: {
+          plan: "ChatGPT Pro", account: "subscription", source: "Codex", updatedAt: read, credits: { label: "Credits", amount: 1250, unit: "credits" },
+          limits: [
+            { id: "weekly", label: "Weekly", percentRemaining: 48, percentUsed: 52, window: "week", resetAt: now() + 3 * 24 * HOUR, primary: true },
+            { id: "session", label: "5-hour session", percentRemaining: 91, percentUsed: 9, window: "session", resetAt: now() + 2 * HOUR },
+          ],
+        },
+        claude: {
+          plan: "Claude Max 20x", account: "subscription", source: "Claude Code", updatedAt: now() - 3 * HOUR, error: "Claude didn't answer just now.",
+          limits: [
+            { id: "weekly", label: "Weekly, all models", percentRemaining: 7, percentUsed: 93, window: "week", resetAt: now() + 20 * HOUR, primary: true },
+            { id: "weekly-opus", label: "Weekly, Opus", percentRemaining: 34, percentUsed: 66, window: "week", model: "Opus", resetAt: now() + 20 * HOUR },
+            { id: "session", label: "5-hour session", window: "session" },
+          ],
+        },
+        opencode: { limits: [], note: "OpenCode doesn't report a plan or limits.", updatedAt: read },
+      };
+      return PROVIDERS.filter((provider) => this.state.settings.providers[provider.id]?.enabled && provider.connected).map((provider) => ({
+        provider: provider.id,
+        name: provider.name,
+        ...(mode === "keys" ? { account: "api-key", limits: [], updatedAt: read } : (shapes[provider.id] ?? { limits: [], updatedAt: read })),
+      }));
+    },
+  };
+}

@@ -1,0 +1,31 @@
+/* The card for an HTML app a bot showed in a chat. */
+.chat-card.app-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.app-card-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  flex-shrink: 0;
+}
+.app-card-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.app-card-text small {
+  color: var(--muted);
+}
+.app-card-text em {
+  font-style: normal;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--accent-text);
+}

@@ -1,0 +1,285 @@
+/* Markdown text in chats, panels, tasks, the board and teammate replies (src/RichText.tsx). */
+.md {
+  line-height: 1.6;
+  min-width: 0;
+}
+/* :where() keeps this reset weaker than the spacing rules below. */
+.md :where(p, ul, ol, dl, blockquote, pre, table, hr, h1, h2, h3, h4, h5, h6) {
+  margin: 0;
+}
+.md > * + *,
+.md :is(blockquote, .md-callout, .footnotes) > * + * {
+  margin-top: 10px;
+}
+.md li > * + * {
+  margin-top: 4px;
+}
+.md :is(strong, small) {
+  display: inline;
+}
+.md strong {
+  font-weight: 700;
+}
+
+/* Headings sit in running text, so they are far smaller than the app's page titles. */
+.md :is(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.3;
+  font-weight: 700;
+}
+.md > * + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 18px;
+}
+.md > :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 6px;
+}
+.md h1 {
+  font-size: 1.38em;
+}
+.md h2 {
+  font-size: 1.2em;
+}
+.md h3 {
+  font-size: 1.07em;
+}
+.md :is(h4, h5, h6) {
+  font-size: 1em;
+}
+.md :is(h5, h6) {
+  color: var(--muted);
+}
+
+.md :is(ul, ol) {
+  padding-left: 22px;
+}
+.md li + li {
+  margin-top: 3px;
+}
+.md li::marker {
+  color: var(--muted);
+}
+.md .contains-task-list {
+  list-style: none;
+  padding-left: 2px;
+}
+.md .task-list-item input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0 7px 0 0;
+  padding: 0;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+}
+
+.md a {
+  cursor: pointer;
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin-block: 16px;
+}
+.md blockquote {
+  padding: 1px 0 1px 13px;
+  border-left: 3px solid color-mix(in srgb, currentColor 22%, transparent);
+  color: color-mix(in srgb, currentColor 78%, transparent);
+}
+.md del {
+  opacity: 0.7;
+}
+.md sup {
+  font-size: 0.75em;
+  line-height: 0;
+}
+.md sup a {
+  padding: 0 2px;
+  text-decoration: none;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.md .footnotes {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.9em;
+  color: var(--muted);
+}
+.md .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.md-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  background: var(--sunken);
+  border-radius: 999px;
+  font-size: 0.9em;
+  text-decoration: none;
+}
+
+/* Tables scroll sideways on their own, so a wide one never stretches the chat. */
+.md-table {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+}
+.md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+.md-table :is(th, td) {
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: break-word;
+}
+.md-table th {
+  color: var(--muted);
+  font-size: 0.92em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.md-table tbody tr:hover td {
+  background: var(--hover);
+}
+
+/* Code */
+.md code,
+.md-code-bar > span {
+  font-family: var(--font-mono);
+}
+.md :not(pre) > code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 0.88em;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+/* Code sits on a soft sunken block. Syntax colors come from the theme, so they follow light and dark. */
+.md-code {
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--sunken);
+  color: var(--ink);
+  --hl-keyword: var(--accent);
+  --hl-string: var(--success);
+  --hl-number: var(--warning);
+  --hl-comment: var(--muted);
+  --hl-title: var(--info);
+  --hl-type: color-mix(in srgb, var(--info) 55%, var(--success));
+  --hl-tag: var(--danger);
+}
+.md-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 5px 3px 13px;
+  border-bottom: 1px solid var(--line);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.md-code-bar button {
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.md .md-code pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  background: none;
+  border-radius: 0;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 2;
+  overflow-wrap: normal;
+}
+.md-code :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-meta .hljs-keyword) {
+  color: var(--hl-keyword);
+}
+.md-code :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-template-variable, .hljs-selector-attr, .hljs-selector-pseudo) {
+  color: var(--hl-string);
+}
+.md-code :is(.hljs-number, .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-symbol, .hljs-bullet, .hljs-link) {
+  color: var(--hl-number);
+}
+.md-code :is(.hljs-comment, .hljs-quote, .hljs-meta) {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.md-code :is(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-selector-class) {
+  color: var(--hl-title);
+}
+.md-code :is(.hljs-type, .hljs-built_in, .hljs-class .hljs-title, .hljs-params .hljs-type) {
+  color: var(--hl-type);
+}
+.md-code :is(.hljs-tag, .hljs-name, .hljs-deletion) {
+  color: var(--hl-tag);
+}
+.md-code .hljs-emphasis {
+  font-style: italic;
+}
+.md-code .hljs-strong {
+  font-weight: 700;
+}
+
+/* Callouts: GitHub alerts such as "> [!NOTE]". */
+.md-callout {
+  --tone: var(--info);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  color: var(--ink);
+}
+.md-callout-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--tone) 72%, var(--ink));
+}
+.md-callout > .md-callout-title + * {
+  margin-top: 4px;
+}
+.md-callout-tip {
+  --tone: var(--success);
+}
+.md-callout-important {
+  --tone: var(--accent);
+}
+.md-callout-warning {
+  --tone: var(--warning);
+}
+.md-callout-caution {
+  --tone: var(--danger);
+}
+
+.chat-file-menu {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  min-width: 175px;
+  padding: 5px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px #0002;
+}
+.chat-file-menu button { padding: 6px 10px; text-align: left; }
+.chat-file-menu button:is(:hover, :focus-visible) { background: var(--hover); }

@@ -1,0 +1,508 @@
+/* The bot's own page, Bot Studio's look picker, and the template menu of Create a bot. Theme tokens only. */
+
+/* ------------------------------------------------------------ look picker */
+.look-picker {
+  display: grid;
+  gap: 10px;
+}
+.look-stage {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 18px 12px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--sunken);
+}
+.look-preview {
+  padding: 0;
+  border-radius: 50%;
+}
+.look-preview:hover {
+  background: none;
+  filter: none;
+}
+.look-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(21px * var(--text-scale));
+}
+.look-surprise {
+  padding: 6px 14px;
+  min-height: 32px;
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.look-surprise:hover {
+  filter: none;
+  background: var(--raised);
+}
+.look-label {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.look-heads {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 4px;
+}
+.look-heads button {
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 4px 6px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.look-heads button:hover {
+  filter: none;
+  background: var(--hover);
+  color: var(--ink);
+}
+/* The chosen character and palette: the action color's soft step and a ring in the action color. */
+.look-heads button.on {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+.look-palettes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.look-palettes button {
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 12px 5px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  font-size: calc(13px * var(--text-scale));
+}
+.look-palettes button:hover {
+  filter: none;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+.look-palettes button.on {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  font-weight: 600;
+}
+.look-palettes i {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 15%, transparent);
+}
+/* Original: each character's own colors, as a little wheel of the theme's colors. */
+.look-palettes i.own {
+  background: conic-gradient(var(--danger), var(--warning), var(--success), var(--info), var(--accent), var(--danger));
+}
+/* Eyes: the same tiles as the characters, a little smaller. */
+.look-eyes {
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+}
+/* Custom colors: one swatch for each of the four colors, each opening a picker. */
+.look-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.look-color button {
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 12px 5px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  font-size: calc(13px * var(--text-scale));
+}
+.look-color button:hover {
+  filter: none;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+.look-color button.on {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  font-weight: 600;
+}
+.look-color i {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+/* The picker's popover. It is placed by script under its swatch, and hidden until it is. */
+.color-pop {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: calc(232px * var(--text-scale));
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.color-pop:not(.placed) {
+  visibility: hidden;
+}
+.color-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+/* The square and the hue bar are the color model itself, so they use plain white and black:
+   the hue fills the square, white fades in from the left and black from the bottom. */
+.color-square {
+  position: relative;
+  height: calc(150px * var(--text-scale));
+  border-radius: var(--radius);
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+  cursor: crosshair;
+  touch-action: none;
+}
+.color-square:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A white ring with a dark edge reads on any color. */
+.color-thumb,
+.color-hue::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45), inset 0 0 0 1px rgb(0 0 0 / 0.2);
+}
+.color-thumb {
+  position: absolute;
+  margin: -9px 0 0 -9px;
+  pointer-events: none;
+}
+.color-hue {
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+.color-hue::-webkit-slider-thumb {
+  appearance: none;
+  background: transparent;
+}
+.color-hex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(13px * var(--text-scale));
+}
+.color-hex label {
+  color: var(--muted);
+  font-weight: 600;
+}
+.color-hex input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  padding: 6px 9px;
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--text-scale));
+}
+.color-hex input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.color-now {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+/* A short window: the stage lies on its side, so the characters show under it. */
+@media (max-height: 640px) {
+  .look-stage {
+    grid-template-columns: auto auto;
+    justify-content: center;
+    align-items: center;
+    column-gap: 20px;
+    row-gap: 6px;
+    padding: 10px 16px;
+  }
+  .look-preview {
+    grid-row: span 2;
+  }
+  .look-preview img {
+    width: 96px;
+    height: 96px;
+  }
+  .look-name {
+    align-self: end;
+    justify-self: start;
+  }
+  .look-surprise {
+    align-self: start;
+    justify-self: start;
+  }
+  .look-label {
+    margin-top: 2px;
+  }
+}
+
+/* -------------------------------------------------------------- bot page */
+/* The bot is the subject: its Botkin large and bare, its name in the serif, and calm sections
+   split by hairlines instead of boxed cards. */
+.bot-profile > * + * {
+  margin-top: 30px;
+}
+.profile-back {
+  margin-left: -4px;
+}
+.profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin-top: 10px;
+}
+.profile-portrait {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.profile-title {
+  min-width: 0;
+  flex: 1;
+}
+.profile-title h1 {
+  margin: 4px 0 2px;
+  font-size: calc(34px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+.profile-title > p.muted {
+  color: var(--muted);
+  font-size: calc(15px * var(--text-scale));
+}
+.profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+}
+.profile-badges .botstatus {
+  margin: 0;
+}
+.profile-about {
+  margin-top: 8px;
+  max-width: 60ch;
+}
+.actionrow.profile-actions {
+  margin: 18px 0 0 -6px;
+  gap: 2px;
+}
+/* One primary (New chat); the rest are quiet words with their icons. */
+.actionrow.profile-actions button {
+  border: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--ink-2);
+  gap: 6px;
+}
+.actionrow.profile-actions button:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+  color: var(--ink);
+}
+.actionrow.profile-actions button > svg {
+  color: var(--muted);
+}
+.actionrow.profile-actions .primary {
+  margin: 0 8px 0 6px;
+  padding: 8px 15px;
+  color: var(--on-accent);
+}
+.actionrow.profile-actions .primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+  filter: brightness(1.06);
+}
+.actionrow.profile-actions .primary > svg {
+  color: inherit;
+}
+.actionrow.profile-actions .danger,
+.actionrow.profile-actions .danger > svg {
+  color: var(--danger);
+}
+.actionrow.profile-actions button:disabled {
+  opacity: 0.4;
+}
+.profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 48px;
+  align-items: start;
+}
+.profile-side {
+  display: grid;
+  gap: 0;
+}
+.profile-card {
+  min-width: 0;
+}
+.profile-side > .profile-card {
+  padding: 22px 0;
+}
+.profile-side > .profile-card:first-child {
+  padding-top: 0;
+}
+.profile-side > .profile-card + .profile-card {
+  border-top: 1px solid var(--line);
+}
+.profile-card h2 {
+  font-size: calc(19px * var(--text-scale));
+}
+.profile-card > p {
+  margin: 4px 0 12px;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.profile-card .sectionhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.profile-card .sectionhead .textbutton {
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.profile-card .sectionhead .textbutton:hover {
+  filter: none;
+  background: var(--hover);
+  color: var(--ink);
+}
+.profile-edit label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  margin: 14px 0;
+}
+.profile-edit input,
+.profile-edit textarea {
+  font-weight: 400;
+}
+.profile-side > section {
+  margin-top: 0;
+}
+.profile-save {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.profile-save .primary:disabled {
+  opacity: 0.4;
+}
+/* Quiet buttons in the sections: a soft fill, no outline. */
+.profile-card .secondary,
+.profile-save .secondary {
+  border: 0;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  gap: 6px;
+}
+.profile-card .secondary:hover,
+.profile-save .secondary:hover {
+  filter: none;
+  background: color-mix(in srgb, var(--ink) 11%, transparent);
+}
+.profile-stat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 0 !important;
+}
+.profile-card .model-picker select {
+  max-width: 100%;
+}
+/* The model list and thinking sit on the canvas here, so their wells take the card color. */
+.bot-profile .mp-list,
+.bot-profile .mp-group-head,
+.bot-profile .model-picker .thinking-control,
+.bot-profile .mp-empty {
+  background: var(--surface);
+}
+.profile-chats .sectionhead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+@media (max-width: 1000px) {
+  .profile-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .profile-side > .profile-card:first-child {
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+  }
+  .profile-hero {
+    gap: 18px;
+  }
+  .profile-portrait img {
+    width: 104px;
+    height: 104px;
+  }
+  .profile-title h1 {
+    font-size: calc(28px * var(--text-scale));
+  }
+}
+
+/* A saved template's Export and Delete menu, in Create a bot. */
+.my-template-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--raised);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.my-template-menu button {
+  justify-content: flex-start;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+}
+.my-template-menu .danger {
+  color: var(--danger);
+}
+.template-note {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  font-size: calc(13px * var(--text-scale));
+}
+.profile-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}

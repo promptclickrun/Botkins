@@ -1,0 +1,180 @@
+/*
+ * The Botkins look. A theme's colors arrive from src/appearance.ts as custom properties on <html>
+ * (--canvas, --surface, --sunken, --raised, --ink, --ink-2, --muted, --faint, --line,
+ * --line-strong, --accent with --on-accent for what is filled with the action color, --accent-text
+ * for the action color as text, --accent-soft, --bubble, --on-bubble, and --success, --warning,
+ * --danger, --info with a -soft step each). The values below are the Ink theme, what the app
+ * wears until a person picks one, for the moment before the script runs. Everything else here is
+ * made from those.
+ */
+@font-face {
+  font-family: "DejaVu Serif";
+  src: url("./fonts/DejaVuSerif-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: block;
+}
+@font-face {
+  font-family: "Open Sans";
+  src: url("./fonts/OpenSans-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Open Sans";
+  src: url("./fonts/OpenSans-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-display: block;
+}
+@font-face {
+  font-family: "Open Sans";
+  src: url("./fonts/OpenSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: block;
+}
+/* Fonts a person can choose in Settings › Appearance. Lora ships with the app. */
+@font-face {
+  font-family: "Lora";
+  src: url("./fonts/Lora-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lora";
+  src: url("./fonts/Lora-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lora";
+  src: url("./fonts/Lora-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lora";
+  src: url("./fonts/Lora-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+/* Georgia has no medium weight: asked for one, the system gives bold. So the medium weights are
+   drawn with the regular face, and only bold is bold. */
+@font-face {
+  font-family: "Botkins Georgia";
+  src: local("Georgia");
+  font-weight: 100 600;
+}
+@font-face {
+  font-family: "Botkins Georgia";
+  src: local("Georgia Italic"), local("Georgia-Italic");
+  font-weight: 100 600;
+  font-style: italic;
+}
+@font-face {
+  font-family: "Botkins Georgia";
+  src: local("Georgia Bold"), local("Georgia-Bold");
+  font-weight: 700 900;
+}
+@font-face {
+  font-family: "Botkins Georgia";
+  src: local("Georgia Bold Italic"), local("Georgia-BoldItalic");
+  font-weight: 700 900;
+  font-style: italic;
+}
+:root {
+  color-scheme: light dark;
+  --canvas: #ffffff;
+  --surface: #f5f5f3;
+  --sunken: #ededea;
+  --raised: #ffffff;
+  --ink: #000000;
+  --ink-2: #1f1f1f;
+  --muted: #595959;
+  --faint: #9a9a98;
+  --line: #e7e7e4;
+  --line-strong: #c8c8c4;
+  --accent: #000000;
+  --on-accent: #ffffff;
+  --accent-soft: #e6e6e3;
+  --accent-text: #000000;
+  --success: #225c36;
+  --success-soft: #e3eee5;
+  --warning: #7a5200;
+  --warning-soft: #f5ecd6;
+  --danger: #9b231c;
+  --danger-soft: #f7e1de;
+  --info: #27536f;
+  --info-soft: #e0eaf0;
+  --bubble: #ededea;
+  --on-bubble: #000000;
+
+  /* Names and short headlines are set in the serif; everything else in the sans. */
+  --font-display: "DejaVu Serif", Georgia, "Times New Roman", serif;
+  --font-body: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* Settings › Appearance › Text size. Every font size in the app is multiplied by it. */
+  --text-scale: 1;
+
+  /* Made from the theme. */
+  --paper: var(--surface);
+  --rail: color-mix(in srgb, var(--sunken) 45%, var(--canvas));
+  --hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  --active: color-mix(in srgb, var(--ink) 9%, transparent);
+  --hero: var(--accent-soft);
+  --ring: var(--line-strong);
+  --scrim: color-mix(in srgb, var(--ink) 42%, transparent);
+  --shadow: 0 1px 2px color-mix(in srgb, var(--ink) 6%, transparent), 0 6px 18px color-mix(in srgb, var(--ink) 5%, transparent);
+  /* Glass, for small controls that float over the chat: the phone's Liquid Glass, drawn with a
+     blur. A see-through tint of the theme's surface, a hairline edge, a bright top edge and a soft shadow. */
+  --glass-fill: color-mix(in srgb, var(--surface) 58%, transparent);
+  --glass-fill-solid: color-mix(in srgb, var(--surface) 94%, transparent);
+  --glass-blur: blur(14px) saturate(180%);
+  --glass-edge: color-mix(in srgb, var(--ink) 10%, transparent);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.7), inset 0 -1px 0 rgb(255 255 255 / 0.2);
+  --glass-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent), 0 6px 20px -4px color-mix(in srgb, var(--ink) 18%, transparent);
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) {
+    --canvas: #000000;
+    --surface: #131313;
+    --sunken: #1a1a1a;
+    --raised: #1e1e1e;
+    --ink: #ffffff;
+    --ink-2: #e8e8e8;
+    --muted: #a8a8a8;
+    --faint: #6e6e6e;
+    --line: #242424;
+    --line-strong: #3d3d3d;
+    --accent: #ffffff;
+    --on-accent: #000000;
+    --accent-soft: #2b2b2b;
+    --accent-text: #ffffff;
+    --success: #93d6a8;
+    --success-soft: #12281a;
+    --warning: #e9c46a;
+    --warning-soft: #2b2412;
+    --danger: #ff9e94;
+    --danger-soft: #351715;
+    --info: #9fcbe6;
+    --info-soft: #12232f;
+    --bubble: #262626;
+    --on-bubble: #ffffff;
+  }
+}
+:root[data-mode="light"] {
+  color-scheme: light;
+}
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --rail: color-mix(in srgb, var(--sunken) 55%, var(--canvas));
+  --scrim: rgb(0 0 0 / 0.55);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 22px rgb(0 0 0 / 0.28);
+  --glass-fill: color-mix(in srgb, var(--raised) 52%, transparent);
+  --glass-fill-solid: color-mix(in srgb, var(--raised) 94%, transparent);
+  --glass-edge: rgb(255 255 255 / 0.12);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(255 255 255 / 0.04);
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 8px 22px -4px rgb(0 0 0 / 0.45);
+}

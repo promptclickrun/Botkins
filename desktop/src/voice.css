@@ -1,0 +1,256 @@
+/* Voice: Settings › Voice, the composer's microphone and Live Voice button, and the live panel.
+   Theme tokens only (src/tokens.css), so it reads in every theme, light and dark. */
+
+/* ------------------------------------------------------------ Settings › Voice */
+.voice-sub {
+  padding: 12px 16px 2px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.set-card > .voice-sub + .set-row {
+  border-top: 0;
+}
+.set-card > * + .voice-sub {
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+.voice-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--success);
+}
+.voice-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.set-control .voice-key input {
+  width: 200px;
+}
+.set-control input.voice-wide {
+  width: 300px;
+}
+.voice-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.voice-speed input[type="range"] {
+  width: 170px;
+  accent-color: var(--accent);
+}
+.voice-speed output {
+  min-width: 3.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.voice-inline {
+  margin: 0;
+  padding: 8px 16px 10px;
+}
+.voice-settings .set-actions .set-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.voice-note {
+  margin-top: -8px;
+}
+/* A narrow window: the control goes under its label, at full width. */
+@media (max-width: 900px) {
+  .voice-settings .set-row:not(.stacked) {
+    flex-wrap: wrap;
+  }
+  .voice-settings .set-control {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .voice-settings .set-control input.voice-wide,
+  .voice-settings .set-control .voice-key input {
+    width: min(300px, 100%);
+  }
+}
+
+/* ------------------------------------------------------------ the composer */
+.composer .composer-mic.recording {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.send.live-voice {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.send.live-voice:hover {
+  filter: brightness(1.08);
+}
+/* Recording for dictation: a strip above the message box. */
+.voice-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  padding: 7px 10px 7px 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--ink);
+}
+.voice-strip .voice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  flex: none;
+}
+.voice-strip > span:not(.voice-dot):not(.voice-meter) {
+  flex: 1;
+  min-width: 0;
+}
+.voice-strip .set-button {
+  min-height: 28px;
+  padding: 3px 11px;
+}
+.voice-strip.note {
+  align-items: flex-start;
+}
+.voice-strip.note > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.voice-strip.error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+.voice-strip .voice-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+}
+.voice-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+  flex: none;
+}
+.voice-meter i {
+  display: block;
+  width: 3px;
+  min-height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.25;
+  transition: height 80ms linear, opacity 80ms linear;
+}
+.voice-meter i.on {
+  opacity: 0.9;
+}
+
+/* ------------------------------------------------------------ the live panel */
+.live-panel {
+  margin: 0 0 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+}
+.live-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.live-who {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.live-who strong {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-who small {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.live-panel .voice-meter {
+  height: 26px;
+  color: var(--accent-text);
+}
+.live-panel .voice-meter.you {
+  color: var(--success);
+}
+.live-panel .voice-meter i {
+  width: 4px;
+}
+.live-buttons {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.live-buttons button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.live-buttons button[aria-pressed="true"] {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.live-transcript {
+  max-height: 132px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.45;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.live-transcript p {
+  margin: 0;
+  color: var(--ink);
+}
+.live-transcript p b {
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 6px;
+}
+.live-transcript p.partial {
+  color: var(--muted);
+}
+.live-error {
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--danger);
+}
+@media (max-width: 640px) {
+  .live-head {
+    flex-wrap: wrap;
+  }
+  .live-buttons {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-meter i {
+    transition: none;
+  }
+}

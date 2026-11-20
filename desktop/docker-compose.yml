@@ -1,0 +1,70 @@
+name: botkins
+
+services:
+  host:
+    build:
+      context: .
+      target: host
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      BOTKINS_HEADLESS: "1"
+      BOTKINS_HOST_NAME: "${BOTKINS_HOST_NAME:-Botkins server}"
+      # The process listens on 59851 inside the container. BOTKINS_BIND_PORT only
+      # selects the host-side published port for an isolated smoke run.
+      BOTKINS_LINK_PORT: "59851"
+      BOTKINS_PAIR_ADDRESS: "${BOTKINS_PAIR_ADDRESS:-127.0.0.1:${BOTKINS_BIND_PORT:-59851}}"
+      BOTKINS_DATA_DIR: /var/lib/botkins-link
+      BOTKINS_OWNER_PAIRING_FILE: /run/botkins-owner/pairing.json
+      BOTKINS_WORKSPACE_SOCKET: /run/botkins-workspace/backend.sock
+    ports:
+      - "${BOTKINS_BIND_ADDRESS:-127.0.0.1}:${BOTKINS_BIND_PORT:-59851}:59851"
+    volumes:
+      - botkins-link:/var/lib/botkins-link
+      - botkins-uploads:/var/lib/botkins-link/uploads
+      - botkins-workspace-runtime:/run/botkins-workspace:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
+      - /run/botkins-owner:rw,nosuid,nodev,noexec,size=4m,uid=10001,gid=10001,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: ["/usr/local/bin/botkins-headless-host"]
+
+  workspace:
+    build:
+      context: .
+      target: workspace
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      BOTKINS_DATA_DIR: /var/lib/botkins-workspace
+      BOTKINS_WORKSPACE_SOCKET: /run/botkins-workspace/backend.sock
+      DISPLAY: ":99"
+    volumes:
+      - botkins-workspace:/var/lib/botkins-workspace
+      - botkins-workspace-runtime:/run/botkins-workspace
+      - botkins-uploads:/var/lib/botkins-link/uploads:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+      - /run:rw,nosuid,nodev,size=32m
+    shm_size: 512m
+    # Chromium's user-namespace sandbox needs clone/unshare calls that Docker's
+    # default seccomp profile rejects. The container remains non-root, has no
+    # capabilities, and keeps no-new-privileges; only the workspace gets this
+    # narrowly scoped profile relaxation.
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+    cap_drop:
+      - ALL
+    command: ["/usr/local/bin/botkins-display-workspace"]
+
+volumes:
+  botkins-link:
+  botkins-uploads:
+  botkins-workspace:
+  botkins-workspace-runtime:

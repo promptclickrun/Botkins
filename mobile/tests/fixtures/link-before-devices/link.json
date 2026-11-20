@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "serverId": "fixture-host",
+ "publicKey": "generated-in-test",
+ "privateKey": "generated-in-test",
+ "port": 47610,
+ "enabled": true,
+ "name": "Fixture Mac",
+ "devices": [
+  {
+   "id": "fixture-phone",
+   "name": "Old phone",
+   "platform": "ios",
+   "publicKey": "generated-in-test",
+   "createdAt": 1795109024688,
+   "lastSeenAt": 1795109024688
+  }
+ ],
+ "looks": {},
+ "screen": "off",
+ "push": {},
+ "sources": {},
+ "relay": {
+  "enabled": false,
+  "url": "https://relay.botkins.app",
+  "key": null
+ }
+}

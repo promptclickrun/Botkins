@@ -1,0 +1,260 @@
+/*
+ * Today: its panels and the Feed, Ideas and Goals board. A panel is a calm surface card with no
+ * border; the base .live-panel rules live in style.css, and `.today-panel` restyles them here.
+ * Colors come from the tokens in tokens.css.
+ */
+.live-panel.today-panel {
+  background: var(--surface);
+  border: 0;
+  border-radius: var(--radius);
+  padding: 16px 20px 14px;
+}
+.today-panel .panel-top {
+  gap: 8px;
+  min-height: 32px;
+}
+.today-panel .panel-top > small {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* The menu and refresh are quiet icon buttons. */
+.today-panel .panel-top > button,
+.today-panel footer > button {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+.today-panel .panel-top > button:hover,
+.today-panel footer > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.today-panel h2 {
+  font-size: calc(19px * var(--text-scale));
+  margin: 6px 0 12px;
+  overflow-wrap: anywhere;
+}
+.today-panel footer {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 12px;
+}
+.today-panel footer > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+}
+.today-panel footer small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.today-panel .panel-table th {
+  background: var(--sunken);
+}
+
+/* The empty Today: no box, just a quiet note and one way in. */
+.today-empty.today-blank {
+  border: 0;
+  background: transparent;
+  padding: 48px 20px;
+  margin: 12px 0;
+}
+.today-empty.today-blank .empty-icon {
+  width: auto;
+  height: auto;
+  background: transparent;
+  color: var(--faint);
+  margin-bottom: 12px;
+}
+.today-empty.today-blank h2 {
+  font-size: calc(20px * var(--text-scale));
+}
+.today-empty.today-blank p {
+  font-size: calc(14px * var(--text-scale));
+  max-width: 420px;
+}
+.today-empty.today-blank .textbutton {
+  color: var(--accent-text);
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+/* Feed, Ideas and Goals. */
+.board-panel {
+  margin-top: 20px;
+}
+.board-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.board-head .board-tabs {
+  margin: 0;
+  gap: 4px;
+}
+.board-head > .textbutton {
+  margin-left: auto;
+  font-size: calc(13px * var(--text-scale));
+}
+.board-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.board-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.board-empty {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: calc(14px * var(--text-scale));
+}
+.board-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  max-height: 460px;
+  overflow: auto;
+}
+.board-item {
+  border-radius: var(--radius);
+}
+.board-item.open {
+  background: var(--hover);
+}
+.board-row {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius);
+}
+.board-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+.board-text small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.board-text strong {
+  font-weight: 600;
+}
+.board-preview {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board-row time {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  flex-shrink: 0;
+}
+.board-unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.board-detail {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px 52px;
+}
+.board-detail .actionrow {
+  flex-wrap: wrap;
+  align-items: center;
+}
+/* Actions beside the one main action are quiet: no outline. */
+.board-detail .actionrow > button:not(.primary) {
+  border-color: transparent;
+  color: var(--ink-2);
+}
+.board-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.board-links .textbutton {
+  color: var(--accent-text);
+}
+.board-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-sm);
+  padding: 0 4px 0 10px;
+  color: var(--ink-2);
+}
+.board-select:hover {
+  background: var(--hover);
+}
+.board-select select {
+  border: 0;
+  background: transparent;
+  padding: 7px 4px;
+  font: inherit;
+  color: inherit;
+}
+.board-rate {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.board-rate button {
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.board-rate button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.board-why {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.board-why small {
+  color: var(--muted);
+  margin-right: 4px;
+}
+.board-why button {
+  border-radius: 99px;
+  background: var(--sunken);
+  padding: 5px 12px;
+  font-size: calc(13px * var(--text-scale));
+}

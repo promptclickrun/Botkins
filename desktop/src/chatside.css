@@ -1,0 +1,102 @@
+/* The quiet panel beside a one-bot chat (src/ChatSide.tsx): the bot, its routines, its page.
+   Tokens only; one hairline at its left and nothing else around it. */
+
+.chat-side {
+  flex: none;
+  width: 272px;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  background: var(--canvas);
+  padding: 32px 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.chat-side-bot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+.chat-side-bot .bot-avatar {
+  margin-bottom: 10px;
+}
+.chat-side-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(18px * var(--text-scale));
+  line-height: 1.3;
+  color: var(--ink);
+}
+.chat-side-bot small {
+  font-size: calc(13px * var(--text-scale));
+}
+.chat-side-label {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  margin-bottom: 8px;
+}
+.chat-side-routines ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.chat-side-routines li > :is(button, div) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 11px;
+  padding: 8px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  min-height: 44px;
+}
+.chat-side-routines li > button:hover {
+  background: var(--hover);
+  filter: none;
+}
+.chat-side-routines li svg {
+  margin-top: 2px;
+  color: var(--muted);
+}
+.chat-side-routines li.paused svg {
+  color: var(--faint);
+}
+.chat-side-routines li span {
+  min-width: 0;
+}
+.chat-side-routines strong {
+  font-weight: 400;
+  font-size: calc(15px * var(--text-scale));
+  color: var(--ink);
+  line-height: 1.35;
+}
+.chat-side-routines small {
+  font-size: calc(13px * var(--text-scale));
+}
+.chat-side-none {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.chat-side .chat-side-link {
+  align-self: flex-start;
+  gap: 4px;
+  padding: 6px 0;
+  color: var(--muted);
+}
+.chat-side .chat-side-link:hover {
+  background: none;
+  color: var(--ink);
+}
+/* The panel only fits beside the chat in a wide window. */
+@media (max-width: 1079px) {
+  .chat-side {
+    display: none;
+  }
+}

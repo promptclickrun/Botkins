@@ -1,0 +1,429 @@
+/* Avatars and bot management. Uses the theme's tokens (tokens.css); adds no palette of its own. */
+
+/* ---------------------------------------------------------------- avatars */
+/* A bot is its Botkin: the design kit's animated SVG in an <img> (Avatar.tsx), shown bare.
+   Nothing sits behind it: no tile, no ring, no tint. */
+.bot-avatar {
+  display: block;
+  flex: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* -------------------------------------------------------------- bot list */
+.sectionhead-actions {
+  display: flex;
+  gap: 6px;
+}
+.bot-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: -4px 0 14px;
+}
+.bot-tools .filters,
+.chat-filters {
+  margin: 0;
+  flex-wrap: wrap;
+}
+.bot-tools .filters button,
+.chat-filters button {
+  padding: 5px 12px;
+  font-size: calc(13px * var(--text-scale));
+}
+.chat-filters {
+  margin: 0 0 6px;
+}
+.bots-none {
+  padding: 6px 8px 2px;
+}
+/* A bot in the grid: the card, then its quiet flags and its ⋯ button on the same line. */
+.botcard-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  border-radius: var(--radius);
+}
+.botcard-wrap:hover {
+  background: var(--hover);
+}
+.botcard-wrap > .botcard:hover {
+  background: none;
+}
+.botcard-wrap.is-hidden > .botcard {
+  opacity: 0.6;
+}
+.botstatus {
+  display: flex !important;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-weight: 600;
+  color: var(--ink) !important;
+}
+.botstatus i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+.botstatus.waiting i {
+  background: var(--warning);
+}
+@keyframes agent-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .botstatus i {
+    animation: none;
+  }
+}
+.botflags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--muted);
+  pointer-events: none;
+}
+/* "Primary" is a quiet word, not a pill. */
+.botbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.botcard .botbadge {
+  display: inline;
+  font-size: inherit;
+  white-space: pre;
+}
+.botbadge.plain {
+  color: var(--muted);
+}
+.menu-button {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  flex: none;
+}
+.botcard-wrap > .menu-button {
+  margin-right: 4px;
+}
+.botgroup {
+  margin-top: 18px;
+}
+.botgroup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.botgroup-head > button:first-child,
+.botgroup-head.plain > span {
+  gap: 7px;
+  padding: 4px 6px 4px 2px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+}
+.botgroup-head.plain > span {
+  color: var(--muted);
+  padding-top: 7px;
+}
+.botgroup-head small {
+  font-weight: 400;
+  font-size: calc(12px * var(--text-scale));
+}
+.botgroup-chevron {
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.botgroup-head button[aria-expanded="false"] .botgroup-chevron {
+  transform: rotate(-90deg);
+}
+
+/* --------------------------------------------------------------- sidebar */
+/* A flat list: the bare avatar, the name in the serif with the time beside it, and one quiet line. */
+.botnav-item {
+  position: relative;
+  display: grid;
+}
+.botnav .botnav-item > button:first-child {
+  min-width: 0;
+  padding: 7px 8px;
+  gap: 10px;
+  justify-content: start;
+  text-align: left;
+  border-radius: var(--radius);
+}
+.botnav-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+.botnav-top,
+.botnav-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.botnav-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(14px * var(--text-scale));
+  color: var(--ink);
+}
+.botnav-line time {
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+/* A narrow side menu keeps the name and drops the time. */
+@media (max-width: 900px) {
+  .botnav-line time {
+    display: none;
+  }
+}
+.botnav-line {
+  align-items: center;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.botnav-line > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.botnav-line.busy {
+  color: var(--ink-2);
+}
+.botnav-line.waiting {
+  color: var(--warning);
+  font-weight: 600;
+}
+.botnav-line .unread-dot {
+  margin: 0;
+  flex: none;
+}
+/* The "needs you" dot shows on the rail; the open menu says it in words. */
+.botnav-alert {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  flex: none;
+}
+.shell.collapsed .botnav-alert {
+  display: block;
+}
+/* The ⋯ button takes the time's place while the row is hovered or focused. */
+.botnav .botnav-item > .menu-button {
+  position: absolute;
+  right: 4px;
+  top: 5px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+  opacity: 0;
+}
+.botnav-item:hover > .menu-button,
+.botnav-item:focus-within > .menu-button,
+.botnav .botnav-item > .menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+/* The ⋯ button sits over the end of the name's line; the name makes room for it. */
+.botnav-item:hover .botnav-top,
+.botnav-item:focus-within .botnav-top {
+  padding-right: 24px;
+}
+.botnav-line time {
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--faint);
+}
+.botnav-group {
+  display: grid;
+  gap: 1px;
+}
+.botnav-label {
+  display: block;
+  padding: 10px 10px 2px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----------------------------------------------------------------- menus */
+.agent-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 210px;
+  max-width: 280px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--raised);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: grid;
+}
+.agent-menu button {
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  text-align: left;
+  min-height: 32px;
+}
+.agent-menu button > svg {
+  color: var(--muted);
+}
+.agent-menu button.danger,
+.agent-menu button.danger > svg {
+  color: var(--danger);
+}
+.agent-menu button:disabled {
+  opacity: 0.45;
+}
+.agent-menu button:focus-visible {
+  outline: none;
+  background: var(--active);
+}
+.agent-menu .menu-back {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.agent-menu .menu-more {
+  margin-left: auto;
+}
+.agent-menu span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-menu hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px 2px;
+}
+
+/* --------------------------------------------------------------- dialogs */
+.ask-dialog {
+  width: min(380px, 90vw);
+}
+.ask-dialog h2 {
+  margin-bottom: 4px;
+}
+.ask-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.ask-actions .secondary {
+  padding: 8px 14px;
+  font-size: calc(13px * var(--text-scale));
+}
+.danger-primary,
+.danger-primary:hover {
+  background: var(--danger);
+  color: var(--canvas);
+}
+
+/* ----------------------------------------------------------------- chats */
+/* Chat rows sit on the canvas, separated by space; the row and its ⋯ share one hover fill. */
+.rowwrap {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+}
+.rowwrap:hover {
+  background: var(--hover);
+}
+.rowwrap > .row {
+  min-width: 0;
+}
+.rowwrap > .row:hover {
+  background: none;
+}
+.rowwrap > .menu-button {
+  margin-right: 4px;
+}
+.chatrow .rowtop,
+.chatrow .rowline {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.chatrow .rowline {
+  align-items: center;
+}
+.chatrow .rowtop strong,
+.chatrow .rowline small {
+  flex: 1;
+  min-width: 0;
+}
+.chatrow .rowtop time {
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+}
+.chatrow .rowtop strong {
+  font-weight: 600;
+}
+.chatgroup-label {
+  margin: 18px 0 2px;
+  padding: 0 8px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.row-pin {
+  display: inline;
+  margin-right: 5px;
+  vertical-align: -1px;
+  color: var(--muted);
+}
+.row.unread .rowtext strong {
+  font-weight: 700;
+}
+/* A group chat's members stand side by side, bare, in the avatar's place. */
+.group-avatars.side {
+  gap: 2px;
+}
+.group-avatars.side > * + * {
+  margin-left: 0;
+}

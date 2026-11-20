@@ -1,0 +1,140 @@
+/* The Tasks board. Colors come from the tokens in tokens.css. */
+.tasks-intro {
+  margin: 6px 0 22px;
+  max-width: 720px;
+}
+/* Quiet columns on the canvas; they wrap into rows on a narrow window instead of scrolling sideways. */
+.task-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 20px 16px;
+  align-items: start;
+}
+.task-lanes > .task-lane {
+  margin: 0;
+}
+.task-lane {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 120px;
+  padding: 4px;
+  border-radius: var(--radius);
+  transition: background 0.15s;
+}
+.task-lane.drop {
+  background: var(--hover);
+}
+.lane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 4px;
+}
+.lane-head strong {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 700;
+}
+.lane-head .count {
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lane-hint {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  padding: 0 4px;
+  margin: -4px 0 4px;
+}
+.task-card {
+  display: grid;
+  justify-content: stretch;
+  justify-items: start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 12px 13px;
+}
+.task-card:hover {
+  background: color-mix(in srgb, var(--ink) 4%, var(--surface));
+}
+.task-card strong {
+  font-weight: 600;
+  font-size: calc(14px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+.task-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.task-meta small {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+/* Priority as a quiet word: high in the warning color, urgent in the danger color. */
+.task-meta em {
+  font-style: normal;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.task-meta em::first-letter {
+  text-transform: uppercase;
+}
+.task-card.priority-high .task-meta em {
+  color: var(--warning);
+}
+.task-card.priority-urgent .task-meta em {
+  color: var(--danger);
+}
+.task-problem {
+  color: var(--danger);
+  font-size: calc(12px * var(--text-scale));
+}
+.task-review {
+  color: var(--accent-text);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.lane-add {
+  justify-self: start;
+  font-size: calc(13px * var(--text-scale));
+}
+.task-dialog {
+  width: min(560px, 92vw);
+}
+.task-dialog form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.task-dialog input,
+.task-dialog textarea,
+.task-dialog select {
+  width: 100%;
+  min-width: 0;
+}
+.task-dialog [role="alert"] {
+  color: var(--danger);
+}
+.task-result {
+  background: var(--sunken);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  max-height: 240px;
+  overflow: auto;
+}
+.task-result small {
+  color: var(--muted);
+}
+.task-actions {
+  flex-wrap: wrap;
+}
+.task-actions .primary {
+  margin-left: auto;
+}

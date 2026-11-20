@@ -1,0 +1,410 @@
+// Notifications and Live Activities on this phone.
+//
+// The computer sends them (link-host/push.mjs) through the relay's push route. This file is the
+// phone's half: it asks iOS for permission and for the address Apple delivers to, tells the
+// computer, keeps the key the notification extension opens sealed alerts with, says when the app
+// is in front (so the computer stays quiet about the chat on screen), opens the right chat when a
+// notification is tapped, and runs a chat's Live Activity while the app is open. When a push wakes
+// the app in the background, it answers what bots asked the phone (src/state/device.ts).
+import * as Application from "expo-application";
+import { router } from "expo-router";
+import { keep, readKept } from "@/state/keep";
+import { AppState, Platform } from "react-native";
+import { create } from "zustand";
+import { Activities } from "../../modules/botkins-activity";
+import { lookOf } from "@/data/botLook";
+import { type Pairing, pushKeyOf } from "@/link/client";
+import type { ActivityState, PushPrefs, RunSummary } from "@/link/types";
+import { activityView, LINGER_MS } from "./activity";
+import { answerPendingAsks } from "./device";
+import { api, chatOnScreen, onChatOnScreen, switchComputer, tellOthers } from "./link";
+import { useApp } from "./store";
+
+const KEY = "botkins.push.v1";
+const TASK = "botkins-push";
+
+type Notifications = typeof import("expo-notifications");
+type TaskManager = typeof import("expo-task-manager");
+/** The native halves, or null in a build made before they were added. */
+function load(): { Notifications: Notifications; TaskManager: TaskManager } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return { Notifications: require("expo-notifications") as Notifications, TaskManager: require("expo-task-manager") as TaskManager };
+  } catch {
+    return null;
+  }
+}
+const native = Platform.OS === "ios" ? load() : null;
+
+export type PushStatus = "off" | "on" | "denied" | "unsupported";
+type PushStore = {
+  /** The person turned notifications on for this phone. Kept on the phone, so a new pairing sets them up again. */
+  wanted: boolean;
+  status: PushStatus;
+  /** One plain sentence when setting up failed. */
+  problem: string | null;
+};
+export const usePush = create<PushStore>(() => ({ wanted: false, status: native ? "off" : "unsupported", problem: null }));
+
+export const pushDefaults: PushPrefs = { replies: true, requests: true, routines: true, previews: true, activities: true };
+/** This phone's choices as the computer holds them, or null while notifications are off there. */
+export function usePushPrefs(): PushPrefs | null {
+  return useApp((state) => (state.pairing ? (state.parts.phones?.[state.pairing.deviceId]?.push ?? null) : null));
+}
+
+const canPush = () => !!useApp.getState().parts.meta?.capabilities.includes("push-v1");
+const base64 = (bytes: Uint8Array) => {
+  let text = "";
+  for (const byte of bytes) text += String.fromCharCode(byte);
+  return btoa(text);
+};
+
+/** `work`, or a failure with `message` when it has not settled in `ms`. Apple's registration can stay silent with no network. */
+function within<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+let startToken: string | undefined;
+let registered = ""; // what the computer was last told, so it is told once
+
+/** Tells the computer where Apple delivers for this phone. Quiet when nothing changed. */
+async function register(force = false) {
+  const { pairing, pairings, link, parts } = useApp.getState();
+  // A computer that still holds this phone's address after notifications were turned off (the phone
+  // was using another computer then) is told now.
+  if (native && pairing && link === "online" && canPush() && !usePush.getState().wanted && parts.phones?.[pairing.deviceId]?.push) {
+    void api["link.push.unregister"]().catch(() => {});
+    return;
+  }
+  if (!native || !pairing || link !== "online" || !usePush.getState().wanted || !canPush()) return;
+  try {
+    const permission = await native.Notifications.getPermissionsAsync();
+    if (!permission.granted) {
+      usePush.setState({ status: permission.canAskAgain ? "off" : "denied" });
+      return;
+    }
+    // The notification extension opens sealed alerts with these keys, one for each paired computer,
+    // so an alert from a computer the phone is not using now opens too. Each is derived from its
+    // pairing and never leaves the phone.
+    await saveKeys(pairings);
+    const token = await within(native.Notifications.getDevicePushTokenAsync(), 15_000, "Apple didn't give this phone an address for notifications. Check the connection and try again.");
+    if (token.type !== "ios" || typeof token.data !== "string") return;
+    // Only a development build can say it is on Apple's test service: its signing profile says
+    // "development". A build from TestFlight or the App Store carries no profile to read (the answer
+    // is null) and is always on production.
+    const env = (await Application.getIosPushNotificationServiceEnvironmentAsync()) === "development" ? "sandbox" : "production";
+    const said = [pairing.serverId, pairing.deviceId, token.data, env, startToken ?? ""].join();
+    if (said === registered && !force) return;
+    await api["link.push.register"]({ token: token.data, env, ...(startToken && { start: startToken }) });
+    registered = said;
+    usePush.setState({ status: "on", problem: null });
+    tellPresence();
+  } catch (error) {
+    usePush.setState({ problem: error instanceof Error ? error.message : "Notifications could not be set up." });
+  }
+}
+
+/** Turns notifications on: asks iOS when it has to, then tells the computer. Resolves to how it went. */
+export async function enablePush(): Promise<PushStatus> {
+  if (!native) return "unsupported";
+  let permission = await native.Notifications.getPermissionsAsync();
+  if (!permission.granted && permission.canAskAgain) permission = await native.Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
+  if (!permission.granted) {
+    usePush.setState({ status: "denied" });
+    return "denied";
+  }
+  usePush.setState({ wanted: true, problem: null });
+  void keep(KEY, JSON.stringify({ wanted: true })).catch(() => {});
+  await register(true);
+  return usePush.getState().status;
+}
+
+export async function disablePush() {
+  usePush.setState({ wanted: false, status: native ? "off" : "unsupported", problem: null });
+  registered = "";
+  void keep(KEY, JSON.stringify({ wanted: false })).catch(() => {});
+  await saveKeys([]).catch(() => {});
+  if (useApp.getState().link === "online") await api["link.push.unregister"]().catch(() => {});
+  // Every other paired computer has this phone's address too.
+  void tellOthers("link.push.unregister");
+}
+
+/** Keeps one key for each paired computer where the notification extension can read them (none removes them all). */
+async function saveKeys(pairings: Pairing[]) {
+  if (!Activities) return;
+  if (typeof Activities.setPushKeys === "function") await Activities.setPushKeys(pairings.map((pairing) => ({ host: pairing.serverId, key: base64(pushKeyOf(pairing)) })));
+  // A build from before several computers keeps one key: the one of the computer in use.
+  else await Activities.setPushKey(pairings.length ? base64(pushKeyOf(useApp.getState().pairing ?? pairings[0]!)) : null);
+}
+
+// ── Presence: the computer says nothing about a chat that is on screen ──────────────────────────
+
+let presence = "";
+function tellPresence() {
+  if (useApp.getState().link !== "online" || !usePush.getState().wanted || !canPush()) return;
+  const active = AppState.currentState === "active";
+  const chatId = active ? chatOnScreen() : undefined;
+  const now = active + ":" + (chatId ?? "");
+  if (now === presence) return;
+  presence = now;
+  void api["link.push.presence"](active, chatId).catch(() => {
+    presence = "";
+  });
+}
+
+// ── Opening the chat a notification is about ────────────────────────────────────────────────────
+
+function chatOf(response: import("expo-notifications").NotificationResponse): string | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const id = payload?.chatId ?? (request.content.data as Record<string, unknown> | undefined)?.chatId;
+  return typeof id === "string" && id ? id : undefined;
+}
+/** The computer an alert came from, as the notification extension found out by which key opened it. */
+function hostOf(response: import("expo-notifications").NotificationResponse): string | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const host = payload?.host ?? (request.content.data as Record<string, unknown> | undefined)?.host;
+  return typeof host === "string" && host ? host : undefined;
+}
+function openFrom(response: import("expo-notifications").NotificationResponse | null) {
+  if (!response || !native) return;
+  const chatId = chatOf(response);
+  const host = hostOf(response);
+  native.Notifications.clearLastNotificationResponse();
+  if (!chatId) return;
+  // The app may still be starting: the chat opens once the pairing is read. An alert from another
+  // paired computer makes the phone use that computer first.
+  const go = () => {
+    const state = useApp.getState();
+    const other = !!host && host !== state.pairing?.serverId && state.pairings.some((pairing) => pairing.serverId === host);
+    if (other) void switchComputer(host);
+    else if (chatOnScreen() === chatId) return;
+    router.push({ pathname: "/chat/[id]", params: { id: chatId } });
+  };
+  if (useApp.getState().booted && useApp.getState().pairing) go();
+  else {
+    const stop = useApp.subscribe((state) => {
+      if (!state.booted) return;
+      stop();
+      if (state.pairing) go();
+    });
+  }
+}
+
+// ── Live Activities while the app is open ───────────────────────────────────────────────────────
+
+/** What a chat's activity shows, from what the phone knows (src/state/activity.ts has the rules). */
+export function activityStateOf(chatId: string, previews: boolean, previous?: ActivityState): ActivityState {
+  const { parts, running } = useApp.getState();
+  const summary = parts.runs?.filter((run) => run.chatId === chatId).reduce<RunSummary | undefined>((latest, run) => (!latest || run.time > latest.time ? run : latest), undefined);
+  return activityView({
+    run: running[chatId],
+    summary,
+    active: !!parts.live?.active.includes(chatId),
+    asked: !!parts.live?.requests.some((request) => request.chatId === chatId),
+    streaming: !!parts.live?.streams[chatId],
+    previews,
+    previous,
+    now: Date.now(),
+  });
+}
+
+const shown = new Map<string, ActivityState | null>(); // chat id → what its card last showed (null: a card this app didn't draw yet)
+const over = new Map<string, number>(); // chat id → when its turn was seen to be over; the card stays a while
+// Apple delivers a card's updates to an address of its own. The computer needs it to change the
+// card while the app is closed, so it is passed on, and passed on again until the computer has it.
+const addresses = new Map<string, string>(); // chat id → the card's address
+const told = new Map<string, string>(); // chat id → the address the computer was last told
+
+function tellAddresses() {
+  if (useApp.getState().link !== "online") return;
+  for (const [chatId, token] of addresses) {
+    if (told.get(chatId) === token) continue;
+    told.set(chatId, token);
+    // A call that fails is tried again the next time the computer is reached.
+    void api["link.push.activity"](chatId, token).catch(() => told.get(chatId) === token && told.delete(chatId));
+  }
+}
+
+/**
+ * Asks the phone which cards it has: a push may have started one while the app was closed, and an
+ * address may have come when nothing was listening. Their addresses go to the computer.
+ */
+async function syncActivities() {
+  if (!Activities) return;
+  try {
+    for (const { chatId, token } of await Activities.tokens()) addresses.set(chatId, token);
+    for (const chatId of await Activities.running()) if (!shown.has(chatId)) shown.set(chatId, null);
+  } catch {
+    // An older build of the native part: the events still bring the addresses.
+  }
+  tellAddresses();
+  void followActivities();
+}
+
+function forgetActivity(chatId: string) {
+  shown.delete(chatId);
+  over.delete(chatId);
+  addresses.delete(chatId);
+  told.delete(chatId);
+  if (useApp.getState().link === "online") void api["link.push.activity"](chatId, null).catch(() => {});
+}
+
+const same = (a: ActivityState | null | undefined, b: ActivityState) => !!a && a.phase === b.phase && a.label === b.label && a.steps === b.steps && a.startedAt === b.startedAt && a.finishedAt === b.finishedAt;
+
+async function followActivities() {
+  if (!Activities || !usePush.getState().wanted) return;
+  const { parts, running, pairing } = useApp.getState();
+  const prefs = pairing ? parts.phones?.[pairing.deviceId]?.push : undefined;
+  // Before the computer has said what is going on, nothing is known: a card is left as it is.
+  if (!prefs?.activities || !parts.live || !useApp.getState().synced) return;
+  const active = new Set(parts.live.active ?? []);
+  const front = AppState.currentState === "active";
+  // A turn in the chat on screen gets a card; it goes on when the person leaves the app.
+  const onScreen = chatOnScreen();
+  if (front && onScreen && active.has(onScreen) && !shown.has(onScreen) && Activities.enabled()) {
+    const chat = parts.chats?.find((item) => item.id === onScreen);
+    const bot = parts.bots?.find((item) => item.id === chat?.botId);
+    const run = running[onScreen];
+    if (chat && bot && !chat.botIds && run?.status === "Working") {
+      const look = lookOf(bot);
+      const state = activityStateOf(onScreen, prefs.previews);
+      shown.set(onScreen, state);
+      try {
+        await Activities.start({ chatId: onScreen, botId: bot.id, botName: bot.name, head: look.head, palette: look.palette, eyes: look.eyes ?? "oval", colors: look.colors ?? [] }, state);
+      } catch {
+        shown.delete(onScreen);
+      }
+    }
+  }
+  for (const chatId of [...shown.keys()]) {
+    const state = activityStateOf(chatId, prefs.previews, shown.get(chatId) ?? undefined);
+    if (!active.has(chatId)) {
+      // The turn is over. The card says so (done, and how long it took) and stays: a new turn in
+      // the chat takes it over, and after a while without one it goes.
+      const since = over.get(chatId);
+      if (since === undefined) over.set(chatId, Date.now());
+      else if (Date.now() - since > LINGER_MS) {
+        void Activities.end(chatId, null, 0).catch(() => {});
+        forgetActivity(chatId);
+        continue;
+      }
+    } else over.delete(chatId);
+    if (same(shown.get(chatId), state)) continue;
+    shown.set(chatId, state);
+    void Activities.update(chatId, state).catch(() => {});
+  }
+}
+
+// ── Starting up ─────────────────────────────────────────────────────────────────────────────────
+
+if (native) {
+  // A push that wakes the app without showing anything: a bot asked this phone something.
+  try {
+    native.TaskManager.defineTask(TASK, async () => {
+      // The app has just been started in the background: give the link a moment to come up.
+      const end = Date.now() + 20_000;
+      while (Date.now() < end && !(useApp.getState().link === "online" && useApp.getState().synced)) await new Promise((resolve) => setTimeout(resolve, 250));
+      // The same wake brings a chat's card up to date (a turn ended while the app was closed) and
+      // tells the computer the card's address, so it can change the card itself from then on.
+      await syncActivities().catch(() => {});
+      const answered = await answerPendingAsks().catch(() => 0);
+      return answered > 0 ? native.Notifications.BackgroundNotificationTaskResult.NewData : native.Notifications.BackgroundNotificationTaskResult.NoData;
+    });
+  } catch {
+    // A task can be defined once; a reload defines it again.
+  }
+}
+
+let started = false;
+/** Called once when the app starts, after the saved pairing is read. */
+export async function startPush() {
+  if (started || !native) return;
+  started = true;
+  const { Notifications } = native;
+  try {
+    const saved = await readKept(KEY);
+    if (saved && (JSON.parse(saved) as { wanted?: boolean }).wanted) usePush.setState({ wanted: true });
+  } catch {
+    // Unreadable: notifications stay off until the person turns them on.
+  }
+
+  // In front, the banner shows for other chats; the chat on screen already shows what arrived.
+  Notifications.setNotificationHandler({
+    handleNotification: async (notification) => {
+      const request = notification.request;
+      const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+      // A chat on another paired computer is never the one on screen, whatever its id.
+      const other = typeof payload?.host === "string" && payload.host !== useApp.getState().pairing?.serverId;
+      const here = !other && !!payload?.chatId && payload.chatId === chatOnScreen();
+      return { shouldShowBanner: !here, shouldShowList: !here, shouldPlaySound: !here, shouldSetBadge: false };
+    },
+  });
+  Notifications.addNotificationResponseReceivedListener(openFrom);
+  openFrom(Notifications.getLastNotificationResponse());
+  Notifications.addPushTokenListener(() => void register(true));
+  void Notifications.registerTaskAsync(TASK).catch(() => {});
+
+  Activities?.addListener("token", ({ chatId, token }) => {
+    addresses.set(chatId, token);
+    if (!shown.has(chatId)) shown.set(chatId, null);
+    tellAddresses();
+  });
+  Activities?.addListener("startToken", ({ token }) => {
+    startToken = token;
+    void register(true);
+  });
+  Activities?.addListener("ended", ({ chatId }) => forgetActivity(chatId));
+  void syncActivities();
+
+  let link = useApp.getState().link;
+  let meta = useApp.getState().parts.meta;
+  let pairings = useApp.getState().pairings;
+  useApp.subscribe((state) => {
+    // A computer was paired or unpaired: the keys follow, so an unpaired computer's key is gone at once.
+    if (state.pairings !== pairings) {
+      pairings = state.pairings;
+      if (usePush.getState().wanted) void saveKeys(pairings).catch(() => {});
+    }
+    // The computer says what it can do in its first answer, a moment after the link is up.
+    if (state.link !== link || state.parts.meta !== meta) {
+      const came = state.link === "online" && link !== "online";
+      link = state.link;
+      meta = state.parts.meta;
+      if (link === "online") {
+        if (came) {
+          presence = "";
+          // The computer may have restarted, or never got an address: every card's is passed on again.
+          told.clear();
+          void syncActivities();
+        }
+        void register();
+        tellPresence();
+      }
+    }
+    void followActivities();
+  });
+  AppState.addEventListener("change", (next) => {
+    tellPresence();
+    if (next === "active") void syncActivities();
+    else void followActivities();
+  });
+  onChatOnScreen(() => {
+    tellPresence();
+    void followActivities();
+  });
+  void register();
+}

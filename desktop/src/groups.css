@@ -1,0 +1,157 @@
+/* Group chats and coding-chat labels. Uses Botkins' tokens from style.css; adds no new palette. */
+
+/* Stacked member avatars: chat header, empty group chat and chat rows. */
+.group-avatars {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+/* Bare avatars side by side, just touching: nothing behind them. */
+.group-avatars > * + * {
+  margin-left: -4px;
+}
+.group-avatars.large {
+  margin-bottom: 6px;
+}
+.group-avatars.large > * + * {
+  margin-left: -8px;
+}
+.group-avatars.small > * + * {
+  margin-left: -6px;
+}
+.chathead-title {
+  min-width: 0;
+}
+.chathead-title h2,
+.chathead-title small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A reply's speaker label. */
+article b.speaker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+article b.speaker .bot-avatar,
+article b.speaker .avatar {
+  flex: none;
+}
+.typing {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* Project label and Changes button in a coding chat's header. */
+.project-tag {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.project-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+  background: var(--sunken);
+}
+.project-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+  color: var(--ink-2);
+}
+.project-label em {
+  font-style: normal;
+  font-weight: 600;
+}
+.composewrap > .project-changes {
+  margin-bottom: 10px;
+}
+.empty-project {
+  width: min(560px, 100%);
+  margin: 18px auto 0;
+  text-align: left;
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 4px 14px 10px;
+}
+.empty-project-open {
+  margin: 16px auto 0;
+  color: var(--muted);
+}
+
+/* New chat: pick one bot or several. */
+.chat-pick {
+  display: grid;
+  gap: 2px;
+  max-height: 46vh;
+  overflow: auto;
+}
+.chat-pick .rowwrap {
+  gap: 8px;
+}
+.chat-pick .row {
+  padding: 10px 4px;
+}
+.chat-pick input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0 2px 0 6px;
+  accent-color: var(--accent);
+  flex: none;
+}
+.chat-pick-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.chat-pick-actions small {
+  color: var(--muted);
+}
+
+/* Chat rows: group members and a coding chat's folder. */
+.row-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.row-folder svg {
+  flex: none;
+}
+
+/* The @ mention menu reuses the slash menu's look. */
+.mention-menu .bot-avatar,
+.mention-menu .avatar {
+  flex: none;
+}
+.mention-menu button > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .project-label > span {
+    max-width: 90px;
+  }
+}
+.chat-pick-actions .primary {
+  flex: none;
+  white-space: nowrap;
+}

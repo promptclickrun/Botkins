@@ -1,0 +1,145 @@
+/* Using another computer's Botkins: the switcher, the line across the top, the pairing form (src/RemoteHosts.tsx). */
+.host-switch {
+  position: relative;
+  margin-top: auto;
+}
+.host-switch + .account {
+  margin-top: 0;
+}
+.host-switch .host-button {
+  width: 100%;
+  margin-top: 0;
+}
+.host-glyph {
+  position: relative;
+  display: inline-flex;
+}
+.host-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--rail);
+  background: var(--faint);
+}
+.host-dot[data-state="online"] {
+  background: var(--success);
+}
+.host-dot[data-state="connecting"] {
+  background: var(--warning);
+}
+.host-dot[data-state="revoked"] {
+  background: var(--danger);
+}
+.host-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 250px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.host-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  text-align: left;
+  justify-content: flex-start;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--ink);
+  background: none;
+}
+.host-menu button:hover,
+.host-menu button:focus-visible {
+  background: var(--hover);
+}
+.host-menu button > span {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.host-menu button small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.host-menu hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px 0;
+}
+.host-error {
+  display: block;
+  color: var(--danger);
+}
+.host-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 8px 15px 0;
+  padding: 7px 8px 7px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: calc(13px * var(--text-scale));
+}
+.host-banner[data-state="offline"],
+.host-banner[data-state="connecting"] {
+  background: var(--warning-soft);
+}
+.host-banner[data-state="revoked"] {
+  background: var(--danger-soft);
+}
+.host-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.host-banner-text strong,
+.host-banner-text span {
+  display: inline;
+}
+.host-banner-state {
+  color: var(--muted);
+}
+.host-banner .secondary {
+  flex: none;
+}
+.host-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.host-form input {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+.host-form input[aria-label="Pairing link"] {
+  flex: 1 1 100%;
+}
+.host-form input[aria-label="Pairing code"] {
+  flex: 0 1 150px;
+}
+.host-or {
+  flex: 1 1 100%;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.host-rename {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.host-rename input {
+  flex: 1;
+  min-width: 0;
+}

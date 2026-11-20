@@ -1,0 +1,294 @@
+/* The wiki page editor (src/WikiEditor.tsx). Loaded with the editor, never in chats.
+   Milkdown Crepe's own colors are mapped to Botkins' tokens, so light and dark follow the app. */
+
+/* While editing, the page fills the pane and only the text scrolls, so Save and the toolbar stay in view. */
+.wiki-page.editing {
+  height: 100%;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+.wiki-page.editing > .wiki-page-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wiki-page.editing .wiki-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wiki-page.editing .wiki-editor-surface {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+/* The editor is a surface card: no border or shadow. */
+.wiki-editor {
+  position: relative;
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------ toolbar */
+.wiki-toolbar {
+  position: relative;
+  z-index: 5;
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
+}
+.wiki-tool {
+  width: 29px;
+  height: 30px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  flex: none;
+}
+.wiki-tool:hover {
+  filter: none;
+}
+.wiki-tool svg {
+  color: var(--ink-2);
+}
+.wiki-tool[aria-pressed="true"] {
+  background: var(--active);
+}
+.wiki-tool[aria-pressed="true"] svg {
+  color: var(--ink);
+}
+.wiki-tool:disabled {
+  opacity: 0.4;
+}
+.wiki-tool-text {
+  width: auto;
+  gap: 6px;
+  padding: 0 9px;
+  font-size: calc(13px * var(--text-scale));
+  white-space: nowrap;
+}
+.wiki-block-select {
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--ink);
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+  min-width: 108px;
+}
+.wiki-block-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wiki-tool-gap {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--line);
+  flex: none;
+}
+.wiki-tool-spacer {
+  flex: 1;
+}
+.wiki-pick-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.wiki-picker {
+  position: fixed;
+  z-index: 60;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+}
+.wiki-picker input {
+  width: 100%;
+  padding: 7px 9px;
+  font-size: calc(13px * var(--text-scale));
+  border-radius: var(--radius-sm);
+}
+.wiki-picker-list {
+  margin-top: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 1px;
+}
+.wiki-picker-list button {
+  width: 100%;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  text-align: left;
+}
+.wiki-picker-list button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wiki-picker-list button small {
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+}
+.wiki-picker-list button[aria-selected="true"] {
+  background: var(--active);
+}
+.wiki-picker-list p {
+  padding: 8px;
+}
+.wiki-editor-loading {
+  position: absolute;
+  top: 58px;
+  left: 24px;
+}
+
+/* ------------------------------------------------------------------ the editor surface */
+.wiki-editor-surface .milkdown {
+  --crepe-color-background: var(--surface);
+  --crepe-color-on-background: var(--ink);
+  --crepe-color-surface: var(--raised);
+  --crepe-color-surface-low: var(--sunken);
+  --crepe-color-on-surface: var(--ink);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--muted);
+  --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--active);
+  --crepe-color-on-secondary: var(--ink);
+  --crepe-color-inverse: var(--ink);
+  --crepe-color-on-inverse: var(--surface);
+  --crepe-color-inline-code: var(--ink);
+  --crepe-color-error: var(--danger);
+  --crepe-color-hover: var(--hover);
+  --crepe-color-selected: color-mix(in srgb, var(--accent) 26%, transparent);
+  --crepe-color-inline-area: color-mix(in srgb, var(--ink) 9%, transparent);
+  --crepe-base-font-size: calc(15px * var(--text-scale));
+  --crepe-font-title: var(--font-display);
+  --crepe-font-default: inherit;
+  --crepe-font-code: var(--font-mono);
+  --crepe-shadow-1: var(--shadow);
+  --crepe-shadow-2: var(--shadow);
+  border-radius: 0 0 var(--radius) var(--radius);
+  font-family: inherit;
+}
+.wiki-editor-surface .milkdown {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.wiki-editor-surface .milkdown .ProseMirror {
+  flex: 1;
+  min-height: 240px;
+  padding: 22px 28px 48px 52px;
+  font-size: calc(16px * var(--text-scale));
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+/* Headings in the serif, as on the read page. */
+.wiki-editor-surface .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.25;
+  padding: 0;
+}
+.wiki-editor-surface .milkdown .ProseMirror h1 {
+  font-size: calc(30px * var(--text-scale));
+  margin-top: 6px;
+}
+.wiki-editor-surface .milkdown .ProseMirror h2 {
+  font-size: calc(21px * var(--text-scale));
+  margin-top: 24px;
+}
+.wiki-editor-surface .milkdown .ProseMirror h3 {
+  font-size: calc(17px * var(--text-scale));
+  margin-top: 18px;
+}
+.wiki-editor-surface .milkdown .ProseMirror h4 {
+  font-size: calc(16px * var(--text-scale));
+  margin-top: 14px;
+}
+.wiki-editor-surface .milkdown .ProseMirror p {
+  padding: 4px 0;
+}
+.wiki-editor-surface .milkdown .ProseMirror h1 + * {
+  margin-top: 6px;
+}
+.wiki-editor-surface .milkdown .ProseMirror strong {
+  display: inline;
+  font-weight: 700;
+}
+.wiki-editor-surface .milkdown .ProseMirror a {
+  color: var(--accent-text);
+  text-underline-offset: 2px;
+}
+.wiki-editor-surface .milkdown .ProseMirror blockquote {
+  padding-left: 14px;
+  color: var(--ink-2);
+}
+.wiki-editor-surface .milkdown .ProseMirror blockquote::before {
+  width: 3px;
+  background: var(--line-strong);
+}
+.wiki-editor-surface .milkdown .ProseMirror code {
+  font-size: calc(14px * var(--text-scale));
+  padding: 0 4px;
+  border-radius: 5px;
+  background: var(--sunken);
+}
+.wiki-editor-surface .milkdown .ProseMirror hr {
+  margin: 8px 0;
+}
+.wiki-editor-surface .milkdown .ProseMirror table {
+  font-size: calc(14px * var(--text-scale));
+}
+
+/* Floating parts: the selection toolbar, the "/" menu, link editing and the block handle. */
+.wiki-editor-surface .milkdown :is(.milkdown-toolbar, .milkdown-slash-menu, .milkdown-link-edit, .milkdown-link-preview) {
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  font-size: calc(13px * var(--text-scale));
+}
+.wiki-editor-surface .milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.wiki-editor-surface .milkdown button:hover {
+  filter: none;
+}
+.wiki-editor-surface .milkdown input {
+  padding: 0;
+  border-radius: 0;
+}
+.wiki-editor-surface .milkdown .milkdown-code-block {
+  --crepe-color-surface: var(--sunken);
+  --crepe-color-surface-low: var(--surface);
+  margin: 8px 0;
+  padding: 6px 12px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.wiki-editor-surface .milkdown .milkdown-code-block .cm-editor {
+  font-size: calc(13px * var(--text-scale));
+}

@@ -1,0 +1,8 @@
+{
+  "name": "botkins-nearby",
+  "version": "1.0.0",
+  "description": "Finds Botkins computers on the local network (Bonjour).",
+  "license": "MIT",
+  "private": true,
+  "main": "index.ts"
+}

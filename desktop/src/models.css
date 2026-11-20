@@ -1,0 +1,702 @@
+/* Model providers and models: provider marks, the model and thinking picker, the model badge,
+   Settings › Model providers and the welcome's providers. Theme tokens only; provider marks keep their own colors. */
+
+/* ------------------------------------------------------------ provider marks (src/ProviderIcon.tsx) */
+.provider-icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: middle;
+  /* The OpenCode mark's inner square. */
+  --provider-icon-soft: color-mix(in srgb, currentColor 35%, transparent);
+}
+.provider-icon.initial {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 22%;
+  background: color-mix(in srgb, var(--ink) 12%, var(--paper));
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ------------------------------------------------------------ a model with its provider's mark */
+.model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.model-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-badge-effort {
+  flex: none;
+  margin-left: -2px;
+  color: var(--muted);
+}
+.model-badge-effort::before {
+  content: "· ";
+}
+
+/* ------------------------------------------------------------ the picker */
+.model-picker .mp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: -6px;
+}
+.mp-label {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.mp-search {
+  position: relative;
+  flex: 1;
+  max-width: 240px;
+  display: flex;
+  align-items: center;
+}
+.mp-search svg {
+  position: absolute;
+  left: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.model-picker .mp-search input {
+  width: 100%;
+  height: 30px;
+  padding: 4px 9px 4px 28px;
+  font-size: calc(13px * var(--text-scale));
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+}
+/* The list is a soft well; rows sit on it without lines of their own. */
+.mp-list {
+  position: relative;
+  max-height: min(300px, 38vh);
+  min-height: 92px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--canvas);
+  border-radius: var(--radius);
+  padding: 0 4px 4px;
+}
+.mp-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mp-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 -4px;
+  padding: 10px 12px 5px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--canvas);
+}
+/* What is left of the provider's plan: "62% of weekly left · resets Mon" (src/ProviderLimits.tsx). */
+.mp-left {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.mp-left.low {
+  color: var(--danger);
+}
+[role="group"] + [role="group"] > .mp-group-head {
+  margin-top: 4px;
+}
+.mp-subhead {
+  padding: 7px 10px 2px 33px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--faint);
+}
+.mp-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px 6px 6px;
+  margin-top: 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: calc(14px * var(--text-scale));
+}
+.mp-option:hover {
+  background: var(--hover);
+}
+/* The chosen model: the action color's soft step, its check and name in the action color. */
+.mp-option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+.mp-option[aria-selected="true"] .mp-name {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+/* The list has focus: the chosen row carries the ring, as a focused native list does. */
+.mp-list:focus-visible .mp-option[aria-selected="true"] {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.mp-option.unavailable {
+  cursor: default;
+  color: var(--muted);
+}
+.mp-option[aria-disabled="true"]:hover {
+  background: none;
+}
+.mp-option.unavailable .mp-name {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.mp-option.unavailable[aria-selected="true"] .mp-name {
+  text-decoration: none;
+}
+.mp-inherit {
+  margin-top: 4px;
+}
+.mp-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--accent-text);
+}
+.mp-text {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.mp-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  font-weight: 400;
+  line-height: 19px;
+}
+.model-picker .mp-text small {
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.35;
+  color: var(--muted);
+}
+/* What the provider states about a model: its window, reply room and the like, one after another. */
+.model-picker .mp-text small.mp-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.mp-facts span + span::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--muted);
+}
+.mp-text small .model-badge {
+  color: var(--ink);
+}
+.mp-tag {
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  line-height: 16px;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: var(--success);
+  background: var(--success-soft);
+}
+.mp-note {
+  padding: 14px 10px;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.mp-empty {
+  display: grid;
+  gap: 3px;
+  padding: 14px 15px;
+  border-radius: var(--radius);
+  background: var(--canvas);
+  font-size: calc(13px * var(--text-scale));
+}
+.mp-empty small,
+p.mp-providers {
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.4;
+  color: var(--muted);
+}
+p.mp-providers {
+  margin: -6px 2px 0;
+}
+
+/* Thinking: "Default" and the model's own levels. Many levels wrap instead of squeezing. */
+.thinking-levels.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.thinking-levels.segmented button {
+  flex: 1 1 auto;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.thinking-levels.segmented button[aria-checked="true"] {
+  background: var(--raised);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.thinking-levels.segmented button:disabled {
+  opacity: 0.55;
+}
+.model-picker p[role="alert"] {
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--danger);
+}
+/* Thinking: a quiet block under the list, on the canvas. */
+.model-picker .thinking-control {
+  background: var(--canvas);
+  border: 0;
+  border-radius: var(--radius);
+}
+
+/* ------------------------------------------------------------ the chat header's model */
+.chathead .chat-model {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 240px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 400;
+}
+.chathead .context-meter ~ .chat-model,
+.chathead .project-tag ~ .chat-model,
+.chathead .chat-model + .bot-settings {
+  margin-left: 0;
+}
+@media (max-width: 1000px) {
+  .chathead .chat-model {
+    max-width: 150px;
+  }
+}
+
+/* The chat's model dialog is a little wider than a plain dialog, for model names and descriptions. */
+dialog.model-dialog {
+  width: min(500px, calc(100vw - 32px));
+}
+
+/* ------------------------------------------------------------ the side menu's Models line */
+.provider-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  min-width: 18px;
+}
+.shell.collapsed .provider-stack > :not(:first-child) {
+  display: none;
+}
+
+/* ------------------------------------------------------------ Settings › Model providers */
+.provider-card .provider-head {
+  justify-content: flex-start;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.provider-card h3.set-name {
+  font-size: calc(15px * var(--text-scale));
+  font-weight: 600;
+}
+.provider-card h3.set-name:focus {
+  outline: none;
+}
+/* The provider's own mark, bare; dimmed until it is connected. */
+.provider-badge {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--muted);
+  flex: none;
+  opacity: 0.7;
+}
+.provider-badge.on {
+  color: var(--ink);
+  opacity: 1;
+}
+.provider-offer .provider-badge {
+  width: 26px;
+  height: 26px;
+}
+.provider-offer {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.provider-offer-problem {
+  flex-basis: 100%;
+  padding-left: 42px;
+}
+.provider-card .set-actions .provider-remove {
+  margin-right: auto;
+}
+.set-button.quiet {
+  background: transparent;
+  color: var(--muted);
+}
+.set-button.quiet:hover:not(:disabled) {
+  color: var(--ink);
+}
+.provider-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.provider-quiet svg {
+  flex: none;
+}
+p.provider-problem {
+  margin: 6px 4px 0;
+}
+p.provider-foot {
+  margin: -6px 4px 18px;
+}
+small.error-text {
+  color: var(--danger) !important;
+}
+.provider-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.provider-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  font-size: calc(12px * var(--text-scale));
+  user-select: all;
+}
+.provider-services {
+  gap: 10px;
+}
+.service-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.service-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 0 4px 2px;
+}
+.service-list li + li {
+  border-top: 1px solid var(--line);
+}
+.service-connect {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--canvas);
+}
+.service-connect .mp-search {
+  max-width: none;
+}
+.service-connect .mp-search input {
+  width: 100%;
+  height: 30px;
+  padding: 4px 9px 4px 28px;
+  font-size: calc(13px * var(--text-scale));
+  border-radius: var(--radius-sm);
+}
+.service-results {
+  list-style: none;
+  margin: 0;
+  padding: 3px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+}
+.service-results:empty {
+  display: none;
+}
+.service-results button {
+  width: 100%;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: calc(13px * var(--text-scale));
+  text-align: left;
+}
+.service-results small {
+  color: var(--muted);
+}
+.service-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.service-title h4 {
+  margin: 0;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+}
+.service-title h4:focus {
+  outline: none;
+}
+.service-form {
+  display: grid;
+  gap: 6px;
+}
+.service-form label {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.service-form input {
+  height: 32px;
+  padding: 4px 10px;
+  font-size: calc(13px * var(--text-scale));
+  border-radius: var(--radius-sm);
+}
+.service-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.service-key {
+  display: flex;
+  gap: 8px;
+}
+.service-key input {
+  flex: 1;
+  min-width: 0;
+}
+.provider-head small.provider-version {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--faint);
+}
+.service-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------ the welcome's providers */
+/* Plain rows on the canvas: the provider's own mark, its name and line, and its action. */
+.welcome-providers {
+  margin-top: 28px;
+  width: 100%;
+  text-align: left;
+}
+.welcome-providers h2 {
+  margin: 0 0 4px;
+  font-family: var(--font-body);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.welcome-provider-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 0;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.welcome-provider-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Every provider is the same row: a mark, a name, one line and one action. What a sign-in is
+   waiting for, or why it failed, sits under its own row. */
+.welcome-provider {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 60px;
+  padding: 10px 2px;
+}
+.welcome-provider > .welcome-note,
+.welcome-provider > .welcome-problem {
+  flex: 0 0 calc(100% - 40px);
+  margin: 2px 0 2px 40px;
+  width: auto;
+}
+.welcome-provider:focus {
+  outline: none;
+}
+.welcome-provider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* A hairline between rows that takes no room, so every row is the same height. */
+.welcome-provider + .welcome-provider {
+  box-shadow: 0 -1px 0 var(--line);
+}
+.welcome-provider-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.welcome-provider-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.welcome-provider-text strong {
+  font-size: calc(15px * var(--text-scale));
+  font-weight: 600;
+}
+.welcome-provider-text small {
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.4;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.welcome-provider-action {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.welcome-provider-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.welcome-provider-state.on {
+  color: var(--success);
+  font-weight: 600;
+}
+/* The sign-in buttons of the three main providers are one size, so none stands out. */
+.welcome-secondary.welcome-signin {
+  gap: 7px;
+  min-width: 172px;
+  justify-content: center;
+}
+.welcome-secondary:disabled {
+  opacity: 0.5;
+}
+.welcome-more {
+  margin-top: 6px;
+}
+.welcome-more summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px 3px 2px;
+  border-radius: 6px;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.welcome-more summary:hover {
+  color: var(--ink);
+}
+.welcome-more summary::-webkit-details-marker {
+  display: none;
+}
+.welcome-more summary svg {
+  transition: transform 0.15s ease;
+}
+.welcome-more[open] summary svg {
+  transform: rotate(90deg);
+}
+.welcome-more summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.welcome-more .welcome-provider-list {
+  margin-top: 2px;
+}
+.welcome .welcome-note {
+  margin-top: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-more summary svg {
+    transition: none;
+  }
+}
+@media (max-height: 640px) {
+  .welcome-providers {
+    margin-top: 18px;
+  }
+  .welcome-provider {
+    min-height: 50px;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+}
+
+/* Short and narrow windows: the picker's list gives room to Thinking and Save, and the side menu shows one mark. */
+@media (max-height: 640px) {
+  .mp-list {
+    max-height: 24vh;
+  }
+  dialog.model-dialog {
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+  dialog.model-dialog > p {
+    margin: 2px 0 8px;
+  }
+  .model-picker {
+    gap: 11px;
+  }
+  .model-picker .thinking-control {
+    padding: 10px 13px;
+  }
+}
+@media (max-width: 900px) {
+  .provider-stack > :not(:first-child) {
+    display: none;
+  }
+}
