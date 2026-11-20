@@ -3,6 +3,15 @@ import { existsSync } from "node:fs";
 import { loadConfig, parseValue, read, saveConfig, SETTINGS, validate, withSetting, changed } from "../../desktop/terminal/config.mjs";
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { ask, edit } from "./input.mjs";
+import { ownCommand } from "./install.mjs";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import semver from "semver";
+import { latestRelease } from "../../desktop/updates.mjs";
+import { serviceManager } from "../../desktop/terminal/manager.mjs";
+import { applyUpdate, assetName, installLayout } from "../../desktop/terminal/update-install.mjs";
+import { REQUEST } from "../../desktop/terminal/updates.mjs";
 
 /**
  * The config through the running service, or straight from the file when no service holds it.
@@ -103,16 +112,41 @@ export const settings = {
   update: {
     summary: "Install the latest signed release",
     usage: "botkins update [--check]",
-    options: { check: { type: "boolean", about: "Only say whether there is a newer release" } },
-    details: "An update is taken only from the project's own releases, and only when its checksums carry the release key's signature. The service restarts on the new version; if that one fails to start, the earlier one is put back.",
+    options: { check: { type: "boolean", about: "Only say whether there is a newer release" }, apply: { type: "boolean", about: "Install now, in this process (what the service's own update job runs)" } },
+    details: "An update is taken only from the project's own releases, and only when its checksums carry the Botkins release key's signature (GnuPG checks it). The new version is unpacked beside the old one and the service restarts on it; if it doesn't stay up, the old one is put back. For the whole computer's service, run it as root (with sudo).",
     async run(context) {
+      const entry = fileURLToPath(new URL("../botkins.mjs", import.meta.url));
+      const layout = installLayout(entry);
       if (context.options.check) {
-        const state = await context.client.call("update.check");
-        context.print(state, state.status === "available" ? "Botkins " + state.latest + " is available (this is " + state.current + ")." + (state.canInstall ? " Install it with `botkins update`." : state.message ? " " + state.message : "") : "Botkins " + state.current + " is the latest release.");
+        let state;
+        try {
+          state = await context.client.call("update.check");
+        } catch (error) {
+          if (error.code !== "NOT_RUNNING" && error.code !== "UNSUPPORTED") throw error;
+          // No service to ask: the same question, asked from here.
+          const { version, assets } = await latestRelease({ token: "" });
+          const newer = semver.gt(version, context.version);
+          state = { status: newer ? "available" : "current", current: context.version, latest: version, canInstall: newer && !!layout && assets.includes(assetName(version, process.platform, process.arch)) };
+        }
+        context.print(state, state.status === "available" ? "Botkins " + state.latest + " is available (this is " + state.current + ")." + (state.canInstall ? " Install it with `botkins update`." : " " + (state.message ?? "It has no terminal host build this copy can install by itself.")) : "Botkins " + state.current + " is the latest release.");
         return;
       }
-      const state = await context.client.call("update.install");
-      context.print(state, state.status === "current" ? "Botkins " + state.current + " is the latest release." : "Botkins " + state.latest + " is being installed. The service restarts by itself; `botkins status` shows the new version.");
+      const manager = serviceManager({ command: ownCommand(), env: context.env });
+      const installed = manager.installed();
+      // The service's request is taken up: left there, the watch would start this job again.
+      if (context.options.apply) rmSync(join(context.paths.runDir, REQUEST), { force: true });
+      if (installed?.scope === "system" && process.getuid?.() !== 0) {
+        // Not root: the service is asked, and its own root job does the installing.
+        const state = await context.client.call("update.install");
+        return void context.print(state, state.status === "current" ? "Botkins " + state.current + " is the latest release." : "Botkins " + state.latest + " is being installed by the service's update job. `botkins status` shows the new version once it has restarted.");
+      }
+      let result;
+      try {
+        result = await applyUpdate({ entry, manager: installed ? manager : undefined, say: (line) => context.note(line) });
+      } catch (error) {
+        throw new CliError(error.message, EXIT.failed, error.code);
+      }
+      context.print(result, result.status === "current" ? "Botkins " + result.current + " is the latest release." : "Botkins " + result.current + " is installed (it was " + result.previous + ")." + (installed ? " The service is running on it." : " Restart `botkins serve` to use it."));
     },
   },
 };

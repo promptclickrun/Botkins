@@ -116,7 +116,7 @@ export const service = {
       process.umask(0o077);
       const trial = context.options.trial === true || context.env.BOTKINS_TRIAL === "1";
       const { terminalUpdates } = await import("../../desktop/terminal/updates.mjs").catch(() => ({}));
-      const running = await startService({ paths: context.paths, version: context.version, trial, out: (line) => context.stdout.write(line), console: true, updates: terminalUpdates, env: context.env });
+      const running = await startService({ paths: context.paths, version: context.version, trial, out: context.env.BOTKINS_QUIET === "1" ? undefined : (line) => context.stdout.write(line), console: true, updates: terminalUpdates, env: context.env });
       return new Promise((resolve) => {
         let asked = false;
         // The service has saved its work and closed what it had open. The process ends now, even

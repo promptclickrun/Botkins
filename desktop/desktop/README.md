@@ -1,8 +1,10 @@
-# Run Botkins on a headless server
+# Run Botkins on a headless server with a virtual display
 
-From the repository root, run `docker compose up --build -d`. Compose starts the phone link and a separate Electron workspace on an Xvfb display with Openbox. By default, the link listens on the server's loopback interface at port 59851. An iOS Simulator on the same Mac can use that address.
+This setup is for a phone that must see and control a screen on the server. It runs Electron on a virtual display. It is the Compose profile `display`.
 
-To run beside an installed Botkins host on the same computer, use a different port and project name. For example, `BOTKINS_BIND_PORT=59853 docker compose -p botkins-smoke up --build -d` creates its own volumes. Use the same project name in subsequent Compose commands.
+From the `desktop` folder, run `docker compose --profile display up --build -d`. To use the profile for each Compose command, put `COMPOSE_PROFILES=display` in `.env`. Compose starts the phone link and a separate Electron workspace on an Xvfb display with Openbox. By default, the link listens on the server's loopback interface at port 59851. An iOS Simulator on the same Mac can use that address.
+
+To run beside an installed Botkins host on the same computer, use a different port and project name. For example, `BOTKINS_BIND_PORT=59853 docker compose -p botkins-smoke --profile display up --build -d` creates its own volumes. Use the same project name in subsequent Compose commands.
 
 For a phone on your network, set the bind address and the address the phone can reach in the repository's `.env` before starting Compose. For example, if your server's LAN address is 192.168.1.20, use the following settings.
 

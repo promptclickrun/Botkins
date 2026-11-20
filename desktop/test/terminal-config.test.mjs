@@ -82,18 +82,25 @@ test("the config file is the service's own, and a broken one is refused whole", 
 
 test("the data folder is the system's for the service's user and a person's own otherwise, never the desktop app's", () => {
   const none = () => false;
-  assert.equal(terminalPaths({ env: {}, platform: "linux", home: "/home/sam", uid: 1000, owns: none }).root, "/home/sam/.local/share/botkins");
-  assert.equal(terminalPaths({ env: { XDG_DATA_HOME: "/data" }, platform: "linux", home: "/home/sam", uid: 1000, owns: none }).root, "/data/botkins");
-  assert.equal(terminalPaths({ env: {}, platform: "linux", home: "/root", uid: 0, owns: none }).root, "/var/lib/botkins");
-  const service = terminalPaths({ env: {}, platform: "linux", home: "/var/lib/botkins", uid: 998, owns: (path, uid) => path === "/var/lib/botkins" && uid === 998 });
+  const record = () => null;
+  assert.equal(terminalPaths({ env: {}, platform: "linux", home: "/home/sam", uid: 1000, owns: none, record }).root, "/home/sam/.local/share/botkins");
+  assert.equal(terminalPaths({ env: { XDG_DATA_HOME: "/data" }, platform: "linux", home: "/home/sam", uid: 1000, owns: none, record }).root, "/data/botkins");
+  assert.equal(terminalPaths({ env: {}, platform: "linux", home: "/root", uid: 0, owns: none, record }).root, "/var/lib/botkins");
+  const service = terminalPaths({ env: {}, platform: "linux", home: "/var/lib/botkins", uid: 998, owns: (path, uid) => path === "/var/lib/botkins" && uid === 998, record });
+  // A whole-computer service installed on a folder of its own choosing is found through its record.
+  const moved = { record: () => ({ dataDir: "/srv/botkins" }) };
+  assert.equal(terminalPaths({ env: {}, platform: "linux", uid: 0, owns: none, ...moved }).root, "/srv/botkins");
+  // Someone else on that computer means the whole computer's service, unless they run one of their own.
+  assert.equal(terminalPaths({ env: {}, platform: "linux", home: "/home/sam", uid: 1000, owns: none, exists: () => false, ...moved }).root, "/srv/botkins");
+  assert.equal(terminalPaths({ env: {}, platform: "linux", home: "/home/sam", uid: 1000, owns: none, exists: () => true, ...moved }).root, "/home/sam/.local/share/botkins");
   assert.deepEqual([service.root, service.scope, service.socket, service.dataDir], ["/var/lib/botkins", "system", "/var/lib/botkins/run/botkins.sock", "/var/lib/botkins/data"]);
-  const mac = terminalPaths({ env: {}, platform: "darwin", home: "/Users/sam", uid: 501, owns: none });
+  const mac = terminalPaths({ env: {}, platform: "darwin", home: "/Users/sam", uid: 501, owns: none, record });
   assert.equal(mac.root, "/Users/sam/Library/Application Support/Botkins Terminal");
   assert.notEqual(userRoot({ platform: "darwin", home: "/Users/sam" }), "/Users/sam/Library/Application Support/Botkins");
   assert.equal(systemRoot("darwin"), "/Library/Application Support/Botkins Terminal");
-  const named = terminalPaths({ root: "/srv/b", env: { BOTKINS_DATA_DIR: "/ignored", BOTKINS_SOCKET: "/run/b.sock" }, platform: "linux", uid: 1000, owns: none });
+  const named = terminalPaths({ root: "/srv/b", env: { BOTKINS_DATA_DIR: "/ignored", BOTKINS_SOCKET: "/run/b.sock" }, platform: "linux", uid: 1000, owns: none, record });
   assert.deepEqual([named.root, named.scope, named.socket, named.config, named.logFile], ["/srv/b", "custom", "/run/b.sock", "/srv/b/config.json", "/srv/b/logs/botkins.log"]);
-  assert.equal(terminalPaths({ env: { BOTKINS_DATA_DIR: "/srv/c" }, platform: "linux", uid: 1000, owns: none }).socket, "/srv/c/run/botkins.sock");
+  assert.equal(terminalPaths({ env: { BOTKINS_DATA_DIR: "/srv/c" }, platform: "linux", uid: 1000, owns: none, record }).socket, "/srv/c/run/botkins.sock");
 });
 
 test("what looks like a credential never reaches the log", () => {
