@@ -35,7 +35,18 @@ test("the page says where the update stands in the desktop app's words, the comp
   // A copy that can't install it says what to do instead, and an error says what failed.
   const docker = "This copy runs in Docker. Pull the new image to update.";
   assert.equal(updateLine(update({ status: "available", latest: "0.16.5", message: docker })), docker);
-  assert.equal(updateLine(update({ status: "error", message: "GitHub could not check for updates (HTTP 503)." })), "GitHub could not check for updates (HTTP 503).");
+  // The computer's sentences when it can't find the latest release (desktop #59), the longest too.
+  const unreachable = "GitHub did not say which release is the latest: it could not be reached (ENOTFOUND). Try again later.";
+  const bothFailed =
+    "GitHub did not say which release is the latest: its release page did not lead to a stable release of Botkins (HTTP 200); its API is not answering this address for now (it limits how often one address may ask). Try again later.";
+  assert.equal(updateLine(update({ status: "error", message: unreachable })), unreachable);
+  assert.equal(updateLine(update({ status: "error", message: bothFailed })), bothFailed);
+  // A folder that isn't safe to update in: the sentence carries the commands that mend it, so it is
+  // shown whole, and the button only checks again.
+  const folder = "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in /opt/botkins. On the computer: `sudo chown root /opt && sudo chmod go-w /opt`.";
+  const unsafe = update({ status: "available", latest: "0.16.6", canInstall: false, message: folder });
+  assert.equal(updateLine(unsafe), folder);
+  assert.deepEqual(updateButton(unsafe), { kind: "check", title: "Check for updates", disabled: false });
   assert.equal(updateLine(update({ status: "error" })), "Botkins couldn't check for updates.");
 });
 
@@ -332,7 +343,7 @@ test("the demo's other cases: a rollback, a copy that can't install, a failed ch
   }
   const failing = await demo("error");
   try {
-    assert.equal((await failing.call<AppUpdate>("checkAppUpdate")).message, "GitHub could not check for updates (HTTP 503).");
+    assert.equal((await failing.call<AppUpdate>("checkAppUpdate")).message, "GitHub did not say which release is the latest: it could not be reached (ENOTFOUND). Try again later.");
     assert.deepEqual(failing.told, []);
   } finally {
     await failing.stop();
