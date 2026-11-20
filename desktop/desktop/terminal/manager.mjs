@@ -17,12 +17,12 @@
 // folder of their own and nothing on the computer changes.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { CREDENTIAL } from "../host/keystore.mjs";
 import { INSTALL_RECORD, SERVICE_USER, systemRoot, userRoot } from "./paths.mjs";
-import { LABEL, launchdJob, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit } from "./units.mjs";
+import { LABEL, launchdJob, readLaunchdJob, readSystemUnit, readUserUnit, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit } from "./units.mjs";
 import { asOwnerOf } from "./update-install.mjs";
 
 /** What is at a path, without following a link there; null when nothing is. */
@@ -35,6 +35,9 @@ function existing(path) {
 }
 
 export const KEY_FILE = "/etc/botkins/host.key";
+/** The names the service's own files have in the service manager's folder. A person's additions (`systemctl edit` makes a folder) are not among them. */
+const OWN_FILES = { systemd: /^botkins[A-Za-z0-9@_.-]*\.(service|path|timer|socket|target)$/, launchd: /^app\.botkins\.terminal[A-Za-z0-9_.-]*\.plist$/ };
+const installRecordText = ({ dataDir, user, command }) => JSON.stringify({ version: 1, scope: "system", dataDir, user, command }, null, 2) + "\n";
 
 /** Runs a tool to the end, without a shell: { code, stdout, stderr }. A tool that isn't there is code 127. */
 function tool(file, args, { input } = {}) {
@@ -52,7 +55,7 @@ function tool(file, args, { input } = {}) {
  * @param options.root      A folder that stands in for "/" for every file written (tests).
  * @param options.say       (line) → what is being done, for the person installing.
  */
-export function serviceManager({ command, platform = process.platform, uid = process.getuid?.() ?? 0, home = homedir(), user = userInfo().username, env = process.env, run = tool, root = "", say = () => {}, own = chownSync } = {}) {
+export function serviceManager({ command, platform = process.platform, uid = process.getuid?.() ?? 0, home = homedir(), user = userInfo().username, env = process.env, run = tool, root = "", say = () => {}, own = chownSync, pause = (ms) => new Promise((done) => setTimeout(done, ms)) } = {}) {
   const at = (path) => root + path;
   const must = async (file, args, what, options) => {
     const result = await run(file, args, options);
@@ -167,7 +170,7 @@ export function serviceManager({ command, platform = process.platform, uid = pro
     }
     write(files.systemd.system, systemUnit({ command, dataDir, user: account, home: accountHome, key, allowPaths }), 0o644);
     for (const [name, text] of Object.entries(updateUnits({ command, dataDir }))) write("/etc/systemd/system/" + name, text, 0o644);
-    write(INSTALL_RECORD, JSON.stringify({ version: 1, scope: "system", dataDir, user: account, command }, null, 2) + "\n", 0o644);
+    write(INSTALL_RECORD, installRecordText({ dataDir, user: account, command }), 0o644);
     await must("systemctl", ["daemon-reload"], "Reloading systemd");
     await must("systemctl", ["enable", UNIT, UPDATE_PATH_UNIT], "Enabling the service");
     if (start) {
@@ -214,7 +217,7 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       extra.BOTKINS_KEY_FILE = KEY_FILE;
       extra.HOME = (await run("sh", ["-c", 'eval echo "~$0"', account])).stdout.trim() || "/Users/" + account;
       keyNote = "key file (" + KEY_FILE + ", readable by " + account + " only)";
-      write(INSTALL_RECORD, JSON.stringify({ version: 1, scope: "system", dataDir: folder, user: account, command }, null, 2) + "\n", 0o644);
+      write(INSTALL_RECORD, installRecordText({ dataDir: folder, user: account, command }), 0o644);
     }
     // The log folder is inside the data folder: made with its owner's rights, as everything in there is.
     asOwnerOf(at(folder), () => mkdirSync(at(join(folder, "logs")), { recursive: true, mode: 0o700 }));
@@ -227,6 +230,135 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       await run("launchctl", ["enable", domain(scope) + "/" + LABEL]);
     }
     return { file, dataDir: folder, user: account, key: keyNote };
+  }
+
+  // Keeping the service's files up to date.
+  //
+  // A release may change what a service file says: one more line that closes something off, a
+  // changed way to start. `refresh` writes the files this version would install, for the service
+  // that is installed, with everything the person chose when they installed it. An update runs it
+  // (desktop/terminal/update-install.mjs): the old version's updater asks the new version, which
+  // is in place by then, to write its own files. `snapshot` and `restore` are the other half: the
+  // updater keeps what the files held, and puts that back when it puts the old version back.
+
+  const read = (path) => {
+    try {
+      return lstatSync(at(path)).isFile() ? readFileSync(at(path), "utf8") : null;
+    } catch {
+      return null;
+    }
+  };
+  /** Takes a launchd job out, changes its file, and loads it again: launchd reads a job's file only when it loads it. */
+  async function loadAgain(scope, file, change) {
+    const target = domain(scope) + "/" + LABEL;
+    await run("launchctl", ["bootout", target]);
+    // launchd lets go of a job only when its process has ended, and refuses to load it before that.
+    for (let tries = 0; tries < 150 && (await run("launchctl", ["print", target])).code === 0; tries++) await pause(200);
+    change();
+    await must("launchctl", ["bootstrap", domain(scope), at(file)], "Loading the service");
+    await run("launchctl", ["enable", target]);
+  }
+
+  /** The files this version would write for the installed service, from what its own file says was chosen: { path: text }. */
+  function wanted(found) {
+    const text = read(found.file);
+    if (text === null) throw Object.assign(new Error("The installed service file " + found.file + " can't be read."), { code: "UNREADABLE_UNIT" });
+    if (found.kind === "launchd") {
+      const chosen = readLaunchdJob(text);
+      return { [found.file]: launchdJob(chosen), ...(found.scope === "system" && chosen.user && { [INSTALL_RECORD]: installRecordText(chosen) }) };
+    }
+    if (found.scope === "user") return { [found.file]: userUnit(readUserUnit(text)) };
+    const chosen = readSystemUnit(text);
+    return { [found.file]: systemUnit(chosen), ...Object.fromEntries(Object.entries(updateUnits(chosen)).map(([name, unit]) => ["/etc/systemd/system/" + name, unit])), [INSTALL_RECORD]: installRecordText(chosen) };
+  }
+
+  /**
+   * Brings the installed service's files up to date with this version.
+   * @param options.write    false only says which files differ, and changes nothing.
+   * @param options.restart  Restart the service when a file changed, so it runs with the new one.
+   *   (On macOS a changed job is loaded again either way, which starts it.)
+   * @returns { kind, scope, file, changed: [paths] }
+   */
+  async function refresh({ write: writing = true, restart = false } = {}) {
+    const found = installed();
+    if (!found) throw Object.assign(new Error("Botkins isn't installed as a service here. Install it with `botkins service install`."), { code: "NOT_INSTALLED" });
+    const texts = wanted(found);
+    const before = Object.fromEntries(Object.keys(texts).map((path) => [path, read(path)]));
+    // Where something other than a plain file is under a name (a unit the person masked is a link), it is theirs and stays.
+    const changed = Object.keys(texts).filter((path) => before[path] !== texts[path] && (before[path] !== null || !existing(at(path))));
+    if (!writing || !changed.length) return { ...found, changed };
+    if (found.scope === "system" && uid !== 0) throw Object.assign(new Error("The Botkins service belongs to the whole computer: run this as root (with sudo)."), { code: "NEEDS_ROOT" });
+    const put = () => {
+      for (const path of changed) write(path, texts[path], 0o644);
+    };
+    if (found.kind === "launchd") {
+      // Only the job's own file needs launchd to load it again.
+      if (changed.includes(found.file)) await loadAgain(found.scope, found.file, put);
+      else put();
+      return { ...found, changed };
+    }
+    const ctl = systemctl(found.scope);
+    const names = changed.filter((path) => path !== INSTALL_RECORD).map((path) => path.slice(path.lastIndexOf("/") + 1));
+    // What the person switched off stays off: only a unit that starts with the computer now is linked again.
+    const enabled = [];
+    for (const name of names) if (before[dirname(found.file) + "/" + name] !== null && (await run(...ctl(["is-enabled", name]))).stdout.trim() === "enabled") enabled.push(name);
+    put();
+    if (names.length) {
+      await must(...ctl(["daemon-reload"]), "Reloading systemd");
+      for (const name of enabled) await must(...ctl(["reenable", name]), "Enabling " + name);
+      // The watch that starts the update job. This may run inside that job, which is left alone.
+      if (names.includes(UPDATE_PATH_UNIT)) {
+        if (before["/etc/systemd/system/" + UPDATE_PATH_UNIT] === null) await must(...ctl(["enable", "--now", UPDATE_PATH_UNIT]), "Starting the update watch");
+        else await must(...ctl(["try-restart", UPDATE_PATH_UNIT]), "Restarting the update watch");
+      }
+      if (restart) await must(...ctl(["restart", UNIT]), "Restarting the service");
+    }
+    return { ...found, changed };
+  }
+
+  /** What the service's own files hold now: { kind, scope, file, dir, files: { path: text } }, or null when no service is installed. */
+  function snapshot() {
+    const found = installed();
+    if (!found) return null;
+    const dir = dirname(found.file);
+    const files = {};
+    for (const name of readdirSync(at(dir))) if (OWN_FILES[found.kind].test(name) && read(dir + "/" + name) !== null) files[dir + "/" + name] = read(dir + "/" + name);
+    if (found.scope === "system" && read(INSTALL_RECORD) !== null) files[INSTALL_RECORD] = read(INSTALL_RECORD);
+    return { ...found, dir, files };
+  }
+
+  /**
+   * Puts the service's files back as a snapshot has them: what changed since is written as it
+   * was, and a file of the service's that was not there is removed.
+   * @returns true when something was put back.
+   */
+  async function restore(saved) {
+    if (!saved) return false;
+    const now = snapshot() ?? { files: {} };
+    const added = Object.keys(now.files).filter((path) => !(path in saved.files));
+    const back = Object.keys(saved.files).filter((path) => now.files[path] !== saved.files[path]);
+    if (!added.length && !back.length) return false;
+    const put = () => {
+      for (const path of added) rmSync(at(path), { force: true });
+      for (const path of back) {
+        // Whatever is under the name now goes first: a link there is replaced, never written through.
+        rmSync(at(path), { force: true });
+        write(path, saved.files[path], 0o644);
+      }
+    };
+    if (saved.kind === "launchd") {
+      if ([...added, ...back].some((path) => path !== INSTALL_RECORD)) await loadAgain(saved.scope, saved.file, put);
+      else put();
+      return true;
+    }
+    const ctl = systemctl(saved.scope);
+    const name = (path) => path.slice(path.lastIndexOf("/") + 1);
+    // A unit the newer version added is stopped and unlinked before its file goes.
+    for (const path of added) if (path !== INSTALL_RECORD) await run(...ctl(["disable", "--now", name(path)]));
+    put();
+    await must(...ctl(["daemon-reload"]), "Reloading systemd");
+    if (back.some((path) => name(path) === UPDATE_PATH_UNIT)) await run(...ctl(["try-restart", UPDATE_PATH_UNIT]));
+    return true;
   }
 
   /** Removes the service's files. The data folder, the key and the user stay: they are the person's to remove. */
@@ -276,5 +408,5 @@ export function serviceManager({ command, platform = process.platform, uid = pro
     return { installed: true, ...found, active: pid > 0, state, enabled: print.code === 0, ...(pid > 0 && { pid }) };
   }
 
-  return { installed, install, uninstall, start: () => act("start"), stop: () => act("stop"), restart: () => act("restart"), status, files };
+  return { installed, install, uninstall, refresh, snapshot, restore, start: () => act("start"), stop: () => act("stop"), restart: () => act("restart"), status, files };
 }

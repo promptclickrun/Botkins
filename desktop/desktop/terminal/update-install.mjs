@@ -225,12 +225,28 @@ export async function verify({ dir, name, keyFile, verifier = verifyRelease }) {
 }
 
 /**
- * Puts a verified tarball in place and makes it the one in use.
- * @param options.manager  { restart(), status() → { active, pid? } } for the installed service, or
- *   nothing when there is none (the caller restarts by hand).
- * @returns { version, folder, previous }
+ * Asks a version that is in place to write the service's files as it would install them, with
+ * what was chosen when the service was installed (`botkins service refresh`). The program that
+ * runs is the new version's own, from the folder its verified tarball was unpacked into: this
+ * updater is the old version's, and can't know what the new one's files say.
  */
-export async function switchTo({ archive, installRoot, version, platform = process.platform, arch = process.arch, manager, healthMs = 30_000, pollMs = 1000, checkOwner = process.getuid?.() === 0, exec = run }) {
+const refreshWith = (exec) => (folder) => exec(join(folder, "bin", "botkins"), ["service", "refresh", "--no-restart", "--json"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+
+/**
+ * Puts a verified tarball in place and makes it the one in use.
+ *
+ * Between the switch and the restart, the service's files are brought up to date with the new
+ * version, so the service starts under them. What they held is kept first, and is put back with
+ * the old version when the new one doesn't stay up. When the files can't be brought up to date
+ * they are left as they were and the update goes on: the new version under the earlier files is
+ * what every update before this did, and `botkins doctor` says that they differ.
+ *
+ * @param options.manager  { restart(), status() → { active, pid? }, snapshot?(), restore?(saved) }
+ *   for the installed service, or nothing when there is none (the caller restarts by hand).
+ * @param options.refresh  (folder) → brings the service's files up to date with the version in `folder`.
+ * @returns { version, folder, previous, note? }  `note` says what a person should know about an install that went well.
+ */
+export async function switchTo({ archive, installRoot, version, platform = process.platform, arch = process.arch, manager, healthMs = 30_000, pollMs = 1000, checkOwner = process.getuid?.() === 0, exec = run, refresh = refreshWith(exec) }) {
   const top = folderName(version, platform, arch);
   const target = join(installRoot, top);
   const current = join(installRoot, "current");
@@ -247,6 +263,9 @@ export async function switchTo({ archive, installRoot, version, platform = proce
   const temp = mkdtempSync(join(installRoot, ".update-"));
   let placed = false;
   let switched = false;
+  // What the service's files held before the new version wrote its own, and why it couldn't, if it couldn't.
+  let saved = null;
+  let problem;
   try {
     await exec("tar", ["--no-same-owner", "--no-same-permissions", "-xzf", archive, "-C", temp]);
     const stage = join(temp, top);
@@ -260,6 +279,17 @@ export async function switchTo({ archive, installRoot, version, platform = proce
     renameSync(join(temp, "next"), current);
     switched = true;
     if (manager) {
+      if (manager.snapshot && manager.restore) {
+        try {
+          saved = manager.snapshot();
+          await refresh(target);
+        } catch (error) {
+          problem = "The service's files could not be brought up to date with Botkins " + version + " (" + String(error.stderr || error.message || error).trim().split("\n").at(-1).replace(/^botkins: /, "").slice(0, 160) + ").";
+          // Half-written is worse than old: whatever was changed goes back.
+          await manager.restore(saved).catch(() => {});
+          saved = null;
+        }
+      }
       await manager.restart();
       // The new version has to stay up, as one process, for the whole watch.
       const until = Date.now() + healthMs;
@@ -273,14 +303,16 @@ export async function switchTo({ archive, installRoot, version, platform = proce
         await new Promise((done) => setTimeout(done, pollMs));
       }
     }
-    return { version, folder: target, previous: priorVersion };
+    return { version, folder: target, previous: priorVersion, ...(problem && { note: problem + " `botkins doctor` says what to do." }) };
   } catch (error) {
     if (switched) {
       renameSync(join(temp, "previous"), current);
+      // The old version runs under the files it had. When they can't be put back, that is said: it then runs under the newer ones.
+      if (saved) await manager.restore(saved).catch((failure) => void (problem = "The service's files could not be put back as Botkins " + priorVersion + " had them (" + String(failure.message).slice(0, 160) + "); `botkins doctor` says what to do."));
       await manager?.restart().catch(() => {});
     }
     if (placed) rmSync(target, { recursive: true, force: true });
-    throw switched ? new Error(error.message + " Botkins " + priorVersion + " was put back.") : error;
+    throw switched ? new Error(error.message + (problem ? " " + problem : "") + " Botkins " + priorVersion + " was put back.") : error;
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -304,7 +336,7 @@ export async function switchTo({ archive, installRoot, version, platform = proce
  *   undone one included. Not called when there was nothing newer to install.
  * @param options.watched  What tells of an error nobody caught (the process). Tests pass their own.
  * @param options.die      (code) → ends the process once such an error is recorded.
- * @returns { status: "current" | "installed", current, latest?, previous? }
+ * @returns { status: "current" | "installed", current, latest?, previous?, note? }
  */
 export async function applyUpdate({ report = () => {}, now = () => new Date(), watched = process, die = (code) => process.exit(code), ...options }) {
   const layout = installLayout(options.entry);
@@ -323,7 +355,7 @@ export async function applyUpdate({ report = () => {}, now = () => new Date(), w
   watched.on("uncaughtException", died);
   try {
     const result = await install({ ...options, layout, found: (version) => (to = version) });
-    if (result.status === "installed") report({ at: now().toISOString(), from: result.previous, to: result.current, ok: true });
+    if (result.status === "installed") report({ at: now().toISOString(), from: result.previous, to: result.current, ok: true, ...(result.note && { message: result.note }) });
     return result;
   } catch (error) {
     // A copy that doesn't update itself has no install to report. Anything else is an install that didn't end well.
@@ -356,7 +388,7 @@ async function install({ entry, layout, found, env = process.env, manager, say =
     await verify({ dir, name, keyFile: join(layout.folder, "desktop", "linux-service", "botkins-release.asc"), verifier });
     say("Installing it beside Botkins " + layout.version + (manager ? " and restarting the service." : "."));
     const done = await switchTo({ archive: join(dir, name), installRoot: layout.installRoot, version, platform, arch, manager, healthMs, checkOwner });
-    return { status: "installed", current: version, latest: version, previous: done.previous };
+    return { status: "installed", current: version, latest: version, previous: done.previous, ...(done.note && { note: done.note }) };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

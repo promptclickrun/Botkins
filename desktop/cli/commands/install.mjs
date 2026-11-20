@@ -83,6 +83,21 @@ export const install = {
           context.print(removed, "The service is removed. The data folder (" + context.paths.root + ") and the host key are still there.");
         },
       },
+      refresh: {
+        summary: "Bring the service's files up to date with this version of Botkins",
+        usage: "botkins service refresh [--check] [--no-restart]",
+        options: {
+          check: { type: "boolean", about: "Only say whether the files are up to date, and change nothing" },
+          "no-restart": { type: "boolean", about: "Write the files without restarting the service" },
+        },
+        details: "A release can change what the service's file says. An update writes the new version's files by itself, so this is for the times it couldn't: `botkins doctor` says when. Everything chosen when the service was installed is kept (the user it runs as, the data folder, the folders named with --allow-path, where the host key comes from): it is read from the installed file. On macOS a changed job is loaded again, which starts it.",
+        async run(context) {
+          const { options } = context;
+          const result = await manager(context).refresh({ write: options.check !== true, restart: options["no-restart"] !== true }).catch(fail);
+          context.print(result, !result.changed.length ? "The service's files are up to date with Botkins " + context.version + "." : options.check ? "Not up to date with Botkins " + context.version + ":\n" + result.changed.map((path) => "  " + path).join("\n") + "\nWrite them with `" + (result.scope === "system" ? "sudo " : "") + "botkins service refresh`." : "Written for Botkins " + context.version + ":\n" + result.changed.map((path) => "  " + path).join("\n") + (options["no-restart"] && result.kind === "systemd" ? "\nRestart the service to run it with them: `botkins service restart`." : ""));
+          return options.check && result.changed.length ? EXIT.failed : EXIT.ok;
+        },
+      },
       start: act("start", { summary: "Start the service", said: "Botkins is starting. `botkins status` shows it." }),
       stop: act("stop", { summary: "Stop the service", said: "Botkins is stopped." }),
       restart: act("restart", { summary: "Restart the service", said: "Botkins is restarting. `botkins status` shows it." }),

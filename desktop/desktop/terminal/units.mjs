@@ -240,3 +240,131 @@ export function launchdJob({ command, dataDir, logFile, user, env = {} }) {
     "",
   ].join("\n");
 }
+
+// Reading a service file back.
+//
+// An update brings the service's files up to date with the version it installs (`refresh` in
+// desktop/terminal/manager.mjs). What the person chose when they installed the service (who it
+// runs as, where its data is, which folders bots may write to, where the host key comes from) is
+// in no other place than the installed file, so it is read from there, and the new text is made
+// from it by the functions above. Nothing is guessed: a file that doesn't say one of these, as
+// `botkins service install` wrote it, is not read at all (UNREADABLE_UNIT), and is left as it is.
+
+const unreadable = (what) => Object.assign(new Error("The installed service file doesn't say " + what + " the way `botkins service install` writes it, so it is left as it is."), { code: "UNREADABLE_UNIT" });
+
+/** The words of a unit file's value, as `unitValue` wrote them. */
+export function unitWords(value) {
+  const words = [];
+  const text = String(value);
+  for (let at = 0; at < text.length; ) {
+    if (/\s/.test(text[at])) {
+      at++;
+      continue;
+    }
+    let word = "";
+    if (text[at] === '"') {
+      for (at++; at < text.length && text[at] !== '"'; at++) word += text[at] === "\\" && at + 1 < text.length ? text[++at] : text[at];
+      at++;
+    } else for (; at < text.length && !/\s/.test(text[at]); at++) word += text[at];
+    words.push(word.replace(/\$\$/g, "$").replace(/%%/g, "%"));
+  }
+  return words;
+}
+
+/** A unit file's settings: name → every value given for it, in order. */
+function unitSettings(text) {
+  const settings = {};
+  for (const line of String(text).split("\n")) {
+    const found = /^([A-Za-z]+)=(.*)$/.exec(line);
+    if (found) (settings[found[1]] ??= []).push(found[2]);
+  }
+  return settings;
+}
+const unitEnvironment = (settings) =>
+  Object.fromEntries(
+    (settings.Environment ?? []).map((value) => {
+      const [pair = ""] = unitWords(value);
+      const cut = pair.indexOf("=");
+      return [pair.slice(0, cut), pair.slice(cut + 1)];
+    }),
+  );
+/** The command a unit starts, without the word it ends with ("serve"). */
+function unitCommand(settings, last) {
+  const words = unitWords(settings.ExecStart?.[0] ?? "");
+  if (words.length < 2 || words.at(-1) !== last) throw unreadable("how Botkins is started");
+  return words.slice(0, -1);
+}
+
+/** What was chosen for the whole computer's service: the options of `systemUnit`. */
+export function readSystemUnit(text) {
+  const settings = unitSettings(text);
+  const env = unitEnvironment(settings);
+  const user = settings.User?.[0];
+  if (!user) throw unreadable("which user the service runs as");
+  const dataDir = env.BOTKINS_DATA_DIR;
+  if (!dataDir || !env.HOME) throw unreadable("where the data folder is");
+  const [first, ...allowPaths] = unitWords(settings.ReadWritePaths?.[0] ?? "");
+  if (first !== dataDir) throw unreadable("which folders bots may write to");
+  const credential = (line) => {
+    const found = /^botkins-key:(\/.+)$/.exec(line ?? "");
+    if (!found) throw unreadable("where the host key comes from");
+    return found[1];
+  };
+  const key = settings.LoadCredentialEncrypted ? { encrypted: credential(settings.LoadCredentialEncrypted[0]) } : settings.LoadCredential ? { file: credential(settings.LoadCredential[0]) } : env.BOTKINS_KEY_SOURCE === "file" && env.BOTKINS_KEY_FILE ? { groupFile: env.BOTKINS_KEY_FILE } : undefined;
+  if (!key) throw unreadable("where the host key comes from");
+  return { command: unitCommand(settings, "serve"), dataDir, user, group: settings.Group?.[0] ?? user, home: env.HOME, key, allowPaths };
+}
+
+/** What was chosen for one person's service: the options of `userUnit`. */
+export function readUserUnit(text) {
+  const settings = unitSettings(text);
+  const env = unitEnvironment(settings);
+  if (!env.BOTKINS_DATA_DIR) throw unreadable("where the data folder is");
+  return { command: unitCommand(settings, "serve"), dataDir: env.BOTKINS_DATA_DIR, ...(env.BOTKINS_KEY_FILE && { keyFile: env.BOTKINS_KEY_FILE }), env: env.PATH ? { PATH: env.PATH } : {} };
+}
+
+const unxml = (text) => text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+/** A property list of the few kinds `launchdJob` writes: dict, array, string, integer, true and false. */
+function plist(text) {
+  const tokens = String(text).match(/<(?:key|string|integer)>[^<]*<\/(?:key|string|integer)>|<\/?(?:dict|array)>|<(?:true|false)\/>/g) ?? [];
+  let at = 0;
+  const value = () => {
+    const token = tokens[at++];
+    if (token === undefined) throw unreadable("what it starts");
+    if (token === "<dict>") {
+      const dict = {};
+      while (tokens[at] !== "</dict>") {
+        const name = /^<key>([^<]*)<\/key>$/.exec(tokens[at++] ?? "");
+        if (!name) throw unreadable("what it starts");
+        dict[unxml(name[1])] = value();
+      }
+      at++;
+      return dict;
+    }
+    if (token === "<array>") {
+      const list = [];
+      while (tokens[at] !== "</array>") list.push(value());
+      at++;
+      return list;
+    }
+    if (token === "<true/>") return true;
+    if (token === "<false/>") return false;
+    const simple = /^<(string|integer)>([^<]*)<\/\1>$/.exec(token);
+    if (!simple) throw unreadable("what it starts");
+    return simple[1] === "integer" ? Number(simple[2]) : unxml(simple[2]);
+  };
+  return value();
+}
+
+/** What was chosen for the launchd job: the options of `launchdJob`. */
+export function readLaunchdJob(text) {
+  const job = plist(text);
+  const words = job.ProgramArguments;
+  if (!Array.isArray(words) || words.length < 2 || words.at(-1) !== "serve" || !words.every((word) => typeof word === "string")) throw unreadable("how Botkins is started");
+  const vars = job.EnvironmentVariables ?? {};
+  if (typeof vars.BOTKINS_DATA_DIR !== "string" || !vars.BOTKINS_DATA_DIR) throw unreadable("where the data folder is");
+  if (typeof job.StandardOutPath !== "string" || !job.StandardOutPath) throw unreadable("where its log goes");
+  // What an install adds for the person or for the daemon's user; the rest is this version's own.
+  const env = Object.fromEntries(["PATH", "BOTKINS_KEY_FILE", "HOME"].filter((name) => typeof vars[name] === "string").map((name) => [name, vars[name]]));
+  return { command: words.slice(0, -1), dataDir: vars.BOTKINS_DATA_DIR, logFile: job.StandardOutPath, ...(typeof job.UserName === "string" && { user: job.UserName }), env };
+}

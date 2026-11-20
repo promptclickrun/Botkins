@@ -35,7 +35,7 @@ const check = (name, ok, detail, fix) => ({ name, ok, detail, ...(fix && { fix }
 const mode = (path) => statSync(path).mode & 0o777;
 
 /** Everything `botkins doctor` looks at. Works with the service stopped; says more when it runs. */
-export async function examine({ paths, client, env, fetcher = fetch, node = process.versions.node, uid = process.getuid?.(), installFolder }) {
+export async function examine({ paths, client, env, fetcher = fetch, node = process.versions.node, uid = process.getuid?.(), installFolder, units }) {
   const checks = [];
   const [major, minor] = node.split(".").map(Number);
   const enough = major > MIN_NODE[0] || (major === MIN_NODE[0] && minor >= MIN_NODE[1]);
@@ -97,6 +97,16 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
   if (folder) {
     const words = folder.problem && notRootOwnedWords(folder.problem, folder.root);
     checks.push(check("Install folder", !folder.problem, folder.problem ? words.replace(/ On the computer: .*$/, "") + " No update is installed until it is put right." : folder.root + " and every folder above it are root's own, so updates can be installed.", folder.problem ? /On the computer: `(.*)`\.$/.exec(words)?.[1] : undefined));
+  }
+  // The installed service's files: the ones this version writes, or older ones. An update brings
+  // them up to date; one done by a version from before that, or one that couldn't, leaves them.
+  if (units) {
+    try {
+      const state = await units();
+      checks.push(check("Service files", state.changed.length === 0, state.changed.length ? "Not the ones this version of Botkins writes: " + state.changed.join(", ") + ". The service runs under what an earlier version wrote." : state.file + " is as this version of Botkins writes it.", state.changed.length ? "`" + (state.scope === "system" ? "sudo " : "") + "botkins service refresh` writes them and keeps what was chosen at install." : undefined));
+    } catch (error) {
+      if (error.code !== "NOT_INSTALLED") checks.push(check("Service files", null, error.message, "`botkins service install`, with the options it was first installed with, writes it anew."));
+    }
   }
   // The relay: whether this computer can reach it at all. Nothing of the workspace is sent.
   if (config) {
@@ -229,14 +239,14 @@ export const service = {
   doctor: {
     summary: "Check this computer and the service, and say what to fix",
     usage: "botkins doctor",
-    details: "Checks Node.js, the data folder's permissions, the config, the control socket, the phone link's port, the install folder of the whole computer's service, whether the relay can be reached and each provider's sign-in. Exits 1 when something needs fixing.",
+    details: "Checks Node.js, the data folder's permissions, the config, the control socket, the phone link's port, the install folder of the whole computer's service, the installed service's files, whether the relay can be reached and each provider's sign-in. Exits 1 when something needs fixing.",
     async run(context) {
       // Only the whole computer's service is updated by root, so only its install folder has to be root's own.
       const installFolder = () => {
         const layout = installLayout(fileURLToPath(new URL("../botkins.mjs", import.meta.url)));
         return layout && serviceManager({ command: [], env: context.env }).installed()?.scope === "system" ? { root: layout.installRoot, problem: notRootOwned(layout.installRoot) } : null;
       };
-      const report = await examine({ paths: context.paths, client: context.client, env: context.env, installFolder });
+      const report = await examine({ paths: context.paths, client: context.client, env: context.env, installFolder, units: () => serviceManager({ command: [], env: context.env }).refresh({ write: false }) });
       context.print(report, () => {
         const { color } = context;
         const lines = report.checks.map((entry) => {
