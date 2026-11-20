@@ -13,7 +13,8 @@ The form has one choice that changes what runs on the VM.
 | What runs | The [terminal host](../../desktop/docs/terminal.md): Botkins as one small service, with no display. | Botkins on a virtual display: the `host` and `workspace` containers of the [display setup](../../desktop/desktop/README.md). |
 | From the phone | Bots, chats, tasks, tools, the wiki and settings. | The same, and the phone can see and control the server's screen. |
 | Default VM | `Standard_D2als_v6` (2 vCPUs, 4 GB) | `Standard_D2as_v6` (2 vCPUs, 8 GB) |
-| First build | A few minutes. | 10 to 15 minutes, and a much bigger image. |
+| First build | A few minutes. | 10 to 15 minutes on 2 vCPUs, and a 5 GB image. |
+| Memory when idle | About 120 MB for all containers. | About 320 MB for all containers. |
 | Sign a provider in later | `botkins host providers login <provider>` on the VM. | On the server's screen, from the phone. |
 
 Use the default unless a bot must use a desktop program, or you must see a sign-in page on the server. From the command line, the choice is the parameter `screenAccess`:
@@ -37,6 +38,8 @@ The port of the phone link is not open to the internet in either setup.
 ## The relay
 
 Phones reach the server only through the relay on the VM itself. Messages are sealed end to end between the phone and the server, as with `relay.botkins.app`. The relay runs the same checks as the Botkins relay, because it shares their code (`mobile/relay/src/shared.ts`). It speaks the same host protocols (`botkins.host.v3`, and `botkins.host.v2` for an older host), and it passes the same protocol test suite (`npm run test:node` in `mobile/relay`).
+
+The Botkins host starts only when the relay answers over HTTPS (`wait-for-relay.sh`). A host offers the newest relay protocol on its first try, and falls back to the older one if that try fails. Without the wait, the first try on a new server comes before Caddy has its certificate.
 
 One thing still uses Botkins' infrastructure: iPhone notifications. Only `relay.botkins.app` holds the Apple push key, so the VM forwards each signed, sealed notification there unchanged. Clear **Send iPhone notifications** to turn this off. Then nothing leaves the server for Botkins.
 
