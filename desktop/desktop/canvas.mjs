@@ -125,9 +125,10 @@ export function finishCanvas(run) {
   for (const r of run.reasoning ?? []) r.finished ??= now;
   if (run.reasoning) run.reasoning = run.reasoning.filter((r) => r.text.trim());
   if (!run.reasoning?.length) delete run.reasoning;
+  // A helper still running here was cut off by the end of the reply. Nothing says it failed.
   for (const a of run.agents ?? [])
     if (a.status === "Running") {
-      a.status = "Failed";
+      a.status = "Stopped";
       a.detail = "Stopped with the reply";
       a.finished = now;
     }

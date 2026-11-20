@@ -341,7 +341,7 @@ export type Reasoning = { id: string; text: string; started: number; finished?: 
  * "turn-timeline-v1": `prompt` is what it was asked, `intent` what it says it is doing now, and
  * `result` what it came back with (each cut short by the computer).
  */
-export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string };
+export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed" | "Stopped"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string };
 export type Usage = { input: number; output: number; cacheRead?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;

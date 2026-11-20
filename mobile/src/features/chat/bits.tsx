@@ -1,6 +1,6 @@
 // Small pieces the chat screens share: step status marks, group avatars, a quiet preview of a
 // message, the bot's typing dots, and how far the bot's work keeps from the screen's edge.
-import { Check, Circle, X } from "lucide-react-native";
+import { Ban, Check, Circle, X } from "lucide-react-native";
 import { useEffect } from "react";
 import { ActivityIndicator, View, type ViewStyle } from "react-native";
 import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
@@ -77,6 +77,12 @@ export function StepMark({ status, size = 16 }: { status: Step["status"]; size?:
     return (
       <View style={box} accessibilityLabel="Failed">
         <X size={size} color={colors.danger} strokeWidth={2.6} />
+      </View>
+    );
+  if (status === "Stopped")
+    return (
+      <View style={box} accessibilityLabel="Stopped">
+        <Ban size={size} color={colors.muted} strokeWidth={2.4} />
       </View>
     );
   return (

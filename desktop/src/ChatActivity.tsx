@@ -419,6 +419,8 @@ export function HelperDrawer({ agents }: { agents: Subagent[] }) {
               <LoaderCircle size={14} className="spin" />
             ) : a.status === "Done" ? (
               <Check size={14} />
+            ) : a.status === "Stopped" ? (
+              <Ban size={14} />
             ) : (
               <CircleAlert size={14} />
             )}
