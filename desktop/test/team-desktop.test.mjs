@@ -73,6 +73,18 @@ test("a member role without use permissions receives no MCP, skills or plugin to
   assert.ok(!tools.includes("propose_plugin"));
 });
 
+test("a member's chat keeps the member's limits when the owner writes in it", (t) => {
+  const fake = fakeClient();
+  const ws = new Workspace(tempDir(t), fake.client, () => {}, { team: () => team });
+  const chatId = ws.createChat("pip");
+  const chat = ws.chat(chatId);
+  chat.createdBy = "m_avery";
+  chat.messages.push({ role: "user", text: "Owner note", time: Date.now() });
+  assert.deepEqual(ws.accessForTurn(chat, {}), { member: true, skills: false, mcp: false, plugins: false });
+  const ownerChat = ws.chat(ws.createChat("pip"));
+  assert.deepEqual(ws.accessForTurn(ownerChat, {}), { member: false, skills: true, mcp: true, plugins: true });
+});
+
 test("a join request notification follows request preferences and opens Team requests", () => {
   const settings = {
     notifications: {

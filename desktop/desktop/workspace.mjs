@@ -986,10 +986,12 @@ export class Workspace {
     ];
   }
   accessForTurn(chat, task) {
-    const latest = task?.author
-      ? task.author
-      : [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
-    return turnAccess(latest, this.teamOf());
+    // A member's chat keeps that member's limits for every turn, also when the owner writes in it,
+    // because a provider session opened with more tools would keep them for the member's next turns.
+    const author = chat?.createdBy
+      ? { memberId: chat.createdBy }
+      : task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
+    return turnAccess(author, this.teamOf());
   }
   /**
    * Opens the provider session for a chat (or a member's or teammate's view of one). `run` and
