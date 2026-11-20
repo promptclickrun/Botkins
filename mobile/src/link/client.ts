@@ -347,7 +347,13 @@ const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRel
 type SyncNews = { epoch: string; v: Record<string, number> | null; parts: Record<string, unknown> };
 class Retry extends Error {}
 
+type HeldText = { id: string; stream: string; thinking: string };
+type Append = { from: number; add: string };
+type TextDelta = { id: string; stream: Append; thinking: Append };
+
 export type LinkOptions = {
+  /** Opt in to boolean live indicators and expanded text:<chatId> parts for watched chats. */
+  streamAppends?: boolean;
   fetch: FetchLike;
   /** Parts that changed on the computer, by name. A chat's detail is "chat:<id>", its running turn "run:<id>". */
   onParts(parts: Record<string, unknown>): void;
@@ -379,6 +385,9 @@ export class LinkClient {
   private session: Session | null = null;
   private opening: Promise<Session> | null = null;
   private epoch = "";
+  private texts = new Map<string, HeldText>();
+  private supportsAppends: boolean | undefined;
+  private receivedFullLive = false;
   private have: Record<string, number> = {};
   private watching: string[] = [];
   private running = false;
@@ -489,6 +498,7 @@ export class LinkClient {
     const next = [...new Set(chatIds)].sort();
     if (next.join("\n") === this.watching.join("\n")) return;
     this.watching = next;
+    if (this.options.streamAppends && this.supportsAppends) delete this.have.live;
     // The waiting request is for the old set: ask again.
     this.poll?.abort();
   }
@@ -625,6 +635,7 @@ export class LinkClient {
       if (this.lifetime === lifetime && reply.epoch !== this.epoch) {
         // The computer's app restarted: nothing we hold is known to be current.
         this.epoch = reply.epoch;
+        this.supportsAppends = undefined;
         this.have = {};
       }
       const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, base };
@@ -684,6 +695,63 @@ export class LinkClient {
     });
   }
 
+  private cursors() {
+    return Object.fromEntries(this.watching.slice(0, 4).flatMap((chat) => {
+      const held = this.texts.get(chat);
+      return held ? [[chat, { id: held.id, stream: held.stream.length, thinking: held.thinking.length }]] : [];
+    }));
+  }
+
+  private expandText(parts: Record<string, unknown>, watching: string[], requested: boolean) {
+    const meta = parts.meta as { capabilities?: string[] } | undefined;
+    if (meta) this.supportsAppends = meta.capabilities?.includes("stream-appends-v1") === true;
+    const live = parts.live as { streams: Record<string, unknown>; thinking: Record<string, unknown> } | undefined;
+    if (!requested || this.supportsAppends === false) {
+      this.texts.clear();
+      if (live) this.receivedFullLive = true;
+      return;
+    }
+    if (live && this.receivedFullLive) {
+      // The previous full snapshot could include bodies for chats we have never watched.
+      for (const chat of [...Object.keys(live.streams), ...Object.keys(live.thinking)]) {
+        if (!("text:" + chat in parts)) parts["text:" + chat] = null;
+      }
+      this.receivedFullLive = false;
+    }
+    for (const chat of this.texts.keys()) {
+      if (!watching.includes(chat) || (live && !(chat in live.streams) && !(chat in live.thinking))) {
+        this.texts.delete(chat);
+        parts["text:" + chat] = null;
+      }
+    }
+    for (const [name, value] of Object.entries(parts)) {
+      if (!name.startsWith("text:")) continue;
+      const chat = name.slice(5);
+      if (!value) {
+        this.texts.delete(chat);
+        continue;
+      }
+      const delta = value as TextDelta;
+      const prev = this.texts.get(chat);
+      const expand = (field: "stream" | "thinking") => {
+        const { from, add } = delta[field];
+        if (from === 0) return add;
+        if (prev?.id !== delta.id || prev[field].length !== from) {
+          // Replay the entire answer, including other chats already expanded in this batch. The
+          // session is fine, so this asks again from zero and is not a lost connection.
+          this.have = {};
+          this.texts.clear();
+          throw new Retry();
+        }
+        return prev[field] + add;
+      };
+      const stream = expand("stream");
+      const thinking = expand("thinking");
+      this.texts.set(chat, { id: delta.id, stream, thinking });
+      parts[name] = { stream, thinking };
+    }
+  }
+
   private async follow(lifetime: object) {
     let failures = 0;
     while (this.lifetime === lifetime) {
@@ -703,7 +771,11 @@ export class LinkClient {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
         const quick = this.suspect;
         this.suspect = false;
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: this.watching, wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
+        const watching = this.watching;
+        const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
+          watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
+        const appends = requestText ? { appends: this.cursors() } : {};
+        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
         if (this.lifetime !== lifetime) break;
         failures = 0;
         this.setState("online");
@@ -712,7 +784,9 @@ export class LinkClient {
           this.epoch = news.epoch;
           this.have = {};
         }
+        if (this.options.streamAppends && watching !== this.watching) continue;
         if (news.v) {
+          if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
           this.have = news.v;
           this.options.onParts(news.parts);
         }

@@ -1,6 +1,6 @@
 // Turns the desktop's whole workspace into the named parts a phone keeps in step with.
-// A phone asks for the parts whose version it doesn't have, so a streaming reply resends only
-// "live", and a long chat's history travels once.
+// The server versions these snapshots. An opted-in phone gets boolean stream indicators in live
+// and only the missing reply and thinking text for its watched chats.
 
 const PREVIEW = 160;
 const STEP_TEXT = 4000;
@@ -112,6 +112,24 @@ export function baseParts(state, info, looks = {}, link = {}) {
     ...(Array.isArray(state.plugins) && { plugins: pluginsPart(state.plugins) }),
     host: { screen: link.screen ?? "off", relay: link.relay === true, ...(link.headless && { headless: true, display: link.display ?? { available: false } }), ...(link.screenSetBy && { screenSetBy: link.screenSetBy }) },
   };
+}
+
+/** The same activity as full live, with just presence and first text for each body. */
+export function quietLive(live) {
+  const flags = (map) => Object.fromEntries(Object.entries(map).map(([id, text]) => [id, !!text]));
+  return { ...live, streams: flags(live.streams), thinking: flags(live.thinking) };
+}
+
+/** Missing UTF-16 suffixes for one watcher. Null clears a held body and undefined means caught up. */
+export function textDelta(text, cursor) {
+  if (!text) return cursor ? null : undefined;
+  const matches = cursor?.id === text.id && cursor.stream <= text.stream.length && cursor.thinking <= text.thinking.length;
+  if (matches && cursor.stream === text.stream.length && cursor.thinking === text.thinking.length) return undefined;
+  const suffix = (field) => {
+    const from = matches ? cursor[field] : 0;
+    return { from, add: text[field].slice(from) };
+  };
+  return { id: text.id, stream: suffix("stream"), thinking: suffix("thinking") };
 }
 
 /** Runs by chat id, newest first, for the chats asked for. */

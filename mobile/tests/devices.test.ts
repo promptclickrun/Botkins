@@ -263,3 +263,70 @@ test("away from the computer's network, all three are served through the relay a
   for (const each of clients) each.client.stop();
   await link.stop();
 });
+
+test("per-phone UTF-16 cursors, replacements, interim boundaries and end tombstones", async (t) => {
+  const { link, at, backend } = await host();
+  t.after(() => link.stop());
+  async function phone(device: typeof THREE[number]) {
+    const paired = await pair(real, { hosts: [at], code: link.startPairing().code }, device);
+    return new LinkClient(paired, { fetch: real, onParts() {}, onState() {} });
+  }
+  const a = await phone(THREE[0]);
+  const b = await phone(THREE[1]);
+  const chat = backend.state.chats[0];
+  const id = chat.id, key = "text:" + id;
+  const sync = (client, appends, have = {}) => client.call("link.sync", { epoch: link.epoch, watch: [id], have, appends });
+  const streams = backend.state.streams, thinking = backend.state.thinking;
+  streams[id] = "a\ud83d";
+  thinking[id] = "why";
+  backend.changed();
+  const start = await sync(a, {});
+  assert.equal(start.parts.live.streams[id], true);
+  assert.equal(start.parts.live.thinking[id], true);
+  assert.equal(start.v[key], undefined);
+  const generation = start.parts[key].id;
+  const cursor = { [id]: { id: generation, stream: 2, thinking: 3 } };
+  streams[id] += "\ude42b";
+  thinking[id] += " now";
+  backend.changed();
+  const next = await sync(a, cursor, start.v);
+  assert.deepEqual(next.parts, { [key]: { id: generation, stream: { from: 2, add: "\ude42b" }, thinking: { from: 3, add: " now" } } });
+  const late = await sync(b, {});
+  assert.deepEqual(late.parts[key].stream, { from: 0, add: "a🙂b" });
+  assert.deepEqual(late.parts[key].thinking, { from: 0, add: "why now" });
+  const caught = { [id]: { id: generation, stream: 4, thinking: 7 } };
+  streams[id] += "!";
+  backend.changed();
+  assert.equal((await sync(a, cursor)).parts[key].stream.add, "\ude42b!");
+  assert.equal((await sync(b, caught)).parts[key].stream.add, "!");
+  streams[id] = "a";
+  backend.changed();
+  let delta = (await sync(a, caught)).parts[key];
+  assert.notEqual(delta.id, generation);
+  assert.deepEqual(delta.stream, { from: 0, add: "a" });
+  assert.deepEqual(delta.thinking, { from: 0, add: "why now" });
+  for (const replace of [
+    () => { streams[id] = "b"; },
+    () => { chat.messages.push({ role: "assistant", interim: true, text: "b" }); streams[id] = "begins again"; },
+  ]) {
+    const before = delta.id;
+    replace();
+    backend.changed();
+    delta = (await sync(a, { [id]: { id: before, stream: 1, thinking: 7 } })).parts[key];
+    assert.notEqual(delta.id, before);
+    assert.deepEqual(delta.stream, { from: 0, add: streams[id] });
+  }
+  delete streams[id];
+  delete thinking[id];
+  backend.changed();
+  assert.equal((await sync(a, caught)).parts[key], null);
+  streams[id] = "another turn";
+  backend.changed();
+  const fresh = (await sync(a, caught)).parts[key];
+  assert.notEqual(fresh.id, delta.id);
+  assert.equal(fresh.stream.from, 0);
+  const held = await sync(a, {});
+  await b.call("link.sync", { epoch: link.epoch, watch: [backend.state.chats[1].id], appends: {} });
+  const complete = { [id]: { id: held.parts[key].id, stream: streams[id].length, thinking: 0 } };
+  assert.deepEqual((await sync(a, complete, held.v)).parts, {}, "another phone changing chats keeps this phone's versions and cursor valid");
+});

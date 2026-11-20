@@ -1,3 +1,4 @@
+import { panelRefreshing } from "@/state/sessionActivity";
 import { type MenuAction, MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
@@ -351,7 +352,7 @@ function PanelMenu({ panel, first, last }: { panel: Panel; first: boolean; last:
 /** Whether the panel is refreshing now: its refresh chat has a turn under way. */
 function useRefreshing(panel: Panel) {
   const streams = usePart("live")?.streams;
-  return !!panel.refreshChatId && !!streams && panel.refreshChatId in streams;
+  return panelRefreshing(streams, panel.refreshChatId);
 }
 
 /** "Updated 5m", or "Refreshing…"; then "Next Tomorrow 9:00 AM" or "Routine paused" when it has a routine. */

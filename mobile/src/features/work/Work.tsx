@@ -317,7 +317,7 @@ export default function Work() {
   const routines = useRoutines();
   const allTasks = usePart("tasks");
   const runs = usePart("runs") ?? [];
-  const requests = usePart("live")?.requests;
+  const requests = useApp((state) => state.parts.live?.requests);
   const canToday = useCan("today", "view");
   const canCreateToday = useCan("today", "create");
   const member = useMember();

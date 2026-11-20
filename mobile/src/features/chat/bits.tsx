@@ -1,12 +1,12 @@
 // Small pieces the chat screens share: step status marks, group avatars, a quiet preview of a
 // message, the bot's typing dots, and how far the bot's work keeps from the screen's edge.
 import { Ban, Check, Circle, X } from "lucide-react-native";
-import { useEffect } from "react";
-import { ActivityIndicator, View, type ViewStyle } from "react-native";
-import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
+import { useLayoutEffect } from "react";
+import { ActivityIndicator, Animated, Easing, useAnimatedValue, View, type ViewStyle } from "react-native";
 import type { Bot, Step } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
 import { BotAvatar, space, useOnShow, useTheme } from "@/ui";
+import { useReducedMotion } from "@/ui/BotAvatar";
 
 /**
  * The bot's work (steps, thinking, updates, fold and status lines) keeps away from the trailing
@@ -20,17 +20,30 @@ function Dot({ delay }: { delay: number }) {
   // Only a dot that can be seen moves (useOnShow), and Reduce Motion stills it.
   const seen = useOnShow();
   const still = useReducedMotion() || !seen;
-  const lift = useSharedValue(0);
-  useEffect(() => {
-    if (still) {
-      cancelAnimation(lift);
-      lift.value = 0;
-      return;
-    }
-    lift.value = withDelay(delay, withRepeat(withSequence(withTiming(1, { duration: 320 }), withTiming(0, { duration: 320 }), withTiming(0, { duration: 260 })), -1));
-    return () => cancelAnimation(lift);
-  }, [delay, lift, still]);
-  const style = useAnimatedStyle(() => ({ opacity: 0.35 + lift.value * 0.65, transform: [{ translateY: -lift.value * 2.5 }] }));
+  const phase = useAnimatedValue(0);
+  useLayoutEffect(() => {
+    phase.setValue(0);
+    if (still) return;
+    const legMs = 320;
+    const duration = 2 * legMs + 260;
+    const ease = Easing.inOut(Easing.quad);
+    const bounce = Animated.loop(Animated.timing(phase, {
+      delay, duration, toValue: 2, useNativeDriver: true, isInteraction: false,
+      // Phase 0 to 1 rises, 1 to 2 falls, then phase 2 holds until the next iteration.
+      easing: (t) => {
+        const leg = t * duration / legMs;
+        if (leg < 1) return ease(leg) / 2;
+        return (1 + ease(Math.min(leg - 1, 1))) / 2;
+      },
+    }));
+    bounce.start();
+    return () => bounce.stop();
+  }, [delay, phase, still]);
+  const inputRange = [0, 1, 2];
+  const style = {
+    opacity: phase.interpolate({ inputRange, outputRange: [0.35, 1, 0.35] }),
+    transform: [{ translateY: phase.interpolate({ inputRange, outputRange: [0, -2.5, 0] }) }],
+  };
   return <Animated.View style={[{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.muted }, style]} />;
 }
 

@@ -392,7 +392,8 @@ export async function startPush() {
   let link = useApp.getState().link;
   let meta = useApp.getState().parts.meta;
   let pairings = useApp.getState().pairings;
-  useApp.subscribe((state) => {
+  useApp.subscribe((state, before) => {
+    if (state.parts === before.parts && state.texts !== before.texts && state.running === before.running && state.chats === before.chats) return;
     // A computer was paired or unpaired: the keys follow, so an unpaired computer's key is gone at once.
     if (state.pairings !== pairings) {
       pairings = state.pairings;

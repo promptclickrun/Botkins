@@ -39,6 +39,7 @@ function follow(pairing: Pairing) {
   client?.stop();
   client = new LinkClient(pairing, {
     fetch: fetcher,
+    streamAppends: true,
     onParts: applyParts,
     onState: (link) => {
       useApp.setState({ link });
@@ -86,7 +87,7 @@ async function lookNearby(serverId: string) {
   }
 }
 
-const EMPTY = { route: null, synced: false, parts: {}, chats: {}, running: {}, models: undefined, providers: undefined, skills: undefined } as const;
+const EMPTY = { route: null, synced: false, parts: {}, texts: {}, chats: {}, running: {}, models: undefined, providers: undefined, skills: undefined } as const;
 
 /**
  * Starts over on the computer in use, or on none: the link to the last one is closed, and nothing

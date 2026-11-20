@@ -941,8 +941,9 @@ function pluginWarnings(entry) {
 }
 
 export class MockBackend {
-  constructor({ state = seed(), speed = 1, timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
+  constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
+    this.streamAppends = appends;
     this.timeline = timeline;
     // A computer nobody has set up yet: no bots, and nothing that belongs to one.
     if (process.env.BOTKINS_DEV_EMPTY === "1") Object.assign(state, { bots: [], chats: [], runs: [], routines: [], tasks: [], board: [], panels: [], sections: [], requests: [] });

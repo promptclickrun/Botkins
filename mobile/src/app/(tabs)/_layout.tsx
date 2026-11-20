@@ -1,3 +1,4 @@
+import { needsYou } from "@/state/sessionActivity";
 import { NativeTabs } from "expo-router/native-tabs";
 import { isConversation } from "@/state/hooks";
 import { useApp } from "@/state/store";
@@ -8,7 +9,7 @@ export default function TabsLayout() {
   const { colors } = theme;
   const badge = badgeColors(theme);
   const unread = useApp((state) => state.parts.chats?.filter((chat) => chat.unread && isConversation(chat)).length ?? 0);
-  const waiting = useApp((state) => (state.parts.live?.requests.length ?? 0) + (state.parts.tasks?.filter((task) => task.status === "review" || task.status === "blocked").length ?? 0));
+  const waiting = useApp((state) => needsYou(state.parts));
   const teamRequests = useApp((state) => {
     const team = state.parts.team;
     return state.parts.meta?.you?.kind !== "member" && team && "requests" in team ? team.requests.length : 0;

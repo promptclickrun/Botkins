@@ -2,7 +2,7 @@
 // screens read it through the hooks in src/state/hooks.ts.
 import { create } from "zustand";
 import type { LinkRoute, LinkState, Pairing } from "@/link/client";
-import type { ChatDetail, Message, ModelInfo, Parts, ProviderStatus, Run, SkillInfo } from "@/link/types";
+import type { ChatDetail, Live, Message, ModelInfo, Parts, ProviderStatus, Run, SkillInfo } from "@/link/types";
 
 /** A chat's messages as loaded so far: a run of them ending at the newest. */
 export type ChatView = {
@@ -19,6 +19,10 @@ export type ChatView = {
 
 export type Toast = { id: number; text: string; tone: "info" | "success" | "error" };
 
+export type QuietLive = Omit<Live, "streams" | "thinking"> & { streams: Record<string, boolean>; thinking: Record<string, boolean> };
+export type PhoneParts = Omit<Parts, "live"> & { live: QuietLive };
+type ChatText = { stream: string; thinking: string };
+
 export type AppState = {
   /** Saved choices and the pairing were read from the phone's storage. */
   booted: boolean;
@@ -31,7 +35,8 @@ export type AppState = {
   route: LinkRoute | null;
   /** The first state arrived from the computer since the app started. */
   synced: boolean;
-  parts: Partial<Parts>;
+  parts: Partial<PhoneParts>;
+  texts: Record<string, ChatText | undefined>;
   chats: Record<string, ChatView | undefined>;
   /** The turn a chat is working on right now. */
   running: Record<string, Run | null | undefined>;
@@ -50,6 +55,7 @@ export const useApp = create<AppState>(() => ({
   route: null,
   synced: false,
   parts: {},
+  texts: {},
   chats: {},
   running: {},
   toast: null,
@@ -79,21 +85,68 @@ export function mergeChat(held: ChatView | undefined, next: ChatDetail): ChatVie
   };
 }
 
+/** Parsed JSON has no cycles. Compare map keys independently of insertion order. */
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object" || Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>, b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && sameValue(a[key], b[key]));
+}
+
+function normalizeLive(live: Live | QuietLive, previous?: QuietLive): QuietLive {
+  const flags = (map: Record<string, string | boolean>) => Object.fromEntries(Object.entries(map).map(([id, text]) => [id, !!text]));
+  const next = { ...live, streams: flags(live.streams), thinking: flags(live.thinking) };
+  if (!previous) return next;
+  const keys = Object.keys(next) as (keyof QuietLive)[];
+  let changed = keys.length !== Object.keys(previous).length;
+  for (const key of keys) {
+    if (sameValue(next[key], previous[key])) Object.assign(next, { [key]: previous[key] });
+    else changed = true;
+  }
+  return changed ? next : previous;
+}
+
 /** Takes in the parts the computer sent. */
 export function applyParts(incoming: Record<string, unknown>) {
   useApp.setState((state) => {
-    const parts = { ...state.parts } as Record<string, unknown>;
+    let parts = state.parts;
+    let texts = state.texts;
+    const putText = (id: string, next: ChatText | null) => {
+      const held = texts[id];
+      if (held?.stream === next?.stream && held?.thinking === next?.thinking) return;
+      if (texts === state.texts) texts = Object.assign(Object.create(null), texts);
+      if (next) texts[id] = next;
+      else delete texts[id];
+    };
     let chats = state.chats;
     let running = state.running;
     for (const [name, value] of Object.entries(incoming)) {
-      if (name.startsWith("chat:")) {
+      if (name === "live") {
+        const live = value as Live | QuietLive;
+        const normalized = normalizeLive(live, parts.live);
+        if (normalized !== parts.live) parts = { ...parts, live: normalized };
+        for (const id of new Set([...Object.keys(texts), ...Object.keys(live.streams), ...Object.keys(live.thinking)])) {
+          const stream = live.streams[id];
+          const thinking = live.thinking[id];
+          if (typeof stream === "string" || typeof thinking === "string") {
+            putText(id, { stream: typeof stream === "string" ? stream : "", thinking: typeof thinking === "string" ? thinking : "" });
+          } else if (!(id in live.streams) && !(id in live.thinking)) putText(id, null);
+        }
+      } else if (name.startsWith("text:")) {
+        putText(name.slice(5), value as ChatText | null);
+      } else if (name.startsWith("chat:")) {
         const id = name.slice(5);
         chats = { ...chats, [id]: value ? mergeChat(chats[id], value as ChatDetail) : undefined };
       } else if (name.startsWith("run:")) {
         running = { ...running, [name.slice(4)]: (value as Run | null) ?? null };
-      } else parts[name] = value;
+      } else {
+        if (parts === state.parts) parts = { ...parts };
+        Object.assign(parts, { [name]: value });
+      }
     }
-    return { parts: parts as Partial<Parts>, chats, running, synced: true };
+    if (state.synced && parts === state.parts && texts === state.texts && chats === state.chats && running === state.running) return state;
+    return { parts, texts, chats, running, synced: true };
   });
 }
 
