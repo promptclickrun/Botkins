@@ -16,6 +16,7 @@ const HOST = "botkins.host.v2";
 const PHONE = "botkins.phone.v1";
 const MiB = 1024 * 1024;
 const MAX_PHONE = 6 * MiB + 64 * 1024; // a phone's largest message
+const MAX_INVITE_LIFE = 30 * 24 * 60 * 60 * 1000;
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 // ---- wrangler dev ----------------------------------------------------------------------------
@@ -97,7 +98,7 @@ async function startDev() {
 // ---- helpers ---------------------------------------------------------------------------------
 
 const roomOf = (publicKey) => createHash("sha256").update("botkins-relay-room-v1:" + publicKey).digest("base64url");
-/** Everything the relay must never log: keys, rooms, signatures, and the conn and from bytes it saw. */
+/** Everything the relay must never log: lookups, cards, keys, rooms, signatures, and conn/from bytes. */
 const secrets = new Set();
 /** A computer's identity: an Ed25519 key pair and the room its public key gives. */
 const newRoom = () => {
@@ -114,6 +115,38 @@ function proof(r, { seconds = nowSeconds(), signedRoom = r.room, signer = r.priv
   secrets.add(signature);
   return [HOST, "k." + key, "t." + seconds, "s." + signature];
 }
+
+const newLookup = () => {
+  const lookup = randomBytes(32).toString("base64url");
+  secrets.add(lookup);
+  return lookup;
+};
+const newInviteCard = () => randomBytes(48).toString("base64url");
+
+/** The headers a host signs when it publishes or deletes an invite card. */
+function inviteProof(r, lookup, { card, expiresAt, seconds = nowSeconds(), signer = r.privateKey, signedCard = card, signedExpiresAt = expiresAt, action = "put" } = {}) {
+  const message =
+    action === "put"
+      ? `botkins-relay-invite-v1:${r.room}:${lookup}:${signedExpiresAt}:${createHash("sha256").update(signedCard).digest("base64url")}:${seconds}`
+      : `botkins-relay-invite-del-v1:${r.room}:${lookup}:${seconds}`;
+  const signature = sign(null, Buffer.from(message), signer).toString("base64url");
+  secrets.add(lookup);
+  if (card) secrets.add(card);
+  secrets.add(signature);
+  return { "x-botkins-key": r.key, "x-botkins-time": String(seconds), "x-botkins-sig": signature };
+}
+
+const putInvite = (r, lookup, body, options) =>
+  fetch(base + `/v1/invites/${lookup}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...inviteProof(r, lookup, { ...body, ...options }) },
+    body: JSON.stringify(body),
+  });
+const deleteInvite = (r, lookup, options) =>
+  fetch(base + `/v1/invites/${lookup}`, {
+    method: "DELETE",
+    headers: inviteProof(r, lookup, { ...options, action: "delete" }),
+  });
 const bytes = (...parts) => Buffer.concat(parts.map((part) => (typeof part === "number" ? Buffer.from([part]) : Buffer.from(part))));
 const u32 = (n) => {
   const b = Buffer.alloc(4);
@@ -174,7 +207,7 @@ class Client {
   }
   /**
    * Resolves with the close code. When the relay closes a socket from another socket's event (a replaced
-   * computer, a 17th phone), workerd sends the Close frame at once but leaves the TCP connection open, and
+   * computer, a 49th phone), workerd sends the Close frame at once but leaves the TCP connection open, and
    * Node's WebSocket reports the close only after its own 10 second timeout. So these waits are long.
    */
   closed(ms = 15_000) {
@@ -261,6 +294,81 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     }
     assert.equal((await rawGet("/v1/health", {}, "POST")).status, 404);
     assert.equal((await rawGet("/v1/health", {}, "DELETE")).status, 404);
+  });
+
+  it("serves the self-contained join page with CSP, no referrer and no cache", async () => {
+    const response = await fetch(base + "/join#c=01234-ABCDE&k=" + "A".repeat(43));
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/html/);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    const csp = response.headers.get("content-security-policy");
+    assert.match(csp, /default-src 'none'/);
+    assert.match(csp, /script-src 'nonce-[^']+'/);
+    assert.doesNotMatch(csp, /unsafe-inline/);
+    assert.match(html, /location\.hash/);
+    assert.match(html, /botkins:\/\/join\?c=/);
+    assert.match(html, /Don't have it open\? Open Botkins and enter this code\./);
+    assert.doesNotMatch(html, /<script[^>]+\bsrc=/);
+    assert.doesNotMatch(html, /<link[^>]+\bhref=/);
+  });
+
+  it("publishes, replaces, reads and deletes an invite card", async () => {
+    const owner = newRoom();
+    const lookup = newLookup();
+    const expiresAt = Date.now() + 60_000;
+    const first = newInviteCard();
+    assert.equal((await putInvite(owner, lookup, { card: first, expiresAt })).status, 204);
+    const read = await fetch(base + `/v1/invites/${lookup}`);
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), { card: first });
+
+    const replacement = newInviteCard();
+    assert.equal((await putInvite(owner, lookup, { card: replacement, expiresAt })).status, 204);
+    assert.deepEqual(await (await fetch(base + `/v1/invites/${lookup}`)).json(), { card: replacement });
+    assert.equal((await deleteInvite(owner, lookup)).status, 204);
+    assert.equal((await fetch(base + `/v1/invites/${lookup}`)).status, 404);
+    assert.equal((await deleteInvite(owner, lookup)).status, 404);
+  });
+
+  it("refuses an invite with a bad signature or stale time", async () => {
+    const owner = newRoom();
+    const other = newRoom();
+    const body = { card: newInviteCard(), expiresAt: Date.now() + 60_000 };
+    const bad = newLookup();
+    assert.equal((await putInvite(owner, bad, body, { signer: other.privateKey })).status, 401);
+    assert.equal((await fetch(base + `/v1/invites/${bad}`)).status, 404);
+
+    const stale = newLookup();
+    assert.equal((await putInvite(owner, stale, body, { seconds: nowSeconds() - 301 })).status, 401);
+    assert.equal((await fetch(base + `/v1/invites/${stale}`)).status, 404);
+  });
+
+  it("lets only the publishing key replace or delete an invite", async () => {
+    const owner = newRoom();
+    const other = newRoom();
+    const lookup = newLookup();
+    const expiresAt = Date.now() + 60_000;
+    const card = newInviteCard();
+    assert.equal((await putInvite(owner, lookup, { card, expiresAt })).status, 204);
+
+    assert.equal((await putInvite(other, lookup, { card: newInviteCard(), expiresAt })).status, 403);
+    assert.equal((await deleteInvite(other, lookup)).status, 403);
+    assert.deepEqual(await (await fetch(base + `/v1/invites/${lookup}`)).json(), { card });
+    assert.equal((await deleteInvite(owner, lookup)).status, 204);
+  });
+
+  it("rejects invite expiry over 30 days and an oversized card", async () => {
+    const owner = newRoom();
+    const tooLong = { card: newInviteCard(), expiresAt: Date.now() + MAX_INVITE_LIFE + 60_000 };
+    assert.equal((await putInvite(owner, newLookup(), tooLong)).status, 400);
+    const tooLarge = { card: randomBytes(4097).toString("base64url"), expiresAt: Date.now() + 60_000 };
+    assert.equal((await putInvite(owner, newLookup(), tooLarge)).status, 400);
+  });
+
+  it("answers 404 for an unknown invite lookup", async () => {
+    assert.equal((await fetch(base + `/v1/invites/${newLookup()}`)).status, 404);
   });
 
   it("answers 426 to a plain GET on a valid room path", async () => {
@@ -499,13 +607,13 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     assert.equal((await oldestClosed).code, 4008);
   });
 
-  it("closes the room's oldest socket (4008) when a 17th arrives from a mix of addresses", { timeout: 60_000 }, async () => {
+  it("closes the room's oldest socket (4008) when a 49th arrives from a mix of addresses", { timeout: 60_000 }, async () => {
     const r = newRoom();
     const h = await host(r);
     const phones = [];
     const ids = [];
-    for (let i = 0; i < 16; i++) {
-      const p = await phone(r, `198.51.100.${i % 8}`); // two sockets each from eight addresses
+    for (let i = 0; i < 48; i++) {
+      const p = await phone(r, `198.51.100.${i % 8}`); // six sockets each from eight addresses
       p.send(request(i));
       ids.push((await h.next()).subarray(0, 16));
       phones.push(p);
@@ -522,7 +630,7 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     assert.ok((await h.next()).equals(bytes(ids[1], 0x04)));
     another.send(request(101));
     assert.ok((await h.next()).subarray(16).equals(request(101)));
-    phones[15].send(request(102));
+    phones[47].send(request(102));
     assert.ok((await h.next()).subarray(16).equals(request(102)));
     assert.equal((await firstClosed).code, 4008);
     assert.equal((await secondClosed).code, 4008);
@@ -611,7 +719,7 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     assert.ok(wakes >= 1, "the object never hibernated, so this test proved nothing");
   });
 
-  it("never logs a key, a signature, a room name, a conn or a from tag", () => {
+  it("never logs an invite lookup, card, key, signature, room name, conn or from tag", () => {
     // wrangler dev prints each request's URL itself; production invocation logs are off. Check the relay's lines.
     const logged = output.split("\n").filter((line) => line.startsWith('{"event":'));
     assert.ok(logged.length > 20, "the relay logged its events");

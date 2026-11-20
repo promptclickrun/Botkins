@@ -7,7 +7,7 @@
   "routes": [{ "pattern": "relay.botkins.app", "custom_domain": true }],
   "workers_dev": false,
   "preview_urls": false,
-  // Workers Logs on. Invocation logs are off because they record the request URL, which holds the room name.
+  // Workers Logs on. Invocation logs are off because request URLs hold room names and invite lookups.
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
@@ -22,12 +22,20 @@
   "ratelimits": [
     { "name": "SOCKETS", "namespace_id": "47611", "simple": { "limit": 30, "period": 60 } },
     { "name": "REQUESTS", "namespace_id": "47612", "simple": { "limit": 120, "period": 60 } },
+    // Public invite lookups: 20 a minute for each network.
+    { "name": "INVITES", "namespace_id": "47614", "simple": { "limit": 20, "period": 60 } },
     // Pushes: 240 a minute for each computer key. POST /v1/push counts one for each item.
     { "name": "PUSHES", "namespace_id": "47613", "simple": { "limit": 240, "period": 60 } }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "ROOM", "class_name": "Room" }]
+    "bindings": [
+      { "name": "ROOM", "class_name": "Room" },
+      { "name": "INVITE", "class_name": "Invite" }
+    ]
   },
-  // SQLite-backed, the only kind the Free plan allows. The relay never uses the storage API.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+  // SQLite-backed, the only kind the Free plan allows. Room uses hibernation; Invite stores sealed cards.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room"] },
+    { "tag": "v2", "new_sqlite_classes": ["Invite"] }
+  ]
 }
