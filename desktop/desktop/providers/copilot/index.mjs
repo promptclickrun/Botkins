@@ -260,7 +260,7 @@ class CopilotSession extends ProviderSession {
     }
     return completed;
   }
-  async send({ prompt, attachments }, timeoutMs, onReady) {
+  async send({ prompt, attachments, fleet }, timeoutMs, onReady) {
     const options = { prompt, ...(attachments?.length && { attachments: sdkAttachments(attachments) }) };
     // Admit the message and use the session events for completion. The SDK's legacy completion
     // timeout is a wall-clock deadline; active tool and sub-agent work must be allowed to outlive it.
@@ -302,6 +302,9 @@ class CopilotSession extends ProviderSession {
           idleBeforeSteer = undefined;
         }
       }
+      // fleet.start returns no message id: its turn is the first new root message after the call.
+      if (fleet && !messageId && event.type === "user.message" && event.data?.messageId && event.data.delivery !== "steering")
+        messageId = event.data.messageId;
       if (event.type === "user.message" && event.data?.messageId === messageId) {
         requestStarted = true;
       } else if (event.type === "session.warning" && event.data?.warningType === "policy_blocked" && event.data?.originatingMessageId === messageId) {
@@ -352,7 +355,11 @@ class CopilotSession extends ProviderSession {
       // returning its message id; if so the stall must reject this call too. Keep a rejection
       // handler on the admission branch because it may settle after the stall branch wins.
       const admission = (async () => {
-        messageId = await timed("send", () => this.sdk.send(options));
+        if (fleet) {
+          // session.idle waits for fleet's background helpers, so the turn ends when they all have.
+          const { started } = await timed("fleet", () => this.sdk.rpc.fleet.start(options));
+          if (!started) throw new Error("Copilot couldn't start fleet mode in this chat.");
+        } else messageId = await timed("send", () => this.sdk.send(options));
         admitted = true;
         for (const event of buffered) observe(event);
         if (!ended) onReady?.(async ({ prompt, attachments }) => {

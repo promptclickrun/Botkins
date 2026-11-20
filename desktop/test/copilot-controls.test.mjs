@@ -15,6 +15,7 @@ const commands = [
     description: "Choose model",
   },
   { name: "fresh-command", kind: "client", description: "From an extension" },
+  { name: "fleet", kind: "builtin", description: "Run in fleet mode" },
   {
     name: "sample",
     kind: "skill",
@@ -36,7 +37,8 @@ function fixture(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const calls = [],
     prompts = [],
-    questions = [];
+    questions = [],
+    fleets = [];
   let cfg;
   const rpc = {
     mcp: { list: async () => ({ servers: [] }) },
@@ -62,6 +64,24 @@ function fixture(t) {
     commands: {
       list: async () => ({ commands }),
       invoke: async ({ name }) => ({ kind: "text", text: "Output of " + name }),
+    },
+    fleet: {
+      // Like the runtime: the call returns at once, then the turn and its background helpers run.
+      start: async ({ prompt }) => {
+        fleets.push(prompt);
+        setTimeout(() => {
+          const messageId = "fleet-" + fleets.length;
+          session.emit({ type: "user.message", id: messageId, data: { messageId, delivery: "idle" } });
+          session.emit({ type: "subagent.started", agentId: "w1", data: { toolCallId: "h1", agentName: "research", agentDisplayName: "worker" } });
+          session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Dispatched." } });
+          setTimeout(() => {
+            session.emit({ type: "subagent.completed", agentId: "w1", data: { toolCallId: "h1", agentName: "research", agentDisplayName: "worker" } });
+            session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Fleet answer" } });
+            session.emit({ type: "session.idle", data: { mode: "interactive" } });
+          }, 5);
+        });
+        return { started: true };
+      },
     },
     model: {
       switchTo: async (args) => {
@@ -111,7 +131,7 @@ function fixture(t) {
       () => {},
       () => ({ kind: "reject" }),
     );
-  return { open, rpc, calls, prompts, questions, config: () => cfg };
+  return { open, rpc, calls, prompts, questions, fleets, config: () => cfg };
 }
 test("the slash menu includes dynamically advertised commands, aliases, skills and native side questions", async (t) => {
   const f = fixture(t);
@@ -174,6 +194,21 @@ test("native command output and transient side questions never become model prom
   assert.equal(JSON.stringify(ws.state), saved);
   assert.deepEqual(f.prompts, ["Hello"]);
   assert.deepEqual(f.questions, ["Why?"]);
+});
+test("/fleet runs as a turn that waits for its background helpers and keeps the final answer", async (t) => {
+  const f = fixture(t),
+    ws = f.open(),
+    id = ws.createChat("pip");
+  await ws.send(id, "/fleet find the cities");
+  const run = ws.state.runs[0];
+  assert.deepEqual(f.fleets, ["find the cities"]);
+  assert.deepEqual(f.prompts, []);
+  assert.equal(run.status, "Completed");
+  assert.deepEqual(run.agents.map((a) => [a.name, a.status]), [["worker", "Done"]]);
+  assert.deepEqual(ws.state.chats[0].messages.map((m) => [m.role, m.text]), [
+    ["user", "/fleet find the cities"],
+    ["assistant", "Fleet answer"],
+  ]);
 });
 test("approval levels, managed requests, remembered scopes and cancellation resolve the correct callback", async (t) => {
   const f = fixture(t),

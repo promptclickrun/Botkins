@@ -374,6 +374,10 @@ export async function resolvePrompt(wrapper, prompt, run, chat, ws) {
       }
     }
   }
+  // Fleet mode starts helpers that outlive the command call. Run it as a turn so the reply waits for
+  // them and their results land in this chat.
+  if (item.command === "fleet" && session.rpc?.fleet?.start)
+    return { kind: "agent-prompt", prompt: args, fleet: true };
   if (item.kind === "Skill") run.skill = item.command;
   if (item.command === "help") {
     const { choices } = await inventory(session);

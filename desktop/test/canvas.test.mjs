@@ -123,6 +123,20 @@ test("reasoning, usage, context, subagents and todos are recorded for the main a
   assert.equal(ws.snapshot().thinking[id], undefined);
 });
 
+test("a helper still running when the reply ends is stopped, not failed", async (t) => {
+  const session = fakeSession(async (emit) => {
+    emit({ type: "subagent.started", data: { toolCallId: "h1", agentName: "research", agentDisplayName: "Researcher" } });
+    return { data: { content: "Started it." } };
+  });
+  const { ws } = workspaceWith(session, t);
+  const id = ws.createChat("pip");
+  await ws.send(id, "Go");
+  const [helper] = ws.state.runs[0].agents;
+  assert.equal(helper.status, "Stopped");
+  assert.equal(helper.detail, "Stopped with the reply");
+  assert.ok(helper.finished >= helper.started);
+});
+
 test("reasoning is capped per run", async (t) => {
   const session = fakeSession(async (emit) => {
     for (let i = 0; i < 30; i++)

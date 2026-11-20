@@ -246,7 +246,8 @@ export type Subagent = {
   id: string;
   name: string;
   description?: string;
-  status: "Running" | "Done" | "Failed";
+  /** Stopped: the reply ended while the helper still ran. */
+  status: "Running" | "Done" | "Failed" | "Stopped";
   started: number;
   finished?: number;
   detail?: string;

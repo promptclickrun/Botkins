@@ -1316,8 +1316,10 @@ export class Workspace {
         checkpoint.draft && "Earlier partial reply:\n" + checkpoint.draft,
         progress.length && "Recorded tool activity:\n" + progress.join("\n"),
       ].filter(Boolean).join("\n\n");
+      // A recovered fleet turn continues as a plain reply; starting fleet mode again would re-dispatch its helpers.
+      const { fleet: _fleet, ...original } = checkpoint.input;
       input = {
-        ...checkpoint.input,
+        ...original,
         prompt: "Continue the unfinished reply in this conversation. Check the results of earlier actions before doing more. If an action may already have happened and you cannot verify it, ask the person before repeating it. The original request follows.\n\n" + checkpoint.input.prompt + (context ? "\n\n" + context : ""),
       };
     } else {
@@ -1621,6 +1623,7 @@ export class Workspace {
             // Mentioned records follow the message as text; mentioned files ride along as attachments.
             prompt: quotedPrompt(effect.prompt, task.quote) + (task.context || ""),
             attachments: task.attachments,
+            ...(effect.fleet && { fleet: true }),
           },
         );
         if (task.stopped || this.closing) return;
