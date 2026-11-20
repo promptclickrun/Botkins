@@ -24,7 +24,13 @@ export class Interactions {
     return new Promise((resolve) => {
       this.entries.set(id, {
         chat: transcript, task,
-        view: { botId: chat.botId, ...view, id, chatId: chat.id },
+        view: {
+          botId: chat.botId,
+          ...view,
+          ...(task?.author && { askedBy: { memberId: task.author.memberId, name: task.author.name } }),
+          id,
+          chatId: chat.id,
+        },
         timer: timeout && setTimeout(() => this.respond(id, { action: "cancel" }, false), timeout).unref(),
         resolve,
       });

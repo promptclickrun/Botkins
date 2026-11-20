@@ -2,14 +2,15 @@
 // side menu, the line across the top that says whose bots these are, and the part of Settings
 // where a computer is paired, renamed and unpaired.
 import { useEffect, useRef, useState } from "react";
-import { Check, Monitor, MonitorSmartphone, Plus, Trash2 } from "lucide-react";
-import type { RemoteHost, State } from "./types";
+import { Check, Monitor, MonitorSmartphone, Plus, Trash2, UserPlus } from "lucide-react";
+import type { RemoteHost, State, TeamJoinState, TeamJoinTarget } from "./types";
 import { Group, errorText } from "./SettingsRows";
 import "./remotehosts.css";
 
 const api = window.botkins;
 const STATES: Record<string, string> = { connecting: "Connecting…", online: "Connected", offline: "Can't be reached", revoked: "No longer paired", idle: "" };
 const said = (e: unknown) => errorText(e);
+const memberLabel = (team?: string) => (team ? "Member of " + team : "");
 
 /** How a host in use is doing, in a few words. */
 export function hostLine(using: NonNullable<State["remote"]>["using"]) {
@@ -69,7 +70,7 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
         </span>
         <span className="nav-label">
           {name}
-          {using && <small>{hostLine(using)}</small>}
+          {using && <small>{using.member ? memberLabel(using.team) : hostLine(using)}</small>}
         </span>
       </button>
       {error && (
@@ -89,7 +90,7 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
               <MonitorSmartphone size={15} aria-hidden="true" />
               <span>
                 {host.name}
-                {host.current && host.state && <small>{STATES[host.state] ?? ""}</small>}
+                {host.member && host.team ? <small>{memberLabel(host.team)}</small> : host.current && host.state && <small>{STATES[host.state] ?? ""}</small>}
               </span>
               {host.current && <Check size={14} aria-hidden="true" />}
             </button>
@@ -136,7 +137,7 @@ export function HostBanner({ state, pairAgain }: { state: State; pairAgain: () =
         ) : (
           <>
             Using <strong>{using.name}</strong>
-            <span className="host-banner-state"> · {hostLine(using)}</span>
+            <span className="host-banner-state"> · {using.member ? memberLabel(using.team) : hostLine(using)}</span>
           </>
         )}
       </span>
@@ -153,7 +154,7 @@ export function HostBanner({ state, pairAgain }: { state: State; pairAgain: () =
 }
 
 /** Settings: the computers this app is paired to, and pairing with one more. */
-export function OtherComputers({ state }: { state: State }) {
+export function OtherComputers({ state, initialJoin }: { state: State; initialJoin?: string }) {
   const hosts: RemoteHost[] = state.remote?.hosts ?? [];
   const [link, setLink] = useState("");
   const [address, setAddress] = useState("");
@@ -162,6 +163,84 @@ export function OtherComputers({ state }: { state: State }) {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const [teamInput, setTeamInput] = useState("");
+  const [teamTarget, setTeamTarget] = useState<TeamJoinTarget>();
+  const [teamJoin, setTeamJoin] = useState<TeamJoinState>();
+  const [teamBusy, setTeamBusy] = useState(false);
+  const [teamError, setTeamError] = useState("");
+  const showTeam = (next: TeamJoinState) => {
+    setTeamJoin(next);
+    setTeamError("");
+  };
+  const findTeam = async (input: string) => {
+    setTeamBusy(true);
+    setTeamError("");
+    setTeamInput(input);
+    try {
+      setTeamTarget(await api.findTeamInvite(input));
+    } catch (e) {
+      const message = said(e);
+      setTeamError(/expired|closed|ten-character|couldn't be opened/i.test(message) ? "This invite has expired or was used." : message);
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+  const acceptTeam = async () => {
+    if (!teamTarget) return;
+    setTeamBusy(true);
+    setTeamError("");
+    try {
+      showTeam(await api.startTeamJoin(teamTarget));
+    } catch (e) {
+      setTeamError(said(e));
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+  const cancelTeam = async () => {
+    if (teamJoin) await api.cancelTeamJoin(teamJoin.id).catch(() => {});
+    setTeamJoin(undefined);
+    setTeamTarget(undefined);
+    setTeamInput("");
+    setTeamError("");
+  };
+  const checkTeam = async () => {
+    if (!teamJoin || !["pending", "offline"].includes(teamJoin.status)) return;
+    try {
+      showTeam(await api.checkTeamJoin(teamJoin.id));
+    } catch (e) {
+      setTeamError(said(e));
+    }
+  };
+  useEffect(() => {
+    if (initialJoin) void findTeam(initialJoin);
+  }, [initialJoin]);
+  useEffect(() => {
+    let live = true;
+    api
+      .teamJoins()
+      .then((items) => {
+        if (live && items[0] && !teamJoin) showTeam(items[0]);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!teamJoin || !["pending", "offline"].includes(teamJoin.status)) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void checkTeam();
+    }, 10_000);
+    const focus = () => {
+      if (document.visibilityState === "visible") void checkTeam();
+    };
+    window.addEventListener("focus", focus);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", focus);
+    };
+  }, [teamJoin?.id, teamJoin?.status]);
   const run = async (action: () => Promise<unknown>, done = "") => {
     setBusy(true);
     setError("");
@@ -212,7 +291,13 @@ export function OtherComputers({ state }: { state: State }) {
             ) : (
               <span className="set-name">{host.name}</span>
             )}
-            <small className="int-line">{host.current ? "In use" + (host.state ? " · " + (STATES[host.state] ?? "") : "") : "Paired " + new Date(host.addedAt).toLocaleDateString()}</small>
+            <small className="int-line">
+              {host.member && host.team
+                ? memberLabel(host.team)
+                : host.current
+                  ? "In use" + (host.state ? " · " + (STATES[host.state] ?? "") : "")
+                  : "Paired " + new Date(host.addedAt).toLocaleDateString()}
+            </small>
           </div>
           <div className="set-control">
             <button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.useRemoteHost(host.current ? null : host.id))}>
@@ -228,6 +313,94 @@ export function OtherComputers({ state }: { state: State }) {
           </div>
         </div>
       ))}
+      <div className="set-row stacked host-team-join">
+        <div className="set-label">
+          <span className="set-name host-team-title">
+            <UserPlus size={15} aria-hidden="true" />
+            Join a team
+          </span>
+          <small>Enter an invite code or paste the link the owner sent.</small>
+        </div>
+        {teamJoin?.status === "pending" || teamJoin?.status === "offline" ? (
+          <div className="host-join-message" role="status">
+            <strong>The request has been sent to the owner of the team.</strong>
+            <small>Waiting for {teamJoin.team}.</small>
+            {teamJoin.status === "offline" && (
+              <small>Can't reach {teamJoin.team} right now. Try again when the owner's computer is on.</small>
+            )}
+            <div className="host-join-actions">
+              <button type="button" className="set-button" disabled={teamBusy} onClick={() => void checkTeam()}>
+                Check now
+              </button>
+              <button type="button" className="set-button" disabled={teamBusy} onClick={() => void cancelTeam()}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : teamJoin?.status === "approved" ? (
+          <div className="host-join-message" role="status">
+            <strong>You're in. Welcome to {teamJoin.team}.</strong>
+            <small>Choose this team in the computer switcher.</small>
+            <button type="button" className="set-button" onClick={() => void cancelTeam()}>
+              Done
+            </button>
+          </div>
+        ) : teamJoin?.status === "denied" ? (
+          <div className="host-join-message" role="status">
+            <strong>The owner didn't approve this request.</strong>
+            <button type="button" className="set-button" onClick={() => void cancelTeam()}>
+              Done
+            </button>
+          </div>
+        ) : teamJoin?.status === "closed" ? (
+          <div className="host-join-message" role="status">
+            <strong>This invite has expired or was used.</strong>
+            <button type="button" className="set-button" onClick={() => void cancelTeam()}>
+              Try another
+            </button>
+          </div>
+        ) : teamTarget ? (
+          <div className="host-join-confirm" role="status">
+            <strong>Join {teamTarget.name}?</strong>
+            <div className="host-join-actions">
+              <button type="button" className="set-button primary" disabled={teamBusy} onClick={() => void acceptTeam()}>
+                Accept
+              </button>
+              <button type="button" className="set-button" disabled={teamBusy} onClick={() => void cancelTeam()}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form
+            className="host-team-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (teamInput.trim() && !teamBusy) void findTeam(teamInput);
+            }}
+          >
+            <input
+              aria-label="Team invite code or link"
+              placeholder="XXXXX-XXXXX or botkins://join?…"
+              value={teamInput}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => {
+                setTeamInput(e.target.value);
+                setTeamError("");
+              }}
+            />
+            <button type="submit" className="set-button" disabled={!teamInput.trim() || teamBusy}>
+              {teamBusy ? "Finding…" : "Join with a code"}
+            </button>
+          </form>
+        )}
+        {teamError && (
+          <small className="host-error" role="alert">
+            {teamError}
+          </small>
+        )}
+      </div>
       <div className="set-row host-pair">
         <div className="set-label">
           <span className="set-name">Connect to another computer</span>

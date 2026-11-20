@@ -449,6 +449,20 @@ dialog.settings-window {
   color: var(--ink);
   font-weight: 600;
 }
+.set-tab-badge {
+  min-width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+}
 /* Plain line icons: muted, and in ink on the chosen section. */
 .set-icon {
   display: grid;

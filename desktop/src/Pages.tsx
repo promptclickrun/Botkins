@@ -43,6 +43,7 @@ import {
 } from "lucide-react";
 import { BotAvatar, activityLabel, botActivity, chatActivity } from "./Avatar";
 import type { Bot, Chat, Section, State } from "./types";
+import { teamCan } from "./teamAccess";
 import "./agents.css";
 import "./groups.css";
 
@@ -347,7 +348,7 @@ const run = (actions: PageActions, p: Promise<unknown>) => void p.catch(actions.
 export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: AskFn): MenuItem[] {
   const primary = state.bots[0]?.id === b.id;
   const sections = state.sections ?? [];
-  return [
+  const items: MenuItem[] = [
     { label: "New chat", icon: MessageSquarePlus, run: () => actions.newChatWith(b.id) },
     { label: "Bot page", icon: UserRound, run: () => actions.botPage(b.id) },
     "separator",
@@ -419,6 +420,15 @@ export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: As
       run: () => run(actions, deleteBot(b, ask)),
     },
   ];
+  const kept = items.filter((item) => {
+    if (item === "separator") return true;
+    if (item.label === "New chat") return teamCan(state, "agents", "chat");
+    if (item.label === "Bot page") return teamCan(state, "agents");
+    if (item.label === "Duplicate") return teamCan(state, "agents", "create");
+    if (item.label.startsWith("Delete")) return teamCan(state, "agents", "delete");
+    return teamCan(state, "agents", "manage");
+  });
+  return kept.filter((item, index) => item !== "separator" || (index > 0 && index < kept.length - 1 && kept[index - 1] !== "separator"));
 }
 
 export async function deleteBot(b: Bot, ask: AskFn) {
@@ -686,7 +696,7 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
               <SlidersHorizontal size={15} />
             </button>
           )}
-          {(!home || tools) && (
+          {(!home || tools) && teamCan(state, "agents", "manage") && (
           <button
             className="textbutton"
             onClick={() =>
@@ -708,10 +718,12 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
             New section
           </button>
           )}
-          <button className="textbutton" onClick={actions.addBot}>
-            <Plus size={15} />
-            Add bot
-          </button>
+          {teamCan(state, "agents", "create") && (
+            <button className="textbutton" onClick={actions.addBot}>
+              <Plus size={15} />
+              Add bot
+            </button>
+          )}
         </span>
       </div>
       {tools && (
@@ -900,10 +912,15 @@ export function ChatRow({
   const b = state.bots.find((b) => b.id === chat.botId);
   const members = (chat.botIds ?? []).map((id) => state.bots.find((x) => x.id === id)).filter((x): x is Bot => !!x);
   const project = chat.projectId ? state.projects?.find((p) => p.id === chat.projectId) : undefined;
+  const createdBy =
+    chat.createdBy && state.team && "members" in state.team
+      ? state.team.members.find((member) => member.id === chat.createdBy)?.name
+      : chat.messages.find((message) => message.author?.memberId === chat.createdBy)?.author?.name;
   const menu = useMenu();
   const dialogs = useAsk();
   if (!b) return null;
-  const items = () => chatMenuItems(chat, actions!, dialogs.ask);
+  const controls = teamCan(state, "agents", "chat") ? actions : undefined;
+  const items = () => chatMenuItems(chat, controls!, dialogs.ask);
   const last = chat.messages.at(-1)?.text;
   const row = (
     <button className={"row chatrow" + (chat.unread ? " unread" : "")} onClick={() => open(chat.id)}>
@@ -920,13 +937,14 @@ export function ChatRow({
       <span className="rowtext">
         <span className="rowtop">
           <strong>
-            {chat.pinned && actions && <Pin size={12} className="row-pin" aria-label="Pinned" />}
+            {chat.pinned && controls && <Pin size={12} className="row-pin" aria-label="Pinned" />}
             {chat.title}
           </strong>
           <time>{shortTime(chat.time)}</time>
         </span>
         <span className="rowline">
           <small>
+            {createdBy && <>{createdBy} · </>}
             {members.length > 1 ? members.map((m) => m.name).join(", ") : b.name} ·{" "}
             {last ? previewOf(last) : "Start a conversation"}
           </small>
@@ -938,10 +956,10 @@ export function ChatRow({
           </small>
         )}
       </span>
-      {!actions && <ChevronRight size={16} />}
+      {!controls && <ChevronRight size={16} />}
     </button>
   );
-  if (!actions) return row;
+  if (!controls) return row;
   return (
     <div className="rowwrap" onContextMenu={(e) => menu.show(e, chat.title, items())}>
       {row}
@@ -1081,7 +1099,7 @@ export function ChatsPage({
             ))}
           </div>
         ))}
-        {!chats.length && (
+        {!chats.length && teamCan(state, "agents", "chat") && (
           <div className="empty">
             <button className="textbutton" onClick={actions.newChat}>
               Start your first chat <ArrowRight size={15} />

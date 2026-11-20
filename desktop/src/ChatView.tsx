@@ -57,6 +57,7 @@ import { blockedBots } from "./access";
 import { FolderKanban, ShieldAlert } from "lucide-react";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
+import { teamCan } from "./teamAccess";
 import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
@@ -181,7 +182,10 @@ export default function ChatView({
   const speaker = group ? state.bots.find((b) => b.id === state.speakers?.[chat.id]) : bot;
   const nameOf = (m: Message) =>
     m.botId ? (state.bots.find((b) => b.id === m.botId)?.name ?? "Removed bot") : bot.name;
+  const messageClass = (message: Message) =>
+    message.role + (message.role === "user" && message.author ? " from-member" : "");
   const project = chat.projectId ? state.projects?.find((p) => p.id === chat.projectId) : undefined;
+  const canManageAgents = teamCan(state, "agents", "manage");
   // A bot that lost access to the chat's project can't take new turns here (desktop/access.mjs).
   const blocked = blockedBots(state, chat);
   const mode: ChatMode = chat.mode ?? "default";
@@ -480,7 +484,7 @@ export default function ChatView({
   const timelineMessage = (m: Message, index: number) => (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
-      className={m.role}
+      className={messageClass(m)}
       key={`timeline-message-${index}`}
       onContextMenu={(e) => {
         if (window.getSelection()?.toString()) return;
@@ -493,7 +497,9 @@ export default function ChatView({
           <BotAvatar bot={group ? state.bots.find((b) => b.id === m.botId) ?? bot : bot} size={22} />
           <span className="speaker-name">{group ? nameOf(m) : bot.name}</span>
         </b>
-      ) : m.role === "user" ? <b className="visually-hidden">You</b> : <b className="command-label">Command output</b>}
+      ) : m.role === "user" ? (
+        <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author?.name ?? "You"}</b>
+      ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
       {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.text} files={files} />}
@@ -613,7 +619,7 @@ export default function ChatView({
           />
         )}
         <TeamRail run={run} bots={state.bots} />
-        <RunCards run={run} prefill={prefill} pickModel={pickModel} />
+        <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
           <div className="error run-error"><span>{groupFailure || (run.ending === "timed-out" ? "Timed out" : run.status) + " · " + (run.detail || "Reply stopped.")}</span>{!groupFailure && run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.retry(run.id).catch((e) => setNotice(e.message))}><RotateCcw size={13} />Try again</button>}</div>
         )}
@@ -709,7 +715,7 @@ export default function ChatView({
               </button>
             </div>
           )}
-          {!group && (
+          {!group && canManageAgents && (
             <button
               className="chat-model"
               aria-label={"Model: " + modelLabel(model, models, defaultProvider) + ". Change model and thinking"}
@@ -719,9 +725,11 @@ export default function ChatView({
               <ModelBadge choice={model} models={models} />
             </button>
           )}
-          <button className="chathead-icon bot-settings" aria-label="Bot settings" title="Bot settings" onClick={botSettings}>
-            <SlidersHorizontal size={17} />
-          </button>
+          {canManageAgents && (
+            <button className="chathead-icon bot-settings" aria-label="Bot settings" title="Bot settings" onClick={botSettings}>
+              <SlidersHorizontal size={17} />
+            </button>
+          )}
           {paneAllowed && (
             <button
               ref={detailsButton}
@@ -815,7 +823,8 @@ export default function ChatView({
             </p>
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && (
-            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={message.role}>
+            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)}>
+              {message.author && <b className="member-speaker">{message.author.name}</b>}
               <RichText text={message.text} files={files} />
               <Attachments list={message.attachments} />
             </article>
@@ -841,7 +850,7 @@ export default function ChatView({
                 {(m.text || m.role !== "assistant") && (
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
-                    className={m.role}
+                    className={messageClass(m)}
                     onContextMenu={(e) => {
                       if (window.getSelection()?.toString()) return;
                       e.preventDefault();
@@ -862,8 +871,7 @@ export default function ChatView({
                         </b>
                       )
                     ) : m.role === "user" ? (
-                      // Screen readers still hear who said it; the bubble shows it on screen.
-                      <b className="visually-hidden">You</b>
+                      <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author?.name ?? "You"}</b>
                     ) : (
                       <b className="command-label">Command output</b>
                     )}
@@ -922,7 +930,7 @@ export default function ChatView({
                       onToggle={disclosed}
                     />
                     <TeamRail run={run} bots={state.bots} />
-                    <RunCards run={run} prefill={prefill} pickModel={pickModel} />
+                    <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
                     {failed.includes(run.status) && (
                       <div className="error run-error">
                         <span>

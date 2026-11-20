@@ -143,3 +143,32 @@
   flex: 1;
   min-width: 0;
 }
+.host-team-title {
+  display: flex !important;
+  align-items: center;
+  gap: 7px;
+}
+.host-team-form,
+.host-join-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.host-team-form input {
+  flex: 1;
+  min-width: 180px;
+  height: 32px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+}
+.host-join-message,
+.host-join-confirm {
+  display: grid;
+  gap: 6px;
+}
+.host-join-message small,
+.host-join-confirm small {
+  color: var(--muted);
+}

@@ -39,6 +39,7 @@ import FirstBot from "./FirstBot";
 import type { Attachment, Bot, Chat, MentionInput, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
+import { memberTeam, teamCan } from "./teamAccess";
 import "./style.css";
 
 // The remembered colors go on before anything is drawn.
@@ -71,12 +72,15 @@ function App() {
   const [messageTarget, setMessageTarget] = useState<{ chatId: string; index: number } | null>(null);
   const [modal, setModal] = useState<Modal>("");
   const [settingsTab, setSettingsTab] = useState("General");
+  const [settingsRevision, setSettingsRevision] = useState(0);
+  const [teamJoinUrl, setTeamJoinUrl] = useState("");
   const [side, setSide] = useState<Record<string, SideAnswer>>({});
   /** The bot whose page is open, or "". */
   const [profileId, setProfileId] = useState("");
   const [settingsBot, setSettingsBot] = useState("");
   function settings(tab: string, botId = "") {
     setSettingsTab(tab);
+    setSettingsRevision((revision) => revision + 1);
     setSettingsBot(botId);
     setModal("settings");
   }
@@ -217,6 +221,7 @@ function App() {
   const openRef = useRef(open);
   openRef.current = open;
   useEffect(() => api.onOpenChat((id) => openRef.current(id)), []);
+  useEffect(() => api.onOpenSettings((tab) => settingsRef.current(tab)), []);
   // An HTML app's answer waits in its chat's message box; the person reviews and sends it.
   useEffect(() => {
     // The answer joins whatever is already typed in that chat, so nothing the person wrote is lost.
@@ -269,6 +274,16 @@ function App() {
     window.addEventListener("botkins-open-settings", show);
     return () => window.removeEventListener("botkins-open-settings", show);
   }, []);
+  useEffect(() => {
+    const openJoin = (url: string) => {
+      void api.takeTeamJoin().catch(() => {});
+      setTeamJoinUrl(url);
+      settingsRef.current("Phone");
+    };
+    const off = api.onTeamJoin(openJoin);
+    api.takeTeamJoin().then((url) => url && openJoin(url)).catch(() => {});
+    return off;
+  }, []);
   // Settings › Access links to a bot's page (src/access.ts).
   const botPageRef = useRef(botPage);
   botPageRef.current = botPage;
@@ -295,7 +310,8 @@ function App() {
       ?? recent.find((c) => c.messages.some((message) => message.role === "user" && !message.runId))
       ?? recent[0];
     if (c) open(c.id);
-    else void newChat(b.id).catch(fail);
+    else if (state && teamCan(state, "agents", "chat")) void newChat(b.id).catch(fail);
+    else nav("Chats");
   }
   async function send(key: string, options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }) {
     const prompt = drafts[key]?.trim();
@@ -453,7 +469,7 @@ function App() {
       />
     );
   // A workspace with no bots opens on the first-run step: the person's existing agents, or Create a bot.
-  if (!state.bots.length)
+  if (!state.bots.length && !state.remote?.using?.member && !memberTeam(state))
     return <FirstBot saved={state.templates} created={async () => setState(await api.snapshot())} />;
   const stream = state.streams[chatId];
   const elsewhere = state.requests.find((r) => r.chatId !== chatId);
@@ -479,6 +495,18 @@ function App() {
       : enabledProviders.some((p) => p.starting)
         ? "Starting…"
         : "Sign in";
+  const teamRequests = !state.remote?.using && state.team && "requests" in state.team ? state.team.requests.length : 0;
+  const member = memberTeam(state);
+  const memberHost = !!member || state.remote?.using?.member === true;
+  const canViewAgents = teamCan(state, "agents");
+  const canChat = teamCan(state, "agents", "chat");
+  const placeAllowed = (place: string) => {
+    if (!memberHost) return true;
+    if (place === "Home" || place === "Chats") return canViewAgents;
+    if (place === "Today") return teamCan(state, "today");
+    if (place === "Work") return teamCan(state, "today", "view") || teamCan(state, "today", "use");
+    return false;
+  };
   // Collapses the side menu to icons: beside Settings when open, at the top of the strip when collapsed.
   const toggle = (
     <button
@@ -499,13 +527,15 @@ function App() {
           <img className="brand-name for-light" src="./wordmark.png" alt="Botkins" />
           <img className="brand-name for-dark" src="./wordmark-dark.png" alt="Botkins" />
           {/* New chat sits at the top of the list, as the + does in the phone app. */}
-          <button type="button" className="newchat" aria-label="New chat" title="New chat" onClick={() => setModal("chat")}>
-            <SquarePen size={17} />
-          </button>
+          {canChat && (
+            <button type="button" className="newchat" aria-label="New chat" title="New chat" onClick={() => setModal("chat")}>
+              <SquarePen size={17} />
+            </button>
+          )}
           {collapsed && toggle}
         </div>
         <nav aria-label="Workspace">
-          {placeOrder(state.settings.sidebar?.order).map((p) => {
+          {placeOrder(state.settings.sidebar?.order).filter(placeAllowed).map((p) => {
             const working = p === "Work" && Object.keys(state.streams).length > 0;
             const selected = (p === page || (p === "Work" && (page === "Routines" || page === "Usage" || page === "Tasks")));
             return (
@@ -531,17 +561,24 @@ function App() {
             );
           })}
         </nav>
-        <div className="sidebarlabel">
-          <span className="nav-label">Bots</span>
-          <button aria-label="Create bot" title={collapsed ? "Create bot" : undefined} onClick={() => setModal("bot")}>
-            <Plus size={15} />
-          </button>
-        </div>
-        <SidebarBots state={state} actions={actions} compact={collapsed} />
+        {canViewAgents && (
+          <>
+            <div className="sidebarlabel">
+              <span className="nav-label">Bots</span>
+              {teamCan(state, "agents", "create") && (
+                <button aria-label="Create bot" title={collapsed ? "Create bot" : undefined} onClick={() => setModal("bot")}>
+                  <Plus size={15} />
+                </button>
+              )}
+            </div>
+            <SidebarBots state={state} actions={actions} compact={collapsed} />
+          </>
+        )}
         <div className="sidebar-foot">
-          <button className="settings-link" title={collapsed ? "Settings (" + MOD + ",)" : undefined} onClick={() => settings("General")}>
+          <button className="settings-link" aria-label="Settings" title={collapsed ? "Settings (" + MOD + ",)" : undefined} onClick={() => settings("General")}>
             <SlidersHorizontal size={17} />
             <span className="nav-label">Settings</span>
+            {teamRequests > 0 && <span className="settings-badge" aria-hidden="true">{teamRequests}</span>}
           </button>
           {!collapsed && toggle}
         </div>
@@ -603,10 +640,10 @@ function App() {
                 return v;
               })
             }
-            composer={composer(
+            composer={canChat ? composer(
               chat.id,
               (chat.botIds?.length ?? 0) > 1 ? "Message the group… Type @ to ask one bot" : "Message " + bot.name + "…",
-            )}
+            ) : null}
             openChat={open}
             messageTarget={messageTarget?.chatId === chat.id ? messageTarget : undefined}
             openProject={(projectId) => projects({ projectId })}
@@ -664,14 +701,14 @@ function App() {
                 }
               />
             )}
-            {page === "Home" && (
+            {page === "Home" && state.bots.length > 0 && (
               <HomePage
                 state={state}
                 actions={actions}
-                composer={composer(
+                composer={canChat ? composer(
                   "home",
                   "Ask " + state.bots[0].name + "…",
-                )}
+                ) : null}
               />
             )}
             {page === "Chats" && (
@@ -692,6 +729,11 @@ function App() {
                 usage={() => nav("Usage")}
                 tasks={() => nav("Tasks")}
               />
+            )}
+            {page === "Home" && state.bots.length === 0 && (
+              <div className="empty">
+                No agents are visible to this role. Ask the team owner if you need access.
+              </div>
             )}
             {page === "Projects" && (
               <ProjectsPage
@@ -765,16 +807,18 @@ function App() {
         )}
         {modal === "settings" && (
           <Settings
+            key={settingsTab + ":" + settingsRevision}
             state={state}
             close={() => setModal("")}
             bots={state.bots}
             initialTab={settingsTab}
             settings={state.settings}
-            initialBot={settingsBot || bot?.id || state.bots[0].id}
+            initialBot={settingsBot || bot?.id || state.bots[0]?.id || ""}
             runCount={state.runs.length}
+            initialJoin={teamJoinUrl}
           />
         )}
-        {modal === "chat" && (
+        {modal === "chat" && canChat && (
           <NewChat
             state={state}
             fail={fail}

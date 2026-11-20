@@ -154,6 +154,7 @@ export default function RequestPanel({
         </strong>
         {count > 1 && <small>1 of {count}</small>}
       </div>
+      {req.askedBy && <small className="request-member">Asked by {req.askedBy.name}'s turn</small>}
       <form
         onSubmit={(e) => {
           e.preventDefault();

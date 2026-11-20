@@ -1,0 +1,214 @@
+.team-settings {
+  min-width: 0;
+}
+.team-views {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 20px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.team-views button {
+  flex: 1;
+  min-height: 31px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.team-views button[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+.team-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: calc(11px * var(--text-scale));
+}
+.team-name-row {
+  min-height: 54px;
+}
+.team-person {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.team-request {
+  align-items: flex-start;
+}
+.team-request-actions,
+.team-member-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.team-request-actions select,
+.team-member-actions select {
+  min-width: 145px;
+}
+.team-invite-card {
+  gap: 12px !important;
+}
+.team-invite-code {
+  padding: 4px 0 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: calc(28px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.team-invite-card > .set-button {
+  align-self: flex-start;
+}
+.team-invite-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.team-invite-link code {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+p.team-invite-note {
+  margin: 0;
+  padding: 10px 16px 13px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.45;
+}
+.team-devices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 3px;
+}
+.team-devices > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.team-online {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.team-online[data-online="true"] {
+  background: var(--success);
+}
+.team-role-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: -7px 0 13px 2px;
+}
+.team-scope {
+  padding: 13px 16px;
+}
+.team-scope + .team-scope {
+  border-top: 1px solid var(--line);
+}
+.team-scope > strong {
+  display: block;
+  margin-bottom: 10px;
+  font-size: calc(13px * var(--text-scale));
+}
+.team-scope > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 9px 18px;
+}
+.team-scope label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: calc(12px * var(--text-scale));
+}
+.team-scope input.switch {
+  width: 34px;
+  height: 20px;
+}
+.team-scope input.switch::after {
+  width: 16px;
+  height: 16px;
+}
+.team-scope input.switch:checked::after {
+  transform: translateX(14px);
+}
+.team-agent-mode {
+  justify-content: flex-start;
+  gap: 24px;
+}
+.team-agent-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: calc(13px * var(--text-scale));
+}
+.team-agent-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border-top: 1px solid var(--line);
+}
+.team-agent-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: calc(13px * var(--text-scale));
+}
+.team-agent-list label span {
+  flex: 1;
+  min-width: 0;
+}
+.team-agent-list input {
+  width: 16px;
+  height: 16px;
+}
+@media (max-width: 860px) {
+  .team-request,
+  .team-member {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .team-request .set-control,
+  .team-member .set-control {
+    width: 100%;
+    max-width: none;
+    padding-left: 46px;
+    justify-content: flex-start;
+  }
+}

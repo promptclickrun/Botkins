@@ -17,6 +17,7 @@ import {
   Mic,
   Settings2,
   Sparkles,
+  Users,
   UsersRound,
   X,
   type LucideIcon,
@@ -39,6 +40,8 @@ import TeamworkSettings from "./TeamworkSettings";
 import BotIntegrations from "./BotIntegrations";
 import BotMemory from "./BotMemory";
 import PluginsSettings from "./PluginsSettings";
+import TeamSettings, { type TeamView } from "./TeamSettings";
+import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
 
 const api = window.botkins;
@@ -55,6 +58,7 @@ export type SectionId =
   | "mcp"
   | "credentials"
   | "teamwork"
+  | "team"
   | "access"
   | "phone"
   | "voice"
@@ -75,6 +79,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "mcp", label: "MCP servers", icon: Server },
   { id: "credentials", label: "Credentials", icon: LockKeyhole },
   { id: "teamwork", label: "Teamwork", icon: UsersRound },
+  { id: "team", label: "Team", icon: Users },
   { id: "access", label: "Access", icon: KeyRound },
   { id: "phone", label: "Phone", icon: Smartphone },
   { id: "voice", label: "Voice", icon: Mic },
@@ -86,8 +91,10 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
 ];
 
 /** Where an older tab name, a section id or a section label opens. Callers still pass "Capabilities", "Bot", "Behavior"… */
-export function sectionFor(tab: string): { section: SectionId; view?: BotView } {
+export function sectionFor(tab: string): { section: SectionId; view?: BotView; teamView?: TeamView } {
   const key = tab.trim().toLowerCase();
+  const teamView = /^team:(requests|invite|members|groups|roles)$/.exec(key)?.[1] as TeamView | undefined;
+  if (teamView) return { section: "team", teamView };
   const legacy: Record<string, { section: SectionId; view?: BotView }> = {
     bot: { section: "bots", view: "model" },
     "bot settings": { section: "bots", view: "model" },
@@ -137,6 +144,7 @@ export default function Settings({
   initialBot,
   initialTab,
   settings,
+  initialJoin,
   runCount = 0,
   close,
 }: {
@@ -145,19 +153,34 @@ export default function Settings({
   initialBot: string;
   initialTab: string;
   settings: Preferences;
+  initialJoin?: string;
   /** Refreshes Usage when runs change. */
   runCount?: number;
   close?: () => void;
 }) {
-  const [start] = useState(() => {
+  const [start] = useState<{ section: SectionId; view?: BotView; teamView?: TeamView }>(() => {
     const s = sectionFor(initialTab);
     const v = nextView;
     nextView = undefined;
     return v ? { section: "bots" as SectionId, view: v } : s;
   });
-  const [id, setId] = useState(initialBot || bots[0].id),
+  const [id, setId] = useState(initialBot || bots[0]?.id || ""),
     [section, setSection] = useState<SectionId>(start.section),
     [view, setView] = useState<BotView>(start.view ?? "model");
+  const teamView = start.teamView ?? "requests";
+  const member = memberTeam(state);
+  const memberHost = !!member || state.remote?.using?.member === true;
+  const sections = SECTIONS.filter((item) => {
+    if (item.id === "team" && state.remote?.using) return false;
+    if (!memberHost) return true;
+    if (item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
+    if (item.id === "bots") return teamCan(state, "agents");
+    if (item.id === "skills") return teamCan(state, "skills");
+    if (item.id === "marketplace") return teamCan(state, "plugins");
+    if (item.id === "mcp") return teamCan(state, "mcp");
+    if (item.id === "notifications" || item.id === "chats") return teamCan(state, "settings", "manage");
+    return true;
+  });
   // Shown at once as the person changes them, and brought in step whenever the saved settings
   // change, here or from somewhere else (a paired phone, or the app settling a choice).
   const [preferences, setPreferences] = useState(settings);
@@ -181,7 +204,7 @@ export default function Settings({
     [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null),
     [cache, setCache] = useState<{ bytes: number; catalogs: number }>();
-  const sources = JSON.stringify([state.mcpServers, state.skills, bot.skillsOff, bot.mcpOff]);
+  const sources = JSON.stringify([state.mcpServers, state.skills, bot?.skillsOff, bot?.mcpOff]);
   useEffect(() => {
     setCatalog(null);
     setError("");
@@ -213,29 +236,29 @@ export default function Settings({
   }
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
   function move(e: KeyboardEvent<HTMLDivElement>) {
-    const at = SECTIONS.findIndex((s) => s.id === section);
+    const at = sections.findIndex((s) => s.id === section);
     const next =
       e.key === "ArrowDown"
-        ? (at + 1) % SECTIONS.length
+        ? (at + 1) % sections.length
         : e.key === "ArrowUp"
-          ? (at - 1 + SECTIONS.length) % SECTIONS.length
+          ? (at - 1 + sections.length) % sections.length
           : e.key === "Home"
             ? 0
             : e.key === "End"
-              ? SECTIONS.length - 1
+              ?               sections.length - 1
               : -1;
     if (next < 0) return;
     e.preventDefault();
-    setSection(SECTIONS[next].id);
+    setSection(sections[next].id);
     menu.current?.querySelectorAll<HTMLElement>("[role=tab]")[next]?.focus();
   }
-  const current = SECTIONS.find((s) => s.id === section)!;
+  const current = sections.find((s) => s.id === section) ?? sections[0];
   return (
     <div className="settings-window-body">
       <div className="set-sidebar">
         <h2>Settings</h2>
         <div role="tablist" aria-orientation="vertical" aria-label="Settings" ref={menu} onKeyDown={move}>
-          {SECTIONS.map(({ id: s, label, icon: Icon }) => (
+          {sections.map(({ id: s, label, icon: Icon }) => (
             <button
               key={s}
               type="button"
@@ -250,6 +273,9 @@ export default function Settings({
                 <Icon size={17} strokeWidth={1.8} />
               </span>
               {label}
+              {s === "team" && state.team && "requests" in state.team && state.team.requests.length > 0 && (
+                <span className="set-tab-badge" aria-hidden="true">{state.team.requests.length}</span>
+              )}
             </button>
           ))}
         </div>
@@ -416,6 +442,7 @@ export default function Settings({
               fail={setError}
             />
           )}
+          {section === "team" && <TeamSettings state={state} initialView={teamView} />}
           {section === "access" && <AccessSettings state={state} />}
           {/* Phones and computers paired to this one, then the computers this app uses. While another
               computer is in use its own devices are managed there. */}
@@ -427,7 +454,7 @@ export default function Settings({
             ) : (
               <PhoneSettings state={state} />
             ))}
-          {section === "phone" && <OtherComputers state={state} />}
+          {section === "phone" && <OtherComputers state={state} initialJoin={initialJoin} />}
           {section === "voice" && <VoiceSettings state={state} />}
           {section === "usage" && <Usage runCount={runCount} />}
           {section === "storage" && (
