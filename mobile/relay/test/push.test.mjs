@@ -337,7 +337,8 @@ describe("POST /v1/push", () => {
       ["a signature over other sends", () => body(computer, good, { signSends: JSON.stringify([item({ priority: 5 })]) }), 401, "unauthorized"],
       ["a signature over another time", () => ({ ...body(computer, good), time: nowSeconds() + 1 }), 401, "unauthorized"],
       ["a stale time", () => body(computer, good, { time: nowSeconds() - 301 }), 401, "unauthorized"],
-      ["a time in the future", () => body(computer, good, { time: nowSeconds() + 301 }), 401, "unauthorized"],
+      // Two seconds past the limit, so a second ticking before the relay reads its clock still refuses.
+      ["a time in the future", () => body(computer, good, { time: nowSeconds() + 302 }), 401, "unauthorized"],
       ["a ninth item", () => body(computer, Array(9).fill(item())), 400, "bad_request"],
       ["no items", () => body(computer, []), 400, "bad_request"],
       ["sends that is not JSON", () => body(computer, "not json"), 400, "bad_request"],

@@ -407,7 +407,9 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
       "a signature by another key": proof(r, { signer: other.privateKey }),
       "a signature over another room": proof(r, { signedRoom: other.room }),
       "a time 301 seconds old": proof(r, { seconds: now - 301 }),
-      "a time 301 seconds ahead": proof(r, { seconds: now + 301 }),
+      // Two seconds past the limit: `now` was read before the relay reads its clock, and one
+      // second ticking in between would leave an offer exactly at the limit, which is allowed.
+      "a time 302 seconds ahead": proof(r, { seconds: now + 302 }),
       "a time that is not a number": proof(r, { seconds: "12x" }),
       "no protocol name": good.slice(1),
       "no key": good.filter((entry) => !entry.startsWith("k.")),
