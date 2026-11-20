@@ -1,0 +1,75 @@
+// Asking the person at the terminal: a line, a hidden line (a token), a yes or no, and a file in
+// their editor.
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { CliError, usage } from "../output.mjs";
+
+/** Everything on standard input, for a value piped in. */
+export async function readAll(stream) {
+  let text = "";
+  stream.setEncoding?.("utf8");
+  for await (const chunk of stream) text += chunk;
+  return text;
+}
+
+/** One line typed at the terminal. `hidden` shows nothing of it (a token, a key). */
+export function ask(context, question, { hidden = false } = {}) {
+  const { stdin, stderr } = context;
+  return new Promise((resolve, reject) => {
+    const rl = createInterface({ input: stdin, output: stderr, terminal: !!stdin.isTTY });
+    if (hidden && stdin.isTTY) {
+      // Whatever is typed is not drawn: only the question stays on the line.
+      rl._writeToOutput = (text) => {
+        if (text.includes(question)) stderr.write(question);
+      };
+    }
+    rl.on("SIGINT", () => {
+      rl.close();
+      reject(new CliError("Cancelled.", 130, "CANCELLED"));
+    });
+    rl.question(question, (answer) => {
+      rl.close();
+      if (hidden && stdin.isTTY) stderr.write("\n");
+      resolve(answer);
+    });
+  });
+}
+
+/** A secret: typed without showing at a terminal, or read from a pipe. Never taken from the command line, where a process list shows it. */
+export async function secret(context, question) {
+  const value = context.stdin.isTTY ? await ask(context, question, { hidden: true }) : await readAll(context.stdin);
+  const trimmed = value.trim();
+  if (!trimmed) throw usage("Nothing was entered.");
+  return trimmed;
+}
+
+/** True for yes. Without a terminal to ask at, `--yes` has to say it. */
+export async function confirm(context, question) {
+  if (context.options.yes) return true;
+  if (!context.stdin.isTTY || context.json) throw usage("This needs a yes. Run it again with --yes.");
+  return /^y(es)?$/i.test((await ask(context, question + " [y/N] ")).trim());
+}
+
+/**
+ * Opens text in the person's editor ($VISUAL, $EDITOR, else vi) and returns what they saved.
+ * The file is in a folder only they can read and is removed afterwards.
+ */
+export function edit(context, text, name = "botkins.json") {
+  const command = context.env.VISUAL || context.env.EDITOR || "vi";
+  const dir = mkdtempSync(join(tmpdir(), "botkins-edit-"));
+  const file = join(dir, name);
+  try {
+    writeFileSync(file, text, { mode: 0o600 });
+    // The editor's own words may hold arguments ("code --wait").
+    const [program, ...args] = command.split(/\s+/).filter(Boolean);
+    const result = spawnSync(program, [...args, file], { stdio: "inherit" });
+    if (result.error) throw new CliError("The editor `" + command + "` couldn't be started: " + result.error.message + ". Set EDITOR to the one you use.");
+    if (result.status !== 0) throw new CliError("The editor ended with an error, so nothing was changed.");
+    return readFileSync(file, "utf8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}

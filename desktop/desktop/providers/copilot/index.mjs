@@ -575,15 +575,26 @@ export class CopilotProvider extends ModelProvider {
       await client.deleteSession(session.sessionId).catch(() => {});
     }
   }
-  async signIn({ open }) {
+  /**
+   * GitHub's sign-in. `open(url)` opens the page in the person's browser on this computer. A host
+   * with no browser passes `device({ userCode, verificationUri, expiresIn })` instead: GitHub's
+   * device sign-in, where the person types a one-time code on a page they open on any device.
+   */
+  async signIn({ open, device }) {
     await this.withAccounts(async (accounts, client) => {
-      const { flowId, step } = await accounts.login.begin({ kind: "githubDotCom", method: "web" });
+      const { flowId, step } = await accounts.login.begin({ kind: "githubDotCom", method: device ? "device-code" : "web" });
       const flow = (this.signInFlow = { cancel: () => accounts.login.cancel({ flowId }).catch(() => {}) });
       const cancelled = () => this.signInFlow !== flow;
       try {
-        if (step.kind !== "open-url" || new URL(step.url).origin !== "https://github.com")
-          throw new Error("Open Copilot CLI and run /login to connect your account.");
-        await open(step.url);
+        if (device) {
+          if (step.kind !== "device-code" || new URL(step.verificationUri).origin !== "https://github.com")
+            throw new Error("GitHub didn't offer a one-time code. Sign in with a GitHub token instead.");
+          await device({ userCode: step.userCode, verificationUri: step.verificationUri, expiresIn: step.expiresIn });
+        } else {
+          if (step.kind !== "open-url" || new URL(step.url).origin !== "https://github.com")
+            throw new Error("Open Copilot CLI and run /login to connect your account.");
+          await open(step.url);
+        }
         let next;
         do {
           try {
