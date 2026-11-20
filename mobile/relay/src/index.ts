@@ -13,6 +13,14 @@ const MAX_PHONE_MESSAGE = 6 * 1024 * 1024 + 64 * 1024; // from a phone
 const MAX_PHONES = 48;
 const MAX_V3_HOSTS = 2; // one active and one standby for a single authenticated runtime group
 const V3_RECONNECT_WINDOW = 15_000;
+// v0.16.1 sends its application ping every 25 seconds. Keep enough room for a delayed ping and
+// use the runtime timestamp rather than waking the object for every heartbeat. Recent binary host
+// traffic or a newer host that proves a shorter heartbeat gets the shorter bound.
+const V3_LEGACY_SILENCE = 40_000;
+const V3_FAST_SILENCE = 15_000;
+const V3_FAST_HEARTBEAT = 12_000;
+const V3_HEARTBEAT_PROBE = 7_000;
+const V3_RESEAT_CLOSE = 4001;
 // Pending bodies are opaque to the relay. Chunks stay below Durable Object per-value limits, and
 // admission is bounded before any body is copied into storage.
 const PENDING_CHUNK = 64 * 1024;
@@ -374,7 +382,20 @@ export class Invite extends DurableObject<Env> {
  * the computer sees, and `at` is when it opened (milliseconds), to find the oldest. `notified` is set
  * once the other side has been told this socket is gone.
  */
-type HostAttachment = { kind: "host"; version?: "v2" | "v3"; group?: string; role?: "active" | "standby"; notified: boolean; closing?: boolean };
+type HostAttachment = {
+  kind: "host";
+  version?: "v2" | "v3";
+  group?: string;
+  role?: "active" | "standby";
+  openedAt?: number;
+  lastBinaryAt?: number;
+  lastAutoResponseAt?: number;
+  autoProbeAt?: number;
+  autoProbeCount?: number;
+  heartbeat?: "legacy" | "fast";
+  notified: boolean;
+  closing?: boolean;
+};
 type PhoneAttachment = { kind: "phone"; ids: Uint8Array; at: number; notified: boolean };
 type Attachment = HostAttachment | PhoneAttachment;
 type RecoveryState = { version: "v3"; group: string; until: number; phones?: string[] };
@@ -427,6 +448,8 @@ export class Room extends DurableObject<Env> {
         version === "v3" &&
         oldHosts.length > 0 &&
         oldSides.every((side) => side?.kind === "host" && side.version === "v3" && side.group === group);
+      let role: "active" | "standby" = "active";
+      let replayPending = resume;
       if (!sameGroup) {
         // v2 keeps its historical one-seat behavior. A v3 group may replace v2 or a distinct v3
         // runtime, but sockets from one v3 group are active/standby peers and stay together.
@@ -438,17 +461,20 @@ export class Room extends DurableObject<Env> {
           await this.failRecovery(!(staleRecovery && !replacingV3 && oldHosts.length > 0));
         }
         for (const old of oldHosts) await this.end(old, 4000, "replaced");
-      } else if (oldHosts.length >= MAX_V3_HOSTS) {
-        // Keep the active/standby bound explicit. Refuse a third socket without disturbing either
-        // live seat; callers can close one and reconnect.
-        return plain("Too many host sockets", 409);
+      } else {
+        // A reconnect from the same proven runtime is not a competing computer. With two existing
+        // seats, retire only the stalest/oldest peer and make this newest proven socket active.
+        const reseat = await this.reseatSameGroup(oldHosts, Date.now());
+        role = reseat.role;
+        replayPending ||= reseat.replay;
       }
       this.ctx.acceptWebSocket(server, ["host"]);
       server.serializeAttachment({
         kind: "host",
         version,
         ...(version === "v3" ? { group } : {}),
-        role: version === "v3" && sameGroup ? "standby" : "active",
+        role: version === "v3" ? role : "active",
+        openedAt: Date.now(),
         notified: false,
       } satisfies Attachment);
       if (version === "v3") {
@@ -457,7 +483,7 @@ export class Room extends DurableObject<Env> {
         // A standby join must not erase a pending-body expiry alarm. Recompute it after any
         // reconnect alarm is cleared, including when the active seat was already present.
         await this.scheduleAlarm();
-        if (resume) {
+        if (replayPending) {
           for (const ids of recovery?.phones ?? []) {
             if (!this.open("c:" + ids.slice(0, 16)).length) send(server, prefixed(unhex(ids), Uint8Array.of(NOTICE_PHONE_CLOSED)));
           }
@@ -545,6 +571,9 @@ export class Room extends DurableObject<Env> {
       }
     } else if (side?.kind === "host") {
       if (side.closing) return;
+      if (side.version === "v3") {
+        ws.serializeAttachment({ ...side, lastBinaryAt: Date.now() } satisfies Attachment);
+      }
       // [conn 8] + the answer. A short message, or a phone that is gone, is dropped.
       if (bytes.length < 9) return;
       if (side.version === "v3" && bytes.length >= 13 && bytes[8] === 0x02) {
@@ -612,12 +641,106 @@ export class Room extends DurableObject<Env> {
     return hosts.find((ws) => (ws.deserializeAttachment() as Attachment | null)?.kind === "host" && (ws.deserializeAttachment() as HostAttachment).role === "active") ?? hosts[0] ?? null;
   }
 
+  /**
+   * Reads activity without requiring a message event. Auto-replies are handled while the object is
+   * hibernated; the timestamp is therefore the only liveness signal that survives a quiet object.
+   * Binary host traffic is also retained in the attachment, so a busy host is never judged from an
+   * older ping that happened before its last answer.
+   */
+  private hostActivity(ws: WebSocket): { side: HostAttachment; last: number; deadline: number } | null {
+    const raw = ws.deserializeAttachment() as Attachment | null;
+    if (raw?.kind !== "host" || raw.version !== "v3") return null;
+    const now = Date.now();
+    let side = raw;
+    // Attachments written by v0.16.1 have no baseline. Seed it on the first wake so a deploy does
+    // not compare an idle legacy socket with Unix epoch and immediately re-arm the same alarm.
+    if (!side.openedAt || !Number.isSafeInteger(side.openedAt)) {
+      side = { ...side, openedAt: now };
+      ws.serializeAttachment(side satisfies Attachment);
+    }
+    let autoAt = 0;
+    try {
+      autoAt = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
+    } catch {
+      // Older local workerd builds did not expose the timestamp accessor. Binary traffic and the
+      // conservative legacy deadline still give those builds safe stale-seat behavior.
+    }
+    if (autoAt > 0 && autoAt !== side.lastAutoResponseAt) {
+      const interval = side.lastAutoResponseAt && autoAt > side.lastAutoResponseAt ? autoAt - side.lastAutoResponseAt : 0;
+      side = {
+        ...side,
+        lastAutoResponseAt: autoAt,
+        ...(interval > 0 && !side.heartbeat
+          ? { heartbeat: interval <= V3_FAST_HEARTBEAT ? ("fast" as const) : ("legacy" as const), autoProbeAt: undefined }
+          : interval <= 0 && !side.heartbeat
+            ? { autoProbeAt: Math.max(autoAt + V3_HEARTBEAT_PROBE, now + V3_HEARTBEAT_PROBE) }
+            : {}),
+      };
+      ws.serializeAttachment(side satisfies Attachment);
+    }
+    const last = Math.max(side.openedAt ?? 0, side.lastBinaryAt ?? 0, side.lastAutoResponseAt ?? 0, autoAt);
+    const silence = side.heartbeat === "fast" ? V3_FAST_SILENCE : V3_LEGACY_SILENCE;
+    if (!side.heartbeat && side.autoProbeAt === undefined) {
+      side = {
+        ...side,
+        autoProbeAt: (side.lastAutoResponseAt ?? side.openedAt ?? now) + V3_HEARTBEAT_PROBE,
+        autoProbeCount: side.autoProbeCount ?? 1,
+      };
+      ws.serializeAttachment(side satisfies Attachment);
+    }
+    if (!side.heartbeat && !autoAt && side.autoProbeAt !== undefined && side.autoProbeAt <= now && (side.autoProbeCount ?? 0) < 2) {
+      side = { ...side, autoProbeAt: now + V3_HEARTBEAT_PROBE, autoProbeCount: (side.autoProbeCount ?? 0) + 1 };
+      ws.serializeAttachment(side satisfies Attachment);
+    }
+    const probe = !side.heartbeat && side.autoProbeAt && side.autoProbeAt > now ? side.autoProbeAt : Infinity;
+    return { side, last, deadline: Math.min(last + silence, probe) };
+  }
+
+  /**
+   * Same-group replacement is a repair of one runtime's two-seat transport, not a takeover. With
+   * two seats, the newest proven socket is always active and the survivor is standby; the close
+   * code is deliberately not 4000, which means a different computer took the room to 0.16.1.
+   */
+  private async reseatSameGroup(hosts: WebSocket[], now: number): Promise<{ role: "active" | "standby"; replay: boolean }> {
+    const ordered = hosts
+      .map((ws) => {
+        const raw = ws.deserializeAttachment() as Attachment | null;
+        const activity = this.hostActivity(ws);
+        return { ws, side: activity?.side ?? raw, activity };
+      })
+      .filter((entry): entry is { ws: WebSocket; side: HostAttachment; activity: { side: HostAttachment; last: number; deadline: number } | null } => entry.side?.kind === "host" && entry.side.version === "v3");
+    if (!ordered.length) return { role: "active", replay: true };
+
+    const active = ordered.find((entry) => entry.side.role === "active") ?? ordered[0]!;
+    const stale = ordered.filter((entry) => entry.activity && entry.activity.deadline <= now);
+    const staleActive = stale.some((entry) => entry.ws === active.ws);
+    if (ordered.length < MAX_V3_HOSTS && !staleActive) {
+      // The first standby joins before either legacy 25-second ping has fired. That alone is not
+      // evidence of a dead active, so do not churn a healthy-looking one during normal startup.
+      return { role: "standby", replay: false };
+    }
+    // Two OPEN seats are a full re-seat, even when both recently answered a ping. A ping proves
+    // only that the old transport was alive before this admission; the new proven socket must be
+    // the active route. Evict the least recently heard seat, demote the survivor, and replay the
+    // bounded opaque request index on the incoming active socket.
+    const leastRecent = [...ordered].sort((a, b) => {
+      const last = (entry: (typeof ordered)[number]) => entry.activity?.last ?? entry.side.openedAt ?? 0;
+      const delta = last(a) - last(b);
+      return delta || (a.side.openedAt ?? 0) - (b.side.openedAt ?? 0);
+    })[0]!;
+    await this.end(leastRecent.ws, V3_RESEAT_CLOSE, "replaced");
+    const survivor = ordered.find((entry) => entry.ws !== leastRecent.ws);
+    if (survivor) survivor.ws.serializeAttachment({ ...survivor.side, role: "standby" } satisfies Attachment);
+    return { role: "active", replay: true };
+  }
+
   alarm(): Promise<void> {
     return this.ctx.blockConcurrencyWhile(() => this.expire());
   }
 
   private async expire(): Promise<void> {
     const now = Date.now();
+    await this.reapStaleHosts(now);
     const recovery = await this.recovery();
     if (recovery && this.activeHost()) {
       await this.clearRecovery();
@@ -628,6 +751,37 @@ export class Room extends DurableObject<Env> {
     }
     await this.expirePending(now);
     await this.scheduleAlarm();
+  }
+
+  /** Runs only at an alarm deadline; no interval or timer keeps the Durable Object resident. */
+  private async reapStaleHosts(now: number): Promise<void> {
+    const hosts = this.open("host");
+    const entries = hosts
+      .map((ws) => {
+        const raw = ws.deserializeAttachment() as Attachment | null;
+        const activity = this.hostActivity(ws);
+        return { ws, side: activity?.side ?? raw, activity };
+      })
+      .filter((entry): entry is { ws: WebSocket; side: HostAttachment; activity: { side: HostAttachment; last: number; deadline: number } | null } => entry.side?.kind === "host" && entry.side.version === "v3");
+    const stale = entries.filter((entry) => entry.activity && entry.activity.deadline <= now);
+    if (!stale.length) return;
+    const active = entries.find((entry) => entry.side.role === "active") ?? entries[0];
+    const staleActive = !!active && stale.some((entry) => entry.ws === active.ws);
+    const victims = staleActive ? stale : stale.filter((entry) => entry.ws !== active?.ws);
+    for (const victim of victims) await this.end(victim.ws, V3_RESEAT_CLOSE, "replaced");
+
+    const survivors = entries.filter((entry) => !victims.some((victim) => victim.ws === entry.ws));
+    if (staleActive && survivors.length) {
+      const promoted = survivors[0]!;
+      promoted.ws.serializeAttachment({ ...promoted.side, role: "active" } satisfies Attachment);
+      for (const survivor of survivors.slice(1)) {
+        survivor.ws.serializeAttachment({ ...survivor.side, role: "standby" } satisfies Attachment);
+      }
+      await this.drainPending(promoted.ws, true);
+    } else if (!survivors.length) {
+      const group = stale[0]?.side.group;
+      if (group) await this.beginRecovery(group);
+    }
   }
 
   private async recovery(): Promise<RecoveryState | null> {
@@ -850,7 +1004,8 @@ export class Room extends DurableObject<Env> {
   private async scheduleAlarm(): Promise<void> {
     const recovery = await this.recovery();
     const state = await this.pending();
-    const times = [recovery?.until ?? Infinity, ...state.items.map((item) => item.at + PENDING_LIFE), ...state.done.map((item) => item.at + PENDING_LIFE)].filter(Number.isFinite);
+    const hostDeadlines = this.open("host").map((ws) => this.hostActivity(ws)?.deadline ?? Infinity);
+    const times = [recovery?.until ?? Infinity, ...hostDeadlines, ...state.items.map((item) => item.at + PENDING_LIFE), ...state.done.map((item) => item.at + PENDING_LIFE)].filter(Number.isFinite);
     if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
     else await this.ctx.storage.delete(PENDING_KEY);
     if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));

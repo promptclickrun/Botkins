@@ -95,8 +95,9 @@ async function start(options: Record<string, unknown> = {}) {
 
 const u32 = (n: number) => Buffer.from([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
 const stepBack = async (time: ReturnType<typeof clock>) => {
+  await until(() => time.delays().length > 0, "the reconnect timer");
   time.advance(time.delays()[0]);
-  await tick();
+  await until(() => time.delays().length > 0, "the handshake to schedule its next timer");
 };
 
 /** A phone played by hand: it sends request frames and collects the answers. */
@@ -670,7 +671,7 @@ test("the private key stays on the computer: not in the status, a part, the pair
   const { relay, time, link, key, room, logs, dir } = await start(wrapped);
   // Make the log busy: drops, retries, and a refusal.
   relay.dropHost(room);
-  await tick();
+  await until(() => !link.status().relay.connected, "the drop to schedule a retry");
   relay.down = true;
   await stepBack(time);
   await stepBack(time);

@@ -38,6 +38,8 @@ const DEAD_MS = 10_000;
 const STABLE_MS = 30_000;
 const FIRST_MS = 1_000;
 const SLOWEST_MS = 60_000;
+const V3_PING_MS = 5_000;
+const V3_DEAD_MS = 4_000;
 
 export const roomOf = (publicKey) => createHash("sha256").update("botkins-relay-room-v1:" + publicKey).digest("base64url");
 export const hostChallenge = (room, seconds) => "botkins-relay-host-v2:" + room + ":" + seconds;
@@ -599,7 +601,9 @@ export class RelayHost {
 
   nextPing(socket, meta) {
     this.clear(meta.ping);
-    meta.ping = this.later(PING_MS, () => {
+    const pingMs = meta.mode === "v3" ? V3_PING_MS : PING_MS;
+    const deadMs = meta.mode === "v3" ? V3_DEAD_MS : DEAD_MS;
+    meta.ping = this.later(pingMs, () => {
       if (this.sockets.get(socket) !== meta) return;
       try {
         socket.send("ping");
@@ -607,7 +611,7 @@ export class RelayHost {
         return this.drop(socket);
       }
       this.clear(meta.dead);
-      meta.dead = this.later(DEAD_MS, () => this.drop(socket));
+      meta.dead = this.later(deadMs, () => this.drop(socket));
       this.nextPing(socket, meta);
     });
   }
@@ -640,6 +644,7 @@ export class RelayHost {
     if (!meta) return;
     const wasOpened = meta.opened;
     const takenCode = code === 4000;
+    if (wasOpened && meta.mode === "v3" && !takenCode) this.attempt = 0;
     this.clear(meta.ping);
     this.clear(meta.dead);
     this.clear(meta.stable);
@@ -842,7 +847,9 @@ export class RelayHost {
     const existing = state.entries.get(id);
     if (existing) {
       if (existing.kind === "done") this.answer(socket, frame.subarray(0, 8), id, existing.status, existing.body);
-      // A duplicate pending request deliberately does not call serve again.
+      else existing.socket = socket;
+      // A duplicate pending request deliberately does not call serve again, but the latest seat
+      // that observed it is the best route for the eventual answer if the original is blackholed.
       return;
     }
     if (state.retired.has(id)) return this.answer(socket, frame.subarray(0, 8), id, 409, json({ error: "replay" }));
@@ -856,9 +863,10 @@ export class RelayHost {
       session: frame.subarray(23, 23 + n).toString("latin1"),
       body: frame.subarray(23 + n),
       isV3,
+      socket,
     };
     if (isV3) this.reservedBytes += V3_RESULT_BYTES;
-    state.entries.set(id, { kind: "pending", at: this.timers.now() });
+    state.entries.set(id, { kind: "pending", at: this.timers.now(), socket });
     state.busy++;
     this.inFlight++;
     Promise.resolve()
@@ -887,15 +895,16 @@ export class RelayHost {
       status = 413;
       body = json({ error: "too_large" });
     }
+    const destination = this.sockets.has(entry.socket) ? entry.socket : this.socket ?? this.standby;
     if (!item.isV3) {
-      this.answer(this.socket ?? this.standby, item.connBytes, item.id, status, body);
+      this.answer(destination, item.connBytes, item.id, status, body);
       state.entries.delete(item.id);
       return;
     }
     this.cacheBytes += body.length;
     state.entries.set(item.id, { kind: "done", status, body, at: this.timers.now() });
     this.prune(state);
-    this.answer(this.socket ?? this.standby, item.connBytes, item.id, status, body);
+    this.answer(destination, item.connBytes, item.id, status, body);
   }
 
   answer(socket, conn, id, status, body) {
