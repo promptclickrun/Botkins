@@ -1,11 +1,34 @@
 // Reads the command line, finds the command and runs it. Everything a command needs comes in one
 // `context`, so the tests run a command with their own output, input and service.
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { userInfo } from "node:os";
 import { parseArgs } from "node:util";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { controlClient, ControlError } from "../desktop/terminal/socket.mjs";
 import { CliError, EXIT, paint, usage } from "./output.mjs";
 import { COMMANDS, find, help } from "./commands/index.mjs";
+
+/**
+ * Root becomes the user the data folder belongs to before it does anything there, so `sudo
+ * botkins pair` talks to the service as the service's own user, and a file it writes while the
+ * service is stopped is that user's. Only what changes the computer itself stays root: installing
+ * the service, and installing an update.
+ */
+function asOwner(paths, path, options, env) {
+  if (process.getuid?.() !== 0 || path[0] === "service" || (path[0] === "update" && !options.check)) return;
+  let stat;
+  try {
+    stat = statSync(paths.root);
+  } catch {
+    return;
+  }
+  if (stat.uid === 0) return;
+  process.setgroups?.([stat.gid]);
+  process.setgid(stat.gid);
+  process.setuid(stat.uid);
+  const info = userInfo();
+  Object.assign(env, { HOME: info.homedir, USER: info.username, LOGNAME: info.username });
+}
 
 export const version = () => JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -87,6 +110,7 @@ export async function main(argv, io = {}) {
       throw usage(error.message.replace(/\. To specify.*$/s, "."));
     }
     const paths = terminalPaths({ root: parsed.values["data-dir"], socket: parsed.values.socket, env });
+    if (!io.client) asOwner(paths, path, parsed.values, env);
     const context = {
       args: parsed.positionals,
       options: parsed.values,

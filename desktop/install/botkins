@@ -1,0 +1,34 @@
+#!/bin/sh
+# Starts the `botkins` command of the release this file belongs to.
+#
+# It is <install folder>/<version>/bin/botkins, and is usually reached through two links:
+# /usr/local/bin/botkins → <install folder>/current/bin/botkins → the version in use. So it first
+# finds where it really is, then runs that version's command line with Node: the one named by
+# BOTKINS_NODE, else the one the installer put beside the versions (<install folder>/node), else
+# the computer's own.
+set -eu
+
+self=$0
+# Follow links by hand: `readlink -f` is not on every system.
+while [ -L "$self" ]; do
+  target=$(readlink "$self")
+  case $target in
+    /*) self=$target ;;
+    *) self=$(dirname "$self")/$target ;;
+  esac
+done
+bin=$(cd "$(dirname "$self")" && pwd -P)
+version_dir=$(dirname "$bin")
+install_dir=$(dirname "$version_dir")
+
+if [ -n "${BOTKINS_NODE:-}" ]; then
+  node=$BOTKINS_NODE
+elif [ -x "$install_dir/node/bin/node" ]; then
+  node=$install_dir/node/bin/node
+elif command -v node >/dev/null 2>&1; then
+  node=$(command -v node)
+else
+  echo "botkins: Node.js was not found. Install Node.js 24, or run the Botkins installer again to add a copy for Botkins alone." >&2
+  exit 127
+fi
+exec "$node" "$version_dir/cli/botkins.mjs" "$@"

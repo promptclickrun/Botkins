@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build as buildTerminal } from "./package-terminal.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -68,6 +69,10 @@ for (const arch of ["x64", "arm64"]) {
     rmSync(stage, { recursive: true, force: true });
   }
 }
+
+// The terminal host's tarballs (scripts/package-terminal.mjs) go in the same folder, so the one
+// signed SHA256SUMS of the release covers them and `botkins update` can check what it downloads.
+buildTerminal({ out });
 
 const files = readdirSync(out).filter((f) => /\.(AppImage|tar\.gz)$/.test(f)).sort();
 const sums = files

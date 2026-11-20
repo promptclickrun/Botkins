@@ -94,11 +94,13 @@ export async function startService({ paths, version, trial = false, out, console
     if (config.providers.only.length) env.BOTKINS_PROVIDERS = config.providers.only.join(",");
     const host = headlessHost({
       version,
-      packaged: !trial,
+      // "Packaged" is what makes the workspace look for a new release by itself now and then.
+      packaged: !trial && config.updates.check,
       // A trial run keeps its keys in files in its own folder, as the desktop app's does.
       keys: async ({ dataDir }) => {
         if (trial) return null;
-        keys = await keySource({ dataDir, source: config.secrets.source, keyFile: config.secrets.keyFile ?? undefined, env });
+        // The service file may say where the key comes from (BOTKINS_KEY_SOURCE): that wins over the setting.
+        keys = await keySource({ dataDir, source: env.BOTKINS_KEY_SOURCE || config.secrets.source, keyFile: config.secrets.keyFile ?? undefined, env });
         return keys;
       },
       updates: () => updates?.(service),
@@ -109,7 +111,10 @@ export async function startService({ paths, version, trial = false, out, console
       dataDir: paths.dataDir,
       trial,
       pushed: bump,
-      link: { port: config.link.port, extraHosts: config.link.addresses, announce: trial ? false : config.link.announce },
+      // For a container, whose own address no phone can reach: BOTKINS_PAIR_ADDRESS adds the
+      // server's address for this start, and BOTKINS_LINK_PORT sets the port, which has to be the
+      // one the container publishes (a phone uses the link's own port at every address).
+      link: { port: /^\d{1,5}$/.test(env.BOTKINS_LINK_PORT ?? "") ? Number(env.BOTKINS_LINK_PORT) : config.link.port, extraHosts: [...config.link.addresses, ...(env.BOTKINS_PAIR_ADDRESS ? [env.BOTKINS_PAIR_ADDRESS.replace(/:\d+$/, "")] : [])], announce: trial ? false : config.link.announce },
       copilot: { github: () => signIns?.copilotGitHub() },
     });
     service.runtime = runtime;

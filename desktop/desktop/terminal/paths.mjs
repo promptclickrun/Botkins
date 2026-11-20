@@ -15,11 +15,13 @@
 // It is never the desktop app's own folder ("Botkins"), so the two can be installed on one Mac.
 // The root and everything in it belong to the user the service runs as, and nobody else can read
 // them (0700): that, and the socket's own mode (0600), is what "owner-only" means here.
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const SERVICE_USER = "botkins";
+/** What `botkins service install` leaves for the whole computer's service: where its data is and who it runs as. */
+export const INSTALL_RECORD = "/etc/botkins/install.json";
 export const SOCKET_NAME = "botkins.sock";
 // A Unix socket's path has to fit in the kernel's address (104 bytes on macOS, 108 on Linux).
 export const MAX_SOCKET_PATH = 100;
@@ -39,14 +41,19 @@ export function userRoot({ platform = process.platform, env = process.env, home 
  * @returns { root, dataDir, config, logs, logFile, runDir, socket, scope }: `scope` is "custom",
  *   "system" or "user", by where the root came from.
  */
-export function terminalPaths({ root, socket, env = process.env, platform = process.platform, home = homedir(), uid = process.getuid?.(), owns = ownedBy } = {}) {
+export function terminalPaths({ root, socket, env = process.env, platform = process.platform, home = homedir(), uid = process.getuid?.(), owns = ownedBy, record = installRecord, exists = existsSync } = {}) {
   let scope = "custom";
   let dir = root || env.BOTKINS_DATA_DIR;
   if (!dir) {
-    const system = systemRoot(platform);
-    // The system's folder is used by root and by the user it belongs to (the service's own).
-    scope = uid === 0 || owns(system, uid) ? "system" : "user";
-    dir = scope === "system" ? system : userRoot({ platform, env, home });
+    // The whole computer's service may have been installed on a folder of its own choosing.
+    const installed = record();
+    const system = installed?.dataDir || systemRoot(platform);
+    const own = userRoot({ platform, env, home });
+    // The system's folder is used by root and by the user it belongs to (the service's own). Anyone
+    // else has their own folder; someone who has none, on a computer with the whole computer's
+    // service, means that service, and is told they need to be root to talk to it.
+    scope = uid === 0 || owns(system, uid) || (installed && !exists(own)) ? "system" : "user";
+    dir = scope === "system" ? system : own;
   }
   dir = resolve(dir);
   const runDir = join(dir, "run");
@@ -60,6 +67,16 @@ export function terminalPaths({ root, socket, env = process.env, platform = proc
     socket: resolve(socket || env.BOTKINS_SOCKET || join(runDir, SOCKET_NAME)),
     scope,
   };
+}
+
+/** The record of the whole computer's service, or null when there is none or it can't be read. */
+export function installRecord(file = INSTALL_RECORD) {
+  try {
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    return typeof record?.dataDir === "string" && record.dataDir.startsWith("/") ? record : null;
+  } catch {
+    return null;
+  }
 }
 
 function ownedBy(path, uid) {
