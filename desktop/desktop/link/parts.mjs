@@ -17,6 +17,7 @@ function chatSummary(chat) {
     id: chat.id,
     botId: chat.botId,
     ...(chat.botIds && { botIds: chat.botIds }),
+    ...(chat.createdBy && { createdBy: chat.createdBy }),
     title: chat.title,
     time: chat.time,
     ...(chat.pinned && { pinned: true }),

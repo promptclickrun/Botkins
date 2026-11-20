@@ -1174,7 +1174,26 @@ else
       liveContext: ({ chatId, botId }) => liveContextFor(workspace, { chatId, botId }),
       // LinkHost only passes names in REMOTE_METHODS. A project's folder sent by a paired device
       // must be one the folder browser could have shown, as for the calls that pick a folder.
-      call: async (name, args) => handlers[name](...(await deviceArgs(folders, name, args))),
+      call: async (name, args, context = {}) => {
+        const checked = await deviceArgs(folders, name, args);
+        const responseChatId = name === "respond" ? workspace.state.requests.find((item) => item.id === args[0])?.chatId : null;
+        const result = await handlers[name](...checked);
+        const principal = context.principal;
+        if (principal?.kind === "member") {
+          if (["createChat", "createGroupChat", "forkChat"].includes(name) && typeof result === "string") {
+            const chat = workspace.state.chats.find((item) => item.id === result);
+            if (chat) chat.createdBy = principal.memberId;
+          }
+          if (name === "send" || name === "respond") {
+            const chatId = name === "send" ? args[0] : responseChatId;
+            const chat = workspace.state.chats.find((item) => item.id === chatId);
+            const message = [...(chat?.messages ?? [])].reverse().find((item) => item.role === "user" && !item.author);
+            if (message) message.author = { memberId: principal.memberId, name: principal.name };
+          }
+          workspace.save();
+        }
+        return result;
+      },
       subscribe: (listener) => {
         changeListeners.add(listener);
         return () => changeListeners.delete(listener);

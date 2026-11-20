@@ -6,6 +6,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { b64u, newKeyPair, random, unb64u } from "./crypto.mjs";
 import { DEFAULT_RELAY_URL, newRelayKey, validRelayKey } from "./relay.mjs";
+import { defaultTeam } from "./team.mjs";
 
 export const DEFAULT_PORT = 47610;
 /** Who set the screen's level from a phone, as it is saved: { deviceId, name, at }, or null when it is not that. */
@@ -16,7 +17,8 @@ export function setBy(value) {
 
 /** What phones may do with this computer's screen: nothing, watch it, or watch and use it. */
 export const SCREEN_MODES = ["off", "view", "control"];
-const MAX_DEVICES = 20;
+export const MAX_OWNER_DEVICES = 20;
+export const MAX_MEMBER_DEVICES = 60;
 /** A paired device is a phone or a computer (another Botkins app that uses this one). */
 export const DEVICE_KINDS = ["phone", "desktop"];
 const DESKTOP_PLATFORMS = ["darwin", "macos", "mac", "win32", "windows", "linux", "desktop"];
@@ -64,6 +66,7 @@ export class LinkStore {
   constructor(dir, { protect, reveal } = {}) {
     Object.assign(this, { dir, file: join(dir, "link.json"), protect, reveal });
     this.data = this.load();
+    if (this.migrateTeam && !this.data.locked) this.save();
   }
   load() {
     // Only a file that isn't there is a new identity. A file that is there and can't be read or
@@ -77,6 +80,7 @@ export class LinkStore {
     }
     if (saved?.version === 1 && saved.serverId && saved.publicKey && saved.privateKey) {
       try {
+        this.migrateTeam = !Object.hasOwn(saved, "team");
         const privateKey = unb64u(saved.wrapped && this.reveal ? this.reveal(saved.privateKey) : saved.privateKey);
         // A key wrapped by a keychain this run can't open is left alone: the link stays off.
         if (saved.wrapped && !this.reveal) throw new Error("locked");
@@ -88,7 +92,7 @@ export class LinkStore {
           enabled: saved.enabled === true,
           name: typeof saved.name === "string" ? saved.name : "",
           // A device paired before kinds were kept has none: it gets the one its platform makes it.
-          devices: Array.isArray(saved.devices) ? saved.devices.filter((d) => d?.id && d.publicKey).map((d) => ({ ...d, kind: deviceKind(d.kind, d.platform) })) : [],
+          devices: Array.isArray(saved.devices) ? saved.devices.filter((d) => d?.id && d.publicKey).map((d) => ({ ...d, kind: deviceKind(d.kind, d.platform), ...(typeof d.memberId === "string" && d.memberId ? { memberId: d.memberId } : {}) })) : [],
           looks: saved.looks && typeof saved.looks === "object" ? saved.looks : {},
           screen: SCREEN_MODES.includes(saved.screen) ? saved.screen : "off",
           // The phone that last set the level from afar (a headless host), or nothing when it was set here.
@@ -97,6 +101,7 @@ export class LinkStore {
           // What each phone set up, by device id: where its notifications go, and what bots may use on it.
           push: saved.push && typeof saved.push === "object" ? saved.push : {},
           sources: saved.sources && typeof saved.sources === "object" ? saved.sources : {},
+          team: this.loadTeam(saved.team),
         };
       } catch (error) {
         return { ...this.fresh(), locked: error.message };
@@ -116,6 +121,18 @@ export class LinkStore {
     const key = { publicKey: stored.publicKey, privateKey };
     return { enabled: relay.enabled === true, url: typeof relay.url === "string" && relay.url ? relay.url : DEFAULT_RELAY_URL, key: validRelayKey(key) ? key : null };
   }
+  loadTeam(saved) {
+    const base = defaultTeam();
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return base;
+    return {
+      name: typeof saved.name === "string" && saved.name.trim() ? saved.name.trim().slice(0, 60) : base.name,
+      roles: Array.isArray(saved.roles) ? saved.roles : base.roles,
+      groups: Array.isArray(saved.groups) ? saved.groups : base.groups,
+      members: Array.isArray(saved.members) ? saved.members : [],
+      invites: Array.isArray(saved.invites) ? saved.invites : [],
+      requests: Array.isArray(saved.requests) ? saved.requests : [],
+    };
+  }
   /** The relay key pair, made the first time it is needed. Only its public half is ever shown or sent. */
   relayKey() {
     if (!this.data.relay.key) this.set({ relay: { ...this.data.relay, key: newRelayKey() } });
@@ -127,12 +144,12 @@ export class LinkStore {
     return this.data.relay.key;
   }
   fresh() {
-    return { serverId: b64u(random(12)), keys: newKeyPair(), port: DEFAULT_PORT, enabled: false, name: "", devices: [], looks: {}, screen: "off", relay: { enabled: false, url: DEFAULT_RELAY_URL, key: null }, push: {}, sources: {} };
+    return { serverId: b64u(random(12)), keys: newKeyPair(), port: DEFAULT_PORT, enabled: false, name: "", devices: [], looks: {}, screen: "off", relay: { enabled: false, url: DEFAULT_RELAY_URL, key: null }, push: {}, sources: {}, team: defaultTeam() };
   }
   save() {
     // A store that couldn't open its key never overwrites the file it failed to read.
     if (this.data.locked) return;
-    const { keys, serverId, port, enabled, name, devices, looks, screen, screenSetBy, relay, push, sources } = this.data;
+    const { keys, serverId, port, enabled, name, devices, looks, screen, screenSetBy, relay, push, sources, team } = this.data;
     const secret = b64u(keys.privateKey);
     const body = {
       version: 1,
@@ -149,6 +166,7 @@ export class LinkStore {
       ...(screenSetBy && { screenSetBy }),
       push,
       sources,
+      team,
       // The relay's private key is wrapped like the link's own.
       relay: { enabled: relay.enabled, url: relay.url, key: relay.key && { publicKey: relay.key.publicKey, privateKey: this.protect ? this.protect(relay.key.privateKey) : relay.key.privateKey } },
     };
@@ -167,8 +185,10 @@ export class LinkStore {
    * `presenceKey` is the phone's second public key (P-256, SPKI as base64url), kept only when the
    * phone paired straight with this computer: what it signs with to turn the screen on (grant.mjs).
    */
-  addDevice({ name, platform, kind, publicKey, presenceKey }) {
-    if (this.data.devices.length >= MAX_DEVICES) throw new Error("Too many paired devices. Remove one first.");
+  addDevice({ name, platform, kind, publicKey, presenceKey, memberId }) {
+    const member = typeof memberId === "string" && memberId ? memberId : null;
+    const count = this.data.devices.filter((device) => (member ? device.memberId : !device.memberId)).length;
+    if (count >= (member ? MAX_MEMBER_DEVICES : MAX_OWNER_DEVICES)) throw new Error(member ? "Too many member devices. Remove one first." : "Too many paired owner devices. Remove one first.");
     const is = deviceKind(kind, platform);
     const device = {
       id: b64u(random(9)),
@@ -176,6 +196,7 @@ export class LinkStore {
       platform: String(platform || "").slice(0, 20),
       kind: is,
       publicKey: b64u(publicKey),
+      ...(member && { memberId: member }),
       ...(presenceKey && { presenceKey }),
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
@@ -224,6 +245,7 @@ export class LinkStore {
       this.data[kept] = next;
     }
     this.data.devices = this.data.devices.filter((d) => d.id !== id);
+    for (const member of this.data.team?.members ?? []) if (Array.isArray(member.deviceIds)) member.deviceIds = member.deviceIds.filter((deviceId) => deviceId !== id);
     if (this.data.devices.length !== before) this.save();
     return this.data.devices.length !== before;
   }

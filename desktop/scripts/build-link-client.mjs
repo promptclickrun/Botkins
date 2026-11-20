@@ -45,9 +45,9 @@ if (source !== copy) {
 }
 const digest = sourcesDigest(copy);
 const entry = [
-  'export { PROTOCOL, LinkClient, LinkError, findHost, pair } from "./client/client";',
+  'export { PROTOCOL, LinkClient, LinkError, checkJoin, findHost, findInvite, join, pair, startJoin } from "./client/client";',
   'export { isRelayHost, relayFetch } from "./client/relay";',
-  'export { DEFAULT_PORT, formatCode, normalizeHost, parsePairingUrl } from "./client/pairing";',
+  'export { DEFAULT_PORT, formatCode, normalizeCode, normalizeHost, parseJoinUrl, parsePairingUrl } from "./client/pairing";',
 ].join("\n");
 const result = await build({
   stdin: { contents: entry, resolveDir: join(root, "desktop", "remote"), loader: "ts", sourcefile: "link-client.ts" },

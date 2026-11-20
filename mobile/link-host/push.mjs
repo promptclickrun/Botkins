@@ -276,6 +276,9 @@ export class Push {
   wants(device, kind) {
     return this.store.push(device.id)?.prefs[kind] === true;
   }
+  maySeeChat(device, chat) {
+    return !device.memberId || chat?.createdBy === device.memberId;
+  }
 
   onRequest(sends, targets, request, chats, bots) {
     const chat = chats.get(request.chatId);
@@ -285,6 +288,7 @@ export class Push {
     // its own, never into the chat.
     const title = request.kind === "permission" ? name + " needs your approval" : request.kind === "secure" ? name + " needs a secure input" : name + " has a question";
     for (const device of targets) {
+      if (device.memberId && (!this.maySeeChat(device, chat) || request.kind === "permission" || request.kind === "secure")) continue;
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
       const record = this.store.push(device.id);
       const text = record.prefs.previews ? firstLine(request.title) || "Open Botkins to answer." : "Open Botkins to answer.";
@@ -320,6 +324,7 @@ export class Push {
     const failed = run.status !== "Completed";
     const watching = this.attention?.();
     for (const device of targets) {
+      if (!this.maySeeChat(device, chat)) continue;
       const record = this.store.push(device.id);
       // The card is brought up to date whatever the notification choices are. It is not ended: it
       // says "done" (or "stopped") with how long the turn took, stays for a while, and a new turn
@@ -355,6 +360,7 @@ export class Push {
     if (!chat || chat.temporary || run.panelId || run.scheduleId != null || run.trigger === "scheduled") return;
     const bot = bots.get(chat.botId);
     for (const device of targets) {
+      if (!this.maySeeChat(device, chat)) continue;
       const record = this.store.push(device.id);
       // A new turn takes the chat's card over: it is no longer waiting to be ended.
       this.stay(device.id + ":" + run.chatId, false);
@@ -383,7 +389,9 @@ export class Push {
   }
 
   onProgress(sends, targets, state, run) {
+    const chat = (state.chats ?? []).find((item) => item.id === run.chatId);
     for (const device of targets) {
+      if (!this.maySeeChat(device, chat)) continue;
       const record = this.store.push(device.id);
       const token = record.activities?.[run.chatId];
       if (!token || !record.prefs.activities) continue;
@@ -428,7 +436,7 @@ export class Push {
           "mutable-content": 1,
           "thread-id": b64u(hkdf(Buffer.from(content.c ?? "botkins", "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),
           "interruption-level": urgent ? "time-sensitive" : "active",
-          category: content.k === "request" ? "botkins_request" : "botkins_message",
+          category: content.k === "request" ? "botkins_request" : content.k === "team" ? "botkins_team" : "botkins_message",
         },
         b: this.seal(deviceId, content),
       },
@@ -503,6 +511,17 @@ export class Push {
     if (!record) return false;
     void this.send([this.alert(deviceId, record, content, options)]);
     return true;
+  }
+  /** A join request is shown only to owner devices, never to member devices. */
+  teamJoin(request) {
+    const content = { t: request.name + " wants to join your team", m: "Open Botkins to review this request.", k: "team", r: request.id };
+    const sends = [];
+    for (const device of this.store.data.devices) {
+      if (device.memberId || !this.wants(device, "requests")) continue;
+      const record = this.store.push(device.id);
+      if (record) sends.push(this.alert(device.id, record, content, { urgent: true, expiration: 300 }));
+    }
+    if (sends.length) void this.send(sends);
   }
   /** Sends one notification and answers with what the relay said, so the phone's settings can show a failure. */
   async test(deviceId) {

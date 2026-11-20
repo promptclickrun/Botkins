@@ -85,8 +85,9 @@ if (process.env.BOTKINS_DEV_AWAY === "1" && process.env.BOTKINS_DEV_RELAY) {
 }
 await host.setEnabled(true);
 
-function open() {
+async function open() {
   const pairing = host.startPairing(24 * 60 * 60_000);
+  const invite = await host.createInvite({ groupId: "g_everyone", days: 7, maxUses: 5 });
   writeFileSync(join(dir, "pairing-url.txt"), pairing.url);
   console.log("\n" + qrText(pairing.url) + "\n");
   console.log("Pairing link  " + pairing.url);
@@ -96,11 +97,13 @@ function open() {
   console.log("Screen        " + host.status().screen.mode);
   console.log("Turn timeline " + (backend.timeline ? "on (turn-timeline-v1)" : "off, as an older computer"));
   console.log("Code          " + pairing.code.replace(/(.{4})(?=.)/g, "$1-") + "\n");
+  console.log("Team invite   " + invite.link);
+  console.log("Invite code   " + invite.code.replace(/(.{5})(?=.)/g, "$1-") + "\n");
 }
 host.on("paired", (device) => {
   console.log("Paired with " + device.name + ". A new code is open for the next phone.");
-  setImmediate(open);
+  setImmediate(() => void open());
 });
-open();
+await open();
 
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => host.stop().finally(() => process.exit(0)));

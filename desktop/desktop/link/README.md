@@ -8,6 +8,7 @@ These modules let a paired phone running Botkins use a desktop app over the loca
 | `crypto.mjs` | X25519, HKDF-SHA256 and ChaCha20-Poly1305 on Node's own crypto. |
 | `store.mjs` | `link.json`: this computer's identity, the paired phones, the Botkin each bot is shown as, the relay's settings and key, and what each phone set up (where its notifications go, which sources bots may use on it). |
 | `parts.mjs` | Turns the app's whole state into the named parts a phone follows. |
+| `team.mjs` | Pure team roles, authorization, member part filtering and invite-code helpers. |
 | `methods.mjs` | The app's calls a phone may make, what a message from a phone may attach, and the shape of each call that stands in for a file or folder dialog on the computer (a file as text out and in, the folder browser). |
 | `credentials.mjs` | Credentials: an encrypted vault (`credentials.json`) and links to password-manager fields. A call can use one without the phone seeing it. |
 | `managers.mjs` | The password-manager drivers: 1Password (`op`), Bitwarden (`bw`) and Proton Pass (`pass-cli`). |
@@ -37,7 +38,7 @@ const link = new LinkHost({
   backend: {
     info: () => ({ app: "botkins", version: app.getVersion(), platform: process.platform }),
     snapshot: () => workspace.snapshot(),
-    call: (name, args) => handlers[name](...args),
+    call: (name, args, { principal }) => handlers[name](...args), // principal is owner or a named member
     subscribe: (listener) => onChange(listener), // returns a function that stops it
     extras: {}, // more calls, reached from the phone as "link.<name>"
     capabilities: ["looks-v2", "routine-delivery-v1", "models-v2", "board-mentions-v1"], // what the app supports itself
@@ -72,6 +73,16 @@ More of `link` that the app uses:
 **Bot looks.** A phone shows each bot as a Botkin: `{ head, palette }`, and optionally `eyes` (one of `LOOK_EYES` in `store.mjs`; `"oval"`, each character's own, is left out) and, with the palette `"custom"`, `colors` (`[shell, accent, faceplate, eyes]`, each `#rrggbb`, kept in lower case). `cleanLook` in `store.mjs` is the check: a look it can't read is refused with "That look can't be saved." An app that draws Botkins itself keeps `look` on each bot in its state and gives the backend a `setLook(botId, look)` function; the link then stores no looks, and the app has to save and return `eyes` and `colors` too and name `looks-v2` in `backend.capabilities`, because the link adds `looks-v2` only when it keeps the looks itself. Without `setLook`, the link keeps the looks in `link.json` and gives every bot one.
 
 A paired phone can do what the person can do in the app, so pairing is a full-trust step: say so where the code is shown.
+
+## Teams
+
+Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
+
+`MEMBER_PREFERENCE_FIELDS` is deliberately limited to `appearance`, `foldTools`, `showThinking`, `linkPreviews` and `readAloud`; no approval, access, teamwork, link, provider or voice setting is member-writable.
+
+`createInvite` returns the invite and a join link. Its public invite card is published only when the relay is on; a failed publication is reported as `published: false` and does not cancel the invite. The demo host prints both an owner pairing code and a seven-day team invite.
+
+On the client, `parseJoinUrl(text)` reads an app or web link, and `findInvite(fetch, code, relayBase?, serverKey?)` opens the relay's card. Use `startJoin(fetch, target, { name, platform, kind })` once and keep its `attempt`; `checkJoin(fetch, attempt)` polls pending status with the same X25519 key. `join(...)` is the convenience form and returns the result with `attempt` for the next call. An approved answer's `Pairing` has `member: true`.
 
 ## Relay
 
