@@ -489,7 +489,14 @@ export default function Settings({
               />
             </Group>
           )}
-          {section === "account" && <ProviderSettings general={() => setSection("general")} />}
+          {section === "account" && (
+            <ProviderSettings
+              key={state.remote?.using?.id ?? "local"}
+              setup={!state.remote?.using || state.remote.using.capabilities.includes("provider-signin-v1")}
+              windows={!state.remote?.using && /Windows/i.test(navigator.userAgent)}
+              general={() => setSection("general")}
+            />
+          )}
           {section === "about" && <About />}
           {error && (
             <p className="set-status error-text" role="alert">

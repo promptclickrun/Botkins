@@ -670,7 +670,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       const statuses = await workspace.providerStatuses(refresh === true);
       return statuses.map((status) => {
         const provider = providers.byId.get(status.id);
-        return provider && status.installed ? { ...status, signInWays: signIns.ways(provider) } : status;
+        if (!provider || !status.installed) return status;
+        return { ...status, signInWays: signIns.ways(provider), signOut: status.signOut || signIns.hasToken(provider.id) };
       });
     },
     // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;

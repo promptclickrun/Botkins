@@ -700,3 +700,12 @@ small.error-text {
     display: none;
   }
 }
+
+.provider-install-output {
+  width: 100%;
+  max-height: 12em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: calc(12px * var(--text-scale));
+}

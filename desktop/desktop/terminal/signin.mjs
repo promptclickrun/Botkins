@@ -82,6 +82,9 @@ export class SignIns {
     const token = this.token("copilot");
     return token ? { token } : undefined;
   }
+  hasToken(id) {
+    return this.vault().has(vaultId(id));
+  }
   /** Puts the kept tokens where the tools read them. Called when the service starts and when one changes. */
   restore() {
     for (const name of CLAUDE_VARIABLES) if (this.held?.has(name)) delete this.env[name];

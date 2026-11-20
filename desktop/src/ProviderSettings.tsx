@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type HTMLAttributes, type SyntheticEvent } from "react";
-import { ArrowLeft, Copy, LoaderCircle, Search } from "lucide-react";
+import { ArrowLeft, LoaderCircle, Search } from "lucide-react";
 import type { AuthStatus, ProviderService, ProviderStatus } from "./types";
+import { ProviderInstall, ProviderToken } from "./ProviderSetup";
 import ProviderIcon from "./ProviderIcon";
 import { useAsk } from "./Pages";
 import { Group, ValueRow } from "./SettingsRows";
@@ -40,7 +41,7 @@ function pill(p: ProviderStatus): { text: string; tone?: "ok" | "warn" } {
 }
 
 /** Settings › Model providers: each provider that is on, its account and actions, and the ones to add. */
-export default function ProviderSettings({ general }: { general?: () => void }) {
+export default function ProviderSettings({ general, setup, windows }: { general?: () => void; setup: boolean; windows: boolean }) {
   const { providers, error, reload } = useProviders();
   const signin = useProviderSignIn();
   const dialogs = useAsk();
@@ -190,7 +191,10 @@ export default function ProviderSettings({ general }: { general?: () => void }) 
                     <small>Botkins couldn't ask {p.name}. {p.error}</small>
                   </div>
                 )}
-                {!p.installed && !p.starting && <InstallRow p={p} />}
+                <ProviderInstall provider={p} available={setup} windows={windows} />
+                {setup && p.installed && !p.connected && p.signInWays?.token && !p.starting && !waiting && (
+                  <ProviderToken provider={p} />
+                )}
                 {p.connected && (p.account || p.plan || managed) && (
                   <ValueRow
                     label={p.account ? "Signed in as " + p.account : "Signed in"}
@@ -331,34 +335,6 @@ export default function ProviderSettings({ general }: { general?: () => void }) 
         </Group>
       )}
       {dialogs.node}
-    </div>
-  );
-}
-
-/** A provider whose tool isn't on this computer: what to do, and the install command to copy. */
-function InstallRow({ p }: { p: ProviderStatus }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="set-row stacked">
-      <small>{p.message || toolName(p) + " isn't on this computer. Install it, then choose Check again."}</small>
-      {p.install?.command && (
-        <div className="provider-command">
-          <code aria-label="Install command">{p.install.command}</code>
-          <button
-            type="button"
-            className="set-button"
-            onClick={() =>
-              void api
-                .copyText(p.install!.command!)
-                .then(() => setCopied(true))
-                .catch(() => {})
-            }
-          >
-            <Copy size={13} aria-hidden="true" />
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
