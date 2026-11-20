@@ -403,7 +403,7 @@ p.set-status.error-text {
 /* The window is on the canvas so its groups, on the card color, stand out without outlines. */
 dialog.settings-window {
   width: min(920px, calc(100vw - 32px));
-  height: min(660px, calc(100vh - 32px));
+  height: min(680px, calc(100vh - 32px));
   max-height: none;
   padding: 0;
   overflow: hidden;
@@ -436,8 +436,9 @@ dialog.settings-window {
   justify-content: flex-start;
   gap: 10px;
   width: 100%;
-  min-height: 32px;
-  padding: 4px 10px;
+  /* Nineteen sections fit the window's full height (680px) without the menu scrolling. */
+  min-height: 30px;
+  padding: 3px 10px;
   border-radius: var(--radius-sm);
   font-size: calc(14px * var(--text-scale));
   text-align: left;
@@ -578,7 +579,8 @@ dialog.settings-window {
     min-width: 150px;
   }
 }
-@media (max-height: 640px) {
+/* A window too short for the full-height Settings (680px and its margin) gets the tighter menu. */
+@media (max-height: 720px) {
   .set-sidebar {
     padding-top: 12px;
     padding-bottom: 8px;
@@ -586,11 +588,23 @@ dialog.settings-window {
   .set-sidebar h2 {
     margin-bottom: 6px;
   }
-  /* Seventeen sections fit the smallest window (760×560) without the menu scrolling. */
+  /* Nineteen sections fit the smallest window (760×560) without the menu scrolling. A section
+     added to Settings has to fit here too: test/sidebar-smoke.mjs measures it. */
   .set-sidebar [role="tab"] {
-    min-height: 25px;
+    min-height: 24px;
     padding-top: 1px;
     padding-bottom: 1px;
+  }
+  /* The smallest window leaves the page 528px (560 less the title bar), and Settings 496 of them. */
+  @media (max-height: 560px) {
+    .set-sidebar [role="tablist"] {
+      gap: 0;
+    }
+    .set-sidebar [role="tab"] {
+      min-height: 23px;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
   }
   .set-pane-head {
     padding-top: 12px;
