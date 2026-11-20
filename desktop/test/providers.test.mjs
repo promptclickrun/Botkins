@@ -493,6 +493,31 @@ test("sign-in opens GitHub in the browser, waits, and cleans up its session", as
   assert.deepEqual(await copilot.auth(), { connected: true, login: "octo", type: "user", host: undefined });
 });
 
+test("a host with no browser signs in with GitHub's one-time code, and only on GitHub's own page", async (t) => {
+  let signedIn = false;
+  const { copilot, calls } = accountsFixture(
+    t,
+    {
+      first: { kind: "device-code", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresIn: 900, interval: 5 },
+      next: [{ kind: "awaiting" }, () => ((signedIn = true), { kind: "completed" })],
+    },
+    () => ({ isAuthenticated: signedIn, login: "octo", authType: "user" }),
+  );
+  const shown = [];
+  await copilot.signIn({ device: async (code) => void shown.push(code) });
+  assert.deepEqual(shown, [{ userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresIn: 900 }]);
+  assert.deepEqual(calls[0][1], { kind: "githubDotCom", method: "device-code" });
+  assert.deepEqual(calls.map((c) => c[0]), ["begin", "advance", "advance", "cancel"]);
+  assert.deepEqual(await copilot.auth(), { connected: true, login: "octo", type: "user", host: undefined });
+  // A code to type anywhere but GitHub is never shown, and neither is a page offered in place of a code.
+  for (const first of [{ kind: "device-code", userCode: "ABCD-1234", verificationUri: "https://example.com/device", expiresIn: 900 }, { kind: "open-url", url: "https://github.com/login/oauth/authorize" }]) {
+    const bad = accountsFixture(t, { first, next: [{ kind: "completed" }] });
+    const seen = [];
+    await assert.rejects(bad.copilot.signIn({ device: async (code) => void seen.push(code) }), /didn't offer a one-time code/);
+    assert.deepEqual(seen, []);
+  }
+});
+
 test("sign-in refuses a link that isn't GitHub, reports failure, and can be cancelled", async (t) => {
   const bad = accountsFixture(t, { first: { kind: "open-url", url: "https://example.com/phish" }, next: [{ kind: "completed" }] });
   const opened = [];

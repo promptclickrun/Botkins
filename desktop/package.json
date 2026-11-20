@@ -6,6 +6,9 @@
   "private": true,
   "type": "module",
   "main": "desktop/start.mjs",
+  "bin": {
+    "botkins": "cli/botkins.mjs"
+  },
   "description": "Your bots, on your computer",
   "scripts": {
     "start": "npm run build && node scripts/start.cjs",
