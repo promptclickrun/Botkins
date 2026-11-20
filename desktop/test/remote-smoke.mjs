@@ -103,15 +103,15 @@ try {
   assert.equal((await b.snap()).settings.appearance.theme, "dark", "the window's look is its own");
   assert.notEqual((await a.snap()).settings.appearance.theme, "dark", "and the host's is untouched");
   await b.page.evaluate(() => window.botkins.setPreferences({ appearance: { theme: "light" } }));
-  // The host's own list: this computer as a device, with its type, rename and remove.
+  // The host's own list: this computer as a device, with its type, person name and remove control.
   await settingsPhone(a);
   const devices = a.page.getByRole("dialog").locator(".set-group", { hasText: "Devices" });
   await devices.waitFor({ timeout: 30000 });
   assert.match(await devices.textContent(), /Computer · /, "this computer is listed by its type");
-  await devices.getByRole("button", { name: /^Rename / }).click();
-  await devices.getByRole("textbox").fill("Travel laptop");
+  await devices.getByRole("button", { name: /^Add name for / }).click();
+  await devices.getByRole("textbox").fill("River");
   await devices.getByRole("button", { name: "Save", exact: true }).click();
-  await devices.getByText("Travel laptop").waitFor({ timeout: 15000 });
+  await devices.getByText("River").waitFor({ timeout: 15000 });
   await devices.scrollIntoViewIfNeeded();
   await a.shot("6-a-devices-list.png");
   assert.ok(!/this phone/.test(await devices.textContent()), "a computer's row says nothing about a phone");

@@ -44,7 +44,7 @@ export function decide(event, { settings, focused, now = new Date(), timeZone } 
   if (event.type === "joinRequest") {
     if (!prefs.requests || focused) return null;
     return {
-      title: event.request.name + " wants to join your team",
+      title: (event.request.person || event.request.name) + " wants to join your team",
       body: "Review the request in Settings › Team.",
       settings: "Team:Requests",
     };

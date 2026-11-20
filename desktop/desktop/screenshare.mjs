@@ -90,7 +90,16 @@ export function screenAdapter({ screen, desktopCapturer, systemPreferences, open
 }
 
 /** What Settings › Phone shows about the screen: the choice, who is watching, and what macOS has allowed. */
-export function screenStatus(status, adapter) {
+export function screenStatus(status, adapter, devices = []) {
   const mode = ["view", "control"].includes(status?.mode) ? status.mode : "off";
-  return { mode, viewers: Array.isArray(status?.viewers) ? status.viewers : [], permissions: adapter.granted() };
+  const withPerson = (actor) => {
+    const person = devices.find(device => device.id === actor.deviceId)?.person;
+    return person ? { ...actor, name: person } : actor;
+  };
+  return {
+    mode,
+    ...(status?.setBy && { setBy: withPerson(status.setBy) }),
+    viewers: Array.isArray(status?.viewers) ? status.viewers.map(withPerson) : [],
+    permissions: adapter.granted(),
+  };
 }
