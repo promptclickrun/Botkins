@@ -83,7 +83,7 @@ Template files you exported from an earlier build still import. Environment vari
 - **Add MCP servers once, for every bot,** under **Settings → MCP servers**. Add a local command or a remote address, or choose **Import…** to paste or open the JSON other apps use (an `mcpServers` object). **Test** connects to a server and lists its tools. Switch a server off for everyone there, or for one bot on that bot's **Capabilities** view. **Inspect capabilities** on a bot shows connection states and everything the bot can use.
 - **Sign in to MCP servers.** A remote server signs in one of three ways, chosen in its form:
   - **API key or token.** Enter the key; Botkins sends it as `Authorization: Bearer …`, or in a header you name.
-  - **Your browser (OAuth).** Choose **Sign in**: your browser opens the server's sign-in page, and Botkins receives the answer on this computer. Botkins finds the server's sign-in server and registers itself there, so there is usually nothing to configure. For a server that doesn't let apps register themselves, enter the client ID (and secret, if it has one) you were given, and register the redirect address the form shows. Botkins renews the sign-in by itself and says when you need to sign in again. **Test** tells you when a server needs a sign-in. A bearer token is always sent spelled "Bearer", whatever the sign-in server called it, because some servers (Composio, for one) refuse "bearer". Sign-ins you saved need no new sign-in.
+  - **Your browser (OAuth).** Choose **Sign in**: your browser opens the server's sign-in page, and Botkins receives the answer on this computer. Botkins uses an approved client configured by your administrator or registers itself when the service allows it. If neither is available, ask your administrator or the server operator to configure a client. You can also enter a client ID and optional secret under **Advanced** and register the redirect address shown there. Botkins renews the sign-in by itself and says when you need to sign in again. **Test** tells you when a server needs a sign-in. A bearer token is always sent spelled "Bearer", whatever the sign-in server called it, because some servers (Composio, for one) refuse "bearer". Sign-ins you saved need no new sign-in.
   - **Custom headers**, for anything else.
   A local server takes its keys as environment values.
 - **Keep credentials in the vault.** Every key, header value, environment value, client secret and sign-in is stored encrypted in Botkins' vault, and **Settings → Credentials** lists what it holds, which server uses each one and when it changed. Values are never shown again, on that page or anywhere else; remove one there, or replace it on its server. In the installed app the vault's key is guarded by the system keychain. If you change the command, arguments or address of a server, Botkins asks you to enter its keys again, and a sign-in or client secret is only ever sent to the server it was made for.
@@ -103,6 +103,34 @@ Template files you exported from an earlier build still import. Environment vari
   - **What each phone chose.** **Phones** shows, under each paired phone, what it is notified about (replies, questions and approvals, routines, and whether the text is included) and what it lets bots use. Both are set on the phone and only shown here, so you can see them from the computer.
   - **No ping for what you are reading.** Botkins tells the phone whether this window is in front and which chat is open in it, so a reply in a chat you are already looking at doesn't send a notification to the phone. The phone also asks which newer features this computer has (model details, a bot's eyes and own colors, where a routine's result goes, and Today items in a message) before it offers them, so an older Botkins on a computer and a newer phone work together.
 - **Clear temporary data** under Settings → Storage. This clears Chromium’s HTTP cache and Botkins’ capability menus. Workspace data and conversation history remain available.
+
+### Provision an MCP OAuth client
+
+Register Botkins as a public native client with the authorization server. Enable the authorization code grant with PKCE (S256), register the loopback redirect URI, and approve the scopes your users need. Install a UTF-8 JSON file named `mcp-oauth-clients.json` on the computer running Botkins. The following example uses illustrative values. Replace them with the registration issued for your deployment.
+
+```json
+{
+  "clients": [
+    {
+      "serverUrl": "https://tools.example.com/mcp",
+      "issuer": "https://login.example.com",
+      "clientId": "your-registered-client-id",
+      "redirectUri": "http://127.0.0.1:47823/callback",
+      "scopes": ["tools.read"]
+    }
+  ]
+}
+```
+
+| Platform | Default file |
+| --- | --- |
+| macOS | `/Library/Application Support/Botkins/mcp-oauth-clients.json` |
+| Windows | `%ProgramData%\Botkins\mcp-oauth-clients.json` |
+| Linux | `/etc/botkins/mcp-oauth-clients.json` |
+
+Alternatively, set `BOTKINS_MCP_OAUTH_CLIENTS_FILE` to an absolute file path in the desktop process’s launch environment. Give the app read access and restrict writes to administrators. Botkins reads the file at sign-in. A profile matches the configured server URL and the discovered OAuth issuer, including their paths. Specify each required scope as a separate string, or use an empty array to omit the scope parameter. Use a fixed HTTP loopback callback on `127.0.0.1`, `[::1]`, or `localhost`, with a path and no query or fragment.
+
+The person chooses **Sign in** and finishes in their browser. A client ID entered under **Advanced** takes precedence over the profile. For a confidential client, use the existing manual configuration, which stores the secret in the credential vault.
 
 ## Development
 

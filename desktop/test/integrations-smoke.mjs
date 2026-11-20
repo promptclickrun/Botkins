@@ -54,7 +54,13 @@ async function nowhere(secret, what) {
   assert.ok(!workspaceText().includes(secret), what + " is in workspace.json");
   assert.ok(!vaultText().includes(secret), what + " is readable in vault.json");
 }
-const oauth = await oauthMcpServer();
+const oauth = await oauthMcpServer({ registration: false, staticClient: { id: "approved-desktop" } });
+const registeredRedirect = "http://127.0.0.1:47823/botkins/sign-in";
+env.BOTKINS_MCP_OAUTH_CLIENTS_FILE = join(dir, "approved-clients.json");
+writeFileSync(env.BOTKINS_MCP_OAUTH_CLIENTS_FILE, JSON.stringify({ clients: [{
+  serverUrl: oauth.url, issuer: oauth.origin, clientId: "approved-desktop",
+  redirectUri: registeredRedirect, scopes: ["tools.read"],
+}] }));
 
 try {
   app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
@@ -349,6 +355,12 @@ try {
   await expect.poll(() => app.evaluate(() => globalThis.browserUrls.length)).toBe(1);
   const authorize = await app.evaluate(() => globalThis.browserUrls[0]);
   assert.ok(authorize.startsWith(oauth.origin + "/authorize?"), "the browser opens the server's sign-in page: " + authorize);
+  const params = new URL(authorize).searchParams;
+  assert.equal(params.get("client_id"), "approved-desktop");
+  assert.equal(params.get("redirect_uri"), registeredRedirect);
+  assert.equal(params.get("scope"), "tools.read");
+  assert.equal(params.get("code_challenge_method"), "S256");
+  assert.ok(!oauth.state.log.some((r) => r.path === "/register"));
   if (shots) await shot("mcp-signing-in");
   await oauth.browser(authorize);
   await expect(row("words").locator(".int-auth")).toHaveText(/Signed in/);

@@ -2,7 +2,7 @@
   "license": "MIT",
   "name": "botkins-desktop",
   "productName": "Botkins",
-  "version": "0.16.2",
+  "version": "0.16.3",
   "private": true,
   "type": "module",
   "main": "desktop/start.mjs",
