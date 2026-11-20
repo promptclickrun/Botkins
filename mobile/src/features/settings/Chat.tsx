@@ -8,15 +8,15 @@ import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { Group, Label, Page, Row, useTheme } from "@/ui";
 
 const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = [
-  { value: "show", label: "Every step", subtitle: "Each tool call as it runs" },
-  { value: "summary", label: "Summary", subtitle: "One line per reply" },
+  { value: "folded", label: "Folded", subtitle: "One line per turn; tap to open it" },
+  { value: "show", label: "Every step", subtitle: "Each step, thought and update in order" },
   { value: "failed", label: "Failed only", subtitle: "Only steps that went wrong" },
   { value: "hide", label: "Hidden", subtitle: "Approvals and errors still show" },
 ];
 const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string }[] = [
   { value: "show", label: "Open", subtitle: "All of it, as it comes" },
   { value: "folded", label: "Folded", subtitle: "The last lines; tap for more" },
-  { value: "hide", label: "Hidden", subtitle: "Not shown while a bot works" },
+  { value: "hide", label: "Hidden", subtitle: "Not shown in a bot's work" },
 ];
 
 /** A row whose value opens a short list of choices. */
@@ -46,8 +46,8 @@ export default function Chat() {
       <View>
         <Label>What a reply shows</Label>
         <Group>
-          <ChoiceMenu title="Steps" subtitle="A bot's tool calls" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
-          <ChoiceMenu title="Thinking" subtitle="While a bot works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
+          <ChoiceMenu title="Steps" subtitle="A bot's work in a turn" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
+          <ChoiceMenu title="Thinking" subtitle="Wherever a bot's work shows" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />
         </Group>

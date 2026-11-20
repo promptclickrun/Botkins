@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ban, Brain, ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleX, MessageCircle } from "lucide-react-native";
 import { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
@@ -10,6 +10,8 @@ import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
 import { Badge, Button, EmptyState, Group, Label, radius, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
 import { StepMark } from "./bits";
+import { helperSheet } from "./HelperRail";
+import { stepLabel } from "./turn";
 
 const STATUS_TONE: Record<string, Tone> = { Working: "accent", Completed: "success", "Needs you": "danger", Stopped: "neutral", Interrupted: "warning" };
 
@@ -29,9 +31,10 @@ function Mono({ label, text }: { label: string; text: string }) {
   );
 }
 
-function StepRow({ step }: { step: Step }) {
+/** One step: its state, its label and how long it took. A tap shows its input and output. */
+export function StepRow({ step, startOpen = false }: { step: Step; /** The step a person tapped in a chat's fold. */ startOpen?: boolean }) {
   const { colors } = useTheme();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
   const more = !!step.input || !!step.output;
   const took = step.finished ? duration(step.finished - step.started) : undefined;
   const head = (
@@ -39,7 +42,7 @@ function StepRow({ step }: { step: Step }) {
       <StepMark status={step.status} />
       <View style={{ flex: 1, minWidth: 0 }}>
         <T variant="callout" weight="500" numberOfLines={open ? undefined : 2}>
-          {step.label || step.name}
+          {stepLabel(step)}
         </T>
         {!!step.progress && step.status === "Running" && (
           <T variant="footnote" color="muted" numberOfLines={1}>
@@ -58,7 +61,7 @@ function StepRow({ step }: { step: Step }) {
   if (!more) return head;
   return (
     <View>
-      <Tap onPress={() => setOpen(!open)} sink={1} feel="select" hitSlop={0} accessibilityLabel={(step.label || step.name) + ", " + step.status} accessibilityState={{ expanded: open }}>
+      <Tap onPress={() => setOpen(!open)} sink={1} feel="select" hitSlop={0} accessibilityLabel={stepLabel(step) + ", " + step.status} accessibilityState={{ expanded: open }}>
         {head}
       </Tap>
       {open && (
@@ -111,7 +114,8 @@ const TEAM_TONE: Record<TeamAsk["status"], Tone> = { waiting: "neutral", working
 
 export default function RunActivity() {
   const { colors } = useTheme();
-  const { chatId, runId } = useLocalSearchParams<{ chatId: string; runId: string }>();
+  // `stepId`: the step a person tapped in the chat's fold; it opens, and "Failed only" doesn't hide it.
+  const { chatId, runId, stepId } = useLocalSearchParams<{ chatId: string; runId: string; stepId?: string }>();
   useWatchedChat(chatId);
   const saved = useApp((state) => state.chats[chatId]?.runs[runId]);
   const running = useApp((state) => state.running[chatId]);
@@ -133,9 +137,11 @@ export default function RunActivity() {
   const took = run.finished ? duration(run.finished - run.time) : run.usage?.durationMs ? duration(run.usage.durationMs) : undefined;
   const model = run.usage?.model ?? (run.model ? modelName(run.model, models) : undefined);
   const facts = [took, model, run.usage ? compactNumber(run.usage.input) + " in · " + compactNumber(run.usage.output) + " out" : undefined].filter(Boolean).join(" · ");
-  const everyStep = run.steps ?? [];
+  // A helper's own steps are listed in its own activity (Helpers, below).
+  const everyStep = (run.steps ?? []).filter((step) => !step.agentId);
   // "Failed only" narrows the list to what went wrong; the rest is a tap away.
-  const onlyFailed = stepsMode === "failed" && !allSteps && everyStep.some((step) => step.status === "Failed");
+  const picked = stepId ? everyStep.find((step) => step.id === stepId) : undefined;
+  const onlyFailed = stepsMode === "failed" && !allSteps && picked?.status !== "Done" && everyStep.some((step) => step.status === "Failed") && (!picked || picked.status === "Failed");
   const steps = onlyFailed ? everyStep.filter((step) => step.status === "Failed") : everyStep;
 
   return (
@@ -164,7 +170,7 @@ export default function RunActivity() {
           <Label>{onlyFailed ? (steps.length === 1 ? "1 failed step" : steps.length + " failed steps") : steps.length === 1 ? "1 step" : steps.length + " steps"}</Label>
           <Group>
             {steps.map((step) => (
-              <StepRow key={step.id} step={step} />
+              <StepRow key={step.id} step={step} startOpen={step.id === stepId} />
             ))}
           </Group>
           {onlyFailed && <Button title={"Show all " + everyStep.length + " steps"} variant="ghost" size="sm" wide onPress={() => setAllSteps(true)} style={{ marginTop: space.xs }} />}
@@ -212,19 +218,22 @@ export default function RunActivity() {
           <Label>Helpers</Label>
           <Group>
             {run.agents.map((agent) => (
-              <View key={agent.id} style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
-                <StepMark status={agent.status} />
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <T variant="callout" weight="500" numberOfLines={1}>
-                    {agent.name}
-                  </T>
-                  {!!(agent.detail || agent.description) && (
-                    <T variant="footnote" color="muted" numberOfLines={2}>
-                      {agent.detail || agent.description}
+              <Tap key={agent.id} onPress={() => router.push(helperSheet(chatId, run.id, agent.id))} sink={1} feel="select" hitSlop={0} accessibilityLabel={agent.name + ", " + agent.status + ", show activity"}>
+                <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
+                  <StepMark status={agent.status} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <T variant="callout" weight="500" numberOfLines={1}>
+                      {agent.name}
                     </T>
-                  )}
+                    {!!(agent.intent || agent.detail || agent.description) && (
+                      <T variant="footnote" color="muted" numberOfLines={2}>
+                        {(agent.status === "Running" && agent.intent) || agent.detail || agent.description}
+                      </T>
+                    )}
+                  </View>
+                  <ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />
                 </View>
-              </View>
+              </Tap>
             ))}
           </Group>
         </View>

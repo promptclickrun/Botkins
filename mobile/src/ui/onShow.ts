@@ -17,9 +17,9 @@ export type Level = { state: State; key: string };
  * in view. tests/onshow.test.ts fails when this list and that file differ.
  */
 export const SHEETS = new Set([
-  "chat/new", "chat/model", "chat/activity", "chat/context", "chat/changes", "chat/pane", "chat/model-info",
+  "chat/new", "chat/model", "chat/activity", "chat/helper", "chat/context", "chat/changes", "chat/pane", "chat/model-info",
   "bot/new", "bot/agents", "bot/[id]/edit", "bot/[id]/look", "bot/[id]/instructions", "bot/[id]/memory",
-  "today/new", "today/routine", "routine/[id]", "task/[id]", "tools/[id]", "skills/[name]", "market/app/[slug]",
+  "today/new", "today/routine", "routine/[id]", "task/[id]", "tools/[id]", "skills/[name]", "market/app/[slug]", "market/plugin-install", "market/plugin-update", "market/add-marketplace",
   "settings/bubble", "tools/import", "folders", "credentials/[id]", "wiki/edit", "wiki/export", "pair/index", "pair/manual",
 ]);
 export const isSheet = (name: string) => SHEETS.has(name);

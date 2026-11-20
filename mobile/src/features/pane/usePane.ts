@@ -55,9 +55,9 @@ export function usePane(chatId: string, onText: (text: string) => void) {
   return {
     /** How many tabs the pane has: the chat's header offers them when there are any. */
     tabs,
-    /** The person opens the pane themselves. */
-    show: () => {
-      const front = paneFront(pane);
+    /** The person opens the pane themselves: on one tab (a screen card in the chat), or on the one in front. */
+    show: (panelId?: string) => {
+      const front = (panelId ? pane?.panels.find((panel) => panel.id === panelId) : undefined) ?? paneFront(pane);
       if (!front) return;
       void api.sidePane(chatId, "opened").catch(() => {});
       router.push(sheet(chatId, front.id));

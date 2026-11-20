@@ -281,7 +281,9 @@ export class Push {
     const chat = chats.get(request.chatId);
     const bot = bots.get(request.botId ?? chat?.botId);
     const name = bot?.name ?? "A bot";
-    const title = request.kind === "permission" ? name + " needs your approval" : name + " has a question";
+    // A secure input ("secure-input-v1") is named as what it is: its answer is typed into a prompt of
+    // its own, never into the chat.
+    const title = request.kind === "permission" ? name + " needs your approval" : request.kind === "secure" ? name + " needs a secure input" : name + " has a question";
     for (const device of targets) {
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
       const record = this.store.push(device.id);
@@ -311,7 +313,8 @@ export class Push {
   onFinish(sends, targets, state, run, chats, bots) {
     const chat = chats.get(run.chatId);
     const kind = this.kindOf(run, chat);
-    const reply = [...(chat?.messages ?? [])].reverse().find((message) => message.runId === run.id && message.role !== "user");
+    // Text written on the way ("turn-timeline-v1": `interim`) is not the reply.
+    const reply = [...(chat?.messages ?? [])].reverse().find((message) => message.runId === run.id && message.role !== "user" && !message.interim);
     const bot = bots.get(reply?.botId ?? chat?.botId);
     const name = bot?.name ?? "Botkins";
     const failed = run.status !== "Completed";

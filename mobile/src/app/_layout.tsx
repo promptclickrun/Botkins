@@ -65,6 +65,7 @@ export default function RootLayout() {
               <Stack.Screen name="chat/new" options={tall} />
               <Stack.Screen name="chat/model" options={tall} />
               <Stack.Screen name="chat/activity" options={tall} />
+              <Stack.Screen name="chat/helper" options={tall} />
               <Stack.Screen name="chat/context" options={tall} />
               <Stack.Screen name="chat/changes" options={tall} />
               <Stack.Screen name="chat/pane" options={tall} />
@@ -95,6 +96,10 @@ export default function RootLayout() {
               <Stack.Screen name="projects/[id]" />
               <Stack.Screen name="market/app/[slug]" options={half} />
               <Stack.Screen name="market/category/[id]" />
+              <Stack.Screen name="market/plugin" />
+              <Stack.Screen name="market/plugin-install" options={tall} />
+              <Stack.Screen name="market/plugin-update" options={tall} />
+              <Stack.Screen name="market/add-marketplace" options={half} />
               <Stack.Screen name="settings/desktop" />
               <Stack.Screen name="settings/appearance" />
               <Stack.Screen name="settings/approvals" />
@@ -103,6 +108,10 @@ export default function RootLayout() {
               <Stack.Screen name="settings/about" />
               <Stack.Screen name="settings/chat" />
               <Stack.Screen name="settings/voice" />
+              <Stack.Screen name="settings/voice/dictation" />
+              <Stack.Screen name="settings/voice/reading" />
+              <Stack.Screen name="settings/voice/live" />
+              <Stack.Screen name="settings/voice/keys" />
               <Stack.Screen name="settings/notifications" />
               <Stack.Screen name="settings/access" />
               <Stack.Screen name="settings/window" />

@@ -27,8 +27,10 @@ export type Prefs = {
   todayOpen: boolean;
   /** The model providers folded shut in the model picker. */
   foldedProviders: string[];
+  /** What the Marketplace tab showed last: apps (Composio) or plugins. */
+  marketView: "apps" | "plugins";
 };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [] };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [], marketView: "apps" };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -59,6 +61,7 @@ function read(saved: Record<string, unknown>): Prefs {
     controlSize: CONTROL_SIZES.includes(saved.controlSize as Prefs["controlSize"]) ? (saved.controlSize as Prefs["controlSize"]) : defaults.controlSize,
     haptics: typeof saved.haptics === "boolean" ? saved.haptics : defaults.haptics,
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
+    marketView: saved.marketView === "plugins" ? "plugins" : "apps",
     foldedProviders: Array.isArray(saved.foldedProviders) ? saved.foldedProviders.filter((id): id is string => typeof id === "string" && id.length <= 100).slice(0, 100) : defaults.foldedProviders,
   };
 }

@@ -1,5 +1,5 @@
 // What this phone keeps for its own voice: the phone's voice and speed when "This phone" reads
-// aloud. The other choices are the computer's (`usePart("voice")`), shared by every phone.
+// aloud, and how live voice listens on this phone. The other choices are the computer's (`usePart("voice")`), shared by every phone.
 import { keep, readKept } from "@/state/keep";
 import { create } from "zustand";
 
@@ -10,16 +10,22 @@ export type PhoneVoicePrefs = {
   voice?: string;
   /** 0.5 to 2. */
   speed: number;
+  /**
+   * How live voice listens on this phone. "conversation": hands-free, it listens while you talk.
+   * "push": it listens only while you hold the talk button.
+   */
+  liveInput: "conversation" | "push";
 };
 
-export const usePhoneVoice = create<PhoneVoicePrefs>(() => ({ speed: 1 }));
+const DEFAULTS: PhoneVoicePrefs = { speed: 1, liveInput: "conversation" };
+export const usePhoneVoice = create<PhoneVoicePrefs>(() => DEFAULTS);
 
 let loading: Promise<void> | null = null;
 export function loadPhoneVoice(): Promise<void> {
   loading ??= (async () => {
     try {
       const saved = await readKept(KEY);
-      if (saved) usePhoneVoice.setState({ speed: 1, ...(JSON.parse(saved) as Partial<PhoneVoicePrefs>) });
+      if (saved) usePhoneVoice.setState({ ...DEFAULTS, ...(JSON.parse(saved) as Partial<PhoneVoicePrefs>) });
     } catch {
       // The defaults stand.
     }

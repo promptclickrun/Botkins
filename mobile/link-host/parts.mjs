@@ -64,6 +64,14 @@ function runDetail(run) {
 }
 
 /**
+ * The installed plugins ("plugins-v1", docs/plugins.md), as phones are sent them. The app already
+ * sends no secret's value; a secret field's `value` is dropped here as well, whatever the app sent.
+ */
+function pluginsPart(plugins) {
+  return plugins.map((plugin) => (Array.isArray(plugin?.config) ? { ...plugin, config: plugin.config.map((field) => (field?.secret ? (({ value: _value, ...rest }) => rest)(field) : field)) } : plugin));
+}
+
+/**
  * The parts every paired phone follows. `looks` is the Botkin saved for each bot, by bot id.
  * `link` holds what the link itself keeps: the public list of credentials and the screen mode.
  */
@@ -83,6 +91,8 @@ export function baseParts(state, info, looks = {}, link = {}) {
       queued: state.queued ?? {},
       requests: state.requests ?? [],
       active,
+      // Whether a message sent now steers the turn under way (the desktop app's "Steer now") or waits ("Send next").
+      ...(state.steerable && typeof state.steerable === "object" && { steerable: state.steerable }),
     },
     runs: (state.runs ?? []).slice(0, RUN_LIST).map(runSummary),
     panels: state.panels ?? [],
@@ -97,6 +107,8 @@ export function baseParts(state, info, looks = {}, link = {}) {
     credentials: link.credentials ?? [],
     // A host with no window of its own says so, with whether it has a display now; and a level that was
     // set from a phone says which phone and when (grant.mjs). A computer with its own settings page says neither.
+    // An app without plugins sends no such part.
+    ...(Array.isArray(state.plugins) && { plugins: pluginsPart(state.plugins) }),
     host: { screen: link.screen ?? "off", relay: link.relay === true, ...(link.headless && { headless: true, display: link.display ?? { available: false } }), ...(link.screenSetBy && { screenSetBy: link.screenSetBy }) },
   };
 }
@@ -136,7 +148,8 @@ export function chatPart(state, chatId, runs = runsByChat(state, [chatId]).get(c
 export function runPart(state, chatId, runs = runsByChat(state, [chatId]).get(chatId) ?? []) {
   const chat = (state.chats ?? []).find((c) => c.id === chatId);
   if (!chat) return null;
-  const answered = new Set((chat.messages ?? []).filter((m) => m.role !== "user").map((m) => m.runId).filter(Boolean));
+  // Text a bot wrote on the way ("turn-timeline-v1": `interim`) is not a reply.
+  const answered = new Set((chat.messages ?? []).filter((m) => m.role !== "user" && !m.interim).map((m) => m.runId).filter(Boolean));
   const run = runs.find((r) => r.status === "Working") ?? (runs[0] && !answered.has(runs[0].id) ? runs[0] : null);
   return run ? runDetail(run) : null;
 }

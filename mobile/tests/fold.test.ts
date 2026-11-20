@@ -1,0 +1,235 @@
+// A turn folded to one line (Settings › Chat › Steps › Folded, the default): what stays in the chat,
+// what goes into the fold and in which order, the fold line's words, and how a saved choice is read.
+// The plain logic is src/features/chat/fold.ts and the fold path of src/features/chat/turn.ts.
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { Message, Run, Step } from "../src/link/types";
+import { foldLine, liveLine, settleSteps, spentTime } from "../src/features/chat/fold";
+import { chatTimeline, type Item, reuseItems, type TimelineInput, type TurnPrefs } from "../src/features/chat/turn";
+
+const T0 = 1_700_000_000_000;
+const at = (seconds: number) => T0 + seconds * 1000;
+const step = (id: string, seconds: number, more: Partial<Step> = {}): Step => ({ id, name: "bash", label: "Ran " + id, status: "Done", started: at(seconds), finished: at(seconds + 1), ...more });
+const run = (more: Partial<Run> = {}): Run => ({ id: "r1", chatId: "c1", title: "Do the thing", time: at(0), status: "Working", ...more });
+const FOLDED: TurnPrefs = { steps: "folded", thinking: "folded" };
+
+function input(more: Partial<TimelineInput>): TimelineInput {
+  return { messages: [], from: 0, runs: {}, timeline: false, group: false, prefs: FOLDED, ...more };
+}
+/** The chat, oldest first: "user:…", "assistant:…", "live:…" (the text being written), "fold:…" / "fold*:…" (a live fold). */
+function shape(items: Item[]): string[] {
+  return items.map((item) => {
+    switch (item.kind) {
+      case "message":
+        return (item.message.interim ? "interim" : item.message.role) + ":" + item.message.text;
+      case "fold":
+        return (item.live ? "fold*:" : "fold:") + item.line;
+      case "live":
+        return "live:" + item.text;
+      case "ended":
+        return "ended:" + item.ending.label + (item.retry ? " (try again)" : "");
+      default:
+        return item.kind;
+    }
+  });
+}
+/** What a fold holds, in order: "text:…", "thought:…", "step:a", "you:…". */
+function inside(items: Item[]): string[] {
+  const fold = items.find((item) => item.kind === "fold");
+  assert.ok(fold?.kind === "fold", "a fold");
+  return fold.entries.map((entry) => (entry.kind === "step" ? "step:" + entry.step.id : entry.kind === "person" ? "you:" + entry.text : entry.kind + ":" + entry.text));
+}
+
+const ask: Message = { role: "user", text: "Do the thing", runId: "r1", time: at(0) };
+
+// ── The setting ──────────────────────────────────────────────────────────────────────────────────
+
+test("everyone moves to Folded once; a choice made after that is kept, and the old Summary reads as Folded", () => {
+  assert.equal(settleSteps({}), "folded");
+  assert.equal(settleSteps({ steps: "show" }), "folded", "a choice saved before the flag was the old default, not a pick");
+  assert.equal(settleSteps({ steps: "hide" }), "folded");
+  assert.equal(settleSteps({ steps: "show", stepsPicked: true }), "show");
+  assert.equal(settleSteps({ steps: "failed", stepsPicked: true }), "failed");
+  assert.equal(settleSteps({ steps: "hide", stepsPicked: true }), "hide");
+  assert.equal(settleSteps({ steps: "summary", stepsPicked: true }), "folded");
+  assert.equal(settleSteps({ steps: "nonsense", stepsPicked: true }), "folded");
+});
+
+// ── The fold line's words ────────────────────────────────────────────────────────────────────────
+
+test("the fold line says how long the turn worked and what it did, in the old line's words", () => {
+  assert.equal(spentTime(52_000), "52s");
+  assert.equal(spentTime(400), "1s");
+  assert.equal(spentTime(75_000), "1m 15s");
+  assert.equal(spentTime(3_700_000), "1h 1m");
+  assert.equal(foldLine({ took: 52_000, steps: 4, failed: 0, mode: "folded", onlyThinking: false }), "Worked for 52s · 4 steps");
+  assert.equal(foldLine({ took: 9_000, steps: 1, failed: 0, mode: "folded", onlyThinking: false }), "Worked for 9s · 1 step");
+  assert.equal(foldLine({ took: 3_000, steps: 0, failed: 0, mode: "folded", onlyThinking: true }), "Thought for 3s");
+  assert.equal(foldLine({ took: 52_000, steps: 4, failed: 1, mode: "failed", onlyThinking: false }), "Worked for 52s · 1 step failed");
+  assert.equal(foldLine({ took: 52_000, steps: 4, failed: 0, mode: "hide", onlyThinking: false }), "Worked for 52s");
+  assert.equal(foldLine({ steps: 2, failed: 0, mode: "folded", onlyThinking: false }), "2 steps", "no time known: no made-up time");
+  assert.equal(foldLine({ steps: 0, failed: 0, mode: "hide", onlyThinking: false }), "Show work");
+});
+
+test("the live fold line says what the bot is doing now and counts as it goes", () => {
+  assert.equal(liveLine({ doing: "Ran c", writing: false, steps: 3, failed: 0, mode: "folded" }), "Ran c · 3 steps");
+  assert.equal(liveLine({ writing: false, steps: 3, failed: 0, mode: "folded" }), "Thinking… · 3 steps");
+  assert.equal(liveLine({ writing: false, steps: 0, failed: 0, mode: "folded" }), "Thinking…");
+  assert.equal(liveLine({ writing: true, steps: 1, failed: 0, mode: "folded" }), "Writing… · 1 step");
+  assert.equal(liveLine({ writing: false, intent: "Reading the logs", steps: 2, failed: 0, mode: "folded" }), "Reading the logs · 2 steps");
+  // Hidden names no step; Failed only counts only what failed.
+  assert.equal(liveLine({ doing: "Ran c", writing: false, steps: 3, failed: 0, mode: "hide" }), "Thinking…");
+  assert.equal(liveLine({ doing: "Ran c", writing: false, steps: 3, failed: 1, mode: "failed" }), "Thinking… · 1 step failed");
+});
+
+// ── A finished turn ──────────────────────────────────────────────────────────────────────────────
+
+const worked: Message[] = [
+  { role: "user", text: "Check the deploy and fix what's broken", runId: "r1", time: 0 },
+  { role: "assistant", text: "I'll look at the last deploy first.", runId: "r1", time: 400, interim: true },
+  { role: "user", text: "Only staging, please", steeredRunId: "r1", time: 5200 },
+  { role: "assistant", text: "Staging only, then. One question first.", runId: "r1", time: 5600, interim: true },
+  { role: "user", text: "Yes", time: 9100, answer: { runId: "r1", requestId: "q1", kind: "question", title: "Restart the staging server?" } },
+  { role: "assistant", text: "Restarted. Staging is healthy again.", runId: "r1", time: 14200 },
+];
+const workedSteps: Step[] = [
+  { id: "s1", name: "bash", label: "tail deploy.log", status: "Done", started: 1900, finished: 2600 },
+  { id: "h1", name: "task", label: "Check staging's health", status: "Done", started: 2700, finished: 8000 },
+  { id: "s2", name: "web_fetch", label: "https://staging.example.com/health", status: "Done", started: 3000, finished: 3400, agentId: "h1" },
+  { id: "s3", name: "ask_user", label: "ask_user", status: "Done", started: 6000, finished: 9100 },
+  { id: "s4", name: "bash", label: "systemctl restart api", status: "Done", started: 9300, finished: 13800 },
+];
+const r1: Run = { id: "r1", chatId: "c1", title: "Check the deploy", time: 0, status: "Completed", finished: 52_000, steps: workedSteps, reasoning: [{ id: "t1", text: "Read the deploy log before anything.", started: 100, finished: 350 }] };
+
+test("folded, a finished turn is the person's message, their steers and answers, the reply, and one fold line under it", () => {
+  const items = chatTimeline(input({ timeline: true, messages: worked, runs: { r1 } }));
+  assert.deepEqual(shape(items), ["user:Check the deploy and fix what's broken", "user:Only staging, please", "user:Yes", "assistant:Restarted. Staging is healthy again.", "fold:Worked for 52s · 4 steps"]);
+  // The fold holds everything else, in the order it happened; a helper's own step stays in its sheet.
+  assert.deepEqual(inside(items), [
+    "thought:Read the deploy log before anything.",
+    "text:I'll look at the last deploy first.",
+    "step:s1",
+    "step:h1",
+    "you:Only staging, please",
+    "text:Staging only, then. One question first.",
+    "step:s3",
+    "you:Restart the staging server?: Yes",
+    "step:s4",
+  ]);
+  const reply = items.at(-2);
+  assert.ok(reply?.kind === "message" && reply.end && !reply.workUnder, "the reply ends the turn; its cards stay with it");
+  const fold = items.at(-1);
+  assert.ok(fold?.kind === "fold" && fold.key === "f:r1" && !fold.live);
+});
+
+test("folded, from an older computer: the steps and the steer's place are in the fold, the reply in the chat", () => {
+  const older = [worked[0], worked[2], { role: "assistant", text: "Restarted. Staging is healthy again.", runId: "r1" } as Message];
+  const plain = { ...r1, reasoning: undefined, steps: workedSteps.map(({ agentId: _agentId, ...rest }) => rest) };
+  const items = chatTimeline(input({ messages: older, runs: { r1: plain } }));
+  assert.deepEqual(shape(items), ["user:Check the deploy and fix what's broken", "user:Only staging, please", "assistant:Restarted. Staging is healthy again.", "fold:Worked for 52s · 5 steps"]);
+  assert.deepEqual(inside(items), ["step:s1", "step:h1", "step:s2", "you:Only staging, please", "step:s3", "step:s4"]);
+});
+
+test("Thinking decides whether thoughts are in the fold", () => {
+  const hidden = chatTimeline(input({ timeline: true, messages: worked, runs: { r1 }, prefs: { steps: "folded", thinking: "hide" } }));
+  assert.equal(inside(hidden).some((entry) => entry.startsWith("thought:")), false);
+  const open = chatTimeline(input({ timeline: true, messages: worked, runs: { r1 }, prefs: { steps: "folded", thinking: "show" } }));
+  assert.equal(inside(open)[0], "thought:Read the deploy log before anything.");
+});
+
+test("Failed only and Hidden fold the interim texts too, and show only what their choice lets through", () => {
+  const failedRun = { ...r1, steps: workedSteps.map((s) => (s.id === "s4" ? { ...s, status: "Failed" } : s)) };
+  const failed = chatTimeline(input({ timeline: true, messages: worked, runs: { r1: failedRun }, prefs: { steps: "failed", thinking: "hide" } }));
+  assert.deepEqual(shape(failed).at(-1), "fold:Worked for 52s · 1 step failed");
+  assert.deepEqual(inside(failed), ["text:I'll look at the last deploy first.", "you:Only staging, please", "text:Staging only, then. One question first.", "you:Restart the staging server?: Yes", "step:s4"]);
+  const hidden = chatTimeline(input({ timeline: true, messages: worked, runs: { r1 }, prefs: { steps: "hide", thinking: "hide" } }));
+  assert.deepEqual(shape(hidden).at(-1), "fold:Worked for 52s");
+  assert.equal(inside(hidden).some((entry) => entry.startsWith("step:")), false);
+  // Nothing to fold: no line at all.
+  const quiet = chatTimeline(input({ messages: [ask, { role: "assistant", text: "Done.", runId: "r1" }], runs: { r1: run({ status: "Completed", steps: [step("a", 1)] }) }, prefs: { steps: "hide", thinking: "hide" } }));
+  assert.deepEqual(shape(quiet), ["user:Do the thing", "assistant:Done."]);
+});
+
+test("a turn that ended with no reply: the fold, then how it ended with Try again; what it wrote is in the fold", () => {
+  const stalled = run({ status: "Needs you", finished: at(700), detail: "Copilot session stalled without an event for 600 seconds.", steps: [step("a", 1), step("b", 2, { status: "Interrupted" })] });
+  const items = chatTimeline(input({ messages: [ask], runs: { r1: stalled }, running: stalled, marks: { r1: { marks: { "s:a": 0, "s:b": 0 }, text: "I found three files and" } } }));
+  assert.deepEqual(shape(items), ["user:Do the thing", "fold:Worked for 11m 40s · 2 steps", "ended:Timed out (try again)"]);
+  assert.deepEqual(inside(items), ["step:a", "step:b", "text:I found three files and"]);
+  // Only tools, no reply, finished: the fold and nothing after it.
+  const tools = chatTimeline(input({ messages: [ask], runs: { r1: run({ status: "Completed", finished: at(4), steps: [step("a", 1)] }) } }));
+  assert.deepEqual(shape(tools), ["user:Do the thing", "fold:Worked for 4s · 1 step"]);
+});
+
+// ── A turn under way ─────────────────────────────────────────────────────────────────────────────
+
+test("folded, a turn under way: steers and answers in place, the newest text streaming, and one live fold line under it", () => {
+  const interim: Message = { role: "assistant", text: "Let me look at the logs.", runId: "r1", time: at(1), interim: true };
+  const answer: Message = { role: "user", text: "Staging", time: at(6), answer: { runId: "r1", requestId: "q1", kind: "question", title: "Which environment?" } };
+  const second: Message = { role: "assistant", text: "Staging it is.", runId: "r1", time: at(7), interim: true };
+  const steps = [step("a", 2), step("b", 4), step("c", 8, { status: "Running", finished: undefined })];
+  const live = run({ steps, reasoning: [{ id: "t1", text: "Read the logs first.", started: at(0.5) }] });
+  const items = chatTimeline(input({ timeline: true, messages: [ask, interim, answer, second], running: live, live: { stream: "Deploying" } }));
+  assert.deepEqual(shape(items), ["user:Do the thing", "user:Staging", "live:Deploying", "fold*:Ran c · 3 steps"]);
+  assert.deepEqual(inside(items), ["thought:Read the logs first.", "text:Let me look at the logs.", "step:a", "step:b", "you:Which environment?: Staging", "text:Staging it is.", "step:c"]);
+  const text = items.at(-2);
+  assert.ok(text?.kind === "live" && text.folded, "the text alone, no steps beside it");
+
+  // Before any text: only the fold line under the person's message, saying what it is doing.
+  const quiet = chatTimeline(input({ timeline: true, messages: [ask], running: run({ steps: [] }), live: { stream: "" } }));
+  assert.deepEqual(shape(quiet), ["user:Do the thing", "fold*:Thinking…"]);
+  // The phone's live thinking, without parts of its own, is in the fold too.
+  const thinking = chatTimeline(input({ timeline: true, messages: [ask], running: run({ steps: [] }), live: { stream: "", thinking: "Hmm, where to start" } }));
+  assert.deepEqual(inside(thinking), ["thought:Hmm, where to start"]);
+});
+
+test("from an older computer, the text before a steer goes into the fold by the phone's marks", () => {
+  const steer: Message = { role: "user", text: "Use staging", steeredRunId: "r1", time: at(5) };
+  const steps = [step("a", 1), step("b", 3), step("c", 7, { status: "Running", finished: undefined })];
+  const live = run({ steps });
+  const marks = { r1: { marks: { "s:a": 0, "s:b": 9, ["p:" + at(5) + ":11"]: 9, "s:c": 22 }, text: "Checking. Now staging. Almost" } };
+  const items = chatTimeline(input({ messages: [ask, steer], running: live, live: { stream: "Checking. Now staging. Almost" }, marks }));
+  assert.deepEqual(shape(items), ["user:Do the thing", "user:Use staging", "live:Almost", "fold*:Ran c · 3 steps"]);
+  assert.deepEqual(inside(items), ["step:a", "text:Checking.", "step:b", "you:Use staging", "text:Now staging.", "step:c"]);
+});
+
+test("from live to finished the reply keeps its place and the fold line stays under it, as the same row", () => {
+  const steps = [step("a", 1)];
+  const working = chatTimeline(input({ timeline: true, messages: [ask], running: run({ steps }), live: { stream: "All done." } }));
+  const done = run({ status: "Completed", finished: at(3), steps });
+  const finished = chatTimeline(input({ timeline: true, messages: [ask, { role: "assistant", text: "All done.", runId: "r1", time: at(2) }], runs: { r1: done }, running: null }));
+  assert.deepEqual(shape(working), ["user:Do the thing", "live:All done.", "fold*:Writing… · 1 step"]);
+  assert.deepEqual(shape(finished), ["user:Do the thing", "assistant:All done.", "fold:Worked for 3s · 1 step"]);
+  assert.equal(working.at(-1)?.key, finished.at(-1)?.key, "one row, so its open or folded state carries over");
+  // The reply can land before the stream is cleared: the text isn't shown twice.
+  const both = chatTimeline(input({ timeline: true, messages: [ask, { role: "assistant", text: "All done.", runId: "r1", time: at(2) }], running: run({ steps }), live: { stream: "All done." } }));
+  assert.deepEqual(shape(both), ["user:Do the thing", "assistant:All done.", "fold*:Writing… · 1 step"]);
+});
+
+test("nothing the person said moves above what came before it", () => {
+  const items = chatTimeline(input({ timeline: true, messages: worked, runs: { r1 } }));
+  const said = items.flatMap((item) => (item.kind === "message" ? [item.index] : []));
+  assert.deepEqual(said, [...said].sort((a, b) => a - b));
+});
+
+test("a fold that didn't change is the same row the next time, while the text streams", () => {
+  const steps = [step("a", 1), step("b", 2, { status: "Running", finished: undefined })];
+  const make = (stream: string) => chatTimeline(input({ timeline: true, messages: [ask], running: run({ steps }), live: { stream } }));
+  const first = reuseItems(undefined, make("Hel"));
+  const second = reuseItems(first.byKey, make("Hello"));
+  const fold = (items: Item[]) => items.find((item) => item.kind === "fold");
+  assert.equal(fold(second.items), fold(first.items));
+});
+
+// ── Group chats ──────────────────────────────────────────────────────────────────────────────────
+
+test("a group chat keeps each member's reply in turn, with interim texts in the fold under the last reply", () => {
+  const note: Message = { role: "assistant", text: "Mira: checking the calendar.", runId: "r1", botId: "mira", time: at(1), interim: true };
+  const first: Message = { role: "assistant", text: "Mira here.", runId: "r1", botId: "mira", time: at(3) };
+  const second: Message = { role: "assistant", text: "Otto here.", runId: "r1", botId: "otto", time: at(6) };
+  const done = run({ status: "Completed", finished: at(8), steps: [step("a", 2)] });
+  const items = chatTimeline(input({ group: true, timeline: true, messages: [ask, note, first, second], runs: { r1: done } }));
+  assert.deepEqual(shape(items), ["user:Do the thing", "assistant:Mira here.", "assistant:Otto here.", "fold:Worked for 8s · 1 step"]);
+  assert.deepEqual(inside(items), ["text:Mira: checking the calendar.", "step:a"]);
+  const last = items.at(-2);
+  assert.ok(last?.kind === "message" && last.end && !last.workUnder);
+});

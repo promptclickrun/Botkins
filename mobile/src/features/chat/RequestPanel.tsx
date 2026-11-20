@@ -1,43 +1,50 @@
-// What a bot is waiting on: an approval, a question or a short form, docked above the composer.
+// What a bot is waiting on, docked above the composer: an approval, a question, a form or a secure
+// input. Every word can be read: the question, each choice and a command wrap onto as many lines as
+// they need, and when the card is taller than its room its body scrolls while the buttons stay in
+// reach. The heading folds the card to one line ("Gordie has a question") so the chat behind it
+// can be read, and opens it again. The words and the behaviour are the desktop app's
+// (Commander-Con/src/RequestPanel.tsx): a choice is picked, then sent with "Send answer".
+//
 // Secrets are typed masked or picked from saved credentials (the computer fills those in, so the
 // value never reaches the phone), and are cleared the moment the answer goes. A request that looks
-// destructive turns red and asks for a press-and-hold on Allow.
-import * as WebBrowser from "expo-web-browser";
-import { Globe, Hand, Lock, ShieldAlert, X } from "lucide-react-native";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import Animated, { FadeInDown, useAnimatedProps, useSharedValue, withTiming } from "react-native-reanimated";
-import Svg, { Circle } from "react-native-svg";
-import { CredentialPicker } from "@/features/credentials/CredentialPicker";
+// destructive turns red and asks for a press-and-hold on Allow. A secure input (request/SecureInput)
+// sends its values to the computer only. The plain logic is in request/logic.ts and
+// request/secure.ts, tested by tests/requests.test.ts.
+import { ChevronDown, ChevronUp, CircleHelp, Hand, Lock, ShieldAlert } from "lucide-react-native";
+import { useEffect, useRef, useState } from "react";
+import { AccessibilityInfo, Alert, Keyboard, StyleSheet, Switch, type TextInputInstance, View } from "react-native";
+import Animated, { FadeInDown } from "react-native-reanimated";
 import type { AgentRequest, Bot, CredentialRef, FormField } from "@/link/types";
 import { api, attempt } from "@/state/link";
-import { BotAvatar, Button, Chip, Field, haptic, lift, radius, space, T, Tap, useTheme, switchColors } from "@/ui";
+import { BotAvatar, Button, Field, haptic, lift, radius, space, switchColors, T, Tap, useTheme } from "@/ui";
+import {
+  answerOf,
+  choicesOf,
+  countLabel,
+  detailMode,
+  foldHint,
+  formReady,
+  freeAnswerShown,
+  heading,
+  headerLabel,
+  initialValue,
+  isSecretField,
+  looksDangerous,
+  looksSecret,
+  rememberNote,
+  splitChoice,
+  wordsFor,
+} from "./request/logic";
+import { AnswerField, ChoiceRow, Code, Disclosure, Frame, HOLD_EXTRA, HoldToAllow, LinkLine, Pair, type Picked, SecretInput, useReveal } from "./request/parts";
+import { isKnownKind, secureFieldsOf, UNKNOWN_LINE } from "./request/secure";
+import { SecureInput } from "./request/SecureInput";
+
+export { looksDangerous, looksSecret } from "./request/logic";
 
 type Answer = { action: string; value?: string | CredentialRef; content?: Record<string, unknown> };
-type Picked = { ref: CredentialRef; name: string };
 
-// --- What a request looks like -------------------------------------------------------------
-
-const SECRET = /\b(password|passwd|passcode|passphrase|secret|token|api ?key|access ?key|private ?key|key|pin|otp|2fa|mfa|one ?time ?code|verification ?code)s?\b/;
-const words = (text: string) =>
-  text
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/[_\-.:/]+/g, " ")
-    .toLowerCase();
-/** Whether a name or title asks for a secret ("API key", "password", "otp_code"). */
-export const looksSecret = (...texts: (string | undefined)[]) => texts.some((text) => !!text && SECRET.test(words(text)));
-const isSecretField = (key: string, field: FormField) => field.format === "password" || looksSecret(key, field.title);
-
-const DANGER = /\brm\s+(-\w*r\w*f|-\w*f\w*r|--recursive\s+--force|--force\s+--recursive)\b|\bdrop\s+(table|database|schema)\b|\btruncate\s+table\b|\bpush\b[^\n]*(\s-f\b|--force)|\bforce[- ]push|\bdelete\b|\bformat\b|\bmkfs\b|\bdd\s+if=|\bgit\s+reset\s+--hard\b|\bgit\s+clean\s+-\w*f/i;
-/** Whether a request's command or words look destructive. */
-export const looksDangerous = (request: AgentRequest) => DANGER.test([request.preview, request.label, request.title].filter(Boolean).join("\n"));
-
-function hostOf(url: string): string | null {
-  const match = /^https?:\/\/([^/?#]+)/i.exec(url);
-  return match ? match[1].replace(/^[^@]*@/, "") : null;
-}
-
-// --- Pieces ----------------------------------------------------------------------------------
+/** What the lock icon beside a button's label adds to its width. */
+const ICON_EXTRA = 27;
 
 function useRespond(request: AgentRequest) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,300 +59,197 @@ function useRespond(request: AgentRequest) {
   return { busy, respond };
 }
 
-function useScreenReader() {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    let live = true;
-    void AccessibilityInfo.isScreenReaderEnabled().then((value) => live && setOn(value));
-    const subscription = AccessibilityInfo.addEventListener("screenReaderChanged", setOn);
-    return () => {
-      live = false;
-      subscription.remove();
-    };
-  }, []);
-  return on;
+/** The title, and the label under it when there is one. Both can be selected and copied. */
+function Head({ request }: { request: AgentRequest }) {
+  return (
+    <View style={{ gap: space.xs }}>
+      <T variant="headline" selectable>
+        {request.title}
+      </T>
+      {!!request.label && (
+        <T variant="subhead" color="muted" selectable>
+          {request.label}
+        </T>
+      )}
+    </View>
+  );
 }
 
-const HOLD_MS = 700;
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-
-/** Allow for a risky request: held for a moment while a ring fills. With a screen reader, a second confirm instead. */
-function HoldToAllow({ onConfirm, busy, disabled }: { onConfirm: () => void; busy: boolean; disabled: boolean }) {
-  const { colors } = useTheme();
-  const reader = useScreenReader();
-  const progress = useSharedValue(0);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const size = 22;
-  const stroke = 2.5;
-  const r = (size - stroke) / 2;
-  const length = 2 * Math.PI * r;
-  const ring = useAnimatedProps(() => ({ strokeDashoffset: length * (1 - progress.value) }));
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
-  if (reader)
+/** The full request: under "Full request" when there is a preview, else shown. */
+function Detail({ request }: { request: AgentRequest }) {
+  const mode = detailMode(request);
+  if (mode === "none" || !request.detail) return null;
+  if (mode === "folded")
     return (
-      <Button
-        title="Allow"
-        variant="danger"
-        style={{ flex: 1 }}
-        loading={busy}
-        disabled={disabled}
-        onPress={() =>
-          Alert.alert("Allow this?", "It may delete or overwrite things.", [
-            { text: "Cancel", style: "cancel" },
-            { text: "Allow", style: "destructive", onPress: onConfirm },
-          ])
-        }
-      />
+      <Disclosure title="Full request">
+        <Code>{request.detail}</Code>
+      </Disclosure>
     );
-
-  const release = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    progress.value = withTiming(0, { duration: 160 });
-  };
-  return (
-    <Pressable
-      disabled={disabled || busy}
-      onPressIn={() => {
-        haptic.tap();
-        progress.value = withTiming(1, { duration: HOLD_MS });
-        timer.current = setTimeout(() => {
-          timer.current = null;
-          haptic.warn();
-          onConfirm();
-        }, HOLD_MS);
-      }}
-      onPressOut={release}
-      accessibilityRole="button"
-      accessibilityLabel="Hold to allow"
-      accessibilityState={{ disabled: disabled || busy, busy }}
-      style={{ flex: 1, height: 46, borderRadius: radius.md, backgroundColor: colors.danger, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, opacity: disabled ? 0.45 : 1 }}
-    >
-      <Svg width={size} height={size}>
-        <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors.dangerSoft} strokeOpacity={0.5} strokeWidth={stroke} fill="none" />
-        <AnimatedCircle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke={colors.dangerSoft}
-          strokeWidth={stroke}
-          fill="none"
-          strokeLinecap="round"
-          strokeDasharray={length}
-          animatedProps={ring}
-          transform={"rotate(-90 " + size / 2 + " " + size / 2 + ")"}
-        />
-      </Svg>
-      <T variant="headline" weight="600" color={colors.dangerSoft} numberOfLines={1}>
-        {busy ? "Allowing…" : "Hold to allow"}
-      </T>
-    </Pressable>
-  );
+  return <Code>{request.detail}</Code>;
 }
 
-/** The address a request wants opened, by its host, with a way to open it. */
-function LinkLine({ url }: { url: string }) {
-  const { colors } = useTheme();
-  const host = hostOf(url);
-  if (!host) return null;
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44, paddingLeft: space.md, borderRadius: radius.md, backgroundColor: colors.sunken }}>
-      <Globe size={16} color={colors.muted} strokeWidth={2.2} />
-      <T variant="subhead" weight="600" numberOfLines={1} style={{ flex: 1 }} accessibilityLabel={"Address, " + host}>
-        {host}
-      </T>
-      <Tap onPress={() => void WebBrowser.openBrowserAsync(url).catch(() => {})} feel="select" accessibilityLabel={"Open " + host} style={{ height: 44, justifyContent: "center", paddingHorizontal: space.md }}>
-        <T variant="subhead" weight="700" color="accentText">
-          Open
-        </T>
-      </Tap>
-    </View>
-  );
-}
+// --- The kinds ---------------------------------------------------------------------------------
 
-/** A masked field for a secret, or the saved credential chosen in its place. */
-function SecretInput({ label, hint, value, onChangeText, picked, onPick, onClear, onSubmit, disabled }: { label: string; hint?: string; value: string; onChangeText: (text: string) => void; picked?: Picked; onPick: (picked: Picked) => void; onClear: () => void; onSubmit?: () => void; disabled?: boolean }) {
-  const { colors, dark, type } = useTheme();
-  return (
-    <View style={{ gap: 6 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: space.xs }}>
-        <Lock size={12} color={colors.muted} strokeWidth={2.6} />
-        <T variant="label" color="muted">
-          {label}
-        </T>
-      </View>
-      {picked ? (
-        <View style={{ minHeight: 50, flexDirection: "row", alignItems: "center", paddingLeft: space.lg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}>
-          <T variant="callout" weight="600" numberOfLines={1} style={{ flex: 1 }} accessibilityLabel={"Saved credential, " + picked.name}>
-            {"•••• " + picked.name}
-          </T>
-          <Tap onPress={onClear} feel="select" accessibilityLabel="Don't use this credential" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-            <X size={16} color={colors.muted} strokeWidth={2.4} />
-          </Tap>
-        </View>
-      ) : (
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          secureTextEntry
-          autoCorrect={false}
-          spellCheck={false}
-          autoCapitalize="none"
-          autoComplete="off"
-          textContentType="none"
-          importantForAutofill="no"
-          contextMenuHidden
-          editable={!disabled}
-          returnKeyType={onSubmit ? "send" : "done"}
-          onSubmitEditing={onSubmit}
-          placeholder="Typed privately"
-          placeholderTextColor={colors.faint}
-          keyboardAppearance={dark ? "dark" : "light"}
-          selectionColor={colors.accent}
-          maxFontSizeMultiplier={1.3}
-          accessibilityLabel={label + ", secret"}
-          accessibilityHint={hint}
-          style={[type.callout, { color: colors.ink, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, paddingHorizontal: space.lg, paddingVertical: 13, minHeight: 50 }]}
-        />
-      )}
-      {!!hint && (
-        <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
-          {hint}
-        </T>
-      )}
-      {!picked && <CredentialPicker disabled={disabled} onPick={(ref, name) => onPick({ ref, name })} />}
-    </View>
-  );
-}
-
-/** How a request is laid out: its body, which may scroll, and its buttons, which stay put. */
-type Frame = (body: ReactNode, actions?: ReactNode) => ReactNode;
-
-// --- The three kinds -------------------------------------------------------------------------
-
-function Permission({ request, danger }: { request: AgentRequest; danger: boolean }) {
-  const { colors, type } = useTheme();
+function Permission({ request, danger, room }: { request: AgentRequest; danger: boolean; room: number }) {
   const { busy, respond } = useRespond(request);
+  const words = wordsFor("permission");
+  const approve = () => void respond({ action: "approve" }, "approve");
   const always = () => void respond({ action: "remember" }, "remember");
   return (
-    <>
-      {!!request.preview && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ backgroundColor: danger ? colors.dangerSoft : colors.sunken, borderRadius: radius.md }} contentContainerStyle={{ paddingHorizontal: space.md, paddingVertical: 10 }}>
-          <Text selectable maxFontSizeMultiplier={1.3} style={[type.mono, { color: colors.ink }]}>
-            {request.preview}
-          </Text>
-        </ScrollView>
-      )}
-      {!!request.detail && (
-        <T variant="footnote" color="muted" numberOfLines={2}>
-          {request.detail}
+    <Frame
+      room={room}
+      actions={
+        <View style={{ gap: space.xs }}>
+          <Pair
+            quiet={{ label: words.quiet, render: (style) => <Button title={words.quiet} variant="secondary" style={style} loading={busy === "deny"} disabled={!!busy} onPress={() => void respond({ action: "deny" }, "deny")} /> }}
+            main={
+              danger
+                ? { label: "Hold to " + words.main.toLowerCase(), extra: HOLD_EXTRA, render: (style) => <HoldToAllow label={words.main} style={style} busy={busy === "approve"} disabled={!!busy} onConfirm={approve} /> }
+                : { label: words.main, render: (style) => <Button title={words.main} style={style} loading={busy === "approve"} disabled={!!busy} onPress={approve} /> }
+            }
+          />
+          {!!request.remember && !!words.remember && (
+            <Button
+              title={words.remember}
+              variant="ghost"
+              size="sm"
+              wide
+              loading={busy === "remember"}
+              disabled={!!busy}
+              onPress={
+                danger
+                  ? () =>
+                      Alert.alert(words.remember + "?", request.remember + " won't ask again in this chat.", [
+                        { text: "Cancel", style: "cancel" },
+                        { text: words.remember ?? "Allow", style: "destructive", onPress: always },
+                      ])
+                  : always
+              }
+              accessibilityLabel={"Allow " + request.remember + " for this chat"}
+            />
+          )}
+        </View>
+      }
+    >
+      <Head request={request} />
+      {!!request.preview && <Code danger={danger}>{request.preview}</Code>}
+      <Detail request={request} />
+      {!!request.url && <LinkLine url={request.url} />}
+      {!!request.remember && (
+        <T variant="footnote" color="muted">
+          {rememberNote(request.remember)}
         </T>
       )}
-      {!!request.url && <LinkLine url={request.url} />}
-      <View style={{ flexDirection: "row", gap: space.sm }}>
-        <Button title="Deny" variant="secondary" style={{ flex: 1 }} loading={busy === "deny"} disabled={!!busy} onPress={() => void respond({ action: "deny" }, "deny")} />
-        {danger ? (
-          <HoldToAllow busy={busy === "approve"} disabled={!!busy} onConfirm={() => void respond({ action: "approve" }, "approve")} />
-        ) : (
-          <Button title="Allow" style={{ flex: 1 }} loading={busy === "approve"} disabled={!!busy} onPress={() => void respond({ action: "approve" }, "approve")} />
-        )}
-      </View>
-      {!!request.remember && (
-        <Button
-          title="Always allow"
-          variant="ghost"
-          size="sm"
-          wide
-          loading={busy === "remember"}
-          disabled={!!busy}
-          onPress={
-            danger
-              ? () =>
-                  Alert.alert("Always allow this?", request.remember + " won't ask again in this chat.", [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Always allow", style: "destructive", onPress: always },
-                  ])
-              : always
-          }
-          accessibilityLabel={"Always allow " + request.remember + " in this chat"}
-        />
-      )}
-    </>
+    </Frame>
   );
 }
 
-function Question({ request, onPrivate }: { request: AgentRequest; onPrivate: () => void }) {
+function Question({ request, room, onPrivate }: { request: AgentRequest; room: number; onPrivate: () => void }) {
   const { busy, respond } = useRespond(request);
-  const [text, setText] = useState("");
+  const words = wordsFor("question");
+  const [choice, setChoice] = useState<string>();
+  // What is typed: the free answer, or a secret while it is being typed (cleared when it is sent).
+  const [typed, setTyped] = useState("");
   const [picked, setPicked] = useState<Picked>();
+  const field = useRef<TextInputInstance>(null);
   const secret = looksSecret(request.title, request.label);
-  const answer = async (value: string | CredentialRef, which: string) => {
+  const choices = request.choices ?? [];
+  const answer = picked ? picked.ref : answerOf(choice, typed);
+
+  const choose = (next: string) => {
+    setChoice(next);
+    // One answer at a time: picking a choice empties what was typed.
+    if (typed) {
+      field.current?.clear();
+      setTyped("");
+    }
+    setPicked(undefined);
+  };
+  const onType = (text: string) => {
+    setTyped(text);
+    if (text.trim()) setChoice(undefined);
+  };
+  const send = async () => {
+    if (!answer) return;
     if (secret) {
       // Nothing secret stays on screen or in memory once it is on its way.
-      setText("");
+      setTyped("");
       setPicked(undefined);
-      if (await respond({ action: "answer", value }, which)) onPrivate();
-    } else void respond({ action: "answer", value }, which);
+      if (await respond({ action: "answer", value: answer }, "send")) onPrivate();
+    } else void respond({ action: "answer", value: answer }, "send");
   };
-  const free = text.trim();
-  const ready = !!picked || !!free;
-  const send = () => ready && void answer(picked ? picked.ref : free, "free");
+
   return (
-    <>
+    <Frame
+      room={room}
+      actions={
+        <Pair
+          quiet={{ label: words.quiet, render: (style) => <Button title={words.quiet} variant="secondary" style={style} loading={busy === "cancel"} disabled={!!busy} onPress={() => void respond({ action: "cancel" }, "cancel")} /> }}
+          main={{
+            label: words.main,
+            extra: secret ? ICON_EXTRA : 0,
+            render: (style) => <Button title={words.main} icon={secret ? Lock : undefined} accessibilityLabel={secret ? "Send answer privately" : undefined} style={style} loading={busy === "send"} disabled={!answer || !!busy} onPress={() => void send()} />,
+          }}
+        />
+      }
+    >
+      <Head request={request} />
+      <Detail request={request} />
       {!!request.url && <LinkLine url={request.url} />}
-      {request.choices?.map((choice) => (
-        <Button key={choice} title={choice} variant="secondary" wide loading={busy === choice} disabled={!!busy} onPress={() => void answer(choice, choice)} />
-      ))}
-      {(request.freeform || (secret && !request.choices?.length)) &&
+      {choices.length > 0 && (
+        <View accessibilityRole="radiogroup" style={{ gap: space.sm }}>
+          {choices.map((option, index) => (
+            <ChoiceRow key={index + ":" + option} parts={splitChoice(option)} selected={choice === option} disabled={!!busy} onPress={() => choose(option)} />
+          ))}
+        </View>
+      )}
+      {freeAnswerShown(request) &&
         (secret ? (
-          <View style={{ gap: space.sm }}>
-            <SecretInput label={request.choices?.length ? "Something else" : "Your answer"} value={text} onChangeText={setText} picked={picked} onPick={setPicked} onClear={() => setPicked(undefined)} onSubmit={send} disabled={!!busy} />
-            <Button title="Send privately" icon={Lock} wide disabled={!ready || !!busy} loading={busy === "free"} onPress={send} />
-          </View>
+          <SecretInput label="Your answer" value={typed} onChangeText={onType}
+            picked={picked}
+            onPick={(next) => {
+              setPicked(next);
+              setChoice(undefined);
+            }} onClear={() => setPicked(undefined)} disabled={!!busy} />
         ) : (
-          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
-            <Field
-              placeholder={request.choices?.length ? "Something else" : "Your answer"}
-              value={text}
-              onChangeText={setText}
-              returnKeyType="send"
-              onSubmitEditing={send}
-              containerStyle={{ flex: 1 }}
-              style={{ minHeight: 46, paddingVertical: 11 }}
-            />
-            <Button title="Send" disabled={!free || !!busy} loading={busy === "free"} onPress={send} />
-          </View>
+          <AnswerField text={typed} onChangeText={onType} inputRef={field} label="Your answer" disabled={!!busy} />
         ))}
-      <Button title="Skip" variant="ghost" size="sm" wide disabled={!!busy} onPress={() => void respond({ action: "cancel" }, "cancel")} />
-    </>
+    </Frame>
   );
 }
 
-const initialValue = (field: FormField, secret: boolean): unknown => {
-  if (secret) return "";
-  if (field.default !== undefined) return field.default;
-  if (field.type === "boolean") return false;
-  return field.type === "number" || field.type === "integer" ? undefined : "";
-};
-const choicesOf = (field: FormField) => field.oneOf?.map((option) => ({ value: option.const, label: option.title ?? option.const })) ?? field.enum?.map((value, index) => ({ value, label: field.enumNames?.[index] ?? value }));
+/** A form's text or number field, kept in view when focused. */
+function FormText({ label, field, value, onChange, disabled }: { label: string; field: FormField; value: unknown; onChange: (value: unknown) => void; disabled: boolean }) {
+  const { ref, onFocus, onBlur } = useReveal();
+  const numeric = field.type === "number" || field.type === "integer";
+  return (
+    <View ref={ref}>
+      <Field
+        label={label}
+        hint={field.description}
+        value={value === undefined ? "" : String(value)}
+        editable={!disabled}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        keyboardType={numeric ? "decimal-pad" : field.format === "email" ? "email-address" : "default"}
+        autoCapitalize={field.format === "email" || field.format === "uri" ? "none" : "sentences"}
+        onChangeText={(text) => onChange(numeric ? (text.trim() === "" || Number.isNaN(Number(text)) ? undefined : Number(text)) : text)}
+      />
+    </View>
+  );
+}
 
-function Form({ request, onPrivate, frame }: { request: AgentRequest; onPrivate: () => void; frame: Frame }) {
+function Form({ request, room, onPrivate }: { request: AgentRequest; room: number; onPrivate: () => void }) {
   const { colors } = useTheme();
   const { busy, respond } = useRespond(request);
+  const words = wordsFor("form");
   const properties = Object.entries(request.schema?.properties ?? {});
   const required = request.schema?.required ?? [];
   const secretKeys = properties.filter(([key, field]) => isSecretField(key, field)).map(([key]) => key);
   const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries(properties.map(([key, field]) => [key, initialValue(field, isSecretField(key, field))])));
   const [picked, setPicked] = useState<Record<string, Picked>>({});
-  const set = (key: string, value: unknown) => setValues({ ...values, [key]: value });
-  const filled = (key: string) => !!picked[key] || (values[key] !== undefined && values[key] !== "");
-  const ready = required.every(filled);
+  const set = (key: string, value: unknown) => setValues((now) => ({ ...now, [key]: value }));
+  const ready = formReady(required, values, Object.keys(picked));
   const submit = async () => {
     const content: Record<string, unknown> = { ...values };
     for (const [key, choice] of Object.entries(picked)) content[key] = choice.ref;
@@ -356,8 +260,22 @@ function Form({ request, onPrivate, frame }: { request: AgentRequest; onPrivate:
       if (await respond({ action: "accept", content }, "accept")) onPrivate();
     } else void respond({ action: "accept", content }, "accept");
   };
-  return frame(
-    <>
+  return (
+    <Frame
+      room={room}
+      actions={
+        <Pair
+          quiet={{ label: words.quiet, render: (style) => <Button title={words.quiet} variant="secondary" style={style} loading={busy === "cancel"} disabled={!!busy} onPress={() => void respond({ action: "cancel" }, "cancel")} /> }}
+          main={{
+            label: words.main,
+            extra: secretKeys.length ? ICON_EXTRA : 0,
+            render: (style) => <Button title={words.main} icon={secretKeys.length ? Lock : undefined} accessibilityLabel={secretKeys.length ? "Send answer privately" : undefined} style={style} loading={busy === "accept"} disabled={!ready || !!busy} onPress={() => void submit()} />,
+          }}
+        />
+      }
+    >
+      <Head request={request} />
+      <Detail request={request} />
       {!!request.url && <LinkLine url={request.url} />}
       {properties.map(([key, field]) => {
         const label = field.title ?? key;
@@ -370,115 +288,161 @@ function Form({ request, onPrivate, frame }: { request: AgentRequest; onPrivate:
               value={typeof values[key] === "string" ? (values[key] as string) : ""}
               onChangeText={(text) => set(key, text)}
               picked={picked[key]}
-              onPick={(choice) => setPicked({ ...picked, [key]: choice })}
-              onClear={() => setPicked(Object.fromEntries(Object.entries(picked).filter(([name]) => name !== key)))}
+              onPick={(choice) => setPicked((now) => ({ ...now, [key]: choice }))}
+              onClear={() => setPicked((now) => Object.fromEntries(Object.entries(now).filter(([name]) => name !== key)))}
               disabled={!!busy}
             />
           );
-        const choices = choicesOf(field);
         if (field.type === "boolean")
           return (
             <View key={key} style={{ flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 44 }}>
-              <T variant="callout" style={{ flex: 1 }}>
-                {label}
-              </T>
-              <Switch value={!!values[key]} onValueChange={(next) => set(key, next)} {...switchColors(colors, !!values[key])} accessibilityLabel={label} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <T variant="callout">{label}</T>
+                {!!field.description && (
+                  <T variant="footnote" color="muted">
+                    {field.description}
+                  </T>
+                )}
+              </View>
+              <Switch value={!!values[key]} disabled={!!busy} onValueChange={(next) => set(key, next)} {...switchColors(colors, !!values[key])} accessibilityLabel={label} />
             </View>
           );
+        const choices = choicesOf(field);
         if (choices)
           return (
             <View key={key} style={{ gap: space.sm }}>
               <T variant="label" color="muted" style={{ paddingHorizontal: space.xs }}>
                 {label}
               </T>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+              {!!field.description && (
+                <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
+                  {field.description}
+                </T>
+              )}
+              <View accessibilityRole="radiogroup" accessibilityLabel={label} style={{ gap: space.sm }}>
                 {choices.map((choice) => (
-                  <Chip key={choice.value} label={choice.label} selected={values[key] === choice.value} onPress={() => set(key, choice.value)} />
+                  <ChoiceRow key={choice.value} parts={{ label: choice.label }} selected={values[key] === choice.value} disabled={!!busy} onPress={() => set(key, choice.value)} />
                 ))}
               </View>
             </View>
           );
-        const numeric = field.type === "number" || field.type === "integer";
-        return (
-          <Field
-            key={key}
-            label={label}
-            hint={field.description}
-            value={values[key] === undefined ? "" : String(values[key])}
-            keyboardType={numeric ? "decimal-pad" : field.format === "email" ? "email-address" : "default"}
-            autoCapitalize={field.format === "email" || field.format === "uri" ? "none" : "sentences"}
-            onChangeText={(text) => set(key, numeric ? (text.trim() === "" || Number.isNaN(Number(text)) ? undefined : Number(text)) : text)}
-          />
-        );
+        return <FormText key={key} label={label} field={field} value={values[key]} onChange={(value) => set(key, value)} disabled={!!busy} />;
       })}
-    </>,
-    <View style={{ flexDirection: "row", gap: space.sm }}>
-      <Button title="Cancel" variant="secondary" style={{ flex: 1 }} disabled={!!busy} loading={busy === "cancel"} onPress={() => void respond({ action: "cancel" }, "cancel")} />
-      <Button title={secretKeys.length ? "Send" : "Submit"} icon={secretKeys.length ? Lock : undefined} accessibilityLabel={secretKeys.length ? "Send privately" : "Submit"} style={{ flex: 1 }} disabled={!ready || !!busy} loading={busy === "accept"} onPress={() => void submit()} />
-    </View>,
+    </Frame>
+  );
+}
+
+/** A request this phone can't answer (a kind from a newer computer, or a secure input with nothing to fill): its title, a line, and a way to dismiss it. Nothing is guessed. */
+function Unknown({ request, room }: { request: AgentRequest; room: number }) {
+  const { busy, respond } = useRespond(request);
+  return (
+    <Frame room={room} actions={<Button title="Dismiss" variant="secondary" wide loading={!!busy} disabled={!!busy} onPress={() => void respond({ action: "cancel" }, "cancel")} />}>
+      <T variant="headline" selectable>
+        {request.title}
+      </T>
+      <T variant="subhead" color="muted">
+        {UNKNOWN_LINE}
+      </T>
+    </Frame>
   );
 }
 
 // --- The panel -------------------------------------------------------------------------------
 
-export function RequestPanel({ request, bot, maxHeight }: { request: AgentRequest; bot?: Bot; maxHeight: number }) {
+/**
+ * The card for a bot's request. `count` is how many requests wait in the chat ("1 of 3" beside the
+ * heading). `maxHeight` is the most room the card may take; past it, its body scrolls.
+ */
+export function RequestPanel({ request, bot, maxHeight, count }: { request: AgentRequest; bot?: Bot; maxHeight: number; count?: number }) {
   const theme = useTheme();
   const { colors } = theme;
+  const [open, setOpen] = useState(true);
   // After a secret answer, one quiet line stands in until the bot moves on.
-  const [sentPrivately, setSentPrivately] = useState(false);
-  const danger = request.kind === "permission" && looksDangerous(request);
+  const [sent, setSent] = useState<string | null>(null);
+  const kind = request.kind;
+  const danger = kind === "permission" && looksDangerous(request);
+  const secure = kind === "secure";
+  const secureFields = secure ? secureFieldsOf(request) : [];
+  const title = heading(kind, bot?.name, danger);
+  const of = countLabel(count);
+  const tone = danger ? "danger" : secure ? "info" : "warning";
+  // The card's room under its heading.
+  const room = Math.max(120, maxHeight - Math.max(52, theme.control.row));
 
-  if (sentPrivately)
+  // A screen reader hears that a bot is waiting.
+  useEffect(() => {
+    AccessibilityInfo.announceForAccessibility(title);
+  }, [title]);
+
+  if (sent)
     return (
       <View accessibilityLiveRegion="polite" style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44, paddingHorizontal: space.lg, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }}>
         <Lock size={15} color={colors.success} strokeWidth={2.4} />
         <T variant="subhead" weight="600" color="success">
-          Sent privately
+          {sent}
         </T>
       </View>
     );
 
-  const head = (
-    <View style={{ gap: 2 }}>
-      <T variant="headline">{request.title}</T>
-      {!!request.label && request.kind === "permission" && (
-        <T variant="subhead" color="ink2" numberOfLines={2}>
-          {request.label}
-        </T>
-      )}
-      {!!request.detail && request.kind !== "permission" && (
-        <T variant="subhead" color="muted" numberOfLines={3}>
-          {request.detail}
-        </T>
-      )}
-    </View>
-  );
-  // What may scroll, and under it the buttons that stay in view however little room there is.
-  const frame: Frame = (body, actions) => (
-    <>
-      <ScrollView bounces={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: space.lg, gap: space.md }} showsVerticalScrollIndicator={false}>
-        {head}
-        {body}
-      </ScrollView>
-      {!!actions && <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg }}>{actions}</View>}
-    </>
+  const toggle = () => {
+    if (open) Keyboard.dismiss();
+    setOpen(!open);
+  };
+  const Fold = open ? ChevronDown : ChevronUp;
+  const mark = danger ? (
+    <ShieldAlert size={18} color={colors.danger} strokeWidth={2.4} />
+  ) : secure ? (
+    <Lock size={17} color={colors.info} strokeWidth={2.5} />
+  ) : !isKnownKind(kind) ? (
+    <CircleHelp size={18} color={colors.warning} strokeWidth={2.4} />
+  ) : bot ? (
+    <BotAvatar bot={bot} size={24} state="waiting" />
+  ) : (
+    <Hand size={16} color={colors.warning} strokeWidth={2.4} />
   );
 
   return (
-    <Animated.View entering={FadeInDown.duration(220)} style={[{ backgroundColor: colors.surface, borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth, borderColor: danger ? colors.danger : colors.lineStrong, overflow: "hidden", maxHeight }, lift(theme, 2)]}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingTop: danger ? space.sm : space.md, paddingBottom: danger ? space.sm : 0, backgroundColor: danger ? colors.dangerSoft : undefined }} accessibilityRole="header">
-        {danger ? <ShieldAlert size={18} color={colors.danger} strokeWidth={2.4} /> : bot ? <BotAvatar bot={bot} size={24} state="waiting" /> : <Hand size={16} color={colors.warning} strokeWidth={2.4} />}
-        <T variant="footnote" weight="700" color={danger ? "danger" : "warning"} numberOfLines={1} style={{ flex: 1 }}>
-          {(bot?.name ?? "Your bot") + (danger ? " wants to do something risky" : " needs you")}
-        </T>
+    <Animated.View entering={FadeInDown.duration(220)} style={[{ backgroundColor: colors.surface, borderRadius: radius.lg, maxHeight }, lift(theme, 2)]}>
+      <View style={{ flexShrink: 1, borderRadius: radius.lg, overflow: "hidden", borderWidth: danger || secure ? 1 : StyleSheet.hairlineWidth, borderColor: danger ? colors.danger : secure ? colors.info : colors.lineStrong }}>
+        <Tap
+          onPress={toggle}
+          feel="select"
+          sink={1}
+          hitSlop={0}
+          accessibilityRole="button"
+          accessibilityLabel={headerLabel(request, { bot: bot?.name, danger, count })}
+          accessibilityHint={foldHint(open)}
+          accessibilityState={{ expanded: open }}
+          style={{ minHeight: Math.max(52, theme.control.row), flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.sm, paddingVertical: space.xs, backgroundColor: danger ? colors.dangerSoft : secure ? colors.infoSoft : undefined }}
+        >
+          {mark}
+          <T variant="subhead" weight="700" color={tone} numberOfLines={open ? undefined : 1} style={{ flex: 1 }}>
+            {title}
+          </T>
+          {!!of && (
+            <T variant="footnote" weight="600" color="muted">
+              {of}
+            </T>
+          )}
+          <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.sunken, alignItems: "center", justifyContent: "center" }}>
+            <Fold size={18} color={colors.muted} strokeWidth={2.4} />
+          </View>
+        </Tap>
+        {/* Folded, the body is hidden but kept, so nothing typed or chosen is lost. */}
+        <View style={{ flexShrink: 1, display: open ? "flex" : "none" }}>
+          {kind === "permission" ? (
+            <Permission request={request} danger={danger} room={room} />
+          ) : kind === "question" ? (
+            <Question request={request} room={room} onPrivate={() => setSent("Sent privately")} />
+          ) : kind === "form" ? (
+            <Form key={request.id} request={request} room={room} onPrivate={() => setSent("Sent privately")} />
+          ) : secure && secureFields.length > 0 ? (
+            <SecureInput request={request} fields={secureFields} bot={bot} room={room} onSent={() => setSent("Sent securely")} />
+          ) : (
+            <Unknown request={request} room={room} />
+          )}
+        </View>
       </View>
-      {request.kind === "permission" ? (
-        frame(<Permission request={request} danger={danger} />)
-      ) : request.kind === "question" ? (
-        frame(<Question request={request} onPrivate={() => setSentPrivately(true)} />)
-      ) : (
-        <Form key={request.id} request={request} onPrivate={() => setSentPrivately(true)} frame={frame} />
-      )}
     </Animated.View>
   );
 }

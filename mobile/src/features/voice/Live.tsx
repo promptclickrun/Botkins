@@ -1,7 +1,9 @@
 // Live voice with a bot: full duplex, through the provider chosen in Settings › Voice. The voice model
 // is only the bot's voice; what needs doing goes to the bot in its chat (the `ask_bot` tool).
+// How the phone listens is this phone's choice (`liveInput`, read when the call starts): hands-free,
+// where a tap stops the bot while it talks, or push to talk, where one large button is held to talk.
 import { router, useLocalSearchParams } from "expo-router";
-import { Mic, MicOff, PhoneOff, Speaker, Volume1 } from "lucide-react-native";
+import { Hand, Mic, MicOff, PhoneOff, Speaker, Volume1 } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import { AppState, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,12 +11,13 @@ import type { LiveProvider } from "@/link/types";
 import { type AvatarState, useBot, useWatchedChat } from "@/state/hooks";
 import { api } from "@/state/link";
 import { useApp } from "@/state/store";
-import { BotAvatar, Button, IconButton, space, T, useTheme } from "@/ui";
+import { BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
 import { RequestPanel } from "../chat/RequestPanel";
 import { chatAccess } from "./chatAccess";
 import { chatTools, type Kit, type Line, type LiveStatus, type LiveTransport, planFor, socketTransport, webrtcTransport } from "./live/index";
-import type { Connect, SocketLike } from "./live/types";
+import type { Connect, InputMode, SocketLike } from "./live/types";
 import { audioModule, duplexAudio, keepAwakeModule, webrtcModule } from "./native";
+import { loadPhoneVoice, usePhoneVoice } from "./prefs";
 import { UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
 import { stopSpeech } from "./tts";
 
@@ -44,6 +47,9 @@ function kit(): Kit {
   };
 }
 
+/** The main control's size: one large round button. */
+const MAIN = 96;
+
 const AVATAR: Record<LiveStatus, AvatarState> = { connecting: "pending", listening: "listening", thinking: "thinking", talking: "talking", ended: "idle" };
 
 export default function Live() {
@@ -63,7 +69,11 @@ export default function Live() {
   const [muted, setMuted] = useState(false);
   const [speaker, setSpeaker] = useState(true);
   const [callStarted, setCallStarted] = useState(false);
+  const [input, setInputMode] = useState<InputMode>(() => usePhoneVoice.getState().liveInput);
+  const [holding, setHolding] = useState(false);
   const transport = useRef<LiveTransport | null>(null);
+  const pressing = useRef(false);
+  const speakerOn = useRef(true);
 
   // One session per visit. It is set up once the settings are known, and always ended on the computer.
   const ready = supported && !!voice;
@@ -86,11 +96,20 @@ export default function Live() {
     stopSpeech();
     setCallStarted(true);
 
+    let routed = false;
     const attach = (next: LiveTransport) => {
       held.current = next;
       transport.current = next;
       offs.push(
-        next.on("status", setStatus),
+        next.on("status", (value) => {
+          setStatus(value);
+          // WebRTC sets up its own sound when the call connects, on the earpiece: the route the
+          // screen shows is applied once it has.
+          if (plan === "offer" && !routed && value !== "connecting" && value !== "ended") {
+            routed = true;
+            void tools.route(speakerOn.current);
+          }
+        }),
         next.on("line", (line) => setLines((held) => [...held.filter((item) => item.id !== line.id), line].slice(-6))),
         next.on("error", (message) => {
           setProblem(message);
@@ -104,6 +123,11 @@ export default function Live() {
     const run = chatTools(chatAccess(chatId));
     void (async () => {
       try {
+        // How this phone listens, as saved when the call starts.
+        await loadPhoneVoice();
+        const mode = usePhoneVoice.getState().liveInput;
+        if (gone) return;
+        setInputMode(mode);
         if (plan === "offer") {
           const next = webrtcTransport(
             tools,
@@ -115,6 +139,7 @@ export default function Live() {
             },
             run,
           );
+          next.setInput(mode);
           attach(next);
           await next.start();
         } else {
@@ -123,6 +148,7 @@ export default function Live() {
           if (gone) return;
           const next = socketTransport(session, tools, run);
           if (!next) throw new Error(UPDATE_APP);
+          next.setInput(mode);
           attach(next);
           await next.start();
         }
@@ -192,13 +218,36 @@ export default function Live() {
   const toggleSpeaker = () => {
     const next = !speaker;
     setSpeaker(next);
+    speakerOn.current = next;
     void Promise.resolve(transport.current?.setSpeaker(next)).catch(() => {});
+  };
+
+  // Push to talk: the button down stops the bot and listens; up sends the turn.
+  const talkDown = () => {
+    if (pressing.current) return;
+    pressing.current = true;
+    setHolding(true);
+    haptic.tap();
+    transport.current?.press();
+  };
+  const talkUp = () => {
+    if (!pressing.current) return;
+    pressing.current = false;
+    setHolding(false);
+    haptic.select();
+    transport.current?.release();
+  };
+  const interrupt = () => {
+    haptic.tap();
+    transport.current?.interrupt();
   };
 
   const blocked = !supported ? UPDATE_COMPUTER + "." : problem;
   const failed = !!blocked && (status === "ended" || status === "connecting" || !transport.current);
-  const line = blocked ?? (request ? "Needs you" : muted && status !== "ended" ? "Muted" : statusLine(status));
-  const avatar: AvatarState = failed ? "error" : request ? "waiting" : AVATAR[status];
+  const live = !failed && status !== "connecting" && status !== "ended";
+  const push = input === "push";
+  const line = blocked ?? (request ? "Needs you" : holding && live ? "Listening… release to send" : muted && status !== "ended" ? "Muted" : push && status === "listening" ? "Hold to talk" : statusLine(status));
+  const avatar: AvatarState = failed ? "error" : request ? "waiting" : holding && live ? "listening" : AVATAR[status];
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas, paddingTop: insets.top + space.xl, paddingBottom: insets.bottom + space.lg, paddingHorizontal: space.xl }}>
@@ -224,12 +273,50 @@ export default function Live() {
         </View>
       )}
 
+      <View style={{ height: MAIN, alignItems: "center", justifyContent: "center" }}>
+        {push ? (
+          <TalkButton holding={holding} disabled={!live} onDown={talkDown} onUp={talkUp} />
+        ) : live && status === "talking" ? (
+          <IconButton icon={Hand} variant="accent" size={MAIN} label="Interrupt" onPress={interrupt} />
+        ) : null}
+      </View>
+
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: space.md }}>
-        <IconButton icon={muted ? MicOff : Mic} variant="soft" size={56} label={muted ? "Unmute" : "Mute"} onPress={toggleMute} disabled={failed} />
+        {push ? <View style={{ width: 56 }} /> : <IconButton icon={muted ? MicOff : Mic} variant="soft" size={56} label={muted ? "Unmute" : "Mute"} onPress={toggleMute} disabled={failed} />}
         <Button title="End" icon={PhoneOff} variant="danger" onPress={close} accessibilityLabel="End live voice" />
         <IconButton icon={speaker ? Speaker : Volume1} variant="soft" size={56} label={speaker ? "Use the earpiece" : "Use the speaker"} onPress={toggleSpeaker} disabled={failed} />
       </View>
     </View>
+  );
+}
+
+/**
+ * Hold to talk. VoiceOver can't hold easily, so its activation starts on one double tap and sends
+ * on the next.
+ */
+function TalkButton({ holding, disabled, onDown, onUp }: { holding: boolean; disabled: boolean; onDown: () => void; onUp: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Tap
+      feel="none"
+      sink={0.92}
+      disabled={disabled}
+      onPressIn={onDown}
+      onPressOut={onUp}
+      accessibilityLabel={holding ? "Send" : "Hold to talk"}
+      accessibilityHint="Hold while you talk, and let go to send. With VoiceOver, double tap to start and double tap again to send."
+      accessibilityState={{ selected: holding, disabled }}
+      accessibilityActions={[{ name: "activate" }]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName !== "activate") return;
+        if (holding) onUp();
+        else onDown();
+      }}
+      hitSlop={slopFor(MAIN)}
+      style={{ width: MAIN, height: MAIN, borderRadius: MAIN / 2, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", borderWidth: 4, borderColor: holding ? colors.accentSoft : "transparent" }}
+    >
+      <Mic size={40} color={colors.onAccent} strokeWidth={2.2} />
+    </Tap>
   );
 }
 

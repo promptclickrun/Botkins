@@ -8,25 +8,28 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import type { FolderList } from "@/link/types";
 import { addedSkillsNote, folderName, placeOf } from "@/state/fileText";
+import { pluginCalls, pluginHref, usePluginsReady } from "@/features/market/plugins/calls";
 import { refresh, useCapability, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Button, Chip, EmptyState, Group, IconTile, Loading, Row, Sheet, space, T, useTheme } from "@/ui";
 
-/** What the chosen folder is for: a new project, a project's own folder (`id`), or skills. */
-type Use = "project-new" | "project" | "skills";
+/** What the chosen folder is for: a new project, a project's own folder (`id`), skills, or a plugin ("plugins-v1"). */
+type Use = "project-new" | "project" | "skills" | "plugin";
 const WORDS: Record<Use, { title: string; action: string }> = {
   "project-new": { title: "Add folder", action: "Add" },
   project: { title: "Choose folder", action: "Choose" },
   skills: { title: "Add from folder", action: "Add" },
+  plugin: { title: "Add a plugin", action: "Add" },
 };
 
 export default function FolderPicker() {
   const params = useLocalSearchParams<{ use?: Use; id?: string }>();
   const use: Use = params.use && params.use in WORDS ? params.use : "project";
   const words = WORDS[use];
+  const pluginsOk = usePluginsReady() || use !== "plugin";
   const { colors } = useTheme();
-  const can = useCapability("folders-v1");
+  const can = useCapability("folders-v1") && pluginsOk;
   const online = useOnline();
   // `at` is the folder asked for (none: the home folder). `good` is the last one the computer listed.
   const [at, setAt] = useState<string>();
@@ -63,6 +66,13 @@ export default function FolderPicker() {
       const made = await attempt(api.addProjectFolder(list.path));
       setBusy(false);
       if (made) router.replace({ pathname: "/projects/[id]", params: { id: made } });
+      return;
+    }
+    if (use === "plugin") {
+      // A folder plugin may arrive turned off: its page shows what it runs, with "Turn on".
+      const added = await attempt(pluginCalls.addFolder(list.path));
+      setBusy(false);
+      if (added) router.replace(pluginHref(added.id));
       return;
     }
     let done = false;

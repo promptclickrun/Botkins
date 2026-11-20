@@ -1,12 +1,14 @@
 import { router } from "expo-router";
 import { Bot, CheckCircle2, LayoutGrid } from "lucide-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from "react-native";
 import { searchToolkits } from "@/composio/catalog";
 import { type BotsAccess, type Toolkit, useBotsAccess, useComposio } from "@/composio/store";
 import { useOnline } from "@/state/hooks";
-import { AppLogo, Button, EmptyState, Group, IconTile, Label, Mascot, Page, radius, Row, space, T, Tap, useTheme } from "@/ui";
+import { setPrefs, usePrefs } from "@/state/prefs";
+import { AppLogo, Button, EmptyState, Group, IconTile, Label, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { AppRow, AppTile, RowSkeleton, SearchField, TileSkeleton } from "./parts";
+import { PluginsPage } from "./plugins/Plugins";
 
 const RESULTS = 60;
 
@@ -165,7 +167,19 @@ function SignedInLine({ email }: { email?: string }) {
   );
 }
 
+const VIEWS: { value: "apps" | "plugins"; label: string }[] = [
+  { value: "apps", label: "Apps" },
+  { value: "plugins", label: "Plugins" },
+];
+
+/** The tab: Apps (Composio) or Plugins, with the last choice remembered on this phone. */
 export default function Market() {
+  const view = usePrefs((prefs) => prefs.marketView);
+  const switcher = <Segmented options={VIEWS} value={view} onChange={(marketView) => setPrefs({ marketView })} />;
+  return view === "plugins" ? <PluginsPage switcher={switcher} /> : <Apps switcher={switcher} />;
+}
+
+function Apps({ switcher }: { switcher: ReactNode }) {
   const catalog = useComposio((state) => state.catalog);
   const catalogStatus = useComposio((state) => state.catalogStatus);
   const authReady = useComposio((state) => state.authReady);
@@ -203,6 +217,7 @@ export default function Market() {
 
   return (
     <Page tab title="Marketplace" quietLink onRefresh={reload} refreshing={refreshing}>
+      {switcher}
       <SearchField value={query} onChange={setQuery} />
 
       {searching ? (
