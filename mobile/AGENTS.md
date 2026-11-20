@@ -1,6 +1,6 @@
 # Botkins
 
-Botkins is the phone app for the Botkins app on the person's computer (the desktop app, which used to be called Commander; some code and paths still say "commander" and `desktop/`). A phone pairs with a computer (or with several, using one at a time), then chats with the person's bots and manages everything about them: bots, chats, routines, tasks, tools (MCP servers), skills, model providers, credentials, the wiki and settings. It can also show the computer's screen, tell the person when a bot needs them, let bots use the phone's calendar, contacts and more, and talk with a bot out loud. The Marketplace connects apps through the person's own Composio account.
+Botkins is the phone app for the Botkins app on the person's computer. A phone pairs with a computer (or with several, using one at a time), then chats with the person's bots and manages everything about them: bots, chats, routines, tasks, tools (MCP servers), skills, model providers, credentials, the wiki and settings. It can also show the computer's screen, tell the person when a bot needs them, let bots use the phone's calendar, contacts and more, and talk with a bot out loud. The Marketplace connects apps through the person's own Composio account.
 
 ## Stack and commands
 
