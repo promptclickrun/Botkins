@@ -184,6 +184,7 @@ const POLICY = {
   "link.device.file": "owner",
   "link.devices.list": "owner",
   "link.devices.rename": "owner",
+  "link.devices.setPerson": "owner",
   "link.devices.remove": "owner",
   "link.frame.page": ["today", "view"],
   "link.frame.chat": ["today", "view"],
@@ -429,8 +430,8 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }) {
       members: team?.members ?? [],
       invites: team?.invites ?? [],
       requests: (team?.requests ?? []).filter((request) => request.status === undefined || request.status === "pending").map((request) => {
-        const { id, name, platform, kind, at, inviteId } = request;
-        return { id, name, platform, kind, at, inviteId };
+        const { id, name, person, platform, kind, at, inviteId } = request;
+        return { id, name, ...(person && { person }), platform, kind, at, inviteId };
       }),
     };
   }

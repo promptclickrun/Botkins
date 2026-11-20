@@ -26,11 +26,13 @@ export function phonePage({ link, qrPath, screens, managed = false, nearby = () 
    * connection is up, and a problem the person can act on.
    */
   const status = () => {
-    const { serverId: _serverId, relay, ...rest } = link().status();
+    const host = link();
+    const { serverId: _serverId, relay, ...rest } = host.status();
     return {
       ...rest,
+      canSetPerson: host.meta().capabilities.includes("device-person-v1"),
       ...(managed && { managed: true }),
-      screen: screenStatus(rest.screen, screens),
+      screen: screenStatus(rest.screen, screens, rest.devices),
       nearby: nearby(),
       relay: { enabled: relay?.enabled === true, connected: relay?.connected === true, ...(relay?.problem === "taken" && { problem: "taken" }) },
       ...(rest.pairing && { pairing: { ...rest.pairing, qr: qrPath(rest.pairing.url) } }),
@@ -54,6 +56,7 @@ export function phonePage({ link, qrPath, screens, managed = false, nearby = () 
     removePhone: (id) => void editable().removeDevice(String(id)),
     // A paired phone or computer under another name, as this computer lists it.
     renamePhone: (id, name) => void editable().renameDevice(String(id), String(name ?? "")),
+    setPhonePerson: (id, person) => void editable().setDevicePerson(id, person),
     renamePhoneLinkComputer: (name) => editable().setName(name),
     // What a paired phone may do with this screen: "off", "view" or "control".
     setPhoneScreen: (mode) => {

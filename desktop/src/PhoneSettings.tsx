@@ -95,16 +95,20 @@ export default function PhoneSettings({ state }: { state: State }) {
       setBusy(false);
     }
   }
-  /** Another name for a paired phone or computer, as this computer lists it. */
+  /** The person using this device. Its model is kept separately. */
   async function rename() {
     if (!renaming) return;
     const { id, name } = renaming;
-    setRenaming(null);
-    if (name.trim()) await run(async () => (await api.renamePhone(id, name.trim()), api.phoneLink()));
+    if (!name.trim()) return;
+    await run(async () => {
+      await api.setPhonePerson(id, name.trim());
+      setRenaming(null);
+      return api.phoneLink();
+    });
   }
   async function remove(device: PhoneLink["devices"][number]) {
     const ok = await dialogs.ask({
-      title: "Remove " + device.name + "?",
+      title: "Remove " + (device.person || device.name) + "?",
       body: "This phone can't reach this computer any more. You can pair it again later.",
       confirm: "Remove",
       danger: true,
@@ -306,7 +310,7 @@ export default function PhoneSettings({ state }: { state: State }) {
                           void rename();
                         }}
                       >
-                        <input aria-label={"Name for " + d.name} value={renaming.name} maxLength={60} autoFocus onChange={(e) => setRenaming({ id: d.id, name: e.target.value })} />
+                        <input aria-label={"Person’s name for " + d.name} value={renaming.name} maxLength={60} autoFocus onChange={(e) => setRenaming({ id: d.id, name: e.target.value })} />
                         <button type="submit" className="set-button" disabled={busy || !renaming.name.trim()}>
                           Save
                         </button>
@@ -315,20 +319,22 @@ export default function PhoneSettings({ state }: { state: State }) {
                         </button>
                       </form>
                     ) : (
-                      <span className="set-name">{d.name}</span>
+                      <span className="set-name">{d.person || d.name}</span>
                     )}
                     <small className="int-line">
-                      {d.kind === "desktop" ? "Computer" : "Phone"} · {d.connected ? "Connected" : "Last seen " + when(d.lastSeenAt)}
+                      {d.person ? d.name : d.kind === "desktop" ? "Computer" : "Phone"} · {d.connected ? "Connected" : "Last seen " + when(d.lastSeenAt)}
                     </small>
                     {/* What the person chose on that phone, shown here so it can be seen from the computer. */}
                     {d.kind !== "desktop" && <small className="int-line">{notified(status, d.id)}</small>}
                     {d.kind !== "desktop" && <small className="int-line">{shared(status, d.id)}</small>}
                   </div>
                   <div className="set-control">
-                    <button type="button" className="set-button" disabled={busy} aria-label={"Rename " + d.name} onClick={() => setRenaming({ id: d.id, name: d.name })}>
-                      Rename
-                    </button>
-                    <button type="button" className="set-button danger" disabled={busy} aria-label={"Remove " + d.name} onClick={() => void remove(d)}>
+                    {status.canSetPerson && renaming?.id !== d.id && (
+                      <button type="button" className="set-button" disabled={busy} aria-label={d.person ? "Change name for " + d.person : "Add name for " + d.name} onClick={() => setRenaming({ id: d.id, name: d.person || "" })}>
+                        {d.person ? "Change name" : "Add name"}
+                      </button>
+                    )}
+                    <button type="button" className="set-button danger" disabled={busy} aria-label={"Remove " + (d.person || d.name)} onClick={() => void remove(d)}>
                       <Trash2 size={13} aria-hidden="true" />
                       Remove
                     </button>

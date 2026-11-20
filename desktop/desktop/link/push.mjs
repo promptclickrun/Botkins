@@ -514,7 +514,7 @@ export class Push {
   }
   /** A join request is shown only to owner devices, never to member devices. */
   teamJoin(request) {
-    const content = { t: request.name + " wants to join your team", m: "Open Botkins to review this request.", k: "team", r: request.id };
+    const content = { t: (request.person || request.name) + " wants to join your team", m: "Open Botkins to review this request.", k: "team", r: request.id };
     const sends = [];
     for (const device of this.store.data.devices) {
       if (device.memberId || !this.wants(device, "requests")) continue;

@@ -1093,6 +1093,7 @@ else
       cancelPhonePairing: () => phone.cancelPhonePairing(),
       removePhone: (id) => phone.removePhone(id),
       renamePhone: (id, name) => phone.renamePhone(id, name),
+      setPhonePerson: (id, person) => phone.setPhonePerson(id, person),
       renamePhoneLinkComputer: (name) => phone.renamePhoneLinkComputer(name),
       setPhoneScreen: (mode) => phone.setPhoneScreen(mode),
       setPhoneRelay: (enabled) => phone.setPhoneRelay(enabled),
