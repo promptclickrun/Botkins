@@ -220,7 +220,17 @@ export default function Settings({
   const menu = useRef<HTMLDivElement>(null);
   // Open on the chosen section with focus in the side menu, as a native settings window does.
   useEffect(() => {
-    menu.current?.querySelector<HTMLElement>("[aria-selected=true]")?.focus();
+    const focus = () => {
+      const chosen = menu.current?.querySelector<HTMLElement>("[aria-selected=true]");
+      chosen?.focus();
+      chosen?.scrollIntoView({ block: "nearest" });
+    };
+    focus();
+    // The window that holds this page is shown just after it is drawn, and showing it puts focus on
+    // the first thing that can take it. When the menu is too long for the window and scrolls, that
+    // is the menu itself, not a section. So the chosen section takes focus again once it is shown.
+    const frame = requestAnimationFrame(focus);
+    return () => cancelAnimationFrame(frame);
   }, []);
   async function act(fn: () => Promise<void>) {
     setError("");

@@ -132,11 +132,15 @@ try {
   await finish(manual, reply);
   await expect.poll(async () => Math.abs(await view.evaluate(el => el.scrollTop) - before)).toBeLessThan(2);
 
-  // Playwright normally keeps its page focused even while Electron is in the tray.
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  // The test driver keeps its page focused whatever the window does, and turning that off through
+  // the driver did not hold from one step to the next. So while the window is hidden the page itself
+  // is told it has no focus, which is what a window in the tray reports, and it gets its own answer
+  // back, with the event a real window sends, when the window is shown again.
   const background = await nextTurn("background");
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
+  await page.evaluate(() => {
+    document.hasFocus = () => false;
+  });
   await expect.poll(() => page.evaluate(() => document.hidden || !document.hasFocus())).toBe(true);
   await finish(background, "Pack a notebook and pencil.");
   assert.ok(Math.abs(await offset()) > 2, "the hidden window has not jumped");
@@ -144,6 +148,10 @@ try {
     const win = BrowserWindow.getAllWindows()[0];
     win.show();
     win.focus();
+  });
+  await page.evaluate(() => {
+    delete document.hasFocus;
+    window.dispatchEvent(new Event("focus"));
   });
   await expect.poll(async () => Math.abs(await offset())).toBeLessThan(2);
   const elsewhere = await nextTurn("another-page");

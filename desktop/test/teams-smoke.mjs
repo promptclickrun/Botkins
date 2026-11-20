@@ -10,7 +10,8 @@ import { seedApp } from "./starter.mjs";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const scratch = join(root, ".teams-smoke-" + process.pid);
 const userData = join(scratch, "app");
-const shots = process.env.TEAMS_SHOTS ?? join("/srv/hermes/workspace/botkins/screenshots");
+// Pictures go where TEAMS_SHOTS says, else into this run's own scratch folder, which is removed at the end.
+const shots = process.env.TEAMS_SHOTS ?? join(scratch, "shots");
 mkdirSync(shots, { recursive: true });
 mkdirSync(userData, { recursive: true });
 seedApp(userData);
