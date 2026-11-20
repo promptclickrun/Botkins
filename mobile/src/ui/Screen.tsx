@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { ActivityIndicator, Platform, RefreshControl, ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRestarting } from "@/state/appUpdate";
 import { wake } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Tap } from "./Tap";
@@ -20,7 +21,18 @@ export function LinkBanner() {
   const link = useApp((state) => state.link);
   const synced = useApp((state) => state.synced);
   const name = useApp((state) => state.pairing?.name) ?? "your computer";
+  // An update this phone started restarts the computer's Botkins: that is said instead of a failure.
+  const restarting = useRestarting();
   if (link === "online" || (link === "connecting" && synced)) return null;
+  if (restarting && link !== "revoked")
+    return (
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, paddingLeft: space.lg, borderRadius: radius.md, backgroundColor: colors.infoSoft }} accessible accessibilityRole="text">
+        <ActivityIndicator color={colors.info} />
+        <T variant="subhead" weight="600" color="info" style={{ flex: 1 }} numberOfLines={2}>
+          {"Botkins on " + name + " is restarting to update"}
+        </T>
+      </View>
+    );
   const revoked = link === "revoked";
   const connecting = link === "connecting";
   return (

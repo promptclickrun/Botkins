@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DemoSignIns } from "./mock-signin.mjs";
+import { DemoUpdates } from "./mock-update.mjs";
 
 const now = () => Date.now();
 // The two seeded projects work in this repository, so pull requests have a folder to look in.
@@ -958,6 +959,9 @@ export class MockBackend {
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
     if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
+    // "app-update-v1": made-up updates of this computer's own Botkins (mock-update.mjs, BOTKINS_DEV_UPDATE).
+    this.updates = new DemoUpdates(this, process.env.BOTKINS_DEV_UPDATE);
+    if (this.updates.capable) this.capabilities.push("app-update-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
@@ -998,7 +1002,7 @@ export class MockBackend {
     };
   }
   info() {
-    return { app: "botkins", version: "0.8.0-demo", platform: process.platform };
+    return { app: "botkins", version: this.updates?.current ?? "0.8.0-demo", platform: process.platform };
   }
   snapshot() {
     // The installed plugins as a phone sees them: a secret setting says only that it is set.
@@ -1523,7 +1527,7 @@ export class MockBackend {
     }
   }
   handlers = {
-    appInfo: () => ({ version: "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
+    appInfo: () => ({ version: this.updates?.current ?? "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};
       if ("harness" in rest && !["copilot", "provider"].includes(rest.harness)) throw new Error("Choose a harness");
@@ -1879,6 +1883,19 @@ export class MockBackend {
       this.state.providers.revision++;
     },
     auth: () => ({ connected: true, login: "octocat" }),
+    // This computer's own updates ("app-update-v1"), acted out by mock-update.mjs.
+    appUpdateStatus() {
+      return this.updates.status();
+    },
+    checkAppUpdate() {
+      return this.updates.check();
+    },
+    installAppUpdate() {
+      return this.updates.install();
+    },
+    setAppUpdateAuto(on) {
+      return this.updates.setAuto(on);
+    },
     signIn() {},
     cancelSignIn() {},
     signOut(id) {

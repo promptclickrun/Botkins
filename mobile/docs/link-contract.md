@@ -165,6 +165,36 @@ A host with its own window says neither `headless` nor the capability, and refus
 
 **No bot can reach it.** These calls are answered only inside a paired device's sealed session. They are not among the app's calls a client may make (`REMOTE_METHODS`), no tool a bot has on the host or on a phone touches them, and the host's app registers no remote method, command-line tool, bot tool or MCP tool for grants. On the headless host the link and its pairing store run in a container of their own, apart from the one that runs the bots, their tools and the display; the bots' container holds no grant method and can't read the host's identity or the owner's pairing file. On the phone only the Screen section of the computer's page makes the calls, from a tap by the person, after a question that says what the level grants; nothing a bot sends (a message, a custom view, a notification, a phone tool) can start it. `tests/screen-grant.test.ts` checks the host's rules, the phone's states and that these are the only callers.
 
+## The computer's own updates (`app-update-v1`)
+
+A phone can see which Botkins its computer runs, check for a newer release, and start the update. On a server (the terminal host) the phone is the only screen, so this is how it is kept up to date. The computer's app names `app-update-v1` in `meta.capabilities` when it can report on updates.
+
+```ts
+type AppUpdate = {
+  status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error";
+  current: string;        // the installed version
+  latest?: string;        // the newest stable release, once checked
+  canInstall: boolean;    // this copy can install `latest` by itself
+  installer?: string;     // for information only
+  message?: string;       // one sentence from the computer: why it can't, or what failed. Shown as it comes.
+  auto?: boolean;         // present only on a host that can install by itself; false until switched on
+  last?: { at: string; from: string; to: string; ok: boolean; message?: string }; // how the last install ended, kept across the restart
+};
+```
+
+| Call | Answer |
+| --- | --- |
+| `appUpdateStatus()` | `AppUpdate` as it is now |
+| `checkAppUpdate()` | `AppUpdate` after asking for the newest release |
+| `installAppUpdate()` | `AppUpdate` (`downloading`, then `restarting`) |
+| `setAppUpdateAuto(on: boolean)` | `AppUpdate`; refused where `auto` is absent |
+
+- **No call takes a version, an address or a channel.** Where a release comes from is fixed on the computer. `setAppUpdateAuto` takes exactly one boolean; the link refuses anything else (`link-host/methods.mjs`).
+- **The owner's devices only.** A team member's device may not make these calls (`link-host/team.mjs`), and no part a member gets says more about updates than the app's version in `meta`.
+- **Installing restarts the computer's Botkins.** The link drops and comes back. Afterwards `appUpdateStatus().last` says how it ended, a rollback too (`ok: false`, and `message` says what happened).
+- **When `canInstall` is false**, `message` says what to do instead (pull a new image, `git pull`); a client shows it as it comes.
+- **A notification.** When a computer learns of a newer release it calls `link.push.updateAvailable(version)` (`link-host/push.mjs`). Each owner device whose notifications are on and whose `updates` choice is on (the default) gets one sealed alert for that version, titled with the computer's name: "Botkins 0.16.5 is available." A member device never gets it. The alert's kind is `"update"`; a tap opens the computer's page.
+
 ## What differs for a desktop client
 
 - **Notifications.** A desktop client does not register for push (`link.push.register` is for phones). It should call `link.push.presence(active, chatId?)` when its window comes to the front, goes away, or shows another chat. While a desktop client is in front, the host treats it like its own window: a reply in the chat on that screen sends no notification to a phone.

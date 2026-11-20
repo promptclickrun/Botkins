@@ -69,6 +69,16 @@ const host = new LinkHost({
 // The demo bot can use a paired phone: a message with "calendar", "contact", "where am I", "photo",
 // "steps" or "email" in it calls the matching phone tool.
 backend.phone = { call: (name, args, options) => host.callDeviceTool(name, args, options) };
+// Its made-up updates (BOTKINS_DEV_UPDATE): a newer version tells the phones, and an install
+// "restarts" the link for a few seconds, as a real update restarts the app.
+backend.updates.onAvailable = (version) => host.push.updateAvailable(version);
+backend.updates.onRestart = async () => {
+  console.log("Restarting for the update…");
+  await host.setEnabled(false);
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+  await host.setEnabled(true);
+  console.log("Back after the update.");
+};
 host.setName(process.env.BOTKINS_DEV_NAME ?? "Demo Mac");
 // The real app starts with the screen off. The demo host starts with it fully on, so the phone's screen
 // pages can be tried; with no capture adapter, macOS uses its own screencapture tool.
