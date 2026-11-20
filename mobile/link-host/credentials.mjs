@@ -133,6 +133,7 @@ const NOT_THERE = "A credential can't be used there.";
  *   respond                 the answer's `value`, and the values directly in its `content`
  *   saveMcpServer           the values directly in `env` and `headers` (a prefix too), and `oauth.clientSecret`
  *   connectProviderService  the `key` (a prefix too)
+ *   providerUseToken        the token itself (the second argument)
  *   link.voice.key          the key itself (the second argument)
  */
 function places(method, args) {
@@ -148,7 +149,7 @@ function places(method, args) {
     each([0, "headers"], args[0].headers, true);
     if (isPlain(args[0].oauth)) found.push([[0, "oauth", "clientSecret"], false]);
   } else if (method === "connectProviderService" && isPlain(args[2])) found.push([[2, "key"], true]);
-  else if (method === "link.voice.key") found.push([[1], false]);
+  else if (method === "link.voice.key" || method === "providerUseToken") found.push([[1], false]);
   // A plugin's settings (docs/plugins.md): each value of "plugins.configure", and of "plugins.install"'s `config`.
   else if (method === "plugins.configure") each([1], args[1], false);
   else if (method === "plugins.install" && isPlain(args[1])) each([1, "config"], args[1].config, false);

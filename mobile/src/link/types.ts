@@ -54,6 +54,36 @@ export type ProviderStatus = {
   install?: { url: string; command?: string };
   starting?: boolean;
   error?: string;
+  /**
+   * How a phone can sign this provider in through the computer ("provider-signin-v1"): `guided`,
+   * the provider's own sign-in run on the computer, its page and code shown on the phone
+   * (providerSignInStart); `token`, a token or key pasted on the phone (providerUseToken). Missing
+   * on a computer without the capability.
+   */
+  signInWays?: { guided: boolean; token: boolean };
+};
+/**
+ * What a sign-in or an install run on the computer says, in order ("provider-signin-v1"): a page
+ * to open with a code to type there, a page to open, a line the tool printed, or the tool waiting
+ * for a line from the person (`text` may be empty when the tool asked in its own output).
+ */
+export type ProviderSignInEvent =
+  | { n: number; type: "code"; url: string; code: string }
+  | { n: number; type: "open"; url: string }
+  | { n: number; type: "output"; text: string }
+  | { n: number; type: "prompt"; text: string };
+/** A sign-in or an install as it stands: the events after the ones already read, and how it ended. */
+export type ProviderSignInView = {
+  events: ProviderSignInEvent[];
+  /** The number of the newest event: read on from here. */
+  next: number;
+  done: boolean;
+  /** Why it didn't finish, in a sentence. */
+  error?: string;
+  /** How it finished: signed in (and as whom), or installed. */
+  result?: { connected?: boolean; installed?: boolean; account?: string | null; plan?: string | null; version?: string | null };
+  /** The tool waits for a line from the person (providerSignInInput). */
+  wantsInput: boolean;
 };
 export type ProviderService = {
   id: string;
@@ -775,6 +805,9 @@ export type UsageReport = {
  * list, a file in pieces, a small picture of it, and the paths written in a chat), and the app's
  * "secure-input-v1" (a bot asks for a password, a code or another secret in a request of kind
  * "secure": the value goes to the computer only, and the bot gets a handle, never the value).
+ * "provider-signin-v1" (the app's: a model provider signed in from a phone with no browser on the
+ * computer, by its own page and code, its own questions, or a pasted token; and a provider's
+ * command-line tool installed from a phone).
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
  * as interim messages, answers to requests as messages, a time on every reply, each helper's own
@@ -1083,6 +1116,26 @@ export type Calls = {
   signIn(providerId?: string): void;
   cancelSignIn(providerId?: string): void;
   signOut(providerId?: string): void;
+  // ---- Signing in and installing from a phone ("provider-signin-v1")
+  /**
+   * Starts the provider's own sign-in on the computer, with no browser there: a page and a code for
+   * the person to open on the phone, or the tool's questions. `service` and `method`: one of
+   * OpenCode's model services and its sign-in. Read it with providerSignInRead.
+   */
+  providerSignInStart(providerId: string, options?: { service?: string; method?: string }): { session: string };
+  /** The events after `after`: at once when there are some or it is over, else within about ten seconds. */
+  providerSignInRead(session: string, after?: number): ProviderSignInView;
+  /** A line the person typed, for a sign-in that waits for one (a code the page showed). */
+  providerSignInInput(session: string, text: string): void;
+  /** Ends a sign-in or an install under way. False when it was already over. */
+  providerSignInCancel(session: string): boolean;
+  /**
+   * Signs a provider in with a token or key the person pasted (or a saved credential, `{ $credential: id }`).
+   * Sent once; the computer keeps it in its own vault or hands it to the tool, and never sends it back.
+   */
+  providerUseToken(providerId: string, token: string, options?: { service?: string }): { connected: boolean; account?: string | null; plan?: string | null };
+  /** Installs a provider's command-line tool with the command the computer names for it (`install.command`). Read it like a sign-in. */
+  installProvider(providerId: string): { session: string };
   providerServices(id: string, query?: string): ProviderService[];
   connectProviderService(id: string, serviceId: string, how: { key: string } | { method: string }): { done?: boolean; instructions?: string; code?: { attempt: string; instructions: string } };
   disconnectProviderService(id: string, serviceId: string): void;

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DemoSignIns } from "./mock-signin.mjs";
 
 const now = () => Date.now();
 // The two seeded projects work in this repository, so pull requests have a folder to look in.
@@ -32,7 +33,7 @@ const PROVIDERS = [
   { id: "codex", name: "ChatGPT", description: "Your ChatGPT plan, through the Codex CLI.", default: false, installed: true, version: "0.98.0", connected: true, account: "you@example.com", plan: "Plus", signIn: "browser", signOut: true },
   { id: "claude", name: "Claude", description: "Your Claude plan, through Claude Code.", default: false, installed: true, version: "2.1.280", connected: true, account: "you@example.com", plan: "Max", signIn: "browser", signOut: true },
   { id: "opencode", name: "OpenCode", description: "Free models, and the model services you connect.", default: false, installed: true, version: "2.3.1", connected: true, signIn: "services", signOut: false },
-  { id: "grok", name: "Grok", description: "Grok, through the Grok CLI.", default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://x.ai/cli" }, message: "Install the Grok CLI on your computer." },
+  { id: "grok", name: "Grok", description: "Grok, through the Grok CLI.", default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://x.ai/cli", command: "curl -fsSL https://example.com/demo/grok-install.sh | bash" }, message: "Install the Grok CLI on your computer." },
 ];
 
 const SKILLS = [
@@ -954,6 +955,9 @@ export class MockBackend {
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
+    // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
+    this.signIns = new DemoSignIns(this);
+    if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
@@ -1857,7 +1861,8 @@ export class MockBackend {
       return MODELS.filter((m) => on[m.provider]?.enabled).map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
     },
     providers() {
-      return PROVIDERS.map((p) => ({ ...p, enabled: !!this.state.settings.providers[p.id]?.enabled }));
+      const capable = this.capabilities.includes("provider-signin-v1");
+      return PROVIDERS.map((p) => ({ ...this.signIns.status(p, capable), enabled: !!this.state.settings.providers[p.id]?.enabled }));
     },
     setModel(scope, id, value) {
       if (scope === "global") this.state.settings.model = value ?? { model: "auto" };
@@ -1876,7 +1881,28 @@ export class MockBackend {
     auth: () => ({ connected: true, login: "octocat" }),
     signIn() {},
     cancelSignIn() {},
-    signOut() {},
+    signOut(id) {
+      this.signIns.signOut(PROVIDERS.find((p) => p.id === id));
+    },
+    // Signing in and installing from a phone ("provider-signin-v1"), acted out by mock-signin.mjs.
+    providerSignInStart(id, options) {
+      return this.signIns.start(PROVIDERS.find((p) => p.id === id), options ?? {});
+    },
+    providerSignInRead(session, after) {
+      return this.signIns.read(session, after);
+    },
+    providerSignInInput(session, text) {
+      this.signIns.input(session, text);
+    },
+    providerSignInCancel(session) {
+      return this.signIns.cancel(session);
+    },
+    providerUseToken(id, token, options) {
+      return this.signIns.useToken(PROVIDERS.find((p) => p.id === id), token, options ?? {});
+    },
+    installProvider(id) {
+      return this.signIns.install(PROVIDERS.find((p) => p.id === id));
+    },
     providerServices() {
       const on = (this.servicesOn ??= new Set(["opencode-zen"]));
       return [

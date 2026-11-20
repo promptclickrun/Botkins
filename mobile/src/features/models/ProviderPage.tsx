@@ -1,14 +1,15 @@
 import * as Clipboard from "expo-clipboard";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { Copy, ExternalLink, LogOut, Power } from "lucide-react-native";
+import { Copy, Download, ExternalLink, KeyRound, LogOut, Power } from "lucide-react-native";
 import { Alert, StyleSheet, View } from "react-native";
 import type { ProviderStatus } from "@/link/types";
-import { refresh, useMember, useModels, useProviders } from "@/state/hooks";
+import { refresh, useCapability, useMember, useModels, useProviders } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Badge, Button, EmptyState, Group, IconButton, IconTile, Label, Loading, Page, ProviderIcon, radius, Row, space, T, useTheme } from "@/ui";
 import { Services } from "./Services";
+import { providerAction, SIGNIN_CAPABILITY } from "./signin";
 import { providerBadge } from "./status";
 
 export default function ProviderPage() {
@@ -35,6 +36,9 @@ function Detail({ provider }: { provider: ProviderStatus }) {
   const { colors } = useTheme();
   const models = useModels()?.filter((model) => model.provider === provider.id);
   const badge = providerBadge(provider);
+  // "provider-signin-v1": the computer runs the sign-in or the install, and the phone finishes it.
+  const action = providerAction(provider, useCapability(SIGNIN_CAPABILITY));
+  const openSheet = (mode: "signin" | "install" | "token") => router.push({ pathname: "/models/signin", params: { id: provider.id, mode } });
 
   const setOn = async (on: boolean) => {
     await attempt(api.setProviderEnabled(provider.id, on));
@@ -98,6 +102,7 @@ function Detail({ provider }: { provider: ProviderStatus }) {
           <T variant="callout" weight="600">
             {provider.message ?? "Install it on your computer first."}
           </T>
+          {action.kind === "install" && <Button title="Install on your computer" icon={Download} size="lg" wide onPress={() => openSheet("install")} />}
           {!!provider.install?.command && (
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderRadius: radius.sm, backgroundColor: colors.sunken }}>
               <T variant="mono" selectable style={{ flex: 1, paddingVertical: space.md }}>
@@ -110,7 +115,10 @@ function Detail({ provider }: { provider: ProviderStatus }) {
         </View>
       ) : (
         <>
-          {provider.signIn === "browser" && !provider.connected && <Button title="Sign in on your computer" size="lg" wide onPress={signIn} />}
+          {action.kind === "signin" && <Button title="Sign in" size="lg" wide onPress={() => openSheet("signin")} />}
+          {action.kind === "signin" && action.token && <Button title="Use a token instead" icon={KeyRound} variant="ghost" wide onPress={() => openSheet("token")} />}
+          {action.kind === "token" && <Button title="Sign in with a token" icon={KeyRound} size="lg" wide onPress={() => openSheet("token")} />}
+          {action.kind === "computer" && <Button title="Sign in on your computer" size="lg" wide onPress={signIn} />}
           {(facts.length > 0 || (provider.connected && provider.signOut)) && (
             <View>
               <Label>Account</Label>
