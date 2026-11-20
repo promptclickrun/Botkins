@@ -8,7 +8,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
 import { asOwnerOf, lastUpdateFile, readLastUpdate, takeRequest, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
@@ -17,7 +16,9 @@ const skip = process.getuid?.() !== 0 && "These need root.";
 // Somebody who is not root, and owns nothing else on this machine.
 const USER = 54321;
 const tempDir = (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "bk-root-"));
+  // In the system's shared temporary folder, which everyone can pass through. (The one in
+  // TMPDIR may be a person's own, closed to every other user: under sudo on a Mac it is.)
+  const dir = mkdtempSync(join(process.platform === "darwin" ? "/private/tmp" : "/tmp", "bk-root-"));
   // Like /var/lib and /opt: root's, and open for others to pass through.
   chmodSync(dir, 0o755);
   t.after(() => rmSync(dir, { recursive: true, force: true }));
