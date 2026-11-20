@@ -168,9 +168,15 @@ class Client {
     this.closeWaiters = [];
     this.opened = new Promise((resolve, reject) => {
       // A local client can name its own address: wrangler dev passes CF-Connecting-IP through.
-      this.ws = address ? new WebSocket(url, { protocols, headers: { "CF-Connecting-IP": address } }) : new WebSocket(url, protocols);
+      this.ws = address ? new WebSocket(url, { protocols, headers: { "CF-Connecting-IP": address } }) : protocols[0] === HOST_V3 ? new ResettableSocket(url, protocols) : new WebSocket(url, protocols);
       this.ws.binaryType = "arraybuffer";
-      this.ws.onopen = () => resolve(this);
+      this.ws.onopen = () => {
+        if (this.ws._receiver) this.ws._receiver.once("conclude", (code, reason) => {
+          this.closeInfo = { code, reason: reason.toString() };
+          for (const waiter of this.closeWaiters) waiter(this.closeInfo);
+        });
+        resolve(this);
+      };
       this.ws.onerror = () => reject(new Error("The socket did not open"));
       this.ws.onclose = (event) => {
         this.closeInfo = { code: event.code, reason: event.reason };
@@ -565,6 +571,136 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     assert.ok((await p.next()).equals(bytes(0x02, u32(5), Buffer.from([0, 200]))));
     await first.silent(100);
     assert.equal((await firstClosed).code, 4000);
+  });
+
+  it("reseats a new proven v3 host when both same-group sockets are stale", { timeout: 90_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const first = await hostV3(r, group);
+    const second = await hostV3(r, group);
+    const p = await phone(r);
+    p.send(request(34, "held-before-reseat"));
+    const held = await first.next();
+    assert.equal(held.readUInt32BE(17), 34);
+    // v0.16.1 left both sockets OPEN when the host process disappeared. A new connection
+    // must be able to take the bounded two-seat room instead of receiving HTTP 409 forever.
+    const replacement = await hostV3(r, group);
+    assert.equal(replacement.protocol, HOST_V3);
+    const replay = await replacement.next(5_000);
+    assert.equal(replay.readUInt32BE(17), 34);
+    replacement.send(bytes(replay.subarray(0, 8), 0x02, u32(34), Buffer.from([0, 200])));
+    assert.equal((await p.next()).readUInt32BE(1), 34);
+    const firstClosed = first.closed().then((info) => ({ client: first, info })).catch(() => null);
+    const secondClosed = second.closed().then((info) => ({ client: second, info })).catch(() => null);
+    const closed = await Promise.race([firstClosed, secondClosed]);
+    assert.ok(closed);
+    assert.equal(closed.info.code, 4001);
+    await (closed.client === first ? second : first).silent(100);
+  });
+
+  it("re-seats after recent pings and binary traffic, keeping the newest active", { timeout: 60_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const first = await hostV3(r, group);
+    const second = await hostV3(r, group);
+    const p = await phone(r);
+
+    first.send("ping");
+    assert.equal(await first.next(), "pong");
+    p.send(request(51, "answered-before-reseat"));
+    const answered = await first.next();
+    first.send(bytes(answered.subarray(0, 8), 0x02, u32(51), Buffer.from([0, 200])));
+    await p.next();
+    assert.equal((await first.next())[16], 0x06);
+    await sleep(20);
+    second.send("ping");
+    assert.equal(await second.next(), "pong");
+    await sleep(20);
+    p.send(request(52, "pending-before-reseat"));
+    const pending = await first.next();
+
+    const replacement = await hostV3(r, group);
+    assert.equal((await first.closed()).code, 4001);
+    await second.silent(100);
+    const replay = await replacement.next(5_000);
+    assert.equal(replay.readUInt32BE(17), pending.readUInt32BE(17));
+    replacement.send(bytes(replay.subarray(0, 8), 0x02, u32(52), Buffer.from([0, 200])));
+    assert.equal((await p.next()).readUInt32BE(1), 52);
+  });
+
+  it("keeps repeated same-group reseats bounded and replays each pending request", { timeout: 120_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const first = await hostV3(r, group);
+    const second = await hostV3(r, group);
+    const p = await phone(r);
+    let active = first;
+    let standby = second;
+
+    for (const id of [61, 62]) {
+      p.send(request(id, "repeat"));
+      const sent = await active.next();
+      assert.equal(sent.readUInt32BE(17), id);
+      const next = await hostV3(r, group);
+      const replay = await next.next(5_000);
+      assert.equal(replay.readUInt32BE(17), id);
+      next.send(bytes(replay.subarray(0, 8), 0x02, u32(id), Buffer.from([0, 200])));
+      assert.equal((await p.next()).readUInt32BE(1), id);
+      assert.equal((await next.next())[16], 0x06);
+      const oldActive = active;
+      const oldStandby = standby;
+      const activeClosed = oldActive.closed().then((info) => ({ client: oldActive, info })).catch(() => null);
+      const standbyClosed = oldStandby.closed().then((info) => ({ client: oldStandby, info })).catch(() => null);
+      const closed = await Promise.race([activeClosed, standbyClosed]);
+      assert.ok(closed);
+      assert.equal(closed.info.code, 4001);
+      [active, standby] = [next, closed.client === oldActive ? oldStandby : oldActive];
+    }
+  });
+
+  it("learns a short heartbeat while idle, then reaps a silent v3 socket", { timeout: 60_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const h = await hostV3(r, group);
+    const standby = await hostV3(r, group);
+    const p = await phone(r);
+    h.send("ping");
+    assert.equal(await h.next(), "pong");
+    standby.send("ping");
+    assert.equal(await standby.next(), "pong");
+    p.send(request(71, "silent-active-in-flight"));
+    const original = await h.next();
+
+    // Keep the standby's transport alive while the active establishes and then stops its short
+    // heartbeat. These pongs are intentionally not consumed until the promotion replay arrives.
+    const keepStandbyAlive = (async () => {
+      for (let i = 0; i < 8; i++) {
+        await sleep(3_000);
+        standby.send("ping");
+      }
+    })();
+    // The hibernation-friendly probe samples this first auto-response around seven seconds.
+    await sleep(8_000);
+    h.send("ping");
+    assert.equal(await h.next(), "pong");
+    // The second probe observes the short cadence; its 15-second deadline then closes only h.
+    await sleep(18_000);
+    let replay;
+    for (;;) {
+      const frame = await standby.next(5_000);
+      if (typeof frame === "string") {
+        assert.equal(frame, "pong");
+        continue;
+      }
+      replay = frame;
+      break;
+    }
+    assert.deepEqual(replay.subarray(0, 16), original.subarray(0, 16));
+    assert.equal(replay.readUInt32BE(17), 71);
+    standby.send(bytes(replay.subarray(0, 8), 0x02, u32(71), Buffer.from([0, 200])));
+    assert.equal((await p.next()).readUInt32BE(1), 71);
+    await keepStandbyAlive;
+    assert.equal((await h.closed()).code, 4001);
   });
 
   it("keeps same-group v3 active/standby sockets and takes over on a new group", { timeout: 60_000 }, async () => {
