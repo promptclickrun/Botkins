@@ -223,6 +223,8 @@ export type LinkOptions = {
   check?(): void;
   /** After a wake, how long the first answer may take before the path is given up (default 4 s). */
   wakeMs?: number;
+  /** Each time a sync came back: the phone is in step with the computer now. */
+  onSync?(): void;
 };
 
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
@@ -253,6 +255,8 @@ export class LinkClient {
   private readonly probeMaxMs: number;
   /** Set by a wake: the path in use may have died while the phone was away, so the next sync proves it quickly. */
   private suspect = false;
+  /** Set by `rest`: the app is in the background, so nothing is followed until `wake`. */
+  private resting = false;
 
   constructor(
     private pairing: Pairing,
@@ -292,6 +296,7 @@ export class LinkClient {
    */
   wake(reason?: "network") {
     if (!this.lifetime) return;
+    this.resting = false;
     this.probeDelay = this.probeMs;
     // On another network, an address that failed on the last one gets a fresh try.
     if (reason === "network") this.distrusted.clear();
@@ -302,6 +307,18 @@ export class LinkClient {
     // The waiting sync may be on a path that just died (the phone left the network).
     this.poll?.abort();
     if (this.route === "relay") void this.probeDirect(false);
+    else this.scheduleProbe();
+  }
+  /**
+   * The app went to the background: stop following (no waiting request, no probe) until `wake`.
+   * A phone in the background does no work for the link; calls made meanwhile still go through.
+   */
+  rest() {
+    if (!this.lifetime || this.resting) return;
+    this.resting = true;
+    clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.poll?.abort();
   }
   /**
    * An address for this computer that was found another way (it announced itself on the network).
@@ -350,7 +367,7 @@ export class LinkClient {
   private scheduleProbe() {
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
-    if (this.running && this.route === "relay" && this.probing !== this.session) {
+    if (this.running && !this.resting && this.route === "relay" && this.probing !== this.session) {
       this.probeTimer = setTimeout(() => void this.probeDirect(), this.probeDelay);
     }
   }
@@ -527,6 +544,16 @@ export class LinkClient {
   private async follow(lifetime: object) {
     let failures = 0;
     while (this.lifetime === lifetime) {
+      if (this.resting) {
+        // At rest until a wake (or a stop, which wakes this too).
+        await new Promise<void>((resolve) => {
+          this.wakeUp = () => {
+            this.wakeUp = null;
+            resolve();
+          };
+        });
+        continue;
+      }
       const poll = new AbortController();
       this.poll = poll;
       try {
@@ -546,6 +573,7 @@ export class LinkClient {
           this.have = news.v;
           this.options.onParts(news.parts);
         }
+        this.options.onSync?.();
       } catch (error) {
         if (this.lifetime !== lifetime) break;
         // Cut short on purpose (the watched chats changed), or a session to renew: go again.

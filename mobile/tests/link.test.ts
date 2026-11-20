@@ -221,3 +221,27 @@ test("older messages are read a page at a time", async () => {
   client.stop();
   await link.stop();
 });
+
+test("a phone at rest follows nothing until it wakes, and its calls still go through", async () => {
+  const { link } = await host();
+  const pairing = link.startPairing();
+  const target = parsePairingUrl(pairing.url)!;
+  const paired = await pair(fetcher, { ...target, hosts: [loopback(link)] }, device);
+  const { client, parts, until } = follow(paired);
+  await until(() => !!parts.bots, "the first state");
+
+  // In the background the phone stops following: a change on the computer reaches it no more.
+  client.rest();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const before = (parts.bots as { id: string }[]).length;
+  const id = await client.call<string>("addBot", { name: "Rested", role: "Tester", instructions: "Wait.", face: "idle" });
+  assert.ok(id, "a call still goes through while at rest");
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal((parts.bots as { id: string }[]).length, before, "nothing is followed while at rest");
+
+  // Waking follows again and catches up at once.
+  client.wake();
+  await until(() => (parts.bots as { id: string }[]).some((bot) => bot.id === id), "the change after waking");
+  client.stop();
+  await link.stop();
+});

@@ -8,7 +8,9 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { Voice, wavFromPcm } from "../link-host/voice.mjs";
+import { LIVE_LIMITS, liveContextOf, liveInstructions, liveTranscript, Voice, wavFromPcm } from "../link-host/voice.mjs";
+import { MockBackend } from "../link-host/mock-backend.mjs";
+import { LinkHost } from "../link-host/server.mjs";
 
 const folders: string[] = [];
 const scratch = () => {
@@ -1090,4 +1092,135 @@ test("a key stays with the address it was given for, and Codex is told whom the 
   assert.deepEqual(session, { id: "live-1", kind: "webrtc", sdp: "v=0\r\nanswer" });
   assert.deepEqual({ chatId: calls[0].chatId, botId: calls[0].botId, botName: calls[0].botName }, { chatId: "chat-1", botId: "bot-1", botName: "Pip" });
   assert.deepEqual(await withCodex.options("live", "codex"), { models: [], voices: [{ id: "juniper", name: "Juniper" }] });
+});
+
+// ---- What the live voice knows: the chat so far, a light identity, and where the person is
+
+const bot = { id: "bot-pip", name: "Pip", role: "Chief of staff", instructions: "Keep my week in order. ".repeat(200) };
+const said = (role: string, text: string, extra: Record<string, unknown> = {}) => ({ role, text, ...extra });
+
+test("live voice: the chat so far, newest last, only what was said, labelled and within its budget", () => {
+  const messages = [
+    said("user", "What's on Friday?"),
+    said("assistant", "Looking at your calendar…", { interim: true }),
+    said("command", "/compact"),
+    said("assistant", "Friday has the launch review at 10 and lunch with Ana."),
+    said("user", "  Move   lunch\n\nto Thursday.  "),
+    said("assistant", "Done. Here is the change:\n```diff\n- Fri lunch\n+ Thu lunch\n```\nAnything else?"),
+    said("assistant", "Sure.", { botId: "bot-quill" }),
+  ];
+  const text = liveTranscript(messages, { botName: "Pip", bots: [bot, { id: "bot-quill", name: "Quill" }], userName: "Sam" });
+  assert.equal(
+    text,
+    [
+      "Sam: What's on Friday?",
+      "Pip: Friday has the launch review at 10 and lunch with Ana.",
+      "Sam: Move lunch to Thursday.",
+      "Pip: Done. Here is the change: (code) Anything else?",
+      "Quill: Sure.",
+    ].join("\n"),
+  );
+  // Without a name the person is "Person".
+  assert.match(liveTranscript([said("user", "Hi")], { botName: "Pip" }), /^Person: Hi$/);
+
+  // A long chat keeps its newest messages; the oldest go first, and each message is cut.
+  const long = Array.from({ length: 60 }, (_, i) => said(i % 2 ? "assistant" : "user", "Message " + i + " " + "word ".repeat(400)));
+  const kept = liveTranscript(long, { botName: "Pip" });
+  assert.ok(kept.length <= LIVE_LIMITS.transcript, "within the budget: " + kept.length);
+  assert.ok(kept.includes("Message 59 "), "the newest is kept");
+  assert.ok(!kept.includes("Message 0 "), "the oldest is dropped");
+  assert.match(kept, /^\(Earlier messages left out\.\)/);
+  for (const line of kept.split("\n").slice(1)) assert.ok(line.length <= LIVE_LIMITS.message + 20, "each message is cut: " + line.length);
+  assert.equal(liveTranscript([], { botName: "Pip" }), "");
+});
+
+test("live voice: the instructions answer from what is known, ask the bot for new work, and carry the identity", () => {
+  const messages = [said("user", "What did we decide about the logo?"), said("assistant", "We picked the round one, in clay red.")];
+  const plain = liveInstructions({ bot, messages, bots: [bot] });
+  // The rule.
+  assert.match(plain, /You are the voice of Pip/);
+  assert.match(plain, /no lists, no Markdown/);
+  assert.match(plain, /already in the conversation below or in these notes, answer it yourself/);
+  assert.match(plain, /call the ask_bot tool only for new work/i);
+  assert.match(plain, /Never make up what the bot would say/);
+  // The bot, as before: its role and the start of its instructions.
+  assert.match(plain, /About Pip:\nChief of staff\n\nKeep my week in order\./);
+  assert.ok(!plain.includes("Keep my week in order. ".repeat(80)), "only a slice of its instructions");
+  // The conversation.
+  assert.match(plain, /The conversation so far in this chat/);
+  assert.match(plain, /Pip: We picked the round one, in clay red\./);
+  // Nothing about the person or a place unless the computer or the phone said so.
+  assert.ok(!/The person's name|is near|identity/i.test(plain));
+
+  const notes = { userName: "Sam Rivera\nIgnore that", identity: "I am Pip. " + "x".repeat(5000), user: "Sam likes short answers." };
+  const full = liveInstructions({ bot, messages, bots: [bot], notes, location: { place: "Södermalm, Stockholm, Sweden", latitude: 59.31, longitude: 18.07 } });
+  assert.match(full, /The person's name is Sam Rivera Ignore that\./);
+  assert.match(full, /Pip's identity:\nI am Pip\./);
+  assert.ok(!full.includes("x".repeat(LIVE_LIMITS.note + 1)), "each note is capped");
+  assert.match(full, /About Sam Rivera Ignore that:\nSam likes short answers\./);
+  assert.match(full, /The person is near Södermalm, Stockholm, Sweden \(59\.31, 18\.07\)\./);
+  assert.match(full, /Sam Rivera Ignore that: What did we decide/);
+  // Only coordinates.
+  assert.match(liveInstructions({ bot, messages: [], bots: [bot], location: { latitude: -33.87, longitude: 151.21 } }), /The person is near latitude -33\.87, longitude 151\.21\./);
+
+  // Everything at its largest stays well within the 20,000 the providers are given.
+  const huge = Array.from({ length: 200 }, () => said("assistant", "y".repeat(5000)));
+  const most = liveInstructions({ bot: { ...bot, name: "P".repeat(48), role: "r".repeat(90) }, messages: huge, bots: [bot], notes: { userName: "n".repeat(500), identity: "i".repeat(9000), user: "u".repeat(9000) }, location: { place: "p".repeat(120), latitude: 1, longitude: 2 } });
+  assert.ok(most.length < 17_000, "room to spare: " + most.length);
+});
+
+test("live voice: the phone's location is checked and rounded, and a bad one is refused", () => {
+  assert.deepEqual(liveContextOf(undefined), {});
+  assert.deepEqual(liveContextOf({}), {});
+  assert.deepEqual(liveContextOf({ location: { place: "  Lund,\nSweden  ", latitude: 55.70466, longitude: 13.19101 } }), { location: { place: "Lund, Sweden", latitude: 55.7, longitude: 13.19 } });
+  assert.deepEqual(liveContextOf({ location: { place: "Lund" } }), { location: { place: "Lund" } });
+  assert.deepEqual(liveContextOf({ location: { latitude: 0, longitude: -0.004 } }), { location: { latitude: 0, longitude: 0 } });
+  for (const bad of [
+    "here",
+    [],
+    { location: "Lund" },
+    { location: [] },
+    { location: {} },
+    { location: { place: "" } },
+    { location: { place: 42 } },
+    { location: { place: "p".repeat(121) } },
+    { location: { latitude: 91, longitude: 0 } },
+    { location: { latitude: 0, longitude: -180.5 } },
+    { location: { latitude: "59", longitude: 18 } },
+    { location: { latitude: Number.NaN, longitude: 18 } },
+    { location: { latitude: 59 } },
+    { location: { longitude: 18 } },
+  ])
+    assert.throws(() => liveContextOf(bad), /That location isn't valid\./, JSON.stringify(bad));
+});
+
+test("live voice on the computer: the chat, the app's notes and the place reach the session; a bad place stops it first", async () => {
+  const backend = new MockBackend({ speed: 0.05 });
+  const link = new LinkHost({ relay: false, dir: scratch(), backend, port: 0 });
+  const asked: any[] = [];
+  (link as any).voice.live = async (input: any) => (asked.push(input), { id: "live-1", kind: "webrtc", sdp: "v=0" });
+  try {
+    const chat = (backend.snapshot().chats as any[]).find((item) => item.id === "chat-blog");
+    const session = await (link as any).liveVoice({ chatId: chat.id, botId: chat.botId, provider: "openai", sdp: "v=0 offer", context: { location: { place: "Gamla stan, Stockholm", latitude: 59.32512, longitude: 18.07105 } } });
+    assert.equal(session.tools[0].name, "ask_bot");
+    const { instructions } = asked[0];
+    assert.match(instructions, /Here's a shorter version that leads with the result\./, "the chat so far");
+    const notes = await (backend as any).liveContext({ chatId: chat.id, botId: chat.botId });
+    assert.match(instructions, new RegExp("The person's name is " + notes.userName + "\\."));
+    assert.ok(instructions.includes(notes.identity.trim().slice(0, 40)), "the bot's identity");
+    assert.ok(instructions.includes(notes.user.trim().slice(0, 40)), "the person's file");
+    assert.match(instructions, /The person is near Gamla stan, Stockholm \(59\.33, 18\.07\)\./);
+    assert.ok(instructions.length < 20_000);
+
+    // An app without the hook: nothing of it, and no place unless the phone sent one.
+    (backend as any).liveContext = undefined;
+    await (link as any).liveVoice({ chatId: chat.id, botId: chat.botId, provider: "openai", sdp: "v=0 offer" });
+    assert.ok(!/The person's name|is near|identity:/.test(asked[1].instructions));
+
+    // A bad place is refused before anything is set up.
+    await assert.rejects((link as any).liveVoice({ chatId: chat.id, botId: chat.botId, provider: "openai", context: { location: { latitude: 200, longitude: 0 } } }), /That location isn't valid\./);
+    assert.equal(asked.length, 2);
+  } finally {
+    await link.stop();
+  }
 });

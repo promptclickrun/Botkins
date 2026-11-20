@@ -13,8 +13,12 @@ import { megabytes } from "./computer";
 import { Devices } from "./Devices";
 import { capitalize, InfoRow, LINK_STATUS, linkLabel, useHeld } from "./shared";
 
-/** Settings › General › Background on the computer: keep running with the window closed, and start with the computer. */
-function Background() {
+/**
+ * Settings › General › Background on the computer: keep running with the window closed, and start
+ * with the computer. These change the app on the computer only, never this phone; the words say so,
+ * because a person read them as the phone's own and turned them off to save the phone's battery.
+ */
+function Background({ name }: { name: string }) {
   const { colors } = useTheme();
   const online = useOnline();
   const [background, hold] = useHeld(useSettings()?.background);
@@ -24,11 +28,14 @@ function Background() {
   const set = (patch: Partial<typeof background>) => void hold(patch, () => api.setPreferences({ background: { ...background, ...patch } }));
   return (
     <View>
-      <Label>Background</Label>
+      <Label>{"Botkins on " + name}</Label>
       <Group>
-        <Row leading={<IconTile icon={MonitorCog} color={colors.ink2} />} title="Keep running when the window is closed" titleLines={2} subtitle="Your phone and routines keep working" subtitleLines={2} toggled={background.keepRunning} disabled={!online} onToggle={(keepRunning) => set({ keepRunning })} />
-        <Row leading={<IconTile icon={LogIn} color={colors.ink2} />} title="Run at startup" subtitle="Starts quietly when you sign in" toggled={background.runAtStartup} disabled={!online} onToggle={(runAtStartup) => set({ runAtStartup })} />
+        <Row leading={<IconTile icon={MonitorCog} color={colors.ink2} />} title="Keep running with its window closed" titleLines={2} subtitle="Routines keep running, and your phones can reach it" subtitleLines={2} toggled={background.keepRunning} disabled={!online} onToggle={(keepRunning) => set({ keepRunning })} />
+        <Row leading={<IconTile icon={LogIn} color={colors.ink2} />} title="Start when the computer starts" titleLines={2} subtitle="Opens quietly when you sign in to it" subtitleLines={2} toggled={background.runAtStartup} disabled={!online} onToggle={(runAtStartup) => set({ runAtStartup })} />
       </Group>
+      <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, paddingTop: space.sm }}>
+        These change the app on your computer, not on this phone.
+      </T>
     </View>
   );
 }
@@ -183,7 +190,7 @@ export default function Desktop() {
 
       <Devices />
 
-      <Background />
+      <Background name={name} />
 
       <Storage />
 

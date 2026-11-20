@@ -9,6 +9,7 @@ import { ElevenLabsTransport, pcmRate } from "../src/features/voice/live/elevenl
 import { GeminiTransport } from "../src/features/voice/live/gemini";
 import { OpenAIRealtime, OpenAISocketTransport, withTranscription } from "../src/features/voice/live/openai";
 import { askBot, type ChatMessage, CUT_NOTE, LOOK_AT_PHONE, MAX_REPLY, replyText, STILL_WORKING } from "../src/features/voice/live/askBot";
+import { liveContext, locationFor, locationOn } from "../src/features/voice/live/context";
 import { BARGE_IN, CUT_SETTLE_MS, ECHO_TAIL_MS, MicGate, MIN_TURN_MS, pcmMs, RELEASE_TAIL_MS, silenceLike } from "../src/features/voice/live/input";
 import { type AudioFrame, type DuplexLike, type Line, type LiveStatus, textOf } from "../src/features/voice/live/types";
 import { WebRTCTransport } from "../src/features/voice/live/webrtc";
@@ -822,6 +823,40 @@ test("ElevenLabs: silence goes while the agent talks or the button is up, so its
   socket.receive({ type: "audio", audio_event: { audio_base_64: "NEW", event_id: 4 } });
   assert.equal(h.audio.played.at(-1), "NEW");
   push.end();
+});
+
+// ---- Where the person is, for a live call
+
+test("live voice: the location is asked for and sent only while Location is on in Device access", async () => {
+  let asked = 0;
+  const read = async () => (asked++, { place: "Lund, Skåne, Sweden", latitude: 55.7, longitude: 13.19 });
+  assert.equal(locationOn({}), false);
+  assert.equal(locationOn({ location: "off" }), false);
+  assert.equal(locationOn({ calendar: "read" }), false);
+  assert.equal(locationOn({ location: "read" }), true);
+  assert.equal(await liveContext({}, read), undefined);
+  assert.equal(await liveContext({ location: "off", calendar: "interact" }, read), undefined);
+  assert.equal(await liveContext(undefined, read), undefined);
+  assert.equal(asked, 0, "the phone isn't even asked");
+  assert.deepEqual(await liveContext({ location: "read" }, read), { location: { place: "Lund, Skåne, Sweden", latitude: 55.7, longitude: 13.19 } });
+  assert.equal(asked, 1);
+});
+
+test("live voice: a slow or failed fix never holds the call up", async () => {
+  const slow = () => new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
+  const began = Date.now();
+  assert.equal(await liveContext({ location: "read" }, slow as never, 30), undefined);
+  assert.ok(Date.now() - began < 500);
+  assert.equal(await liveContext({ location: "read" }, async () => Promise.reject(new Error("no fix"))), undefined);
+  assert.equal(await liveContext({ location: "read" }, async () => null), undefined);
+});
+
+test("live voice: a fix becomes the town, region and country, about a kilometre, never a street", () => {
+  assert.deepEqual(locationFor(59.325117, 18.071093, { city: "Stockholm", district: "Gamla stan", region: "Stockholm", country: "Sweden" }), { latitude: 59.33, longitude: 18.07, place: "Stockholm, Sweden" });
+  assert.deepEqual(locationFor(-0.004, 0.001, null), { latitude: 0, longitude: 0 });
+  assert.deepEqual(locationFor(Number.NaN, 0, { district: "Shibuya", region: "Tokyo", country: "Japan" }), { place: "Shibuya, Tokyo, Japan" });
+  assert.ok(locationFor(10, 10, { city: "x".repeat(300) })!.place!.length <= 120);
+  assert.equal(locationFor(Number.NaN, Number.NaN, {}), null);
 });
 
 test("a socket message in bytes reads as text", () => {

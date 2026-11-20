@@ -9,13 +9,16 @@ import { AppState, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LiveProvider } from "@/link/types";
 import { type AvatarState, useBot, useWatchedChat } from "@/state/hooks";
+import { loadDevicePrefs, useDevicePrefs } from "@/state/devicePrefs";
 import { api } from "@/state/link";
 import { useApp } from "@/state/store";
 import { BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
 import { RequestPanel } from "../chat/RequestPanel";
 import { chatAccess } from "./chatAccess";
+import { liveContext } from "./live/context";
 import { chatTools, type Kit, type Line, type LiveStatus, type LiveTransport, planFor, socketTransport, webrtcTransport } from "./live/index";
 import type { Connect, InputMode, SocketLike } from "./live/types";
+import { readLocation } from "./location";
 import { audioModule, duplexAudio, keepAwakeModule, webrtcModule } from "./native";
 import { loadPhoneVoice, usePhoneVoice } from "./prefs";
 import { UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
@@ -121,6 +124,11 @@ export default function Live() {
       );
     };
     const run = chatTools(chatAccess(chatId));
+    // Roughly where the person is, only with Location on in Device access. Looked for from the
+    // start, alongside the rest, and given up on quickly (live/context.ts).
+    const where = loadDevicePrefs()
+      .then(() => liveContext(useDevicePrefs.getState().sources, readLocation))
+      .catch(() => undefined);
     void (async () => {
       try {
         // How this phone listens, as saved when the call starts.
@@ -132,7 +140,8 @@ export default function Live() {
           const next = webrtcTransport(
             tools,
             async (sdp) => {
-              const session = await api["link.voice.live"]({ chatId, botId, provider, sdp });
+              const context = await where;
+              const session = await api["link.voice.live"]({ chatId, botId, provider, sdp, ...(context && { context }) });
               sessionId = session.id;
               if (session.kind !== "webrtc") throw new Error(UPDATE_COMPUTER + ".");
               return session;
@@ -143,7 +152,8 @@ export default function Live() {
           attach(next);
           await next.start();
         } else {
-          const session = await api["link.voice.live"]({ chatId, botId, provider });
+          const context = await where;
+          const session = await api["link.voice.live"]({ chatId, botId, provider, ...(context && { context }) });
           sessionId = session.id;
           if (gone) return;
           const next = socketTransport(session, tools, run);

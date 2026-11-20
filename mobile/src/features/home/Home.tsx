@@ -1,108 +1,29 @@
 // Home: the computer it talks to, the bots up top, then every bot as a flat list: the primary bot,
-// pinned bots, each section, then the rest. Filters show pinned or hidden bots.
-import { MenuView } from "@react-native-menu/menu";
+// pinned bots, each section, then the rest. Filters show pinned or hidden bots. Under "All" a bot can
+// be dragged to another place or group (BotBoard.tsx); a still hold opens its menu.
 import { type Href, router } from "expo-router";
-import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus, Sunrise } from "lucide-react-native";
+import { ChevronDown, ChevronUp, Plus, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Alert, ScrollView, View } from "react-native";
-import Animated, { FadeIn } from "react-native-reanimated";
-import { plainPreview } from "@/features/chat/bits";
-import { newBotChat, openBotChat } from "@/features/chat/open";
+import { ScrollView, useWindowDimensions, View } from "react-native";
+import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scheduleOnRN } from "react-native-worklets";
+import { openBotChat } from "@/features/chat/open";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
-import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_ACTIONS, toggleHidden } from "@/features/bots/menus";
-import type { AgentRequest, Bot, ChatSummary, Section } from "@/link/types";
+import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
 import { activityLabel, isConversation, useBotActivity, useBots, useChats, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { ago } from "@/state/time";
-import { BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, Mascot, Page, Row, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, TAB_BAR_ROOM, Tap, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
-import { arrangeBots, type BotFilter, filterBots, filterLabels } from "./arrange";
+import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
+import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
 import { runComputerChoice } from "./computers";
+import { applyPlan, DRAG, dropPlan, type Zone } from "./drag";
 
-const AVATAR = 48;
 const TOP = 4;
-
-/** Long-press on a bot: the desktop's bot menu (New chat, Bot page, Pin, Move to section, Make primary, Duplicate, Hide, Delete). */
-function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
-  const bots = useBots();
-  const sections = usePart("sections");
-  const primary = bots[0]?.id === bot.id;
-  return (
-    <HoldMenu
-      actions={[
-        { id: "new", title: "New chat", image: "square.and.pencil" },
-        { id: "page", title: "Bot page", image: "person.crop.circle" },
-        { id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" },
-        moveToSection(bot, sections),
-        { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } },
-        { id: "duplicate", title: "Duplicate", image: "doc.on.doc" },
-        hideAction(bot, primary),
-        { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true, disabled: bots.length < 2 } },
-      ]}
-      onPressAction={({ nativeEvent }) => {
-        const event = nativeEvent.event;
-        if (runSectionChoice(bot, event)) return;
-        if (event === "new") void newBotChat(bot.id);
-        else if (event === "page") router.push({ pathname: "/bot/[id]", params: { id: bot.id } });
-        else if (event === "pin") void attempt(api.setBotFlags(bot.id, { pinned: !bot.pinned }));
-        else if (event === "primary") void attempt(api.makePrimary(bot.id), bot.name + " is first now");
-        else if (event === "duplicate") void attempt(api.duplicateBot(bot.id), "Bot duplicated");
-        else if (event === "hide") toggleHidden(bot);
-        else if (event === "delete")
-          Alert.alert("Delete " + bot.name + "?", "Its chats and history are deleted too.", [
-            { text: "Cancel", style: "cancel" },
-            { text: "Delete", style: "destructive", onPress: () => void attempt(api.deleteBot(bot.id)) },
-          ]);
-      }}
-    >
-      {children}
-    </HoldMenu>
-  );
-}
-
-/** A section's heading: its name and count fold it; its menu renames or deletes it. */
-function SectionHead({ section, count, open, onToggle }: { section: Section; count: number; open: boolean; onToggle: () => void }) {
-  const { colors } = useTheme();
-  const Fold = open ? ChevronDown : ChevronRight;
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", marginBottom: -space.sm }}>
-      <Tap
-        onPress={onToggle}
-        feel="select"
-        accessibilityLabel={section.name + ", " + count + (count === 1 ? " bot" : " bots")}
-        accessibilityState={{ expanded: open }}
-        style={{ flex: 1, minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xs }}
-      >
-        <T variant="label" color="muted" numberOfLines={1} style={{ textTransform: "uppercase", flexShrink: 1 }} accessibilityRole="header">
-          {section.name}
-        </T>
-        <T variant="label" color="faint">
-          {String(count)}
-        </T>
-        <Fold size={14} color={colors.faint} strokeWidth={2.4} />
-      </Tap>
-      <MenuView title={section.name} actions={SECTION_ACTIONS} onPressAction={({ nativeEvent }) => runSectionAction(section, nativeEvent.event)}>
-        <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-          <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
-        </View>
-      </MenuView>
-    </View>
-  );
-}
-
-/** A plain heading in the list ("Other bots"). */
-function ListHead({ title }: { title: string }) {
-  return (
-    <View style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: space.xs, marginBottom: -space.sm }}>
-      <T variant="label" color="muted" style={{ textTransform: "uppercase" }} accessibilityRole="header">
-        {title}
-      </T>
-    </View>
-  );
-}
 
 /** A big bare avatar with its name under it, for the row at the top. */
 function TopBot({ bot, size }: { bot: Bot; size: number }) {
@@ -119,47 +40,6 @@ function TopBot({ bot, size }: { bot: Bot; size: number }) {
         </Tap>
       </BotMenu>
     </View>
-  );
-}
-
-/** One bot in the list: its face, its name, one line, and when it last spoke. */
-function BotRow({ bot, chat, unread }: { bot: Bot; chat?: ChatSummary; unread: boolean }) {
-  const state = useBotActivity(bot.id);
-  const status = activityLabel(state);
-  const last = chat?.last ? plainPreview(chat.last.text) : undefined;
-  const line = status || last || bot.role || "Bot";
-  const busy = !!status;
-  return (
-    <BotMenu bot={bot}>
-      <Tap
-        onPress={() => void openBotChat(bot.id)}
-        feel="select"
-        sink={0.98}
-        hitSlop={0}
-        accessibilityLabel={bot.name + ", " + line + (unread ? ", unread" : "")}
-        style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: 10 }}
-      >
-        <BotAvatar bot={bot} state={state} size={AVATAR} />
-        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-          <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm }}>
-            <T variant="name" numberOfLines={1} style={{ flex: 1 }}>
-              {bot.name}
-            </T>
-            {!!chat && (
-              <T variant="footnote" color="muted">
-                {ago(chat.time)}
-              </T>
-            )}
-          </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-            <T variant="subhead" color={state === "waiting" ? "warning" : busy ? "accentText" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
-              {line}
-            </T>
-            {unread && <Dot />}
-          </View>
-        </View>
-      </Tap>
-    </BotMenu>
   );
 }
 
@@ -228,9 +108,99 @@ function FirstBot() {
   );
 }
 
+/**
+ * Page's frame for a tab's root, with a scroll view Home can scroll itself: a dragged bot near the
+ * top or bottom edge scrolls the page (Page has no handle on its scroll view). Keep it like Page's.
+ */
+function HomeFrame({ children, scroll, scrollEnabled, onScrolled }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; onScrolled: () => void }) {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const view = useSharedValue(0);
+  const content = useSharedValue(0);
+  const told = useSharedValue(0);
+  const { edges, offset, max } = scroll;
+  useEffect(() => {
+    edges.value = { top: insets.top, bottom: height - TAB_BAR_ROOM - insets.bottom };
+  }, [edges, insets.top, insets.bottom, height]);
+  // The offset on the UI thread for the drag; Today hears of a scroll a few times a second at most.
+  const onScroll = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      offset.value = event.contentOffset.y;
+      const now = Date.now();
+      if (now - told.value < 200) return;
+      told.value = now;
+      scheduleOnRN(onScrolled);
+    },
+    onMomentumEnd: () => scheduleOnRN(onScrolled),
+  });
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <Animated.ScrollView
+        ref={scroll.ref}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: insets.top + space.md, paddingBottom: TAB_BAR_ROOM + insets.bottom + space.xxl, gap: space.xl }}
+        contentInsetAdjustmentBehavior="never"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={scrollEnabled}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        onLayout={(event) => {
+          view.value = event.nativeEvent.layout.height;
+          max.value = Math.max(0, content.value - view.value);
+        }}
+        onContentSizeChange={(_, h) => {
+          content.value = h;
+          max.value = Math.max(0, content.value - view.value);
+        }}
+      >
+        <LinkBanner />
+        {children}
+      </Animated.ScrollView>
+    </View>
+  );
+}
+
+/**
+ * A drop's new order, shown at once until the computer's own state arrives: while its calls are out,
+ * then until the bots change once more after they finish (or DRAG.HOLD_ORDER_MS). A failed call shows
+ * its toast and the computer's order comes back.
+ */
+function useDropOrder(bots: Bot[]) {
+  const sections = usePart("sections");
+  const [pending, setPending] = useState<{ bots: Bot[]; done?: Bot[] } | null>(null);
+  const stale = !!pending?.done && pending.done !== bots;
+  useEffect(() => {
+    if (stale) setPending(null);
+  }, [stale]);
+  useEffect(() => {
+    if (!pending?.done) return;
+    const timer = setTimeout(() => setPending(null), DRAG.HOLD_ORDER_MS);
+    return () => clearTimeout(timer);
+  }, [pending]);
+  const drop = (id: string, zone: Zone, index: number) => {
+    const plan = dropPlan(bots, sections, id, zone, index);
+    if (!plan) return;
+    const shown = applyPlan(bots, id, plan);
+    setPending({ bots: shown });
+    void (async () => {
+      let ok = true;
+      if (plan.flags) ok = !!(await attempt(api.setBotFlags(id, plan.flags).then(() => true)));
+      if (ok && plan.order) ok = !!(await attempt(api.reorderBots(plan.order).then(() => true)));
+      // Kept until the bots change after this, so the list doesn't flick back to the old order first.
+      setPending((now) => (now?.bots === shown ? (ok ? { bots: shown, done: useApp.getState().parts.bots ?? [] } : null) : now));
+    })();
+  };
+  return { shown: pending && !stale ? pending.bots : bots, drop };
+}
+
 export default function Home() {
   const { colors } = useTheme();
-  const bots = useBots();
+  // The computer's bots, or a drop's new order while the computer catches up.
+  const order = useDropOrder(useBots());
+  const bots = order.shown;
   const chats = useChats();
   const synced = useApp((state) => state.synced);
   const online = useApp((state) => state.link === "online");
@@ -273,6 +243,9 @@ export default function Home() {
       })}
     </Group>
   );
+  // The page, for scrolling it under a dragged bot; and whether a drag is under way, which stops its own scrolling.
+  const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
+  const [dragging, setDragging] = useState(false);
   const today = (board?.filter((item) => item.status === "open").length ?? 0) + (panels?.filter((panel) => !panel.hidden).length ?? 0);
   // Today sits open under the bots until the person folds it; the choice is kept.
   const todayOpen = usePrefs((prefs) => prefs.todayOpen);
@@ -281,7 +254,7 @@ export default function Home() {
   const waiting = requests ?? [];
 
   return (
-    <Page tab onScroll={seen.scrolled}>
+    <HomeFrame scroll={scroll} scrollEnabled={!dragging} onScrolled={seen.scrolled}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
         {/* A tap opens the computer's page; a hold opens the switcher. */}
         <HoldMenu title="Computers" actions={computerActions(computers, inUse)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
@@ -338,48 +311,32 @@ export default function Home() {
               </T>
             )
           ) : (
-            <>
-              {rows([...(arranged.primary ? [arranged.primary] : []), ...arranged.pinned, ...(arranged.sections.length ? [] : arranged.rest)])}
-              {arranged.sections.map(({ section, bots: inSection }) => {
-                const open = !folded.includes(section.id);
-                return (
-                  <View key={section.id}>
-                    <SectionHead section={section} count={inSection.length} open={open} onToggle={() => setFolded(open ? [...folded, section.id] : folded.filter((id) => id !== section.id))} />
-                    {open &&
-                      (inSection.length > 0 ? (
-                        rows(inSection)
-                      ) : (
-                        <T variant="footnote" color="faint" style={{ paddingHorizontal: space.xs, paddingTop: space.sm }}>
-                          {bots.some((bot) => bot.sectionId === section.id && !bot.hidden) ? "Its bots are pinned above." : "No bots here yet."}
-                        </T>
-                      ))}
-                  </View>
-                );
-              })}
-              {arranged.sections.length > 0 && arranged.rest.length > 0 && (
-                <View>
-                  <ListHead title="Other bots" />
-                  {rows(arranged.rest)}
-                </View>
-              )}
-            </>
+            <BotBoard
+              bots={bots}
+              sections={sections}
+              latest={latest}
+              folded={folded}
+              onFold={(id) => setFolded(folded.includes(id) ? folded.filter((entry) => entry !== id) : [...folded, id])}
+              scroll={scroll}
+              onDrop={order.drop}
+              onDragging={setDragging}
+            />
           )}
-          {today > 0 && (
-            <View style={{ gap: space.lg }}>
-              <Group flat>
-                <Row
-                  leading={<IconTile icon={Sunrise} />}
-                  title="Today"
-                  value={todayOpen ? undefined : String(today)}
-                  trailing={<Fold size={18} color={colors.faint} strokeWidth={2.2} />}
-                  onPress={() => setPrefs({ todayOpen: !todayOpen })}
-                />
-              </Group>
-              {todayOpen && <TodayContent seen={seen} />}
-            </View>
-          )}
+          {/* Today is always under the bots, even with nothing open: it has its own empty states. */}
+          <View style={{ gap: space.lg }}>
+            <Group flat>
+              <Row
+                leading={<IconTile icon={Sunrise} />}
+                title="Today"
+                value={todayRow(todayOpen, today).value}
+                trailing={<Fold size={18} color={colors.faint} strokeWidth={2.2} />}
+                onPress={() => setPrefs({ todayOpen: !todayOpen })}
+              />
+            </Group>
+            {todayOpen && <TodayContent seen={seen} />}
+          </View>
         </Animated.View>
       )}
-    </Page>
+    </HomeFrame>
   );
 }
