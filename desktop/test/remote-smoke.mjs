@@ -71,6 +71,20 @@ try {
   // The switcher appears in the side menu once a computer is paired.
   let switcher = b.page.getByRole("button", { name: /^Computer: / });
   await switcher.waitFor({ timeout: 15000 });
+  // The side menu's bottom rows stay together: Settings, the switcher, then Models, with all the
+  // free space above them. (The switcher once claimed that space too, which left Settings alone in
+  // the middle of the menu with a gap on each side.) Checked with the menu open and narrow.
+  for (const collapsed of [false, true]) {
+    await b.page.evaluate(async (narrow) => window.botkins.setPreferences({ sidebar: { ...(await window.botkins.snapshot()).settings.sidebar, collapsed: narrow } }), collapsed);
+    await b.page.waitForFunction((narrow) => document.querySelector(".shell")?.classList.contains("collapsed") === narrow, collapsed);
+    const rows = await b.page.evaluate(() => {
+      const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const [foot, host, models, menu] = [box(".sidebar-foot"), box(".host-switch"), box(".models-status"), box(".sidebar-foot").top && document.querySelector(".sidebar-foot").parentElement.getBoundingClientRect()];
+      return { settingsToSwitcher: Math.round(host.top - foot.bottom), switcherToModels: Math.round(models.top - host.bottom), modelsToEnd: Math.round(menu.bottom - models.bottom) };
+    });
+    for (const [name, gap] of Object.entries(rows)) assert.ok(gap >= 0 && gap <= 16, "the bottom rows of the side menu sit together (" + (collapsed ? "narrow" : "open") + "): " + JSON.stringify(rows) + ", " + name);
+    await b.shot("3a-b-side-menu-" + (collapsed ? "narrow" : "open") + ".png");
+  }
   assert.equal(await switcher.getAttribute("aria-label"), "Computer: This computer. Switch computer");
   await switcher.click();
   await b.page.getByRole("menu", { name: "Computers" }).waitFor();

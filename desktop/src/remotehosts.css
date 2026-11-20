@@ -1,7 +1,8 @@
 /* Using another computer's Botkins: the switcher, the line across the top, the pairing form (src/RemoteHosts.tsx). */
+/* The switcher sits right under Settings. The space above the side menu's bottom rows belongs to
+   Settings' row alone (.sidebar-foot): a second row that asked for it too would be pushed apart from it. */
 .host-switch {
   position: relative;
-  margin-top: auto;
 }
 .host-switch + .account {
   margin-top: 0;
