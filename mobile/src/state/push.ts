@@ -46,7 +46,7 @@ type PushStore = {
 };
 export const usePush = create<PushStore>(() => ({ wanted: false, status: native ? "off" : "unsupported", problem: null }));
 
-export const pushDefaults: PushPrefs = { replies: true, requests: true, routines: true, previews: true, activities: true };
+export const pushDefaults: PushPrefs = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true };
 /** This phone's choices as the computer holds them, or null while notifications are off there. */
 export function usePushPrefs(): PushPrefs | null {
   return useApp((state) => (state.pairing ? (state.parts.phones?.[state.pairing.deviceId]?.push ?? null) : null));
@@ -192,7 +192,7 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
   const host = hostOf(response);
   const kind = kindOf(response);
   native.Notifications.clearLastNotificationResponse();
-  if (!chatId && kind !== "team") return;
+  if (!chatId && kind !== "team" && kind !== "update") return;
   // The app may still be starting: the chat opens once the pairing is read. An alert from another
   // paired computer makes the phone use that computer first.
   const go = () => {
@@ -201,6 +201,11 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
     if (other) void switchComputer(host);
     if (kind === "team") {
       router.push({ pathname: "/settings/team", params: { section: "requests" } });
+      return;
+    }
+    // "A newer Botkins is out" ("app-update-v1"): the computer's page, where it is installed.
+    if (kind === "update") {
+      router.push("/settings/desktop");
       return;
     }
     if (!chatId) return;

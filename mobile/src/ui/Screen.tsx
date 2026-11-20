@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { ActivityIndicator, Platform, RefreshControl, ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRestarting } from "@/state/appUpdate";
 import { wake } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Tap } from "./Tap";
@@ -20,7 +21,25 @@ export function LinkBanner() {
   const link = useApp((state) => state.link);
   const synced = useApp((state) => state.synced);
   const name = useApp((state) => state.pairing?.name) ?? "your computer";
+  // An update this phone started restarts the computer's Botkins: for its first minutes that is said
+  // instead of a failure (src/state/appUpdate.ts), and a tap still tries again.
+  const restarting = useRestarting();
   if (link === "online" || (link === "connecting" && synced)) return null;
+  if (restarting?.stage === "restarting" && link !== "revoked")
+    return (
+      <Tap
+        onPress={() => wake()}
+        feel="select"
+        sink={0.98}
+        accessibilityLabel={"Botkins on " + name + " is restarting to update. Try again"}
+        style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, paddingLeft: space.lg, borderRadius: radius.md, backgroundColor: colors.infoSoft }}
+      >
+        <ActivityIndicator color={colors.info} />
+        <T variant="subhead" weight="600" color="info" style={{ flex: 1 }} numberOfLines={2}>
+          {"Botkins on " + name + " is restarting to update"}
+        </T>
+      </Tap>
+    );
   const revoked = link === "revoked";
   const connecting = link === "connecting";
   return (

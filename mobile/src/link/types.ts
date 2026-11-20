@@ -792,6 +792,8 @@ export type UsageReport = {
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
  * "frames-v1" (custom views: the page of an html block, for the phone to draw),
  * "provider-usage-v1" (each provider's plan and what is left of its limits),
+ * "app-update-v1" (the app's: which Botkins the computer runs, checking for a newer release and
+ * starting its install from a phone, and whether a host installs them by itself),
  * "devices-v1" (the list of paired devices, and renaming and removing one), "device-person-v1" (the
  * name of the person each device belongs to, and "link.devices.setPerson"),
  * "side-pane-v1" (a bot can open a pane beside a chat: a custom view, a table, a website, the screen),
@@ -980,7 +982,24 @@ export type PluginConfigValue = string | CredentialRef | null;
 // what a notification says is sealed for the phone, so the relay and Apple carry no message text.
 
 /** What a phone wants to be told about. `previews` off shows "New message" with no text. */
-export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean };
+/** `updates`: a newer Botkins for the computer is out ("app-update-v1"). A computer from before leaves it out; it counts as on. */
+export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean; updates?: boolean };
+/**
+ * The computer's own Botkins and its updates ("app-update-v1"; docs/link-contract.md). `message` is
+ * the computer's sentence (why it can't install, what failed), shown as it comes. `auto` is there
+ * only on a host that can install by itself. `last` is how the last install ended, kept across the
+ * restart it causes, a rollback too.
+ */
+export type AppUpdate = {
+  status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error";
+  current: string;
+  latest?: string;
+  canInstall: boolean;
+  installer?: string;
+  message?: string;
+  auto?: boolean;
+  last?: { at: string; from: string; to: string; ok: boolean; message?: string };
+};
 /** Where Apple delivers for this phone. `start` is the token that can start a Live Activity (iOS 17.2 or later). */
 export type PushTarget = { token: string; env: "production" | "sandbox"; start?: string };
 /** A paired phone as the computer knows it. Tokens stay on the computer and are not in here. */
@@ -1071,6 +1090,13 @@ export type LiveSession =
 export type Calls = {
   setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers">> & { appearance?: Partial<Appearance> }): void;
   appInfo(): { version: string; electron: string; chrome: string; platform: string };
+  // ---- The computer's own updates ("app-update-v1"; the owner's devices only). None takes a version or an address.
+  appUpdateStatus(): AppUpdate;
+  checkAppUpdate(): AppUpdate;
+  /** Installs `latest` and restarts the computer's Botkins: the link drops and comes back. `last` says how it ended. */
+  installAppUpdate(): AppUpdate;
+  /** Installing by itself, on a host that can (`auto` present). Refused elsewhere. */
+  setAppUpdateAuto(on: boolean): AppUpdate;
   addBot(bot: BotInput): string;
   updateBot(id: string, patch: Partial<Pick<Bot, "role" | "instructions" | "name" | "clarificationInstructions" | "summary" | "avatar">>): void;
   setBotFlags(id: string, flags: Partial<Pick<Bot, "pinned" | "hidden" | "sectionId" | "teamwork">>): void;

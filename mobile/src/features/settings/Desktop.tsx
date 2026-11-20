@@ -9,6 +9,7 @@ import { useApp } from "@/state/store";
 import { Badge, brand, Button, Group, IconTile, Label, Mascot, Page, radius, Row, space, T, tint, useTheme } from "@/ui";
 import { addComputer, switchTo } from "@/features/home/computers";
 import { ScreenAccess } from "@/features/remote/ScreenAccess";
+import { AppUpdates } from "./AppUpdates";
 import { megabytes } from "./computer";
 import { Devices } from "./Devices";
 import { capitalize, InfoRow, LINK_STATUS, linkLabel, useHeld } from "./shared";
@@ -189,6 +190,9 @@ export default function Desktop() {
           )}
         </Group>
       )}
+
+      {/* Keyed by the computer: after a switch, nothing of the last computer's update shows. */}
+      {!member && <AppUpdates key={pairing?.serverId} name={name} />}
 
       {!member && <ScreenAccess />}
 

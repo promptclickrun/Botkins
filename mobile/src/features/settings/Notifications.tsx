@@ -2,11 +2,11 @@
 // notification shows, and Live Activities. The choices are kept on the computer for this phone, so
 // it knows what to send; the switch that turns everything on is this phone's own. Under them, the
 // computer's own notifications (ComputerAlerts).
-import { Bell, BellRing, CircleHelp, Eye, MessageCircle, Repeat, Smartphone } from "lucide-react-native";
+import { Bell, BellRing, CircleHelp, Download, Eye, MessageCircle, Repeat, Smartphone } from "lucide-react-native";
 import { useState } from "react";
 import { Linking, View } from "react-native";
 import type { PushPrefs } from "@/link/types";
-import { useMember, useOnline, usePart } from "@/state/hooks";
+import { useCapability, useMember, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { disablePush, enablePush, pushDefaults, usePush, usePushPrefs } from "@/state/push";
 import { showToast } from "@/state/store";
@@ -18,6 +18,7 @@ export default function Notifications() {
   const online = useOnline();
   const supported = usePart("meta")?.capabilities.includes("push-v1");
   const member = useMember();
+  const canUpdate = useCapability("app-update-v1");
   const { wanted, status, problem } = usePush();
   const saved = usePushPrefs();
   const [busy, setBusy] = useState(false);
@@ -77,6 +78,10 @@ export default function Notifications() {
               <Row leading={<IconTile icon={MessageCircle} color={colors.ink2} />} title="A bot replies" toggled={prefs.replies} onToggle={(replies) => void set({ replies })} />
               <Row leading={<IconTile icon={CircleHelp} color={colors.ink2} />} title="A bot needs me" subtitle="Approvals and questions" toggled={prefs.requests} onToggle={(requests) => void set({ requests })} />
               <Row leading={<IconTile icon={Repeat} color={colors.ink2} />} title="A routine finishes" subtitle="Each routine can also be made quiet" toggled={prefs.routines} onToggle={(routines) => void set({ routines })} />
+              {/* "app-update-v1": a computer from before leaves the choice out, and it counts as on. */}
+              {canUpdate && !member && (
+                <Row leading={<IconTile icon={Download} color={colors.ink2} />} title="A Botkins update is out" subtitle="For your computer" toggled={prefs.updates !== false} onToggle={(updates) => void set({ updates })} />
+              )}
             </Group>
           </View>
 

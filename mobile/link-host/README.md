@@ -127,7 +127,7 @@ The demo computer (`npm run dev-host`) opens no relay socket unless `BOTKINS_DEV
 - A turn the person started gets a Live Activity: started by a push (only when the phone has a start token and isn't in front), updated while it runs, and ended when it finishes, whatever the notification choices are. A scheduled turn gets none.
 - A phone that is in front and was heard from recently gets nothing about what it is showing. The computer's own window counts too: when `backend.attention()` says the person is reading a chat there, a reply in it isn't sent.
 
-**What is sealed and what is not.** An alert's title and text never cross the relay in the clear. The payload Apple carries says only "Botkins" and "New message" or "A bot needs you", and the real text is in `b`, sealed for one phone and opened by the phone's notification extension:
+**What is sealed and what is not.** An alert's title and text never cross the relay in the clear. The payload Apple carries says only "Botkins" and "New message", "A bot needs you" or "An update is available", and the real text is in `b`, sealed for one phone and opened by the phone's notification extension:
 
 ```
 key  = HKDF-SHA256(device key, salt = device id, info = "botkins/push/v1")
