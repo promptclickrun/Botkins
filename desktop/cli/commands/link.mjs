@@ -2,21 +2,26 @@
 import { ago, CliError, EXIT, table, usage } from "../output.mjs";
 import { confirm } from "./input.mjs";
 
+// The longest a pairing code may stay open: a day (desktop/terminal/control.mjs checks the same).
+const MAX_PAIR_MINUTES = 24 * 60;
 const deviceRows = (devices) => devices.map((device) => [device.name, device.person ?? "", device.kind, device.platform, device.connected ? "connected" : "last seen " + ago(device.lastSeenAt), device.id]);
 
 export const link = {
   pair: {
     summary: "Show a pairing code (QR code, code and link) for a phone",
-    usage: "botkins pair [--no-wait] [--no-qr]",
+    usage: "botkins pair [--ttl <minutes>] [--no-wait] [--no-qr]",
     options: {
+      ttl: { type: "string", value: "minutes", about: "How long the code stays open, from 1 to 1440 minutes (5)" },
       "no-wait": { type: "boolean", about: "Print the code and return, without waiting for the phone" },
       wait: { type: "boolean", about: "With --json: wait for the phone and print the device too" },
       "no-qr": { type: "boolean", about: "Leave the QR code out (for a terminal that can't draw it)" },
     },
-    details: "Open Botkins on the phone, choose to add a computer and scan the code, or type the address and the code. The code works once and for five minutes. It lets a phone in: show it only to the person whose phone it is.",
+    details: "Open Botkins on the phone, choose to add a computer and scan the code, or type the address and the code. The code works once and for five minutes, or for as long as --ttl says when the phone's owner gets it later. It lets a phone in: show it only to the person whose phone it is.",
     async run(context) {
+      const minutes = context.options.ttl === undefined ? undefined : Number(context.options.ttl);
+      if (minutes !== undefined && !(Number.isInteger(minutes) && minutes >= 1 && minutes <= MAX_PAIR_MINUTES)) throw usage("--ttl takes a whole number of minutes from 1 to " + MAX_PAIR_MINUTES + ".");
       const before = new Set((await context.client.call("devices.list")).map((device) => device.id));
-      const pairing = await context.client.call("pair.start");
+      const pairing = await context.client.call("pair.start", ...(minutes === undefined ? [] : [{ minutes }]));
       const status = await context.client.call("status");
       const waits = context.json ? context.options.wait === true : context.options["no-wait"] !== true;
       if (!context.json) {

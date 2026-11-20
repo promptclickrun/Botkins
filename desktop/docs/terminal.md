@@ -177,6 +177,12 @@ The command prints a QR code, a code and a link. Open Botkins on the phone, choo
 
 The code works one time, for five minutes. It lets a phone in, so show it only to the owner of the phone.
 
+If the owner of the phone gets the code later, keep it open for longer. `--ttl` takes minutes, from 1 to 1440. In a script, add `--no-wait --json` to get the code and the link as JSON without waiting for the phone:
+
+```sh
+botkins pair --ttl 60 --no-wait --json
+```
+
 A phone on another network needs an address that it can reach. Use one of these:
 
 - Turn the relay on: `botkins relay on`. The host keeps one outgoing connection to `relay.botkins.app`, and the phone connects through it. The relay cannot read the messages, because the phone and the host seal them.

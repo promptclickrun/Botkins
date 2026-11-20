@@ -154,6 +154,15 @@ test("with --json a command prints exactly one JSON document, the service's own 
   const pairing = await botkins(["pair", "--no-wait", "--no-qr"], { service });
   assert.match(pairing.out, /Code\s+ABCDEFGH12/);
   assert.doesNotMatch(pairing.out, /██/);
+  // Without --ttl the service opens the code for its own few minutes; with it, for that many.
+  assert.deepEqual(service.calls.at(-2), ["pair.start"]);
+  const handed = await botkins(["pair", "--ttl", "60", "--no-wait", "--json"], { service });
+  assert.deepEqual(service.calls.find(([method, options]) => method === "pair.start" && options), ["pair.start", { minutes: 60 }]);
+  assert.equal(handed.json().code, "ABCDEFGH12");
+  for (const bad of ["0", "1441", "1.5", "soon"]) {
+    const refused = await botkins(["pair", "--ttl", bad, "--no-wait"], { service });
+    assert.deepEqual([refused.exit, /--ttl takes a whole number of minutes/.test(refused.err)], [EXIT.usage, true], bad);
+  }
 });
 
 test("a failure is one sentence on standard error, an error document with --json, and an exit code a script can test", async () => {
