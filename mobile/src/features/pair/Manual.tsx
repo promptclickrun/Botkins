@@ -1,3 +1,4 @@
+import { useLocalSearchParams } from "expo-router";
 import { Check, Monitor } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Linking, View } from "react-native";
@@ -17,7 +18,9 @@ export default function Manual() {
   const [typing, setTyping] = useState(!canLookNearby);
   const [address, setAddress] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
-  const [code, setCode] = useState("");
+  // A pairing code typed in Join's invite field arrives here (joinLogic.ts).
+  const given = useLocalSearchParams<{ code?: string }>().code;
+  const [code, setCode] = useState(typeof given === "string" ? given : "");
   const { busy, error, errorCode, start, clear } = usePairing();
   const { computers, looking, blocked } = useNearby(!typing);
 

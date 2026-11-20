@@ -7,6 +7,7 @@ import {
   parseInviteInput,
   pollJoinState,
   readJoinResume,
+  savedJoin,
 } from "../src/features/pair/joinLogic";
 import { can, toggleRoleAction } from "../src/state/team";
 
@@ -84,7 +85,7 @@ test("join polling reaches terminal states and resumes a saved attempt", async (
   const resumed = await readJoinResume(
     async () => {
       reads++;
-      return JSON.stringify(attempt);
+      return savedJoin(attempt, Date.now() - 60_000);
     },
     async (saved) => ({ status: "approved", pairing: { serverId: saved.target.serverId!, serverKey: saved.target.serverKey, deviceId: "device", secretKey: saved.keys.secretKey, hosts: saved.target.hosts, name: "Studio", member: true } }),
   );
