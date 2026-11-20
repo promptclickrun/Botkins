@@ -79,6 +79,8 @@ export async function openChatPath(shell, path, action = "open") {
 export async function thumbnail(info, size, nativeImage) {
   if (!Number.isInteger(size) || size < 16 || size > 512) throw new Error("Invalid thumbnail size.");
   if (!["image", "video"].includes(info.kind) && info.mime !== "application/pdf") return null;
+  // A host with nothing to draw pictures with (desktop/host/headless.mjs) has no thumbnails.
+  if (!nativeImage) return null;
   try {
     let image;
     if (process.platform !== "linux") image = await nativeImage.createThumbnailFromPath(info.path, { width: size, height: size });
