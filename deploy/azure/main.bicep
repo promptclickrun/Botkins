@@ -2,6 +2,9 @@
 // Caddy for HTTPS on the VM's Azure DNS name, and the self-hosted relay behind it. The deployment's
 // output is a pairing link to open on a phone.
 //
+// By default the VM runs the terminal host: Botkins as one small service with no display. With
+// screenAccess it runs Botkins on a virtual display that a paired phone can see and control.
+//
 // Build azuredeploy.json from this file with: az bicep build -f main.bicep --outfile azuredeploy.json
 
 @description('Where the VM runs.')
@@ -12,17 +15,24 @@ param location string = resourceGroup().location
 @maxLength(40)
 param vmName string = 'botkins'
 
-@description('The VM size. Botkins builds and runs Electron: 2 vCPUs and 8 GB is the comfortable minimum.')
+@description('Screen access. Off: the terminal host, one small service with no display, which is what most servers need. On: Botkins runs on a virtual display, so a paired phone can see and control the server\'s screen. That needs a bigger VM image and a longer first build.')
+param screenAccess bool = false
+
+@description('The VM size. Leave empty for the default: 2 vCPUs and 4 GB for the terminal host, 2 vCPUs and 8 GB with Screen access. Screen access builds and runs Electron and needs 8 GB.')
 @allowed([
+  ''
+  'Standard_D2als_v6'
+  'Standard_D2ls_v6'
+  'Standard_D2als_v7'
+  'Standard_D2ls_v7'
   'Standard_D2as_v6'
   'Standard_D2s_v6'
+  'Standard_D2as_v7'
+  'Standard_D2s_v7'
   'Standard_D4as_v6'
   'Standard_D4s_v6'
-  'Standard_D2as_v5'
-  'Standard_D2s_v5'
-  'Standard_B2ms'
 ])
-param vmSize string = 'Standard_D2as_v6'
+param vmSize string = ''
 
 @description('The name your phone shows for this server.')
 @maxLength(60)
@@ -64,6 +74,7 @@ param repositoryRef string = 'main'
 @description('Change this to run the setup again on an existing deployment (for example to get a new pairing link).')
 param setupRun string = utcNow()
 
+var size = !empty(vmSize) ? vmSize : screenAccess ? 'Standard_D2as_v6' : 'Standard_D2als_v6'
 var label = empty(dnsLabel) ? toLower('${take(replace(vmName, '_', '-'), 30)}-${uniqueString(resourceGroup().id, vmName)}') : toLower(dnsLabel)
 var fqdn = '${label}.${location}.cloudapp.azure.com'
 var b64 = {
@@ -75,8 +86,9 @@ var b64 = {
   claude: base64(claudeCodeToken)
   github: base64(githubCopilotToken)
   push: base64(pushNotifications ? 'https://relay.botkins.app' : 'off')
+  screen: base64(screenAccess ? 'true' : 'false')
 }
-var setupCommand = 'echo ${base64(loadTextContent('install.sh'))} | base64 -d > /root/botkins-install.sh && BK_FQDN=${b64.fqdn} BK_EMAIL=${b64.email} BK_NAME=${b64.name} BK_REPO=${b64.repo} BK_REF=${b64.ref} BK_CLAUDE_TOKEN=${b64.claude} BK_GITHUB_TOKEN=${b64.github} BK_PUSH=${b64.push} bash /root/botkins-install.sh'
+var setupCommand = 'echo ${base64(loadTextContent('install.sh'))} | base64 -d > /root/botkins-install.sh && BK_FQDN=${b64.fqdn} BK_EMAIL=${b64.email} BK_NAME=${b64.name} BK_REPO=${b64.repo} BK_REF=${b64.ref} BK_CLAUDE_TOKEN=${b64.claude} BK_GITHUB_TOKEN=${b64.github} BK_PUSH=${b64.push} BK_SCREEN=${b64.screen} bash /root/botkins-install.sh'
 
 var webRules = [
   {
@@ -179,7 +191,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
   properties: {
-    hardwareProfile: { vmSize: vmSize }
+    hardwareProfile: { vmSize: size }
     securityProfile: {
       securityType: 'TrustedLaunch'
       uefiSettings: { secureBootEnabled: true, vTpmEnabled: true }

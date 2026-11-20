@@ -5,7 +5,7 @@
   "parameters": {
     "config": {
       "basics": {
-        "description": "**Botkins on Azure.** One VM runs Botkins and its own relay. When the deployment finishes, open **Outputs** and use the **pairingLink** on your phone to pair the Botkins app. Phones reach the server only through its own relay, over HTTPS on the VM's Azure DNS name.",
+        "description": "**Botkins on Azure.** One VM runs Botkins and its own relay. When the deployment finishes, open **Outputs** and use the **pairingLink** on your phone to pair the Botkins app. Phones reach the server only through its own relay, over HTTPS on the VM's Azure DNS name. The server has no screen unless you turn on **Screen access**.",
         "location": {
           "label": "Region",
           "toolTip": "Where the VM runs. If a size isn't available here, pick another region or size."
@@ -30,20 +30,80 @@
         "type": "Microsoft.Common.TextBox",
         "label": "Name on your phone",
         "defaultValue": "Botkins on Azure",
-        "constraints": { "required": true, "regex": "^.{1,60}$", "validationMessage": "Up to 60 characters." }
+        "constraints": {
+          "required": true,
+          "regex": "^.{1,60}$",
+          "validationMessage": "Up to 60 characters."
+        }
       },
       {
-        "name": "vmSize",
+        "name": "screenAccess",
+        "type": "Microsoft.Common.CheckBox",
+        "label": "Screen access",
+        "defaultValue": false,
+        "toolTip": "Runs Botkins on a virtual display, so your phone can see and control the server's screen. This needs a bigger VM image and a longer first build. Leave it off for a server with no screen: you still use your bots, chats and tools from the phone."
+      },
+      {
+        "name": "vmSizeTerminal",
         "type": "Microsoft.Compute.SizeSelector",
         "label": "VM size",
-        "toolTip": "2 vCPUs and 8 GB is the comfortable minimum.",
-        "recommendedSizes": ["Standard_D2as_v6", "Standard_D2s_v6", "Standard_D4as_v6"],
+        "toolTip": "Without Screen access the server is small: 2 vCPUs and 4 GB is plenty.",
+        "recommendedSizes": [
+          "Standard_D2als_v6",
+          "Standard_D2ls_v6",
+          "Standard_D2as_v6"
+        ],
         "constraints": {
-          "allowedSizes": ["Standard_D2as_v6", "Standard_D2s_v6", "Standard_D4as_v6", "Standard_D4s_v6", "Standard_D2as_v5", "Standard_D2s_v5", "Standard_B2ms"]
+          "allowedSizes": [
+            "Standard_D2als_v6",
+            "Standard_D2ls_v6",
+            "Standard_D2als_v7",
+            "Standard_D2ls_v7",
+            "Standard_D2as_v6",
+            "Standard_D2s_v6",
+            "Standard_D2as_v7",
+            "Standard_D2s_v7",
+            "Standard_D4as_v6",
+            "Standard_D4s_v6"
+          ]
         },
         "osPlatform": "Linux",
-        "imageReference": { "publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server" },
-        "count": 1
+        "imageReference": {
+          "publisher": "Canonical",
+          "offer": "ubuntu-24_04-lts",
+          "sku": "server"
+        },
+        "count": 1,
+        "visible": "[not(basics('screenAccess'))]"
+      },
+      {
+        "name": "vmSizeScreen",
+        "type": "Microsoft.Compute.SizeSelector",
+        "label": "VM size",
+        "toolTip": "Screen access builds and runs the desktop app: 2 vCPUs and 8 GB is the comfortable minimum.",
+        "recommendedSizes": [
+          "Standard_D2as_v6",
+          "Standard_D2s_v6",
+          "Standard_D4as_v6"
+        ],
+        "constraints": {
+          "allowedSizes": [
+            "Standard_D2as_v6",
+            "Standard_D2s_v6",
+            "Standard_D2as_v7",
+            "Standard_D2s_v7",
+            "Standard_D4as_v6",
+            "Standard_D4s_v6"
+          ]
+        },
+        "osPlatform": "Linux",
+        "imageReference": {
+          "publisher": "Canonical",
+          "offer": "ubuntu-24_04-lts",
+          "sku": "server"
+        },
+        "count": 1,
+        "visible": "[basics('screenAccess')]"
       }
     ],
     "steps": [
@@ -56,24 +116,38 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "icon": "Info",
-              "text": "Both are optional. Without them, sign in to a provider from the Botkins app after pairing: open the server's Screen and finish the sign-in page there. Tokens are passed in the VM extension's encrypted settings and kept only on the VM."
+              "text": "Both are optional. Without them, sign in to a provider later. On a server without Screen access, run `botkins host providers login <provider>` on the VM. With Screen access, open the server's Screen in the Botkins app after pairing and finish the sign-in page there. Tokens are passed in the VM extension's encrypted settings and kept only on the VM."
             }
           },
           {
             "name": "claudeCodeToken",
             "type": "Microsoft.Common.PasswordBox",
-            "label": { "password": "Claude Code token", "confirmPassword": "Confirm token" },
+            "label": {
+              "password": "Claude Code token",
+              "confirmPassword": "Confirm token"
+            },
             "toolTip": "Run `claude setup-token` on a computer signed in to your Claude plan, and paste the token.",
-            "constraints": { "required": false },
-            "options": { "hideConfirmation": true }
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
           },
           {
             "name": "githubCopilotToken",
             "type": "Microsoft.Common.PasswordBox",
-            "label": { "password": "GitHub Copilot token", "confirmPassword": "Confirm token" },
+            "label": {
+              "password": "GitHub Copilot token",
+              "confirmPassword": "Confirm token"
+            },
             "toolTip": "A GitHub token for an account with Copilot access (for example from `gh auth token`).",
-            "constraints": { "required": false },
-            "options": { "hideConfirmation": true }
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
           }
         ]
       },
@@ -102,10 +176,20 @@
           {
             "name": "admin",
             "type": "Microsoft.Compute.CredentialsCombo",
-            "label": { "authenticationType": "Authentication", "sshPublicKey": "SSH public key" },
-            "toolTip": { "sshPublicKey": "Choose Generate new key pair to have Azure make one and download the private key." },
-            "constraints": { "required": true },
-            "options": { "hideConfirmation": true, "hidePassword": true },
+            "label": {
+              "authenticationType": "Authentication",
+              "sshPublicKey": "SSH public key"
+            },
+            "toolTip": {
+              "sshPublicKey": "Choose Generate new key pair to have Azure make one and download the private key."
+            },
+            "constraints": {
+              "required": true
+            },
+            "options": {
+              "hideConfirmation": true,
+              "hidePassword": true
+            },
             "osPlatform": "Linux"
           },
           {
@@ -114,7 +198,9 @@
             "label": "Administrator name",
             "defaultValue": "botkins",
             "osPlatform": "Linux",
-            "constraints": { "required": true }
+            "constraints": {
+              "required": true
+            }
           },
           {
             "name": "sshAllowedFrom",
@@ -134,7 +220,8 @@
       "location": "[location()]",
       "vmName": "[basics('vmName')]",
       "serverName": "[basics('serverName')]",
-      "vmSize": "[basics('vmSize')]",
+      "screenAccess": "[basics('screenAccess')]",
+      "vmSize": "[if(basics('screenAccess'), basics('vmSizeScreen'), basics('vmSizeTerminal'))]",
       "claudeCodeToken": "[steps('providers').claudeCodeToken]",
       "githubCopilotToken": "[steps('providers').githubCopilotToken]",
       "pushNotifications": "[steps('server').pushNotifications]",

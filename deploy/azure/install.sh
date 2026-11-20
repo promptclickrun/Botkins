@@ -1,12 +1,16 @@
 #!/bin/bash
 # Installs Botkins with its own relay on a fresh Ubuntu 24.04 VM, then prints one line: the
-# pairing link. The Azure template runs this through the Custom Script extension and returns that
-# line as the deployment's output. It is safe to run again: it updates and restarts.
+# pairing link. By default it installs the terminal host (one small service, no display). With
+# Screen access it installs Botkins on a virtual display instead. The Azure template runs this
+# through the Custom Script extension and returns that line as the deployment's output. It is
+# safe to run again: it updates and restarts.
 #
 # Settings come from the environment, base64-encoded so no value needs quoting:
 #   BK_FQDN          the VM's public DNS name (required)
 #   BK_EMAIL         optional: a certificate contact address (also enables ZeroSSL as a fallback CA)
 #   BK_NAME          the name phones show for this server
+#   BK_SCREEN        "true" for Screen access: Botkins on a virtual display the phone can see and
+#                    control. Anything else installs the terminal host, which has no screen.
 #   BK_REPO, BK_REF  where the Botkins sources come from
 #   BK_CLAUDE_TOKEN  optional: a Claude Code token (`claude setup-token`)
 #   BK_GITHUB_TOKEN  optional: a GitHub token for Copilot
@@ -22,6 +26,10 @@ REF=$(decode "${BK_REF:-}")
 CLAUDE_TOKEN=$(decode "${BK_CLAUDE_TOKEN:-}")
 GITHUB_TOKEN=$(decode "${BK_GITHUB_TOKEN:-}")
 PUSH=$(decode "${BK_PUSH:-}")
+SCREEN=$(decode "${BK_SCREEN:-}")
+# The tokens stay in this shell: nothing this script starts inherits them.
+unset BK_CLAUDE_TOKEN BK_GITHUB_TOKEN
+if [ "$SCREEN" = true ]; then MODE=screen; else MODE=terminal; fi
 : "${NAME:=Botkins server}" "${REPO:=https://github.com/promptclickrun/Botkins}" "${REF:=main}" "${PUSH:=https://relay.botkins.app}"
 if [ -z "$FQDN" ]; then echo "BK_FQDN is required." >&2; exit 64; fi
 
@@ -61,23 +69,37 @@ else
 fi
 say "At $(git -C "$SRC" rev-parse --short HEAD)"
 
-say "Writing settings"
+# A server that ran the other setup stops it first. The two keep separate data, and both stay on disk.
+if [ -f /etc/botkins/botkins.env ]; then
+  WAS=$(sed -n 's/^BOTKINS_MODE=//p' /etc/botkins/botkins.env | head -n 1)
+  if [ "${WAS:-screen}" != "$MODE" ]; then
+    say "Stopping the earlier setup (${WAS:-screen})"
+    # By the project's name, so it does not depend on which files started it. Volumes are kept.
+    docker compose -p botkins down --remove-orphans || true
+  fi
+fi
+
+say "Writing settings ($MODE)"
 install -d -m 0700 /etc/botkins
 umask 077
 {
   printf 'BOTKINS_FQDN=%s\n' "$FQDN"
   printf 'BOTKINS_HOST_NAME=%s\n' "$NAME"
   printf 'BOTKINS_PUSH_UPSTREAM=%s\n' "$PUSH"
+  printf 'BOTKINS_MODE=%s\n' "$MODE"
 } >/etc/botkins/botkins.env
 {
   if [ -n "$EMAIL" ]; then printf '{\n\temail %s\n}\n\n' "$EMAIL"; fi
   cat "$SRC/deploy/azure/Caddyfile"
 } >/etc/botkins/Caddyfile
 chmod 0644 /etc/botkins/Caddyfile
-# Only the workspace container reads these. An empty file is fine: sign in later.
+# With Screen access, only the workspace container reads these. An empty file is fine: sign in
+# later. The terminal host keeps a sign-in in its own vault instead (below), so the file stays empty.
 {
-  [ -n "$CLAUDE_TOKEN" ] && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN"
-  [ -n "$GITHUB_TOKEN" ] && printf 'BOTKINS_COPILOT_TOKEN=%s\n' "$GITHUB_TOKEN"
+  if [ "$MODE" = screen ]; then
+    [ -n "$CLAUDE_TOKEN" ] && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN"
+    [ -n "$GITHUB_TOKEN" ] && printf 'BOTKINS_COPILOT_TOKEN=%s\n' "$GITHUB_TOKEN"
+  fi
   true
 } >/etc/botkins/providers.env
 umask 022
@@ -86,6 +108,28 @@ install -m 0755 "$SRC/deploy/azure/botkins" /usr/local/bin/botkins
 say "Building and starting (this takes several minutes the first time)"
 botkins compose build
 botkins compose up -d --remove-orphans
+
+if [ "$MODE" = terminal ]; then
+  say "Configuring the terminal host"
+  for i in $(seq 1 90); do botkins host status --json >/dev/null 2>&1 && break; sleep 2; done
+  # The host's own settings, through its own command: its name, and this server's relay.
+  botkins host config set name "$NAME"
+  botkins host config set relay.url "https://$FQDN"
+  botkins host relay on
+
+  # A sign-in given at deployment goes to the host on standard input, never on a command line,
+  # and the host keeps it sealed in its vault. A token the provider turns down is not kept: the
+  # server still works, and `botkins host providers login <provider>` signs in later.
+  signin() { # <provider> <token>
+    if printf '%s' "$2" | botkins host providers login "$1" --token; then say "Signed in: $1"; else say "The $1 token was not accepted. Sign in later: botkins host providers login $1"; fi
+  }
+  if [ -n "$GITHUB_TOKEN" ]; then signin copilot "$GITHUB_TOKEN"; fi
+  if [ -n "$CLAUDE_TOKEN" ]; then
+    # The terminal host's image has no Claude Code. It goes in the data volume, once.
+    say "Installing Claude Code"
+    if botkins install-claude; then signin claude "$CLAUDE_TOKEN"; else say "Claude Code did not install. Later: botkins install-claude, then botkins host providers login claude"; fi
+  fi
+fi
 
 say "Waiting for the certificate and the relay, then opening a pairing code"
 # A fresh code every run, so a rerun of the deployment hands out a new link with its full lifetime.

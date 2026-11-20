@@ -2,11 +2,27 @@
 # `botkins` command runs both files with --project-directory desktop, so paths here are
 # relative to desktop/.
 #
+# It runs one of two setups, by the profile the `botkins` command passes:
+#   terminal  the terminal host (`botkins`): one small Node service, no display
+#   display   Screen access (`host` and `workspace`): Botkins on a virtual display a phone can see
+#
 # Only Caddy listens on the internet (80 for the certificate check, 443). The relay sits behind
 # it, and the Botkins host reaches the relay through Caddy by the same public name the phones
 # use, without leaving the machine.
 
 services:
+  botkins:
+    # In the base file this service has no profile and always runs. Here it runs only when
+    # the deployment was made without Screen access.
+    profiles: ["terminal"]
+    environment:
+      # Phones reach this server through its relay only. The relay and the server's name are
+      # the terminal host's own settings: install.sh sets them with `botkins config set`.
+      BOTKINS_PAIR_ADDRESS: ""
+    # The link's port is not published: nothing reaches it from outside the container network.
+    ports: !reset []
+    depends_on: [caddy]
+
   host:
     environment:
       BOTKINS_RELAY_URL: "https://${BOTKINS_FQDN:?}"
@@ -59,7 +75,7 @@ services:
     depends_on: [relay]
     networks:
       default:
-        # The host container finds the relay at its public name here, so it needs no hairpin route.
+        # The Botkins host finds the relay at its public name here, so it needs no hairpin route.
         aliases:
           - "${BOTKINS_FQDN:?}"
 
