@@ -107,18 +107,24 @@ jobs:
     env:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
-      # The image is built from the source the release was cut from.
+      # The check script is the default branch's own, so a release that was tagged before a
+      # change to it is checked the same way as the next one.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      # The image is built from the source the release was cut from, in `source/`.
       - uses: actions/checkout@v7
         with:
           ref: v${{ needs.check.outputs.version }}
+          path: source
       - name: The tag's source is this version
-        run: test "$(jq -r .version desktop/package.json)" = "$VERSION"
+        run: test "$(jq -r .version source/desktop/package.json)" = "$VERSION"
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - name: Build the image for this machine
         uses: docker/build-push-action@v7
         with:
-          context: desktop
+          context: source/desktop
           target: terminal
           load: true
           tags: botkins:check
@@ -132,7 +138,7 @@ jobs:
           LATEST: ${{ needs.check.outputs.latest }}
         run: |
           {
-            echo "revision=$(git rev-parse HEAD)"
+            echo "revision=$(git -C source rev-parse HEAD)"
             echo "tags<<END"
             echo "$IMAGE:$VERSION"
             if [ "$LATEST" = "true" ]; then echo "$IMAGE:latest"; fi
@@ -146,7 +152,7 @@ jobs:
       - name: Build for x64 and arm64, and publish
         uses: docker/build-push-action@v7
         with:
-          context: desktop
+          context: source/desktop
           target: terminal
           platforms: linux/amd64,linux/arm64
           push: true
