@@ -1,8 +1,13 @@
-# Botkins headless host and its isolated virtual-display workspace.
+# Botkins on a server.
 #
-# The host and workspace are separate Compose services. The host owns the paired-phone
-# identity and screen grant. The workspace owns the Electron display and exposes only a
-# Unix socket through the shared runtime volume.
+# The default image (the last stage, `terminal`) is the terminal host: the whole workspace and
+# the phone link in one small Node service, with no Electron and no display. It is what
+# `docker compose up` runs. See docs/terminal.md.
+#
+# The stages before it are the earlier headless setup, kept for a phone that should see and
+# control a screen: a `host` that owns the paired-phone identity and the screen grant, and a
+# `workspace` that runs Electron on a virtual display and exposes only a Unix socket through the
+# shared runtime volume. `docker compose --profile display up` runs those two.
 FROM node:24-bookworm-slim AS botkins
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -121,3 +126,45 @@ CMD ["/usr/local/bin/botkins-headless-host"]
 
 FROM botkins AS workspace
 CMD ["/usr/local/bin/botkins-display-workspace"]
+
+# The terminal host: plain Node, nothing of a desktop. This is the default image.
+FROM node:24-bookworm-slim AS terminal
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Certificates for the providers and the relay, git for bots that work in a project folder, and
+# tini so the service is stopped properly and the tools it starts are reaped.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git tini \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/botkins
+
+COPY package.json package-lock.json ./
+# The same dependencies as the desktop app's own process, without Electron and the build tools.
+# The copies of Claude Code the SDK brings are left out, as in the desktop package: a host uses
+# the one that is installed on it.
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+  && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-* node_modules/electron-updater node_modules/@microsoft/copilot-sdk-linuxmusl-* \
+  && npm cache clean --force
+COPY cli ./cli
+COPY desktop ./desktop
+COPY install/botkins ./bin/botkins
+
+RUN groupadd --system --gid 10001 botkins \
+  && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /var/lib/botkins/home --shell /usr/sbin/nologin botkins \
+  && install -d -o botkins -g botkins -m 0700 /var/lib/botkins /var/lib/botkins/home \
+  && chmod 0755 bin/botkins \
+  && ln -s /opt/botkins/bin/botkins /usr/local/bin/botkins
+
+ENV NODE_ENV=production \
+    BOTKINS_DATA_DIR=/var/lib/botkins \
+    HOME=/var/lib/botkins/home
+
+USER botkins
+VOLUME ["/var/lib/botkins"]
+# The phone link. The control socket stays inside the container: `docker compose exec botkins botkins pair`.
+EXPOSE 47610
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD ["botkins", "status", "--json"]
+ENTRYPOINT ["/usr/bin/tini", "--", "botkins"]
+CMD ["serve"]

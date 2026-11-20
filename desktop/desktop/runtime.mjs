@@ -94,10 +94,12 @@ export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "r
  * @param options.pushed   Called when the app's own view of things is out of date (the desktop
  *   app tells its window). Calls may come in bursts: the listener coalesces them.
  * @param options.link     For a host that sets the link up itself: { port?, extraHosts?, announce? }.
+ * @param options.copilot  { github? }: () → { token } | undefined, for a host that keeps the
+ *   GitHub sign-in of the Copilot runtime itself (the terminal host, for a pasted token).
  * @returns What the program around it uses: `handlers`, `workspace`, `providers`, `link`, `phone`,
- *   and `begin()` / `stop()`.
+ *   `listening` (settles when the link's first start is over), and `begin()` / `stop()`.
  */
-export async function createRuntime({ host, dataDir, trial = false, pushed = () => {}, link: linkOptions = {} }) {
+export async function createRuntime({ host, dataDir, trial = false, pushed = () => {}, link: linkOptions = {}, copilot: copilotOptions = {} }) {
   let workspace,
     // The model providers (desktop/providers). To add one, construct it here and list it below.
     providers,
@@ -172,7 +174,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     baseDirectory: join(dataDir, "copilot"),
     // The person's Copilot sign-in is in the keychain. A trial run is given a token instead
     // (BOTKINS_COPILOT_TOKEN, else the GitHub CLI's), or runs signed out.
-    ...(trial && env("COPILOT_SIGNIN") !== "keychain" && { github: trialGitHub }),
+    ...(copilotOptions.github ? { github: copilotOptions.github } : trial && env("COPILOT_SIGNIN") !== "keychain" && { github: trialGitHub }),
     userHome: process.env.COPILOT_HOME || join(homedir(), ".copilot"),
     workingDirectory: dataDir,
     // A chat's session stays open for half an hour after its last use, so follow-ups start at once
@@ -905,10 +907,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   announcing.unref();
   // Listens only when the person turned phone access on. A busy port must not stop the app.
   let closeWorkspaceSocket;
+  let listening = Promise.resolve();
   if (workspaceSocket) {
     const { serveWorkspace } = await import("./headless/workspace.mjs");
     closeWorkspaceSocket = await serveWorkspace(workspaceSocket, linkBackend);
-  } else link.start().then(announce, (error) => console.error("Phone link:", error.message));
+  } else listening = link.start().then(announce, (error) => console.error("Phone link:", error.message));
   /** What the app's own view shows of this computer: the workspace, the team, and a number that goes up when a phone changes. */
   const snapshot = () => ({ ...workspace.snapshot(), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
   const tick = () => {
@@ -931,6 +934,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     bridge,
     link,
     linkBackend,
+    listening,
     handlers,
     phone,
     notifier,

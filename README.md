@@ -85,7 +85,7 @@ Pair the phone app, and your team goes with you.
 ### Use Botkins anywhere
 
 - **macOS, Windows and Linux.** Signed and notarized on Mac. Updates check GitHub Releases.
-- **Headless servers.** Run Botkins in Docker and use it from your phone. See [the headless setup](desktop/desktop/README.md).
+- **Headless servers.** Run Botkins as a service on a computer with no screen, and use it from your phone. One command installs it, and `botkins` operates it from a terminal. See [Run Botkins from a terminal](desktop/docs/terminal.md).
 - **Other computers.** Pair one Botkins with another, and switch between them from the side menu.
 
 ## Privacy and security

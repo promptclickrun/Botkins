@@ -1,7 +1,44 @@
 name: botkins
 
+# `docker compose up -d` runs the terminal host: Botkins as one small Node service, with no display.
+# Pair a phone with `docker compose exec botkins botkins pair`. See docs/terminal.md.
+#
+# `docker compose --profile display up -d` runs the earlier setup instead, for a phone that should
+# see and control a screen: the `host` and `workspace` services (desktop/README.md). The two
+# setups keep separate data; run one of them.
 services:
+  botkins:
+    build:
+      context: .
+      target: terminal
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      BOTKINS_DATA_DIR: /var/lib/botkins
+      # A container's own address is not one a phone can reach: the pairing code offers this one.
+      # Set it to the server's address on your network, or its public name (no port).
+      BOTKINS_PAIR_ADDRESS: "${BOTKINS_PAIR_ADDRESS:-127.0.0.1}"
+      # The link listens on the port that is published, so the port a phone is told is the one it reaches.
+      BOTKINS_LINK_PORT: "${BOTKINS_BIND_PORT:-47610}"
+      # The host key that wraps secrets at rest. With the secret below it stays out of the data
+      # volume; without it, the key is a file in the volume (docs/terminal.md, "Security").
+      # BOTKINS_KEY_FILE: /run/secrets/botkins_host_key
+    ports:
+      - "${BOTKINS_BIND_ADDRESS:-127.0.0.1}:${BOTKINS_BIND_PORT:-47610}:${BOTKINS_BIND_PORT:-47610}"
+    volumes:
+      - botkins-data:/var/lib/botkins
+    # secrets:
+    #   - botkins_host_key
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   host:
+    profiles: ["display"]
     build:
       context: .
       target: host
@@ -34,6 +71,7 @@ services:
     command: ["/usr/local/bin/botkins-headless-host"]
 
   workspace:
+    profiles: ["display"]
     build:
       context: .
       target: workspace
@@ -63,7 +101,12 @@ services:
       - ALL
     command: ["/usr/local/bin/botkins-display-workspace"]
 
+# secrets:
+#   botkins_host_key:
+#     file: ./botkins-host.key   # 32 random bytes: head -c 32 /dev/urandom | base64 > botkins-host.key
+
 volumes:
+  botkins-data:
   botkins-link:
   botkins-uploads:
   botkins-workspace:

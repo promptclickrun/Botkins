@@ -32,8 +32,17 @@ export async function latestRelease({ fetcher = fetch, token }) {
 }
 
 export class AppUpdates {
-  constructor({ current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable = async () => true, notify = () => {} }) {
-    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify });
+  /**
+   * @param options.linuxAsset   (version, arch) → the name of the tarball a copy installed from one
+   *   updates to. The desktop app's by default; the terminal host names its own.
+   * @param options.unitMissing  What to say when that tarball is there and the updater isn't set up.
+   * @param options.cannotInstall  What to say when asked to install and this copy can't. The desktop app's own words when left out.
+   */
+  constructor({ current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable = async () => true, notify = () => {},
+    linuxAsset = (version, arch) => "botkins-desktop-" + version + (arch === "arm64" ? "-arm64" : "") + ".tar.gz",
+    unitMissing = "Linux updates need the Botkins systemd updater unit.",
+    cannotInstall }) {
+    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify, linuxAsset, unitMissing, cannotInstall });
     this.state = { status: "idle", current, canInstall: false };
   }
 
@@ -49,13 +58,13 @@ export class AppUpdates {
       const { version, assets } = await this.latest();
       const newer = semver.gt(version, this.current);
       const macCompatible = [this.arch, "universal"].some(arch => assets.includes("Botkins-" + version + "-" + arch + "-mac.zip")) && assets.includes("latest-mac.yml");
-      const linuxName = "botkins-desktop-" + version + (this.arch === "arm64" ? "-arm64" : "") + ".tar.gz";
+      const linuxName = this.linuxAsset(version, this.arch);
       const linuxCompatible = assets.includes(linuxName);
       const unitReady = this.linux === true ? await this.linuxUnitAvailable() : false;
       this.state = { status: newer ? "available" : "current", current: this.current, latest: version,
         canInstall: newer && ((this.mac === true && macCompatible) || (this.linux === true && linuxCompatible && unitReady)),
         ...(this.linux && linuxCompatible && { installer: "linux-tarball" }),
-        ...(this.linux && newer && linuxCompatible && !unitReady && { message: "Linux updates need the Botkins systemd updater unit." }) };
+        ...(this.linux && newer && linuxCompatible && !unitReady && { message: this.unitMissing }) };
       if (newer && this.announced !== version) {
         this.announced = version;
         this.notify(version);
@@ -74,7 +83,7 @@ export class AppUpdates {
     this.installing = (async () => {
       const info = await checked;
       if (info.status === "current") return info;
-      if (!info.canInstall) throw new Error(this.linux ? "Linux tarball updates need a matching signed build and the Botkins systemd updater helper. Open GitHub Releases to see its downloads." : "This release has no compatible in-app installer for this copy. Open GitHub Releases to see its downloads.");
+      if (!info.canInstall) throw new Error(this.cannotInstall ?? (this.linux ? "Linux tarball updates need a matching signed build and the Botkins systemd updater helper. Open GitHub Releases to see its downloads." : "This release has no compatible in-app installer for this copy. Open GitHub Releases to see its downloads."));
       this.state = { ...info, status: "downloading", canInstall: false };
       try {
         await this.stage(info.latest);

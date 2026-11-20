@@ -6,6 +6,9 @@
   "private": true,
   "type": "module",
   "main": "desktop/start.mjs",
+  "bin": {
+    "botkins": "cli/botkins.mjs"
+  },
   "description": "Your bots, on your computer",
   "scripts": {
     "start": "npm run build && node scripts/start.cjs",
@@ -14,6 +17,7 @@
     "package": "npm run build && electron-builder --publish never",
     "package:windows": "npm run build && node scripts/package-windows.mjs",
     "package:linux": "npm run build && node scripts/package-linux.mjs",
+    "package:terminal": "node scripts/package-terminal.mjs --sums",
     "test:today": "node test/today-smoke.mjs",
     "test:controls": "node test/controls-smoke.mjs"
   },

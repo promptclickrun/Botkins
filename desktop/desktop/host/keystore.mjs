@@ -6,7 +6,7 @@
 // decides what a copy of the data folder is worth to someone who has nothing else:
 //
 //   systemd   The service's unit hands it over as a credential (LoadCredential= or
-//             LoadCredentialEncrypted=, see desktop/terminal/service.mjs): a file named
+//             LoadCredentialEncrypted=, see desktop/terminal/units.mjs): a file named
 //             "botkins-key" in $CREDENTIALS_DIRECTORY, a memory-only folder that only this
 //             service can read, and only while it runs. On disk the key is a root-only file
 //             (/etc/botkins/host.key, mode 0400, which the service's own user can't open), or
@@ -14,7 +14,9 @@
 //   keychain  macOS: a generic password in the keychain of the person the service runs as, read
 //             and written with /usr/bin/security.
 //   file      A key file, <data>/host.key unless BOTKINS_KEY_FILE names another, readable by the
-//             service's user only. This is what a plain `botkins serve` in a terminal uses.
+//             service's user only. This is what a plain `botkins serve` in a terminal uses, and
+//             (as /etc/botkins/host.key, root's own and readable by the service's group) what a
+//             service gets where systemd can't hand a credential over, as in some containers.
 //
 // What this is for, plainly. It protects the secrets in a copy of the data folder that left the
 // computer without the host key: a backup, a disk image of the data volume, a folder synced or
