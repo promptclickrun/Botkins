@@ -1,15 +1,18 @@
 // The model services inside a provider that holds several (OpenCode): connect one with its key, or
-// with one of its sign-ins. A sign-in is finished on the computer, and may come back with a code for
-// the person to type in (the desktop's ProviderSettings ConnectService).
+// with one of its sign-ins. With "provider-signin-v1" a sign-in runs on the computer and is finished
+// on the phone (SignInSheet.tsx: its page opens here). Without it, it is finished on the computer, and
+// may come back with a code for the person to type in (the desktop's ProviderSettings ConnectService).
+import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { CredentialPicker, PickedCredential } from "@/features/credentials/CredentialPicker";
 import type { CredentialRef, ProviderService } from "@/link/types";
-import { refresh } from "@/state/hooks";
+import { refresh, useCapability } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { showToast } from "@/state/store";
+import { showToast, useApp } from "@/state/store";
 import { Badge, Button, Field, Group, Label, Loading, Row, space, T, useTheme } from "@/ui";
+import { SIGNIN_CAPABILITY } from "./signin";
 
 /** Where connecting the open service is: choosing how, waiting for the sign-in on the computer, or asking for a code. */
 type Phase = { kind: "method" } | { kind: "waiting" } | { kind: "code"; attempt: string; instructions: string };
@@ -27,6 +30,9 @@ export function Services({ providerId }: { providerId: string }) {
   const [picked, setPicked] = useState<{ ref: CredentialRef; name: string } | undefined>(undefined);
   // A sign-in that was cancelled ignores its late answer.
   const tries = useRef(0);
+  const capable = useCapability(SIGNIN_CAPABILITY);
+  // A service connected elsewhere (the sign-in sheet, the computer) changes the providers' revision.
+  const revision = useApp((state) => state.parts.revs?.providers);
 
   useEffect(() => {
     let live = true;
@@ -34,7 +40,7 @@ export function Services({ providerId }: { providerId: string }) {
     return () => {
       live = false;
     };
-  }, [providerId, round]);
+  }, [providerId, round, revision]);
 
   const changed = async () => {
     setRound(round + 1);
@@ -54,6 +60,11 @@ export function Services({ providerId }: { providerId: string }) {
     await changed();
   };
   const connect = async (service: ProviderService, how: { key: string } | { method: string }) => {
+    // The computer runs the service's sign-in and the phone finishes it, with no browser on the computer.
+    if ("method" in how && capable) {
+      router.push({ pathname: "/models/signin", params: { id: providerId, mode: "signin", service: service.id, method: how.method, label: service.name } });
+      return;
+    }
     const mine = ++tries.current;
     if ("method" in how) setPhase({ kind: "waiting" });
     else setBusy(true);

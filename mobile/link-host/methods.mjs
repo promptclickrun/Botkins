@@ -44,6 +44,9 @@ export const REMOTE_METHODS = new Set([
   // Models and providers
   "models", "setModel", "providers", "setProviderEnabled", "auth", "signIn", "cancelSignIn", "signOut",
   "providerServices", "connectProviderService", "finishProviderService", "cancelProviderService", "disconnectProviderService",
+  // Signing in and installing from a phone ("provider-signin-v1"): the computer runs the provider's
+  // own sign-in or install command; the phone only names the provider.
+  "providerSignInStart", "providerSignInRead", "providerSignInInput", "providerSignInCancel", "providerUseToken", "installProvider",
   // Routines and tasks
   "createRoutine", "updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine",
   "previewCadence", "changeSchedule",
@@ -298,5 +301,43 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? args;
+}
+
+/** The longest of each thing a phone sends to sign a provider in or install one. */
+export const PROVIDER_LIMITS = { id: 100, session: 100, service: 200, text: 4000, token: 8000 };
+const cut = (value, limit) => (typeof value === "string" ? value.slice(0, limit) : "");
+
+/**
+ * The provider sign-in and install calls ("provider-signin-v1"), cut to their shape: ids and lines
+ * as strings of a bounded length, a token as a string or a saved credential reference, nothing
+ * else. Null for any other call.
+ */
+function providerArgs(method, args) {
+  const id = () => cut(args[0], PROVIDER_LIMITS.id);
+  const session = () => cut(args[0], PROVIDER_LIMITS.session);
+  const service = (options) => (options && typeof options === "object" && typeof options.service === "string" ? { service: options.service.slice(0, PROVIDER_LIMITS.service) } : {});
+  switch (method) {
+    case "providerSignInStart": {
+      const options = args[1] && typeof args[1] === "object" ? args[1] : {};
+      return [id(), { ...service(options), ...(typeof options.method === "string" && { method: options.method.slice(0, PROVIDER_LIMITS.service) }) }];
+    }
+    case "providerSignInRead":
+      return [session(), Number.isSafeInteger(args[1]) && args[1] > 0 ? args[1] : 0];
+    case "providerSignInInput":
+      if (typeof args[1] !== "string" || args[1].length > PROVIDER_LIMITS.text) throw new Error("That is too long to be a code.");
+      return [session(), args[1]];
+    case "providerSignInCancel":
+      return [session()];
+    case "providerUseToken": {
+      const token = args[1];
+      const reference = token && typeof token === "object" && typeof token.$credential === "string";
+      if (!reference && (typeof token !== "string" || !token.trim() || token.length > PROVIDER_LIMITS.token)) throw new Error("Paste the token or key.");
+      return [id(), reference ? { $credential: token.$credential } : token, service(args[2])];
+    }
+    case "installProvider":
+      return [id()];
+    default:
+      return null;
+  }
 }
