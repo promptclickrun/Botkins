@@ -1,0 +1,12 @@
+# The site the Azure deployment serves. install.sh writes /etc/botkins/Caddyfile from this file, with a
+# global `email` block first when the deployment was given a certificate email (that also lets Caddy fall
+# back to ZeroSSL; without one it uses Let's Encrypt only).
+#
+# No access log: request lines would hold room names and invite lookups.
+{$BOTKINS_FQDN} {
+	encode zstd gzip
+	reverse_proxy relay:8080 {
+		# The relay counts limits per network: it trusts this header, set here and nowhere else.
+		header_up X-Real-IP {remote_host}
+	}
+}

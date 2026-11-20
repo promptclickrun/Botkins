@@ -14,7 +14,7 @@ import { workspaceActions } from "../desktop/headless/workspace.mjs";
 import { phonePage } from "../desktop/phonepage.mjs";
 import { REMOTE_METHODS } from "../desktop/link/methods.mjs";
 import { LinkHost } from "../desktop/link/index.mjs";
-import { LinkClient, pair } from "../desktop/remote/link-client.mjs";
+import { LinkClient, isRelayHost, pair, parsePairingUrl, relayFetch } from "../desktop/remote/link-client.mjs";
 import { Workspace } from "./starter.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: process.platform === "win32" && "The Docker host uses Unix sockets." }, fn);
@@ -102,6 +102,7 @@ test("the headless server opens and renews a private pairing file and clears it 
     const next = await pairing(first.code);
     const address = new URL(next.url).searchParams.get("h");
     assert.match(address, /^127\.0\.0\.1:\d+$/);
+    assert.equal(next.link, null);
     await pair(fetch, { hosts: [address], code: next.code }, { name: "Fixture phone", platform: "ios" });
     assert.equal(existsSync(owner), false);
     assert.equal(JSON.parse(readFileSync(join(dir, "link", "link.json"), "utf8")).devices.length, 1);
@@ -110,6 +111,59 @@ test("the headless server opens and renews a private pairing file and clears it 
     await exit;
     close();
     actions.unsubscribe();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("with BOTKINS_RELAY_URL the headless server pairs a phone through a self-hosted relay alone", async () => {
+  const { createRelay } = await import("../../mobile/relay/node/server.mjs");
+  const relay = createRelay({ limits: false, pushUpstream: "off" });
+  await new Promise((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const relayUrl = "http://127.0.0.1:" + relay.address().port;
+  const dir = mkdtempSync(join(tmpdir(), "bk-"));
+  const owner = join(dir, "owner", "pairing.json");
+  const actions = workspaceActions(stubWorkspace().backend, () => {});
+  const socket = join(dir, "backend.sock");
+  const close = await listenWorkspace(socket, actions.dispatch);
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../desktop/headless/host.mjs", import.meta.url))], {
+    env: { ...process.env, BOTKINS_DATA_DIR: join(dir, "link"), BOTKINS_OWNER_PAIRING_FILE: owner, BOTKINS_WORKSPACE_SOCKET: socket, BOTKINS_PAIR_ADDRESS: "", BOTKINS_LINK_PORT: "0", BOTKINS_RELAY_URL: relayUrl, BOTKINS_PAIR_TTL_MS: String(30 * 60_000) },
+    stdio: "ignore",
+  });
+  const exit = once(child, "exit");
+  try {
+    let value;
+    for (let i = 0; i < 400 && child.exitCode === null; i++) {
+      if (existsSync(owner)) {
+        value = JSON.parse(readFileSync(owner, "utf8"));
+        if (value.relay?.connected) break;
+      }
+      await delay(25);
+    }
+    assert.equal(value?.relay?.connected, true, "the server reached the relay");
+    assert.ok(value.expiresAt - Date.now() > 25 * 60_000, "the pairing lasts as long as asked");
+    // Only the relay's entry: no container address that a phone could never reach.
+    const hosts = new URL(value.url).searchParams.get("h").split(",");
+    assert.equal(hosts.length, 1);
+    assert.ok(isRelayHost(hosts[0]));
+    // The web link carries the same pairing query, in the fragment only.
+    const link = new URL(value.link);
+    assert.equal(link.origin + link.pathname, relayUrl + "/pair");
+    assert.equal(link.search, "");
+    assert.equal(link.hash.slice(1), new URL(value.url).search.slice(1));
+    // A phone that can't reach the server directly pairs through the relay.
+    const away = () => Promise.reject(new TypeError("Network request failed"));
+    const target = parsePairingUrl(value.url);
+    await pair(relayFetch(away, { idleMs: 500 }), target, { name: "Away phone", platform: "ios" });
+    for (let i = 0; i < 200 && existsSync(owner); i++) await delay(25);
+    assert.equal(existsSync(owner), false);
+    assert.equal(JSON.parse(readFileSync(join(dir, "link", "link.json"), "utf8")).devices.length, 1);
+  } finally {
+    child.kill("SIGTERM");
+    await exit;
+    close();
+    actions.unsubscribe();
+    await new Promise((resolve) => relay.close(resolve));
+    relay.closeAllConnections?.();
     rmSync(dir, { recursive: true, force: true });
   }
 });
