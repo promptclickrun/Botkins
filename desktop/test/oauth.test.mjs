@@ -229,13 +229,17 @@ test("a sign-in can be cancelled, refused by the person, or answered wrongly", a
   // The browser never comes back: Cancel ends the wait.
   let release;
   const { remote, ws, id, view } = await setup(t, {}, { oauthPort: 0, openExternal: () => new Promise((resolve) => (release = resolve)) });
-  const waiting = ws.integrations.signIn(id);
-  await tick(50);
+  // The outcome is watched from the start, so the cancel below never rejects a promise nobody holds.
+  const cancelled = assert.rejects(ws.integrations.signIn(id), /Sign-in was cancelled/);
+  // Wait for the browser to be asked, however long the steps before it take on this machine. A fixed
+  // pause was too short on a slow one: the cancel then came before there was anything to release.
+  for (let waited = 0; !release && waited < 10000; waited += 10) await tick(10);
+  assert.equal(typeof release, "function", "the browser was asked to open the sign-in page");
   assert.equal(view().auth?.signingIn ?? ws.integrations.oauth.flows.has(id), true);
   await assert.rejects(ws.integrations.signIn(id), /already open in your browser/);
   assert.equal(ws.integrations.cancelSignIn(id), true);
   release();
-  await assert.rejects(waiting, /Sign-in was cancelled/);
+  await cancelled;
   assert.deepEqual(view().auth, { type: "none" });
   // The person chooses Deny on the server's page.
   remote.state.authorize = "deny";

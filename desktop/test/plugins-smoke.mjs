@@ -93,13 +93,16 @@ try {
   // Scope and enablement refresh from the host's pushed State.plugins part.
   const useFor = dialog.getByLabel("Use for", { exact: true });
   await useFor.selectOption("selected");
-  await dialog.getByLabel("Pip", { exact: true }).check();
+  // These switches show what the app says, so they change when the app's answer arrives, not at the
+  // click: the click is made, and what the app then says is waited for.
+  await dialog.getByLabel("Pip", { exact: true }).click();
   await page.getByText("Updated which bots use fixture.", { exact: true }).waitFor();
   state = await snapshot();
   assert.deepEqual(state.plugins[0].bots, ["pip"]);
   const enabled = dialog.getByRole("switch", { name: "fixture enabled", exact: true });
-  await enabled.uncheck();
+  await enabled.click();
   await page.getByText("fixture is off.", { exact: true }).waitFor();
+  assert.equal(await enabled.isChecked(), false);
   await enabled.click();
   await page.getByRole("dialog").getByRole("button", { name: "Allow and continue", exact: true }).click();
   await page.getByText("fixture is on.", { exact: true }).waitFor();

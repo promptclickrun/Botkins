@@ -112,7 +112,10 @@ try {
       { timeout: 120000 },
     )
     .toBe(2);
-  assert.equal(readFileSync(data.receipt, "utf8").trim().split("\n").length, 2);
+  // A real model now and then calls the tool twice in one turn. That is its own choice and says
+  // nothing about approvals, so receipts are counted as "more than before", never as an exact number.
+  const receipts = () => readFileSync(data.receipt, "utf8").trim().split("\n").length;
+  assert.ok(receipts() >= 2, "the tool ran again in the second turn");
   await button("Settings").click();
   await page.getByRole("tab", { name: "Chat", exact: true }).click();
   await button("Clear remembered approvals").click();
@@ -128,7 +131,8 @@ try {
       { timeout: 120000 },
     )
     .toBe(3);
-  assert.equal(readFileSync(data.receipt, "utf8").trim().split("\n").length, 3);
+  const allowed = receipts();
+  assert.ok(allowed >= 3, "the tool ran in each of the three turns");
   await button("Settings").click();
   await page.getByRole("tab", { name: "Chat", exact: true }).click();
   await page.getByLabel("Approval level").selectOption("ask");
@@ -141,7 +145,7 @@ try {
   await expect
     .poll(async () => (await snap()).runs[0].status, { timeout: 120000 })
     .not.toBe("Working");
-  assert.equal(readFileSync(data.receipt, "utf8").trim().split("\n").length, 3);
+  assert.equal(receipts(), allowed, "the denied call left no receipt");
   console.log(
     "A native side question worked during an approval. Global approve-all permitted the tool after grants were cleared. Returning to Ask and denying prevented the next invocation.",
   );
