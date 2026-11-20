@@ -22,6 +22,11 @@ services:
     # The link's port is not published: nothing reaches it from outside the container network.
     ports: !reset []
     depends_on: [caddy]
+    # Each start waits for the relay to answer, so the host's first try at it succeeds (see the script).
+    volumes:
+      - ../deploy/azure/wait-for-relay.sh:/usr/local/bin/wait-for-relay:ro
+    entrypoint: ["/usr/bin/tini", "--", "sh", "/usr/local/bin/wait-for-relay", "https://${BOTKINS_FQDN:?}/v1/health"]
+    command: ["botkins", "serve"]
 
   host:
     environment:
@@ -33,6 +38,10 @@ services:
       BOTKINS_PAIR_ADDRESS: ""
       BOTKINS_PAIR_TTL_MS: "${BOTKINS_PAIR_TTL_MS:-3600000}"
     depends_on: [caddy]
+    # Each start waits for the relay to answer, so the host's first try at it succeeds (see the script).
+    volumes:
+      - ../deploy/azure/wait-for-relay.sh:/usr/local/bin/wait-for-relay:ro
+    command: ["sh", "/usr/local/bin/wait-for-relay", "https://${BOTKINS_FQDN:?}/v1/health", "/usr/local/bin/botkins-headless-host"]
 
   workspace:
     # Model provider sign-ins given at deployment (CLAUDE_CODE_OAUTH_TOKEN, BOTKINS_COPILOT_TOKEN).

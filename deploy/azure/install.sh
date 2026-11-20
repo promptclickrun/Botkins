@@ -117,8 +117,15 @@ botkins compose build
 botkins compose up -d --remove-orphans
 
 if [ "$MODE" = terminal ]; then
-  say "Configuring the terminal host"
-  for i in $(seq 1 90); do botkins host status --json >/dev/null 2>&1 && break; sleep 2; done
+  say "Waiting for the certificate, then configuring the terminal host"
+  # The host starts once its relay answers over HTTPS (wait-for-relay.sh), so this covers the
+  # time Caddy needs to get its certificate.
+  ready=
+  for i in $(seq 1 450); do
+    if botkins host status --json >/dev/null 2>&1; then ready=1; break; fi
+    sleep 2
+  done
+  [ -n "$ready" ] || fail "the Botkins host did not start. Check: botkins logs caddy relay botkins"
   # The host's own settings, through its own command: its name, and this server's relay.
   botkins host config set name "$NAME"
   botkins host config set relay.url "https://$FQDN"
