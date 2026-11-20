@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AppUpdates, latestRelease, updateTools } from "../desktop/updates.mjs";
+import { installLinuxTarball, isLinuxTarballExecutable, linuxUnitAvailable } from "../desktop/linux-update.mjs";
+import { performUpdate } from "../desktop/linux-service/botkins-update-helper.mjs";
 
 test("check compares stable GitHub tags, notifies once, and installs only on request", async t => {
   let tag = "v0.15.4";
@@ -31,6 +37,13 @@ test("check compares stable GitHub tags, notifies once, and installs only on req
   await restarted.promise;
   assert.deepEqual(installs, ["0.15.10", "restart"]);
 });
+
+test("GitHub release discovery follows API redirects", async () => {
+  let options;
+  const result = await latestRelease({ fetcher: async (_url, next) => { options = next; return Response.json({ tag_name: "v0.15.7", draft: false, prerelease: false, assets: [] }); } });
+  assert.equal(result.version, "0.15.7");
+  assert.equal(options.redirect, "follow");
+});
 test("untrusted tags, missing assets, and unavailable private releases never install", async () => {
   await assert.rejects(latestRelease({ token: "", fetcher: async () => new Response(null, { status: 404 }) }), /GitHub CLI/);
   for (const data of [{ tag_name: "whatever" }, { tag_name: "v1.0.0", prerelease: true }, { tag_name: "v1.0.0", draft: true }])
@@ -39,6 +52,84 @@ test("untrusted tags, missing assets, and unavailable private releases never ins
   assert.equal((await u.check()).canInstall, false);
   await assert.rejects(u.install(), /compatible/);
   assert.deepEqual(updateTools(u, { helper: true }, {}, {}), []);
+});
+
+test("Linux tarball installs advertise the matching architecture", async () => {
+  const u = new AppUpdates({ current: "0.15.6", linux: true, mac: false, arch: "arm64", latest: async () => ({ version: "0.15.7", assets: ["botkins-desktop-0.15.7-arm64.tar.gz"] }) });
+  assert.equal((await u.check()).canInstall, true);
+  assert.equal((await u.check()).installer, "linux-tarball");
+  const calls = [];
+  await installLinuxTarball(async (...args) => calls.push(args));
+  assert.deepEqual(calls[0].slice(0, 2), ["systemctl", ["--no-ask-password", "start", "botkins-update.service"]]);
+});
+
+test("Linux updater refuses AppImage and unsupported executable layouts and probes its systemd unit", async () => {
+  assert.equal(isLinuxTarballExecutable("/opt/botkins/current/botkins-desktop", () => ({ isSymbolicLink: () => true })), true);
+  assert.equal(isLinuxTarballExecutable("/opt/botkins/current/Botkins", () => ({ isSymbolicLink: () => true })), false);
+  assert.equal(isLinuxTarballExecutable("/opt/botkins/Botkins.AppImage", () => ({ isSymbolicLink: () => false })), false);
+  const calls = [];
+  assert.equal(await linuxUnitAvailable(async (...args) => { calls.push(args); return { stdout: "loaded\n" }; }), true);
+  assert.deepEqual(calls[0].slice(0, 2), ["systemctl", ["show", "botkins-update.service", "--property=LoadState", "--value"]]);
+});
+
+test("Linux install waits for the person's turn before starting the updater unit", async () => {
+  const calls = [];
+  const turn = Promise.withResolvers();
+  const fired = Promise.withResolvers();
+  const updates = new AppUpdates({ current:"0.15.6", linux:true, arch:"arm64",
+    latest: async () => ({version:"0.15.7", assets:["botkins-desktop-0.15.7-arm64.tar.gz"]}),
+    stage: async () => {}, restart: () => {calls.push("restart"); fired.resolve();} });
+  // The tool has to return BEFORE the turn can finish.
+  assert.equal((await updates.install(turn.promise)).status, "restarting");
+  assert.equal(calls.length, 0);
+  turn.resolve();
+  await fired.promise;
+  assert.equal(calls.length, 1);
+});
+
+test("Linux upgrade preserves existing directories and restores the running version on failed health checks", t => {
+  const root = mkdtempSync(join(tmpdir(), "botkins-update-"));
+  t.after(() => rmSync(root, { force:true, recursive:true }));
+  const current = join(root, "current");
+  const versionDir = version => "botkins-desktop-" + version + "-arm64";
+  const previous = join(root, versionDir("0.15.6"));
+  mkdirSync(previous);
+  symlinkSync(previous, current);
+  const stage = join(root, "source");
+  mkdirSync(stage);
+  function fixture(version) {
+    const top = versionDir(version);
+    mkdirSync(join(stage, top));
+    writeFileSync(join(stage, top, "botkins-desktop"), version);
+    writeFileSync(join(stage, top, "chrome-sandbox"), "sandbox");
+    const archive = join(root, top + ".tar.gz");
+    execFileSync("tar", ["-czf", archive, "-C", stage, top]);
+    return {version, archive, installRoot:root, currentLink:current, service:"botkins.service",
+      arch:"arm64", verifyOwnership:false, healthWindowMs:0};
+  }
+  const good = fixture("0.15.7");
+  const invoke = (file, args, options) => file === "systemctl" ? "healthy" : execFileSync(file, args, options);
+  performUpdate({...good, execFile:invoke});
+  const activeVersion = () => readFileSync(join(current,"botkins-desktop"),"utf8");
+  assert.equal(activeVersion(),"0.15.7");
+  assert.throws(() => performUpdate({...good,execFile:invoke}), /newer/);
+  assert.equal(activeVersion(),"0.15.7");
+  const next = fixture("0.15.8");
+  const target = join(root, versionDir("0.15.8"));
+  mkdirSync(target);
+  assert.throws(() => performUpdate({...next,execFile:invoke}), /already exists/);
+  assert.ok(lstatSync(target).isDirectory());
+  rmSync(target,{recursive:true});
+  let restarts = 0;
+  const unhealthy = (file,args,options) => {
+    if (file === "systemctl" && args[0] === "restart") restarts++;
+    if (file === "systemctl" && args[0] === "is-active") throw new Error("unit failed");
+    return invoke(file,args,options);
+  };
+  assert.throws(() => performUpdate({...next,execFile:unhealthy}), /unit failed/);
+  assert.equal(activeVersion(),"0.15.7");
+  assert.equal(restarts,2);
+  assert.equal(existsSync(target),false);
 });
 
 test("agent update tools use the active person's turn and wait for its reply", async () => {

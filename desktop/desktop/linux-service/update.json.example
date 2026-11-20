@@ -1,0 +1,5 @@
+{
+  "installRoot": "/opt/botkins",
+  "currentLink": "/opt/botkins/current",
+  "service": "botkins.service"
+}

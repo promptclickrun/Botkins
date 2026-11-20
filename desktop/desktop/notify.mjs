@@ -65,7 +65,7 @@ export function decide(event, { settings, focused, now = new Date(), timeZone } 
   } else if (routine) {
     if (!prefs.routines) return null;
   } else if (!prefs.replies || focused) return null;
-  const reply = chat?.messages?.findLast((m) => m.runId === run.id && m.role !== "user");
+  const reply = chat?.messages?.findLast((m) => m.runId === run.id && m.role !== "user" && !m.interim);
   return {
     title: botName + " · " + (routine ? run.title : chat?.title || "Reply"),
     body: failed

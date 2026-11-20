@@ -95,6 +95,9 @@ export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "
 export type Message = {
   role: "assistant" | "user" | "command";
   text: string;
+  interim?: boolean;
+  steeredRunId?: string;
+  answer?: { runId: string; requestId: string; kind: string; title: string };
   /** Records the person mentioned in this message, for display. */
   mentions?: Mention[];
   plain?: boolean;
@@ -165,6 +168,7 @@ export type PanePanel = {
   url?: string;
 };
 export type Run = {
+  ending?: "failed" | "timed-out" | "interrupted" | "stopped";
   id: string;
   /** HTML apps the bot showed in this turn. */
   apps?: AppCard[];
@@ -236,6 +240,9 @@ export type Todo = {
   dependsOn?: string[];
 };
 export type Subagent = {
+  prompt?: string;
+  intent?: string;
+  result?: string;
   id: string;
   name: string;
   description?: string;
@@ -1361,6 +1368,8 @@ export type MacToolsStatus = {
 export type Preferences = {
   model: ModelChoice;
   appearance: Appearance;
+  steps?: "folded" | "every" | "failed" | "hidden";
+  thinking?: "open" | "folded" | "hidden";
   foldTools: boolean;
   showThinking: boolean;
   /** Show a card for the first web link in a reply. Private and local hosts are never fetched. */
@@ -1402,6 +1411,7 @@ export type Preferences = {
   teamwork?: boolean;
 };
 export type Step = {
+  agentId?: string;
   id: string;
   name: string;
   source?: string;

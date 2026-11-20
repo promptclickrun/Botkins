@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Mic, MicOff, PhoneOff, X } from "lucide-react";
-import { closeLive, endLive, muteLive, useLive, type LiveState } from "./voice";
+import { closeLive, endLive, interruptLive, muteLive, pressLive, releaseLive, useLive, type LiveState } from "./voice";
 import "./voice.css";
 
 const PROVIDERS: Record<string, string> = { codex: "ChatGPT", openai: "OpenAI", gemini: "Gemini", elevenlabs: "ElevenLabs" };
@@ -34,8 +34,33 @@ export default function LivePanel({ chatId, botName }: { chatId?: string; botNam
   useEffect(() => {
     lines.current?.scrollTo({ top: lines.current.scrollHeight });
   }, [state?.transcript]);
+  const elsewhere = !!chatId && !!state && state.chatId !== chatId;
+  const push = !!state && state.inputMode === "push" && !elsewhere;
+  useEffect(() => {
+    if (!push) return;
+    const key = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      pressLive();
+    };
+    const up = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      event.preventDefault();
+      releaseLive();
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("keyup", up, true);
+    // A held Space key does not produce keyup when the window loses focus. Releasing here keeps
+    // the microphone closed and sends the provider's end-of-turn message immediately.
+    window.addEventListener("blur", releaseLive, true);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("keyup", up, true);
+      window.removeEventListener("blur", releaseLive, true);
+      releaseLive();
+    };
+  }, [push]);
   if (!state) return null;
-  const elsewhere = !!chatId && state.chatId !== chatId;
   const bot = elsewhere ? "another chat" : botName || "The bot";
   const by = PROVIDERS[state.provider] ?? state.provider;
   return (
@@ -54,6 +79,31 @@ export default function LivePanel({ chatId, botName }: { chatId?: string; botNam
             </button>
           ) : (
             <>
+              {!push && (
+                <button type="button" className="set-button" aria-label="Interrupt bot" onClick={interruptLive}>
+                  Interrupt
+                </button>
+              )}
+              {push && (
+                <button
+                  type="button"
+                  className="set-button"
+                  aria-label="Hold to talk"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    pressLive();
+                  }}
+                  onPointerUp={(event) => {
+                    event.preventDefault();
+                    releaseLive();
+                  }}
+                  onPointerCancel={releaseLive}
+                  onPointerLeave={releaseLive}
+                >
+                  <Mic size={14} aria-hidden="true" />
+                  Hold to talk
+                </button>
+              )}
               <button type="button" className="set-button" aria-pressed={state.muted} aria-label={state.muted ? "Unmute" : "Mute"} onClick={() => muteLive(!state.muted)}>
                 {state.muted ? <MicOff size={14} aria-hidden="true" /> : <Mic size={14} aria-hidden="true" />}
                 {state.muted ? "Unmute" : "Mute"}

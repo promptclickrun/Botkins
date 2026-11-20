@@ -50,6 +50,7 @@ import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewer
 import { desktopUpdates } from "./mac-update.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
+import { liveContextFor } from "./live-context.mjs";
 import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
@@ -160,13 +161,14 @@ const hostOf = (url) => {
     return "";
   }
 };
+
 // The chat open in the window, as the page last said (handlers.viewing).
 let viewingChat = null;
 const viewerGuests = new Set();
 // What this app supports that a phone has to ask about by name (the link adds them to its own):
 // model details in the catalog, a Botkin's eyes and own colors, where a routine's result goes and
 // whether it notifies, and a Today item carried by a message.
-const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", PLUGINS];
+const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS];
 /**
  * What the window shows: this computer's workspace, or the state of the other computer in use
  * (with this window's own look). `remote` says which, and lists the computers this app is paired to.
@@ -690,7 +692,7 @@ else
       copyReply: (id) => {
         const reply = workspace
           .chat(id)
-          .messages.findLast((m) => m.role === "assistant" && m.text);
+          .messages.findLast((m) => m.role === "assistant" && !m.interim && m.text);
         if (!reply) throw new Error("This chat has no reply to copy.");
         clipboard.writeText(reply.text);
       },
@@ -1132,6 +1134,7 @@ else
     const voiceDesk = new VoiceDesk({
       voice: () => link?.voice ?? null,
       workspace: () => workspace,
+      liveContext: ({ chatId, botId }) => liveContextFor(workspace, { chatId, botId }),
       // The system's own dictation, into the focused field (macOS: Edit › Start Dictation).
       dictate: () => {
         if (!win || win.isDestroyed()) return;
@@ -1166,6 +1169,9 @@ else
         return { focused, ...(focused && viewingChat && { chatId: viewingChat }) };
       },
       snapshot: () => workspace.snapshot(),
+      // Optional context for a live voice: bounded bot profile files and the person's chosen name;
+      // no location is read on the desktop without a separate permissioned source.
+      liveContext: ({ chatId, botId }) => liveContextFor(workspace, { chatId, botId }),
       // LinkHost only passes names in REMOTE_METHODS. A project's folder sent by a paired device
       // must be one the folder browser could have shown, as for the calls that pick a folder.
       call: async (name, args) => handlers[name](...(await deviceArgs(folders, name, args))),

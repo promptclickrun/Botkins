@@ -238,7 +238,7 @@ class ClaudeSession extends ProviderSession {
       stderr: (text) => (turn.stderr = (turn.stderr + text).slice(-4000)),
     });
     const timer = setTimeout(() => {
-      turn.failure = "Claude didn't finish in time.";
+      turn.timeout = Object.assign(new Error("Claude didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"});
       abort.abort();
     }, timeoutMs);
     timer.unref?.();
@@ -258,6 +258,7 @@ class ClaudeSession extends ProviderSession {
         }
       }
     } catch (error) {
+      if (turn.timeout) throw turn.timeout;
       if (!turn.stopped) throw new Error(turn.failure || this.problem(error, turn.stderr));
     } finally {
       clearTimeout(timer);
@@ -275,6 +276,7 @@ class ClaudeSession extends ProviderSession {
     }
     const text = turn.text.map((t) => t.trim()).filter(Boolean).join("\n\n");
     if (turn.stopped) return { text };
+    if (turn.timeout) throw turn.timeout;
     if (!result) throw new Error(turn.failure || "Claude stopped before it finished this reply.");
     this.report(result, turn);
     if (result.subtype !== "success" || (result.is_error && !text))
@@ -345,7 +347,7 @@ class ClaudeSession extends ProviderSession {
           this.emit("tool.execution_complete", { toolCallId: block.tool_use_id, success: !block.is_error, ...(text && { result: { content: text } }), ...(block.is_error && { error: { message: text || "Failed" } }) }, undefined, agentId);
           if (this.tasks.has(block.tool_use_id)) {
             this.tasks.delete(block.tool_use_id);
-            this.emit(block.is_error ? "subagent.failed" : "subagent.completed", { toolCallId: block.tool_use_id, ...(block.is_error && { error: text }) });
+            this.emit(block.is_error ? "subagent.failed" : "subagent.completed", { toolCallId: block.tool_use_id, ...(block.is_error ? { error: text } : { result:text }) });
           }
         }
         return;
@@ -368,7 +370,7 @@ class ClaudeSession extends ProviderSession {
     );
     if ((block.name === "Agent" || block.name === "Task") && !agentId) {
       this.tasks.set(block.id, true);
-      this.emit("subagent.started", { toolCallId: block.id, agentName: block.input?.subagent_type || block.input?.name || "Helper", agentDescription: block.input?.description });
+      this.emit("subagent.started", { toolCallId: block.id, agentName: block.input?.subagent_type || block.input?.name || "Helper", agentDescription: block.input?.description, ...(block.input?.prompt && {prompt:block.input.prompt}) });
     }
     if (block.name === "TodoWrite" && Array.isArray(block.input?.todos) && !agentId) {
       this.todoList = block.input.todos.map((t, i) => ({ id: String(i + 1), title: t.content, status: t.status }));

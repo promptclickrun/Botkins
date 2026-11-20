@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Play, Square } from "lucide-react";
+import { ArrowLeft, AudioLines, Check, KeyRound, Mic, Play, Square, Volume2, type LucideIcon } from "lucide-react";
 import type { DeskVoiceSettings, LiveProvider, SttProvider, State, TtsProvider, VoiceKeyProvider, VoiceOptions, VoicePatch } from "./types";
 import { Group, Row, SwitchRow, errorText } from "./SettingsRows";
 import { stopCancel } from "./SkillsSettings";
@@ -36,6 +36,44 @@ const LIVE: { id: LiveProvider | ""; name: string }[] = [
 const NAMES: Record<VoiceKeyProvider, string> = { openai: "OpenAI", azure: "Azure", elevenlabs: "ElevenLabs", gemini: "Gemini", custom: "Your own server" };
 const SAMPLE = "Hello. This is how Botkins reads replies aloud.";
 const LOCAL_NOTE = "Not available yet. A speech server on this computer (one that runs Whisper or Piper, for example) works through Your own server.";
+type VoicePage = "overview" | "dictation" | "reading" | "live" | "keys";
+type LiveInput = "live" | "ptt";
+const LIVE_INPUT_KEY = "botkins.liveInput";
+const LIVE_INPUTS: { id: LiveInput; name: string }[] = [
+  { id: "live", name: "Live conversation" },
+  { id: "ptt", name: "Push to talk" },
+];
+
+function readLiveInput(): LiveInput {
+  try {
+    return localStorage.getItem(LIVE_INPUT_KEY) === "ptt" ? "ptt" : "live";
+  } catch {
+    return "live";
+  }
+}
+
+function saveLiveInput(value: LiveInput) {
+  try {
+    localStorage.setItem(LIVE_INPUT_KEY, value);
+  } catch {
+    // A private browsing profile can refuse local storage. Live voice uses the default.
+  }
+}
+
+function VoiceFeatureRow({ icon: Icon, title, value, subtitle, onClick }: { icon: LucideIcon; title: string; value: string; subtitle: string; onClick: () => void }) {
+  return (
+    <button type="button" className="voice-feature-row" onClick={onClick}>
+      <span className="voice-feature-icon" aria-hidden="true"><Icon size={17} /></span>
+      <span className="voice-feature-copy"><strong>{title}</strong><small>{subtitle}</small></span>
+      <span className="voice-feature-value">{value}</span>
+      <span className="voice-feature-chevron" aria-hidden="true">›</span>
+    </button>
+  );
+}
+
+function SetupButton({ provider, onClick }: { provider: string; onClick: () => void }) {
+  return <button type="button" className="set-link voice-setup" onClick={onClick}>Set up {provider}</button>;
+}
 
 /** Which key a provider needs, and whether it is saved. */
 function keyNote(s: DeskVoiceSettings, provider: string) {
@@ -114,7 +152,7 @@ function KeyRow({ provider, has, busy, save, optional, dropped }: { provider: Vo
   };
   if (has && !editing)
     return (
-      <div className="set-row">
+      <div className="set-row" data-voice-provider={provider}>
         <div className="set-label">
           <span className="set-name">{name}</span>
           <small>Kept on this computer. Botkins never shows it again.</small>
@@ -134,38 +172,40 @@ function KeyRow({ provider, has, busy, save, optional, dropped }: { provider: Vo
       </div>
     );
   return (
-    <Row
-      label={name}
-      // A key belongs to the address it was given for: a different address needs its key again.
-      help={dropped ? "The saved key was removed because the address changed. Enter the key for the new address." : optional ? "Only if your server asks for one." : undefined}
-    >
-      {(id, describedBy) => (
-        <form
-          className="voice-key"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submit();
-          }}
-        >
-          <input id={id} type="password" aria-describedby={describedBy} value={text} autoComplete="off" spellCheck={false} placeholder="Paste the key" onChange={(e) => setText(e.target.value)} />
-          <button type="submit" className="set-button" disabled={busy || !text.trim()} aria-label={"Save " + name}>
-            Save
-          </button>
-          {editing && (
-            <button
-              type="button"
-              className="set-button"
-              onClick={() => {
-                setText("");
-                setEditing(false);
-              }}
-            >
-              Cancel
+    <div data-voice-provider={provider}>
+      <Row
+        label={name}
+        // A key belongs to the address it was given for: a different address needs its key again.
+        help={dropped ? "The saved key was removed because the address changed. Enter the key for the new address." : optional ? "Only if your server asks for one." : undefined}
+      >
+        {(id, describedBy) => (
+          <form
+            className="voice-key"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submit();
+            }}
+          >
+            <input id={id} type="password" aria-describedby={describedBy} value={text} autoComplete="off" spellCheck={false} placeholder="Paste the key" onChange={(e) => setText(e.target.value)} />
+            <button type="submit" className="set-button" disabled={busy || !text.trim()} aria-label={"Save " + name}>
+              Save
             </button>
-          )}
-        </form>
-      )}
-    </Row>
+            {editing && (
+              <button
+                type="button"
+                className="set-button"
+                onClick={() => {
+                  setText("");
+                  setEditing(false);
+                }}
+              >
+                Cancel
+              </button>
+            )}
+          </form>
+        )}
+      </Row>
+    </div>
   );
 }
 
@@ -191,6 +231,9 @@ function Pick({ label, help, value, options, change, empty = "Default", disabled
 /** Settings › Voice: dictation, reading aloud, live voice, and the keys and servers they use. */
 export default function VoiceSettings({ state }: { state: State }) {
   const [s, setS] = useState<DeskVoiceSettings>();
+  const [page, setPage] = useState<VoicePage>("overview");
+  const [keysFocus, setKeysFocus] = useState<VoiceKeyProvider | null>(null);
+  const [liveInput, setLiveInput] = useState<LiveInput>(readLiveInput);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [platform, setPlatform] = useState("");
@@ -244,6 +287,10 @@ export default function VoiceSettings({ state }: { state: State }) {
     const timer = setTimeout(() => void change({ tts: { speed } }).catch(() => {}), 350);
     return () => clearTimeout(timer);
   }, [speed]);
+  useEffect(() => {
+    if (page !== "keys" || !keysFocus) return;
+    document.querySelector<HTMLElement>(`[data-voice-provider="${keysFocus}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [page, keysFocus]);
 
   if (!s)
     return error ? (
@@ -286,6 +333,37 @@ export default function VoiceSettings({ state }: { state: State }) {
           : "Sign in with ChatGPT in Settings › Model providers first."
       : keyNote(s, s.live.provider) || "Your voice goes straight to " + (LIVE.find((p) => p.id === s.live.provider)?.name.replace(/ key$/, "") ?? "it") + " while live voice is on.";
   const azure = s.providers.azure;
+  const sttName = STT.find((provider) => provider.id === s.stt.provider)?.name ?? s.stt.provider;
+  const ttsName = TTS.find((provider) => provider.id === s.tts.provider)?.name ?? s.tts.provider;
+  const liveName = LIVE.find((provider) => provider.id === (s.live.provider ?? ""))?.name ?? "Off";
+  const keyCount = KEYED.filter((provider) => s.providers[provider].hasKey).length;
+  const dictationSummary = keyNote(s, s.stt.provider) || (s.stt.provider === "device" ? "Uses this computer's dictation" : s.stt.language ? "Language " + s.stt.language : "Ready to transcribe");
+  const readingSummary = keyNote(s, s.tts.provider) || (state.settings.readAloud ? "Reads replies aloud" : "Set up, when you need it");
+  const liveSummary = !s.live.provider
+    ? "Choose a provider to begin"
+    : s.live.provider === "codex" && !codex.signedIn
+      ? "Sign in under Model providers"
+      : keyNote(s, s.live.provider) || (liveInput === "ptt" ? "Push to talk" : "Live conversation");
+  const goKeys = (provider: VoiceKeyProvider) => {
+    setKeysFocus(provider);
+    setPage("keys");
+  };
+  if (page === "overview")
+    return (
+      <div className="int-section voice-settings voice-overview" {...stopCancel}>
+        {!s.ready && <p className="set-status error-text" role="alert">{s.problem || "Voice settings can't be changed right now."}</p>}
+        {error && <p className="set-status error-text" role="alert">{error}</p>}
+        <Group>
+          <VoiceFeatureRow icon={Mic} title="Dictation" value={sttName} subtitle={dictationSummary} onClick={() => setPage("dictation")} />
+          <VoiceFeatureRow icon={Volume2} title="Reading aloud" value={ttsName} subtitle={readingSummary} onClick={() => setPage("reading")} />
+          <VoiceFeatureRow icon={AudioLines} title="Live voice" value={s.live.provider ? liveName.replace(/ key$/, "") : "Off"} subtitle={liveSummary} onClick={() => setPage("live")} />
+        </Group>
+        <p className="set-foot voice-note">Saved on this computer, for every phone.</p>
+        <Group>
+          <VoiceFeatureRow icon={KeyRound} title="Keys and servers" value={keyCount === 0 ? "None" : keyCount + (keyCount === 1 ? " key" : " keys")} subtitle="Kept on this computer" onClick={() => setPage("keys")} />
+        </Group>
+      </div>
+    );
   return (
     <div className="int-section voice-settings" {...stopCancel}>
       {!s.ready && (
@@ -298,6 +376,11 @@ export default function VoiceSettings({ state }: { state: State }) {
           {error}
         </p>
       )}
+      <div className="voice-detail-head">
+        <button type="button" className="set-link voice-back" onClick={() => setPage("overview")}><ArrowLeft size={15} aria-hidden="true" /> Voice</button>
+        <h2>{page === "dictation" ? "Dictation" : page === "reading" ? "Reading aloud" : page === "live" ? "Live voice" : "Keys and servers"}</h2>
+      </div>
+      {page === "dictation" && (
       <Group title="Dictation" footer="The microphone button beside the message box turns speech into text. Nothing is sent until you send it.">
         <Pick
           label="Speech to text"
@@ -308,13 +391,16 @@ export default function VoiceSettings({ state }: { state: State }) {
           empty={null}
           change={(provider) => void change({ stt: { provider: provider as SttProvider } }).catch(() => {})}
         />
+        {keyNote(s, s.stt.provider) && KEYED.includes(s.stt.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.stt.provider as VoiceKeyProvider]} onClick={() => goKeys(s.stt.provider as VoiceKeyProvider)} />}
         {stt.options.models.length > 0 && <Pick label="Model" value={s.stt.model ?? ""} options={stt.options.models} change={(model) => void change({ stt: { model } }).catch(() => {})} />}
         {s.stt.provider !== "device" && (
           <TextRow label="Language" help="Such as en or en-US. Leave it empty to let the service tell." value={s.stt.language ?? ""} placeholder="Automatic" save={(language) => change({ stt: { language } })} />
         )}
         {stt.error && <p className="set-status error-text voice-inline">{stt.error}</p>}
       </Group>
+      )}
 
+      {page === "reading" && (
       <Group
         title="Reading aloud"
         actions={
@@ -334,6 +420,7 @@ export default function VoiceSettings({ state }: { state: State }) {
           empty={null}
           change={(provider) => void change({ tts: { provider: provider as TtsProvider } }).catch(() => {})}
         />
+        {keyNote(s, s.tts.provider) && KEYED.includes(s.tts.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.tts.provider as VoiceKeyProvider]} onClick={() => goKeys(s.tts.provider as VoiceKeyProvider)} />}
         {tts.options.models.length > 0 && <Pick label="Model" value={s.tts.model ?? ""} options={tts.options.models} change={(model) => void change({ tts: { model } }).catch(() => {})} />}
         {(s.tts.provider === "device" ? deviceVoices : tts.options.voices).length > 0 && (
           <Pick label="Voice" value={s.tts.voice ?? ""} options={s.tts.provider === "device" ? deviceVoices : tts.options.voices} change={(voice) => void change({ tts: { voice } }).catch(() => {})} />
@@ -354,7 +441,9 @@ export default function VoiceSettings({ state }: { state: State }) {
           onChange={(on) => void api.setPreferences({ readAloud: on }).catch((e) => setError(errorText(e)))}
         />
       </Group>
+      )}
 
+      {page === "live" && (
       <Group title="Live voice" footer="Press the Live Voice button where Send is when the message box is empty. Talk, and the bot answers out loud.">
         <Pick
           label="Live voice by"
@@ -365,11 +454,18 @@ export default function VoiceSettings({ state }: { state: State }) {
           disabledIds={codex.available ? [] : ["codex"]}
           change={(provider) => void change({ live: { provider: (provider || null) as LiveProvider | null } }).catch(() => {})}
         />
+        {!!s.live.provider && keyNote(s, s.live.provider) && KEYED.includes(s.live.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.live.provider as VoiceKeyProvider]} onClick={() => goKeys(s.live.provider as VoiceKeyProvider)} />}
         {liveOptions.options.models.length > 0 && <Pick label="Model" value={s.live.model ?? ""} options={liveOptions.options.models} change={(model) => void change({ live: { model } }).catch(() => {})} />}
         {liveOptions.options.voices.length > 0 && <Pick label="Voice" value={s.live.voice ?? ""} options={liveOptions.options.voices} change={(voice) => void change({ live: { voice } }).catch(() => {})} />}
         {liveOptions.error && <p className="set-status error-text voice-inline">{liveOptions.error}</p>}
+        <div className="set-row">
+          <div className="set-label"><span className="set-name">How you talk</span><small>{liveInput === "ptt" ? "Hold the key while you talk. Let go and it answers." : "Talk freely. It listens while you speak and answers when you pause."}</small></div>
+          <div className="set-control"><Choices label="How you talk" value={liveInput} options={LIVE_INPUTS} onChange={(next) => { setLiveInput(next); saveLiveInput(next); }} /></div>
+        </div>
       </Group>
+      )}
 
+      {page === "keys" && (
       <Group title="Keys and servers" footer="Keys are kept on this computer, locked by the system's keychain, and shared with your paired phones' voice. They are never shown again.">
         <div className="voice-sub">OpenAI</div>
         {/* The address comes before the key: a key is kept with the address it was given for. */}
@@ -421,6 +517,7 @@ export default function VoiceSettings({ state }: { state: State }) {
         />
         <KeyRow provider="custom" has={s.providers.custom.hasKey} busy={busy} optional dropped={dropped.includes("custom")} save={saveKey("custom")} />
       </Group>
+      )}
       <p className="set-foot voice-note">
         {mac ? "macOS asks whether Botkins may use the microphone the first time you dictate with a speech service or start live voice." : "Botkins uses the microphone only while you dictate with a speech service or live voice is on."}
       </p>

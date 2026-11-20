@@ -110,15 +110,18 @@ try {
   await button("Settings").click();
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("tablist", { name: "Settings" }).getByRole("tab", { name: "Voice", exact: true }).click();
-  for (const title of ["Dictation", "Reading aloud", "Live voice", "Keys and servers"]) await expect(settings.getByRole("heading", { name: title, exact: true })).toBeVisible();
+  for (const title of ["Dictation", "Reading aloud", "Live voice", "Keys and servers"]) await expect(settings.locator(".voice-feature-row", { hasText: title })).toBeVisible();
   assert.equal((await voice()).stt.provider, "device", "dictation starts on this computer's own");
   assert.equal((await voice()).live.provider, null, "no live voice is chosen at first");
-  await expect(settings.getByLabel("Live voice by", { exact: true })).toHaveValue("");
+  await settings.locator(".voice-feature-row", { hasText: "Dictation" }).click();
+  await expect(settings.locator("h2", { hasText: "Dictation" })).toBeVisible();
   // The local engine isn't built: it is listed, and says how a local server is used instead.
   await expect(settings.getByLabel("Speech to text", { exact: true }).locator("option", { hasText: "not available yet" })).toBeDisabled();
   await settings.getByLabel("Speech to text", { exact: true }).selectOption("openai");
   await expect.poll(async () => (await voice()).stt.provider).toBe("openai");
-  await expect(settings.getByText("Add an OpenAI key under Keys and servers.")).toBeVisible();
+  await expect(settings.getByRole("button", { name: "Set up OpenAI", exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Set up OpenAI", exact: true }).click();
+  await expect(settings.locator("h2", { hasText: "Keys and servers" })).toBeVisible();
 
   // ---- A key is saved, then shows only as Saved. Its text is nowhere the page can see.
   await settings.getByLabel("OpenAI key", { exact: true }).fill(KEY);
@@ -147,6 +150,8 @@ try {
   await expect(settings.getByText("The saved key was removed because the address changed.", { exact: false })).toHaveCount(0);
   assert.equal((await voice()).providers.openai.hasKey, true);
   // Reading aloud through "OpenAI": the stand-in's audio comes back in parts.
+  await settings.locator(".voice-back").click();
+  await settings.locator(".voice-feature-row", { hasText: "Reading aloud" }).click();
   await settings.getByLabel("Text to speech", { exact: true }).selectOption("openai");
   await expect.poll(async () => (await voice()).tts.provider).toBe("openai");
   const spoken = await page.evaluate(async () => {
@@ -177,6 +182,7 @@ try {
   assert.equal((await page.evaluate(() => window.botkins.snapshot())).chats.length, chatsBefore);
   await button("Choose in Settings › Voice").click();
   await expect(settings.getByRole("tab", { name: "Voice", exact: true })).toHaveAttribute("aria-selected", "true");
+  await settings.locator(".voice-feature-row", { hasText: "Live voice" }).click();
   // A live voice is chosen but its key isn't there: the note says so, and no chat or microphone is opened.
   await settings.getByLabel("Live voice by", { exact: true }).selectOption("gemini");
   await expect.poll(async () => (await voice()).live.provider).toBe("gemini");
@@ -187,6 +193,7 @@ try {
   assert.equal((await page.evaluate(() => window.botkins.snapshot())).chats.length, chatsBefore);
   await expect(page.getByRole("region", { name: "Live voice" })).toHaveCount(0);
   await button("Choose in Settings › Voice").click();
+  await settings.locator(".voice-feature-row", { hasText: "Live voice" }).click();
   await settings.getByLabel("Live voice by", { exact: true }).selectOption("");
   await expect.poll(async () => (await voice()).live.provider).toBe(null);
   await page.keyboard.press("Escape");

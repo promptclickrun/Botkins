@@ -1011,3 +1011,111 @@ export class Voice {
     return { id: "live-" + b64u(random(9)), kind: "elevenlabs-ws", url: signed.signed_url, init, input: { sampleRate: 16000 }, output: { sampleRate: 16000 } };
   }
 }
+
+// ── What a live voice knows ─────────────────────────────────────────────────────────────────────
+// The voice speaks for a bot in one chat. It is told the chat so far, a light identity (the bot's
+// name, role and the start of its instructions; the person's name; the bot's identity file and the
+// person's user file, when the app has them) and, when the phone sent it, roughly where the person
+// is. With that it answers what is already known itself, and asks the bot only for new work.
+
+/** Character limits. The whole stays well under the 20,000 `live()` takes. */
+export const LIVE_LIMITS = { transcript: 8000, message: 1200, note: 2000, name: 80, about: 1500, place: 120 };
+
+const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+const cut = (text, limit) => (text.length > limit ? text.slice(0, limit).trimEnd() + "…" : text);
+const near = (value) => {
+  const rounded = Math.round(value * 100) / 100;
+  return rounded === 0 ? 0 : rounded;
+};
+
+/**
+ * What the phone sent about itself for a live call: `{ location?: { place?, latitude?, longitude? } }`.
+ * A place is up to 120 characters; coordinates come as a pair and are rounded to about a kilometre.
+ * Anything else in `context` is ignored; a location of the wrong shape is refused.
+ */
+export function liveContextOf(context) {
+  if (context === undefined || context === null) return {};
+  const bad = () => new Failure("That location isn't valid.");
+  if (!isPlain(context)) throw bad();
+  if (context.location === undefined) return {};
+  const given = context.location;
+  if (!isPlain(given)) throw bad();
+  const location = {};
+  if (given.place !== undefined) {
+    if (typeof given.place !== "string") throw bad();
+    const place = oneLine(given.place);
+    if (!place || place.length > LIVE_LIMITS.place) throw bad();
+    location.place = place;
+  }
+  const { latitude, longitude } = given;
+  if (latitude !== undefined || longitude !== undefined) {
+    const valid = (value, limit) => typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= limit;
+    if (!valid(latitude, 90) || !valid(longitude, 180)) throw bad();
+    location.latitude = near(latitude);
+    location.longitude = near(longitude);
+  }
+  if (!Object.keys(location).length) throw bad();
+  return { location };
+}
+
+/** One message as the voice hears it: code is named, not read, and the whole is one cut line. */
+function spoken(text) {
+  return cut(oneLine(String(text ?? "").replace(/```[\s\S]*?(```|$)/g, " (code) ")), LIVE_LIMITS.message);
+}
+
+/**
+ * The chat so far, oldest first: what the person said and the bots' replies, one line each, labelled
+ * with who said it. Text a bot wrote on the way (`interim`), commands and empty messages are left out.
+ * Within `budget` characters, the newest messages are kept.
+ */
+export function liveTranscript(messages, { botName, bots = [], userName, budget = LIVE_LIMITS.transcript } = {}) {
+  const person = oneLine(userName).slice(0, LIVE_LIMITS.name) || "Person";
+  const names = new Map(bots.map((item) => [item.id, oneLine(item.name)]));
+  const lines = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!isPlain(message) || message.interim || (message.role !== "user" && message.role !== "assistant")) continue;
+    const text = spoken(message.text);
+    if (!text) continue;
+    const who = message.role === "user" ? person : (message.botId && names.get(message.botId)) || oneLine(botName) || "Bot";
+    lines.push(who + ": " + text);
+  }
+  const LEFT_OUT = "(Earlier messages left out.)";
+  const kept = [];
+  let size = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const room = budget - (i > 0 ? LEFT_OUT.length + 1 : 0);
+    if (size + lines[i].length + (kept.length ? 1 : 0) > room) break;
+    size += lines[i].length + (kept.length ? 1 : 0);
+    kept.unshift(lines[i]);
+  }
+  if (kept.length < lines.length) kept.unshift(LEFT_OUT);
+  return kept.join("\n");
+}
+
+/**
+ * The live voice's instructions. `notes` is what the app gave (`backend.liveContext`):
+ * `{ userName?, identity?, user? }`, each cut here. `location` is from `liveContextOf`.
+ */
+export function liveInstructions({ bot, messages = [], bots = [], notes = {}, location } = {}) {
+  const name = oneLine(bot?.name).slice(0, LIVE_LIMITS.name) || "the bot";
+  const note = (value) => (typeof value === "string" ? cut(value.trim(), LIVE_LIMITS.note) : "");
+  const userName = typeof notes.userName === "string" ? oneLine(notes.userName).slice(0, LIVE_LIMITS.name) : "";
+  const identity = note(notes.identity);
+  const user = note(notes.user);
+  const about = [oneLine(bot?.role), String(bot?.instructions ?? "").trim().slice(0, LIVE_LIMITS.about)].filter(Boolean).join("\n\n");
+  const transcript = liveTranscript(messages, { botName: name, bots, userName });
+  const coords = location && Number.isFinite(location.latitude) ? location.latitude + ", " + location.longitude : "";
+  const place = location?.place ? location.place + (coords ? " (" + coords + ")" : "") : coords && "latitude " + location.latitude + ", longitude " + location.longitude;
+  return [
+    "You are the voice of " + name + ", a bot the person works with. Speak as " + name + ", in the first person, warmly and briefly: this is a spoken conversation, so no lists, no Markdown, and one or two sentences unless asked for more.",
+    "When the answer is already in the conversation below or in these notes, answer it yourself: what " + name + " already said or found, who you are, who the person is, where they are. Don't ask the bot again for something it already answered. Call the ask_bot tool only for new work: fresh or current information, anything to look up, do, change or remember, or when you aren't sure. Then call it once with the request in the person's own words, say a few words such as \"One moment\" while it works, and tell them what it answered in your own words. Never make up what the bot would say.",
+    userName && "The person's name is " + userName + ".",
+    place && "The person is near " + place + ". Use it only when it helps, such as for the time, the weather or places nearby.",
+    about && "About " + name + ":\n" + about,
+    identity && name + "'s identity:\n" + identity,
+    user && "About " + (userName || "the person") + ":\n" + user,
+    transcript && "The conversation so far in this chat, oldest first:\n" + transcript,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}

@@ -269,7 +269,7 @@ class CodexSession extends ProviderSession {
       }
       if (this.stopRequested) await this.interrupt();
       else onReady?.(this.steerInput(rpc, threadId, turn));
-      timer = setTimeout(() => finished.reject(new Error("ChatGPT didn't finish in time.")), 600000);
+      timer = setTimeout(() => finished.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), 600000);
       await finished.promise;
       if (turn.recoveryInterrupted) return null;
       return turn.text.map((item) => item.text).filter(Boolean).join("\n\n");
@@ -305,7 +305,7 @@ class CodexSession extends ProviderSession {
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       // The turn can be failed from elsewhere (the CLI stopping) before anything waits on it.
       finished.catch(() => {});
-      timer = setTimeout(() => turn.reject(new Error("ChatGPT didn't finish in time.")), timeoutMs);
+      timer = setTimeout(() => turn.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
       timer.unref?.();
       try {
         const started = await rpc.request("turn/start", {
@@ -364,6 +364,9 @@ class CodexSession extends ProviderSession {
             arguments: step[1],
             ...(step[2] && { mcpServerName: step[2], mcpToolName: step[0] }),
           });
+        if (item.type === "collabAgentToolCall") this.emit("subagent.started", {
+          toolCallId:item.id, agentName:item.tool || "Helper", prompt:item.prompt,
+        });
         return;
       }
       case "item/agentMessage/delta": {
@@ -393,6 +396,7 @@ class CodexSession extends ProviderSession {
         if (item.type === "agentMessage" && turn) {
           // The finished message is the truth; deltas may have been dropped.
           const entry = turn.text.find((t) => t.id === item.id);
+          if ((!entry || !entry.text) && item.text) this.emit("assistant.message_delta", { deltaContent:item.text, messageId:item.id });
           if (entry) entry.text = item.text || entry.text;
           else turn.text.push({ id: item.id, text: item.text ?? "" });
         } else if (item.type === "reasoning") {
@@ -400,6 +404,7 @@ class CodexSession extends ProviderSession {
           this.emit("assistant.reasoning", { reasoningId: item.id, content });
         } else if (describeItem(item)) {
           const { success, content, error } = itemResult(item);
+          if (item.type === "collabAgentToolCall") this.emit(success ? "subagent.completed" : "subagent.failed", { toolCallId:item.id });
           this.emit("tool.execution_complete", {
             toolCallId: item.id,
             success,

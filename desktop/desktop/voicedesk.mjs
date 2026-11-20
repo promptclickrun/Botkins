@@ -3,13 +3,13 @@
 // (desktop/link/voice.mjs, see VOICE.md), so this computer and its paired phones share one set of
 // choices and keys. This file only shapes what the page needs: plain data, never a key.
 import { Failure } from "./link/tools.mjs";
-import { MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
+import { liveInstructions as sharedLiveInstructions, MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
 
 /** The one tool a live voice has. The voice only talks; the bot does the work, as a normal turn in the chat. */
 export const ASK_BOT = {
   name: "ask_bot",
   description:
-    "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for anything beyond small talk: questions about their work, anything to look up, do, remember or change.",
+    "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for new work: fresh or current information, anything to look up, do, change or remember. Not for what the conversation or your notes already answer.",
   parameters: {
     type: "object",
     properties: { request: { type: "string", description: "The request, in the person's own words." } },
@@ -23,6 +23,7 @@ const FORMATS = ["wav", "m4a", "mp3", "webm"];
 const NOT_READY = "Voice isn't ready yet. Try again in a moment.";
 // A request waits behind at most this many turns that were already running in the chat.
 const MAX_WAITS = 5;
+const LIVE_CONTEXT_WAIT = 2000;
 
 /** Plain text for speaking: Markdown marks, code blocks and link addresses left out. */
 export function speakable(text) {
@@ -116,8 +117,8 @@ export class VoiceDesk {
    * @param options.handoffMs  How long a tool call waits on the bot before the voice is told the bot is
    *                           still at work, and the answer follows by `say`.
    */
-  constructor({ voice, workspace, dictate, platform = process.platform, refresh, say, handoffMs = 45_000, log = () => {} } = {}) {
-    Object.assign(this, { voiceOf: voice, workspaceOf: workspace, dictate, platform, refresh, say, handoffMs, log });
+  constructor({ voice, workspace, liveContext, dictate, platform = process.platform, refresh, say, handoffMs = 45_000, log = () => {} } = {}) {
+    Object.assign(this, { voiceOf: voice, workspaceOf: workspace, liveContextOf: liveContext, dictate, platform, refresh, say, handoffMs, log });
     // Live sessions: id → { chatId, own?, turn? }. `turn` is a request to the bot that outlasted its
     // tool call: { done, reply?, following }.
     this.sessions = new Map();
@@ -193,6 +194,30 @@ export class VoiceDesk {
 
   // ── Live voice ──────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * The app's bounded identity/user notes for this chat. A missing hook, a throw or a slow read
+   * leaves the voice with the chat and bot alone; this mirrors the link host's optional hook.
+   */
+  async liveNotes(chatId, botId) {
+    const workspace = this.workspaceOf();
+    const read = this.liveContextOf ?? workspace?.liveContext;
+    if (typeof read !== "function") return {};
+    let timer;
+    try {
+      const notes = await Promise.race([
+        Promise.resolve(read({ chatId, botId })),
+        new Promise((resolve) => (timer = setTimeout(() => resolve(null), LIVE_CONTEXT_WAIT))),
+      ]);
+      if (!notes || typeof notes !== "object" || Array.isArray(notes)) return {};
+      return Object.fromEntries(["userName", "identity", "user"].filter((key) => typeof notes[key] === "string").map((key) => [key, notes[key]]));
+    } catch {
+      this.log("voice: the app's notes for a live call could not be read");
+      return {};
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Opens a live session for a chat with its bot. `sdp` is the page's WebRTC offer (OpenAI and Codex). */
   async startLive(chatId, { sdp } = {}) {
     const workspace = this.workspaceOf();
@@ -206,8 +231,16 @@ export class VoiceDesk {
     this.starting = (this.starting ?? 0) + 1;
     let session;
     try {
+      const contextReader = this.liveContextOf ?? workspace.liveContext;
+      // Keep the old no-hook path synchronous: callers can receive the live session immediately,
+      // while the optional app context is the only thing that may add the bounded wait.
+      const notes = typeof contextReader === "function" ? await this.liveNotes(chat.id, bot.id) : {};
+      // Only actual conversation messages are carried into voice. Interim updates, secure-input
+      // receipts and command/step records stay in the desktop chat, never in provider context.
+      const messages = (chat.messages ?? []).filter((message) => message?.answer?.kind !== "secure");
+      const instructions = sharedLiveInstructions({ bot, messages, bots: workspace.state.bots ?? [], notes });
       // `about` reaches the Codex helper, which names the bot to its voice and says whose chat the session is for (noteSession).
-      session = await this.voice.live({ ...(typeof sdp === "string" && sdp && { sdp }), instructions: liveInstructions(bot, workspace.profileContext?.(botId)), tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name } });
+      session = await this.voice.live({ ...(typeof sdp === "string" && sdp && { sdp }), instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name } });
       this.sessions.set(session.id, { chatId: chat.id, own: true });
     } finally {
       this.starting--;
@@ -307,7 +340,7 @@ export class VoiceDesk {
       }
     }
     const reply = () => {
-      const said = chat.messages.slice(before).findLast((m) => m.role === "assistant" && m.text);
+      const said = chat.messages.slice(before).findLast((m) => m.role === "assistant" && !m.interim && m.text);
       if (said) return cutForSpeech(speakable(said.text), SPOKEN_REPLY);
       // No reply: the run says why, when it knows.
       const run = (workspace.state.runs ?? []).find((r) => r.chatId === chatId && r.id === chat.messages[before]?.runId);

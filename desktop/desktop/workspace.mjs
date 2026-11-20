@@ -1,3 +1,4 @@
+import { commitInterim, finishReply, wholeMessage } from "./transcript.mjs";
 import { stripVTControlCharacters } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -193,6 +194,10 @@ export class Workspace {
         .toReversed();
       let index = -1;
       for (const message of chat.messages) {
+        if (message.answer || message.steeredRunId) {
+          delete message.runId;
+          continue;
+        }
         if (message.role === "user") index++;
         if (history[index]) message.runId ??= history[index].id;
       }
@@ -251,6 +256,8 @@ export class Workspace {
         const chat = this.state.chats.find((c) => c.id === run.chatId);
         const message = chat?.messages.find((m) => m.runId === run.id && m.role === "user");
         if (!run.stopRequested && message && this.state.bots.some((b) => b.id === chat.botId)) continue;
+        if (chat) commitInterim(chat, run, { stream: run.recovery?.draft, speaker: isGroup(chat) ? run.recovery?.botId : undefined });
+        run.ending = run.stopRequested ? "stopped" : "interrupted";
         run.status = run.stopRequested ? "Stopped" : "Interrupted";
         run.detail = run.stopRequested ? "" : "The original message or bot is missing.";
         delete run.stopRequested;
@@ -721,6 +728,7 @@ export class Workspace {
             .map(m => ({ kind: "file", path: m.path, name: m.label }));
           const accepted = await task.deliverSteer({ prompt: quotedPrompt(item.text, item.quote) + (refs.context || ""), attachments: [...attachments, ...mentioned] });
           if (!accepted) break;
+          commitInterim(chat, task.run, task);
           chat.messages.push({ role: "user", text: item.text, steeredRunId: task.run.id, time: Date.now(),
             ...(item.quote && { quote: item.quote }), ...(attachments.length && { attachments }),
             ...(refs.list.length && { mentions: refs.list, context: refs.context }) });
@@ -772,7 +780,7 @@ export class Workspace {
         const chat = this.state.chats.find((c) => c.id === chatId);
         if (chat && !this.closing) {
           const time = Date.now();
-          const run = { id: randomUUID(), chatId, title: next.text.slice(0, 100), time, status: "Needs you", detail: err.message, finished: time };
+          const run = { id: randomUUID(), chatId, title: next.text.slice(0, 100), time, status: "Needs you", detail: err.message, finished: time, ending: "failed" };
           this.state.runs.unshift(run);
           chat.messages.push({
             role: "user",
@@ -1254,9 +1262,15 @@ export class Workspace {
       task.stream = "";
       task.showingDraft = false;
     }
+    if (data?.messageId != null) {
+      if (task.sourceMessageId !== data.messageId) task.sourceText = "";
+      task.sourceMessageId = data.messageId;
+      task.sourceText = (task.sourceText || "") + (data.deltaContent || "");
+    }
+    if (data?.deltaContent?.trim()) task.streamTime ??= Date.now();
     appendStream(task, data);
+    if (run.recovery) run.recovery.draft = task.stream;
     if (run.recovery && Date.now() >= (task.nextCheckpoint ?? 0)) {
-      run.recovery.draft = task.stream.slice(-4000);
       task.nextCheckpoint = Date.now() + 2000;
       this.save();
     } else this.notify();
@@ -1290,7 +1304,7 @@ export class Workspace {
     }
     if (task.recovering && checkpoint.input && checkpoint.botId === bot.id) {
       const saved = await session.completedReply?.(checkpoint.eventId, onReady);
-      if (saved != null) return { text: saved };
+      if (saved != null) { task.stream = ""; return { text: saved }; }
       task.showingDraft = !run.noOutput;
       task.stream = run.noOutput ? "" : checkpoint.draft ?? "";
       const progress = (run.steps ?? []).filter((step) => !step.botId || step.botId === bot.id)
@@ -1360,20 +1374,23 @@ export class Workspace {
     // The / menu and side questions can't borrow a member session mid-turn.
     task.opened(null);
     const failures = run.failures ?? [];
+    let failureEnding = "failed";
     try {
       for (const bot of order) {
         if (task.stopped || this.closing) break;
-        if (chat.messages.some((m) => m.runId === run.id && m.role === "assistant" && m.botId === bot.id) || failures.some((f) => f.botId === bot.id)) continue;
-        Object.assign(task, { speaker: bot.id, stream: "", thinking: "", intent: "", streamMessage: undefined, streamBreak: false });
+        if (chat.messages.some((m) => m.runId === run.id && m.role === "assistant" && !m.interim && m.botId === bot.id) || failures.some((f) => f.botId === bot.id)) continue;
+        Object.assign(task, { speaker: bot.id, stream: "", streamTime: undefined, committedMessage: undefined, thinking: "", intent: "", streamMessage: undefined, streamBreak: false });
         this.notify();
         try {
           const text = await this.memberTurn(chat, bot, members, run, task);
           if (task.stopped || this.closing) break;
-          chat.messages.push({ role: "assistant", text, runId: run.id, botId: bot.id, time: Date.now() });
+          finishReply(chat, run, task, text);
           markSeen(chat, bot.id);
           this.save();
         } catch (error) {
           if (task.stopped || this.closing || this.retryConnection(error, run, task)) break;
+          commitInterim(chat, run, task);
+          failureEnding = turnEnding(error);
           failures.push({ botId: bot.id, detail: error.message });
           run.failures = failures;
           this.save();
@@ -1387,15 +1404,19 @@ export class Workspace {
           .join(" · ");
       }
       run.status = failures.length === order.length ? "Needs you" : "Completed";
+      if (run.status === "Needs you") run.ending = failureEnding;
     } finally {
       task.finishing = true;
       task.ended = true;
+      if (task.stopped) commitInterim(chat, run, task);
       delete task.speaker;
       this.interactions.cancel(chat.id);
       if ((task.retry || this.closing) && !task.stopped && run.status === "Working") return;
       delete run.recovery;
       delete run.stopRequested;
-      if (task.stopped) run.status = "Stopped";
+      if (task.stopped) { run.status = "Stopped"; run.ending = "stopped"; }
+      if (run.status === "Needs you") run.ending ??= "failed";
+      if (run.ending) commitInterim(chat, run, task);
       for (const step of run.steps ?? [])
         if (step.status === "Running") step.status = "Interrupted";
       finishCanvas(run);
@@ -1454,6 +1475,14 @@ export class Workspace {
       let todoRead = 0;
       unsubscribe = session.on((event) => {
         const { type, data, agentId } = event;
+        if (!event.agentId && !event.data?.parentToolCallId) {
+          if (event.type === "tool.execution_start") commitInterim(chat, run, task);
+          if (event.type === "assistant.message" && !run.noOutput) {
+            wholeMessage(task, event.data);
+            if (run.recovery) run.recovery.draft = task.stream;
+            this.notify();
+          }
+        }
         this.artifactEvents.tool(chat, bot.id, run, event);
         if (type === "user.message" && !agentId && run.recovery?.input) {
           run.recovery.eventId = event.id;
@@ -1498,13 +1527,13 @@ export class Workspace {
       });
       const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots) });
       if (task.stopped) return "";
-      if (!text) throw new Error(bot.name + " finished without a reply.");
+      if (!text && !run.steps?.length && !task.stream?.trim()) throw new Error(bot.name + " finished without a reply.");
       return text;
     } catch (error) {
       failed = true;
       if (error?.code === "BOTKINS_SESSION_STALL") {
         const recovered = await this.recoverStalled(session, chat, run);
-        if (recovered != null) return recovered;
+        if (recovered != null) { task.stream = ""; return recovered; }
       }
       if (session) await session.abort().catch(() => {});
       throw error;
@@ -1533,6 +1562,14 @@ export class Workspace {
       else if (current) run.model = { ...current, ...(chat.sessionProvider && { provider: chat.sessionProvider }) };
       let todoRead = 0;
       unsubscribe = session.on((event) => {
+        if (!event.agentId && !event.data?.parentToolCallId) {
+          if (event.type === "tool.execution_start") commitInterim(chat, run, task);
+          if (event.type === "assistant.message" && !run.noOutput) {
+            wholeMessage(task, event.data);
+            if (run.recovery) run.recovery.draft = task.stream;
+            this.notify();
+          }
+        }
         this.artifactEvents.tool(chat, bot.id, run, event);
         if (event.type === "assistant.message_delta") {
           if (event.agentId) return;
@@ -1592,9 +1629,9 @@ export class Workspace {
           run.noOutput = true;
           noOutput = true;
         }
-        if (empty && !run.cards?.length && !routine)
+        if (empty && !run.cards?.length && !run.steps?.length && !task.stream?.trim() && !routine)
           throw new Error(bot.name + " finished without a reply.");
-        if (!noOutput) chat.messages.push({ role: "assistant", text, runId: run.id });
+        if (!noOutput) finishReply(chat, run, task, text || task.stream);
       } else {
         let text;
         switch (effect.kind) {
@@ -1653,6 +1690,7 @@ export class Workspace {
         }
         if (!noOutput) chat.messages.push({
           role: "command",
+          time: Date.now(),
           text: commandText,
           plain: effect.kind === "text" && !effect.markdown,
           runId: run.id,
@@ -1663,7 +1701,8 @@ export class Workspace {
       if (error?.code === "BOTKINS_SESSION_STALL") {
         const recovered = await this.recoverStalled(session, chat, run);
         if (recovered != null) {
-          if (!noOutput) chat.messages.push({ role: "assistant", text: recovered, runId: run.id });
+          task.stream = "";
+          if (!noOutput) finishReply(chat, run, task, recovered);
           run.status = "Completed";
           run.detail = "";
           return;
@@ -1671,6 +1710,7 @@ export class Workspace {
       }
       if (this.closing || this.retryConnection(error, run, task)) return;
       run.status = "Needs you";
+      run.ending = turnEnding(error);
       run.detail = error.message;
       if (session) await session.abort().catch(() => {});
     } finally {
@@ -1689,7 +1729,9 @@ export class Workspace {
       if ((task.retry || this.closing) && !task.stopped && run.status === "Working") return;
       delete run.recovery;
       delete run.stopRequested;
-      if (task.stopped) run.status = "Stopped";
+      if (task.stopped) { run.status = "Stopped"; run.ending = "stopped"; }
+      if (run.status === "Needs you") run.ending ??= "failed";
+      if (run.ending) commitInterim(chat, run, task);
       for (const step of run.steps ?? [])
         if (step.status === "Running") step.status = "Interrupted";
       finishCanvas(run);
@@ -1732,4 +1774,8 @@ export class Workspace {
       await task.session?.abort();
     }
   }
+}
+
+function turnEnding(error) {
+  return ["BOTKINS_SESSION_STALL", "BOTKINS_TURN_TIMEOUT", "ETIMEDOUT"].includes(error?.code) || error?.name === "TimeoutError" ? "timed-out" : "failed";
 }

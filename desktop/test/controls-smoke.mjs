@@ -148,7 +148,7 @@ try {
     "#8bc6b2",
   );
   await record("appearance");
-  await page.getByRole("tab", { name: "Chats & approvals", exact: true }).click();
+  await page.getByRole("tab", { name: "Chat", exact: true }).click();
   await dialog().getByLabel("Approval level").selectOption("read");
   await dialog()
     .getByLabel("Custom question instructions")

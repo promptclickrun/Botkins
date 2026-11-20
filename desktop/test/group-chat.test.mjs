@@ -138,7 +138,9 @@ test("the snapshot names the speaker while a member replies, and Stop halts the 
   assert.deepEqual(speakers, ["pip"]);
   assert.equal(log.sent.length, 1, "members not yet started never run");
   assert.equal(ws.state.runs[0].status, "Stopped");
-  assert.equal(ws.chat(id).messages.filter((m) => m.role === "assistant").length, 0);
+  assert.deepEqual(ws.chat(id).messages.filter(m => m.role === "assistant").map(m => [m.botId, m.text, m.interim]),
+    [["pip", "Thinking about it", true]]);
+  assert.equal(ws.state.runs[0].ending, "stopped");
   assert.equal(ws.snapshot().speakers[id], undefined);
 });
 

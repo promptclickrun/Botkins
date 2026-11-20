@@ -80,5 +80,5 @@ execFileSync(
   ["--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "--local-user", key, "--armor", "--detach-sign", "--output", join(out, "SHA256SUMS.asc"), join(out, "SHA256SUMS")],
   { input: passphrase(), stdio: ["pipe", "inherit", "inherit"] },
 );
-execFileSync("gpg", ["--armor", "--export", key, "--output", join(out, "botkins-release.asc"), "--yes"], { stdio: "inherit" });
+execFileSync("gpg", ["--yes", "--armor", "--output", join(out, "botkins-release.asc"), "--export", key], { stdio: "inherit" });
 console.log(`Signed ${files.length} Linux packages in ${out}`);

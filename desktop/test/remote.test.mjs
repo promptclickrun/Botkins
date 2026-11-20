@@ -10,6 +10,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { Workspace } from "./starter.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
+import { liveContextFor } from "../desktop/live-context.mjs";
+import { writeProfile } from "../desktop/bot-profile-files.mjs";
 import { LinkHost } from "../desktop/link/index.mjs";
 import { HERE, REMOTE_HOSTS, RemoteHosts, snapshotOf } from "../desktop/remotehosts.mjs";
 import * as lib from "../desktop/remote/link-client.mjs";
@@ -72,7 +74,7 @@ async function host(t, name = "Studio") {
   const link = new LinkHost({
     dir: join(tempDir(t), "link"),
     port: 0,
-    backend: { info: () => ({ app: "botkins", version: "9.9.9", platform: process.platform }), capabilities: [REMOTE_HOSTS], snapshot: () => ws.snapshot(), call: (method, args) => handlers[method](...args), subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)) },
+    backend: { info: () => ({ app: "botkins", version: "9.9.9", platform: process.platform }), capabilities: [REMOTE_HOSTS], liveContext: (args) => liveContextFor(ws, args), snapshot: () => ws.snapshot(), call: (method, args) => handlers[method](...args), subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)) },
   });
   t.after(() => link.stop());
   await link.start();
@@ -256,4 +258,60 @@ test("forgetting a host unpairs on both sides", async (t) => {
   const again = await b.remote.pair({ address: a.address, code: a.link.startPairing().code });
   await b.remote.forget(again.id);
   assert.deepEqual(a.link.status().devices, []);
+});
+
+test("a resting paired client resumes for one sync and keeps its chat changes", async (t) => {
+  const computer = await host(t);
+  const pairing = await lib.pair(fetch, { hosts: [computer.address], code: computer.link.startPairing().code }, { name: "Phone", platform: "ios" });
+  const parts = {};
+  let syncs = 0;
+  const phone = new lib.LinkClient(pairing, {
+    fetch,
+    onState() {},
+    onParts: (changes) => Object.assign(parts, changes),
+    onSync() {
+      syncs++;
+      phone.rest();
+    },
+  });
+  t.after(() => phone.stop());
+  assert.equal(typeof phone.rest, "function");
+  phone.start();
+  await until("initial sync", () => syncs === 1);
+  const chat = await phone.call("createChat", "pip");
+  assert.equal(syncs, 1);
+  assert.ok(!parts.chats.some((item) => item.id === chat));
+  phone.wake();
+  await until("one sync after wake", () => syncs === 2 && parts.chats.some((item) => item.id === chat));
+});
+
+test("paired live voice passes its chat and profiles to the provider with location only on request", async (t) => {
+  const { ws, link, address } = await host(t);
+  const chatId = ws.createChat("pip");
+  writeProfile(ws, "pip", { file: "IDENTITY.md", previous: "", text: "I keep the garden journal." });
+  writeProfile(ws, "pip", { file: "USER.md", previous: "", text: "Name: Robin\nPrefers Celsius." });
+  ws.chat(chatId).messages.push(
+    { role: "user", text: "Which seedlings sprouted?" },
+    { role: "assistant", text: "CHECKING_SEEDLINGS", interim: true },
+    { role: "assistant", text: "The basil sprouted yesterday." }
+  );
+  const pairing = await lib.pair(fetch, { hosts: [address], code: link.startPairing().code }, { name: "Phone", platform: "ios" });
+  const phone = new lib.LinkClient(pairing, { fetch, onState() {}, onParts() {} });
+  t.after(() => phone.stop());
+  const prompts = [];
+  link.voice.live = async ({ instructions }) => {
+    prompts.push(instructions);
+    return { id: "voice-one" };
+  };
+  const request = { chatId, botId: "pip", provider: "openai" };
+  await phone.call("link.voice.live", request);
+  assert.match(prompts[0], /basil sprouted yesterday/);
+  assert.match(prompts[0], /keep the garden journal/);
+  assert.match(prompts[0], /Prefers Celsius/);
+  assert.match(prompts[0], /person's name is Robin/);
+  assert.doesNotMatch(prompts[0], /CHECKING_SEEDLINGS|The person is near/);
+  await phone.call("link.voice.live", { ...request, context: { location: { place: "Greenhouse", latitude: 45.1234, longitude: -90.2345 } } });
+  assert.match(prompts[1], /Greenhouse \(45\.12, -90\.23\)/);
+  await assert.rejects(phone.call("link.voice.live", { ...request, context: { location: { latitude: 999, longitude: 0 } } }), /location/i);
+  assert.equal(prompts.length, 2);
 });

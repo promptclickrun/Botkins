@@ -298,7 +298,7 @@ try {
     "General",
     "Appearance",
     "Side menu",
-    "Chats & approvals",
+    "Chat",
     "Notifications",
     "Bots & capabilities",
     "Skills",

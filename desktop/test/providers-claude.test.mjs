@@ -284,7 +284,7 @@ test("a turn runs Claude Code with Botkins' instructions, tools and servers, and
     ["t5", true, "Found it"],
   ]);
   assert.deepEqual(of("subagent.started").map((e) => e.data), [{ toolCallId: "t5", agentName: "Explore", agentDescription: "Find the file" }]);
-  assert.deepEqual(of("subagent.completed").map((e) => e.data), [{ toolCallId: "t5" }]);
+  assert.deepEqual(of("subagent.completed").map((e) => e.data), [{ toolCallId: "t5", result:"Found it" }]);
   assert.deepEqual(await session.todos(), { rows: [{ id: "1", title: "Look", status: "completed" }, { id: "2", title: "Answer", status: "in_progress" }], dependencies: [] });
   assert.deepEqual(of("assistant.usage").map((e) => e.data), [{ inputTokens: 15, outputTokens: 20, cacheReadTokens: 90, duration: 1500, model: "claude-opus-9" }], "a plan shows no cost");
   assert.deepEqual(of("session.usage_info").map((e) => e.data), [{ currentTokens: 125, tokenLimit: 200000 }]);

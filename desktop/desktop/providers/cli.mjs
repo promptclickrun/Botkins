@@ -208,7 +208,7 @@ export class StdioRpc {
   request(method, params, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
       const id = this.next++;
-      const timer = timeoutMs > 0 ? setTimeout(() => this.pending.delete(id) && reject(new Error("The model provider didn't answer in time (" + method + ").")), timeoutMs) : null;
+      const timer = timeoutMs > 0 ? setTimeout(() => this.pending.delete(id) && reject(Object.assign(new Error("The model provider didn't answer in time (" + method + ")."), {code:"ETIMEDOUT"})), timeoutMs) : null;
       timer?.unref?.();
       this.pending.set(id, { resolve, reject, timer });
       try {

@@ -1,3 +1,4 @@
+import { associateHelper, helperId } from "./activity.mjs";
 // Chat canvas helpers: reasoning, usage, context, todos, background helpers,
 // attachments, fork context and the plain-language work summary.
 import { statSync } from "node:fs";
@@ -46,6 +47,12 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
           .slice(-LIVE_CAP);
       return true;
     }
+    case "assistant.intent": {
+      const helper = agentId && run.agents?.find(a => a.id === helperId(run, agentId));
+      if (!helper || !data?.intent) return false;
+      helper.intent = String(data.intent).slice(0, 4000);
+      return true;
+    }
     case "assistant.usage": {
       if (!data) return false;
       const u = (run.usage ??= { input: 0, output: 0 });
@@ -75,9 +82,16 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
     case "subagent.started": {
       if (!data?.toolCallId) return false;
       run.agents ??= [];
+      associateHelper(run, data.instanceId ?? agentId, data.toolCallId);
       if (run.agents.some((a) => a.id === data.toolCallId)) return true;
+      let prompt = data.prompt;
+      if (!prompt) {
+        const input = run.steps?.find(s => s.id === data.toolCallId)?.input;
+        try { prompt = input && JSON.parse(input)?.prompt; } catch { /* Input can be clipped. */ }
+      }
       run.agents.push({
         id: data.toolCallId,
+        ...(typeof prompt === "string" && {prompt:prompt.slice(0,4000)}),
         name: data.agentDisplayName || data.agentName || "Helper",
         ...(data.agentDescription && { description: String(data.agentDescription).slice(0, 300) }),
         status: "Running",
@@ -95,6 +109,8 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
         agent.detail = String(data.error || "Failed").slice(0, 500);
       } else {
         agent.status = "Done";
+        const result = data.result ?? run.steps?.find(s => s.id === agent.id)?.output;
+        if (typeof result === "string" && result) agent.result = result.slice(0, 4000);
         if (data.cancelled) agent.detail = "Cancelled";
       }
       return true;

@@ -53,8 +53,8 @@ function fakeVoice({ tts = "openai" } = {}) {
 }
 
 /** A stand-in workspace: send() runs a "turn" that adds the bot's reply. */
-function fakeWorkspace({ reply = "Sure. **Done** with `code`." } = {}) {
-  const chat = { id: "chat-1", botId: "bot-1", messages: [] };
+function fakeWorkspace({ reply = "Sure. **Done** with `code`.", messages = [], liveContext } = {}) {
+  const chat = { id: "chat-1", botId: "bot-1", messages };
   const ws = {
     sent: [],
     active: new Map(),
@@ -70,6 +70,7 @@ function fakeWorkspace({ reply = "Sure. **Done** with `code`." } = {}) {
       chat.messages.push({ role: "assistant", text: typeof reply === "function" ? reply(text) : reply });
     },
   };
+  if (liveContext) ws.liveContext = liveContext;
   return ws;
 }
 
@@ -165,6 +166,8 @@ test("startLive gives the voice the bot's name and role and the one ask_bot tool
   assert.match(args.instructions, /voice of Pip/);
   assert.match(args.instructions, /garden notes/);
   assert.match(args.instructions, /ask_bot/);
+  assert.match(ASK_BOT.description, /new work/);
+  assert.match(ASK_BOT.description, /Not for what the conversation or your notes already answer/);
   assert.deepEqual(args.about, { chatId: "chat-1", botId: "bot-1", botName: "Pip" }, "whom the voice speaks for, for a helper that needs to know");
   assert.equal(desk.isOwn("live-1"), true, "a session this window started");
   assert.deepEqual(ASK_BOT.parameters.required, ["request"]);
@@ -172,6 +175,41 @@ test("startLive gives the voice the bot's name and role and the one ask_bot tool
   desk.endLive("live-1");
   assert.deepEqual(voice.calls.at(-1), ["endLive", "live-1"]);
   await assert.rejects(desk.liveTool("live-1", "ask_bot", { request: "hi" }), /ended/);
+});
+
+test("local live voice carries bounded context and actual chat, not secret receipts or work records", async () => {
+  const ws = fakeWorkspace({
+    messages: [
+      { role: "user", text: "What did we decide about basil?" },
+      { role: "assistant", text: "Basil goes in the sunny bed." },
+      { role: "assistant", text: "interim tool narration", interim: true },
+      { role: "command", text: "secret command output" },
+      { role: "user", text: "Provided Password", answer: { kind: "secure", title: "Credentials", runId: "r", requestId: "q" } },
+    ],
+    liveContext: async () => ({ userName: "Alex Example", identity: "Pip keeps the garden notes.", user: "Alex prefers short answers." }),
+  });
+  const voice = fakeVoice();
+  const desk = new VoiceDesk({ voice: () => voice, workspace: () => ws });
+  await desk.startLive("chat-1", { sdp: "v=0 offer" });
+  const [, args] = voice.calls.find((call) => call[0] === "live");
+  assert.match(args.instructions, /The person's name is Alex Example\./);
+  assert.match(args.instructions, /Pip keeps the garden notes/);
+  assert.match(args.instructions, /Alex prefers short answers/);
+  assert.match(args.instructions, /What did we decide about basil\?/);
+  assert.match(args.instructions, /Basil goes in the sunny bed/);
+  assert.doesNotMatch(args.instructions, /interim tool narration|secret command output|Provided Password/);
+  assert.doesNotMatch(args.instructions, /near /, "the desktop did not claim location permission");
+});
+
+test("a slow local live context hook fails open after two seconds", async () => {
+  const ws = fakeWorkspace({ liveContext: () => new Promise(() => {}) });
+  const voice = fakeVoice();
+  const desk = new VoiceDesk({ voice: () => voice, workspace: () => ws });
+  const started = Date.now();
+  await desk.startLive("chat-1");
+  assert.ok(Date.now() - started >= 1900 && Date.now() - started < 2600);
+  const [, args] = voice.calls.find((call) => call[0] === "live");
+  assert.doesNotMatch(args.instructions, /The person's name|identity:|About Alex/);
 });
 
 test("liveTool runs ask_bot as a normal turn and answers with the reply, ready to speak", async () => {

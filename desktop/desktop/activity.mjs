@@ -16,7 +16,22 @@ function toolLabel(name, args) {
     : name;
 }
 
-export function recordActivity(run, { type, data }, notify) {
+// Provider instance IDs and tool-call IDs can differ. Keep the association private to the run.
+const owners = new WeakMap();
+const pendingOwners = new WeakMap();
+export function associateHelper(run, instance, toolCallId) {
+  if (!instance || !toolCallId) return;
+  if (!owners.has(run)) owners.set(run, new Map());
+  owners.get(run).set(instance, toolCallId);
+  for (const step of run.steps ?? []) if (pendingOwners.get(step) === instance) {
+    step.agentId = toolCallId;
+    pendingOwners.delete(step);
+  }
+}
+export function helperId(run, instance) {
+  return owners.get(run)?.get(instance) ?? run.agents?.find(a => a.id === instance)?.id;
+}
+export function recordActivity(run, { type, data, agentId }, notify) {
   const id = data?.toolCallId;
   if (!id || !type.startsWith("tool.")) return;
   run.steps ??= [];
@@ -24,8 +39,10 @@ export function recordActivity(run, { type, data }, notify) {
   if (type === "tool.execution_start") {
     if (step) return;
     const name = data.mcpToolName || data.toolName || "Tool";
+    const owner = data.parentToolCallId ?? (agentId && helperId(run, agentId));
     step = {
       id,
+      ...(owner && {agentId:owner}),
       name,
       source: data.mcpServerName,
       label: toolLabel(name, data.arguments),
@@ -33,6 +50,7 @@ export function recordActivity(run, { type, data }, notify) {
       status: "Running",
       started: Date.now(),
     };
+    if (!owner && agentId) pendingOwners.set(step, agentId);
     run.steps.push(step);
   } else if (!step) return;
   else if (type === "tool.execution_progress")

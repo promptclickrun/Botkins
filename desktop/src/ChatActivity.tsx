@@ -57,13 +57,16 @@ export function Reasoning({
   run,
   live,
   onToggle,
+  display = "open",
 }: {
   run: Run;
   live?: string;
   onToggle?: () => void;
+  /** Thinking and updates setting. `hide` leaves the work available in the activity view. */
+  display?: "open" | "folded" | "hidden";
 }) {
   const running = run.status === "Working";
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(display !== "hidden");
   const [all, setAll] = useState(false);
   const entries = run.reasoning ?? [];
   const text = running
@@ -72,7 +75,7 @@ export function Reasoning({
         .map((r) => plain(r.text).trim())
         .filter(Boolean)
         .join("\n\n");
-  if (!text.trim()) return null;
+  if (!text.trim() || display === "hidden") return null;
   // Thinking starts with the turn, before the first summary word arrives.
   const started = run.time;
   const ended = Math.max(...entries.map((r) => r.finished ?? r.started), started);
@@ -94,10 +97,10 @@ export function Reasoning({
       </button>
       {open && (
         <>
-          <p className={"reasoning-text" + (all || running ? "" : " folded")}>
+            <p className={"reasoning-text" + (all || (running && display === "open") ? "" : " folded")}>
             {running && !all ? newestWords(text) : text}
           </p>
-          {long && !running && (
+          {long && (!running || display === "folded") && (
             <button
               className="show-more"
               onClick={() => {
@@ -176,6 +179,92 @@ export function StepList({ steps }: { steps: Step[] }) {
   );
 }
 
+/** Text the bot wrote while a turn was moving between tools. It is deliberately quieter than a
+ * reply, while retaining its position in the transcript when the turn timeline capability is on. */
+export function InterimUpdate({ text, onToggle, display = "open" }: { text: string; onToggle?: () => void; display?: "open" | "folded" | "hidden" }) {
+  const value = text.trim();
+  if (!value || display === "hidden") return null;
+  return (
+    <div className="assistant interim-update" onClick={onToggle}>
+      <span className="interim-mark" aria-hidden="true" />
+      <p>{display === "folded" ? newestWords(value, 320) : value}</p>
+    </div>
+  );
+}
+
+/** One reasoning/update segment in a timeline. It intentionally does not repeat the whole run. */
+export function ReasoningUpdate({ text, title = "Thinking and updates", display = "open" }: { text: string; title?: string; display?: "open" | "folded" | "hidden" }) {
+  const value = text.trim();
+  if (!value || display === "hidden") return null;
+  const shown = display === "folded" ? newestWords(value) : value;
+  return (
+    <section className="reasoning timeline-reasoning" aria-label={title}>
+      <div className="reasoning-head"><Brain size={14} /><span>{title}</span></div>
+      <p className={"reasoning-text" + (display === "folded" ? " folded" : "")}>{shown}</p>
+    </section>
+  );
+}
+
+/** The fixed-height row under a reply. Opening it reveals the exact in-order timeline entries. */
+export function TimelineFold({
+  line,
+  live = false,
+  body,
+  detailsBody,
+  avatar,
+  intent,
+  count,
+  onDetails,
+}: {
+  line: string;
+  live?: boolean;
+  body?: ReactNode;
+  /** The complete work timeline, including content hidden by the chat preferences. */
+  detailsBody?: ReactNode;
+  /** The Botkin's live face. The activity pulse remains the fallback for older callers. */
+  avatar?: ReactNode;
+  intent?: string;
+  count?: string;
+  onDetails?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const toggle = () => {
+    if (live) return onDetails?.();
+    setOpen((value) => !value);
+  };
+  const showDetails = () => {
+    onDetails?.();
+    setDetailsOpen(true);
+  };
+  return (
+    <section className={"timeline-fold" + (live ? " live" : "")} aria-label={live ? "Turn status" : "Turn activity"}>
+      <button className="timeline-fold-line" aria-expanded={live ? undefined : open} onClick={toggle}>
+        {live ? (avatar ?? <span className="activity-pulse" aria-hidden="true" />) : <Activity size={14} />}
+        {live && <span className="typing-dots" aria-label="Typing" aria-hidden="true"><i /><i /><i /></span>}
+        <span className={live ? "work-intent" : undefined}>{live ? (intent?.trim() || line) : line}</span>
+        {count && <span className="work-count">{count}</span>}
+        {!live && <small>{open ? "Hide work" : "Show work"}</small>}
+      </button>
+      {open && !live && (
+        <div className="timeline-fold-body">
+          {body}
+          <button className="timeline-details" onClick={showDetails}>Details</button>
+        </div>
+      )}
+      {detailsOpen && !live && (
+        <div className="timeline-activity" role="dialog" aria-label="Work activity">
+          <div className="timeline-activity-head">
+            <strong>Work activity</strong>
+            <button className="timeline-activity-close" aria-label="Close work activity" onClick={() => setDetailsOpen(false)}>Close</button>
+          </div>
+          <div className="timeline-activity-body">{detailsBody ?? body}</div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * A turn's tool work. Live: "<Bot> is working" with the newest steps. Done: one row,
  * "Worked for 1m 51s · 7 steps" over a plain summary, opening to every step.
@@ -186,6 +275,8 @@ export function ToolTrail({
   bot = "Bot",
   avatar,
   onToggle,
+  mode,
+  intent,
 }: {
   run: Run;
   fold: boolean;
@@ -193,16 +284,23 @@ export function ToolTrail({
   /** The working bot's small avatar, acting out its state; shown in place of the spinner while live. */
   avatar?: ReactNode;
   onToggle?: () => void;
+  /** The four Settings › Chat › Steps choices. `fold` remains for older callers. */
+  mode?: "folded" | "every" | "failed" | "hidden";
+  intent?: string;
 }) {
   const live = run.status === "Working";
-  const [expanded, setExpanded] = useState(!fold);
+  const choice = mode ?? (fold ? "folded" : "every");
+  const [expanded, setExpanded] = useState(choice === "every");
   useEffect(() => {
-    setExpanded(!fold);
-  }, [live, fold]);
+    setExpanded(choice === "every");
+  }, [live, choice]);
   const now = useNow(live);
   const steps = run.steps ?? [];
-  const count = steps.length || run.usedTools?.length || 0;
-  if (!count) return null;
+  const visibleSteps = choice === "hidden" ? [] : choice === "failed" ? steps.filter((step) => step.status === "Failed") : steps;
+  const count = visibleSteps.length || (choice === "hidden" ? 0 : run.usedTools?.length || 0);
+  // Keep a stable status row even before the first tool arrives. This is the anchor that becomes
+  // the finished work line when the turn ends.
+  if (!live && !count && !run.summary) return null;
   const toggle = () => {
     onToggle?.();
     setExpanded(!expanded);
@@ -213,13 +311,12 @@ export function ToolTrail({
       <section className="tool-trail work-live" aria-label="Tool activity">
         <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
           {avatar ?? <LoaderCircle size={15} className="spin" />}
-          <strong>{bot} is working</strong>
-          <span>
-            {duration(now - run.time)} · {count + plural}
-          </span>
-          <ChevronDown size={15} />
+          <strong>{bot}</strong>
+          <span className="typing-dots" aria-label="Typing" aria-hidden="true"><i /><i /><i /></span>
+          <span className="work-intent">{intent?.trim() || "Working…"}</span>
+          {count > 0 && <span className="work-count">{count + plural}</span>}
         </button>
-        {expanded ? <StepList steps={steps} /> : <StepList steps={steps.slice(-3)} />}
+        {expanded && <StepList steps={visibleSteps} />}
       </section>
     );
   const last = Math.max(run.time, ...steps.map((s) => s.finished ?? s.started));
@@ -229,16 +326,14 @@ export function ToolTrail({
       <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
         <Activity size={15} />
         <span className="work-title">
-          <strong>
-            Worked for {duration(elapsed)} · {count + plural}
-          </strong>
+          <strong>Worked for {duration(elapsed)}</strong>
           {run.summary && <small>{run.summary}</small>}
         </span>
-        <ChevronDown size={15} />
+        {count > 0 && <span className="work-count">{count + plural}</span>}
       </button>
       {expanded &&
         (steps.length ? (
-          <StepList steps={steps} />
+          <StepList steps={visibleSteps} />
         ) : (
           <ol>
             {run.usedTools?.map((name) => (

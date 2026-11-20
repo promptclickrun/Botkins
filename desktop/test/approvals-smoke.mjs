@@ -114,7 +114,7 @@ try {
     .toBe(2);
   assert.equal(readFileSync(data.receipt, "utf8").trim().split("\n").length, 2);
   await button("Settings").click();
-  await page.getByRole("tab", { name: "Chats & approvals", exact: true }).click();
+  await page.getByRole("tab", { name: "Chat", exact: true }).click();
   await button("Clear remembered approvals").click();
   await page.getByLabel("Approval level").selectOption("all");
   await button("Close dialog").click();
@@ -130,7 +130,7 @@ try {
     .toBe(3);
   assert.equal(readFileSync(data.receipt, "utf8").trim().split("\n").length, 3);
   await button("Settings").click();
-  await page.getByRole("tab", { name: "Chats & approvals", exact: true }).click();
+  await page.getByRole("tab", { name: "Chat", exact: true }).click();
   await page.getByLabel("Approval level").selectOption("ask");
   await button("Close dialog").click();
   await send(

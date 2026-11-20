@@ -125,7 +125,7 @@ export class Tasks {
     const task = this.all.find((t) => t.id === run.taskId);
     if (!task || task.status !== "working") return;
     const chat = this.ws.state.chats.find((c) => c.id === run.chatId);
-    const reply = chat?.messages.findLast((m) => m.runId === run.id && m.role === "assistant")?.text;
+    const reply = chat?.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text;
     if (run.status === "Completed") Object.assign(task, { status: "review", result: (reply ?? "").slice(0, 4000) });
     else Object.assign(task, { status: "blocked", problem: run.detail || run.status });
     task.updatedAt = Date.now();

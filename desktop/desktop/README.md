@@ -28,3 +28,7 @@ The public `host` service owns the pairing credentials and the saved screen leve
 The phone and host message shapes are documented in the [link contract](link/CONTRACT.md).
 
 Electron, model tools and their shell processes run in the `workspace` service. That service owns the X11 display and answers capture and input requests on a Unix socket. Only the public host can read the owner pairing file and write the link volume. Docker operators control both services. Keep the Docker socket, host home directory and link volume outside the workspace container.
+
+### Linux tarball updates
+
+A systemd host can install signed updates through Settings → About or the agent update tool. Configure its fixed updater unit once using the [Linux setup instructions](linux-service/README.md). The same files ship in the Linux tarball under `resources/app/desktop/linux-service`.
