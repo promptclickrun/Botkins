@@ -52,7 +52,7 @@ export class DemoUpdates {
     this.state = { status: "checking" };
     await this.backend.sleep(1200);
     const found = this.found();
-    this.state = found ?? { status: "error", message: "GitHub could not check for updates (HTTP 503)." };
+    this.state = found ?? { status: "error", message: "GitHub did not say which release is the latest: it could not be reached (ENOTFOUND). Try again later." };
     if (found?.status === "available") this.onAvailable(found.latest);
     return this.status();
   }
