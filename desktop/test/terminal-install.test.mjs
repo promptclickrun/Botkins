@@ -10,10 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownCommand } from "../cli/commands/install.mjs";
+import { examine } from "../cli/commands/service.mjs";
 import { keyFrom } from "../desktop/host/keystore.mjs";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
 import { launchdJob, systemUnit, updateUnits, userUnit } from "../desktop/terminal/units.mjs";
-import { applyUpdate, asOwnerOf, assetName, cleanLastUpdate, folderName, installLayout, lastUpdateFile, readLastUpdate, switchTo, takeRequest, unmanaged, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
+import { applyUpdate, asOwnerOf, assetName, cleanLastUpdate, folderName, installLayout, lastUpdateFile, notRootOwned, notRootOwnedWords, readLastUpdate, switchTo, takeRequest, unmanaged, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
 import { defaults } from "../desktop/terminal/config.mjs";
 import { terminalUpdates } from "../desktop/terminal/updates.mjs";
 import { AppUpdates } from "../desktop/updates.mjs";
@@ -345,7 +346,49 @@ test("an update moves `current` to the new version in one step, and back when th
   await assert.rejects(switchTo({ archive: strayArchive, installRoot, version: "1.6.0", platform: "linux", arch: "arm64", checkOwner: false }), /outside its own folder/);
   assert.equal(readdirNames(installRoot).some((name) => name.startsWith(".update-")), false, "nothing is left half unpacked");
   // As root, an install folder somebody else could write to is refused.
-  await assert.rejects(switchTo({ archive: release(dir, "1.7.0").archive, installRoot, version: "1.7.0", platform: "linux", arch: "arm64", checkOwner: true }), /is not root's own/);
+  await assert.rejects(switchTo({ archive: release(dir, "1.7.0").archive, installRoot, version: "1.7.0", platform: "linux", arch: "arm64", checkOwner: true }), (error) => error.code === "INSTALL_FOLDER" && /does not belong to root, so Botkins can't be updated in /.test(error.message));
+});
+
+test("an install folder that is not root's alone is found, said in words with the commands that fix it, and nothing is downloaded for it", { skip }, async (t) => {
+  // The look goes from the folder up to the top of the disk. The system's own folders are root's; the shared temporary one is everybody's.
+  assert.equal(notRootOwned("/usr"), null);
+  const shared = notRootOwned(realpathSync("/tmp"));
+  assert.deepEqual([shared.path, shared.uid, (shared.mode & 0o002) !== 0], [realpathSync("/tmp"), 0, true]);
+  const dir = tempDir(t);
+  // A folder of somebody else's, and a folder under it: the one that is wrong is the one named.
+  mkdirSync(join(dir, "srv", "botkins"), { recursive: true });
+  const mine = notRootOwned(join(dir, "srv", "botkins"));
+  assert.deepEqual([mine.path, mine.uid], [join(dir, "srv", "botkins"), process.getuid()]);
+  assert.equal(notRootOwned(join(dir, "nothing", "here")).path, join(dir, "nothing", "here"), "a folder that isn't there is not root's own");
+  // The words are for a person, at the terminal and on a phone: what is wrong, and what to type.
+  assert.equal(notRootOwnedWords({ path: "/opt", uid: 0, mode: 0o777 }, "/opt/botkins"), "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in /opt/botkins. On the computer: `sudo chown root /opt && sudo chmod go-w /opt`.");
+  assert.equal(notRootOwnedWords({ path: "/srv/my apps", uid: 1000, mode: 0o755 }, "/srv/my apps/botkins"), "The folder /srv/my apps does not belong to root, so Botkins can't be updated in /srv/my apps/botkins. On the computer: `sudo chown root '/srv/my apps' && sudo chmod go-w '/srv/my apps'`.");
+  assert.ok(notRootOwnedWords({ path: "/opt", uid: 0, mode: 0o777 }, "/opt/botkins").length < 300, "it fits in the record a phone is shown");
+  // A folder that couldn't be looked at: said as that, with no command that might not help.
+  assert.equal(notRootOwnedWords(notRootOwned(join(dir, "nothing", "here")), join(dir, "nothing", "here")), "The folder " + join(dir, "nothing", "here") + " is not there or can't be read, so Botkins can't be updated in " + join(dir, "nothing", "here") + ".");
+  // The updater says it before it downloads anything, and it is an install that failed, with that reason.
+  const { entry } = installed(dir, "1.2.3");
+  const reports = [];
+  await assert.rejects(applyUpdate({ entry, platform: "linux", arch: "arm64", checkOwner: true, latest: () => assert.fail("nothing is looked for"), fetcher: () => assert.fail("nothing is downloaded"), report: (record) => reports.push(record), now: () => new Date("2026-01-02T03:04:05Z") }), { code: "INSTALL_FOLDER" });
+  assert.deepEqual([reports[0].ok, reports[0].from, reports[0].to], [false, "1.2.3", "1.2.3"]);
+  assert.match(reports[0].message, /does not belong to root, so Botkins can't be updated in .* On the computer: `sudo chown root /);
+  // The running service knows it before anyone asks: it says so to whoever looks, a phone too,
+  // and leaves no request for a root job that would only refuse it.
+  const service = { version: "1.2.3", paths: { root: join(dir, "data"), runDir: join(dir, "data", "run") }, log: { info() {}, error() {} }, config: () => ({ updates: { auto: false } }), setConfig() {} };
+  mkdirSync(service.paths.runDir, { recursive: true });
+  const latest = async () => ({ version: "1.3.0", assets: [assetName("1.3.0", "linux", "arm64"), "SHA256SUMS", "SHA256SUMS.asc"] });
+  const words = "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in " + join(dir, "opt") + ". On the computer: `sudo chown root /opt && sudo chmod go-w /opt`.";
+  const looked = [];
+  const updates = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: (path) => (looked.push(path), { path: "/opt", uid: 0, mode: 0o777 }), launch: assert.fail, env: {} });
+  assert.deepEqual(await updates.check(), { status: "available", current: "1.2.3", latest: "1.3.0", canInstall: false, installer: "linux-tarball", message: words });
+  assert.deepEqual(looked, [join(dir, "opt")]);
+  await assert.rejects(updates.install(), (error) => error.message === words);
+  assert.equal(existsSync(join(service.paths.runDir, "update-requested")), false);
+  updates.stopAuto();
+  // One person's own service is updated by that person, in their own folder: nothing of root's is asked of it.
+  const own = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "user" }) }, folder: () => assert.fail("not asked"), launch: () => ({ unref() {} }), env: {} });
+  assert.equal((await own.check()).canInstall, true);
+  own.stopAuto();
 });
 const readdirNames = (dir) => execFileSync("ls", ["-a", dir], { encoding: "utf8" }).split("\n");
 
@@ -410,7 +453,7 @@ test("the running service can only ask for an update: a request file for the roo
   const latest = async () => ({ version: "1.3.0", assets: ["botkins-terminal-1.3.0-linux-arm64.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"] });
   const launched = [];
   const launch = (file, args) => (launched.push([file, ...args]), { unref() {} });
-  const system = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch });
+  const system = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: () => null, launch });
   assert.ok(system instanceof AppUpdates);
   const state = await system.check();
   assert.deepEqual([state.status, state.latest, state.canInstall], ["available", "1.3.0", true]);
@@ -427,8 +470,9 @@ test("the running service can only ask for an update: a request file for the roo
   // Not installed as a service, or not from a release: it says so and installs nothing.
   const loose = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => null }, launch });
   assert.deepEqual([(await loose.check()).canInstall, /botkins service install/.test((await loose.check()).message)], [false, true]);
-  await assert.rejects(loose.install(), /can't install this release by itself/);
-  const checkout = terminalUpdates(service, { entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)), platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch });
+  // Asked to install all the same, it gives the reason it found, not a general one.
+  await assert.rejects(loose.install(), /runs Botkins from a terminal, not as a service, so it can't update itself/);
+  const checkout = terminalUpdates(service, { entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)), platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: () => null, launch });
   assert.equal((await checkout.check()).canInstall, false);
   await assert.rejects(checkout.install(), /wasn't installed from a release/);
 });
@@ -540,7 +584,7 @@ test("a host that can install tells how it stands, installs by itself only when 
   const service = { version: "1.2.3", paths: { runDir, root: dir }, log: { info: (line) => lines.push(line), error: (line) => lines.push(line) }, config: () => config, setConfig: async (next) => void (config = next), runtime: { workspace: { active: { get size() { return active; } } } }, changed: () => changes++ };
   let found = "1.2.3";
   const latest = async () => ({ version: found, assets: ["botkins-terminal-" + found + "-linux-arm64.tar.gz", "SHA256SUMS", "SHA256SUMS.asc"] });
-  const updates = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, launch: assert.fail, env: {}, pollMs: 10, startedMs: 60_000, heardMs: 60_000, autoPollMs: 10 });
+  const updates = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: () => null, launch: assert.fail, env: {}, pollMs: 10, startedMs: 60_000, heardMs: 60_000, autoPollMs: 10 });
   t.after(() => updates.stopAuto());
   const requested = () => existsSync(join(runDir, "update-requested"));
   // What a phone is shown: the state, and the choice, off until someone switches it on.
@@ -585,7 +629,7 @@ test("a host that can install tells how it stands, installs by itself only when 
   assert.throws(() => updates.setAuto("yes"), /Say on or off/);
   // A turn that starts between the decision and the request stops an install nobody asked for; it is tried again when the turn is over.
   let late = 0;
-  const idleThenBusy = terminalUpdates({ ...service, config: () => ({ updates: { auto: true } }), runtime: { workspace: { active: { get size() { return late++ === 0 ? 0 : 1; } } } } }, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, autoPollMs: 10_000 });
+  const idleThenBusy = terminalUpdates({ ...service, config: () => ({ updates: { auto: true } }), runtime: { workspace: { active: { get size() { return late++ === 0 ? 0 : 1; } } } } }, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: () => null, env: {}, pollMs: 10, autoPollMs: 10_000 });
   rmSync(lastUpdateFile(installRoot));
   await idleThenBusy.check();
   await new Promise((resolve) => setTimeout(resolve, 60));
@@ -593,13 +637,13 @@ test("a host that can install tells how it stands, installs by itself only when 
   assert.equal(idleThenBusy.status().status, "available");
   idleThenBusy.stopAuto();
   // A request nobody takes up (no update job on this computer) is said, and taken back, so a job that starts later installs nothing unasked.
-  const quiet = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, startedMs: 50, heardMs: 60_000 });
+  const quiet = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: () => null, env: {}, pollMs: 10, startedMs: 50, heardMs: 60_000 });
   await quiet.install();
   for (let tries = 0; tries < 100 && quiet.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.match(quiet.status().message, /The update did not start/);
   assert.equal(requested(), false);
   // One that was taken up and never said how it ended is said too, later.
-  const silent = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, env: {}, pollMs: 10, startedMs: 60_000, heardMs: 80 });
+  const silent = terminalUpdates(service, { entry, platform: "linux", arch: "arm64", latest, manager: { installed: () => ({ scope: "system" }) }, folder: () => null, env: {}, pollMs: 10, startedMs: 60_000, heardMs: 80 });
   await silent.install();
   await new Promise((resolve) => setTimeout(resolve, 20));
   rmSync(join(runDir, "update-requested"));
@@ -663,4 +707,43 @@ test("the installer and the launcher are plain sh, and the installer checks befo
   for (const check of ['[ "$found" = "$fingerprint" ]', "gpgv --homedir", 'grep -q "^\\[GNUPG:\\] VALIDSIG $fingerprint "', '[ "$(sha256 "$work/$archive")" = "$wanted" ]', "holds files outside its own folder"]) assert.ok(first(check) < unpack, check + " comes before unpacking");
   assert.match(script, /^set -eu$/m);
   assert.doesNotMatch(script, /curl[^\n]*\|\s*(sh|bash)/, "the installer pipes nothing it downloads into a shell");
+  // The whole computer's install goes only where the updater will install too: the folder check
+  // comes before anything is downloaded or made, and ends the install with the commands that fix it.
+  const folderCheck = first('unsafe=$(not_roots_own "$prefix")');
+  assert.ok(folderCheck < first('fetch "$base/$file"') && folderCheck < first('mkdir -p "$prefix"'));
+  assert.match(script, /\[ -z "\$unsafe" \] \|\| fail "The folder \$unsafe does not belong to root alone[^\n]*Nothing was installed\. Put it right, then run this again:\n  sudo chown root '\$unsafe' && sudo chmod go-w '\$unsafe'"/);
+  // Its look at the folders, run as it is: the system's own are root's, the shared temporary folder and a person's own are not.
+  const look = /^not_roots_own\(\) \{\n[\s\S]*?\n\}$/m.exec(script)[0];
+  const notRoots = (dir) => execFileSync("sh", ["-c", "set -eu\n" + look + '\nnot_roots_own "$1"', "sh", dir], { encoding: "utf8" }).trim();
+  assert.equal(notRoots("/usr"), "");
+  assert.equal(notRoots("/usr/no such folder/botkins"), "", "a folder that is not there yet is made by root, under one that is root's");
+  assert.equal(notRoots("/tmp/botkins"), realpathSync("/tmp"));
+  assert.match(look, /dir=\$\(cd "\$dir" 2>\/dev\/null && pwd -P\) \|\| \{ printf '%s\\n' "\$1"; return 0; \}/, "a folder that can't be entered is named, not passed over without a word");
+  const mine = realpathSync(mkdtempSync(join(tmpdir(), "bk-own-")));
+  try {
+    mkdirSync(join(mine, "opt"));
+    assert.equal(notRoots(join(mine, "opt", "botkins")), process.getuid() === 0 ? realpathSync(tmpdir()) : join(mine, "opt"));
+  } finally {
+    rmSync(mine, { recursive: true, force: true });
+  }
+  // Which release is the latest comes from the release page; GitHub's API, which refuses a busy address, is only the second try.
+  const page = first('version=$(latest_from_page "https://github.com/$REPO/releases/latest"');
+  const api = first('fetch "https://api.github.com/repos/$REPO/releases/latest"');
+  assert.ok(page < api && script.slice(page, api).includes('if [ -z "$version" ]; then'));
+  assert.doesNotMatch(helper, /api\.github\.com/, "the desktop app's Linux updater asks the release page too");
+  assert.match(helper, /fetch\(repo \+ "\/releases\/latest", \{headers, redirect:"manual"/);
+});
+
+test("`botkins doctor` says when the whole computer's install folder is one no update will be installed into", { skip }, async (t) => {
+  const root = tempDir(t);
+  const paths = { root: join(root, "data"), config: join(root, "data", "config.json"), socket: join(root, "data", "run", "botkins.sock") };
+  const client = { call: async () => { throw Object.assign(new Error("not running"), { code: "NOT_RUNNING" }); } };
+  const look = async (installFolder) => (await examine({ paths, client, env: {}, fetcher: async () => new Response(""), node: "24.1.0", installFolder })).checks.find((entry) => entry.name === "Install folder");
+  assert.deepEqual(await look(() => ({ root: "/opt/botkins", problem: null })), { name: "Install folder", ok: true, detail: "/opt/botkins and every folder above it are root's own, so updates can be installed." });
+  assert.deepEqual(await look(() => ({ root: "/opt/botkins", problem: { path: "/opt", uid: 0, mode: 0o777 } })), { name: "Install folder", ok: false, detail: "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in /opt/botkins. No update is installed until it is put right.", fix: "sudo chown root /opt && sudo chmod go-w /opt" });
+  // One person's own service, or a checkout: there is no such folder to ask about.
+  const gone = await look(() => ({ root: "/opt/botkins", problem: { path: "/opt/botkins", uid: -1, mode: 0 } }));
+  assert.deepEqual([gone.ok, gone.detail, gone.fix], [false, "The folder /opt/botkins is not there or can't be read, so Botkins can't be updated in /opt/botkins. No update is installed until it is put right.", undefined]);
+  assert.equal(await look(() => null), undefined);
+  assert.equal(await look(undefined), undefined);
 });

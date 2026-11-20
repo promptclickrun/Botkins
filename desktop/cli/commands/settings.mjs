@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { latestRelease } from "../../desktop/updates.mjs";
 import { serviceManager } from "../../desktop/terminal/manager.mjs";
-import { applyUpdate, assetName, installLayout, takeRequest, unmanaged, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
+import { applyUpdate, assetName, installLayout, notRootOwned, notRootOwnedWords, takeRequest, unmanaged, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
 import { REQUEST } from "../../desktop/terminal/updates.mjs";
 
 /**
@@ -124,7 +124,9 @@ export const settings = {
           // No service to ask: the same question, asked from here.
           const { version, assets } = await latestRelease({ token: "" });
           const newer = semver.gt(version, context.version);
-          state = { status: newer ? "available" : "current", current: context.version, latest: version, canInstall: newer && !!layout && assets.includes(assetName(version, process.platform, process.arch)) };
+          // The whole computer's install is updated by root, only into a folder that is root's alone: said here too, with nothing running to say it.
+          const unsafe = newer && layout && serviceManager({ command: ownCommand(), env: context.env }).installed()?.scope === "system" ? notRootOwned(layout.installRoot) : null;
+          state = { status: newer ? "available" : "current", current: context.version, latest: version, canInstall: newer && !!layout && !unsafe && assets.includes(assetName(version, process.platform, process.arch)), ...(unsafe && { message: notRootOwnedWords(unsafe, layout.installRoot) }) };
         }
         context.print(state, state.status === "available" ? "Botkins " + state.latest + " is available (this is " + state.current + ")." + (state.canInstall ? " Install it with `botkins update`." : " " + (state.message ?? (layout ? "It has no terminal host build this copy can install by itself." : unmanaged(context.env)))) : "Botkins " + state.current + " is the latest release.");
         return;

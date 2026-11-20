@@ -194,9 +194,31 @@ step "The service runs on Botkins $from"
 running_on "$from"
 key_source
 
+# asking_github <command…> runs a command that asks GitHub which release is the latest, and
+# tries again when GitHub refuses the question. Releases up to 0.16.6 ask GitHub's API, which
+# answers an address that is not signed in only 60 times an hour and counts every machine behind
+# that address together, so a test machine in a cloud is refused now and then. That is GitHub's
+# limit and not a failure of Botkins: the run waits and asks again, and when it gives up it says
+# which of the two it was. What the command printed is left in $asked, and what it said beside
+# that (warnings, the reason for a failure) in $asked.err, so an answer that is JSON stays JSON.
+asked=$(mktemp)
+asking_github() {
+  tries=0
+  while :; do
+    tries=$((tries + 1))
+    if "$@" > "$asked" 2> "$asked.err"; then return 0; fi
+    grep -Eq "GitHub could not provide a release|limits how often one address may ask|HTTP 403|HTTP 429" "$asked" "$asked.err" || return 1
+    [ "$tries" -lt 6 ] || fail "GitHub refused the question about the latest release $tries times. That is GitHub's limit on requests from one address that is not signed in (60 an hour, counted for every machine behind the address), not a failure of Botkins. Run this again later."
+    say "GitHub refused the question (its limit on requests from one address). Trying again in 30 seconds ($tries of 6)."
+    sleep 30
+  done
+}
+
 step "Is there a newer release, as this copy sees it?"
-run botkins update --check
-latest=$(botkins update --check --json 2>/dev/null | pick .latest)
+printf '$ botkins update --check --json\n'
+asking_github botkins update --check --json || { cat "$asked" "$asked.err"; fail "Botkins $from could not look for a newer release."; }
+latest=$(pick .latest < "$asked")
+say "Botkins $from sees Botkins ${latest:-(nothing)} as the latest release."
 [ "$latest" = "$to" ] || fail "The latest release is ${latest:-unknown}, not $to. Run this after Botkins $to is marked as the latest release."
 
 step "Update, asked for the way a phone asks: the service's own user asks the service, and the root job does the install"
@@ -205,7 +227,8 @@ user=$(systemctl show botkins -p User --value)
 [ "$(systemctl is-active botkins-update.path 2>/dev/null || true)" = active ] || fail "The watch that starts the update job (botkins-update.path) is not running."
 if command -v runuser >/dev/null 2>&1; then as_service() { runuser -u "$user" -- "$@"; }; else as_service() { sudo -u "$user" "$@"; }; fi
 printf '$ (as %s) botkins update\n' "$user"
-as_service botkins update || fail "The service did not take the request for an update."
+asking_github as_service botkins update || { cat "$asked" "$asked.err"; fail "The service did not take the request for an update."; }
+cat "$asked" "$asked.err"
 
 step "The root job installs Botkins $to and restarts the service on it"
 elapsed=0
