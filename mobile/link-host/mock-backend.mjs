@@ -965,6 +965,19 @@ export class MockBackend {
     if (this.pluginsOn) this.state.plugins = this.plugins.installed.map((record) => this.pluginView(record));
     return this.state;
   }
+  /**
+   * What a live voice may know of the bot and the person (server.mjs `liveNotes`): the person's
+   * name, the bot's identity file and the person's user file, as the app keeps them. Made up here.
+   */
+  async liveContext({ botId }) {
+    const bot = this.state.bots.find((item) => item.id === botId);
+    const name = bot?.name ?? "Bot";
+    return {
+      userName: "Alex Demo",
+      identity: `# ${name}\n\nI am ${name}, ${bot?.role ? "the " + bot.role.toLowerCase() : "a bot"} on Alex's demo computer. I keep answers short and say when I'm not sure.`,
+      user: "# Alex Demo\n\n- Prefers short, direct answers.\n- Works on the Botkins launch this month.\n- Time zone: Europe/Stockholm.",
+    };
+  }
   // ── Plugins ──
   pluginEntry(id) {
     const entry = this.plugins.catalog.find((item) => item.id === id);
@@ -1492,8 +1505,12 @@ export class MockBackend {
       const bot = this.bot(id);
       this.state.bots = [bot, ...this.state.bots.filter((b) => b !== bot)];
     },
+    // As the desktop app (desktop/agents.mjs): every bot once, hidden ones too; the first is the primary and is shown.
     reorderBots(ids) {
-      this.state.bots.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+      const bots = this.state.bots;
+      if (!Array.isArray(ids) || ids.length !== bots.length || new Set(ids).size !== ids.length) throw new Error("List every bot once to reorder.");
+      this.state.bots = ids.map((id) => this.bot(id));
+      if (this.state.bots[0]) this.state.bots[0].hidden = false;
     },
     deleteBot(id) {
       this.bot(id);

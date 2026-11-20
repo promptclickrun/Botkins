@@ -1,18 +1,17 @@
-// The turn a bot is working on now. With Steps on "Every step" (Settings › Chat) a turn is drawn in
-// parts, in the order things happened (turn.ts): each part's steps and thinking is a `WorkPart`,
-// and the newest part is the `LiveTurn` at the bottom. Folded (the default) and the other choices
-// draw only the text being written here; its work is the fold line under it (FoldRow.tsx).
-// Requests and errors are shown elsewhere and always show.
+// The turn a bot is working on now, drawn in parts in the order things happened (turn.ts), whatever
+// Steps says: each part's steps and thinking is a `WorkPart`, and the newest part is the `LiveTurn`
+// at the bottom. Failed only and Hidden narrow the steps. Under it, in every mode, the turn's status
+// line: the bot's face and its typing dots (FoldRow.tsx). A turn that will fold once it ends keeps
+// room under its text for the reply's row. The work keeps away from the screen's edge (`workWidth`).
+// Thinking and interim texts are `Aside`s. Requests and errors are shown elsewhere and always show.
 import { router } from "expo-router";
-import { Brain, ChevronDown, ChevronRight } from "lucide-react-native";
-import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
-import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import type { Bot, Step } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { useApp } from "@/state/store";
-import { BotAvatar, Markdown, radius, space, T, Tap, useOnShow, useTheme } from "@/ui";
-import { StepMark } from "./bits";
+import { BotAvatar, Markdown, radius, space, T, Tap, useTheme } from "@/ui";
+import { Aside } from "./Aside";
+import { StepMark, TypingDots, workWidth } from "./bits";
 import { WorkLine } from "./Messages";
 import { type Item, stepLabel } from "./turn";
 
@@ -20,59 +19,18 @@ const SHOWN_STEPS = 4;
 /** The height of the row under a reply that holds Read aloud (MessageRow). */
 const READ_ALOUD_ROW = 28;
 
-function Dot({ delay }: { delay: number }) {
-  const { colors } = useTheme();
-  const seen = useOnShow();
-  const still = useReducedMotion() || !seen;
-  const lift = useSharedValue(0);
-  useEffect(() => {
-    if (still) {
-      cancelAnimation(lift);
-      lift.value = 0;
-      return;
-    }
-    lift.value = withDelay(delay, withRepeat(withSequence(withTiming(1, { duration: 320 }), withTiming(0, { duration: 320 }), withTiming(0, { duration: 260 })), -1));
-    return () => cancelAnimation(lift);
-  }, [delay, lift, still]);
-  const style = useAnimatedStyle(() => ({ opacity: 0.35 + lift.value * 0.65, transform: [{ translateY: -lift.value * 2.5 }] }));
-  return <Animated.View style={[{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.muted }, style]} />;
-}
-
+/** The bot typing, for a turn whose run hasn't come yet; otherwise its status line under the turn is its face (FoldRow.tsx). */
 function Typing({ bot, intent }: { bot?: Bot; intent?: string }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 36 }} accessibilityLabel={(bot?.name ?? "The bot") + " is thinking" + (intent ? ", " + intent : "")} accessibilityLiveRegion="polite">
       <BotAvatar bot={bot} size={32} state="thinking" />
-      <View style={{ flexDirection: "row", gap: 4, paddingTop: 2 }}>
-        <Dot delay={0} />
-        <Dot delay={150} />
-        <Dot delay={300} />
-      </View>
+      <TypingDots />
       {!!intent && (
         <T variant="subhead" color="muted" numberOfLines={1} style={{ flex: 1 }}>
           {intent}
         </T>
       )}
     </View>
-  );
-}
-
-export function Thinking({ text, startOpen }: { text: string; startOpen: boolean }) {
-  const { colors } = useTheme();
-  const [open, setOpen] = useState(startOpen);
-  const tail = text.length > 260 ? "…" + text.slice(-260).trimStart() : text;
-  return (
-    <Tap onPress={() => setOpen(!open)} feel="select" sink={0.99} accessibilityLabel={open ? "Hide thinking" : "Show thinking"} accessibilityState={{ expanded: open }} style={{ gap: 6, paddingLeft: space.md, borderLeftWidth: 2, borderLeftColor: colors.lineStrong }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <Brain size={14} color={colors.muted} strokeWidth={2.2} />
-        <T variant="footnote" weight="600" color="muted">
-          Thinking…
-        </T>
-        {open ? <ChevronDown size={14} color={colors.faint} strokeWidth={2.4} /> : <ChevronRight size={14} color={colors.faint} strokeWidth={2.4} />}
-      </View>
-      <T variant="footnote" color="muted" numberOfLines={open ? undefined : 3} ellipsizeMode="head" style={{ fontStyle: "italic" }}>
-        {open ? text : tail}
-      </T>
-    </Tap>
   );
 }
 
@@ -92,7 +50,7 @@ function Steps({ chatId, runId, all, mode }: { chatId: string; runId?: string; a
       feel="select"
       sink={0.99}
       accessibilityLabel={(mode === "failed" ? steps.length + " failed of " : "Working, ") + count + ", show activity"}
-      style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingHorizontal: space.md, paddingVertical: space.sm, gap: 2 }}
+      style={{ ...workWidth, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingHorizontal: space.md, paddingVertical: space.sm, gap: 2 }}
     >
       {hidden > 0 && (
         <T variant="caption" color="faint" style={{ paddingLeft: 28, paddingVertical: 2 }}>
@@ -119,15 +77,22 @@ export function WorkPart({ chatId, item }: { chatId: string; item: Extract<Item,
   return (
     <View style={{ gap: space.md }}>
       <Steps chatId={chatId} runId={item.run.id} all={item.steps} mode={stepsMode} />
-      {thinkingMode !== "hide" && !!item.thinking && <Thinking text={item.thinking} startOpen={thinkingMode === "show"} />}
+      {thinkingMode !== "hide" && !!item.thinking && (
+        <View style={workWidth}>
+          <Aside kind="thinking" text={item.thinking} />
+        </View>
+      )}
     </View>
   );
 }
 
-/** Text a bot wrote that is not a message of its own (noted by this phone from an older computer). */
+/** Text the bot wrote before it moved on (an interim message, or a piece noted from an older computer): one of its updates. */
 export function TurnText({ item }: { item: Extract<Item, { kind: "text" }> }) {
-  const markdown = useChatPrefs((prefs) => prefs.markdown);
-  return <Markdown text={item.text} plain={!markdown} />;
+  return (
+    <View style={workWidth}>
+      <Aside kind="update" text={item.text} />
+    </View>
+  );
 }
 
 /** The newest part of the turn under way: its steps and thinking, and the reply as it streams in. Rendered only while a reply is under way. */
@@ -139,23 +104,7 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
   const stream = item.text;
-  // Folded: the text alone, laid out as the reply will be once the turn ends (MessageRow), so it
-  // stays where it is when it becomes the reply. The empty row is where Read aloud will be.
-  if (item.folded)
-    return (
-      <View style={{ gap: space.sm }}>
-        {group && (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-            <BotAvatar bot={speaker} size={22} state="talking" />
-            <T variant="footnote" weight="700" color="ink2" numberOfLines={1}>
-              {speaker?.name ?? "Bot"}
-            </T>
-          </View>
-        )}
-        <Markdown text={stream} plain={!markdown} />
-        <View style={{ height: READ_ALOUD_ROW }} />
-      </View>
-    );
+  const thinking = thinkingMode !== "hide" && !!item.thinking;
   return (
     <View style={{ gap: space.md }}>
       {group && !!stream && (
@@ -167,8 +116,23 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
         </View>
       )}
       <Steps chatId={chatId} runId={item.run?.id} all={item.steps} mode={stepsMode} />
-      {thinkingMode !== "hide" && !!item.thinking && <Thinking text={item.thinking} startOpen={thinkingMode === "show"} />}
-      {stream ? <Markdown text={stream} plain={!markdown} /> : <Typing bot={speaker} intent={intent} />}
+      {thinking && (
+        <View style={workWidth}>
+          <Aside kind="thinking" text={item.thinking} live />
+        </View>
+      )}
+      {stream && item.reserve ? (
+        // Laid out as the reply will be (MessageRow): the empty row is where Read aloud will be, so
+        // the text stays where it is when it becomes the reply and the status line becomes the fold line.
+        <View style={{ gap: space.sm }}>
+          <Markdown text={stream} plain={!markdown} />
+          <View style={{ height: READ_ALOUD_ROW }} />
+        </View>
+      ) : stream ? (
+        <Markdown text={stream} plain={!markdown} />
+      ) : (
+        !item.run && <Typing bot={speaker} intent={intent} />
+      )}
     </View>
   );
 }

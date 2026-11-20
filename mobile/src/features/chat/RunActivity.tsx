@@ -8,7 +8,7 @@ import { useBots, useModels, useWatchedChat } from "@/state/hooks";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
-import { Badge, Button, EmptyState, Group, Label, radius, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
+import { Badge, Button, EmptyState, Group, Label, Markdown, radius, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
 import { StepMark } from "./bits";
 import { helperSheet } from "./HelperRail";
 import { stepLabel } from "./turn";
@@ -116,7 +116,7 @@ export default function RunActivity() {
   const { colors } = useTheme();
   // `stepId`: the step a person tapped in the chat's fold; it opens, and "Failed only" doesn't hide it.
   const { chatId, runId, stepId } = useLocalSearchParams<{ chatId: string; runId: string; stepId?: string }>();
-  useWatchedChat(chatId);
+  const chat = useWatchedChat(chatId);
   const saved = useApp((state) => state.chats[chatId]?.runs[runId]);
   const running = useApp((state) => state.running[chatId]);
   const run = running?.id === runId ? running : saved;
@@ -124,6 +124,9 @@ export default function RunActivity() {
   const models = useModels();
   const stepsMode = useChatPrefs((prefs) => prefs.steps);
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
+  const markdown = useChatPrefs((prefs) => prefs.markdown);
+  // What the bot wrote before it moved on (interim messages, "turn-timeline-v1").
+  const updates = (chat?.messages ?? []).filter((message) => message.interim && message.runId === runId && message.text.trim());
   const [allSteps, setAllSteps] = useState(false);
 
   if (!run)
@@ -177,7 +180,21 @@ export default function RunActivity() {
         </View>
       )}
 
-      {thinkingMode !== "hide" && <Reasoning run={run} startOpen={thinkingMode === "show"} />}
+      {/* Thinking and updates on Hidden keeps both out of the chat; this sheet still has them. */}
+      <Reasoning run={run} startOpen={thinkingMode === "show"} />
+
+      {updates.length > 0 && (
+        <View>
+          <Label>{updates.length === 1 ? "1 update" : updates.length + " updates"}</Label>
+          <Group>
+            {updates.map((message, i) => (
+              <View key={(message.time ?? 0) + ":" + i} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
+                <Markdown text={message.text} size="small" plain={!markdown} />
+              </View>
+            ))}
+          </Group>
+        </View>
+      )}
 
       {!!run.todos?.length && (
         <View>

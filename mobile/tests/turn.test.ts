@@ -34,6 +34,8 @@ function shape(items: Item[]): string[] {
         return (item.live ? "steps:" : "work:") + item.steps.map((s) => s.id).join(",");
       case "text":
         return (item.unfinished ? "unfinished:" : "text:") + item.text;
+      case "thought":
+        return "thought:" + item.text;
       case "screen":
         return "screen:" + item.panel.id;
       case "ended":
@@ -55,7 +57,7 @@ test("a steer from a computer without the capability lands between the steps aro
   // The phone saw the turn from its start: "Checking." came before b, "Now staging." after the steer.
   const marks: RunMarks = { marks: { "s:a": 0, "s:b": 9, [markKeys(live, [ask, steer]).at(-1)!]: 9, "s:c": 22 }, text: "Checking. Now staging. Almost" };
   const shown = chatTimeline(input({ messages: [ask, steer], running: live, live: { stream: "Checking. Now staging. Almost" }, marks: { r1: marks } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "steps:a", "text:Checking.", "steps:b", "user:Use staging", "text:Now staging.", "live:c|Almost"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "steps:a", "text:Checking.", "steps:b", "user:Use staging", "text:Now staging.", "live:c|Almost", "fold"]);
 
   // After the turn: the steps fold into work lines in place, and the reply comes last.
   const done = run({ status: "Completed", finished: at(9), steps: steps.map((s) => ({ ...s, status: "Done", finished: s.started + 500 })) });
@@ -70,10 +72,10 @@ test("without marks the live text stays at the end, as before, and the steer sti
   const steer: Message = { role: "user", text: "Also check prod", steeredRunId: "r1", time: at(4) };
   const live = run({ steps: [step("a", 1), step("b", 6, { status: "Running" })] });
   const shown = chatTimeline(input({ messages: [ask, steer], running: live, live: { stream: "Looking now" } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "steps:a", "user:Also check prod", "live:b|Looking now"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "steps:a", "user:Also check prod", "live:b|Looking now", "fold"]);
 });
 
-test("a computer with turn-timeline-v1 sends interim text and answers as messages: they are drawn where they happened", () => {
+test("a computer with turn-timeline-v1 sends interim text and answers as messages: they are drawn where they happened, interim text as the bot's updates", () => {
   const interim: Message = { role: "assistant", text: "Let me look at the logs.", runId: "r1", time: at(1), interim: true };
   const question: Message = { role: "user", text: "Staging", time: at(6), answer: { runId: "r1", requestId: "q1", kind: "question", title: "Which environment?" } };
   const second: Message = { role: "assistant", text: "Staging it is.", runId: "r1", time: at(7), interim: true };
@@ -81,20 +83,21 @@ test("a computer with turn-timeline-v1 sends interim text and answers as message
   const thinking = [{ id: "t1", text: "Read the logs first.", started: at(0.5) }];
   const live = run({ steps, reasoning: thinking });
   const shown = chatTimeline(input({ timeline: true, messages: [ask, interim, question, second], running: live, live: { stream: "Deploying" } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "steps:", "interim:Let me look at the logs.", "steps:a,b", "user:Staging", "interim:Staging it is.", "live:c|Deploying"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "steps:", "text:Let me look at the logs.", "steps:a,b", "user:Staging", "text:Staging it is.", "live:c|Deploying", "fold"]);
   const thought = shown[1];
   assert.ok(thought.kind === "work" && thought.thinking === "Read the logs first.", "thinking sits where it began");
 
   const reply: Message = { role: "assistant", text: "Deployed.", runId: "r1", time: at(10) };
   const done = run({ status: "Completed", finished: at(11), steps: steps.map((s) => ({ ...s, status: "Done" })), reasoning: thinking });
   const after = chatTimeline(input({ timeline: true, messages: [ask, interim, question, second, reply], runs: { r1: done } }));
-  assert.deepEqual(shape(after), ["user:Do the thing", "interim:Let me look at the logs.", "work:a,b", "user:Staging", "interim:Staging it is.", "work:c", "assistant:Deployed."]);
+  // Finished, Every step keeps the thinking where it began too (Thinking and updates says how).
+  assert.deepEqual(shape(after), ["user:Do the thing", "thought:Read the logs first.", "text:Let me look at the logs.", "work:a,b", "user:Staging", "text:Staging it is.", "work:c", "assistant:Deployed."]);
 });
 
 test("a helper's own steps are not the turn's: they stay in the helper's activity", () => {
   const steps = [step("task-1", 1, { name: "task" }), step("h1", 2, { agentId: "task-1" }), step("a", 3)];
   const shown = chatTimeline(input({ timeline: true, messages: [ask], running: run({ steps }), live: { stream: "" } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "live:task-1,a|"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "live:task-1,a|", "fold"]);
 });
 
 test("a turn that ended without a reply says how, keeps its work, and only the latest offers Try again", () => {
@@ -166,7 +169,7 @@ test("the screen a bot showed sits in the chat at the time it showed it", () => 
   const old: Message = { role: "user", text: "Earlier", time: at(-100) };
   const live = run({ steps: [step("a", 1), step("b", 5, { status: "Running" })] });
   const shown = chatTimeline(input({ timeline: true, messages: [old, ask], running: live, live: { stream: "" }, screens: [screen("s1", 3), screen("s0", -50)] }));
-  assert.deepEqual(shape(shown), ["user:Earlier", "screen:s0", "user:Do the thing", "steps:a", "screen:s1", "live:b|"]);
+  assert.deepEqual(shape(shown), ["user:Earlier", "screen:s0", "user:Do the thing", "steps:a", "screen:s1", "live:b|", "fold"]);
 });
 
 test("the phone notes how long the text was when each thing first showed", () => {
@@ -396,7 +399,7 @@ test("the worked example in docs/turn-timeline.md reads as the doc says, from ei
     { id: "s4", name: "bash", label: "systemctl restart api", status: "Done", started: 9300, finished: 13800 },
   ];
   const r1: Run = { id: "r1", chatId: "c1", title: "Check the deploy", time: 0, status: "Completed", finished: 14800, steps };
-  const labels = (items: Item[]) => items.map((item) => (item.kind === "work" ? "work:" + item.label : item.kind === "message" ? item.message.text : item.kind));
+  const labels = (items: Item[]) => items.map((item) => (item.kind === "work" ? "work:" + item.label : item.kind === "message" || item.kind === "text" ? ("message" in item ? item.message.text : item.text) : item.kind));
   assert.deepEqual(labels(chatTimeline(input({ timeline: true, messages, runs: { r1 } }))), [
     "Check the deploy and fix what's broken",
     "I'll look at the last deploy first.",

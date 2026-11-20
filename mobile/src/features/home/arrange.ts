@@ -33,3 +33,12 @@ export function filterLabels(bots: Pick<Bot, "hidden" | "pinned">[]): { value: B
 
 /** The section a bot is in, or undefined when it is in none (or in one that is gone). */
 export const sectionOf = (bot: Pick<Bot, "sectionId">, sections: Section[] | undefined) => (bot.sectionId ? sections?.find((section) => section.id === bot.sectionId) : undefined);
+
+/**
+ * The Today row under the bots. It is always there while the bot list is: Today has its own empty
+ * states, and a computer with no open card or panel still has a Today (a real one often has neither).
+ * Folded, the row shows the count only when there is something.
+ */
+export function todayRow(open: boolean, count: number): { open: boolean; value: string | undefined } {
+  return { open, value: !open && count > 0 ? String(count) : undefined };
+}

@@ -32,6 +32,8 @@ const fetcher = relayFetch(expoFetch as unknown as FetchLike);
 setRandomSource((length) => Crypto.getRandomBytes(length));
 
 let client: LinkClient | null = null;
+/** Who waits for the next sync to come back (`freshSync`). */
+const syncWaiters = new Set<() => void>();
 
 function follow(pairing: Pairing) {
   client?.stop();
@@ -44,6 +46,9 @@ function follow(pairing: Pairing) {
     },
     onUnreachable: () => void lookNearby(pairing.serverId),
     onRoute: (route) => useApp.setState({ route }),
+    onSync: () => {
+      for (const done of [...syncWaiters]) done();
+    },
     check: () => fetcher.check(),
     onHosts: (hosts) => {
       const next = { ...pairing, hosts };
@@ -143,7 +148,7 @@ export async function boot() {
     if (state === "active") {
       nearbyPace.reset();
       client?.wake();
-    }
+    } else if (state === "background") client?.rest();
   });
   // Leaving Wi-Fi, or coming back to it, changes how the computer is reached: look again at once.
   try {
@@ -309,5 +314,30 @@ export async function loadEarlier(chatId: string) {
 
 export function wake() {
   client?.wake();
+}
+
+/**
+ * For a wake in the background (a push): follows the computer until one sync has come back, so what
+ * the app then reads is current, not what it held when it was suspended. Resolves false when there is
+ * no link yet or no answer within `ms`.
+ */
+export function freshSync(ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!client) return resolve(false);
+    const done = (ok: boolean) => {
+      clearTimeout(timer);
+      syncWaiters.delete(hit);
+      resolve(ok);
+    };
+    const hit = () => done(true);
+    const timer = setTimeout(() => done(false), ms);
+    syncWaiters.add(hit);
+    client.wake();
+  });
+}
+
+/** Back to rest after a wake in the background, unless the person opened the app meanwhile. */
+export function restIfAway() {
+  if (AppState.currentState !== "active") client?.rest();
 }
 export { mergeChat };

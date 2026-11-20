@@ -14,6 +14,7 @@ import { clockTime } from "@/state/time";
 import { speakText, stopSpeech, useSpeakingNow } from "@/features/voice/tts";
 import { ArtifactChips } from "@/features/artifacts/ArtifactBits";
 import { useMessageLinks } from "@/features/artifacts/data";
+import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
@@ -57,9 +58,9 @@ export function WorkLine({ chatId, runId, label, failed }: { chatId: string; run
       feel="select"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       accessibilityLabel={label + ", show activity"}
-      style={{ alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 2, minHeight: 32 }}
+      style={{ ...workWidth, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 2, minHeight: 32 }}
     >
-      <T variant="footnote" color={failed ? "danger" : "muted"} numberOfLines={1}>
+      <T variant="footnote" color={failed ? "danger" : "muted"} numberOfLines={1} style={{ flexShrink: 1 }}>
         {label}
       </T>
       <ChevronRight size={14} color={colors.faint} strokeWidth={2.4} />

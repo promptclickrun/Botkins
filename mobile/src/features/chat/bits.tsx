@@ -1,9 +1,49 @@
-// Small pieces the chat screens share: step status marks, group avatars, a quiet preview of a message.
+// Small pieces the chat screens share: step status marks, group avatars, a quiet preview of a
+// message, the bot's typing dots, and how far the bot's work keeps from the screen's edge.
 import { Check, Circle, X } from "lucide-react-native";
-import { ActivityIndicator, View } from "react-native";
+import { useEffect } from "react";
+import { ActivityIndicator, View, type ViewStyle } from "react-native";
+import Animated, { cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import type { Bot, Step } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
-import { BotAvatar, useTheme } from "@/ui";
+import { BotAvatar, space, useOnShow, useTheme } from "@/ui";
+
+/**
+ * The bot's work (steps, thinking, updates, fold and status lines) keeps away from the trailing
+ * edge as the person's bubbles keep away from the leading one, and never stretches past 600 points
+ * on a wide screen. Its leading edge stays with the reply's text; the reply itself keeps the full width.
+ */
+export const workWidth: ViewStyle = { maxWidth: 600, marginRight: space.huge + space.lg };
+
+function Dot({ delay }: { delay: number }) {
+  const { colors } = useTheme();
+  // Only a dot that can be seen moves (useOnShow), and Reduce Motion stills it.
+  const seen = useOnShow();
+  const still = useReducedMotion() || !seen;
+  const lift = useSharedValue(0);
+  useEffect(() => {
+    if (still) {
+      cancelAnimation(lift);
+      lift.value = 0;
+      return;
+    }
+    lift.value = withDelay(delay, withRepeat(withSequence(withTiming(1, { duration: 320 }), withTiming(0, { duration: 320 }), withTiming(0, { duration: 260 })), -1));
+    return () => cancelAnimation(lift);
+  }, [delay, lift, still]);
+  const style = useAnimatedStyle(() => ({ opacity: 0.35 + lift.value * 0.65, transform: [{ translateY: -lift.value * 2.5 }] }));
+  return <Animated.View style={[{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.muted }, style]} />;
+}
+
+/** Three dots that bounce in turn while the bot works. */
+export function TypingDots() {
+  return (
+    <View style={{ flexDirection: "row", gap: 4, paddingTop: 2 }}>
+      <Dot delay={0} />
+      <Dot delay={150} />
+      <Dot delay={300} />
+    </View>
+  );
+}
 
 /** Markdown symbols out of a one-line preview: "**Done.** See `x`" → "Done. See x". */
 export function plainPreview(text: string): string {

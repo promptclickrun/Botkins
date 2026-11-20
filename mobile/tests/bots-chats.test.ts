@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Bot, Section } from "../src/link/types";
 import { canUseProject, globalAccess, grantOf, grantSummary, MODE_LABELS, projectBlock, sortedProjects, toggleProject } from "../src/features/bots/projectAccess";
-import { arrangeBots, filterBots, filterLabels, sectionOf } from "../src/features/home/arrange";
+import { arrangeBots, filterBots, filterLabels, sectionOf, todayRow } from "../src/features/home/arrange";
 import { changedPath, diffLineKind, fileCount, kindLetter, quoteOf, sideQuestionOf } from "../src/features/chat/side";
 
 const bot = (id: string, extra: Partial<Bot> = {}): Bot => ({ id, name: id, role: "", instructions: "", face: "idle", ...extra });
@@ -91,4 +91,11 @@ test("a diff's lines and a changed file read as on the computer", () => {
   assert.equal(changedPath({ path: "b.ts" }), "b.ts");
   assert.equal(fileCount(1), "1 file");
   assert.equal(fileCount(3), "3 files");
+});
+
+test("Today shows under the bots whatever its count; the folded row counts only above zero", () => {
+  assert.deepEqual(todayRow(true, 0), { open: true, value: undefined });
+  assert.deepEqual(todayRow(false, 0), { open: false, value: undefined });
+  assert.deepEqual(todayRow(false, 3), { open: false, value: "3" });
+  assert.deepEqual(todayRow(true, 3), { open: true, value: undefined });
 });

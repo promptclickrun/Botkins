@@ -18,7 +18,7 @@ import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
-import { GroupFace } from "./bits";
+import { GroupFace, workWidth } from "./bits";
 import { MAX_MENTIONS, withBoardQuote } from "./compose";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ContextMeter } from "./ContextMeter";
@@ -27,6 +27,7 @@ import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { EndedNote, type MessageActions, MessageRow } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
+import { Aside } from "./Aside";
 import { chatTimeline, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
@@ -289,7 +290,6 @@ export default function ChatScreen() {
   const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
   const stream = streaming ? live?.streams[chatId] : undefined;
   const liveThinking = live?.thinking[chatId];
-  const intent = live?.intents[chatId];
   const panels = view?.pane?.panels;
   const data = useMemo(() => {
     if (!view) return [];
@@ -299,7 +299,7 @@ export default function ChatScreen() {
       from: view.from,
       runs: view.runs,
       running: runPart,
-      live: { stream, thinking: liveThinking, intent },
+      live: { stream, thinking: liveThinking },
       marks,
       timeline,
       group,
@@ -307,7 +307,7 @@ export default function ChatScreen() {
       prefs: { steps: stepsPref, thinking: thinkingPref },
     });
     return steady(chatId, items).reverse();
-  }, [view, runPart, stream, liveThinking, intent, marks, timeline, group, panesOn, panels, stepsPref, thinkingPref, chatId]);
+  }, [view, runPart, stream, liveThinking, marks, timeline, group, panesOn, panels, stepsPref, thinkingPref, chatId]);
   useEffect(() => () => forgetDrawn(chatId), [chatId]);
   // The helpers of the chat's newest turn, above the composer.
   const newest = view ? latestTurn(runPart, view.messages, view.runs) : undefined;
@@ -530,6 +530,10 @@ export default function ChatScreen() {
               <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
             ) : item.kind === "fold" ? (
               <FoldRow chatId={chatId} bot={bot} group={group} bots={bots} item={item} hold={holdFold} />
+            ) : item.kind === "thought" ? (
+              <View style={workWidth}>
+                <Aside kind="thinking" text={item.text} />
+              </View>
             ) : (
               <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
             )

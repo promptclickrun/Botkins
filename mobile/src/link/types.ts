@@ -968,6 +968,11 @@ export type VoiceSettings = {
 };
 export type VoicePatch = { stt?: Partial<VoiceSettings["stt"]>; tts?: Partial<VoiceSettings["tts"]>; live?: Partial<VoiceSettings["live"]>; providers?: { openai?: { baseUrl?: string }; azure?: Partial<Omit<VoiceSettings["providers"]["azure"], "hasKey">>; elevenlabs?: { agentId?: string }; custom?: { baseUrl?: string } } };
 export type VoiceOptions = { models: { id: string; name: string }[]; voices: { id: string; name: string; language?: string; preview?: string }[] };
+/**
+ * What a phone tells the computer about itself for a live call. `place` is at most 120 characters;
+ * coordinates come as a pair, rounded to two decimals. Never logged.
+ */
+export type LiveContext = { location?: { place?: string; latitude?: number; longitude?: number } };
 /** A tool the live voice may call. The phone runs it and sends the result back itself. */
 export type LiveTool = { name: string; description: string; parameters: Record<string, unknown> };
 /**
@@ -1221,7 +1226,12 @@ export type Calls = {
   /** Text to speech on the computer's provider: base64 audio to play. At most 4,000 characters; split long text by sentence. */
   "link.voice.speak"(input: { text: string; voice?: string; speed?: number }): { audio: string; format: "mp3" | "wav" };
   /** Sets up a live voice session for a chat with a bot. `sdp` is this phone's WebRTC offer, for the providers that use WebRTC. */
-  "link.voice.live"(input: { chatId: string; botId: string; provider?: LiveProvider; sdp?: string }): LiveSession & { tools: LiveTool[] };
+  /**
+   * `context` is what the phone says about itself for the voice: roughly where the person is, only
+   * when Location is on in Device access. The computer adds the chat so far and what its app knows
+   * (`backend.liveContext({ chatId, botId })` → `{ userName?, identity?, user? }`, each a string).
+   */
+  "link.voice.live"(input: { chatId: string; botId: string; provider?: LiveProvider; sdp?: string; context?: LiveContext }): LiveSession & { tools: LiveTool[] };
   "link.voice.endLive"(id: string): void;
   /** Hands the desktop a sign-in the phone finished, for an MCP server that signs in with OAuth. */
   "link.adoptMcpSignIn"(serverId: string, grant: { clientId: string; accessToken: string; refreshToken?: string; expiresIn?: number; scope?: string; redirectUri: string }): { status: string; tools: string[] };
