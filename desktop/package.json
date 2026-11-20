@@ -15,6 +15,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --test test/*.test.mjs",
     "package": "npm run build && electron-builder --publish never",
+    "release": "node scripts/release-draft.mjs",
     "package:windows": "npm run build && node scripts/package-windows.mjs",
     "package:linux": "npm run build && node scripts/package-linux.mjs",
     "package:terminal": "node scripts/package-terminal.mjs --sums",
