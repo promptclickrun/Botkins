@@ -298,11 +298,15 @@ The setting applies only to an installation from a release that runs as a servic
 
 ```sh
 cd desktop
-docker compose up -d --build
+docker compose up -d
 docker compose exec botkins botkins pair
 ```
 
-The default image is the terminal host: one small Node service, with no display. The data is in the volume `botkins-data`.
+Compose uses the image that each release publishes, `ghcr.io/promptclickrun/botkins`. It is the terminal host: one small Node service, with no display. The data is in the volume `botkins-data`.
+
+- To use one release, set `BOTKINS_VERSION` in `.env`, for example `BOTKINS_VERSION=0.17.0`. Without it, Compose uses the latest release.
+- To build the image from this checkout, run `docker compose up -d --build`.
+- To update, run `docker compose pull`, then `docker compose up -d`. A container does not update itself. `botkins update` in a container tells you this, and so does a paired phone.
 
 A phone cannot reach the address of a container. Before you start Compose, put the address of the server in `.env`:
 

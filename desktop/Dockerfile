@@ -157,8 +157,11 @@ RUN groupadd --system --gid 10001 botkins \
   && chmod 0755 bin/botkins \
   && ln -s /opt/botkins/bin/botkins /usr/local/bin/botkins
 
+# BOTKINS_IMAGE names the image this is, so `botkins update` can say what to pull: a container is
+# replaced by a new image, never updated from inside.
 ENV NODE_ENV=production \
     BOTKINS_DATA_DIR=/var/lib/botkins \
+    BOTKINS_IMAGE=ghcr.io/promptclickrun/botkins \
     HOME=/var/lib/botkins/home
 
 USER botkins

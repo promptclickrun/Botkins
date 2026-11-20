@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import semver from "semver";
 import { latestRelease } from "../../desktop/updates.mjs";
 import { serviceManager } from "../../desktop/terminal/manager.mjs";
-import { applyUpdate, assetName, installLayout, takeRequest, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
+import { applyUpdate, assetName, installLayout, takeRequest, unmanaged, writeLastUpdate } from "../../desktop/terminal/update-install.mjs";
 import { REQUEST } from "../../desktop/terminal/updates.mjs";
 
 /**
@@ -126,7 +126,7 @@ export const settings = {
           const newer = semver.gt(version, context.version);
           state = { status: newer ? "available" : "current", current: context.version, latest: version, canInstall: newer && !!layout && assets.includes(assetName(version, process.platform, process.arch)) };
         }
-        context.print(state, state.status === "available" ? "Botkins " + state.latest + " is available (this is " + state.current + ")." + (state.canInstall ? " Install it with `botkins update`." : " " + (state.message ?? "It has no terminal host build this copy can install by itself.")) : "Botkins " + state.current + " is the latest release.");
+        context.print(state, state.status === "available" ? "Botkins " + state.latest + " is available (this is " + state.current + ")." + (state.canInstall ? " Install it with `botkins update`." : " " + (state.message ?? (layout ? "It has no terminal host build this copy can install by itself." : unmanaged(context.env)))) : "Botkins " + state.current + " is the latest release.");
         return;
       }
       const manager = serviceManager({ command: ownCommand(), env: context.env });
@@ -142,7 +142,7 @@ export const settings = {
       let result;
       try {
         // How it ends is left beside the versions, where the service reads it when it is back, for a phone that asked and for `botkins status`.
-        result = await applyUpdate({ entry, manager: installed ? manager : undefined, say: (line) => context.note(line), report: (record) => void (layout && writeLastUpdate(layout.installRoot, record)) });
+        result = await applyUpdate({ entry, env: context.env, manager: installed ? manager : undefined, say: (line) => context.note(line), report: (record) => void (layout && writeLastUpdate(layout.installRoot, record)) });
       } catch (error) {
         throw new CliError(error.message, EXIT.failed, error.code);
       }
