@@ -48,6 +48,16 @@ jobs:
       # Type-checks the window's code and bundles it.
       - run: npm run build
       - run: npm test
+      # What the terminal host does as root beside a folder that is not root's own (its update job
+      # and its service install). `npm test` skips these tests, because they need root to give
+      # rights up and to plant links another user could not write through.
+      - name: The tests that need root
+        run: |
+          if [ -f test/terminal-root.test.mjs ]; then
+            sudo env "PATH=$PATH" node --test test/terminal-root.test.mjs
+          else
+            echo "This branch has no test/terminal-root.test.mjs yet."
+          fi
 
   mobile:
     name: Phone app
