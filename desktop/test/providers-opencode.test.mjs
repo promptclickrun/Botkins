@@ -258,8 +258,11 @@ test("model services are looked up, connected with a key or a sign-in, and remov
   // Cancelling stops the wait.
   state.signInUrl = undefined;
   state.oauthOutcome = "pending";
+  const existingAttempts = new Set(state.attempts.keys());
   const waiting = provider.connectService("openai", { method: "chatgpt", open });
-  await tick(50);
+  await t.waitFor(() => {
+    assert.ok([...state.attempts].some(([id, attempt]) => !existingAttempts.has(id) && attempt.polls > 0));
+  }, { timeout: 10_000 });
   await provider.cancelService("openai");
   await assert.rejects(waiting, /cancelled/);
 

@@ -1,0 +1,8 @@
+// Replace botkins with the User= account in botkins.service.
+polkit.addRule(function(action, subject) {
+  if (action.id === "org.freedesktop.systemd1.manage-units" &&
+      action.lookup("unit") === "botkins-update.service" &&
+      action.lookup("verb") === "start" && subject.user === "botkins") {
+    return polkit.Result.YES;
+  }
+});

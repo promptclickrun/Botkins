@@ -402,7 +402,7 @@ export class Routines {
     if (run?.scheduleId == null || run.status !== "Completed" || run.delivery) return;
     const entry = chat.schedules?.find((s) => s.id === run.scheduleId && s.routine);
     if (!entry?.deliver || entry.deliver.to === "none") return;
-    const text = chat.messages.findLast((m) => m.runId === run.id && m.role === "assistant")?.text?.trim();
+    const text = chat.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text?.trim();
     if (!text) return;
     const { to, category } = entry.deliver;
     try {

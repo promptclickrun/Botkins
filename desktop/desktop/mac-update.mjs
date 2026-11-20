@@ -1,8 +1,16 @@
 import { AppUpdates, githubToken, latestRelease, repository } from "./updates.mjs";
+import { linuxUpdates } from "./linux-update.mjs";
 
 // electron-updater checks the artifact hash and hands the ZIP to Squirrel.Mac for
 // native signature validation, atomic replacement and relaunch.
 export function desktopUpdates({ app, native, notify, mac = app.isPackaged && process.platform === "darwin" }) {
+  if (app.isPackaged && process.platform === "linux") {
+    return linuxUpdates({
+      app,
+      notify,
+      latest: async () => latestRelease({ token: "" }),
+    });
+  }
   let driver;
   const service = new AppUpdates({
     current: app.getVersion(), mac, arch: process.arch, notify,

@@ -93,10 +93,129 @@ article.live .typing {
   color: var(--muted);
 }
 
+/* Timeline updates are part of a run, rather than replies. Keep them quiet and in the same
+   bounded work column so a reply never changes width when a turn ends. */
+.interim-update {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 600px;
+  margin: 0 0 12px;
+  padding-left: 2px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.5;
+}
+.interim-update p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.answer-label {
+  display: block;
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.timeline-person {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  white-space: pre-wrap;
+}
+.timeline-step {
+  max-width: 600px;
+  margin: 0 0 6px;
+}
+.interim-mark {
+  width: 6px;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+}
+.timeline-reasoning {
+  margin-bottom: 8px;
+}
+.timeline-reasoning .reasoning-head {
+  cursor: default;
+  margin-left: 0;
+  padding-left: 0;
+}
+.timeline-fold {
+  max-width: 600px;
+  margin: 0 48px 14px 0;
+  color: var(--muted);
+}
+.timeline-fold-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: calc(13px * var(--text-scale));
+  text-align: left;
+}
+.timeline-fold-line:hover {
+  color: var(--ink);
+  filter: none;
+}
+.timeline-fold-line small {
+  color: var(--faint);
+  font-size: calc(11px * var(--text-scale));
+}
+.timeline-fold-body {
+  margin: 4px 0 0 10px;
+  padding: 4px 0 4px 14px;
+  border-left: 2px solid var(--line);
+}
+.timeline-fold-body .tool-trail {
+  margin-right: 0;
+  margin-bottom: 4px;
+}
+.timeline-details {
+  padding: 5px 0;
+  color: var(--accent-text);
+  font-size: calc(12px * var(--text-scale));
+}
+.timeline-activity {
+  margin: 8px 0 0 10px;
+  padding: 10px 0 10px 14px;
+  border-left: 2px solid var(--accent);
+  max-width: 600px;
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+}
+.timeline-activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--ink-2);
+  font-size: calc(12px * var(--text-scale));
+}
+.timeline-activity-close {
+  padding: 2px 0;
+  color: var(--accent-text);
+  font-size: calc(12px * var(--text-scale));
+}
+.timeline-activity-body {
+  max-height: min(55vh, 520px);
+  overflow: auto;
+}
+.timeline-fold.live .timeline-fold-line {
+  cursor: default;
+}
+
 /* Thinking */
 .reasoning {
   margin: 0 0 12px;
   min-width: 0;
+  max-width: 600px;
+  margin-right: 48px;
 }
 .reasoning-head {
   display: flex;
@@ -180,6 +299,51 @@ article.live .typing {
 }
 .work-live .trail-toggle > .bot-avatar {
   flex: none;
+}
+.work-live .trail-toggle {
+  max-width: 600px;
+  min-height: 36px;
+}
+.work-intent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  flex: none;
+}
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .45;
+  animation: canvas-dot 1.2s ease-in-out infinite;
+}
+.typing-dots i:nth-child(2) { animation-delay: .15s; }
+.typing-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes canvas-dot {
+  0%, 60%, 100% { opacity: .35; transform: translateY(0); }
+  30% { opacity: .95; transform: translateY(-2px); }
+}
+.work-count {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 40%, transparent);
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .spin {
   animation: canvas-spin 1s linear infinite;

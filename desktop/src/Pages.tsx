@@ -1,3 +1,4 @@
+import { useBotDrag } from "./useBotDrag";
 import {
   useEffect,
   useLayoutEffect,
@@ -480,12 +481,14 @@ function BotCard({
   bot: b,
   actions,
   menu,
+  drag,
   large,
 }: {
   state: State;
   bot: Bot;
   actions: PageActions;
   menu: (e: ReactMouseEvent<HTMLElement>, b: Bot) => void;
+  drag: ReturnType<ReturnType<typeof useBotDrag>["row"]>;
   large?: boolean;
 }) {
   const activity = botActivity(state, b.id);
@@ -493,6 +496,7 @@ function BotCard({
   const primary = state.bots[0]?.id === b.id;
   return (
     <div
+      {...drag}
       className={"botcard-wrap" + (b.hidden ? " is-hidden" : "")}
       onContextMenu={(e) => menu(e, b)}
     >
@@ -556,7 +560,8 @@ export function BotCards({
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const botMenu = (e: ReactMouseEvent<HTMLElement>, b: Bot) =>
     menu.show(e, b.name, botMenuItems(state, b, actions, dialogs.ask));
-  const card = (b: Bot) => <BotCard key={b.id} state={state} bot={b} actions={actions} menu={botMenu} large={large} />;
+  const drag = useBotDrag(state.bots, actions.fail);
+  const card = (b: Bot) => <BotCard key={b.id} state={state} bot={b} actions={actions} menu={botMenu} drag={drag.row(b, large)} large={large} />;
   function toggle(id: string) {
     const next = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
     setCollapsed(next);
@@ -593,7 +598,7 @@ export function BotCards({
         {sections.map(({ section, bots }) => {
           const open = !collapsed.includes(section.id);
           return (
-            <div className="botgroup" key={section.id} onContextMenu={(e) => menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask))}>
+            <div {...drag.place({pinned:false, sectionId:section.id})} className="botgroup" key={section.id} onContextMenu={(e) => menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask))}>
               <div className="botgroup-head">
                 <button aria-expanded={open} onClick={() => toggle(section.id)}>
                   <ChevronDown size={15} className="botgroup-chevron" />
@@ -625,7 +630,7 @@ export function BotCards({
         })}
         {sections.length > 0 && rest.length > 0 && (
           <div className="botgroup">
-            <div className="botgroup-head plain">
+            <div {...drag.place({pinned:false, sectionId:null})} className="botgroup-head plain">
               <span>Other bots</span>
             </div>
             <div className="bots">{rest.map(card)}</div>
@@ -637,6 +642,7 @@ export function BotCards({
   return (
     <>
       {body}
+      {drag.zones(state.sections ?? [])}
       {menu.node}
       {dialogs.node}
     </>
@@ -746,6 +752,7 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
  * `compact`: the menu is collapsed to icons, so each bot is its avatar with its name as a tooltip.
  */
 export function SidebarBots({ state, actions, compact }: { state: State; actions: PageActions; compact?: boolean }) {
+  const drag = useBotDrag(state.bots, actions.fail);
   const menu = useMenu();
   const dialogs = useAsk();
   const { primary, pinned, sections, rest } = arrangeBots(state);
@@ -767,7 +774,7 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
     const line = status || (last ? previewOf(last) : b.role);
     const lineId = "botnav-line-" + b.id;
     return (
-      <div className="botnav-item" key={b.id} onContextMenu={(e) => menu.show(e, b.name, items())}>
+      <div {...drag.row(b)} className="botnav-item" key={b.id} onContextMenu={(e) => menu.show(e, b.name, items())}>
         <button
           onClick={() => actions.botChat(b)}
           aria-label={b.name}
@@ -806,7 +813,7 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
       {sections.map(
         ({ section, bots }) =>
           bots.length > 0 && (
-            <div className="botnav-group" key={section.id} role="group" aria-label={section.name}>
+            <div {...drag.place({pinned:false, sectionId:section.id})} className="botnav-group" key={section.id} role="group" aria-label={section.name}>
               <span className="botnav-label">{section.name}</span>
               {bots.map(item)}
             </div>
@@ -814,6 +821,7 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
       )}
       {sections.some((s) => s.bots.length) && rest.length > 0 && <span className="botnav-label">Other</span>}
       {rest.map(item)}
+      {drag.zones(state.sections ?? [])}
       {menu.node}
       {dialogs.node}
     </div>

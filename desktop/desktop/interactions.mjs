@@ -1,3 +1,4 @@
+import { commitInterim, answerReceipt } from "./transcript.mjs";
 // Approvals, questions and forms a turn needs from the person.
 // Requests arrive in the provider-neutral shape of desktop/providers/provider.mjs.
 import { createHash, randomUUID } from "node:crypto";
@@ -18,17 +19,20 @@ export class Interactions {
     if (task.stopped || task.ended || this.ws.closing)
       return Promise.resolve({ action: "cancel" });
     const id = randomUUID();
+    const transcript = this.ws.state?.chats.find(c => c.id === chat.id) ?? chat;
+    if (task.run) commitInterim(transcript, task.run, task);
     return new Promise((resolve) => {
       this.entries.set(id, {
+        chat: transcript, task,
         view: { botId: chat.botId, ...view, id, chatId: chat.id },
-        timer: timeout && setTimeout(() => this.respond(id, { action: "cancel" }), timeout).unref(),
+        timer: timeout && setTimeout(() => this.respond(id, { action: "cancel" }, false), timeout).unref(),
         resolve,
       });
       this.ws.notify();
       this.ws.events?.emit("request", this.entries.get(id).view);
     });
   }
-  respond(id, answer) {
+  respond(id, answer, human = true) {
     const entry = this.entries.get(id);
     if (!entry) throw new Error("This request has already closed.");
     const { view } = entry;
@@ -50,6 +54,12 @@ export class Interactions {
     )
       throw new Error("Choose an answer or enter a response.");
     if (view.kind === "secure") answer = secureAnswer(view, answer);
+    if (human && entry.task.run && !entry.task.run.noOutput) {
+      commitInterim(entry.chat, entry.task.run, entry.task);
+      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(),
+        answer: { runId: entry.task.run.id, requestId: id, kind: view.kind, title: view.title } });
+      this.ws.save();
+    }
     clearTimeout(entry.timer);
     this.entries.delete(id);
     entry.resolve(answer);
@@ -59,7 +69,7 @@ export class Interactions {
     this.ws.secureInputs?.cancel(chatId);
     for (const { view } of this.entries.values())
       if (!chatId || view.chatId === chatId)
-        this.respond(view.id, { action: "cancel" });
+        this.respond(view.id, { action: "cancel" }, false);
   }
   /**
    * Decides one permission request: Botkins' own rules first, then the person.

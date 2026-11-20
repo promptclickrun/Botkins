@@ -1,3 +1,4 @@
+import { saveChatDisplay } from "./chatDisplay";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 import type { Preferences as Values, Appearance } from "./types";
@@ -190,12 +191,6 @@ export function AppearanceSettings({ settings, change, fail }: Props) {
         </div>
       </Group>
       <Group title="Conversations">
-        <SwitchRow label="Fold finished tool activity" checked={settings.foldTools} onChange={(on) => toggle({ foldTools: on })} />
-        <SwitchRow
-          label="Show the bot’s thinking"
-          checked={settings.showThinking !== false}
-          onChange={(on) => toggle({ showThinking: on })}
-        />
         <SwitchRow
           label="Show link previews"
           help="Fetches the first link in a reply, never a private or local one."
@@ -232,6 +227,18 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
   const update = (p: Patch) => change(p).catch(fail);
   return (
     <>
+      <Group title="Chat">
+        <Row label="Steps" help={({folded:"Every step while it works; one line when it's done", every:"Each step, thought and update in order", failed:"Only steps that failed", hidden:"Hide steps"})[settings.steps ?? "folded"]}>
+          {(id, desc) => <select id={id} aria-describedby={desc} value={settings.steps ?? "folded"} onChange={e => saveChatDisplay({steps:e.target.value as Values["steps"], stepsPicked:true})}>
+            <option value="folded">Folded</option><option value="every">Every step</option><option value="failed">Failed only</option><option value="hidden">Hidden</option>
+          </select>}
+        </Row>
+        <Row label="Thinking and updates" help="Its reasoning and notes while it works">
+          {(id, desc) => <select id={id} aria-describedby={desc} value={settings.thinking ?? "folded"} onChange={e => saveChatDisplay({thinking:e.target.value as Values["thinking"]})}>
+            <option value="open">Open</option><option value="folded">Folded</option><option value="hidden">Hidden</option>
+          </select>}
+        </Row>
+      </Group>
       <Group title="Tool approvals">
         <Row label="Approval level" help={approvalHelp[settings.approval]}>
           {(id, d) => (

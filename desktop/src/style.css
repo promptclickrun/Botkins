@@ -1084,6 +1084,8 @@ article.user a {
 .tool-trail {
   margin: 0 0 14px;
   color: var(--muted);
+  max-width: 600px;
+  margin-right: 48px;
 }
 .chat-card {
   margin: 0 0 18px;

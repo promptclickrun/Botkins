@@ -186,7 +186,7 @@ class OpenCodeSession extends ProviderSession {
       const turn = (this.turn = { text: [], any: false, usage: { input: 0, output: 0, cacheRead: 0, cost: 0 }, failure: "", started: Date.now(), posted: false, ended: false });
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       finished.catch(() => {});
-      timer = setTimeout(() => turn.reject(new Error("OpenCode didn't finish in time.")), timeoutMs);
+      timer = setTimeout(() => turn.reject(Object.assign(new Error("OpenCode didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
       timer.unref?.();
       try {
         const { data } = await api.post("/api/session/" + sessionId + "/prompt", {
@@ -255,17 +255,19 @@ class OpenCodeSession extends ProviderSession {
     const agentId = child ? data.sessionID : undefined;
     switch (type) {
       case "session.text.started":
+        if (turn && !child) turn.sectionDelta = false;
         if (turn && !child && turn.any) this.emit("assistant.message_delta", { deltaContent: "\n\n" });
         return;
       case "session.text.delta":
-        if (turn && !child) turn.any = true;
+        if (turn && !child) turn.sectionDelta = turn.any = true;
         if (data.delta) this.emit("assistant.message_delta", { deltaContent: data.delta }, undefined, agentId);
         return;
       case "session.text.ended":
         if (turn && !child && data.text) {
           turn.text.push(data.text);
           // Text that arrived whole, without deltas, is shown now.
-          if (!turn.any) this.emit("assistant.message_delta", { deltaContent: data.text });
+          if (!turn.sectionDelta) this.emit("assistant.message_delta", { deltaContent: data.text });
+          turn.sectionDelta = false;
           turn.any = true;
         }
         return;
@@ -285,6 +287,9 @@ class OpenCodeSession extends ProviderSession {
         tool.started = true;
         const [name, server] = this.toolName(tool.name);
         this.emit("tool.execution_start", { toolCallId: data.id, toolName: name, arguments: data.input ?? {}, ...(server && { mcpServerName: server, mcpToolName: name }) }, undefined, agentId);
+        if (!child && tool.name === "task") this.emit("subagent.started", {
+          toolCallId:data.id, agentName:data.input?.subagent_type, agentDescription:data.input?.description, prompt:data.input?.prompt,
+        });
         return;
       }
       case "session.tool.success": {
@@ -293,10 +298,16 @@ class OpenCodeSession extends ProviderSession {
           this.todoList = data.metadata.todos.map((t, i) => ({ id: String(t.id ?? i + 1), title: t.content, status: t.status }));
           this.emit("session.todos_changed", {});
         }
+        if (!child && this.tools.get(data.id)?.name === "task") {
+          const instanceId = data.metadata?.sessionId ?? data.metadata?.sessionID;
+          if (instanceId) this.emit("subagent.started", { toolCallId:data.id, instanceId });
+          this.emit("subagent.completed", { toolCallId:data.id, result:text });
+        }
         this.emit("tool.execution_complete", { toolCallId: data.id, success: true, ...(text && { result: { content: text } }) }, undefined, agentId);
         return;
       }
       case "session.tool.failed":
+        if (!child && this.tools.get(data.id)?.name === "task") this.emit("subagent.failed", {toolCallId:data.id, error:data.error?.message});
         this.emit("tool.execution_complete", { toolCallId: data.id, success: false, error: { message: data.error?.message ?? (typeof data.error === "string" ? data.error : "Failed") } }, undefined, agentId);
         return;
       case "session.step.ended":

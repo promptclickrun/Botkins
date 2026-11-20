@@ -127,16 +127,11 @@ export class SecureInputs {
         active();
         const handles = Object.fromEntries(Object.keys(answer.content).map(key => [key, randomUUID()]));
         if (!Object.keys(handles).length) {
-          chat.messages.push({ role: "user", text: plan.title + " · No fields supplied", time: Date.now() });
-          this.ws.save();
           return JSON.stringify({ handles });
         }
         const grant = { task, botId: bot.id, chatId: chat.id, plan, handles, values: answer.content, expires: Date.now() + ttl };
         grant.timer = setTimeout(() => this.#forget(grant), ttl).unref();
         for (const handle of Object.values(handles)) this.#grants.set(handle, grant);
-        const labels = plan.fields.filter(f => Object.hasOwn(handles, f.key)).map(f => f.label);
-        chat.messages.push({ role: "user", text: plan.title + " · Provided " + labels.join(", "), time: Date.now() });
-        this.ws.save();
         return JSON.stringify({ handles });
       },
     });

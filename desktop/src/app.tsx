@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { chatDisplayEvent, readChatDisplay, settleChatDisplay } from "./chatDisplay";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
@@ -49,7 +50,20 @@ const personalChat = (chat: Chat) =>
   !chat.archived && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
-  const [state, setState] = useState<State>();
+  const [snapshot, setState] = useState<State>();
+  const [display, setDisplay] = useState(readChatDisplay);
+  useEffect(() => {
+    const read = () => setDisplay(readChatDisplay());
+    window.addEventListener(chatDisplayEvent, read);
+    window.addEventListener("storage", read);
+    return () => {
+      window.removeEventListener(chatDisplayEvent, read);
+      window.removeEventListener("storage", read);
+    };
+  }, []);
+  const state = useMemo(() => snapshot && ({ ...snapshot, settings: {
+    ...snapshot.settings, ...settleChatDisplay(display, snapshot.settings.showThinking)
+  } }), [snapshot, display]);
   const [page, setPage] = useState<Page>("Home");
   const [chatId, setChatId] = useState("");
   const host = state?.remote?.using?.id ?? "local";

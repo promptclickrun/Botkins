@@ -20,7 +20,7 @@ export async function githubToken() {
 export async function latestRelease({ fetcher = fetch, token }) {
   const response = await fetcher("https://api.github.com/repos/promptclickrun/Botkins/releases/latest", {
     headers: { Accept: "application/vnd.github+json", ...(token && { Authorization: "Bearer " + token }) },
-    redirect: "error", signal: AbortSignal.timeout(20000),
+    redirect: "follow", signal: AbortSignal.timeout(20000),
   });
   if ([401, 403, 404].includes(response.status))
     throw new Error("GitHub could not provide a release. Sign in to GitHub CLI with access to the Botkins repository and try again.");
@@ -32,8 +32,8 @@ export async function latestRelease({ fetcher = fetch, token }) {
 }
 
 export class AppUpdates {
-  constructor({ current, mac, arch, latest, stage, restart, notify = () => {} }) {
-    Object.assign(this, { current, mac, arch, latest, stage, restart, notify });
+  constructor({ current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable = async () => true, notify = () => {} }) {
+    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify });
     this.state = { status: "idle", current, canInstall: false };
   }
 
@@ -48,9 +48,14 @@ export class AppUpdates {
     try {
       const { version, assets } = await this.latest();
       const newer = semver.gt(version, this.current);
-      const compatible = [this.arch, "universal"].some(arch => assets.includes("Botkins-" + version + "-" + arch + "-mac.zip"));
+      const macCompatible = [this.arch, "universal"].some(arch => assets.includes("Botkins-" + version + "-" + arch + "-mac.zip")) && assets.includes("latest-mac.yml");
+      const linuxName = "botkins-desktop-" + version + (this.arch === "arm64" ? "-arm64" : "") + ".tar.gz";
+      const linuxCompatible = assets.includes(linuxName);
+      const unitReady = this.linux === true ? await this.linuxUnitAvailable() : false;
       this.state = { status: newer ? "available" : "current", current: this.current, latest: version,
-        canInstall: newer && this.mac && compatible && assets.includes("latest-mac.yml") };
+        canInstall: newer && ((this.mac === true && macCompatible) || (this.linux === true && linuxCompatible && unitReady)),
+        ...(this.linux && linuxCompatible && { installer: "linux-tarball" }),
+        ...(this.linux && newer && linuxCompatible && !unitReady && { message: "Linux updates need the Botkins systemd updater unit." }) };
       if (newer && this.announced !== version) {
         this.announced = version;
         this.notify(version);
@@ -69,14 +74,14 @@ export class AppUpdates {
     this.installing = (async () => {
       const info = await checked;
       if (info.status === "current") return info;
-      if (!info.canInstall) throw new Error("This release has no compatible in-app installer for this copy. Open GitHub Releases to see its downloads.");
+      if (!info.canInstall) throw new Error(this.linux ? "Linux tarball updates need a matching signed build and the Botkins systemd updater helper. Open GitHub Releases to see its downloads." : "This release has no compatible in-app installer for this copy. Open GitHub Releases to see its downloads.");
       this.state = { ...info, status: "downloading", canInstall: false };
       try {
         await this.stage(info.latest);
         this.state = { ...info, status: "restarting", canInstall: false };
         // Give the tool's turn time to save its reply before the native updater closes the app.
         Promise.resolve(afterTurn).catch(() => {}).then(() => setImmediate(() => {
-          try { this.restart(); } catch { this.failedInstall(); }
+          Promise.resolve().then(() => this.restart()).catch(() => this.failedInstall());
         }));
         return this.state;
       } catch {
@@ -103,6 +108,6 @@ export function updateTools(updates, chat, run, task, currentTask) {
   });
   return [
     tool("check_app_update", "Check the installed Botkins desktop version against the latest stable GitHub release.", () => updates.check(), true),
-    tool("install_app_update", "When the person asks to update Botkins, download its signed Mac update and restart the app after this reply.", () => updates.install(task.done), false),
+    tool("install_app_update", "When the person asks to update Botkins, download its signed update and restart the app after this reply.", () => updates.install(task.done), false),
   ];
 }

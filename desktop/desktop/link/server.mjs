@@ -25,7 +25,7 @@ import { cleanRelayUrl, RelayLink, roomOf } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
 import { cleanLook, LinkStore, SCREEN_MODES } from "./store.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
-import { Voice } from "./voice.mjs";
+import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
 
 export const PROTOCOL = 1;
@@ -62,10 +62,12 @@ const MAX_VOICE_AUDIO = 5 * 1024 * 1024; // what one call can carry, well under 
 /** The one tool a live voice has: the voice only talks; the bot does the work. The phone runs it by sending the message to the chat. */
 const ASK_BOT = {
   name: "ask_bot",
-  description: "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for anything beyond small talk: questions about their work, anything to look up, do, remember or change.",
+  description: "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for new work: fresh or current information, anything to look up, do, change or remember. Not for what the conversation or your notes already answer.",
   parameters: { type: "object", properties: { message: { type: "string", description: "The request, in the person's own words." } }, required: ["message"], additionalProperties: false },
 };
 const MAX_WAITERS = 2; // "link.sync" calls a session may have waiting at once
+const LIVE_NOTES_MS = 2000; // the longest a live call waits for the app's notes (backend.liveContext)
+const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const SYSTEM_ERROR = "That didn't work on your computer.";
 
 /**
@@ -314,24 +316,41 @@ export class LinkHost extends EventEmitter {
   // ── Live voice ──────────────────────────────────────────────────────────────────────────────
 
   /**
-   * Sets up a live voice session for a chat with a bot. The voice is told who it speaks for and is
-   * given one tool, `ask_bot`; the phone runs that tool by sending the message to the chat.
+   * Sets up a live voice session for a chat with a bot. The voice is told who it speaks for, the
+   * chat so far, what the app knows of the bot and the person (`backend.liveContext`), and roughly
+   * where the person is when the phone sent it (`context.location`, never logged). It is given one
+   * tool, `ask_bot`; the phone runs that tool by sending the message to the chat.
    */
-  async liveVoice({ chatId, botId, provider, sdp } = {}) {
+  async liveVoice({ chatId, botId, provider, sdp, context } = {}) {
+    const { location } = liveContextOf(context);
     const state = this.backend.snapshot();
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     const bot = (state.bots ?? []).find((item) => item.id === botId);
     if (!chat || !bot) throw new Failure("That chat is gone.");
-    const about = [bot.role, String(bot.instructions ?? "").slice(0, 1500)].filter(Boolean).join("\n\n");
-    const instructions = [
-      "You are the voice of " + bot.name + ", a bot the person works with. Speak as " + bot.name + ", in the first person, warmly and briefly: this is a spoken conversation, so no lists, no Markdown, and one or two sentences unless asked for more.",
-      "You only do the talking. For anything beyond small talk (a question about their work, anything to look up, do, remember or change), call the ask_bot tool once with the request in the person's own words, say a few words such as \"One moment\" while it works, and then tell them what it answered in your own words. Never make up what the bot would say.",
-      about && "About " + bot.name + ":\n" + about,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const notes = await this.liveNotes(chat.id, bot.id);
+    const instructions = liveInstructions({ bot, messages: chat.messages ?? [], bots: state.bots ?? [], notes, location });
     const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name } });
     return { ...session, tools: [ASK_BOT] };
+  }
+
+  /**
+   * What the app knows that a live voice may use: `backend.liveContext({ chatId, botId })`, which
+   * returns (or resolves to) `{ userName?, identity?, user? }` as strings. Optional: without it, or
+   * when it fails or takes over two seconds, the voice goes without.
+   */
+  async liveNotes(chatId, botId) {
+    if (typeof this.backend.liveContext !== "function") return {};
+    let timer;
+    try {
+      const notes = await Promise.race([Promise.resolve(this.backend.liveContext({ chatId, botId })), new Promise((resolve) => (timer = setTimeout(() => resolve(null), LIVE_NOTES_MS)))]);
+      if (!isPlainObject(notes)) return {};
+      return Object.fromEntries(["userName", "identity", "user"].filter((key) => typeof notes[key] === "string").map((key) => [key, notes[key]]));
+    } catch {
+      this.log("voice: the app's notes for a live call could not be read");
+      return {};
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ── Tools that run on a phone (for the app's bots) ──────────────────────────────────────────

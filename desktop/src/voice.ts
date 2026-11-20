@@ -3,6 +3,8 @@
 // A live session's audio goes straight between this page and the provider, as desktop/link/VOICE.md says.
 import { useSyncExternalStore } from "react";
 import type { DeskLiveSession, DeskVoiceSettings, LiveVoiceEvent } from "./types";
+import { liveInputMode, MicGate, RELEASE_TAIL_MS, type InputMode } from "./liveInput";
+import { geminiManualTurn, openAiManualTurn } from "./liveProtocol";
 
 const api = window.botkins;
 
@@ -293,6 +295,7 @@ export type LiveState = {
   level: number;
   transcript: LiveLine[];
   error: string;
+  inputMode: InputMode;
 };
 const live = store<LiveState | null>(null);
 let call: LiveCall | null = null;
@@ -323,6 +326,17 @@ export function closeLive() {
 export function muteLive(on: boolean) {
   call?.mute(on);
 }
+/** Stops the bot's current answer and lets the person speak over it. */
+export function interruptLive() {
+  call?.interrupt();
+}
+/** The talk key/button for push-to-talk. */
+export function pressLive() {
+  call?.pressInput();
+}
+export function releaseLive() {
+  call?.releaseInput();
+}
 
 const b64 = (bytes: Uint8Array) => {
   let text = "";
@@ -330,6 +344,20 @@ const b64 = (bytes: Uint8Array) => {
   return btoa(text);
 };
 const unb64 = (text: string) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+
+function addOpenAiManualTurn(session: Record<string, unknown>) {
+  const inner = session.session && typeof session.session === "object" ? session.session as Record<string, unknown> : session;
+  const audio = inner.audio && typeof inner.audio === "object" ? inner.audio as Record<string, unknown> : {};
+  const input = audio.input && typeof audio.input === "object" ? audio.input as Record<string, unknown> : {};
+  return { ...session, session: { ...inner, audio: { ...audio, input: { ...input, turn_detection: null } } } };
+}
+
+function addGeminiManualTurn(session: Record<string, unknown>) {
+  const inner = session.setup && typeof session.setup === "object" ? session.setup as Record<string, unknown> : session;
+  const config = inner.realtimeInputConfig && typeof inner.realtimeInputConfig === "object" ? inner.realtimeInputConfig as Record<string, unknown> : {};
+  const detection = config.automaticActivityDetection && typeof config.automaticActivityDetection === "object" ? config.automaticActivityDetection as Record<string, unknown> : {};
+  return { ...session, setup: { ...inner, realtimeInputConfig: { ...config, automaticActivityDetection: { ...detection, disabled: true } } } };
+}
 
 /** Plays a provider's 16-bit PCM without gaps, and stops at once when the person talks over it. */
 class PcmPlayer {
@@ -398,9 +426,15 @@ class LiveCall {
   inputRate = 16000;
   outputRate = 16000;
   tools = 0;
+  readonly inputMode = liveInputMode();
+  gate: MicGate;
+  private releaseTimer: number | null = null;
+  private micTimer: number | null = null;
+  private turnMs = 0;
 
   constructor(chatId: string, provider: string) {
-    this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, level: 0, transcript: [], error: "" };
+    this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, level: 0, transcript: [], error: "", inputMode: this.inputMode };
+    this.gate = new MicGate(this.inputMode, Date.now, provider === "elevenlabs" ? "silence" : "drop");
     live.set(this.state);
   }
   update(patch: Partial<LiveState>) {
@@ -444,6 +478,8 @@ class LiveCall {
     const mic = this.state.muted ? 0 : levelOf(this.micAnalyser);
     const out = levelOf(this.outAnalyser);
     const bot = out > 0.02 || !!this.player?.playing;
+    this.gate.level(out);
+    this.gate.playing(bot);
     const speaking = bot ? "bot" : mic > 0.06 ? "you" : null;
     const level = Math.round((bot ? Math.max(out, 0.15) : mic) * 20) / 20;
     if (speaking !== this.state.speaking || level !== this.state.level) this.update({ speaking, level });
@@ -469,9 +505,13 @@ class LiveCall {
     await api.startLiveVoice(this.state.chatId, { prepare: true });
     const pc = (this.pc = new RTCPeerConnection());
     for (const track of this.mic!.getAudioTracks()) pc.addTrack(track, this.mic!);
+    this.applyMic();
     // The events channel is made before the offer, so the offer carries it.
     const channel = (this.channel = pc.createDataChannel("oai-events"));
     channel.onmessage = (e) => this.openaiEvent(e.data, (event) => channel.readyState === "open" && channel.send(JSON.stringify(event)));
+    channel.onopen = () => {
+      if (this.inputMode === "push") channel.send(JSON.stringify({ type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: null } } } }));
+    };
     pc.ontrack = (e) => {
       const audio = (this.remote = new Audio());
       audio.autoplay = true;
@@ -531,9 +571,22 @@ class LiveCall {
         // The person talks over the voice: it stops at once.
         this.player?.flush();
         return;
+      case "output_audio_buffer.started":
+        this.gate.playing(true);
+        for (const track of this.mic?.getAudioTracks() ?? []) track.enabled = false;
+        return;
+      case "output_audio_buffer.stopped":
+      case "output_audio_buffer.cleared":
+        this.gate.playing(false);
+        this.applyMic();
+        return;
       case "response.output_audio.delta":
       case "response.audio.delta":
-        if (this.player && typeof event.delta === "string") this.player.play(event.delta, 24000);
+        if (this.player && typeof event.delta === "string") {
+          this.player.play(event.delta, 24000);
+          const pad = event.delta.endsWith("==") ? 2 : event.delta.endsWith("=") ? 1 : 0;
+          this.gate.queued((Math.floor((event.delta.length * 3) / 4) - pad) / 2 / 24000 * 1000);
+        }
         return;
       case "conversation.item.input_audio_transcription.delta":
         if (!codex) this.heard("user", String(event.delta ?? ""), false);
@@ -592,7 +645,8 @@ class LiveCall {
       this.inputRate = this.outputRate = 24000;
       ws = new WebSocket(session.url, ["realtime", "openai-insecure-api-key." + session.token]);
       ws.onopen = () => {
-        ws.send(JSON.stringify(session.session));
+        const initial = this.inputMode === "push" ? addOpenAiManualTurn(session.session) : session.session;
+        ws.send(JSON.stringify(initial));
         this.sending = true;
         this.update({ status: "live" });
       };
@@ -602,7 +656,7 @@ class LiveCall {
       this.outputRate = session.output.sampleRate;
       ws = new WebSocket(session.url);
       ws.binaryType = "arraybuffer";
-      ws.onopen = () => ws.send(JSON.stringify(session.setup));
+      ws.onopen = () => ws.send(JSON.stringify(this.inputMode === "push" ? addGeminiManualTurn(session.setup) : session.setup));
       ws.onmessage = (e) => this.geminiMessage(e.data, ws);
     } else if (session.kind === "elevenlabs-ws") {
       this.inputRate = session.input.sampleRate;
@@ -640,11 +694,15 @@ class LiveCall {
     quiet.gain.value = 0;
     node.connect(quiet).connect(ctx.destination);
     node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      if (!this.sending || this.state.muted || ws.readyState !== WebSocket.OPEN) return;
       const audio = b64(new Uint8Array(e.data));
-      if (kind === "openai-ws") ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
-      else if (kind === "gemini-ws") ws.send(JSON.stringify({ realtimeInput: { audio: { data: audio, mimeType: "audio/pcm;rate=" + this.inputRate } } }));
-      else ws.send(JSON.stringify({ user_audio_chunk: audio }));
+      if (!this.sending || this.state.muted || ws.readyState !== WebSocket.OPEN) return;
+      const decision = this.gate.frame(audio, levelOf(this.micAnalyser));
+      if (decision.barge) this.interrupt();
+      for (const data of decision.send) {
+        if (kind === "openai-ws") ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: data }));
+        else if (kind === "gemini-ws") ws.send(JSON.stringify({ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=" + this.inputRate } } }));
+        else ws.send(JSON.stringify({ user_audio_chunk: data }));
+      }
     };
   }
 
@@ -667,6 +725,7 @@ class LiveCall {
         if (inline?.data && /^audio\/pcm/.test(inline.mimeType ?? "audio/pcm")) {
           const rate = Number(/rate=(\d+)/.exec(inline.mimeType ?? "")?.[1]) || this.outputRate;
           this.player?.play(inline.data, rate);
+          this.gate.queued((inline.data.length * 3 / 4) / 2 / rate * 1000);
         }
       }
       if (content.inputTranscription?.text) this.heard("user", content.inputTranscription.text, false);
@@ -740,6 +799,59 @@ class LiveCall {
   mute(on: boolean) {
     for (const track of this.mic?.getAudioTracks() ?? []) track.enabled = !on;
     this.update({ muted: on });
+    this.applyMic();
+  }
+  private applyMic() {
+    if (this.micTimer !== null) window.clearTimeout(this.micTimer);
+    this.micTimer = null;
+    const enabled = !this.state.muted && !this.ended && this.gate.open();
+    for (const track of this.mic?.getAudioTracks() ?? []) track.enabled = enabled;
+    const wait = this.gate.wait();
+    if (wait !== null && !this.ended) this.micTimer = window.setTimeout(() => this.applyMic(), wait + 5);
+  }
+  interrupt() {
+    if (this.ended) return;
+    if (this.state.provider === "codex" || this.state.provider === "openai") {
+      if (this.channel?.readyState === "open") {
+        this.channel.send(JSON.stringify({ type: "response.cancel" }));
+        this.channel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+      } else if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "response.cancel" }));
+        this.ws.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+      }
+    } else if (this.state.provider === "gemini") this.player?.flush();
+    else if (this.state.provider === "elevenlabs") this.player?.flush();
+    this.gate.cut();
+    this.applyMic();
+  }
+  pressInput() {
+    if (this.inputMode !== "push" || this.ended || this.gate.holding) return;
+    this.turnMs = 0;
+    if (this.inputMode === "push") this.interrupt();
+    this.gate.press();
+    if (this.ws?.readyState === WebSocket.OPEN && this.state.provider === "gemini") this.ws.send(JSON.stringify(geminiManualTurn("start")));
+    const socket = this.state.provider === "openai" ? this.ws : this.channel;
+    const open = this.state.provider === "openai" ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
+    if (open && socket && (this.state.provider === "openai" || this.state.provider === "codex")) socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    this.applyMic();
+  }
+  releaseInput() {
+    if (this.inputMode !== "push" || !this.gate.holding) return;
+    this.turnMs += this.gate.release();
+    this.applyMic();
+    if (this.releaseTimer !== null) window.clearTimeout(this.releaseTimer);
+    if (this.micTimer !== null) window.clearTimeout(this.micTimer);
+    this.releaseTimer = window.setTimeout(() => {
+      this.releaseTimer = null;
+      if (this.ended) return;
+      if (this.ws?.readyState === WebSocket.OPEN && this.state.provider === "gemini") this.ws.send(JSON.stringify(geminiManualTurn("end")));
+      const socket = this.state.provider === "openai" ? this.ws : this.channel;
+      const open = this.state.provider === "openai" ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
+      if (open && socket && (this.state.provider === "openai" || this.state.provider === "codex")) {
+        for (const message of openAiManualTurn(this.turnMs)) socket.send(JSON.stringify(message));
+      }
+      this.applyMic();
+    }, RELEASE_TAIL_MS + 10);
   }
   /** The person ended it. */
   end() {
@@ -755,6 +867,7 @@ class LiveCall {
   stop() {
     this.ended = true;
     window.clearInterval(this.timer);
+    if (this.releaseTimer !== null) window.clearTimeout(this.releaseTimer);
     this.off?.();
     this.off = null;
     this.player?.flush();

@@ -427,3 +427,7 @@
 .group-avatars.side > * + * {
   margin-left: 0;
 }
+
+.bot-drop-zones { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; }
+.bot-drop-zones > div { padding: 6px 10px; border: 1px dashed currentColor; border-radius: 6px; font-size: .85em; }
+[data-drag-over="true"] { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; }

@@ -219,7 +219,7 @@ try {
       await page.waitForTimeout(500);
     },
     ...Object.fromEntries(
-      ["General", "Side menu", "Chats & approvals", "Notifications", "Bots & capabilities", "Skills", "MCP servers", "Credentials", "Teamwork", "Access", "Phone", "Usage", "Storage", "Model providers", "About"].map((tab) => [
+      ["General", "Side menu", "Chat", "Notifications", "Bots & capabilities", "Skills", "MCP servers", "Credentials", "Teamwork", "Access", "Phone", "Usage", "Storage", "Model providers", "About"].map((tab) => [
         "settings-" + tab.toLowerCase().replace(/[^a-z]+/g, "-"),
         async () => {
           await event("botkins-open-settings", tab === "Model providers" ? "Account" : tab === "Bots & capabilities" ? "Bot" : tab);
