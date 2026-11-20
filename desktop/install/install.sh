@@ -86,10 +86,39 @@ else
   bin_dir=$HOME/.local/bin
 fi
 
+# The first folder, from the one given upwards, that is not root's own or that somebody other
+# than root can write to; nothing when every one of them is root's alone. The updater asks the
+# same before it installs a new version (desktop/terminal/update-install.mjs, notRootOwned),
+# and refuses: whoever can write to one of these folders can put their own program where root is
+# about to run it. So an install into such a folder would be one that can never be updated.
+not_roots_own() {
+  dir=$1
+  # The folder may not be there yet: the look starts at the nearest one that is.
+  while [ ! -d "$dir" ]; do dir=$(dirname "$dir"); done
+  dir=$(cd "$dir" && pwd -P)
+  while :; do
+    line=$(ls -ldn "$dir" 2>/dev/null) || { printf '%s\n' "$dir"; return 0; }
+    case ${line%% *} in
+      ?????w*|????????w*) printf '%s\n' "$dir"; return 0 ;;
+    esac
+    if [ "$(printf '%s\n' "$line" | awk '{ print $3 }')" != 0 ]; then printf '%s\n' "$dir"; return 0; fi
+    if [ "$dir" = / ]; then return 0; fi
+    dir=$(dirname "$dir")
+  done
+}
+if [ "$scope" = system ]; then
+  unsafe=$(not_roots_own "$prefix")
+  [ -z "$unsafe" ] || fail "The folder $unsafe does not belong to root alone ($(ls -ldn "$unsafe" | awk '{ print $1 ", owner " $3 }')). Botkins for the whole computer is installed into $prefix, and it is updated only where that folder and every folder above it are root's own. Nothing was installed. Put it right, then run this again:
+  sudo chown root '$unsafe' && sudo chmod go-w '$unsafe'"
+fi
+
+# latest_from_page <url> prints where the page sends its reader on, without going there.
 if command -v curl >/dev/null 2>&1; then
   fetch() { curl -fsSL --proto '=https,http' --retry 3 -o "$2" "$1"; }
+  latest_from_page() { curl -sI --proto '=https' --retry 3 -o /dev/null -w '%{redirect_url}\n' "$1" 2>/dev/null || true; }
 elif command -v wget >/dev/null 2>&1; then
   fetch() { wget -q -O "$2" "$1"; }
+  latest_from_page() { wget --max-redirect=0 --spider -S "$1" 2>&1 | sed -n 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//p' | tr -d '\r' | head -n 1; }
 else
   fail "curl or wget is needed to download Botkins."
 fi
@@ -110,9 +139,15 @@ chmod 700 "$work"
 
 if [ -z "$version" ]; then
   [ -z "$release_url" ] || fail "With --release-url, say which release to install with --version."
-  fetch "https://api.github.com/repos/$REPO/releases/latest" "$work/latest.json" || fail "The latest Botkins release couldn't be read from GitHub."
-  version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' "$work/latest.json" | head -n 1)
-  [ -n "$version" ] || fail "GitHub didn't name the latest Botkins release."
+  # The release page leads to the latest release. GitHub's API would say it too, but it answers
+  # an address that is not signed in only 60 times an hour, counted for everyone behind that
+  # address, so a server in a cloud can be refused through no fault of its own. It is the second try.
+  version=$(latest_from_page "https://github.com/$REPO/releases/latest" | sed -n 's|.*/releases/tag/v\([0-9][0-9.]*\)[[:space:]]*$|\1|p' | head -n 1)
+  if [ -z "$version" ]; then
+    fetch "https://api.github.com/repos/$REPO/releases/latest" "$work/latest.json" || fail "GitHub didn't say which Botkins release is the latest. Try again later, or name one: --version <version>."
+    version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' "$work/latest.json" | head -n 1)
+  fi
+  [ -n "$version" ] || fail "GitHub didn't name the latest Botkins release. Try again later, or name one: --version <version>."
 fi
 printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || fail "$version is not a release version (such as 0.17.0)."
 base=${release_url:-https://github.com/$REPO/releases/download}/v$version

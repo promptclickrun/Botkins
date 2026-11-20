@@ -7,10 +7,11 @@
 // Anyone else's run skips them; test/terminal-install.test.mjs covers the same code without root.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
-import { asOwnerOf, lastUpdateFile, readLastUpdate, takeRequest, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
+import { asOwnerOf, lastUpdateFile, notRootOwned, readLastUpdate, takeRequest, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
 
 const skip = process.getuid?.() !== 0 && "These need root.";
 // Somebody who is not root, and owns nothing else on this machine.
@@ -90,7 +91,7 @@ test("the install record goes only into a folder that is root's own, and through
     writeFileSync(victim, "the system's own file\n", { mode: 0o600 });
     rmSync(name, { force: true });
     symlinkSync(victim, name);
-    assert.equal(writeLastUpdate(installRoot, good), true);
+    assert.equal(writeLastUpdate(installRoot, good, { top: dir }), true);
     assert.equal(readFileSync(victim, "utf8"), "the system's own file\n");
     assert.deepEqual([statSync(victim).uid, statSync(victim).mode & 0o777], [0, 0o600], "neither its owner nor its mode changed");
     assert.deepEqual(readLastUpdate(installRoot), good);
@@ -100,12 +101,52 @@ test("the install record goes only into a folder that is root's own, and through
   const theirs = join(dir, "theirs");
   mkdirSync(theirs);
   chownSync(theirs, USER, USER);
-  assert.equal(writeLastUpdate(theirs, good), false);
+  assert.equal(writeLastUpdate(theirs, good, { top: dir }), false);
   const loose = join(dir, "loose");
   mkdirSync(loose);
   chmodSync(loose, 0o777);
-  assert.equal(writeLastUpdate(loose, good), false);
+  assert.equal(writeLastUpdate(loose, good, { top: dir }), false);
   assert.equal(existsSync(lastUpdateFile(theirs)) || existsSync(lastUpdateFile(loose)), false);
+  // A folder that is root's own under one that somebody else can write to: they could put
+  // another folder under its name between the look and the write, so nothing is written.
+  const under = join(loose, "botkins");
+  mkdirSync(under, { mode: 0o755 });
+  assert.equal(writeLastUpdate(under, good, { top: dir }), false);
+  assert.equal(existsSync(lastUpdateFile(under)), false);
+  // Without a place to stop, the look goes to the top of the disk: the shared temporary folder this test is in is everybody's.
+  rmSync(lastUpdateFile(installRoot));
+  assert.equal(writeLastUpdate(installRoot, good), false);
+  assert.equal(existsSync(lastUpdateFile(installRoot)), false);
+});
+
+test("the installer and the updater agree on which install folder is root's alone", { skip }, (t) => {
+  const dir = tempDir(t);
+  // The installer's own look, from install/install.sh, run as it is.
+  const look = /^not_roots_own\(\) \{\n[\s\S]*?\n\}$/m.exec(readFileSync(new URL("../install/install.sh", import.meta.url), "utf8"))[0];
+  const installer = (path) => execFileSync("sh", ["-c", "set -eu\n" + look + '\nnot_roots_own "$1"', "sh", path], { encoding: "utf8" }).trim();
+  const make = (path, uid, mode) => {
+    mkdirSync(path, { recursive: true });
+    chownSync(path, uid, uid);
+    chmodSync(path, mode);
+    return path;
+  };
+  // Root's own all the way down from the test's folder: both say so (each names the shared temporary folder above it, and nothing below).
+  const good = make(join(dir, "opt", "botkins"), 0, 0o755);
+  assert.equal(notRootOwned(good, dir), null);
+  assert.ok(!installer(good).startsWith(dir + "/"), installer(good));
+  // Each way a folder on the way can be somebody else's to change: theirs, or open to a group, or open to everyone (as GitHub's runners have /opt).
+  for (const [name, uid, mode] of [["theirs", USER, 0o755], ["group", 0, 0o775], ["everyone", 0, 0o777], ["sticky", 0, 0o1777]]) {
+    const parent = make(join(dir, name), uid, mode);
+    const under = make(join(parent, "botkins"), 0, 0o755);
+    assert.equal(notRootOwned(under, dir).path, parent, name);
+    assert.equal(installer(under), parent, name);
+    // And when Botkins' own folder is not there yet.
+    assert.equal(installer(join(parent, "not", "there", "yet")), parent, name);
+  }
+  // The install folder itself being theirs.
+  const own = make(join(dir, "opt", "own"), USER, 0o755);
+  assert.equal(notRootOwned(own, dir).path, own);
+  assert.equal(installer(own), own);
 });
 
 test("installing the service again follows no link a bot's tool left in the data folder", { skip }, async (t) => {

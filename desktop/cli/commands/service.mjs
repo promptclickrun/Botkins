@@ -3,7 +3,10 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import { createServer } from "node:net";
 import { userInfo } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "../../desktop/terminal/config.mjs";
+import { serviceManager } from "../../desktop/terminal/manager.mjs";
+import { installLayout, notRootOwned, notRootOwnedWords } from "../../desktop/terminal/update-install.mjs";
 import { CliError, duration, EXIT, table } from "../output.mjs";
 
 const MIN_NODE = [22, 12];
@@ -32,7 +35,7 @@ const check = (name, ok, detail, fix) => ({ name, ok, detail, ...(fix && { fix }
 const mode = (path) => statSync(path).mode & 0o777;
 
 /** Everything `botkins doctor` looks at. Works with the service stopped; says more when it runs. */
-export async function examine({ paths, client, env, fetcher = fetch, node = process.versions.node, uid = process.getuid?.() }) {
+export async function examine({ paths, client, env, fetcher = fetch, node = process.versions.node, uid = process.getuid?.(), installFolder }) {
   const checks = [];
   const [major, minor] = node.split(".").map(Number);
   const enough = major > MIN_NODE[0] || (major === MIN_NODE[0] && minor >= MIN_NODE[1]);
@@ -88,6 +91,12 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
   } else if (config) {
     const free = await portFree(config.link.port);
     checks.push(check("Phone link port", free ? true : null, "Port " + config.link.port + (free ? " is free." : " is in use by another program.") , free ? undefined : "Choose another with `botkins config set link.port`."));
+  }
+  // The install folder of the whole computer's service: root's own, all the way up, or no update is installed into it.
+  const folder = installFolder?.();
+  if (folder) {
+    const words = folder.problem && notRootOwnedWords(folder.problem, folder.root);
+    checks.push(check("Install folder", !folder.problem, folder.problem ? words.replace(/ On the computer: .*$/, "") + " No update is installed until it is put right." : folder.root + " and every folder above it are root's own, so updates can be installed.", folder.problem ? /On the computer: `(.*)`\.$/.exec(words)[1] : undefined));
   }
   // The relay: whether this computer can reach it at all. Nothing of the workspace is sent.
   if (config) {
@@ -220,9 +229,14 @@ export const service = {
   doctor: {
     summary: "Check this computer and the service, and say what to fix",
     usage: "botkins doctor",
-    details: "Checks Node.js, the data folder's permissions, the config, the control socket, the phone link's port, whether the relay can be reached and each provider's sign-in. Exits 1 when something needs fixing.",
+    details: "Checks Node.js, the data folder's permissions, the config, the control socket, the phone link's port, the install folder of the whole computer's service, whether the relay can be reached and each provider's sign-in. Exits 1 when something needs fixing.",
     async run(context) {
-      const report = await examine({ paths: context.paths, client: context.client, env: context.env });
+      // Only the whole computer's service is updated by root, so only its install folder has to be root's own.
+      const installFolder = () => {
+        const layout = installLayout(fileURLToPath(new URL("../botkins.mjs", import.meta.url)));
+        return layout && serviceManager({ command: [], env: context.env }).installed()?.scope === "system" ? { root: layout.installRoot, problem: notRootOwned(layout.installRoot) } : null;
+      };
+      const report = await examine({ paths: context.paths, client: context.client, env: context.env, installFolder });
       context.print(report, () => {
         const { color } = context;
         const lines = report.checks.map((entry) => {

@@ -17,18 +17,75 @@ export async function githubToken() {
   return "";
 }
 
-export async function latestRelease({ fetcher = fetch, token }) {
-  const response = await fetcher("https://api.github.com/repos/promptclickrun/Botkins/releases/latest", {
+// Finding the latest release.
+//
+// GitHub's API names a release and every file in it in one answer, but it answers an address
+// that is not signed in only 60 times an hour, and counts everyone behind that address
+// together: a server in a cloud, an office behind one router. So a computer can be refused
+// through no fault of its own. The release page itself has no such limit: /releases/latest
+// answers with a redirect to the latest stable release, and what that release holds is in its
+// own SHA256SUMS (the list an install checks the signature of anyway). So that is the way
+// taken first, and the API is the second try. With a sign-in (the desktop app, where GitHub CLI
+// is signed in) the API is asked first: it is not limited that way, and names every file.
+const reach = (error) => new Error("GitHub could not be reached to look for a new release (" + (error.cause?.code ?? error.name ?? "no answer") + "). Try again later.");
+const ask = async (fetcher, url, options) => {
+  try {
+    return await fetcher(url, { signal: AbortSignal.timeout(20000), ...options });
+  } catch (error) {
+    throw reach(error);
+  }
+};
+
+/** The latest stable release as GitHub's API tells it: { version, assets }. */
+async function latestFromApi({ fetcher, token }) {
+  const response = await ask(fetcher, "https://api.github.com/repos/promptclickrun/Botkins/releases/latest", {
     headers: { Accept: "application/vnd.github+json", ...(token && { Authorization: "Bearer " + token }) },
-    redirect: "follow", signal: AbortSignal.timeout(20000),
+    redirect: "follow",
   });
-  if ([401, 403, 404].includes(response.status))
-    throw new Error("GitHub could not provide a release. Sign in to GitHub CLI with access to the Botkins repository and try again.");
-  if (!response.ok) throw new Error("GitHub could not check for updates (HTTP " + response.status + ").");
+  if ([403, 429].includes(response.status)) throw new Error("GitHub is not answering this address for now: it limits how often one address may ask about releases. Try again later.");
+  if (response.status === 401) throw new Error("GitHub did not accept the sign-in it was given, so the latest release could not be read. Try again later.");
+  if (response.status === 404) throw new Error("GitHub names no published release of Botkins. Try again later.");
+  if (!response.ok) throw new Error("GitHub could not check for updates (HTTP " + response.status + "). Try again later.");
   const data = await response.json();
   const version = semver.valid(data.tag_name);
   if (!version || data.draft || data.prerelease || semver.prerelease(version)) throw new Error("The latest release has no stable desktop version.");
   return { version, assets: (data.assets ?? []).map(a => a.name) };
+}
+
+/**
+ * The same without the API: the version from where /releases/latest leads, and the files from
+ * the release's SHA256SUMS. The files the desktop app's own updater takes are not in that list,
+ * so each is asked for by name.
+ */
+async function latestFromPage({ fetcher }) {
+  const page = await ask(fetcher, releasePage, { redirect: "manual" });
+  const tag = /\/releases\/tag\/([^/?#]+)$/.exec(page.headers.get("location") ?? "")?.[1];
+  const version = tag ? semver.valid(tag) : null;
+  if (!version || tag !== "v" + version || semver.prerelease(version)) throw new Error("GitHub's release page did not lead to a stable release of Botkins (HTTP " + page.status + "). Try again later.");
+  const base = "https://github.com/promptclickrun/Botkins/releases/download/" + tag + "/";
+  const sums = await ask(fetcher, base + "SHA256SUMS", { redirect: "follow" });
+  const listed = sums.ok ? (await sums.text()).split(/\r?\n/).map((line) => /^[a-f0-9]{64} [ *](.+)$/.exec(line)?.[1]).filter(Boolean) : [];
+  const others = ["SHA256SUMS.asc", "latest-mac.yml", ...["arm64", "x64", "universal"].map((arch) => "Botkins-" + version + "-" + arch + "-mac.zip")];
+  // A file that is there answers with a redirect to where it is kept; one that is not, with 404.
+  const there = await Promise.all(others.map((name) => ask(fetcher, base + name, { method: "HEAD", redirect: "manual" }).then((response) => response.status >= 200 && response.status < 400, () => false)));
+  return { version, assets: [...listed, ...(sums.ok ? ["SHA256SUMS"] : []), ...others.filter((_, at) => there[at])] };
+}
+
+/**
+ * The latest stable release: { version, assets: [file names] }.
+ * @param options.token  A GitHub sign-in, when there is one (the desktop app asks GitHub CLI).
+ */
+export async function latestRelease({ fetcher = fetch, token }) {
+  const ways = token ? [latestFromApi, latestFromPage] : [latestFromPage, latestFromApi];
+  let failure;
+  for (const way of ways) {
+    try {
+      return await way({ fetcher, token });
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 
 export class AppUpdates {
@@ -177,7 +234,8 @@ export class AppUpdates {
     this.installing = (async () => {
       const info = await checked;
       if (info.status === "current") return info;
-      if (!info.canInstall) throw new Error(this.cannotInstall ?? (this.linux ? "Linux tarball updates need a matching signed build and the Botkins systemd updater helper. Open GitHub Releases to see its downloads." : "This release has no compatible in-app installer for this copy. Open GitHub Releases to see its downloads."));
+      // The reason the check itself found, when it found one, is the one to say.
+      if (!info.canInstall) throw new Error(info.message ?? this.cannotInstall ?? (this.linux ? "Linux tarball updates need a matching signed build and the Botkins systemd updater helper. Open GitHub Releases to see its downloads." : "This release has no compatible in-app installer for this copy. Open GitHub Releases to see its downloads."));
       this.state = { ...info, status: "downloading", canInstall: false };
       try {
         await this.stage(info.latest);

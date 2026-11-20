@@ -107,18 +107,20 @@ async function main() {
   }
   const config = JSON.parse(readFileSync(configPath,"utf8"));
   const headers = { "User-Agent":"Botkins-systemd-updater" };
-  const response = await fetch("https://api.github.com/repos/promptclickrun/Botkins/releases/latest", {headers, signal:AbortSignal.timeout(30_000)});
-  if (!response.ok) fail("Cannot read the latest public Botkins release.");
-  const release = await response.json();
-  const version = String(release.tag_name).replace(/^v/,"");
-  if (release.draft || release.prerelease || release.tag_name !== "v"+version) fail("Expected a stable public Botkins release.");
+  // The release page, not GitHub's API: the API answers an address that is not signed in only 60
+  // times an hour, counted for everyone behind that address, so a server can be refused through
+  // no fault of its own. /releases/latest leads to the latest release that is neither a draft
+  // nor a pre-release. What is installed is decided below, by the signature on its checksums.
+  const page = await fetch(repo + "/releases/latest", {headers, redirect:"manual", signal:AbortSignal.timeout(30_000)});
+  const version = /\/releases\/tag\/v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(page.headers.get("location") ?? "")?.[1];
+  if (!version) fail("Cannot read the latest public Botkins release. Try again later.");
   const name = directoryName(version,process.arch) + ".tar.gz";
   const dir = mkdtempSync(join(tmpdir(), "botkins-download-"));
   try {
     for (const file of [name,"SHA256SUMS","SHA256SUMS.asc"]) {
       const url = repo + "/releases/download/v" + version + "/" + file;
-      if (release.assets.filter(a => a.name === file && a.browser_download_url === url).length !== 1) fail("Missing public release asset " + file);
       const asset = await fetch(url,{headers, signal:AbortSignal.timeout(300_000)});
+      if (asset.status === 404) fail("Missing public release asset " + file);
       if (!asset.ok || !asset.body) fail("Failed to download " + file);
       await pipeline(asset.body,createWriteStream(join(dir,file),{flags:"wx",mode:0o600}));
     }

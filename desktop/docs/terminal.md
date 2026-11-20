@@ -40,6 +40,8 @@ The installer does these things:
 
 The signature check uses GnuPG. If GnuPG is not installed, install it first (`apt-get install -y gnupg` on Debian and Ubuntu).
 
+The folder `/opt/botkins` and each folder above it must belong to root. Only root can have permission to write to them. An update installs a new version only into such a folder, because root runs what is in it. The installer makes the same check before it installs. If a folder is not correct, the installer stops, names the folder and prints the commands that correct it. Some cloud images make `/opt` writable for all users.
+
 To pass options to the installer, put them after `sh -s --`:
 
 ```sh
@@ -272,6 +274,8 @@ sudo botkins update
 
 `update` installs the latest release. It takes a release only from the releases of the project. It installs a release only if its checksums have a good signature from the Botkins release key. It never installs an unsigned release.
 
+Botkins finds the latest release from the release page of the project on GitHub. This needs no account, and GitHub does not limit it for an address. If the page gives no answer, Botkins asks the GitHub API. GitHub answers the API only 60 times in one hour for one address, and many cloud machines share one address. If GitHub refuses the two questions, Botkins tells you to try again later.
+
 The command unpacks the new version next to the old version. Then it restarts the service on the new version and monitors it for 30 seconds. If the new version does not stay in operation, the command puts the old version back. The old version stays on the disk.
 
 ### Updates from a phone
@@ -392,6 +396,10 @@ The terminal host has no window and no screen. These features report "… is not
 Start with `botkins doctor`. It names most problems and prints the fix.
 
 **`botkins` says that Botkins does not run here.** Run `botkins service status`. If the service is not installed, run `botkins service install`. If it stopped, read `botkins logs -n 50`, or `journalctl -u botkins -n 50` on Linux.
+
+**An update says that a folder does not belong to root alone.** The service for the whole computer gets a new version only into an install folder that belongs to root alone. Each folder above it must be the same. Run the commands that the message shows, for example `sudo chown root /opt && sudo chmod go-w /opt`. `botkins doctor` shows the same problem as the line `Install folder`, and a paired phone shows the same sentence.
+
+**`botkins update --check` says that GitHub does not answer this address.** GitHub limits the questions from one address. Try again later. Botkins 0.16.6 and earlier ask only the GitHub API, so they get this answer more frequently on a cloud machine.
 
 **`botkins` says that this user has no permission to talk to the service.** The service belongs to a different user. For an installation for the whole computer, run the command with `sudo`.
 

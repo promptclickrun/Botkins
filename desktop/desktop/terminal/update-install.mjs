@@ -65,11 +65,13 @@ export function readLastUpdate(installRoot) {
 }
 /**
  * Writes the record. As root, only into a folder that is root's own and that nobody else can
- * write to; the temporary name is removed first and then made new without following a link, so
- * nothing that was put there beforehand decides where the bytes go.
+ * write to, with every folder above it the same; the temporary name is removed first and then
+ * made new without following a link, so nothing that was put there beforehand decides where the
+ * bytes go.
+ * @param options.top  Where the look upwards ends ("/"). The tests end it at a folder of their own.
  * @returns true when it was written.
  */
-export function writeLastUpdate(installRoot, record) {
+export function writeLastUpdate(installRoot, record, { top = "/" } = {}) {
   const clean = cleanLastUpdate(record);
   if (!clean) return false;
   const file = lastUpdateFile(installRoot);
@@ -77,7 +79,9 @@ export function writeLastUpdate(installRoot, record) {
   try {
     const folder = lstatSync(installRoot);
     if (!folder.isDirectory()) return false;
-    if (process.getuid?.() === 0 && (folder.uid !== 0 || folder.mode & 0o022)) return false;
+    // The folder and every folder above it: where somebody else can write to one of those, they
+    // can put another folder under this one's name between the look and the write.
+    if (process.getuid?.() === 0 && notRootOwned(installRoot, top)) return false;
     rmSync(temp, { force: true });
     const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
     try {
@@ -161,14 +165,38 @@ export function installLayout(entry) {
   }
 }
 
-/** As root, the install folder and everything above it must be root's and not writable by anyone else. */
-function rootOwned(path) {
+/**
+ * The first folder, from `path` up to `top`, that is not root's own or that somebody other than
+ * root can write to: { path, mode, uid }, or null when every one of them is root's alone.
+ *
+ * Root installs a version by unpacking it under the install folder and pointing `current` at
+ * it. Whoever can write to that folder, or to a folder above it, can put their own files where
+ * root is about to run them. So the installer, the updater and `botkins doctor` all ask this,
+ * and a computer where the answer is not null is told so before anything is installed.
+ */
+export function notRootOwned(path, top = "/") {
   for (;;) {
-    const stat = lstatSync(path);
-    if (!stat.isDirectory() || stat.uid !== 0 || stat.mode & 0o022) throw new Error("The install folder " + path + " is not root's own, so nothing is installed into it.");
-    if (path === dirname(path)) return;
+    let stat;
+    try {
+      stat = lstatSync(path);
+    } catch {
+      return { path, uid: -1, mode: 0 };
+    }
+    if (!stat.isDirectory() || stat.uid !== 0 || stat.mode & 0o022) return { path, uid: stat.uid, mode: stat.mode & 0o7777 };
+    if (path === top || path === dirname(path)) return null;
     path = dirname(path);
   }
+}
+/** What to say of a folder `notRootOwned` found, with the commands that put it right. One or two sentences: a phone shows them as they are. */
+export function notRootOwnedWords(found, installRoot) {
+  const quoted = /^[A-Za-z0-9_./-]+$/.test(found.path) ? found.path : "'" + found.path.replace(/'/g, "'\\''") + "'";
+  const why = found.uid !== 0 ? "does not belong to root" : "can be changed by users other than root (its mode is " + found.mode.toString(8) + ")";
+  return "The folder " + found.path + " " + why + ", so Botkins can't be updated in " + installRoot + ". On the computer: `sudo chown root " + quoted + " && sudo chmod go-w " + quoted + "`.";
+}
+/** As root, the install folder and everything above it must be root's and not writable by anyone else. */
+function rootOwned(path) {
+  const found = notRootOwned(path);
+  if (found) throw Object.assign(new Error(notRootOwnedWords(found, path)), { code: "INSTALL_FOLDER" });
 }
 
 /** Downloads a release's tarball and its signed checksums into `dir`. */
@@ -284,8 +312,10 @@ export function unmanaged(env = process.env) {
   if (env.BOTKINS_IMAGE) return "This Botkins runs from the Docker image " + env.BOTKINS_IMAGE + ", so it is updated by pulling the new image, not from inside the container. On the computer that runs it: `docker compose pull && docker compose up -d` (or `docker pull " + env.BOTKINS_IMAGE + ":latest` and start the container again). The data volume stays.";
   return "This copy of Botkins wasn't installed from a release, so it doesn't update itself. Update it the way it was installed (a checkout: `git pull`).";
 }
-async function install({ entry, layout, found, env = process.env, manager, say = () => {}, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), fetcher = fetch, verifier, healthMs }) {
+async function install({ entry, layout, found, env = process.env, manager, say = () => {}, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), fetcher = fetch, verifier, healthMs, checkOwner = process.getuid?.() === 0 }) {
   if (!layout) throw Object.assign(new Error(unmanaged(env)), { code: "UNMANAGED" });
+  // Said before anything is downloaded: an install folder root can't trust is one nothing will be installed into.
+  if (checkOwner) rootOwned(layout.installRoot);
   const { version, assets } = await latest();
   if (!semver.gt(version, layout.version)) return { status: "current", current: layout.version };
   found(version);
@@ -298,7 +328,7 @@ async function install({ entry, layout, found, env = process.env, manager, say =
     say("Checking its signature and checksum.");
     await verify({ dir, name, keyFile: join(layout.folder, "desktop", "linux-service", "botkins-release.asc"), verifier });
     say("Installing it beside Botkins " + layout.version + (manager ? " and restarting the service." : "."));
-    const done = await switchTo({ archive: join(dir, name), installRoot: layout.installRoot, version, platform, arch, manager, healthMs });
+    const done = await switchTo({ archive: join(dir, name), installRoot: layout.installRoot, version, platform, arch, manager, healthMs, checkOwner });
     return { status: "installed", current: version, latest: version, previous: done.previous };
   } finally {
     rmSync(dir, { recursive: true, force: true });

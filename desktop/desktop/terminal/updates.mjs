@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { AppUpdates, latestRelease } from "../updates.mjs";
 import { serviceManager } from "./manager.mjs";
 import { withSetting } from "./config.mjs";
-import { assetName, installLayout, readLastUpdate } from "./update-install.mjs";
+import { assetName, installLayout, notRootOwned, notRootOwnedWords, readLastUpdate } from "./update-install.mjs";
 
 const ENTRY = fileURLToPath(new URL("../../cli/botkins.mjs", import.meta.url));
 export const REQUEST = "update-requested";
@@ -41,7 +41,9 @@ const STARTED_MS = 2 * 60_000;
 const HEARD_MS = 25 * 60_000;
 
 /** The update service for `botkins serve` (desktop/terminal/serve.mjs). */
-export function terminalUpdates(service, { entry = ENTRY, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), manager = serviceManager({ command: [process.execPath, entry] }), launch = spawn, env = process.env, pollMs = 2000, startedMs = STARTED_MS, heardMs = HEARD_MS, autoPollMs } = {}) {
+const NO_SERVICE = "This computer runs Botkins from a terminal, not as a service, so it can't update itself. On the computer, run `botkins service install`, or `botkins update`.";
+
+export function terminalUpdates(service, { entry = ENTRY, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), manager = serviceManager({ command: [process.execPath, entry] }), launch = spawn, env = process.env, pollMs = 2000, startedMs = STARTED_MS, heardMs = HEARD_MS, autoPollMs, folder = notRootOwned } = {}) {
   const layout = installLayout(entry);
   const found = () => manager.installed();
   const last = () => (layout ? readLastUpdate(layout.installRoot) : null);
@@ -55,8 +57,15 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
     arch,
     latest,
     linuxAsset: (version) => assetName(version, platform, arch),
-    linuxUnitAvailable: async () => !!found(),
-    unitMissing: "This computer runs Botkins from a terminal, not as a service, so it can't update itself. On the computer, run `botkins service install`, or `botkins update`.",
+    linuxUnitAvailable: async () => {
+      // The whole computer's service is updated by root, and root installs nothing into a folder
+      // somebody else can write to. That is known now, so it is said now, to whoever looks (a
+      // phone too), and no request is left for a job that would only refuse it.
+      const unsafe = layout && found()?.scope === "system" ? folder(layout.installRoot) : null;
+      updates.unitMissing = unsafe ? notRootOwnedWords(unsafe, layout.installRoot) : NO_SERVICE;
+      return !!found() && !unsafe;
+    },
+    unitMissing: NO_SERVICE,
     cannotInstall: layout
       ? "This computer can't install this release by itself: it has no signed build for this system yet, or Botkins isn't installed as a service there. On the computer, `botkins update` says which."
       : image
