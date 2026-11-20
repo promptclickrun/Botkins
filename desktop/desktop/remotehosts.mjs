@@ -104,6 +104,7 @@ export function snapshotOf(parts, own = {}) {
     tasks: parts.tasks ?? [],
     projects: parts.projects ?? [],
     mcpServers: parts.mcp ?? [],
+    plugins: parts.plugins ?? [],
     skills: parts.skills ?? { folders: [], plugins: [], disabled: [] },
     templates: parts.templates ?? [],
     wiki: { revision: parts.revs?.wiki ?? 0 },

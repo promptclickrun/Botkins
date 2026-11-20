@@ -8,11 +8,16 @@ import test from "node:test";
 import { Workspace } from "./starter.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
+import { pluginHandlers } from "../desktop/plugins.mjs";
 import { LinkHost, qrPath, REMOTE_METHODS } from "../desktop/link/index.mjs";
 
 const source = (file) => readFileSync(new URL("../desktop/" + file, import.meta.url), "utf8");
 const preload = new Set([...source("preload.cjs").matchAll(/^ {2}"([\w.]+)",$/gm)].map((m) => m[1]));
 const handlers = new Set([...source("main.mjs").matchAll(/^ {6}(?:([\w]+)|"([\w.]+)"): /gm)].map((m) => m[1] ?? m[2]));
+// The same shared handler factory serves local IPC and the paired-device dispatcher.
+if (source("main.mjs").includes("...pluginHandlers(workspace.plugins, savedCredentials)")) {
+  for (const name of Object.keys(pluginHandlers({}, {}))) handlers.add(name);
+}
 // The calls only Settings › Phone makes. A phone must never be able to make them.
 const PHONE_PAGE = ["remoteHosts", "pairRemoteHost", "useRemoteHost", "forgetRemoteHost", "renameRemoteHost", "renamePhone", "phoneLink", "setPhoneLink", "startPhonePairing", "cancelPhonePairing", "removePhone", "renamePhoneLinkComputer", "setPhoneScreen", "setPhoneRelay", "resetPhoneRelay", "requestScreenPermission", "allowLocalNetwork", "macToolsStatus", "setMacTool", "grantMacTool", "voiceSettings", "setVoice", "setVoiceKey", "voiceOptions", "transcribe", "speak", "startDictation", "startLiveVoice", "liveVoiceTool", "endLiveVoice", "savedCredentials", "saveSavedCredential", "removeSavedCredential", "checkSavedCredential", "passwordManagers", "unlockPasswordManager", "lockPasswordManager", "passwordManagerVaults", "passwordManagerItems", "passwordManagerItem", "linkPasswordManagerField"];
 
@@ -21,7 +26,7 @@ test("every call a phone may make exists, and the phone page's own calls are not
     assert.ok(preload.has(name), name + " is in REMOTE_METHODS but not in preload.cjs");
     assert.ok(handlers.has(name), name + " is in REMOTE_METHODS but has no handler in main.mjs");
   }
-  for (const name of [...PHONE_PAGE, "openChatPath", "previewChatPath", "inspectChatPaths"]) {
+  for (const name of [...PHONE_PAGE, "pickPluginFolder", "openChatPath", "previewChatPath", "inspectChatPaths"]) {
     assert.ok(preload.has(name), name + " is missing from preload.cjs");
     assert.ok(handlers.has(name), name + " has no handler in main.mjs");
     assert.ok(!REMOTE_METHODS.has(name), name + " must not be callable from a phone");

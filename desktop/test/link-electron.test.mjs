@@ -3,6 +3,7 @@
 // link tests run) never takes that path, and pairing with a phone failed in the real app while every
 // test passed. Here the host runs on Electron (test/fixtures/link-electron-host.mjs) and this process,
 // plain Node with the cipher of its own, plays the phone over the real protocol on 127.0.0.1.
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -14,7 +15,7 @@ import test from "node:test";
 import { agree, b64u, box, CIPHER, cleanCode, hkdf, INFO, newKeyPair, open, random, seal, seqNonce, unb64u, unbox } from "../desktop/link/crypto.mjs";
 
 const electron = createRequire(import.meta.url)("electron");
-const fixture = new URL("./fixtures/link-electron-host.mjs", import.meta.url).pathname;
+const fixture = fileURLToPath(new URL("./fixtures/link-electron-host.mjs", import.meta.url));
 
 /** Starts the link on Electron's Node and returns what it printed. Closing `stdin` stops it. */
 async function startHost(t) {

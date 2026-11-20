@@ -1,0 +1,114 @@
+/* Marketplace plugins: compact, review-first rows within the Settings design system. */
+.plugin-settings { min-width: 0; }
+.plugin-top-tabs, .plugin-mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.plugin-top-tabs button, .plugin-mode-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 7px 12px 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.plugin-top-tabs button[aria-selected=true], .plugin-mode-tabs button[aria-selected=true] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.plugin-toolbar { align-items: center; }
+.plugin-toolbar .int-filter { min-width: 150px; }
+.plugin-market-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.plugin-market-chips button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 11px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.plugin-market-chips button.selected { color: var(--on-accent); border-color: var(--accent); background: var(--accent); }
+.plugin-listing {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 11px;
+  min-height: 66px;
+  padding: 10px 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+}
+.set-card > .plugin-listing:first-child { border-top: 0; }
+.plugin-listing:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); filter: none; }
+.plugin-listing > svg { flex: none; color: var(--muted); }
+.plugin-listing-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 8px; background: var(--accent-soft); color: var(--accent-text); }
+.plugin-listing-copy { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.plugin-listing-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
+.plugin-listing-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-listing-copy em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11px * var(--text-scale)); font-style: normal; }
+.plugin-error { display: flex; align-items: center; gap: 10px; color: var(--danger); }
+.plugin-error span { flex: 1; }
+.plugin-unavailable { min-height: 170px; }
+.plugin-detail { min-width: 0; }
+.plugin-back { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 13px; text-decoration: none; }
+.plugin-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin: 0 2px 17px; }
+.plugin-detail-head h3 { margin: 0 0 4px; font-size: calc(20px * var(--text-scale)); font-weight: 700; }
+.plugin-detail-head p { margin: 0 0 5px; color: var(--muted); font-size: calc(13px * var(--text-scale)); }
+.plugin-detail-head small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-detail-head > a { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.plugin-warning { align-items: flex-start; gap: 8px; color: var(--warning); }
+.plugin-warning svg { flex: none; margin-top: 2px; }
+.plugin-content-list { align-items: stretch; gap: 8px; }
+.plugin-content-list > strong { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-content-list ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--ink); font-size: calc(13px * var(--text-scale)); }
+.plugin-tool, .plugin-hook { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.plugin-tool > span { display: grid; min-width: 0; gap: 2px; }
+.plugin-tool b { display: flex; align-items: center; gap: 6px; font-size: calc(13px * var(--text-scale)); font-weight: 600; }
+.plugin-tool small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--font-mono); font-size: calc(11px * var(--text-scale)); }
+.plugin-tool-icon { display: inline-flex; color: var(--muted); }
+.plugin-tool button { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.plugin-hook { align-items: baseline; gap: 10px; }
+.plugin-hook span { flex: none; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-hook code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: calc(11px * var(--text-scale)); }
+.plugin-postinstall { margin: -10px 0 17px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--ink); font-size: calc(12px * var(--text-scale)); line-height: 1.45; }
+.plugin-detail-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 0 0 20px; }
+.plugin-detail-actions .set-button { display: inline-flex; align-items: center; gap: 5px; }
+.plugin-bots { display: grid; gap: 10px; padding: 4px 0; }
+.plugin-bots > label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.plugin-bots select { min-width: 170px; height: 32px; padding: 2px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--canvas); color: var(--ink); font-size: calc(13px * var(--text-scale)); }
+.plugin-bot-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; padding: 2px 0 2px 4px; }
+.plugin-bot-checks label { display: flex; align-items: center; gap: 7px; color: var(--ink); font-size: calc(13px * var(--text-scale)); }
+.plugin-field { display: grid; gap: 5px; margin: 0 0 14px; }
+.plugin-field > label, .plugin-field > span { color: var(--ink); font-size: calc(13px * var(--text-scale)); font-weight: 600; }
+.plugin-field > small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-field > input { width: 100%; height: 34px; padding: 5px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--canvas); color: var(--ink); font-size: calc(13px * var(--text-scale)); }
+.plugin-field > input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.plugin-form-intro { margin: 0 0 17px; color: var(--muted); font-size: calc(13px * var(--text-scale)); line-height: 1.45; }
+.plugin-form-bots { display: grid; gap: 7px; margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--line); }
+.plugin-form-bots > strong { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-clear { display: inline-flex !important; align-items: center; gap: 6px; color: var(--muted) !important; font-size: calc(12px * var(--text-scale)) !important; font-weight: 400 !important; }
+.plugin-folder-path { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--canvas); }
+.plugin-folder-path code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+.plugin-folder-roots { display: flex; gap: 7px; flex-wrap: wrap; margin: 0 0 10px; }
+.plugin-folder-list { display: grid; max-height: 270px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.plugin-folder-list button { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 7px 10px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; font-size: calc(13px * var(--text-scale)); }
+.plugin-folder-list button:first-child { border-top: 0; }
+.plugin-folder-list button:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); filter: none; }
+.plugin-folder-list small, .plugin-folder-list .set-status { padding: 12px; }
+.plugin-marketplace-row .set-label { min-width: 0; }
+.plugin-marketplace-row .set-control { max-width: none; }
+.int-sheet-error:empty { display: none; }
+@media (max-width: 620px) {
+  .plugin-toolbar { align-items: stretch; flex-wrap: wrap; }
+  .plugin-toolbar .int-filter { max-width: none; flex-basis: 100%; }
+  .plugin-detail-head { display: block; }
+  .plugin-detail-head > a { margin-top: 8px; }
+  .plugin-hook { display: grid; gap: 3px; }
+}

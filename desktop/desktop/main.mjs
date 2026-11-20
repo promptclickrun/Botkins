@@ -44,6 +44,7 @@ import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, REMOTE_HOSTS, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
 import { FOLDERS, Folders, deviceArgs } from "./folders.mjs";
+import { PLUGINS, pluginHandlers } from "./plugins.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { desktopUpdates } from "./mac-update.mjs";
@@ -165,7 +166,7 @@ const viewerGuests = new Set();
 // What this app supports that a phone has to ask about by name (the link adds them to its own):
 // model details in the catalog, a Botkin's eyes and own colors, where a routine's result goes and
 // whether it notifies, and a Today item carried by a message.
-const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1"];
+const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", PLUGINS];
 /**
  * What the window shows: this computer's workspace, or the state of the other computer in use
  * (with this window's own look). `remote` says which, and lists the computers this app is paired to.
@@ -564,6 +565,11 @@ else
     const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
     const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null });
     const handlers = {
+      ...pluginHandlers(workspace.plugins, savedCredentials),
+      pickPluginFolder: async () => {
+        const result = await dialog.showOpenDialog(win, { title: "Choose a plugin folder", properties: ["openDirectory"] });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
       createRoutine: (data) => routines.create(data),
       updateRoutine: (id, data) => routines.update(id, data),
       setRoutineEnabled: (id, enabled) => routines.setEnabled(id, null, enabled),
@@ -742,9 +748,9 @@ else
       removeMcpServer: (id) => workspace.integrations.removeServer(id),
       testMcpServer: (id) => workspace.integrations.testServer(id),
       // Sign-in for a remote server (OAuth), and the vault that holds every credential.
-      signInMcpServer: (id) => workspace.integrations.signIn(id),
-      cancelMcpSignIn: (id) => workspace.integrations.cancelSignIn(id),
-      signOutMcpServer: (id) => workspace.integrations.signOut(id),
+      signInMcpServer: (id) => typeof id === "string" && id.startsWith("plugin-") ? workspace.plugins.signIn(id) : workspace.integrations.signIn(id),
+      cancelMcpSignIn: (id) => typeof id === "string" && id.startsWith("plugin-") ? workspace.plugins.cancelSignIn(id) : workspace.integrations.cancelSignIn(id),
+      signOutMcpServer: (id) => typeof id === "string" && id.startsWith("plugin-") ? workspace.plugins.signOut(id) : workspace.integrations.signOut(id),
       credentials: () => workspace.integrations.credentials(),
       resetVault: () => workspace.integrations.resetVault(),
       removeCredential: (id) => workspace.integrations.removeCredential(id),

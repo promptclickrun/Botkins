@@ -14,6 +14,8 @@ import { Panels, textField } from "./panels.mjs";
 import { Providers } from "./providers/index.mjs";
 import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
+import { Plugins } from "./plugins.mjs";
+import { pluginTools } from "./plugin-tools.mjs";
 import { SecureInputs } from "./secure-input.mjs";
 import { updateTools } from "./updates.mjs";
 import { profileContext } from "./bot-profile-files.mjs";
@@ -214,6 +216,7 @@ export class Workspace {
     // Skills and MCP servers for every bot, each bot's memory, bot-to-bot help and message mentions
     // (desktop/integrations.mjs, memory.mjs, teamwork.mjs, mentions.mjs)
     this.integrations = new Integrations(this);
+    this.plugins = new Plugins(this);
     this.memory = new Memory(this);
     this.teamwork = new Teamwork(this);
     this.mentions = new Mentions(this);
@@ -302,6 +305,7 @@ export class Workspace {
         return summary;
       }),
       // The page sees MCP servers without the values of their environment entries and headers.
+      plugins: this.plugins.list(),
       mcpServers: this.integrations.publicServers(),
       // The page reads the wiki through its own calls; this number tells it when to look again.
       wiki: { revision: this.wiki.revision },
@@ -939,6 +943,7 @@ export class Workspace {
     // A helping teammate reads records and keeps its memory; it changes nothing else in the app.
     if (chat.helper) return records;
     return [
+      ...pluginTools(this, bot, chat, run, task),
       ...this.secureInputs.tools(bot, chat, run, task),
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
@@ -1039,6 +1044,8 @@ export class Workspace {
       form: (request) =>
         task.stopped ? { action: "cancel" } : this.interactions.elicit(chat, task, request),
     };
+    const copilotPlugins = provider.id === "copilot";
+    const pluginSpec = await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins });
     const session = await provider.openSession({
       sessionId: chat.sessionId ?? chat.id,
       established: !!chat.established,
@@ -1055,10 +1062,12 @@ export class Workspace {
       tools: this.sessionTools(bot, chat, run, task),
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
       skills: this.integrations.skillsFor(bot),
-      mcpServers: this.integrations.serversFor(bot),
+      mcpServers: { ...this.integrations.serversFor(bot), ...(copilotPlugins && pluginSpec.mcpServers) },
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
-      mcpAuth: (request) => this.integrations.mcpAuth(request),
-      plugins: this.integrations.pluginsFor(),
+      mcpAuth: async (request) => copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
+      plugins: [...this.integrations.pluginsFor(), ...pluginSpec.directories],
+      pluginHooks: copilotPlugins ? pluginSpec.hooks : undefined,
+      pluginRevision: this.plugins.generation,
       history: () => chat.messages ?? [],
       handlers: handlers || null,
       ...overrides,

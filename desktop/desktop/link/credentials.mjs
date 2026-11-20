@@ -149,6 +149,9 @@ function places(method, args) {
     if (isPlain(args[0].oauth)) found.push([[0, "oauth", "clientSecret"], false]);
   } else if (method === "connectProviderService" && isPlain(args[2])) found.push([[2, "key"], true]);
   else if (method === "link.voice.key") found.push([[1], false]);
+  // A plugin's settings (docs/plugins.md): each value of "plugins.configure", and of "plugins.install"'s `config`.
+  else if (method === "plugins.configure") each([1], args[1], false);
+  else if (method === "plugins.install" && isPlain(args[1])) each([1, "config"], args[1].config, false);
   return found;
 }
 const at = (root, path) => path.reduce((value, key) => (value !== null && typeof value === "object" && Object.hasOwn(value, key) ? value[key] : undefined), root);

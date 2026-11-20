@@ -301,6 +301,8 @@ export type State = {
   macTools?: { available: boolean };
   /** Linked skill folders, plugin folders and the names of skills that are switched off (Settings › Skills). */
   skills?: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
+  /** Plugins installed on this computer (`plugins-v1`). Secret settings only say whether they are set. */
+  plugins?: InstalledPlugin[];
   /** Live reasoning text per chat while a turn runs. */
   thinking: Record<string, string>;
   /** Messages waiting to reach a busy chat, per chat. */
@@ -628,6 +630,29 @@ declare global {
       revealSkill(name: string): Promise<void>;
       /** Which skills (names) and MCP servers (ids) one bot leaves out. */
       setBotIntegrations(botId: string, patch: { skillsOff?: string[]; mcpOff?: string[] }): Promise<void>;
+      // Marketplace plugins (`plugins-v1`, docs/plugins.md). Dotted names match the link contract.
+      "plugins.marketplaces"(): Promise<PluginMarketplace[]>;
+      "plugins.addMarketplace"(source: string): Promise<PluginMarketplace>;
+      "plugins.removeMarketplace"(id: string): Promise<void>;
+      "plugins.browse"(query: { marketplace?: string; query?: string; cursor?: string }): Promise<{ plugins: PluginListing[]; cursor?: string }>;
+      "plugins.preview"(id: string): Promise<PluginPreview>;
+      "plugins.install"(id: string, options?: { bots?: "all" | string[]; config?: Record<string, PluginConfigValue>; revision?: string }): Promise<InstalledPlugin>;
+      "plugins.addFolder"(path: string): Promise<InstalledPlugin>;
+      "plugins.configure"(id: string, values: Record<string, PluginConfigValue>): Promise<void>;
+      "plugins.setBots"(id: string, bots: "all" | string[]): Promise<void>;
+      "plugins.setEnabled"(id: string, on: boolean): Promise<void>;
+      "plugins.update"(id: string, options?: { revision?: string }): Promise<InstalledPlugin>;
+      "plugins.uninstall"(id: string): Promise<void>;
+      /** Native folder chooser for local plugin installs. Remote hosts do not expose this method. */
+      pickPluginFolder?(): Promise<string | null>;
+      /** Folder-browser fallback for a paired/remote host when no native chooser is available. */
+      listFolders?(path?: string): Promise<{
+        path: string;
+        parent: string | null;
+        folders: { name: string; path: string }[];
+        roots?: { name: string; path: string }[];
+        more?: boolean;
+      }>;
       /** A bot's persistent memory (its MEMORY.md), as text. */
       botMemory(botId: string): Promise<string>;
       setBotMemory(botId: string, text: string): Promise<void>;
@@ -978,6 +1003,82 @@ export type SkillFolders = {
   folders: { id: string; path: string; missing: boolean; skills: number }[];
   plugins: { id: string; path: string; missing: boolean }[];
 };
+
+// Plugins (`plugins-v1`, docs/plugins.md). IDs are opaque: the renderer only displays names and
+// marketplace labels and sends the id back unchanged to the bridge.
+export type PluginMarketplace = {
+  id: string;
+  name: string;
+  source: string;
+  builtIn: boolean;
+  count?: number;
+  updatedAt?: number;
+  error?: string;
+};
+export type PluginListing = {
+  id: string;
+  name: string;
+  marketplace: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords?: string[];
+  installed?: true;
+};
+export type PluginHookEvent =
+  | "sessionStart"
+  | "userPromptSubmitted"
+  | "preToolUse"
+  | "postToolUse"
+  | "postToolUseFailure"
+  | "agentStop"
+  | "subagentStart"
+  | "subagentStop"
+  | "sessionEnd"
+  | "errorOccurred"
+  | "preCompact"
+  | "notification"
+  | "permissionRequest";
+export type PluginContents = {
+  skills: string[];
+  agents: string[];
+  commands: string[];
+  mcpServers: { name: string; kind: "local" | "remote"; command?: string; url?: string; oauth?: true; serverId?: string }[];
+  hooks: { event: PluginHookEvent | (string & {}); command: string }[];
+  lspServers?: string[];
+};
+export type PluginField = {
+  key: string;
+  label: string;
+  description?: string;
+  secret: boolean;
+  required: boolean;
+  default?: string;
+};
+export type PluginPreview = PluginListing & {
+  contents: PluginContents;
+  config: PluginField[];
+  postInstallMessage?: string;
+  revision?: string;
+  warnings?: string[];
+};
+export type InstalledPlugin = PluginListing & {
+  installed: true;
+  enabled: boolean;
+  bots: "all" | string[];
+  contents: PluginContents;
+  config: (PluginField & { set: boolean; value?: string })[];
+  status: "ready" | "needs-config" | "needs-sign-in" | "error";
+  detail?: string;
+  limits?: string;
+  updateAvailable?: true;
+  folder?: string;
+  installedAt: number;
+};
+export type PluginConfigValue = string | CredentialRef | null;
 export type Mentionables = {
   projects: { id: string; name: string; hint: string; current?: boolean }[];
   /** Wiki pages the chat's bots may use. Newest first. `hint` is the page's section. */

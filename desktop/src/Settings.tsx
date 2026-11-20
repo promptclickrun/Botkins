@@ -12,6 +12,7 @@ import {
   PanelLeft,
   Palette,
   Server,
+  Store,
   Smartphone,
   Mic,
   Settings2,
@@ -37,6 +38,7 @@ import SidebarSettings from "./SidebarSettings";
 import TeamworkSettings from "./TeamworkSettings";
 import BotIntegrations from "./BotIntegrations";
 import BotMemory from "./BotMemory";
+import PluginsSettings from "./PluginsSettings";
 import "./settings.css";
 
 const api = window.botkins;
@@ -49,6 +51,7 @@ export type SectionId =
   | "notifications"
   | "bots"
   | "skills"
+  | "marketplace"
   | "mcp"
   | "credentials"
   | "teamwork"
@@ -68,6 +71,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "bots", label: "Bots & capabilities", icon: BotIcon },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "marketplace", label: "Marketplace", icon: Store },
   { id: "mcp", label: "MCP servers", icon: Server },
   { id: "credentials", label: "Credentials", icon: LockKeyhole },
   { id: "teamwork", label: "Teamwork", icon: UsersRound },
@@ -93,6 +97,10 @@ export function sectionFor(tab: string): { section: SectionId; view?: BotView } 
     "bot memory": { section: "bots", view: "memory" },
     "mcp servers": { section: "mcp" },
     "mcp server": { section: "mcp" },
+    plugins: { section: "marketplace" },
+    plugin: { section: "marketplace" },
+    market: { section: "marketplace" },
+    marketplace: { section: "marketplace" },
     vault: { section: "credentials" },
     keys: { section: "credentials" },
     "side menu": { section: "sidebar" },
@@ -396,6 +404,7 @@ export default function Settings({
             </>
           )}
           {section === "skills" && <SkillsSettings stamp={JSON.stringify(state.skills ?? null)} />}
+          {section === "marketplace" && <PluginsSettings state={state} bots={bots} />}
           {section === "mcp" && <McpSettings state={state} credentials={() => setSection("credentials")} />}
           {section === "credentials" && <CredentialsSettings state={state} mcp={() => setSection("mcp")} />}
           {section === "teamwork" && (

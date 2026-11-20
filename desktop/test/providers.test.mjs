@@ -78,6 +78,8 @@ test("a session spec becomes grouped SDK 2.0 options, with the turn's handlers b
       skills: { directories: ["/skills"], disabled: ["old"] },
       mcpServers: { files: { type: "stdio", command: "npx", args: ["x"], env: {}, tools: ["*"] } },
       plugins: ["/plugin"],
+      pluginHooks: { handlers: { onSessionStart: async () => ({ additionalContext: "plugin" }) } },
+      pluginRevision: 7,
     },
     turn,
   );
@@ -95,6 +97,7 @@ test("a session spec becomes grouped SDK 2.0 options, with the turn's handlers b
   assert.ok(!("includedBuiltinSkills" in options.skills), "that filter makes the SDK update options after opening, which is slow");
   assert.deepEqual(Object.keys(options.mcp.servers), ["files"]);
   assert.deepEqual(options.plugins.directories, ["/plugin"]);
+  assert.equal(typeof options.hooks.handlers.onSessionStart, "function");
   assert.deepEqual(options.systemMessage, { mode: "append", content: "You are Pip.\nMemory: likes teal." });
   // The SDK's request reaches Botkins in neutral terms, and the answer goes back as an SDK result.
   assert.deepEqual(await options.permissions.onRequest({ kind: "shell", fullCommandText: "ls" }, {}), {
@@ -115,6 +118,36 @@ test("a session spec becomes grouped SDK 2.0 options, with the turn's handlers b
   assert.deepEqual(coding.skills.disabledSkills, [], "a coding chat keeps the runtime's pull-request skills");
   assert.equal(coding.permissions.mode, "allow-all");
   assert.equal(sessionOptions({ model: { model: "m" }, approval: "assisted", instructions: "", tools: [] }, {}).permissions.mode, "assisted");
+});
+
+test("a plugin revision invalidates a warm Copilot session and callbacks reach SDK options", async (t) => {
+  const dir = tempDir(t);
+  const fake = fakeClient();
+  const copilot = new CopilotProvider({ connect: fake.client, keepWarmMs: 60_000 });
+  t.after(() => copilot.stop());
+  const hook = { handlers: { onSessionStart: async () => ({ additionalContext: "plugin context" }) } };
+  const spec = {
+    sessionId: "plugin-chat",
+    folder: dir,
+    model: { model: "auto" },
+    approval: "ask",
+    instructions: "",
+    skills: { directories: [], disabled: [] },
+    mcpServers: {},
+    plugins: [],
+    tools: [],
+    pluginHooks: hook,
+    pluginRevision: 1,
+  };
+  const first = await copilot.openSession(spec);
+  await first.close();
+  assert.deepEqual(fake.log.created, ["plugin-chat"]);
+  const second = await copilot.openSession({ ...spec, pluginRevision: 2, pluginHooks: { handlers: { onSessionStart: async () => ({ additionalContext: "new context" }) } } });
+  await second.close();
+  assert.deepEqual(fake.log.disconnected, ["plugin-chat"]);
+  assert.deepEqual(fake.log.resumed, [], "revision change creates a fresh warm SDK session");
+  assert.deepEqual(fake.log.created, ["plugin-chat", "plugin-chat"]);
+  assert.equal(fake.log.configs.get("plugin-chat").hooks.handlers.onSessionStart !== hook.handlers.onSessionStart, true);
 });
 
 test("a chat's session stays warm: the next turn reuses it with that turn's tools and handlers", async (t) => {

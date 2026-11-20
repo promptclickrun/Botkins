@@ -1,6 +1,7 @@
 // iMessage and Mail as bot tools (desktop/mactools.mjs). Everything runs against stand-ins: a fake
 // `imsg` program (test/fixtures/fake-imsg.mjs) and a fake AppleScript runner. No test reads or
 // sends anyone's messages or mail, or touches ~/Library/Messages or Mail.
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, readFileSync } from "node:fs";
@@ -12,7 +13,7 @@ import { fakeClient, tempDir } from "./fake-copilot.mjs";
 import { IMSG_INSTALL, MacTools, macToolsField } from "../desktop/mactools.mjs";
 import * as scripts from "../desktop/mactools-mail.mjs";
 
-const FIXTURE = new URL("./fixtures/fake-imsg.mjs", import.meta.url).pathname;
+const FIXTURE = fileURLToPath(new URL("./fixtures/fake-imsg.mjs", import.meta.url));
 chmodSync(FIXTURE, 0o755);
 
 /** The real launcher's shape, run on the fake imsg with extra environment. Records every start. */

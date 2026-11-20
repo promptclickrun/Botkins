@@ -129,6 +129,7 @@ export class Folders {
  * could have shown, as for the calls that pick a folder. Other calls pass as they are.
  */
 export async function deviceArgs(folders, name, args) {
+  if (name === "plugins.addFolder" || (name === "plugins.addMarketplace" && typeof args[0] === "string" && isAbsolute(args[0]))) return [(await folders.allowed(args[0])).path];
   if (name === "updateProject" && args[1] && typeof args[1] === "object" && args[1].folder) return [args[0], { ...args[1], folder: (await folders.allowed(args[1].folder)).path }, ...args.slice(2)];
   if (name === "createProject" && args[0] && typeof args[0] === "object" && args[0].folder) return [{ ...args[0], folder: (await folders.allowed(args[0].folder)).path }, ...args.slice(1)];
   return args;
