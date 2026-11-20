@@ -22,7 +22,7 @@ import { isNear, reachable } from "./net.mjs";
 import { baseParts, CHAT_PAGE, chatPart, runPart, runsByChat } from "./parts.mjs";
 import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
-import { cleanRelayUrl, RelayLink, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
+import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
 import { cleanLook, deviceKind, LinkStore, SCREEN_MODES } from "./store.mjs";
 import { authorize, cleanGroup, cleanRole, filterParts, inviteLink, inviteLookup, newInviteCode, normalizeCode } from "./team.mjs";
@@ -534,7 +534,7 @@ export class LinkHost extends EventEmitter {
       this.relayLink = null;
     }
     if (!wanted || this.relayLink) return;
-    const next = new RelayLink({
+    const next = new RelayHost({
       url: wanted.url,
       key: this.store.relayKey(),
       serve: (request) => this.serve({ ...request, via: "relay" }),

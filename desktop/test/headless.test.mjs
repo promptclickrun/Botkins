@@ -84,9 +84,12 @@ test("the headless server opens and renews a private pairing file and clears it 
   const exit = once(child, "exit");
   async function pairing(previous) {
     for (let i = 0; i < 200 && child.exitCode === null; i++) {
-      if (existsSync(owner)) {
+      try {
         const value = JSON.parse(readFileSync(owner, "utf8"));
         if (value.code !== previous) return value;
+      } catch (error) {
+        // Renewal removes the old file before publishing the next code.
+        if (error.code !== "ENOENT") throw error;
       }
       await delay(25);
     }

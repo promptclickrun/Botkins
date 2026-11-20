@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { before, describe, it } from "node:test";
-import { HOST_PROTOCOL, MAX_SKEW, hostChallenge, hostProof, networkOf, roomOf } from "../src/pure.ts";
+import { HOST_PROTOCOL, HOST_PROTOCOL_V3, MAX_SKEW, hostChallenge, hostChallengeV3, hostProof, hostProofV3, networkOf, roomOf } from "../src/pure.ts";
 
 describe("networkOf", () => {
   it("leaves IPv4 and local alone", () => {
@@ -82,5 +82,40 @@ describe("hostProof", () => {
     assert.equal(await hostProof([good[0], good[1], "t." + (now + 1), good[3]], room, now), false);
     for (let i = 0; i < 4; i++) assert.equal(await hostProof(good.filter((_, at) => at !== i), room, now), false);
     assert.equal(await hostProof([...good, good[1]], room, now), false);
+  });
+});
+
+describe("hostProofV3", () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const key = publicKey.export({ format: "jwk" }).x;
+  const group = Buffer.alloc(32, 7).toString("base64url");
+  let room = "";
+  before(async () => {
+    room = await roomOf(key);
+  });
+  const make = (seconds, selectedGroup = group) => [
+    HOST_PROTOCOL_V3,
+    "k." + key,
+    "g." + selectedGroup,
+    "t." + seconds,
+    "s." + sign(null, Buffer.from(hostChallengeV3(room, selectedGroup, String(seconds))), privateKey).toString("base64url"),
+  ];
+
+  it("authenticates the instance group as part of the v3 seat proof", async () => {
+    const now = 1_800_000_000;
+    assert.equal(await hostProofV3(make(now), room, now), true);
+    assert.equal(await hostProofV3(make(now, Buffer.alloc(32, 8).toString("base64url")), room, now), true);
+    assert.equal(await hostProofV3(make(now).filter((entry) => !entry.startsWith("g.")), room, now), false);
+    assert.equal(await hostProofV3([...make(now), "g." + group], room, now), false);
+    assert.equal(await hostProofV3([HOST_PROTOCOL, ...make(now).slice(1)], room, now), false);
+  });
+
+  it("uses v3 domain separation and rejects malformed groups", async () => {
+    const now = 1_800_000_000;
+    const good = make(now);
+    const signature = sign(null, Buffer.from(hostChallenge(room, String(now))), privateKey).toString("base64url");
+    assert.equal(await hostProofV3([...good.slice(0, -1), "s." + signature], room, now), false);
+    assert.equal(await hostProofV3([...good.slice(0, 2), "g.short", ...good.slice(3)], room, now), false);
+    assert.equal(await hostProofV3([...good.slice(0, 2), "g." + "!".repeat(43), ...good.slice(3)], room, now), false);
   });
 });

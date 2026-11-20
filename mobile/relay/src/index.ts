@@ -1,17 +1,27 @@
 // The Botkins relay: a Worker in front of Durable Objects for rooms and invite cards.
 //
-// The wire format is in ../../tests/fake-relay.ts (its header), and that class is the reference this
-// file must match. The relay only passes sealed messages between a computer and its phones. It never
-// reads or keeps a message body, and it never logs a lookup, a key, a signature, a card, a room name,
-// a `from` tag or message contents: logs hold counts, socket kinds and close codes only.
+// The host and phone wire formats are documented in ../README.md. A v3 room retains a bounded
+// set of opaque requests for transport recovery. It never inspects their bodies. Logs contain only
+// event kinds, counts and close codes or fixed reasons.
 
 import { DurableObject } from "cloudflare:workers";
-import { HOST_PROTOCOL, MAX_SKEW, PHONE_PROTOCOL, base64url, hex, hostProof, networkOf, roomOf, sha256, unhex, verifyEd25519 } from "./pure.ts";
+import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, MAX_SKEW, PHONE_PROTOCOL, base64url, hex, hostProof, hostProofV3, networkOf, roomOf, sha256, unhex, verifyEd25519 } from "./pure.ts";
 import { handlePush } from "./push.ts";
 
 const MAX_MESSAGE = 8 * 1024 * 1024; // from the computer
 const MAX_PHONE_MESSAGE = 6 * 1024 * 1024 + 64 * 1024; // from a phone
 const MAX_PHONES = 48;
+const MAX_V3_HOSTS = 2; // one active and one standby for a single authenticated runtime group
+const V3_RECONNECT_WINDOW = 15_000;
+// Pending bodies are opaque to the relay. Chunks stay below Durable Object per-value limits, and
+// admission is bounded before any body is copied into storage.
+const PENDING_CHUNK = 64 * 1024;
+const MAX_PENDING_REQUESTS = 48;
+const MAX_PENDING_BYTES = 16 * 1024 * 1024;
+const PENDING_LIFE = 5 * 60_000;
+const RECOVERY_KEY = "room:recovery";
+const SEAT_KEY = "room:seat";
+const PENDING_KEY = "room:pending";
 // A household or an office behind one address may have several phones away at once on one computer.
 const MAX_PER_FROM = 8;
 const BASE64URL_43 = /^[A-Za-z0-9_-]{43}$/;
@@ -24,12 +34,15 @@ const MAX_INVITE_LIFE = 30 * 24 * 60 * 60 * 1000;
 // The Worker sets these two headers itself. The Durable Object is only reachable through this Worker.
 const KIND_HEADER = "x-relay-kind";
 const FROM_HEADER = "x-relay-from";
+const HOST_VERSION_HEADER = "x-relay-host-version";
+const HOST_GROUP_HEADER = "x-relay-host-group";
 const INVITE_OWNER_HEADER = "x-relay-invite-owner";
 
 const OPEN = 1;
 const NOTICE_OFFLINE = 0x03;
 const NOTICE_PHONE_CLOSED = 0x04;
 const NOTICE_HOST_CLOSED = 0x05;
+const NOTICE_ANSWER_ACCEPTED = 0x06; // host-only cache acknowledgement; never sent to a phone
 const REQUEST = 0x01;
 
 /** `prefix` then `body`, in one allocation. */
@@ -266,10 +279,20 @@ export default {
       .map((entry) => entry.trim())
       .filter(Boolean);
 
+    let hostVersion = "";
+    let hostGroup = "";
     if (kind === "host") {
       // The computer proves it owns the room by signing with the key the room is a hash of.
       // Nothing secret is sent, so nothing here can be replayed for long: the signature holds a time.
-      if (!(await hostProof(offered, room, Math.floor(Date.now() / 1000)))) return plain("Unauthorized", 401);
+      if (offered.includes(HOST_PROTOCOL_V3)) {
+        if (!(await hostProofV3(offered, room, Math.floor(Date.now() / 1000)))) return plain("Unauthorized", 401);
+        hostVersion = "v3";
+        hostGroup = offered.find((entry) => entry.startsWith("g."))?.slice(2) ?? "";
+        if (!new RegExp(`^[A-Za-z0-9_-]{${HOST_GROUP_LENGTH}}$`).test(hostGroup)) return plain("Unauthorized", 401);
+      } else {
+        if (!(await hostProof(offered, room, Math.floor(Date.now() / 1000)))) return plain("Unauthorized", 401);
+        hostVersion = "v2";
+      }
     } else if (!offered.includes(PHONE_PROTOCOL)) {
       return plain("Bad request", 400);
     }
@@ -278,9 +301,12 @@ export default {
     const from = hex((await sha256(room + ":" + network)).subarray(0, 8));
 
     // Build the headers from scratch: nothing the client sent can reach the Durable Object.
-    const forwarded = new Request("https://room.internal/", {
-      headers: { Upgrade: "websocket", [KIND_HEADER]: kind, [FROM_HEADER]: from },
-    });
+    const headers: Record<string, string> = { Upgrade: "websocket", [KIND_HEADER]: kind, [FROM_HEADER]: from };
+    if (kind === "host") {
+      headers[HOST_VERSION_HEADER] = hostVersion;
+      if (hostVersion === "v3") headers[HOST_GROUP_HEADER] = hostGroup;
+    }
+    const forwarded = new Request("https://room.internal/", { headers });
     return env.ROOM.getByName(room).fetch(forwarded);
   },
 } satisfies ExportedHandler<Env>;
@@ -348,10 +374,20 @@ export class Invite extends DurableObject<Env> {
  * the computer sees, and `at` is when it opened (milliseconds), to find the oldest. `notified` is set
  * once the other side has been told this socket is gone.
  */
-type Attachment = { kind: "host"; notified: boolean } | { kind: "phone"; ids: Uint8Array; at: number; notified: boolean };
+type HostAttachment = { kind: "host"; version?: "v2" | "v3"; group?: string; role?: "active" | "standby"; notified: boolean; closing?: boolean };
+type PhoneAttachment = { kind: "phone"; ids: Uint8Array; at: number; notified: boolean };
+type Attachment = HostAttachment | PhoneAttachment;
+type RecoveryState = { version: "v3"; group: string; until: number; phones?: string[] };
+type SeatState = { version: "v3"; group: string };
+type PendingItem = { id: number; ids: string; requestId: number; size: number; at: number; sent: boolean };
+type PendingDone = { ids: string; requestId: number; at: number };
+type PendingState = { next: number; total: number; items: PendingItem[]; done: PendingDone[] };
 
 /** One room. Nothing lives in memory between events: every handler finds sockets by tag. */
 export class Room extends DurableObject<Env> {
+  // Membership and the replay index change together. Each event finishes its bounded storage
+  // work before another event changes either one. None of these handlers waits on a peer.
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Answered by the runtime without waking the object.
@@ -359,7 +395,11 @@ export class Room extends DurableObject<Env> {
     log("wake", { sockets: ctx.getWebSockets().length });
   }
 
-  async fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<Response> {
+    return this.ctx.blockConcurrencyWhile(() => this.upgrade(request));
+  }
+
+  private async upgrade(request: Request): Promise<Response> {
     const kind = request.headers.get(KIND_HEADER);
     const from = request.headers.get(FROM_HEADER) ?? "";
     if (request.headers.get("Upgrade") !== "websocket" || !/^[0-9a-f]{16}$/.test(from)) {
@@ -370,10 +410,64 @@ export class Room extends DurableObject<Env> {
     const server = pair[1];
 
     if (kind === "host") {
-      // One computer socket per room: a new one replaces the old.
-      for (const old of this.open("host")) this.end(old, 4000, "replaced");
+      const version = request.headers.get(HOST_VERSION_HEADER);
+      const group = request.headers.get(HOST_GROUP_HEADER) ?? "";
+      if (version !== "v2" && version !== "v3") return plain("Bad request", 400);
+      if (version === "v3" && !new RegExp(`^[A-Za-z0-9_-]{${HOST_GROUP_LENGTH}}$`).test(group)) return plain("Bad request", 400);
+
+      const oldHosts = this.open("host");
+      const oldSides = oldHosts.map((ws) => ws.deserializeAttachment() as Attachment | null);
+      let recovery = await this.recovery();
+      if (!oldHosts.length && !recovery) {
+        const previous = await this.seatedV3();
+        if (previous) recovery = await this.beginRecovery(previous.group);
+      }
+      const resume = version === "v3" && recovery?.group === group && recovery.until > Date.now();
+      const sameGroup =
+        version === "v3" &&
+        oldHosts.length > 0 &&
+        oldSides.every((side) => side?.kind === "host" && side.version === "v3" && side.group === group);
+      if (!sameGroup) {
+        // v2 keeps its historical one-seat behavior. A v3 group may replace v2 or a distinct v3
+        // runtime, but sockets from one v3 group are active/standby peers and stay together.
+        const replacingV3 = oldSides.some((side) => side?.kind === "host" && side.version === "v3");
+        const staleRecovery = !!recovery && (version !== "v3" || recovery.group !== group || recovery.until <= Date.now());
+        if (replacingV3 || staleRecovery) {
+          // A new incarnation must not inherit opaque requests from the old one. Fail them before
+          // closing the old seats; v3's normal disconnect path waits for the reconnect window.
+          await this.failRecovery(!(staleRecovery && !replacingV3 && oldHosts.length > 0));
+        }
+        for (const old of oldHosts) await this.end(old, 4000, "replaced");
+      } else if (oldHosts.length >= MAX_V3_HOSTS) {
+        // Keep the active/standby bound explicit. Refuse a third socket without disturbing either
+        // live seat; callers can close one and reconnect.
+        return plain("Too many host sockets", 409);
+      }
       this.ctx.acceptWebSocket(server, ["host"]);
-      server.serializeAttachment({ kind: "host", notified: false } satisfies Attachment);
+      server.serializeAttachment({
+        kind: "host",
+        version,
+        ...(version === "v3" ? { group } : {}),
+        role: version === "v3" && sameGroup ? "standby" : "active",
+        notified: false,
+      } satisfies Attachment);
+      if (version === "v3") {
+        await this.ctx.storage.put(SEAT_KEY, { version: "v3", group } satisfies SeatState);
+        if (recovery) await this.clearRecovery();
+        // A standby join must not erase a pending-body expiry alarm. Recompute it after any
+        // reconnect alarm is cleared, including when the active seat was already present.
+        await this.scheduleAlarm();
+        if (resume) {
+          for (const ids of recovery?.phones ?? []) {
+            if (!this.open("c:" + ids.slice(0, 16)).length) send(server, prefixed(unhex(ids), Uint8Array.of(NOTICE_PHONE_CLOSED)));
+          }
+          await this.drainPending(server, true);
+        }
+      } else {
+        await this.ctx.storage.delete(SEAT_KEY);
+        await this.clearRecovery();
+        await this.clearPending();
+      }
     } else if (kind === "phone") {
       // A new phone is never turned away. Its address's oldest socket makes room first, then the room's.
       const phones = this.open("phone")
@@ -384,7 +478,7 @@ export class Room extends DurableObject<Env> {
       const closed = new Set<WebSocket>();
       if (same.length >= MAX_PER_FROM) closed.add(same[0]!.ws);
       if (phones.length - closed.size >= MAX_PHONES) closed.add(phones.find((phone) => !closed.has(phone.ws))!.ws);
-      for (const ws of closed) this.end(ws, 4008, "replaced");
+      for (const ws of closed) await this.end(ws, 4008, "replaced");
 
       const conn = crypto.getRandomValues(new Uint8Array(8));
       const ids = prefixed(conn, unhex(from));
@@ -394,11 +488,15 @@ export class Room extends DurableObject<Env> {
       return plain("Bad request", 400);
     }
     log("open", { kind, phones: this.open("phone").length });
-    const protocol = kind === "host" ? HOST_PROTOCOL : PHONE_PROTOCOL;
+    const protocol = kind === "host" ? (request.headers.get(HOST_VERSION_HEADER) === "v3" ? HOST_PROTOCOL_V3 : HOST_PROTOCOL) : PHONE_PROTOCOL;
     return new Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": protocol } });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    return this.ctx.blockConcurrencyWhile(() => this.message(ws, message));
+  }
+
+  private async message(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     // "ping" never gets here (auto-response). Any other text is ignored.
     if (typeof message === "string" || ws.readyState !== OPEN) return;
     const bytes = new Uint8Array(message);
@@ -406,25 +504,73 @@ export class Room extends DurableObject<Env> {
     if (message.byteLength > (side?.kind === "phone" ? MAX_PHONE_MESSAGE : MAX_MESSAGE)) return this.end(ws, 1009, "too big");
 
     if (side?.kind === "phone") {
-      const host = this.open("host")[0];
+      const host = this.activeHost();
       if (!host) {
-        // Nothing is passed on. A request gets told at once, so it can name the one that failed.
-        if (bytes.length >= 5 && bytes[0] === REQUEST) ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+        // A v3 host has a short, durable reconnect window. Keep opaque requests for that window;
+        // an old/v2 room still gets the immediate per-request offline answer.
+        let recovery = await this.recovery();
+        // A simultaneous loss can deliver a phone frame before either close callback has written
+        // the grace record. The durable seat marker closes that small event-ordering gap.
+        if (!recovery) {
+          const seat = await this.seatedV3();
+          if (seat) {
+            await this.beginRecovery(seat.group);
+            recovery = await this.recovery();
+          }
+        }
+        if (recovery && recovery.until > Date.now()) {
+          if (!(await this.storePending(side.ids, bytes)) && bytes.length >= 5 && bytes[0] === REQUEST) {
+            ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+          }
+        } else if (bytes.length >= 5 && bytes[0] === REQUEST) {
+          ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+        }
         return;
       }
-      send(host, prefixed(side.ids, bytes));
+      // If a reconnect just drained opaque requests, preserve their arrival order before a new
+      // request. This is a bounded storage read, not a wait for the host to answer anything.
+      const hostSide = host.deserializeAttachment() as Attachment | null;
+      const pendingAllowed = hostSide?.kind === "host" && hostSide.version === "v3";
+      if (pendingAllowed && (bytes.length < 5 || bytes[0] !== REQUEST)) return;
+      if (pendingAllowed) await this.drainPending(host);
+      if (pendingAllowed && bytes.length >= 5 && bytes[0] === REQUEST) {
+        const pending = await this.storePending(side.ids, bytes);
+        if (!pending) {
+          ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+        } else if (send(host, prefixed(side.ids, bytes))) {
+          await this.markPendingSent(pending.id);
+        }
+      } else {
+        send(host, prefixed(side.ids, bytes));
+      }
     } else if (side?.kind === "host") {
+      if (side.closing) return;
       // [conn 8] + the answer. A short message, or a phone that is gone, is dropped.
       if (bytes.length < 9) return;
+      if (side.version === "v3" && bytes.length >= 13 && bytes[8] === 0x02) {
+        const accepted = await this.ackPending(bytes.subarray(0, 8), readU32(bytes, 9));
+        if (!accepted) return;
+        // Commit the room's durable answer acknowledgement before forwarding the answer. The
+        // host can now evict its replay cache, while a duplicate answer gets this idempotent ack.
+        send(ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), u32Bytes(accepted.requestId))));
+        if (accepted.duplicate) return;
+      }
       const phone = this.open("c:" + hex(bytes.subarray(0, 8)))[0];
       // A view of the same bytes: the 8 are stripped without a copy.
       if (phone) send(phone, bytes.subarray(8));
     }
   }
 
-  webSocketClose(ws: WebSocket, code: number): void {
+  webSocketClose(ws: WebSocket, code: number): Promise<void> {
+    return this.ctx.blockConcurrencyWhile(() => this.closed(ws, code));
+  }
+
+  private async closed(ws: WebSocket, code: number): Promise<void> {
     log("close", { kind: this.kindOf(ws), code });
-    this.ended(ws);
+    const side = ws.deserializeAttachment() as Attachment | null;
+    await this.ended(ws);
+    if (side?.kind === "host" && !side.closing && !side.notified) await this.hostEnded(side);
+    if (side?.kind === "phone") await this.dropPendingFor(side.ids);
     // Complete the handshake. Codes that cannot be sent (1005, 1006, ...) go without a code.
     try {
       if (code >= 1000 && code < 5000 && ![1004, 1005, 1006, 1015].includes(code)) ws.close(code);
@@ -434,9 +580,16 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  webSocketError(ws: WebSocket): void {
+  webSocketError(ws: WebSocket): Promise<void> {
+    return this.ctx.blockConcurrencyWhile(() => this.errored(ws));
+  }
+
+  private async errored(ws: WebSocket): Promise<void> {
     log("error", { kind: this.kindOf(ws) });
-    this.ended(ws);
+    const side = ws.deserializeAttachment() as Attachment | null;
+    await this.ended(ws);
+    if (side?.kind === "host" && !side.closing && !side.notified) await this.hostEnded(side);
+    if (side?.kind === "phone") await this.dropPendingFor(side.ids);
     try {
       ws.close();
     } catch {
@@ -453,37 +606,310 @@ export class Room extends DurableObject<Env> {
     return (ws.deserializeAttachment() as Attachment | null)?.kind ?? "unknown";
   }
 
+  /** The role survives hibernation; old v2 attachments without one use a safe compatibility fallback. */
+  private activeHost(): WebSocket | null {
+    const hosts = this.open("host");
+    return hosts.find((ws) => (ws.deserializeAttachment() as Attachment | null)?.kind === "host" && (ws.deserializeAttachment() as HostAttachment).role === "active") ?? hosts[0] ?? null;
+  }
+
+  alarm(): Promise<void> {
+    return this.ctx.blockConcurrencyWhile(() => this.expire());
+  }
+
+  private async expire(): Promise<void> {
+    const now = Date.now();
+    const recovery = await this.recovery();
+    if (recovery && this.activeHost()) {
+      await this.clearRecovery();
+    } else if (recovery && recovery.until <= now) {
+      // The old runtime did not return. Fail both queued and in-flight phones once, then leave
+      // subsequent requests to the normal immediate [0x03][id] path.
+      await this.failRecovery();
+    }
+    await this.expirePending(now);
+    await this.scheduleAlarm();
+  }
+
+  private async recovery(): Promise<RecoveryState | null> {
+    const stored = await this.ctx.storage.get<RecoveryState>(RECOVERY_KEY);
+    if (!stored || stored.version !== "v3" || !/^[A-Za-z0-9_-]{43}$/.test(stored.group) || !Number.isSafeInteger(stored.until)) return null;
+    return stored;
+  }
+
+  private async seatedV3(): Promise<SeatState | null> {
+    const stored = await this.ctx.storage.get<SeatState>(SEAT_KEY);
+    return stored?.version === "v3" && /^[A-Za-z0-9_-]{43}$/.test(stored.group) ? stored : null;
+  }
+
+  private async beginRecovery(group: string, leaving?: Uint8Array): Promise<RecoveryState | null> {
+    if (this.open("host").length) return null;
+    const current = await this.recovery();
+    if (current?.group === group) return current;
+    const phones = this.open("phone").map(ws => hex((ws.deserializeAttachment() as PhoneAttachment).ids));
+    if (leaving && !phones.includes(hex(leaving))) phones.push(hex(leaving));
+    const recovery = { version: "v3", group, until: Date.now() + V3_RECONNECT_WINDOW, phones } satisfies RecoveryState;
+    await this.ctx.storage.put(RECOVERY_KEY, recovery);
+    await this.scheduleAlarm();
+    return recovery;
+  }
+
+  private async clearRecovery(): Promise<void> {
+    await this.ctx.storage.delete(RECOVERY_KEY);
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  private async hostEnded(side: HostAttachment): Promise<void> {
+    const other = this.open("host");
+    if (other.length) {
+      if (side.version === "v3") {
+        const currentActive = other.find((ws) => (ws.deserializeAttachment() as Attachment | null)?.kind === "host" && (ws.deserializeAttachment() as HostAttachment).role === "active");
+        const standby = side.role === "active" || !currentActive ? other.find((ws) => {
+          const candidate = ws.deserializeAttachment() as Attachment | null;
+          return candidate?.kind === "host" && candidate.role !== "active";
+        }) ?? other[0] : null;
+        if (standby) {
+          const candidate = standby.deserializeAttachment() as HostAttachment;
+          standby.serializeAttachment({ ...candidate, role: "active" } satisfies Attachment);
+          await this.drainPending(standby, true);
+        }
+      }
+      return;
+    }
+    if (side.version === "v3" && side.group && /^[A-Za-z0-9_-]{43}$/.test(side.group)) {
+      await this.beginRecovery(side.group);
+    } else {
+      await this.ctx.storage.delete(SEAT_KEY);
+      await this.clearPending(true);
+      await this.clearRecovery();
+      await this.scheduleAlarm();
+    }
+  }
+
+  /** Ends a v3 reconnect window or an explicit cross-runtime takeover. */
+  private async failRecovery(notify = true): Promise<void> {
+    await this.clearPending(true);
+    await this.clearRecovery();
+    await this.ctx.storage.delete(SEAT_KEY);
+    await this.scheduleAlarm();
+    if (notify) for (const phone of this.open("phone")) send(phone, Uint8Array.of(NOTICE_HOST_CLOSED));
+  }
+
+  private async pending(): Promise<PendingState> {
+    const stored = await this.ctx.storage.get<PendingState>(PENDING_KEY);
+    if (!stored || !Number.isSafeInteger(stored.next) || !Number.isSafeInteger(stored.total) || !Array.isArray(stored.items)) {
+      return { next: 1, total: 0, items: [], done: [] };
+    }
+    const items = stored.items.filter(
+      (item) =>
+        item &&
+        Number.isSafeInteger(item.id) &&
+        /^[0-9a-f]{32}$/.test(item.ids) &&
+        Number.isSafeInteger(item.requestId) &&
+        Number.isSafeInteger(item.size) &&
+        item.size >= 0 &&
+        Number.isSafeInteger(item.at) &&
+        typeof item.sent === "boolean",
+    );
+    const total = items.reduce((sum, item) => sum + item.size, 0);
+    const done = (Array.isArray(stored.done) ? stored.done : []).filter(
+      (item) => item && /^[0-9a-f]{32}$/.test(item.ids) && Number.isSafeInteger(item.requestId) && Number.isSafeInteger(item.at),
+    ).filter((item) => item.at + PENDING_LIFE > Date.now()).slice(-128);
+    return { next: stored.next > 0 ? stored.next : 1, total, items, done };
+  }
+
+  private chunkKey(id: number, at: number): string {
+    return `room:pending:${id}:${at}`;
+  }
+
+  private async storePending(ids: Uint8Array, body: Uint8Array): Promise<PendingItem | null> {
+    if (body.length < 5 || body[0] !== REQUEST || body.length > MAX_PHONE_MESSAGE) return null;
+    const state = await this.pending();
+    if (state.items.length >= MAX_PENDING_REQUESTS || state.total + body.length > MAX_PENDING_BYTES) return null;
+    const conn = hex(ids);
+    const requestId = readU32(body, 1);
+    const now = Date.now();
+    state.done = state.done.filter((entry) => entry.at + PENDING_LIFE > now);
+    if (state.items.some((entry) => entry.ids === conn && entry.requestId === requestId) || state.done.some((entry) => entry.ids === conn && entry.requestId === requestId)) return null;
+    const id = state.next > 0 && state.next < 2_000_000_000 ? state.next : 1;
+    const item: PendingItem = { id, ids: conn, requestId, size: body.length, at: now, sent: false };
+    const puts: Record<string, Uint8Array> = {};
+    for (let at = 0; at < body.length; at += PENDING_CHUNK) puts[this.chunkKey(id, at / PENDING_CHUNK)] = body.slice(at, Math.min(body.length, at + PENDING_CHUNK));
+    try {
+      await this.ctx.storage.put(puts);
+      await this.ctx.storage.put(PENDING_KEY, { next: id + 1, total: state.total + body.length, items: [...state.items, item], done: state.done } satisfies PendingState);
+      await this.scheduleAlarm();
+      return item;
+    } catch {
+      await this.ctx.storage.delete(Object.keys(puts)).catch(() => {});
+      return null;
+    }
+  }
+
+  private async readPendingBody(item: PendingItem): Promise<Uint8Array | null> {
+    const count = Math.ceil(item.size / PENDING_CHUNK);
+    const values = await this.ctx.storage.get<Uint8Array>(Array.from({ length: count }, (_, at) => this.chunkKey(item.id, at)));
+    const body = new Uint8Array(item.size);
+    for (let at = 0; at < count; at++) {
+      const chunk = values.get(this.chunkKey(item.id, at));
+      if (!chunk) return null;
+      body.set(new Uint8Array(chunk), at * PENDING_CHUNK);
+    }
+    return body;
+  }
+
+  private async deletePendingItem(item: PendingItem): Promise<void> {
+    const count = Math.ceil(item.size / PENDING_CHUNK);
+    await this.ctx.storage.delete(Array.from({ length: count }, (_, at) => this.chunkKey(item.id, at)));
+  }
+
+  private async markPendingSent(id: number): Promise<void> {
+    const state = await this.pending();
+    const item = state.items.find((entry) => entry.id === id);
+    if (!item || item.sent) return;
+    item.sent = true;
+    await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
+  }
+
+  private async removePending(id: number, tombstone: boolean): Promise<PendingItem | null> {
+    const state = await this.pending();
+    const item = state.items.find((entry) => entry.id === id);
+    if (!item) return null;
+    await this.deletePendingItem(item);
+    state.items = state.items.filter((entry) => entry.id !== id);
+    state.total -= item.size;
+    if (tombstone) state.done.push({ ids: item.ids, requestId: item.requestId, at: Date.now() });
+    if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
+    else await this.ctx.storage.delete(PENDING_KEY);
+    await this.scheduleAlarm();
+    return item;
+  }
+
+  private async drainPending(host = this.activeHost(), force = false): Promise<void> {
+    if (!host) return;
+    const state = await this.pending();
+    for (const item of [...state.items]) {
+      if (item.sent && !force) continue;
+      const body = await this.readPendingBody(item);
+      if (!body) {
+        this.notifyOffline(item);
+        await this.removePending(item.id, true);
+        continue;
+      }
+      if (!send(host, prefixed(unhex(item.ids), body))) break;
+      await this.markPendingSent(item.id);
+    }
+  }
+
+  private async ackPending(conn: Uint8Array, requestId: number): Promise<(PendingItem | PendingDone) & { duplicate: boolean } | null> {
+    const state = await this.pending();
+    const item = state.items.find((entry) => entry.requestId === requestId && entry.ids.startsWith(hex(conn)));
+    if (!item) {
+      const done = state.done.find((entry) => entry.requestId === requestId && entry.ids.startsWith(hex(conn)));
+      return done ? { ...done, duplicate: true } : null;
+    }
+    await this.removePending(item.id, true);
+    return { ...item, duplicate: false };
+  }
+
+  private async dropPendingFor(ids: Uint8Array): Promise<void> {
+    const prefix = hex(ids);
+    const state = await this.pending();
+    const dropped = state.items.filter((item) => item.ids === prefix);
+    if (!dropped.length && !state.done.some((item) => item.ids === prefix)) return;
+    for (const item of dropped) await this.deletePendingItem(item);
+    state.items = state.items.filter((item) => item.ids !== prefix);
+    state.total = state.items.reduce((sum, item) => sum + item.size, 0);
+    state.done = state.done.filter((item) => item.ids !== prefix);
+    if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
+    else await this.ctx.storage.delete(PENDING_KEY);
+    await this.scheduleAlarm();
+  }
+
+  private async clearPending(keepDone = false): Promise<void> {
+    const state = await this.pending();
+    for (const item of state.items) await this.deletePendingItem(item);
+    if (keepDone && state.done.length) await this.ctx.storage.put(PENDING_KEY, { next: state.next, total: 0, items: [], done: state.done } satisfies PendingState);
+    else await this.ctx.storage.delete(PENDING_KEY);
+  }
+
+  private async expirePending(now: number): Promise<void> {
+    const state = await this.pending();
+    const expired = state.items.filter((item) => item.at + PENDING_LIFE <= now);
+    if (!expired.length) return;
+    for (const item of expired) {
+      this.notifyOffline(item);
+      await this.removePending(item.id, true);
+    }
+  }
+
+  private notifyOffline(item: PendingItem): void {
+    const phone = this.open("c:" + item.ids.slice(0, 16))[0];
+    if (phone) send(phone, prefixed(Uint8Array.of(NOTICE_OFFLINE), Uint8Array.of((item.requestId >>> 24) & 255, (item.requestId >>> 16) & 255, (item.requestId >>> 8) & 255, item.requestId & 255)));
+  }
+
+  private async scheduleAlarm(): Promise<void> {
+    const recovery = await this.recovery();
+    const state = await this.pending();
+    const times = [recovery?.until ?? Infinity, ...state.items.map((item) => item.at + PENDING_LIFE), ...state.done.map((item) => item.at + PENDING_LIFE)].filter(Number.isFinite);
+    if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
+    else await this.ctx.storage.delete(PENDING_KEY);
+    if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
+    else await this.ctx.storage.deleteAlarm();
+  }
+
   /** Tells the other side, once, that a socket is gone: the computer about a phone, every phone about the computer. */
-  private ended(ws: WebSocket): void {
+  private async ended(ws: WebSocket): Promise<void> {
     const side = ws.deserializeAttachment() as Attachment | null;
     if (!side || side.notified) return;
     ws.serializeAttachment({ ...side, notified: true } satisfies Attachment);
     if (side.kind === "phone") {
-      const host = this.open("host")[0];
+      const host = this.activeHost();
       if (host) send(host, prefixed(side.ids, Uint8Array.of(NOTICE_PHONE_CLOSED)));
-    } else {
-      // What the phones still wait for will not be answered; they can try again at once.
+      else {
+        const seat = await this.seatedV3();
+        if (seat) await this.beginRecovery(seat.group, side.ids);
+      }
+    } else if (side.version !== "v3") {
+      // What the phones still wait for will not be answered; they can try again at once. A v3
+      // standby is already a usable seat, so its active peer disappearing is intentionally silent.
       for (const phone of this.open("phone")) if (phone !== ws) send(phone, Uint8Array.of(NOTICE_HOST_CLOSED));
     }
   }
 
   /** Closes a socket from this side. The reason is always one of our own fixed words. */
-  private end(ws: WebSocket, code: number, reason: string): void {
+  private async end(ws: WebSocket, code: number, reason: string): Promise<void> {
     log("drop", { kind: this.kindOf(ws), code, reason });
-    this.ended(ws);
+    const side = ws.deserializeAttachment() as Attachment | null;
+    const replacing = reason === "replaced";
+    if (side?.kind === "host") ws.serializeAttachment({ ...side, closing: true } satisfies Attachment);
     try {
       ws.close(code, reason);
     } catch {
       // Already closed.
     }
+    await this.ended(ws);
+    // A deliberate protocol close (for example, an oversized v3 host frame) still needs to
+    // promote standby or arm the reconnect window. Replacement closes are handled by the new seat.
+    if (side?.kind === "host" && !replacing) await this.hostEnded({ ...side, closing: true });
   }
 }
 
-function send(ws: WebSocket, data: Uint8Array): void {
+function readU32(bytes: Uint8Array, at: number): number {
+  return ((bytes[at]! * 0x1000000) + (bytes[at + 1]! << 16) + (bytes[at + 2]! << 8) + bytes[at + 3]!) >>> 0;
+}
+
+function u32Bytes(value: number): Uint8Array {
+  return Uint8Array.of((value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255);
+}
+
+function send(ws: WebSocket, data: Uint8Array): boolean {
+  if (ws.readyState !== OPEN) return false;
   try {
     ws.send(data);
+    return true;
   } catch {
     // The socket closed between the check and the send.
+    return false;
   }
 }
 

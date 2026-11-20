@@ -1,6 +1,7 @@
 // Turning the screen on from a phone, on a headless host ("screen-grant-v1"; link-host/grant.mjs).
 // The computer's side runs for real (LinkHost with the phone's client library); the phone's
 // presence key is a P-256 key made here, standing in for the one a phone keeps behind Face ID.
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, type KeyObject, sign } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
@@ -330,7 +331,7 @@ test("no bot can reach it: not a call the app offers phones, not a tool on the c
       else if (/\.tsx?$/.test(name) && /link\.screen\.(grant|revoke)/.test(readFileSync(path, "utf8"))) callers.push(path.replace(/^.*\/src\//, "src/"));
     }
   };
-  walk(new URL("../src", import.meta.url).pathname);
+  walk(fileURLToPath(new URL("../src", import.meta.url)));
   assert.deepEqual(callers.sort(), ["src/features/remote/grant.ts", "src/link/types.ts"]);
 });
 
@@ -401,7 +402,7 @@ test("the gate: a level can be turned on only directly, by a phone that can prov
 });
 
 test("on the phone, one section asks and one function signs: nothing else can", () => {
-  const source = new URL("../src", import.meta.url).pathname;
+  const source = fileURLToPath(new URL("../src", import.meta.url));
   const files: { path: string; text: string }[] = [];
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {

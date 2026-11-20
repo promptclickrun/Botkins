@@ -2,7 +2,7 @@
 
 A small Cloudflare Worker with one Durable Object per room. It lets a phone reach its computer when the two are not on the same network.
 
-The computer keeps one outgoing WebSocket open to the relay. The phone opens one too. The relay passes messages between them. Every message is already sealed end to end by the link, so the relay can not read it.
+The computer keeps an active WebSocket and a standby open to the relay. Older computers use one connection. The phone opens one too. The relay passes messages between them. Every message is already sealed end to end by the link, so the relay can not read it.
 
 The same Worker has two more jobs. It keeps short-lived, sealed team-invite cards in a Durable Object directory and serves the `/join` page (see "Team invites"). `POST /v1/push` sends Apple push notifications for the iPhone app (see "Push notifications"). The push route is a plain forward and stores nothing.
 
@@ -27,21 +27,24 @@ What it can not see:
 - Invite contents. A card is encrypted with a key derived from the invite code.
 - Any secret of the computer.
 
-The relay keeps no messages. Its invite directory stores only sealed cards it cannot read, together with an expiry and owner public key, in a Durable Object keyed by the hash of the invite code. The card is deleted at expiry. Logs hold counts, socket kinds, close codes and the relay's own fixed close reasons, and nothing else: no lookup, key, signature, room name, `from` tag, card or message content. Invocation logs are off in `wrangler.jsonc` because they record request URLs, which hold room names and invite lookups.
+The room holds bounded, opaque requests until they are answered or expire, so it can forward them again after a transport interruption. It drops pending requests when the phone leaves. Its invite directory stores only sealed cards it cannot read, together with an expiry and owner public key, in a Durable Object keyed by the hash of the invite code. The card is deleted at expiry. Logs hold counts, socket kinds, close codes and the relay's own fixed close reasons, and nothing else: no lookup, key, signature, room name, `from` tag, card or message content. Invocation logs are off in `wrangler.jsonc` because they record request URLs, which hold room names and invite lookups.
 
 ## Wire format
 
-The wire format is the header of [`../tests/fake-relay.ts`](../tests/fake-relay.ts). That file is also an in-memory copy of the relay's behavior. In short:
+Phones continue to use the original frames. The legacy host protocol is also covered by [the in-memory relay](../tests/fake-relay.ts).
 
-- Computer: `wss://<relay>/v1/host/<room>`, subprotocols `["botkins.host.v2", "k.<public key>", "t.<unix seconds>", "s.<signature>"]`. Keys and signatures are base64url. `<room>` is `base64url(SHA-256("botkins-relay-room-v1:" + <public key text>))`, 43 characters. The signature is Ed25519 over the UTF-8 text `botkins-relay-host-v2:<room>:<unix seconds>`. The relay needs exactly one `k.`, one `t.` and one `s.` entry, a key that gives this room, a time within 300 seconds of its own, and a good signature. Anything else is 401 with no upgrade. The answer selects `botkins.host.v2` and repeats nothing else.
+- Computer (v3): offers `botkins.host.v3` with `k.<public key>`, `t.<unix seconds>`, `g.<group>` and `s.<signature>`. The group is a fresh 32-byte random value, encoded as base64url and shared by the two connections of one host instance. Both sign the UTF-8 text `botkins-relay-host-v3:<room>:<group>:<unix seconds>`. A different proven group takes the seat. The phone continues to use `botkins.phone.v1`.
+- Legacy computer (v2): `wss://<relay>/v1/host/<room>`, subprotocols `["botkins.host.v2", "k.<public key>", "t.<unix seconds>", "s.<signature>"]`. Keys and signatures are base64url. `<room>` is `base64url(SHA-256("botkins-relay-room-v1:" + <public key text>))`, 43 characters. The signature is Ed25519 over the UTF-8 text `botkins-relay-host-v2:<room>:<unix seconds>`. The relay needs exactly one `k.`, one `t.` and one `s.` entry, a key that gives this room, a time within 300 seconds of its own, and a good signature. Anything else is 401 with no upgrade. The answer selects `botkins.host.v2` and repeats nothing else.
 - Phone: `wss://<relay>/v1/room/<room>`, subprotocol `["botkins.phone.v1"]`.
-- One computer socket per room. A new one closes the old with 4000.
+- A v2 computer uses one socket. A v3 computer can attach a second authenticated socket to the same seat. A different computer taking the seat closes the previous computer’s sockets with 4000.
 - Up to 48 phone sockets, and up to 8 from one network address. A new phone socket is never turned away: when its address already has 8, that address's oldest socket is closed with 4008, then when the room has 48, the room's oldest is closed with 4008.
 - Text `ping` gets `pong` on both kinds of socket.
 - Phone to computer: `[conn 8][from 8] + the phone's message`. Computer to phone: `[conn 8] + the answer`, sent to that phone with the 8 bytes removed. An answer for a phone that is gone is dropped.
-- No computer connected: the phone gets `[0x03][id]` for each request.
+- The v3 room keeps up to 48 outstanding requests and 16 MiB of request bodies across all phones. It holds them in arrival order, including requests sent while both sockets were down. A request that exceeds either limit gets the usual offline answer. An unanswered request expires after five minutes.
+- The v3 host receives `[conn 8][from 8][0x06][request id u32]` after the room accepts an answer. It can then release the cached answer body. This acknowledgement stays between the room and the host.
+- No computer connected and no v3 reconnect window: the phone gets `[0x03][id]` for each request.
 - A phone socket closes (for any reason, also a 4008): the computer gets `[conn][from][0x04]`.
-- The computer's socket closes: every phone in the room gets `[0x05]`, so it stops waiting for answers that will not come.
+- A v2 computer disconnects, or a v3 computer exhausts its reconnect window: every phone in the room gets `[0x05]`, so it stops waiting for answers that will not come.
 - A phone's message over 6 MiB + 64 KiB (6,356,992 bytes) closes that phone with 1009. The computer's limit is 8 MiB.
 
 Other answers: `GET /` is a one-line text, `GET /v1/health` is `{"ok":true}` and `GET /join` serves the self-contained invite page. A wrong room name or any other path is 404. A plain GET on a room path is 426. A phone without its subprotocol is 400. Other unsupported methods are 404 and are counted against the request limit like everything else.
