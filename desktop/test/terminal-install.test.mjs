@@ -638,6 +638,16 @@ test("the installer and the launcher are plain sh, and the installer checks befo
   const check = readFileSync(fromRelease, "utf8");
   assert.match(check, /download=\$\{BOTKINS_E2E_RELEASE_URL:-https:\/\/github\.com\/\$REPO\/releases\/download\}/);
   assert.doesNotMatch(check, /--checksum-only|--release-fingerprint [0-9A-F]{40}/);
+  // The old version's updater does the install, so the record of it is asked for only from a
+  // version that leaves one. The script's own comparison of two releases, run as it is:
+  const newerThan = /^newer_than\(\) \{.*\}$/m.exec(check)[0];
+  const newer = (a, b) => execFileSync("sh", ["-c", newerThan + '\nif newer_than "$1" "$2"; then echo yes; else echo no; fi', "sh", a, b], { encoding: "utf8" }).trim();
+  for (const [a, b, wanted] of [["0.16.6", "0.16.5", "yes"], ["0.17.0", "0.16.5", "yes"], ["1.0.0", "0.16.5", "yes"], ["0.16.10", "0.16.9", "yes"], ["0.16.5", "0.16.5", "no"], ["0.16.4", "0.16.5", "no"], ["0.9.99", "0.16.5", "no"]]) assert.equal(newer(a, b), wanted, a + " newer than " + b);
+  assert.match(check, /^NO_RECORD_UNTIL="0\.16\.5"$/m);
+  // Up to that release the record is not asked for; what stays for every release is asked before the choice.
+  const choice = check.indexOf('if newer_than "$from" "$NO_RECORD_UNTIL"; then');
+  assert.ok(choice > 0);
+  for (const kept of ['[ "$result" = success ]', '[ ! -e "/var/lib/botkins/run/update-requested" ]', 'running_on "$to" 90', '[ -d "/opt/botkins/botkins-terminal-$from-linux-$arch" ]']) assert.ok(check.indexOf(kept) > 0 && check.indexOf(kept) < choice, kept);
   const script = readFileSync(new URL("../install/install.sh", import.meta.url), "utf8");
   // The release key's fingerprint is the one the updater checks too.
   const helper = readFileSync(new URL("../desktop/linux-service/botkins-update-helper.mjs", import.meta.url), "utf8");
