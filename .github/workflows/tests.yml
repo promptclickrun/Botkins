@@ -1,0 +1,80 @@
+# Runs each component's own tests on every pull request and on main.
+#
+# The desktop app and the terminal host are one codebase (desktop/), and the desktop suite
+# holds the terminal host's tests too. It runs on Linux and on macOS because the terminal
+# host is installed on both. A change that breaks one of them fails here before it merges.
+#
+# No job uses a secret, so a pull request from a fork runs the same checks.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Desktop and terminal host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      # Type-checks the window's code and bundles it.
+      - run: npm run build
+      - run: npm test
+
+  mobile:
+    name: Phone app
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+
+  relay:
+    name: Relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile/relay
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/relay/package-lock.json
+      - run: npm ci
+      # The tests start `wrangler dev` on the runner. It needs no account and no network.
+      - run: npm test
