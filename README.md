@@ -86,6 +86,9 @@ Pair the phone app, and your team goes with you.
 
 - **macOS, Windows and Linux.** Signed and notarized on Mac. Updates check GitHub Releases.
 - **Headless servers.** Run Botkins as a service on a computer with no screen, and use it from your phone. One command installs it, and `botkins` operates it from a terminal. See [Run Botkins from a terminal](desktop/docs/terminal.md).
+- **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. See [Botkins on Azure](deploy/azure/README.md).
+
+  [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 - **Other computers.** Pair one Botkins with another, and switch between them from the side menu.
 
 ## Privacy and security
