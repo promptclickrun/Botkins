@@ -178,7 +178,7 @@ type AppUpdate = {
   installer?: string;     // for information only
   message?: string;       // one sentence from the computer: why it can't, or what failed. Shown as it comes.
   auto?: boolean;         // present only on a host that can install by itself; false until switched on
-  last?: { at: string; from: string; to: string; ok: boolean; message?: string }; // how the last install ended, kept across the restart
+  last?: { at: string; from: string; to: string; ok: boolean; message?: string }; // how the last install ended, kept across the restart; `message` with `ok: true` is a note about an install that worked
 };
 ```
 
@@ -192,7 +192,7 @@ type AppUpdate = {
 - **No call takes a version, an address or a channel.** Where a release comes from is fixed on the computer. `setAppUpdateAuto` takes exactly one boolean; the link refuses anything else (`link-host/methods.mjs`).
 - **The owner's devices only.** A team member's device may not make these calls (`link-host/team.mjs`), and no part a member gets says more about updates than the app's version in `meta`.
 - **Directly and through the relay.** Unlike the screen grant, these calls are allowed over the relay too, for the owner's devices of either kind (a phone, or another computer's Botkins app): a server is usually reached through the relay, and starting its update from a phone is the point.
-- **Installing restarts the computer's Botkins.** The link drops and comes back, and it can drop before `installAppUpdate` answers: a client then asks `appUpdateStatus()` before it calls the install a failure. Afterwards `appUpdateStatus().last` says how it ended, a rollback too (`ok: false`, and `message` says what happened). To tell this install's `last` from an older one, compare it with the `last` the computer showed before the install, never the client's clock with `last.at`.
+- **Installing restarts the computer's Botkins.** The link drops and comes back, and it can drop before `installAppUpdate` answers: a client then asks `appUpdateStatus()` before it calls the install a failure. Afterwards `appUpdateStatus().last` says how it ended, a rollback too (`ok: false`, and `message` says what happened). `message` can also come with `ok: true`: the install worked, and the computer has one more thing to say about it (for example, that it kept its older system files). A client shows that sentence after the result, as it comes, where the person can read it, not only in a passing notice. To tell this install's `last` from an older one, compare it with the `last` the computer showed before the install, never the client's clock with `last.at`.
 - **When `canInstall` is false**, `message` says what to do instead (pull a new image, `git pull`); a client shows it as it comes.
 - **A notification.** When a computer learns of a newer release it calls `link.push.updateAvailable(version)` (`link-host/push.mjs`). Each owner device whose notifications are on and whose `updates` choice is on (the default) gets one sealed alert for that version, titled with the computer's name: "Botkins 0.16.5 is available." A member device never gets it. A device counts as told only once the relay took its alert, so one that missed it is told at a later check. The alert's kind is `"update"`, and its unsealed line is "An update is available"; a tap opens the computer's page.
 

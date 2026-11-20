@@ -114,7 +114,7 @@ export function AppUpdates({ name }: { name: string }) {
         <Group>
           <Row leading={<IconTile icon={Download} color={colors.ink2} />} title={update ? "Botkins " + update.current : "Botkins"} subtitle={line || " "} subtitleLines={4} />
           {!!last && update?.last && (
-            <Row leading={<IconTile icon={History} color={update.last.ok ? colors.ink2 : colors.danger} />} title="Last update" subtitle={last} subtitleLines={3} />
+            <Row leading={<IconTile icon={History} color={update.last.ok ? colors.ink2 : colors.danger} />} title="Last update" subtitle={last} subtitleLines={6} />
           )}
           {typeof update?.auto === "boolean" && (
             <Row
