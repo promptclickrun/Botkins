@@ -5,8 +5,9 @@ import { link } from "./link.mjs";
 import { workspace } from "./workspace.mjs";
 import { settings } from "./settings.mjs";
 import { install } from "./install.mjs";
+import { tui } from "./tui.mjs";
 
-export const COMMANDS = { ...service, ...install, ...link, ...workspace, ...settings };
+export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...settings };
 
 /** The command the leading words name, and those words: { command, path }, or null. */
 export function find(words) {

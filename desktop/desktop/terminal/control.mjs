@@ -325,6 +325,14 @@ export function controlApi(service) {
       return { ...view, seen: mark(view) };
     },
     "chat.stop": ([chatId]) => void handlers.stop(String(chatId)),
+    /** The latest runs (a turn of a chat, a routine's run), newest first. */
+    "runs.list": ([limit = 20]) =>
+      state()
+        .runs.slice(0, Math.max(1, Math.min(200, Number(limit) || 20)))
+        .map((run) => {
+          const chat = state().chats.find((entry) => entry.id === run.chatId);
+          return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
+        }),
     "chat.respond": ([requestId, answer]) => handlers.respond(String(requestId), answer),
 
     // ── Routines ─────────────────────────────────────────────────────────────────────────────
