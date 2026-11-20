@@ -30,7 +30,11 @@ export async function githubToken() {
 //
 // Each way either answers or says why not (`cause` below). An answer is never made out of a
 // failure: a list that did not come is not an empty list, and a file that could not be asked
-// about is not a file that isn't there. Only GitHub saying 404 means "not there".
+// about is not a file that isn't there. Only GitHub saying 404 means "not there", and for the
+// list itself not even that: every release is published with its list, so a release without
+// one is a broken release, and "this release has no build for your system" would be the wrong
+// thing to say of it. Only the Mac app goes on without the list, because the two files it
+// installs from are not in it and are asked for by name.
 
 /** A way that did not answer, with the reason as a clause that fits after "GitHub did not say which release is the latest:". */
 const cause = (clause) => Object.assign(new Error("GitHub did not say which release is the latest: " + clause + ". Try again later."), { clause });
@@ -73,7 +77,7 @@ async function latestFromPage({ fetcher, mac }) {
   if (!version || tag !== "v" + version || semver.prerelease(version)) throw cause("its release page did not lead to a stable release of Botkins (HTTP " + page.status + ")");
   const base = "https://github.com/promptclickrun/Botkins/releases/download/" + tag + "/";
   const sums = await ask(fetcher, base + "SHA256SUMS", { redirect: "follow" });
-  if (!sums.ok && sums.status !== 404) throw cause("the list of what Botkins " + version + " holds did not come (HTTP " + sums.status + ")");
+  if (!sums.ok && !(mac && sums.status === 404)) throw cause("the list of what Botkins " + version + " holds did not come (HTTP " + sums.status + ")");
   const listed = sums.ok ? (await sums.text()).split(/\r?\n/).map((line) => /^[a-f0-9]{64} [ *](.+)$/.exec(line)?.[1]).filter(Boolean) : [];
   const others = ["SHA256SUMS.asc", ...(mac ? ["latest-mac.yml", ...["arm64", "x64", "universal"].map((arch) => "Botkins-" + version + "-" + arch + "-mac.zip")] : [])];
   // A file that is there answers with a redirect to where it is kept; one that is not, with 404.

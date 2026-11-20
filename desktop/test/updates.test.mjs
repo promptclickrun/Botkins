@@ -156,10 +156,17 @@ test("the latest release is found from the release page, which GitHub does not l
   // And when the API can't answer either, nothing is made up: the lookup fails, and says both reasons.
   await assert.rejects(latestRelease({ fetcher: github({ api: 403, files: { SHA256SUMS: 503 } }).fetcher, token: "" }), (error) => error.message === "GitHub did not say which release is the latest: the list of what Botkins 0.17.0 holds did not come (HTTP 503); its API is not answering this address for now (it limits how often one address may ask). Try again later.");
   await assert.rejects(latestRelease({ fetcher: github({ api: 403, files: { "latest-mac.yml": 500 } }).fetcher, token: "", mac: true }), /it did not say whether Botkins 0\.17\.0 has latest-mac\.yml \(HTTP 500\); its API is not answering/);
-  // 404 is GitHub saying "not there", and is an answer: a release with no list of its own, a file it doesn't have.
+  // 404 is GitHub saying "not there", and for a file asked for by name that is an answer (the Mac
+  // zips this release doesn't have, above). The Mac app goes on without the list too: the files it
+  // installs from are not in it.
   const bare = github({ files: { SHA256SUMS: 404 } });
   assert.deepEqual(await latestRelease({ fetcher: bare.fetcher, token: "", mac: true }), { version: "0.17.0", assets: ["SHA256SUMS.asc", "latest-mac.yml", "Botkins-0.17.0-arm64-mac.zip"] });
   assert.ok(bare.asked.every((line) => !line.includes("api:")));
+  // For everyone else a release with no list is a broken release, not one with no build for this
+  // system: the page way gives up, the API has its turn, and when it has no answer either, that is what is said.
+  const listless = github({ api: fromApi, files: { SHA256SUMS: 404 } });
+  assert.deepEqual(await latestRelease({ fetcher: listless.fetcher, token: "" }), { version: "0.17.0", assets: ["from-the-api"] });
+  await assert.rejects(latestRelease({ fetcher: github({ api: 403, files: { SHA256SUMS: 404 } }).fetcher, token: "" }), /the list of what Botkins 0\.17\.0 holds did not come \(HTTP 404\); its API is not answering this address/);
 
   // A page that leads to something that is no stable release of this project is not followed: a
   // pre-release, a tag that is no version, and the same path at another address (a network's own sign-in page, say).
