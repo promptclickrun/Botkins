@@ -1,6 +1,8 @@
 # Run Botkins on a headless server with a virtual display
 
-This setup is for a phone that must see and control a screen on the server. It runs Electron on a virtual display. It is the Compose profile `display`.
+For a server with no screen, use the terminal host. It needs no Electron and no display, and you install and operate it from a terminal. See [Run Botkins from a terminal](../docs/terminal.md).
+
+The setup on this page is for a phone that must see and control a screen on the server. It runs Electron on a virtual display. It is the Compose profile `display`.
 
 From the `desktop` folder, run `docker compose --profile display up --build -d`. To use the profile for each Compose command, put `COMPOSE_PROFILES=display` in `.env`. Compose starts the phone link and a separate Electron workspace on an Xvfb display with Openbox. By default, the link listens on the server's loopback interface at port 59851. An iOS Simulator on the same Mac can use that address.
 
