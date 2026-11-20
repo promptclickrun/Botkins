@@ -204,9 +204,12 @@ export function controlApi(service) {
     "events.wait": ([after = 0], { signal }) => service.waitForChange({ after: Number(after) || 0, ms: WAIT_MS, signal }),
 
     // ── Pairing and devices ──────────────────────────────────────────────────────────────────
-    async "pair.start"() {
+    /** Opens a pairing code: for the link's own few minutes, or for `minutes` (1 to 1440) when the code is handed on. */
+    async "pair.start"([{ minutes } = {}] = []) {
       if (!link.status().enabled) throw new ControlError("Phone access is off. Turn it on with `botkins config set link.enabled true`.", "LINK_OFF");
-      return pairingView(link.startPairing());
+      if (minutes === undefined) return pairingView(link.startPairing());
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 24 * 60) throw new ControlError("A pairing code stays open for 1 to 1440 minutes.", "BAD_ARGUMENT");
+      return pairingView(link.startPairing(minutes * 60_000));
     },
     "pair.status": () => {
       const status = link.status();

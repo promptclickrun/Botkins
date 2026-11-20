@@ -5,6 +5,8 @@
 import type { HostDisplay, HostPart, ScreenMode } from "@/link/types";
 
 export const GRANT_CAPABILITY = "screen-grant-v1";
+/** A headless host behind its own relay: it takes the same calls through that relay. */
+export const GRANT_RELAY_CAPABILITY = "screen-grant-relay-v1";
 
 /** The three levels, in order, with what each lets phones do. The statement is shown before a level is turned on. */
 export const LEVELS: { value: ScreenMode; label: string; grants: string }[] = [
@@ -34,15 +36,16 @@ export type ScreenAccess =
 /**
  * What the Screen section shows, from what the computer says and what this phone has.
  * - `capable`: the computer names "screen-grant-v1" (only a headless host does).
- * - `route`: how the phone reaches it now. The computer takes these calls only directly.
+ * - `route`: how the phone reaches it now. The computer takes these calls only directly, unless it
+ *   says it takes them through its own relay too (`overRelay`: it names "screen-grant-relay-v1").
  * - `pinned`: the computer keeps this phone's presence key; `hasKey`: the phone still has its half;
  *   `canProve`: the phone can ask for Face ID or a passcode at all.
  */
-export function screenAccess(input: { host?: HostPart; capable: boolean; online: boolean; route: "direct" | "relay" | null; pinned: boolean; hasKey: boolean; canProve: boolean }): ScreenAccess {
+export function screenAccess(input: { host?: HostPart; capable: boolean; overRelay?: boolean; online: boolean; route: "direct" | "relay" | null; pinned: boolean; hasKey: boolean; canProve: boolean }): ScreenAccess {
   const { host } = input;
   if (!host) return { kind: "none" };
   if (!host.headless || !input.capable) return { kind: "computer", level: host.screen };
-  const reach: Blocked | null = !input.online ? "offline" : input.route === "relay" ? "relay" : null;
+  const reach: Blocked | null = !input.online ? "offline" : input.route === "relay" && !input.overRelay ? "relay" : null;
   // Turning it off needs no proof: only that the computer hears it directly.
   const turnOn: Blocked | null = reach ?? (!input.canProve ? "passcode" : !input.pinned || !input.hasKey ? "pair-again" : null);
   return { kind: "phone", level: host.screen, display: host.display ?? { available: false }, ...(host.screenSetBy && { setBy: host.screenSetBy }), turnOn, turnOff: reach };

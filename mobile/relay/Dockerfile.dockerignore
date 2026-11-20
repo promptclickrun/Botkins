@@ -1,0 +1,6 @@
+*
+!relay/package.json
+!relay/package-lock.json
+!relay/src
+!relay/node
+!link-host/vendor/qrcode.mjs

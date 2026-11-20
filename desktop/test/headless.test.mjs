@@ -14,7 +14,7 @@ import { workspaceActions } from "../desktop/headless/workspace.mjs";
 import { phonePage } from "../desktop/phonepage.mjs";
 import { REMOTE_METHODS } from "../desktop/link/methods.mjs";
 import { LinkHost } from "../desktop/link/index.mjs";
-import { LinkClient, pair } from "../desktop/remote/link-client.mjs";
+import { LinkClient, isRelayHost, pair, parsePairingUrl, relayFetch } from "../desktop/remote/link-client.mjs";
 import { Workspace } from "./starter.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: process.platform === "win32" && "The Docker host uses Unix sockets." }, fn);
@@ -102,6 +102,7 @@ test("the headless server opens and renews a private pairing file and clears it 
     const next = await pairing(first.code);
     const address = new URL(next.url).searchParams.get("h");
     assert.match(address, /^127\.0\.0\.1:\d+$/);
+    assert.equal(next.link, null);
     await pair(fetch, { hosts: [address], code: next.code }, { name: "Fixture phone", platform: "ios" });
     assert.equal(existsSync(owner), false);
     assert.equal(JSON.parse(readFileSync(join(dir, "link", "link.json"), "utf8")).devices.length, 1);
@@ -110,6 +111,134 @@ test("the headless server opens and renews a private pairing file and clears it 
     await exit;
     close();
     actions.unsubscribe();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The next two tests run the self-hosted relay, which has its own packages: `npm ci` in mobile/relay.
+test("with BOTKINS_RELAY_URL the headless server pairs a phone through a self-hosted relay alone", async () => {
+  const { createRelay } = await import("../../mobile/relay/node/server.mjs");
+  const relay = createRelay({ limits: false, pushUpstream: "off" });
+  await new Promise((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const relayUrl = "http://127.0.0.1:" + relay.address().port;
+  const dir = mkdtempSync(join(tmpdir(), "bk-"));
+  const owner = join(dir, "owner", "pairing.json");
+  const actions = workspaceActions(stubWorkspace().backend, () => {});
+  const socket = join(dir, "backend.sock");
+  const close = await listenWorkspace(socket, actions.dispatch);
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../desktop/headless/host.mjs", import.meta.url))], {
+    env: { ...process.env, BOTKINS_DATA_DIR: join(dir, "link"), BOTKINS_OWNER_PAIRING_FILE: owner, BOTKINS_WORKSPACE_SOCKET: socket, BOTKINS_PAIR_ADDRESS: "", BOTKINS_LINK_PORT: "0", BOTKINS_RELAY_URL: relayUrl, BOTKINS_PAIR_TTL_MS: String(30 * 60_000) },
+    stdio: "ignore",
+  });
+  const exit = once(child, "exit");
+  try {
+    let value;
+    for (let i = 0; i < 400 && child.exitCode === null; i++) {
+      if (existsSync(owner)) {
+        value = JSON.parse(readFileSync(owner, "utf8"));
+        if (value.relay?.connected) break;
+      }
+      await delay(25);
+    }
+    assert.equal(value?.relay?.connected, true, "the server reached the relay");
+    assert.ok(value.expiresAt - Date.now() > 25 * 60_000, "the pairing lasts as long as asked");
+    // Only the relay's entry: no container address that a phone could never reach.
+    const hosts = new URL(value.url).searchParams.get("h").split(",");
+    assert.equal(hosts.length, 1);
+    assert.ok(isRelayHost(hosts[0]));
+    // The web link carries the same pairing query, in the fragment only.
+    const link = new URL(value.link);
+    assert.equal(link.origin + link.pathname, relayUrl + "/pair");
+    assert.equal(link.search, "");
+    assert.equal(link.hash.slice(1), new URL(value.url).search.slice(1));
+    // A phone that can't reach the server directly pairs through the relay.
+    const away = () => Promise.reject(new TypeError("Network request failed"));
+    const target = parsePairingUrl(value.url);
+    await pair(relayFetch(away, { idleMs: 500 }), target, { name: "Away phone", platform: "ios" });
+    for (let i = 0; i < 200 && existsSync(owner); i++) await delay(25);
+    assert.equal(existsSync(owner), false);
+    assert.equal(JSON.parse(readFileSync(join(dir, "link", "link.json"), "utf8")).devices.length, 1);
+  } finally {
+    child.kill("SIGTERM");
+    await exit;
+    close();
+    actions.unsubscribe();
+    await new Promise((resolve) => relay.close(resolve));
+    relay.closeAllConnections?.();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("with BOTKINS_RELAY_OWN a phone that only has the server's own relay sets the screen level and sees the display", async () => {
+  const { createRelay } = await import("../../mobile/relay/node/server.mjs");
+  const relay = createRelay({ limits: false, pushUpstream: "off" });
+  await new Promise((resolve) => relay.listen(0, "127.0.0.1", resolve));
+  const relayUrl = "http://127.0.0.1:" + relay.address().port;
+  const dir = mkdtempSync(join(tmpdir(), "bk-"));
+  const owner = join(dir, "owner", "pairing.json");
+  const actions = workspaceActions(stubWorkspace().backend, () => {});
+  const socket = join(dir, "backend.sock");
+  const close = await listenWorkspace(socket, actions.dispatch);
+  const start = (own) =>
+    spawn(process.execPath, [fileURLToPath(new URL("../desktop/headless/host.mjs", import.meta.url))], {
+      env: { ...process.env, BOTKINS_DATA_DIR: join(dir, own ? "own" : "other"), BOTKINS_OWNER_PAIRING_FILE: owner, BOTKINS_WORKSPACE_SOCKET: socket, BOTKINS_PAIR_ADDRESS: "", BOTKINS_LINK_PORT: "0", BOTKINS_RELAY_URL: relayUrl, ...(own && { BOTKINS_RELAY_OWN: "1" }) },
+      stdio: "ignore",
+    });
+  const away = () => Promise.reject(new TypeError("Network request failed"));
+  /** Pairs through the relay alone, with a presence key, and opens a session. */
+  const meet = async (child) => {
+    let value;
+    for (let i = 0; i < 400 && child.exitCode === null; i++) {
+      if (existsSync(owner)) {
+        value = JSON.parse(readFileSync(owner, "utf8"));
+        if (value.relay?.connected) break;
+      }
+      await delay(25);
+    }
+    assert.equal(value?.relay?.connected, true, "the server reached the relay");
+    const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const fetcher = relayFetch(away, { idleMs: 500 });
+    const pairing = await pair(fetcher, parsePairingUrl(value.url), { name: "Away phone", platform: "ios", presenceKey: key.publicKey.export({ type: "spki", format: "der" }).toString("base64url") });
+    const parts = {};
+    const phone = new LinkClient(pairing, { fetch: fetcher, onState() {}, onParts: (next) => Object.assign(parts, next) });
+    phone.start();
+    for (let i = 0; i < 400 && !(parts.meta && parts.host); i++) await delay(25);
+    return { phone, parts, pairing, key };
+  };
+  const stop = async (child) => {
+    const exit = once(child, "exit");
+    child.kill("SIGTERM");
+    await exit;
+    rmSync(owner, { force: true });
+  };
+  let child = start(true);
+  try {
+    const { phone, parts, pairing, key } = await meet(child);
+    assert.equal(phone.route, "relay");
+    assert.ok(parts.meta.capabilities.includes("screen-grant-v1") && parts.meta.capabilities.includes("screen-grant-relay-v1"));
+    assert.deepEqual(parts.host.display, { available: true, kind: "xvfb" });
+    assert.equal((await phone.call("link.screen.info")).canView, false);
+    const { ticket } = await phone.call("link.screen.grant.begin", "view");
+    const challenge = JSON.stringify(["botkins-screen-grant-v1", pairing.serverId, pairing.deviceId, "view", ticket]);
+    assert.deepEqual(await phone.call("link.screen.grant.confirm", ticket, sign("sha256", Buffer.from(challenge), key.privateKey).toString("base64url")), { screen: "view" });
+    const shot = await phone.call("link.screen.frame", { display: "1" });
+    assert.equal(shot.jpeg, Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64"));
+    assert.deepEqual(await phone.call("link.screen.revoke"), { screen: "off" });
+    phone.stop();
+    await stop(child);
+
+    // Without it the same relay is only a relay: the level can't be set through it.
+    child = start(false);
+    const plain = await meet(child);
+    assert.equal(plain.parts.meta.capabilities.includes("screen-grant-relay-v1"), false);
+    await assert.rejects(plain.phone.call("link.screen.grant.begin", "view"), /can't be changed through the relay/);
+    plain.phone.stop();
+  } finally {
+    await stop(child);
+    close();
+    actions.unsubscribe();
+    await new Promise((resolve) => relay.close(resolve));
+    relay.closeAllConnections?.();
     rmSync(dir, { recursive: true, force: true });
   }
 });

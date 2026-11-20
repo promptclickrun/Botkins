@@ -1,0 +1,379 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.48.1.52935",
+      "templateHash": "11726604028100460208"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Where the VM runs."
+      }
+    },
+    "vmName": {
+      "type": "string",
+      "defaultValue": "botkins",
+      "minLength": 1,
+      "maxLength": 40,
+      "metadata": {
+        "description": "The VM name. Also the start of its DNS name unless dnsLabel is set."
+      }
+    },
+    "screenAccess": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Screen access. Off: the terminal host, one small service with no display, which is what most servers need. On: Botkins runs on a virtual display, so a paired phone can see and control the server's screen. That needs a bigger VM image and a longer first build."
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "",
+      "allowedValues": [
+        "",
+        "Standard_D2als_v6",
+        "Standard_D2ls_v6",
+        "Standard_D2als_v7",
+        "Standard_D2ls_v7",
+        "Standard_D2as_v6",
+        "Standard_D2s_v6",
+        "Standard_D2as_v7",
+        "Standard_D2s_v7",
+        "Standard_D4as_v6",
+        "Standard_D4s_v6"
+      ],
+      "metadata": {
+        "description": "The VM size. Leave empty for the default: 2 vCPUs and 4 GB for the terminal host, 2 vCPUs and 8 GB with Screen access. Screen access builds and runs Electron and needs 8 GB."
+      }
+    },
+    "serverName": {
+      "type": "string",
+      "defaultValue": "Botkins on Azure",
+      "maxLength": 60,
+      "metadata": {
+        "description": "The name your phone shows for this server."
+      }
+    },
+    "certificateEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. An email address for the HTTPS certificate. It only receives certificate notices, and lets the server fall back to ZeroSSL if Let's Encrypt is busy."
+      }
+    },
+    "dnsLabel": {
+      "type": "string",
+      "defaultValue": "",
+      "maxLength": 50,
+      "metadata": {
+        "description": "The DNS label: the server becomes <label>.<region>.cloudapp.azure.com. Leave empty for a generated one."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "botkins",
+      "metadata": {
+        "description": "The VM administrator account."
+      }
+    },
+    "sshPublicKey": {
+      "type": "string",
+      "metadata": {
+        "description": "Your SSH public key (ssh-ed25519 or ssh-rsa). Password sign-in is off."
+      }
+    },
+    "sshAllowedFrom": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "An IP address or CIDR range allowed to reach SSH. Leave empty to keep SSH closed (use Azure Run Command instead)."
+      }
+    },
+    "claudeCodeToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. A Claude Code token from `claude setup-token`, so Claude works without signing in on the server."
+      }
+    },
+    "githubCopilotToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. A GitHub token with Copilot access, so GitHub Copilot works without signing in on the server."
+      }
+    },
+    "pushNotifications": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Forward notifications for the Botkins iPhone app through relay.botkins.app. Notifications are sealed for your phone; the Botkins relay only passes them to Apple. Off: no notifications, and nothing leaves your server for Botkins' infrastructure."
+      }
+    },
+    "repositoryUrl": {
+      "type": "string",
+      "defaultValue": "https://github.com/promptclickrun/Botkins",
+      "metadata": {
+        "description": "The Botkins sources to install."
+      }
+    },
+    "repositoryRef": {
+      "type": "string",
+      "defaultValue": "main",
+      "metadata": {
+        "description": "The branch or tag to install."
+      }
+    },
+    "setupRun": {
+      "type": "string",
+      "defaultValue": "[utcNow()]",
+      "metadata": {
+        "description": "Change this to run the setup again on an existing deployment (for example to get a new pairing link)."
+      }
+    }
+  },
+  "variables": {
+    "$fxv#0": "#!/bin/bash\n# Installs Botkins with its own relay on a fresh Ubuntu 24.04 VM, then prints one line: the\n# pairing link. By default it installs the terminal host (one small service, no display). With\n# Screen access it installs Botkins on a virtual display instead. The Azure template runs this\n# through the Custom Script extension and returns that line as the deployment's output. It is\n# safe to run again: it updates and restarts.\n#\n# Settings come from the environment, base64-encoded so no value needs quoting:\n#   BK_FQDN          the VM's public DNS name (required)\n#   BK_EMAIL         optional: a certificate contact address (also enables ZeroSSL as a fallback CA)\n#   BK_NAME          the name phones show for this server\n#   BK_SCREEN        \"true\" for Screen access: Botkins on a virtual display the phone can see and\n#                    control. Anything else installs the terminal host, which has no screen.\n#   BK_REPO, BK_REF  where the Botkins sources come from\n#   BK_CLAUDE_TOKEN  optional: a Claude Code token (`claude setup-token`)\n#   BK_GITHUB_TOKEN  optional: a GitHub token for Copilot\n#   BK_PUSH          https://relay.botkins.app (forward notifications) or \"off\"\nset -euo pipefail\n\ndecode() { if [ -n \"${1:-}\" ]; then printf '%s' \"$1\" | base64 -d; fi; }\nFQDN=$(decode \"${BK_FQDN:-}\")\nEMAIL=$(decode \"${BK_EMAIL:-}\")\nNAME=$(decode \"${BK_NAME:-}\")\nREPO=$(decode \"${BK_REPO:-}\")\nREF=$(decode \"${BK_REF:-}\")\nCLAUDE_TOKEN=$(decode \"${BK_CLAUDE_TOKEN:-}\")\nGITHUB_TOKEN=$(decode \"${BK_GITHUB_TOKEN:-}\")\nPUSH=$(decode \"${BK_PUSH:-}\")\nSCREEN=$(decode \"${BK_SCREEN:-}\")\n# The tokens stay in this shell: nothing this script starts inherits them.\nunset BK_CLAUDE_TOKEN BK_GITHUB_TOKEN\nif [ \"$SCREEN\" = true ]; then MODE=screen; else MODE=terminal; fi\n: \"${NAME:=Botkins server}\" \"${REPO:=https://github.com/promptclickrun/Botkins}\" \"${REF:=main}\" \"${PUSH:=https://relay.botkins.app}\"\nif [ -z \"$FQDN\" ]; then echo \"BK_FQDN is required.\" >&2; exit 64; fi\n\nLOG=/var/log/botkins-install.log\nexec 3>&1 >>\"$LOG\" 2>&1\nsay() { echo \"[$(date -u +%H:%M:%S)] $*\"; }\nfail() { say \"FAILED: $*\"; echo \"Botkins setup failed: $*. See $LOG on the VM.\" >&3; exit 1; }\ntrap 'fail \"line $LINENO\"' ERR\n\nsay \"Installing Docker\"\nexport DEBIAN_FRONTEND=noninteractive\nif command -v docker >/dev/null && ! docker compose version >/dev/null 2>&1 && dpkg -s docker.io >/dev/null 2>&1; then\n  # A machine that already runs Ubuntu's own Docker keeps it, and whatever it runs: only Compose\n  # and Buildx are added. Docker's packages would replace the engine and restart its containers.\n  for i in $(seq 1 30); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 5; done\n  apt-get update -q\n  apt-get install -yq ca-certificates curl git docker-compose-v2 docker-buildx\nelif ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then\n  for i in $(seq 1 30); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 5; done\n  apt-get update -q\n  apt-get install -yq ca-certificates curl git\n  install -m 0755 -d /etc/apt/keyrings\n  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc\n  chmod a+r /etc/apt/keyrings/docker.asc\n  echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" >/etc/apt/sources.list.d/docker.list\n  apt-get update -q\n  apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin\nfi\nsystemctl enable --now docker\ncommand -v git >/dev/null || { apt-get update -q; apt-get install -yq git; }\n\nsay \"Fetching Botkins ($REF)\"\nSRC=/opt/botkins/src\nif [ -d \"$SRC/.git\" ]; then\n  git -C \"$SRC\" fetch -q --depth 1 origin \"$REF\"\n  git -C \"$SRC\" checkout -q --force FETCH_HEAD\nelse\n  rm -rf \"$SRC\"\n  install -d -m 0755 /opt/botkins\n  git init -q \"$SRC\"\n  git -C \"$SRC\" remote add origin \"$REPO\"\n  git -C \"$SRC\" fetch -q --depth 1 origin \"$REF\"\n  git -C \"$SRC\" checkout -q FETCH_HEAD\nfi\nsay \"At $(git -C \"$SRC\" rev-parse --short HEAD)\"\n\n# A server that ran the other setup stops it first. The two keep separate data, and both stay on disk.\nif [ -f /etc/botkins/botkins.env ]; then\n  WAS=$(sed -n 's/^BOTKINS_MODE=//p' /etc/botkins/botkins.env | head -n 1)\n  if [ \"${WAS:-screen}\" != \"$MODE\" ]; then\n    say \"Stopping the earlier setup (${WAS:-screen})\"\n    # By the project's name, so it does not depend on which files started it. Volumes are kept.\n    docker compose -p botkins down --remove-orphans || true\n  fi\nfi\n\nsay \"Writing settings ($MODE)\"\ninstall -d -m 0700 /etc/botkins\numask 077\n{\n  printf 'BOTKINS_FQDN=%s\\n' \"$FQDN\"\n  printf 'BOTKINS_HOST_NAME=%s\\n' \"$NAME\"\n  printf 'BOTKINS_PUSH_UPSTREAM=%s\\n' \"$PUSH\"\n  printf 'BOTKINS_MODE=%s\\n' \"$MODE\"\n} >/etc/botkins/botkins.env\n{\n  if [ -n \"$EMAIL\" ]; then printf '{\\n\\temail %s\\n}\\n\\n' \"$EMAIL\"; fi\n  cat \"$SRC/deploy/azure/Caddyfile\"\n} >/etc/botkins/Caddyfile\nchmod 0644 /etc/botkins/Caddyfile\n# With Screen access, only the workspace container reads these. An empty file is fine: sign in\n# later. The terminal host keeps a sign-in in its own vault instead (below), so the file stays empty.\n{\n  if [ \"$MODE\" = screen ]; then\n    [ -n \"$CLAUDE_TOKEN\" ] && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\\n' \"$CLAUDE_TOKEN\"\n    [ -n \"$GITHUB_TOKEN\" ] && printf 'BOTKINS_COPILOT_TOKEN=%s\\n' \"$GITHUB_TOKEN\"\n  fi\n  true\n} >/etc/botkins/providers.env\numask 022\ninstall -m 0755 \"$SRC/deploy/azure/botkins\" /usr/local/bin/botkins\n\nsay \"Building and starting (this takes several minutes the first time)\"\nbotkins compose build\nbotkins compose up -d --remove-orphans\n\nif [ \"$MODE\" = terminal ]; then\n  say \"Waiting for the certificate, then configuring the terminal host\"\n  # The host starts once its relay answers over HTTPS (wait-for-relay.sh), so this covers the\n  # time Caddy needs to get its certificate.\n  ready=\n  for i in $(seq 1 450); do\n    if botkins host status --json >/dev/null 2>&1; then ready=1; break; fi\n    sleep 2\n  done\n  [ -n \"$ready\" ] || fail \"the Botkins host did not start. Check: botkins logs caddy relay botkins\"\n  # The host's own settings, through its own command: its name, and this server's relay.\n  botkins host config set name \"$NAME\"\n  botkins host config set relay.url \"https://$FQDN\"\n  botkins host relay on\n\n  # A sign-in given at deployment goes to the host on standard input, never on a command line,\n  # and the host keeps it sealed in its vault. A token the provider turns down is not kept: the\n  # server still works, and `botkins host providers login <provider>` signs in later.\n  signin() { # <provider> <token>\n    if printf '%s' \"$2\" | botkins host providers login \"$1\" --token; then say \"Signed in: $1\"; else say \"The $1 token was not accepted. Sign in later: botkins host providers login $1\"; fi\n  }\n  if [ -n \"$GITHUB_TOKEN\" ]; then signin copilot \"$GITHUB_TOKEN\"; fi\n  if [ -n \"$CLAUDE_TOKEN\" ]; then\n    # The terminal host's image has no Claude Code. It goes in the data volume, once.\n    say \"Installing Claude Code\"\n    if botkins install-claude; then signin claude \"$CLAUDE_TOKEN\"; else say \"Claude Code did not install. Later: botkins install-claude, then botkins host providers login claude\"; fi\n  fi\nfi\n\nsay \"Waiting for the certificate and the relay, then opening a pairing code\"\n# A fresh code every run, so a rerun of the deployment hands out a new link with its full lifetime.\nlink=$(botkins pair --wait 900) || fail \"the server did not reach its relay at https://$FQDN\"\nsay \"Ready\"\necho \"$link\" >&3\n",
+    "size": "[if(not(empty(parameters('vmSize'))), parameters('vmSize'), if(parameters('screenAccess'), 'Standard_D2as_v6', 'Standard_D2als_v6'))]",
+    "label": "[if(empty(parameters('dnsLabel')), toLower(format('{0}-{1}', take(replace(parameters('vmName'), '_', '-'), 30), uniqueString(resourceGroup().id, parameters('vmName')))), toLower(parameters('dnsLabel')))]",
+    "fqdn": "[format('{0}.{1}.cloudapp.azure.com', variables('label'), parameters('location'))]",
+    "b64": {
+      "fqdn": "[base64(variables('fqdn'))]",
+      "email": "[base64(parameters('certificateEmail'))]",
+      "name": "[base64(parameters('serverName'))]",
+      "repo": "[base64(parameters('repositoryUrl'))]",
+      "ref": "[base64(parameters('repositoryRef'))]",
+      "claude": "[base64(parameters('claudeCodeToken'))]",
+      "github": "[base64(parameters('githubCopilotToken'))]",
+      "push": "[base64(if(parameters('pushNotifications'), 'https://relay.botkins.app', 'off'))]",
+      "screen": "[base64(if(parameters('screenAccess'), 'true', 'false'))]"
+    },
+    "setupCommand": "[format('echo {0} | base64 -d > /root/botkins-install.sh && BK_FQDN={1} BK_EMAIL={2} BK_NAME={3} BK_REPO={4} BK_REF={5} BK_CLAUDE_TOKEN={6} BK_GITHUB_TOKEN={7} BK_PUSH={8} BK_SCREEN={9} bash /root/botkins-install.sh', base64(variables('$fxv#0')), variables('b64').fqdn, variables('b64').email, variables('b64').name, variables('b64').repo, variables('b64').ref, variables('b64').claude, variables('b64').github, variables('b64').push, variables('b64').screen)]",
+    "webRules": [
+      {
+        "name": "https",
+        "properties": {
+          "priority": 100,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourceAddressPrefix": "Internet",
+          "sourcePortRange": "*",
+          "destinationAddressPrefix": "*",
+          "destinationPortRange": "443"
+        }
+      },
+      {
+        "name": "http-certificate-check",
+        "properties": {
+          "priority": 110,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourceAddressPrefix": "Internet",
+          "sourcePortRange": "*",
+          "destinationAddressPrefix": "*",
+          "destinationPortRange": "80"
+        }
+      }
+    ],
+    "sshRule": "[if(empty(parameters('sshAllowedFrom')), createArray(), createArray(createObject('name', 'ssh', 'properties', createObject('priority', 120, 'direction', 'Inbound', 'access', 'Allow', 'protocol', 'Tcp', 'sourceAddressPrefix', parameters('sshAllowedFrom'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '22'))))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}-nsg', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": "[concat(variables('webRules'), variables('sshRule'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}-vnet', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.20.0.0/24"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "default",
+            "properties": {
+              "addressPrefix": "10.20.0.0/24",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('vmName')))]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('vmName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}-ip', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[variables('label')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}-nic', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig",
+            "properties": {
+              "subnet": {
+                "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('vmName'))), '2024-05-01').subnets[0].id]"
+              },
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-ip', parameters('vmName')))]"
+              },
+              "privateIPAllocationMethod": "Dynamic"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-ip', parameters('vmName')))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('vmName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-07-01",
+      "name": "[parameters('vmName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[variables('size')]"
+        },
+        "securityProfile": {
+          "securityType": "TrustedLaunch",
+          "uefiSettings": {
+            "secureBootEnabled": true,
+            "vTpmEnabled": true
+          }
+        },
+        "osProfile": {
+          "computerName": "[take(replace(parameters('vmName'), '_', '-'), 15)]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+              "publicKeys": [
+                {
+                  "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername'))]",
+                  "keyData": "[parameters('sshPublicKey')]"
+                }
+              ]
+            },
+            "patchSettings": {
+              "patchMode": "AutomaticByPlatform",
+              "assessmentMode": "AutomaticByPlatform"
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "ubuntu-24_04-lts",
+            "sku": "server",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage",
+            "diskSizeGB": 64,
+            "managedDisk": {
+              "storageAccountType": "StandardSSD_LRS"
+            },
+            "deleteOption": "Delete"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]",
+              "properties": {
+                "deleteOption": "Delete"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2024-07-01",
+      "name": "[format('{0}/{1}', parameters('vmName'), 'botkins-setup')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "forceUpdateTag": "[parameters('setupRun')]",
+        "protectedSettings": {
+          "commandToExecute": "[variables('setupCommand')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "pairingLink": {
+      "type": "string",
+      "metadata": {
+        "description": "Open this on your phone, or scan its QR code from a computer, to pair the Botkins app. It works once and expires in an hour."
+      },
+      "value": "[trim(split(split(reference(resourceId('Microsoft.Compute/virtualMachines/extensions', parameters('vmName'), 'botkins-setup'), '2024-07-01').instanceView.statuses[0].message, '[stdout]')[1], '[stderr]')[0])]"
+    },
+    "relayUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Your server's relay. Phones reach the server through it."
+      },
+      "value": "[format('https://{0}', variables('fqdn'))]"
+    },
+    "newPairingLink": {
+      "type": "string",
+      "metadata": {
+        "description": "Run this to get a new pairing link later."
+      },
+      "value": "[format('az vm run-command invoke -g {0} -n {1} --command-id RunShellScript --scripts \"botkins pair\" --query \"value[0].message\" -o tsv', resourceGroup().name, parameters('vmName'))]"
+    },
+    "sshCommand": {
+      "type": "string",
+      "value": "[if(empty(parameters('sshAllowedFrom')), format('SSH is closed. Use: az vm run-command invoke -g {0} -n {1} --command-id RunShellScript --scripts \"botkins status\"', resourceGroup().name, parameters('vmName')), format('ssh {0}@{1}', parameters('adminUsername'), variables('fqdn')))]"
+    }
+  }
+}

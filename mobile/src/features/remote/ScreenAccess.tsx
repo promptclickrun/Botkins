@@ -14,19 +14,20 @@ import { canProvePresence, hasPresenceKey, PresenceCancelled } from "@/state/pre
 import { showToast, useApp } from "@/state/store";
 import { Group, IconTile, Label, Row, space, T, useTheme } from "@/ui";
 import { grantScreen, revokeScreen } from "./grant";
-import { BLOCKED, confirmWords, displayLine, displayNote, GRANT_CAPABILITY, levelOf, LEVELS, screenAccess, setByLine } from "./grantWords";
+import { BLOCKED, confirmWords, displayLine, displayNote, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, levelOf, LEVELS, screenAccess, setByLine } from "./grantWords";
 
 export function ScreenAccess() {
   const { colors } = useTheme();
   const host = usePart("host");
   const capable = useCapability(GRANT_CAPABILITY);
+  const overRelay = useCapability(GRANT_RELAY_CAPABILITY);
   const online = useOnline();
   const route = useApp((state) => state.route);
   const pairing = useApp((state) => state.pairing);
   const phones = usePart("phones");
   const [busy, setBusy] = useState<ScreenMode>();
   if (!pairing) return null;
-  const access = screenAccess({ host, capable, online, route, pinned: phones?.[pairing.deviceId]?.presence === true, hasKey: hasPresenceKey(pairing.presenceTag), canProve: canProvePresence() });
+  const access = screenAccess({ host, capable, overRelay, online, route, pinned: phones?.[pairing.deviceId]?.presence === true, hasKey: hasPresenceKey(pairing.presenceTag), canProve: canProvePresence() });
   if (access.kind === "none") return null;
 
   if (access.kind === "computer")

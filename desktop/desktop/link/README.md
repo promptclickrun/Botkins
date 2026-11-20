@@ -13,7 +13,7 @@ These modules let a paired phone running Botkins use a desktop app over the loca
 | `credentials.mjs` | Credentials: an encrypted vault (`credentials.json`) and links to password-manager fields. A call can use one without the phone seeing it. |
 | `managers.mjs` | The password-manager drivers: 1Password (`op`), Bitwarden (`bw`) and Proton Pass (`pass-cli`). |
 | `screen.mjs` | Showing the screen to a phone: frames with change numbers, who is watching, and clicks and typing when the person allows them. |
-| `grant.mjs` | On a headless host only: a phone sets what phones may do with the screen (`screen-grant-v1`). A ticket, the phone's signature made after Face ID or the passcode, a direct connection, a phone. The file's header has the rules. |
+| `grant.mjs` | On a headless host only: a phone sets what phones may do with the screen (`screen-grant-v1`). A ticket, the phone's signature made after Face ID or the passcode, a direct connection, a phone. A server behind its own relay (`relay.own`) takes the calls through that relay too (`screen-grant-relay-v1`). The file's header has the rules. |
 | `input.mjs` | Checks what a phone sends to control the screen, and posts it on macOS, Windows and Linux. |
 | `prs.mjs` | Pull requests of a chat's project, read with the GitHub CLI (`gh`). |
 | `uploads.mjs` | Files a phone sends for a message, kept per phone. A photo a phone tool brings over is one of these. |

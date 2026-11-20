@@ -56,6 +56,9 @@ function stopDev() {
 }
 process.on("exit", stopDev);
 
+// RELAY_TARGET=node runs this same suite against the self-hosted relay (../node/server.mjs).
+const NODE_RELAY = process.env.RELAY_TARGET === "node";
+
 async function startDev() {
   const port = await freePort();
   const inspector = await freePort();
@@ -63,9 +66,9 @@ async function startDev() {
   // No Cloudflare credentials reach the child, and nothing is sent to anyone.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("CLOUDFLARE_")));
   Object.assign(env, { WRANGLER_SEND_METRICS: "false", CI: "1", NO_COLOR: "1" });
-  child = spawn(
-    process.execPath,
-    [
+  const args = NODE_RELAY
+    ? [path.join(root, "node/server.mjs")]
+    : [
       path.join(root, "node_modules/wrangler/bin/wrangler.js"),
       "dev",
       "--local",
@@ -76,9 +79,10 @@ async function startDev() {
       "--show-interactive-dev-session=false",
       // Every socket of a test run comes from one address, so the per-network limits are off here.
       "--var=RATE_LIMITS:off",
-    ],
-    { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
-  );
+    ];
+  // The Node relay trusts the address header only when told to, as it does behind its proxy.
+  if (NODE_RELAY) Object.assign(env, { PORT: String(port), HOST: "127.0.0.1", RATE_LIMITS: "off", CLIENT_IP_HEADER: "cf-connecting-ip", DATA_DIR: stateDir, PUSH_UPSTREAM: "off" });
+  child = spawn(process.execPath, args, { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
   base = `http://127.0.0.1:${port}`;
@@ -86,7 +90,7 @@ async function startDev() {
 
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error("wrangler dev stopped early:\n" + output);
+    if (child.exitCode !== null) throw new Error("The relay stopped early:\n" + output);
     try {
       const response = await fetch(base + "/v1/health");
       if (response.ok) return;
@@ -95,7 +99,7 @@ async function startDev() {
     }
     await sleep(250);
   }
-  throw new Error("wrangler dev did not answer in time:\n" + output);
+  throw new Error("The relay did not answer in time:\n" + output);
 }
 
 // ---- helpers ---------------------------------------------------------------------------------
@@ -288,7 +292,7 @@ const upgrade = (protocols) => ({
 
 // ---- tests -----------------------------------------------------------------------------------
 
-describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
+describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_000 }, () => {
   before(startDev, { timeout: 120_000 });
   after(async () => {
     for (const client of open) client.close();
@@ -918,6 +922,8 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     assert.ok((await p.next()).equals(bytes(0x02, u32(3), Buffer.from([0, 200]))));
     p.close();
     assert.equal((await h.next()).length, 17);
+    // The Node relay keeps rooms in memory and has nothing to hibernate.
+    if (NODE_RELAY) return;
     const wakes = (output.match(/"event":"wake"/g) ?? []).length - wakesBefore;
     // The object logs "wake" each time it starts: after the pause it must have started again, which
     // proves it hibernated and the sockets, tags and attachments survived.
@@ -979,6 +985,8 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
       replacement.send(bytes(replay.subarray(0, 8), reply));
       assert.deepEqual(await p.next(), reply);
     }
+    // The Node relay keeps the held requests in memory: there is no hibernation to wake from.
+    if (NODE_RELAY) return;
     assert.ok((output.match(/"event":"wake"/g) ?? []).length > wakesBefore, "the room must wake during recovery");
   });
 

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { DEVICE_TOOLS } from "../link-host/device.mjs";
-import { cleanPresenceKey, GRANT_CAPABILITY, grantMessage as hostMessage, NO_PRESENCE_KEY, NOT_A_PHONE, NOT_CONFIRMED, NOT_DIRECT, NOT_HEADLESS, ScreenGrants, TICKET_GONE, TICKET_MS } from "../link-host/grant.mjs";
+import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, grantMessage as hostMessage, NO_PRESENCE_KEY, NOT_A_PHONE, NOT_CONFIRMED, NOT_DIRECT, NOT_HEADLESS, ScreenGrants, TICKET_GONE, TICKET_MS } from "../link-host/grant.mjs";
 import { LinkHost } from "../link-host/index.mjs";
 import { REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
@@ -286,6 +286,59 @@ test("only a phone, only one that paired directly with a key, and never through 
   await server.link.stop();
 });
 
+test("a server behind its own relay keeps a phone's key and takes its grant through that relay; any other relay stays closed", async () => {
+  const relay = new FakeRelay();
+  // `own`: the app says this relay is the server's own and the only way in (a cloud server).
+  const server = await host({ relay: { url: "https://relay.test", WebSocket: relay.WebSocket, own: true } });
+  server.link.setRelay({ enabled: true });
+  await until(() => server.link.status().relay.connected, "the server to reach its relay");
+  const away: FetchLike = () => Promise.reject(new TypeError("Network request failed"));
+  const viaRelay = relayFetch(away, { WebSocket: relay.WebSocket as any, idleMs: 200 });
+  const hosts = server.link.hosts().filter(isRelayHost);
+
+  // A phone that only ever reaches the server through the relay: pairing keeps its presence key.
+  const key = presence();
+  const pairing = await pair(viaRelay, { hosts, code: server.link.startPairing().code }, { name: "Colt's phone", platform: "ios", presenceKey: key.spki });
+  const phone = follow({ ...pairing, hosts }, viaRelay);
+  await until(() => !!phone.parts.host && !!phone.parts.meta, "the phone through the relay", 10_000);
+  assert.equal(phone.client.route, "relay");
+  assert.equal((await recordOf(phone)).presence, true);
+  const capabilities = (phone.parts.meta as Meta).capabilities;
+  assert.ok(capabilities.includes(GRANT_CAPABILITY) && capabilities.includes(GRANT_RELAY_CAPABILITY));
+
+  // The same ticket and signature as on the server's own network. Without the signature, nothing.
+  const first = await phone.client.call<ScreenTicket>("link.screen.grant.begin", "view");
+  await refused(phone.client.call("link.screen.grant.confirm", first.ticket, signed(presence().privateKey, grantMessage(pairing.serverId, pairing.deviceId, "view", first.ticket))), NOT_CONFIRMED);
+  assert.equal(server.link.status().screen.mode, "off");
+  const { ticket } = await phone.client.call<ScreenTicket>("link.screen.grant.begin", "view");
+  assert.deepEqual(await phone.client.call("link.screen.grant.confirm", ticket, signed(key.privateKey, grantMessage(pairing.serverId, pairing.deviceId, "view", ticket))), { screen: "view" });
+  assert.equal(server.link.status().screen.mode, "view");
+  assert.deepEqual(await phone.client.call("link.screen.revoke"), { screen: "off" });
+
+  // The relay turned off: the host no longer says it, whatever the app passed.
+  server.link.setRelay({ enabled: false });
+  assert.equal(server.link.ownRelay(), false);
+  phone.client.stop();
+  await server.link.stop();
+
+  // A host on a relay that is not its own names no such thing (the test above holds what it refuses),
+  // and a computer with its own window never does.
+  const plain = await host({ relay: { url: "https://relay.test", WebSocket: new FakeRelay().WebSocket } });
+  plain.link.setRelay({ enabled: true });
+  const local = follow(await pairPhone(plain.at, plain.link, presence().spki));
+  await online(local);
+  assert.equal((local.parts.meta as Meta).capabilities.includes(GRANT_RELAY_CAPABILITY), false);
+  const windowed = await host({ headless: false, relay: { url: "https://relay.test", WebSocket: new FakeRelay().WebSocket, own: true } });
+  windowed.link.setRelay({ enabled: true });
+  const desk = follow(await pairPhone(windowed.at, windowed.link, presence().spki));
+  await online(desk);
+  assert.equal((desk.parts.meta as Meta).capabilities.includes(GRANT_RELAY_CAPABILITY), false);
+  await refused(desk.client.call("link.screen.grant.begin", "view"), NOT_HEADLESS);
+  for (const each of [local, desk]) each.client.stop();
+  await plain.link.stop();
+  await windowed.link.stop();
+});
+
 test("set on the computer itself, the level carries no phone's name", async () => {
   const server = await host();
   const key = presence();
@@ -384,6 +437,10 @@ test("the gate: a level can be turned on only directly, by a phone that can prov
   assert.deepEqual(blocked({}), [null, null]);
   assert.deepEqual(blocked({ online: false }), ["offline", "offline"]);
   assert.deepEqual(blocked({ route: "relay" }), ["relay", "relay"]);
+  // A server that takes these calls through its own relay: the relay is no bar, and the rest still is.
+  assert.deepEqual(blocked({ route: "relay", overRelay: true }), [null, null]);
+  assert.deepEqual(blocked({ route: "relay", overRelay: true, pinned: false }), ["pair-again", null]);
+  assert.deepEqual(blocked({ route: "relay", overRelay: true, online: false }), ["offline", "offline"]);
   // No passcode on the phone, no key kept by the computer, or the phone's half gone: on is closed, off is not.
   assert.deepEqual(blocked({ canProve: false }), ["passcode", null]);
   assert.deepEqual(blocked({ pinned: false }), ["pair-again", null]);

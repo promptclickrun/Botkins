@@ -281,7 +281,14 @@ test("a phone pairs from the terminal's code, chats with a bot and is listed, re
   const { client, dir, env } = await service(t);
   await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });
   assert.deepEqual(await client.call("devices.list"), []);
+  // A code that is handed on (a deployment's pairing link) stays open as long as it is asked to, within a day.
+  const handed = await client.call("pair.start", { minutes: 60 });
+  const left = new Date(handed.expiresAt) - Date.now();
+  assert.ok(left > 59 * 60_000 && left <= 60 * 60_000, "open for an hour");
+  for (const minutes of [0, 1441, 1.5, "60"]) await assert.rejects(client.call("pair.start", { minutes }), { code: "BAD_ARGUMENT" });
+  assert.equal((await client.call("pair.status")).pairing.code, handed.code, "a refused request leaves the open code alone");
   const pairing = await client.call("pair.start");
+  assert.ok(new Date(pairing.expiresAt) - Date.now() <= 5 * 60_000, "the link's own five minutes");
   assert.match(pairing.url, /^botkins:\/\/pair\?/);
   assert.match(pairing.code, /^[0-9A-Z]{8,}$/);
   assert.ok(pairing.qr.split("\n").length > 10, "a QR code a terminal can draw");
