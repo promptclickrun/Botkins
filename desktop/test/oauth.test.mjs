@@ -1,7 +1,7 @@
 // Signing in to a remote MCP server with OAuth (desktop/oauth.mjs, desktop/integrations.mjs),
 // against the local stand-in server in test/oauth-server.mjs.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
@@ -117,9 +117,62 @@ test("a token is renewed without the person, and a sign-in that has ended asks t
   assert.equal(view().auth.needsSignIn, true);
 });
 
+test("one Sign in uses the approved public client, exact callback and scopes without registration", async (t) => {
+  const { remote, dir, ws, id, ask, opened, open } = await setup(t, {
+    registration: false, staticClient: { id: "approved" }, scope: "all.tools",
+  });
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const redirectUri = "http://127.0.0.1:" + probe.address().port + "/botkins/return";
+  await new Promise((resolve) => probe.close(resolve));
+  const file = join(dir, "approved.json");
+  const previous = process.env.BOTKINS_MCP_OAUTH_CLIENTS_FILE;
+  process.env.BOTKINS_MCP_OAUTH_CLIENTS_FILE = file;
+  t.after(() => {
+    if (previous === undefined) delete process.env.BOTKINS_MCP_OAUTH_CLIENTS_FILE;
+    else process.env.BOTKINS_MCP_OAUTH_CLIENTS_FILE = previous;
+  });
+  const profile = { serverUrl: remote.url, issuer: remote.origin, clientId: "approved", redirectUri, scopes: ["tools.read", "user.read"] };
+  const provision = (changes) => writeFileSync(file, JSON.stringify({ clients: [{ ...profile, ...changes }] }));
+  provision({});
+  assert.equal((await ws.integrations.signIn(id)).signedIn, true);
+  assert.equal(opened.length, 1);
+  const params = new URL(opened[0]).searchParams;
+  assert.equal(params.get("client_id"), profile.clientId);
+  assert.equal(params.get("redirect_uri"), redirectUri);
+  assert.equal(params.get("scope"), "tools.read user.read");
+  assert.equal(params.get("code_challenge_method"), "S256");
+  assert.ok(params.get("state"));
+  const exchange = new URLSearchParams(remote.state.log.find((r) => r.path === "/token").body);
+  assert.equal(exchange.get("redirect_uri"), redirectUri);
+  assert.ok(exchange.get("code_verifier"));
+  assert.equal(exchange.has("client_secret"), false);
+  assert.ok((await ask("refresh", open())).accessToken);
+  assert.equal(remote.state.log.some((r) => r.path === "/register"), false);
+
+  for (const changes of [
+    { serverUrl: remote.url + "/other" }, { issuer: remote.origin + "/another-issuer" },
+    { redirectUri: "https://outside.example/callback" }, { scopes: ["read write"] },
+  ]) {
+    provision(changes);
+    await assert.rejects(ws.integrations.signIn(id), /administrator|server operator/i);
+    assert.equal(opened.length, 1);
+  }
+  // A fixed registered callback cannot quietly move to a different port.
+  provision({});
+  const occupied = createServer();
+  await new Promise((resolve) => occupied.listen(Number(new URL(redirectUri).port), "127.0.0.1", resolve));
+  try {
+    await assert.rejects(ws.integrations.signIn(id), /port/);
+    assert.equal(opened.length, 1);
+  } finally {
+    await new Promise((resolve) => occupied.close(resolve));
+  }
+});
+
 test("a server that doesn't register apps takes a client ID entered by hand, with its secret in the vault", async (t) => {
   const { remote, ws, id, view, ask, files } = await setup(t, { registration: false, staticClient: { id: "botkins-desktop", secret: "client-s3cret" } }, { oauthPort: 0 });
-  await assert.rejects(ws.integrations.signIn(id), /doesn't let apps register themselves\. Ask whoever runs it for a client ID/);
+  await assert.rejects(ws.integrations.signIn(id), /administrator or the server operator to configure an approved OAuth client/);
   assert.deepEqual(view().auth, { type: "none" }, "a failed sign-in changes nothing");
   assert.throws(() => ws.integrations.saveServer({ id, name: "words", type: "http", url: remote.url, oauth: { clientSecret: "x" } }), /A client secret needs its client ID/);
   ws.integrations.saveServer({ id, name: "words", type: "http", url: remote.url, oauth: { clientId: "botkins-desktop", clientSecret: "client-s3cret", scope: "tools.read" } });

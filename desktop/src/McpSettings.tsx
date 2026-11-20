@@ -840,7 +840,7 @@ function ServerSheet({ server, close, saved }: { server?: McpServer; close: () =
               </button>
               {advanced && (
                 <div className="int-advanced">
-                  <small className="int-hint">Only for a server that asks you to create an app yourself. Most servers don't need these.</small>
+                  <small className="int-hint">Enter a client here if your server operator gave you one. Leave these fields empty to use automatic setup.</small>
                   <label>
                     Client ID
                     <input className="int-mono" spellCheck={false} value={clientId} onChange={(e) => setClientId(e.target.value)} />
@@ -864,7 +864,7 @@ function ServerSheet({ server, close, saved }: { server?: McpServer; close: () =
                       Scopes <span className="optional">Optional</span>
                     </span>
                     <input className="int-mono" spellCheck={false} placeholder="read write" value={scope} onChange={(e) => setScope(e.target.value)} />
-                    <small className="int-hint">Separate them with spaces. Leave empty to use the server's own.</small>
+                    <small className="int-hint">Separate them with spaces. Leave empty to use the default scopes.</small>
                   </label>
                   <div className="int-field">
                     <span className="int-field-label">Redirect address</span>

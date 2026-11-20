@@ -8,6 +8,7 @@
 // sign in or out and reads `status()`.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { approvedClient } from "./oauth-clients.mjs";
 
 /** Where the browser hands the sign-in back. A fixed port, so it can be registered by hand too. */
 export const REDIRECT_PORT = 47823;
@@ -277,7 +278,7 @@ export class McpOAuth {
     };
   }
   /** Listens on this computer for the browser's answer. Resolves { port, wait(state), close }. */
-  listen(port) {
+  listen(port, callback) {
     return new Promise((resolve, reject) => {
       let settle;
       const answer = new Promise((done, fail) => (settle = { done, fail }));
@@ -296,8 +297,8 @@ export class McpOAuth {
           return html(400, "Not found", "This address only finishes a Botkins sign-in.");
         }
         const host = String(request.headers.host ?? "");
-        if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host)) return html(400, "Not found", "This address only finishes a Botkins sign-in.");
-        if (request.method !== "GET" || url.pathname !== "/callback") return html(404, "Not found", "This address only finishes a Botkins sign-in.");
+        if (callback ? host !== callback.host : !/^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host)) return html(400, "Not found", "This address only finishes a Botkins sign-in.");
+        if (request.method !== "GET" || url.pathname !== (callback?.pathname ?? "/callback")) return html(404, "Not found", "This address only finishes a Botkins sign-in.");
         const params = url.searchParams;
         if (!expected || params.get("state") !== expected) return html(400, "Sign-in didn't match", "This answer doesn't belong to the sign-in Botkins started. Start again from Botkins.");
         if (params.get("error")) {
@@ -310,7 +311,7 @@ export class McpOAuth {
       });
       server.once("error", reject);
       server.on("clientError", (_error, socket) => socket.destroy());
-      server.listen(port, "127.0.0.1", () => {
+      server.listen(port, callback?.hostname === "[::1]" ? "::1" : "127.0.0.1", () => {
         const timer = setTimeout(() => settle.fail(new Error("Sign-in timed out. Try again.")), SIGN_IN_TIMEOUT);
         resolve({
           port: server.address().port,
@@ -371,19 +372,23 @@ export class McpOAuth {
       const found = await this.discover(server, hint);
       const { meta } = found;
       const saved = this.read(server) ?? {};
-      const wanted = scope || found.scope;
+      const approved = client ? null : await approvedClient(server.url, meta.issuer);
+      const wanted = approved ? approved.scope : scope || found.scope;
+      const port = approved ? Number(approved.callback.port || 80) : this.port;
+      const missingClient = () => new Error("Ask your administrator or the server operator to configure an approved OAuth client for " + server.name + ". You can also enter a client ID in this server's advanced sign-in settings.");
+      if (!approved && !client && !meta.registration_endpoint && !saved.registered) throw missingClient();
       // The answer comes back to a fixed port. When something else holds it, a registration made
       // for another port can be made again; one typed in by hand can't.
       try {
-        listener = await this.listen(this.port);
+        listener = await this.listen(port, approved?.callback);
       } catch (error) {
-        if (client || !meta.registration_endpoint) throw new Error("Botkins couldn't listen for the sign-in on port " + this.port + ". Close what is using it and try again.");
+        if (approved || client || !meta.registration_endpoint) throw new Error("Botkins couldn't listen for the sign-in on port " + port + ". Close what is using it and try again.");
         listener = await this.listen(0);
       }
       flow.cancel = listener.cancel;
       if (flow.cancelled) throw new Error("Sign-in was cancelled.");
-      const redirect = redirectUri(listener.port);
-      let app = client;
+      const redirect = approved?.redirectUri ?? redirectUri(listener.port);
+      let app = client ?? approved;
       // A secret the person entered was for one sign-in server. It is never sent to another one the
       // server names later; entering it again accepts the new one.
       if (client?.clientSecret && client.boundTo && new URL(meta.token_endpoint).origin !== client.boundTo)
@@ -394,8 +399,7 @@ export class McpOAuth {
       if (!app && saved.registered && saved.clientId && saved.redirectUri === redirect && saved.issuer === found.issuer && saved.tokenEndpoint === meta.token_endpoint)
         app = { clientId: saved.clientId, clientSecret: saved.clientSecret, registered: true };
       if (!app) {
-        if (!meta.registration_endpoint)
-          throw new Error(server.name + " doesn't let apps register themselves. Ask whoever runs it for a client ID, and enter it in this server's sign-in settings.");
+        if (!meta.registration_endpoint) throw missingClient();
         const reply = await this.json(meta.registration_endpoint, {
           method: "POST",
           headers: { "content-type": "application/json", accept: "application/json" },
