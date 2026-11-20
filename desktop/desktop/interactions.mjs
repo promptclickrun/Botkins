@@ -2,6 +2,8 @@
 // Requests arrive in the provider-neutral shape of desktop/providers/provider.mjs.
 import { createHash, randomUUID } from "node:crypto";
 
+import { secureAnswer } from "./secure-input.mjs";
+
 export { displayValue } from "./display.mjs";
 
 export class Interactions {
@@ -12,13 +14,14 @@ export class Interactions {
   snapshot() {
     return [...this.entries.values()].map((e) => e.view);
   }
-  request(chat, task, view) {
+  request(chat, task, view, timeout) {
     if (task.stopped || task.ended || this.ws.closing)
       return Promise.resolve({ action: "cancel" });
     const id = randomUUID();
     return new Promise((resolve) => {
       this.entries.set(id, {
-        view: { ...view, id, chatId: chat.id, botId: chat.botId },
+        view: { botId: chat.botId, ...view, id, chatId: chat.id },
+        timer: timeout && setTimeout(() => this.respond(id, { action: "cancel" }), timeout).unref(),
         resolve,
       });
       this.ws.notify();
@@ -46,11 +49,14 @@ export class Interactions {
         (!view.freeform && !view.choices.includes(answer.value)))
     )
       throw new Error("Choose an answer or enter a response.");
+    if (view.kind === "secure") answer = secureAnswer(view, answer);
+    clearTimeout(entry.timer);
     this.entries.delete(id);
     entry.resolve(answer);
     this.ws.notify();
   }
   cancel(chatId) {
+    this.ws.secureInputs?.cancel(chatId);
     for (const { view } of this.entries.values())
       if (!chatId || view.chatId === chatId)
         this.respond(view.id, { action: "cancel" });

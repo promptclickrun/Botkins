@@ -66,3 +66,43 @@ export function guardViewerSession(session) {
   session.setDevicePermissionHandler?.(() => false);
   session.on("will-download", (event) => event.preventDefault());
 }
+
+// This function runs in Chromium's isolated world in the guest's current main document.
+// The debugger passes values as structured arguments. The script source contains no secrets.
+function fillNamedInputs(url, fields, values) {
+  if (location.href !== url || document.visibilityState !== "visible") return false;
+  const inputs = [];
+  for (const field of fields) {
+    if (!Object.hasOwn(values, field.key)) continue;
+    const matches = [...document.getElementsByName(field.key)].filter(input => input instanceof HTMLInputElement &&
+      ["text", "email", "password", "tel", "search", "number"].includes(input.type) && input.checkVisibility() && !input.disabled && !input.readOnly);
+    if (matches.length !== 1) return false;
+    inputs.push([matches[0], values[field.key]]);
+  }
+  for (const [input, value] of inputs) input.value = value;
+  for (const [input] of inputs) {
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  return true;
+}
+
+export async function fillSecurePage(guest, plan, values, signal) {
+  const debuggerApi = guest.debugger;
+  if (guest.isDestroyed() || guest.getURL() !== plan.url || debuggerApi.isAttached()) throw new Error("Open the requested page.");
+  debuggerApi.attach();
+  try {
+    const { frameTree } = await debuggerApi.sendCommand("Page.getFrameTree");
+    const { executionContextId } = await debuggerApi.sendCommand("Page.createIsolatedWorld", {
+      frameId: frameTree.frame.id, worldName: "Botkins secure input",
+    });
+    signal.throwIfAborted();
+    const { result, exceptionDetails } = await debuggerApi.sendCommand("Runtime.callFunctionOn", {
+      executionContextId, functionDeclaration: fillNamedInputs.toString(), returnByValue: true,
+      arguments: [plan.url, plan.fields, values].map(value => ({ value })),
+    });
+    if (exceptionDetails || result?.value !== true) throw new Error("The requested fields are unavailable.");
+  } finally {
+    if (!guest.isDestroyed() && debuggerApi.isAttached()) debuggerApi.detach();
+  }
+}

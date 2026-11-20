@@ -18,6 +18,8 @@ function accessToken() {
 }
 
 exports.default = async function sign(config) {
+  // Microsoft's own binaries keep Microsoft's signature, as on the Mac (build.mac.signIgnore).
+  if (/[\\/]node_modules[\\/]@microsoft[\\/]/.test(config.path)) return;
   if (!account) throw new Error("Set BOTKINS_SIGN_ACCOUNT to your signing account name.");
   if (!profile) throw new Error("Set BOTKINS_SIGN_PROFILE to the Artifact Signing certificate profile name.");
   execFileSync(

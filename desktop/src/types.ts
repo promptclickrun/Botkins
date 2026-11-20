@@ -1339,7 +1339,8 @@ export type AgentRequest = {
   id: string;
   chatId: string;
   botId: string;
-  kind: "permission" | "question" | "form";
+  kind: "permission" | "question" | "form" | "secure";
+  fields?: { key: string; label: string; kind: "password" | "code" | "secret" | "text"; hint?: string; optional?: true }[];
   title: string;
   label?: string;
   preview?: string;

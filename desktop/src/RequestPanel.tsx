@@ -114,7 +114,8 @@ export default function RequestPanel({
   // computer puts the value in (desktop/savedcredentials.mjs). "" is the question's own answer.
   const secretQuestion = req.kind === "question" && looksSecret(req.title, req.label);
   const secretFields = req.kind === "form" ? fields.filter(([name, field]) => isSecretField(name, field)).map(([name]) => name) : [];
-  const saved = useSavedCredentials(secretQuestion || secretFields.length > 0);
+  const secure = req.kind === "secure";
+  const saved = useSavedCredentials(secure || secretQuestion || secretFields.length > 0);
   const [picked, setPicked] = useState<Record<string, Picked>>({});
   const pick = (key: string, next: Picked | undefined) =>
     setPicked((now) => {
@@ -129,7 +130,7 @@ export default function RequestPanel({
     try {
       await window.botkins.respond(req.id, payload);
     } catch (e) {
-      setError(String(e));
+      setError(secure ? "The secure answer could not be sent. Check the fields and try again." : String(e));
       setBusy(false);
     }
   }
@@ -138,18 +139,18 @@ export default function RequestPanel({
       className="request-panel"
       role="region"
       aria-label={
-        req.kind === "permission" ? "Approval request" : "Clarifying question"
+        secure ? "Secure input request" : req.kind === "permission" ? "Approval request" : "Clarifying question"
       }
     >
       <div className="request-heading">
-        {req.kind === "permission" ? (
+        {secure || req.kind === "permission" ? (
           <ShieldCheck size={17} />
         ) : (
           <MessageCircleQuestion size={17} />
         )}
         <strong>
           {bot}{" "}
-          {req.kind === "permission" ? "needs approval" : "has a question"}
+          {secure ? "requests secure input" : req.kind === "permission" ? "needs approval" : "has a question"}
         </strong>
         {count > 1 && <small>1 of {count}</small>}
       </div>
@@ -161,6 +162,16 @@ export default function RequestPanel({
             // Nothing secret stays on screen once it is on its way.
             if (secretQuestion) setValue("");
             void reply({ action: "answer", value: answer });
+          } else if (secure) {
+            const data = new FormData(e.currentTarget);
+            const content: Record<string, unknown> = {};
+            for (const { key } of req.fields ?? []) {
+              const entry = picked[key]?.ref ?? data.get(key);
+              if (entry) content[key] = entry;
+            }
+            HTMLFormElement.prototype.reset.call(e.currentTarget);
+            setPicked({});
+            void reply({ action: "accept", content });
           } else if (req.kind === "form") {
             const data = new FormData(e.currentTarget);
             const content = Object.fromEntries(
@@ -207,7 +218,8 @@ export default function RequestPanel({
           <p className="request-title">{req.title}</p>
           {req.label && <small className="request-label">{req.label}</small>}
           {req.preview && <pre>{req.preview}</pre>}
-          {req.detail && (
+          {secure && <p className="secure-destination">{req.detail}</p>}
+          {req.detail && !secure && (
             <details
               className="request-raw"
               open={req.preview ? undefined : true}
@@ -271,6 +283,20 @@ export default function RequestPanel({
               )}
             </>
           )}
+          {secure && req.fields?.map(field => (
+            <div className="scred-field" key={field.key}>
+              <label>
+                {field.label}{field.optional && " (optional)"}
+                {field.hint && <small>{field.hint}</small>}
+                <input name={field.key} type={field.kind === "text" ? "text" : "password"}
+                  autoComplete={field.kind === "code" ? "one-time-code" : "off"}
+                  autoCapitalize="none" spellCheck={false} maxLength={32000}
+                  required={!field.optional && !picked[field.key]} disabled={busy || !!picked[field.key]} />
+              </label>
+              <CredentialChoice label={field.label} saved={saved} picked={picked[field.key]}
+                pick={next => pick(field.key, next)} disabled={busy} />
+            </div>
+          ))}
           {req.kind === "form" && (
             <>
               {req.url && (
@@ -356,7 +382,7 @@ export default function RequestPanel({
               className="primary"
               disabled={busy || (req.kind === "question" && !value.trim() && !picked[""])}
             >
-              Send answer
+              {secure ? "Allow this use" : "Send answer"}
             </button>
           )}
         </div>
