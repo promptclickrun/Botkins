@@ -8,7 +8,7 @@ Open **Home** to chat with your bots. **Today** holds panels they publish and ma
 
 ## Using Botkins
 
-To run Botkins on a server and view or control its virtual display from a paired phone, see the [headless Docker setup](desktop/README.md).
+To run Botkins on a server with no screen, install the terminal host: one command installs it as a service, and you operate it with `botkins` from a terminal. See [Run Botkins from a terminal](docs/terminal.md). If a paired phone must view or control a display on the server, use the [Docker setup with a virtual display](desktop/README.md).
 
 Open **Settings → Marketplace → Plugins** to search GitHub’s plugin catalogs or add your own marketplace. Review the commands, hooks and remote servers a plugin declares, choose the bots that can use it, then install it. **Add from your computer** copies a local plugin into Botkins and leaves it off until you review and enable it. Installed plugins have controls for settings, bot access, updates and removal. [Create a plugin](docs/PLUGINS.md).
 
