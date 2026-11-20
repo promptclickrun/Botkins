@@ -13,9 +13,13 @@ import { LinkHost, qrPath, REMOTE_METHODS } from "../desktop/link/index.mjs";
 
 const source = (file) => readFileSync(new URL("../desktop/" + file, import.meta.url), "utf8");
 const preload = new Set([...source("preload.cjs").matchAll(/^ {2}"([\w.]+)",$/gm)].map((m) => m[1]));
-const handlers = new Set([...source("main.mjs").matchAll(/^ {6}(?:([\w]+)|"([\w.]+)"): /gm)].map((m) => m[1] ?? m[2]));
+// The window's calls: the workspace's own, which a phone's calls are among (the `handlers` of
+// desktop/runtime.mjs), and the ones only the window makes (desktop/main.mjs).
+const shared = source("runtime.mjs");
+const table = shared.slice(shared.indexOf("  const handlers = {"), shared.indexOf("\n  };", shared.indexOf("  const handlers = {")));
+const handlers = new Set([...table.matchAll(/^ {4}(?:([\w]+)|"([\w.]+)"): /gm), ...source("main.mjs").matchAll(/^ {6}(?:([\w]+)|"([\w.]+)"): /gm)].map((m) => m[1] ?? m[2]));
 // The same shared handler factory serves local IPC and the paired-device dispatcher.
-if (source("main.mjs").includes("...pluginHandlers(workspace.plugins, savedCredentials)")) {
+if (shared.includes("...pluginHandlers(workspace.plugins, savedCredentials)")) {
   for (const name of Object.keys(pluginHandlers({}, {}))) handlers.add(name);
 }
 // The calls only Settings › Phone makes. A phone must never be able to make them.
