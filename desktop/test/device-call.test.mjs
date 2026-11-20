@@ -87,3 +87,23 @@ test("a team member's message is marked as theirs", async (t) => {
   await call("send", [chatId, "Help with this"], { principal: avery });
   assert.deepEqual(ws.chat(chatId).messages[0].author, { memberId: "m_avery", name: "Avery" });
 });
+
+test("a team member's message leaves the owner's earlier messages alone", async (t) => {
+  const { ws, call } = open(t);
+  const chatId = await call("createChat", ["pip"], { principal: avery });
+  await ws.send(chatId, "From the owner");
+  await call("send", [chatId, "From Avery"], { principal: avery });
+  const said = ws.chat(chatId).messages.filter((message) => message.role === "user").map((message) => [message.text, message.author?.name]);
+  assert.deepEqual(said, [["From the owner", undefined], ["From Avery", "Avery"]]);
+});
+
+test("a team member's answer that leaves no line in the chat marks nobody else's message", async (t) => {
+  const { ws, call } = open(t);
+  const chatId = await call("createChat", ["pip"], { principal: avery });
+  await ws.send(chatId, "From the owner");
+  // An approval asked outside a run writes no receipt.
+  const allowed = ws.interactions.permission(ws.chat(chatId), { stopped: false }, { kind: "shell", title: "Run a command", detail: "ls" });
+  await call("respond", [ws.snapshot().requests[0].id, { action: "approve" }], { principal: avery });
+  assert.deepEqual(await allowed, { allow: true, interactive: true });
+  assert.equal(ws.chat(chatId).messages.find((message) => message.role === "user").author, undefined);
+});
