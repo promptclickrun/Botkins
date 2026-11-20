@@ -43,7 +43,8 @@ import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artif
 import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, REMOTE_HOSTS, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
-import { FOLDERS, Folders, deviceArgs } from "./folders.mjs";
+import { FOLDERS, Folders } from "./folders.mjs";
+import { deviceCall } from "./device-call.mjs";
 import { PLUGINS, pluginHandlers } from "./plugins.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
@@ -1217,32 +1218,9 @@ else
       // Optional context for a live voice: bounded bot profile files and the person's chosen name;
       // no location is read on the desktop without a separate permissioned source.
       liveContext: ({ chatId, botId }) => liveContextFor(workspace, { chatId, botId }),
-      // LinkHost only passes names in REMOTE_METHODS. A project's folder sent by a paired device
-      // must be one the folder browser could have shown, as for the calls that pick a folder.
-      call: async (name, args, context = {}) => {
-        const checked = await deviceArgs(folders, name, args);
-        const responseChatId = name === "respond" ? workspace.state.requests.find((item) => item.id === args[0])?.chatId : null;
-        const principal = context.principal;
-        const callArgs =
-          principal?.kind === "member" && name === "send"
-            ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: { memberId: principal.memberId, name: principal.name } }]
-            : checked;
-        const result = await handlers[name](...callArgs);
-        if (principal?.kind === "member") {
-          if (["createChat", "createGroupChat", "forkChat"].includes(name) && typeof result === "string") {
-            const chat = workspace.state.chats.find((item) => item.id === result);
-            if (chat) chat.createdBy = principal.memberId;
-          }
-          if (name === "send" || name === "respond") {
-            const chatId = name === "send" ? args[0] : responseChatId;
-            const chat = workspace.state.chats.find((item) => item.id === chatId);
-            const message = [...(chat?.messages ?? [])].reverse().find((item) => item.role === "user" && !item.author);
-            if (message) message.author = { memberId: principal.memberId, name: principal.name };
-          }
-          workspace.save();
-        }
-        return result;
-      },
+      // LinkHost only passes names in REMOTE_METHODS. What a paired device sends is checked and,
+      // for a team member, marked as theirs on its way to the handlers (desktop/device-call.mjs).
+      call: deviceCall({ workspace, handlers, folders }),
       subscribe: (listener) => {
         changeListeners.add(listener);
         return () => changeListeners.delete(listener);
