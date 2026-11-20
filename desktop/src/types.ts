@@ -108,6 +108,8 @@ export type Message = {
   quote?: string;
   /** In a group chat, the bot that wrote this reply. */
   botId?: string;
+  /** A team member's stamped identity. The original displayed text is unchanged. */
+  author?: { memberId: string; name: string };
 };
 export type Chat = {
   loaded?: { from: number; total: number } | null;
@@ -117,6 +119,8 @@ export type Chat = {
   /** Per group member: the message index it has read up to, and whether its session exists. */
   members?: Record<string, { seen: number; established: boolean }>;
   botId: string;
+  /** The member who created this chat, when it did not come from the owner. */
+  createdBy?: string;
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
   mode?: ChatMode;
@@ -271,14 +275,54 @@ export type RemoteHost = {
   route?: "direct" | "relay" | null;
   version?: string;
   capabilities?: string[];
+  member?: true;
+  /** The team this host's member pairing belongs to. */
+  team?: string;
 };
+export type TeamScope = "agents" | "today" | "skills" | "mcp" | "plugins" | "settings";
+export type TeamRole = {
+  id: string;
+  name: string;
+  perms: Record<TeamScope, string[]>;
+  bots: "all" | string[];
+};
+export type TeamGroup = { id: string; name: string; roleId: string };
+export type TeamDevice = { id: string; name: string; kind: string; platform: string; connected: boolean };
+export type TeamMember = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices: TeamDevice[] };
+export type TeamInvite = {
+  id: string;
+  code: string;
+  groupId: string;
+  createdAt: number;
+  expiresAt: number;
+  maxUses: number;
+  uses: number;
+  revoked?: true;
+  published?: boolean;
+  link: string;
+};
+export type TeamRequest = { id: string; name: string; platform: string; kind: string; at: number; inviteId: string };
+export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[] };
+export type MemberTeam = {
+  me: {
+    memberId: string;
+    name: string;
+    group: { id: string; name: string };
+    role: { name: string; perms: Record<TeamScope, string[]>; bots: "all" | string[] };
+  };
+  team: { name: string };
+};
+export type TeamJoinTarget = { code: string; serverId: string; serverKey: string; name: string; hosts: string[]; room?: string; relayBase?: string };
+export type TeamJoinState = { id: string; team: string; status: "pending" | "approved" | "denied" | "closed" | "offline"; createdAt?: number; requestId?: string };
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
-    using: { id: string; name: string; state: "idle" | "connecting" | "online" | "offline" | "revoked"; route: "direct" | "relay" | null; version: string | null; capabilities: string[] } | null;
+    using: { id: string; name: string; state: "idle" | "connecting" | "online" | "offline" | "revoked"; route: "direct" | "relay" | null; version: string | null; capabilities: string[]; member?: true; team?: string } | null;
     hosts: RemoteHost[];
   };
   bots: Bot[];
+  /** Full team management data for this computer's owner, or this member's filtered identity. */
+  team?: OwnerTeam | MemberTeam;
   chats: Chat[];
   runs: Run[];
   panels: Panel[];
@@ -851,6 +895,27 @@ declare global {
       remoteHosts(): Promise<NonNullable<State["remote"]>>;
       /** Pairs with another computer: its pairing link, or its address and the code it shows. */
       pairRemoteHost(input: { link?: string; address?: string; code?: string }): Promise<{ id: string; name: string }>;
+      /** Finds a team from a ten-character code or Botkins join link. */
+      findTeamInvite(input: string): Promise<TeamJoinTarget>;
+      startTeamJoin(target: TeamJoinTarget): Promise<TeamJoinState>;
+      checkTeamJoin(id: string): Promise<TeamJoinState>;
+      teamJoins(): Promise<TeamJoinState[]>;
+      cancelTeamJoin(id: string): Promise<void>;
+      /** A join link received by the operating system before this window opened. */
+      takeTeamJoin(): Promise<string | null>;
+      /** The owner view of this computer's team, managed by Settings › Team. */
+      team(): Promise<OwnerTeam>;
+      saveTeamRole(role: TeamRole): Promise<OwnerTeam>;
+      deleteTeamRole(id: string): Promise<OwnerTeam>;
+      saveTeamGroup(group: TeamGroup): Promise<OwnerTeam>;
+      deleteTeamGroup(id: string, moveTo?: string): Promise<OwnerTeam>;
+      createTeamInvite(options: { groupId: string; days: number; maxUses: number }): Promise<TeamInvite>;
+      revokeTeamInvite(id: string): Promise<OwnerTeam>;
+      approveTeamRequest(id: string, groupId?: string): Promise<OwnerTeam>;
+      denyTeamRequest(id: string): Promise<OwnerTeam>;
+      moveTeamMember(id: string, groupId: string): Promise<OwnerTeam>;
+      removeTeamMember(id: string): Promise<OwnerTeam>;
+      renameTeam(name: string): Promise<OwnerTeam>;
       /** Shows a paired computer's workspace in this window, or this computer's own (null). */
       useRemoteHost(id: string | null): Promise<unknown>;
       forgetRemoteHost(id: string): Promise<void>;
@@ -864,6 +929,8 @@ declare global {
       exportUsage(days: number): Promise<boolean>;
       /** A notification click asks to open a chat. */
       onOpenChat(fn: (chatId: string) => void): () => void;
+      onOpenSettings(fn: (tab: string) => void): () => void;
+      onTeamJoin(fn: (url: string) => void): () => void;
     };
   }
 }
@@ -1462,6 +1529,8 @@ export type AgentRequest = {
   freeform?: boolean;
   schema?: { properties: Record<string, FormField>; required?: string[] };
   url?: string;
+  /** A request raised by a member's turn, shown and notified to the owner. */
+  askedBy?: { memberId: string; name: string };
 };
 
 export type BoardItem = {

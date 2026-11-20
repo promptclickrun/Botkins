@@ -74,6 +74,7 @@ import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Templates } from "./templates.mjs";
 import { Access, migrateCustomers } from "./access.mjs";
+import { memberPrompt, turnAccess } from "./team-turn.mjs";
 
 function textFieldOptional(text) {
   if (typeof text !== "string" || text.length > 4000)
@@ -120,6 +121,7 @@ export class Workspace {
     });
     this.updates = options?.updates;
     this.fetch = options?.fetch ?? globalThis.fetch;
+    this.teamOf = options?.team ?? (() => null);
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
     this.file = join(dir, "workspace.json");
@@ -585,7 +587,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, author, ...context } = options;
     // A routine that sends its result elsewhere tells the bot so, in this turn's prompt (desktop/routines.mjs).
     const where = context.scheduleId != null ? this.panels.routines.destinationNote(this.state.chats.find((c) => c.id === chatId), context.scheduleId) : "";
     const prompt = textField(text, 32000, "message");
@@ -633,6 +635,7 @@ export class Workspace {
       text: prompt,
       runId: run.id,
       time: chat.time,
+      ...(author && { author }),
       ...(attachments.length && { attachments }),
       ...(quote && { quote }),
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
@@ -663,6 +666,7 @@ export class Workspace {
       // Mentioned files go to the model with the message, without being listed as attachments.
       attachments: [...attachments, ...mentionedFiles],
       quote,
+      author: message.author,
       context: extra ? (message.context || "") + "\n\n" + extra : message.context,
     };
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
@@ -692,6 +696,7 @@ export class Workspace {
         options.quote.trim() && { quote: options.quote.trim().slice(0, 4000) }),
       // Checked now so a bad mention is refused at once, and again when the message is sent.
       ...(this.mentions.resolve(chat, options.mentions).list.length && { mentions: options.mentions }),
+      ...(options.author && { author: options.author }),
     };
     const list = this.queues.get(chat.id) ?? [];
     if (list.length >= 20) throw new Error("Up to 20 messages can wait at once.");
@@ -726,10 +731,12 @@ export class Workspace {
           const attachments = validateAttachments(item.attachments);
           const mentioned = refs.list.filter(m => m.kind === "file" && !attachments.some(a => a.path === m.path))
             .map(m => ({ kind: "file", path: m.path, name: m.label }));
-          const accepted = await task.deliverSteer({ prompt: quotedPrompt(item.text, item.quote) + (refs.context || ""), attachments: [...attachments, ...mentioned] });
+          const authored = memberPrompt(item.text, item.author, this.teamOf());
+          const accepted = await task.deliverSteer({ prompt: quotedPrompt(authored, item.quote) + (refs.context || ""), attachments: [...attachments, ...mentioned] });
           if (!accepted) break;
           commitInterim(chat, task.run, task);
           chat.messages.push({ role: "user", text: item.text, steeredRunId: task.run.id, time: Date.now(),
+            ...(item.author && { author: item.author }),
             ...(item.quote && { quote: item.quote }), ...(attachments.length && { attachments }),
             ...(refs.list.length && { mentions: refs.list, context: refs.context }) });
           const remaining = this.queues.get(chat.id)?.filter(q => q.id !== item.id);
@@ -771,6 +778,7 @@ export class Workspace {
         attachments: next.attachments,
         quote: next.quote,
         mentions: next.mentions,
+        author: next.author,
       }).catch((err) => console.error("Queued turn:", err.message));
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
@@ -787,6 +795,7 @@ export class Workspace {
             text: next.text,
             runId: run.id,
             time,
+            ...(next.author && { author: next.author }),
             ...(next.attachments?.length && { attachments: next.attachments }),
             ...(next.quote && { quote: next.quote }),
           });
@@ -828,6 +837,7 @@ export class Workspace {
     return this.submit(chat.id, message.text, {
       attachments,
       quote: message.quote,
+      author: message.author,
       ...(mentions.length && { mentions }),
       ...(run.panelId && { panelId: run.panelId }),
       // A retried routine or task run is still unattended work: it keeps its read-only memory and wiki.
@@ -942,6 +952,7 @@ export class Workspace {
   }
   /** Botkins' own tools for one turn. */
   sessionTools(bot, chat, run, task) {
+    const access = this.accessForTurn(chat, task);
     const records = [
       // The bot's project to-dos, its memory and the wiki (desktop/projects.mjs, memory.mjs, wiki.mjs).
       ...this.projects.tools(bot, chat, run, task),
@@ -951,7 +962,7 @@ export class Workspace {
     // A helping teammate reads records and keeps its memory; it changes nothing else in the app.
     if (chat.helper) return records;
     return [
-      ...pluginTools(this, bot, chat, run, task),
+      ...(access.plugins ? pluginTools(this, bot, chat, run, task) : []),
       ...this.secureInputs.tools(bot, chat, run, task),
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
@@ -973,6 +984,12 @@ export class Workspace {
             ...this.teamwork.tools(bot, chat, run, task),
           ]),
     ];
+  }
+  accessForTurn(chat, task) {
+    const latest = task?.author
+      ? task.author
+      : [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
+    return turnAccess(latest, this.teamOf());
   }
   /**
    * Opens the provider session for a chat (or a member's or teammate's view of one). `run` and
@@ -1053,7 +1070,14 @@ export class Workspace {
         task.stopped ? { action: "cancel" } : this.interactions.elicit(chat, task, request),
     };
     const copilotPlugins = provider.id === "copilot";
-    const pluginSpec = await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins });
+    const access = this.accessForTurn(chat, task);
+    const pluginSpec = access.plugins
+      ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
+      : { directories: [], mcpServers: {}, hooks: undefined };
+    const mcpServers = {
+      ...(access.mcp ? this.integrations.serversFor(bot) : {}),
+      ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
+    };
     const session = await provider.openSession({
       sessionId: chat.sessionId ?? chat.id,
       established: !!chat.established,
@@ -1069,12 +1093,15 @@ export class Workspace {
       context: this.memory.context(bot),
       tools: this.sessionTools(bot, chat, run, task),
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
-      skills: this.integrations.skillsFor(bot),
-      mcpServers: { ...this.integrations.serversFor(bot), ...(copilotPlugins && pluginSpec.mcpServers) },
+      skills: access.skills ? this.integrations.skillsFor(bot) : { directories: [], disabled: [] },
+      mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
-      mcpAuth: async (request) => copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
-      plugins: [...this.integrations.pluginsFor(), ...pluginSpec.directories],
-      pluginHooks: copilotPlugins ? pluginSpec.hooks : undefined,
+      mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
+      plugins: [
+        ...(access.skills ? this.integrations.pluginsFor() : []),
+        ...(access.plugins ? pluginSpec.directories : []),
+      ],
+      pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.messages ?? [],
       handlers: handlers || null,
@@ -1337,7 +1364,8 @@ export class Workspace {
     }
     delete checkpoint.eventId;
     this.save();
-    return session.send(input, 600000, onReady);
+    const prompt = memberPrompt(input.prompt, task.author, this.teamOf());
+    return session.send({ ...input, ...(prompt !== input.prompt && { prompt }) }, 600000, onReady);
   }
   /**
    * A coding chat in Plan mode runs in Copilot's plan mode: the agent plans and asks before it

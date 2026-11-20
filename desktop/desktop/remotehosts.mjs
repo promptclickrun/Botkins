@@ -40,6 +40,12 @@ export const HERE = new Set([
   "openSignIn",
   "remoteHosts",
   "pairRemoteHost",
+  "takeTeamJoin",
+  "findTeamInvite",
+  "startTeamJoin",
+  "checkTeamJoin",
+  "teamJoins",
+  "cancelTeamJoin",
   "useRemoteHost",
   "forgetRemoteHost",
   "renameRemoteHost",
@@ -89,6 +95,7 @@ export function snapshotOf(parts, own = {}) {
   for (const key of OWN_SETTINGS) if (own[key] !== undefined) settings[key] = own[key];
   return {
     settings,
+    ...(parts.team && { team: parts.team }),
     bots: parts.bots ?? [],
     sections: parts.sections ?? [],
     chats,
@@ -136,6 +143,7 @@ export class RemoteHosts {
     this.state = "idle";
     this.route = null;
     this.watching = [];
+    this.joins = new Map();
     // The host that was in use when the app was last closed (resume() goes back to it).
     this.remembered = null;
     if (!file) return;
@@ -143,7 +151,21 @@ export class RemoteHosts {
       const saved = JSON.parse(readFileSync(file, "utf8"));
       for (const entry of Array.isArray(saved?.hosts) ? saved.hosts : []) {
         const pairing = this.open(entry.pairing);
-        if (pairing?.serverId && pairing.secretKey) this.hosts.push({ id: pairing.serverId, name: text(entry.name) || text(pairing.name) || "Computer", addedAt: Number(entry.addedAt) || Date.now(), pairing });
+        if (pairing?.serverId && pairing.secretKey) this.hosts.push({ id: pairing.serverId, name: text(entry.name) || text(pairing.name) || "Computer", team: text(entry.team), member: pairing.member === true, addedAt: Number(entry.addedAt) || Date.now(), pairing });
+      }
+      for (const entry of Array.isArray(saved?.joins) ? saved.joins : []) {
+        const attempt = this.open(entry.attempt);
+        if (attempt?.keys?.secretKey && attempt?.target?.code) {
+          const id = text(entry.id) || attempt.keys.publicKey || attempt.target.code;
+          this.joins.set(id, {
+            id,
+            attempt,
+            team: text(entry.team) || text(attempt.target?.name) || "the team",
+            createdAt: Number(entry.createdAt) || Date.now(),
+            status: "pending",
+            ...(text(entry.requestId) && { requestId: text(entry.requestId) }),
+          });
+        }
       }
       if (typeof saved?.current === "string" && this.hosts.some((host) => host.id === saved.current)) this.remembered = saved.current;
     } catch {
@@ -168,7 +190,22 @@ export class RemoteHosts {
     mkdirSync(dirname(this.file), { recursive: true });
     // `current` is the host in use (its id, which is no secret), or null for this computer.
     const current = this.hosts.some((host) => host.id === this.current) ? this.current : null;
-    writeFileSync(this.file, JSON.stringify({ current, hosts: this.hosts.map((host) => ({ name: host.name, addedAt: host.addedAt, pairing: this.seal(host.pairing) })) }, null, 2), { mode: 0o600 });
+    writeFileSync(this.file, JSON.stringify({
+      current,
+      hosts: this.hosts.map((host) => ({
+        name: host.name,
+        addedAt: host.addedAt,
+        ...(host.team && { team: host.team }),
+        pairing: this.seal(host.pairing),
+      })),
+      joins: [...this.joins.values()].map((entry) => ({
+        id: entry.id,
+        team: entry.team,
+        createdAt: entry.createdAt,
+        ...(entry.requestId && { requestId: entry.requestId }),
+        attempt: this.seal(entry.attempt),
+      })),
+    }, null, 2), { mode: 0o600 });
   }
   /**
    * Goes back to the host that was in use when the app was last closed, if it is still paired.
@@ -191,19 +228,163 @@ export class RemoteHosts {
 
   /** What Settings and the switcher show. Nothing of a credential is in it. */
   list() {
-    return this.hosts.map((host) => ({
-      id: host.id,
-      name: host.name,
-      addedAt: host.addedAt,
-      current: host.id === this.current,
-      ...(host.id === this.current && { state: this.state, route: this.route, version: this.parts.meta?.version, capabilities: this.parts.meta?.capabilities ?? [] }),
-    }));
+    return this.hosts.map((host) => {
+      const team = host.id === this.current ? text(this.parts.team?.team?.name) || host.team : host.team;
+      return {
+        id: host.id,
+        name: host.name,
+        addedAt: host.addedAt,
+        ...(host.member && { member: true }),
+        ...(team && { team }),
+        current: host.id === this.current,
+        ...(host.id === this.current && { state: this.state, route: this.route, version: this.parts.meta?.version, capabilities: this.parts.meta?.capabilities ?? [] }),
+      };
+    });
   }
   /** The host in use as the window names it, or null for this computer. */
   inUse() {
     if (!this.current) return null;
     const host = this.find(this.current);
-    return { id: host.id, name: text(this.parts.meta?.name) || host.name, state: this.state, route: this.route, version: this.parts.meta?.version ?? null, capabilities: this.parts.meta?.capabilities ?? [] };
+    return {
+      id: host.id,
+      name: text(this.parts.meta?.name) || host.name,
+      state: this.state,
+      route: this.route,
+      version: this.parts.meta?.version ?? null,
+      capabilities: this.parts.meta?.capabilities ?? [],
+      ...(host.member && { member: true }),
+      ...((text(this.parts.team?.team?.name) || host.team) && { team: text(this.parts.team?.team?.name) || host.team }),
+    };
+  }
+
+  /** Finds a team invite card from a code or Botkins join link. */
+  async findTeamInvite(value) {
+    const input = String(value ?? "").trim();
+    const target = this.lib.parseJoinUrl(input);
+    const code = target?.code ?? this.lib.normalizeCode(input);
+    let relayBase;
+    if (target && /^https:/i.test(input)) {
+      try {
+        relayBase = new URL(input).origin;
+      } catch {
+        // The parser already refused malformed links.
+      }
+    }
+    try {
+      return await this.lib.findInvite(this.transport(), code, relayBase, target?.serverKey);
+    } catch (error) {
+      throw this.teamJoinError(error, "this team");
+    }
+  }
+  teamJoins() {
+    return [...this.joins.values()].map((entry) => ({
+      id: entry.id,
+      team: entry.team,
+      status: entry.status,
+      createdAt: entry.createdAt,
+      ...(entry.requestId && { requestId: entry.requestId }),
+    }));
+  }
+  async startTeamJoin(target) {
+    const name = text(target?.name) || "the team";
+    let outcome;
+    try {
+      outcome = await this.lib.startJoin(this.transport(), target, {
+        name: text(this.device?.name) || "Computer",
+        platform: this.device?.platform ?? process.platform,
+        kind: "desktop",
+      });
+    } catch (error) {
+      throw this.teamJoinError(error, name);
+    }
+    const attempt = outcome.attempt;
+    const id = text(attempt?.keys?.publicKey) || this.lib.normalizeCode(target?.code);
+    if (outcome.result?.status === "pending") {
+      this.joins.set(id, {
+        id,
+        attempt,
+        team: text(outcome.result.team?.name) || name,
+        createdAt: Date.now(),
+        status: "pending",
+        requestId: outcome.result.requestId,
+      });
+      this.save();
+      this.changed();
+      return { ...this.teamJoinView(id), status: "pending" };
+    }
+    if (outcome.result?.status === "approved") return this.finishTeamJoin(id, name, outcome.result);
+    return this.finishTeamJoin(id, name, outcome.result);
+  }
+  teamJoinView(id) {
+    const entry = this.joins.get(id);
+    return entry
+      ? { id: entry.id, team: entry.team, status: entry.status, createdAt: entry.createdAt, ...(entry.requestId && { requestId: entry.requestId }) }
+      : { id, team: "the team", status: "pending" };
+  }
+  teamJoinError(error, name) {
+    if (error?.code === "join_closed") return new Error("This invite has expired or was used.");
+    if (error?.code === "offline" || error?.code === "not-found") {
+      return new Error("Can't reach " + name + " right now. Try again when the owner's computer is on.");
+    }
+    return new Error(String(error?.message ?? error));
+  }
+  finishTeamJoin(id, name, result) {
+    const entry = this.joins.get(id);
+    const team = entry?.team || text(name) || "the team";
+    if (result?.status === "approved" && result.pairing) {
+      this.joins.delete(id);
+      const pairing = { ...result.pairing, member: true };
+      const earlier = this.hosts.find((host) => host.id === pairing.serverId);
+      const host = {
+        id: pairing.serverId,
+        name: earlier?.name || text(pairing.name) || team,
+        team,
+        member: true,
+        addedAt: earlier?.addedAt || Date.now(),
+        pairing,
+      };
+      this.hosts = [...this.hosts.filter((item) => item.id !== pairing.serverId), host];
+      this.save();
+      this.changed();
+      return { id: host.id, team, status: "approved" };
+    }
+    if (result?.status === "denied") {
+      this.joins.delete(id);
+      this.save();
+      this.changed();
+    }
+    return { id, team, status: result?.status ?? "pending" };
+  }
+  async checkTeamJoin(id) {
+    const entry = this.joins.get(id);
+    if (!entry) throw new Error("That join request is no longer waiting.");
+    try {
+      const result = await this.lib.checkJoin(this.transport(), entry.attempt);
+      if (result?.status === "pending") {
+        if (result.requestId) entry.requestId = result.requestId;
+        if (result.team?.name) entry.team = text(result.team.name) || entry.team;
+        this.save();
+        return this.teamJoinView(id);
+      }
+      return this.finishTeamJoin(id, entry.team, result);
+    } catch (error) {
+      if (error?.code === "join_closed") {
+        this.joins.delete(id);
+        this.save();
+        this.changed();
+        return { id, team: entry.team, status: "closed" };
+      }
+      if (error?.code === "offline" || error?.code === "not-found") {
+        return { ...this.teamJoinView(id), status: "offline" };
+      }
+      throw this.teamJoinError(error, entry.team);
+    }
+  }
+  cancelTeamJoin(id) {
+    if (this.joins.delete(id)) {
+      this.save();
+      this.changed();
+    }
   }
 
   /**

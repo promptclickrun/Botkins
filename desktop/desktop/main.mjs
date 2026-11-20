@@ -75,6 +75,8 @@ import { VoiceDesk } from "./voicedesk.mjs";
 import { CodexVoice } from "./codexvoice.mjs";
 // Settings › Credentials: the link's saved credentials and password managers, for this window.
 import { SavedCredentials, trialToolDirs } from "./savedcredentials.mjs";
+import { teamHandlers } from "./team-ipc.mjs";
+import { parseJoinUrl } from "./remote/link-client.mjs";
 
 // The data folder: Botkins' own (desktop/home.mjs). Tests name their own.
 // A folder from when the app was called Commander takes the app's name first (one rename, with a
@@ -85,8 +87,10 @@ const home = dataHome({ appData: app.getPath("appData"), override: env("DATA_DIR
 app.setName(APP_NAME);
 app.setPath("userData", home.dir);
 registerAppScheme();
+app.setAsDefaultProtocolClient("botkins");
 let appWindows;
 let pendingPrefill = null;
+let pendingTeamJoin = null;
 // Frames of html blocks: when each last sent an answer, and whether a link question is open.
 const frameAnswers = new Map();
 const frameQuiet = new Map();
@@ -177,6 +181,7 @@ const appSnapshot = () => {
   const using = remote?.inUse() ?? null;
   return {
     ...(using ? remote.snapshot(workspace.state.settings) : workspace.snapshot()),
+    ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: phoneRevision },
     remote: { using, hosts: remote?.list() ?? [] },
   };
@@ -195,6 +200,16 @@ function notify() {
   // Every time: the link coalesces by itself.
   for (const listener of changeListeners) listener();
   push();
+}
+function openTeamJoin(value) {
+  const url = String(value ?? "").trim();
+  if (!parseJoinUrl(url)) return false;
+  pendingTeamJoin = url;
+  showWindow();
+  if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
+    win.webContents.send("open-team-join", url);
+  }
+  return true;
 }
 /**
  * Saves a wiki export where the person chooses. Returns the saved file's path, or null when they cancel.
@@ -347,12 +362,20 @@ function openWindow() {
   win.on("hide", syncTray);
   win.loadFile(html);
 }
+const teamUrlFrom = (argv) => argv.find((value) => typeof value === "string" && parseJoinUrl(value));
+pendingTeamJoin = teamUrlFrom(process.argv) ?? null;
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  openTeamJoin(url);
+});
 if (!app.requestSingleInstanceLock()) app.quit();
 else
   app.whenReady().then(async () => {
     // Opening Botkins while it runs shows its window. A second start by the computer at sign-in stays quiet.
     app.on("second-instance", (_event, argv) => {
-      if (!argv.includes(HIDDEN_FLAG)) showWindow();
+      const url = teamUrlFrom(argv);
+      if (!url && !argv.includes(HIDDEN_FLAG)) showWindow();
+      if (url) openTeamJoin(url);
     });
     app.on("activate", showWindow);
     const dataDir = join(app.getPath("userData"), "data");
@@ -465,6 +488,7 @@ else
     } });
     workspace = new Workspace(dataDir, providers, notify, {
       updates,
+      team: () => link?.team(),
       secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => {
         if (remote?.inUse() || viewingChat !== plan.chatId) throw new Error("Open the chat on this computer.");
         const matches = [...viewerGuests].filter(g => !g.isDestroyed() && g.getURL() === plan.url);
@@ -553,10 +577,18 @@ else
         win.webContents.once("did-finish-load", () => setTimeout(deliver, 300));
       else deliver();
     };
+    const openSettings = (tab) => {
+      showWindow();
+      const deliver = () => win?.webContents.send("open-settings", tab);
+      if (win.webContents.isLoading())
+        win.webContents.once("did-finish-load", () => setTimeout(deliver, 300));
+      else deliver();
+    };
     const notifier = new Notifier(workspace, {
       Notification,
       focused: () => !!win && !win.isDestroyed() && win.isVisible() && win.isFocused(),
       open: openChat,
+      openSettings,
     });
     // A sign-in page a provider asks for opens in the person's browser, and only a web page does.
     const openSignIn = (url) => {
@@ -568,6 +600,17 @@ else
     const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null });
     const handlers = {
       ...pluginHandlers(workspace.plugins, savedCredentials),
+      ...teamHandlers(() => link),
+      takeTeamJoin: () => {
+        const url = pendingTeamJoin;
+        pendingTeamJoin = null;
+        return url;
+      },
+      findTeamInvite: (input) => remote.findTeamInvite(input),
+      startTeamJoin: (target) => remote.startTeamJoin(target),
+      checkTeamJoin: (id) => remote.checkTeamJoin(id),
+      teamJoins: () => remote.teamJoins(),
+      cancelTeamJoin: (id) => remote.cancelTeamJoin(id),
       pickPluginFolder: async () => {
         const result = await dialog.showOpenDialog(win, { title: "Choose a plugin folder", properties: ["openDirectory"] });
         return result.canceled ? null : result.filePaths[0] ?? null;
@@ -957,6 +1000,7 @@ else
           attachments: options?.attachments,
           quote: options?.quote,
           mentions: options?.mentions,
+          author: options?.author,
         });
         turn?.catch((err) => console.error("Workspace turn:", err.message));
       },
@@ -1177,8 +1221,12 @@ else
       call: async (name, args, context = {}) => {
         const checked = await deviceArgs(folders, name, args);
         const responseChatId = name === "respond" ? workspace.state.requests.find((item) => item.id === args[0])?.chatId : null;
-        const result = await handlers[name](...checked);
         const principal = context.principal;
+        const callArgs =
+          principal?.kind === "member" && name === "send"
+            ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: { memberId: principal.memberId, name: principal.name } }]
+            : checked;
+        const result = await handlers[name](...callArgs);
         if (principal?.kind === "member") {
           if (["createChat", "createGroupChat", "forkChat"].includes(name) && typeof result === "string") {
             const chat = workspace.state.chats.find((item) => item.id === result);
@@ -1244,6 +1292,7 @@ else
       const name = link.status().devices.find((d) => d.id === device)?.name ?? "A phone";
       notifier.show({ title: name + " is viewing this screen", body: "Stop it in Settings › Phone." });
     });
+    link.on("joinRequest", (request) => notifier.consider({ type: "joinRequest", request }));
     // Until the person names this computer for their phones, it goes by the system's own name for
     // it (on a Mac the one in Sharing), not by a network host name such as a tailnet's.
     if (!link.store.data.locked && !link.store.data.name) {

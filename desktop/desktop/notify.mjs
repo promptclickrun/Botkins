@@ -41,8 +41,17 @@ export function decide(event, { settings, focused, now = new Date(), timeZone } 
   const prefs = { ...defaultSettings.notifications, ...settings?.notifications };
   if (inQuietHours(prefs.quietHours, now, timeZone)) return null;
   const botName = event.bot?.name ?? "Botkins";
-  if (event.type === "request") {
+  if (event.type === "joinRequest") {
     if (!prefs.requests || focused) return null;
+    return {
+      title: event.request.name + " wants to join your team",
+      body: "Review the request in Settings › Team.",
+      settings: "Team:Requests",
+    };
+  }
+  if (event.type === "request") {
+    const memberApproval = event.request.askedBy && (event.request.kind === "permission" || event.request.kind === "secure");
+    if (!prefs.requests || (focused && !memberApproval)) return null;
     return {
       title: botName + (event.request.kind === "permission" ? " needs your approval" : " has a question"),
       body: firstLine(event.request.title) || "Open Botkins to respond.",
@@ -82,12 +91,14 @@ export class Notifier {
    * @param options.Notification Electron's Notification class
    * @param options.focused () => boolean, whether the window is focused
    * @param options.open (chatId) => void, shows the window on that chat
+   * @param options.openSettings (tab) => void, opens one Settings section
    */
-  constructor(workspace, { Notification, focused, open }) {
+  constructor(workspace, { Notification, focused, open, openSettings }) {
     this.ws = workspace;
     this.Notification = Notification;
     this.focused = focused;
     this.open = open;
+    this.openSettings = openSettings;
     // Electron drops click handlers on notifications that are garbage-collected.
     this.live = new Set();
     workspace.events.on("turn", ({ chat, run }) =>
@@ -108,7 +119,7 @@ export class Notifier {
       console.error("Notification:", error.message);
     }
   }
-  show({ title, body, chatId }) {
+  show({ title, body, chatId, settings }) {
     if (!this.Notification?.isSupported?.()) return false;
     const n = new this.Notification({ title, body, silent: false });
     this.live.add(n);
@@ -116,6 +127,7 @@ export class Notifier {
     n.on("click", () => {
       drop();
       if (chatId) this.open(chatId);
+      else if (settings) this.openSettings?.(settings);
     });
     n.on("close", drop);
     n.on("failed", drop);

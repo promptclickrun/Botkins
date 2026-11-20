@@ -445,7 +445,7 @@ export function RunCards({
 }: {
   run: Run;
   prefill: (s: string) => void;
-  pickModel: () => void;
+  pickModel?: () => void;
 }) {
   return (
     <>
@@ -492,7 +492,7 @@ export function RunCards({
           ))}
         </div>
       )}
-      {run.openModel && (
+      {run.openModel && pickModel && (
         <button className="secondary" onClick={pickModel}>
           Choose chat model
         </button>

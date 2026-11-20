@@ -157,6 +157,24 @@ for (const name of [
   "addSkillFolderAt",
   "remoteHosts",
   "pairRemoteHost",
+  "findTeamInvite",
+  "startTeamJoin",
+  "checkTeamJoin",
+  "teamJoins",
+  "cancelTeamJoin",
+  "takeTeamJoin",
+  "team",
+  "saveTeamRole",
+  "deleteTeamRole",
+  "saveTeamGroup",
+  "deleteTeamGroup",
+  "createTeamInvite",
+  "revokeTeamInvite",
+  "approveTeamRequest",
+  "denyTeamRequest",
+  "moveTeamMember",
+  "removeTeamMember",
+  "renameTeam",
   "useRemoteHost",
   "forgetRemoteHost",
   "renameRemoteHost",
@@ -238,6 +256,16 @@ api.onOpenChat = (fn) => {
   const listener = (_, chatId) => fn(chatId);
   ipcRenderer.on("open-chat", listener);
   return () => ipcRenderer.removeListener("open-chat", listener);
+};
+api.onOpenSettings = (fn) => {
+  const listener = (_, tab) => fn(tab);
+  ipcRenderer.on("open-settings", listener);
+  return () => ipcRenderer.removeListener("open-settings", listener);
+};
+api.onTeamJoin = (fn) => {
+  const listener = (_, url) => fn(url);
+  ipcRenderer.on("open-team-join", listener);
+  return () => ipcRenderer.removeListener("open-team-join", listener);
 };
 // An HTML app's answer, placed in its chat's message box. Nothing is sent until the person sends it.
 api.onPrefill = (fn) => {
