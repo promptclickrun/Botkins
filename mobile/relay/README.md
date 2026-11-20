@@ -4,7 +4,7 @@ A small Cloudflare Worker with one Durable Object per room. It lets a phone reac
 
 The computer keeps one outgoing WebSocket open to the relay. The phone opens one too. The relay passes messages between them. Every message is already sealed end to end by the link, so the relay can not read it.
 
-The same Worker has one more job: `POST /v1/push` sends Apple push notifications for the iPhone app (see "Push notifications"). It is a plain forward. It stores nothing.
+The same Worker has two more jobs. It keeps short-lived, sealed team-invite cards in a Durable Object directory and serves the `/join` page (see "Team invites"). `POST /v1/push` sends Apple push notifications for the iPhone app (see "Push notifications"). The push route is a plain forward and stores nothing.
 
 ## Trust notes
 
@@ -17,15 +17,17 @@ Nothing secret is ever sent to the relay.
 What the relay can see:
 
 - Room names (a hash of the computer's public key).
+- Invite lookups (a hash of an invite code), card ciphertext and the public key of the computer that published each card.
 - Message sizes and timing.
 - Network addresses of the sockets, as Cloudflare shows them to any Worker. It keeps only a per-room hash of the address (IPv6 by /64) as `from`.
 
 What it can not see:
 
 - Message contents. They are sealed by the link (see `link-host/server.mjs`).
+- Invite contents. A card is encrypted with a key derived from the invite code.
 - Any secret of the computer.
 
-The relay keeps no message and no storage. It never uses the storage API. Logs hold counts, socket kinds, close codes and the relay's own fixed close reasons, and nothing else: no key, signature, room name, `from` tag or message content. Invocation logs are off in `wrangler.jsonc` because they record the request URL, which holds the room name.
+The relay keeps no messages. Its invite directory stores only sealed cards it cannot read, together with an expiry and owner public key, in a Durable Object keyed by the hash of the invite code. The card is deleted at expiry. Logs hold counts, socket kinds, close codes and the relay's own fixed close reasons, and nothing else: no lookup, key, signature, room name, `from` tag, card or message content. Invocation logs are off in `wrangler.jsonc` because they record request URLs, which hold room names and invite lookups.
 
 ## Wire format
 
@@ -34,7 +36,7 @@ The wire format is the header of [`../tests/fake-relay.ts`](../tests/fake-relay.
 - Computer: `wss://<relay>/v1/host/<room>`, subprotocols `["botkins.host.v2", "k.<public key>", "t.<unix seconds>", "s.<signature>"]`. Keys and signatures are base64url. `<room>` is `base64url(SHA-256("botkins-relay-room-v1:" + <public key text>))`, 43 characters. The signature is Ed25519 over the UTF-8 text `botkins-relay-host-v2:<room>:<unix seconds>`. The relay needs exactly one `k.`, one `t.` and one `s.` entry, a key that gives this room, a time within 300 seconds of its own, and a good signature. Anything else is 401 with no upgrade. The answer selects `botkins.host.v2` and repeats nothing else.
 - Phone: `wss://<relay>/v1/room/<room>`, subprotocol `["botkins.phone.v1"]`.
 - One computer socket per room. A new one closes the old with 4000.
-- Up to 16 phone sockets, and up to 8 from one network address. A new phone socket is never turned away: when its address already has 8, that address's oldest socket is closed with 4008, then when the room has 16, the room's oldest is closed with 4008.
+- Up to 48 phone sockets, and up to 8 from one network address. A new phone socket is never turned away: when its address already has 8, that address's oldest socket is closed with 4008, then when the room has 48, the room's oldest is closed with 4008.
 - Text `ping` gets `pong` on both kinds of socket.
 - Phone to computer: `[conn 8][from 8] + the phone's message`. Computer to phone: `[conn 8] + the answer`, sent to that phone with the 8 bytes removed. An answer for a phone that is gone is dropped.
 - No computer connected: the phone gets `[0x03][id]` for each request.
@@ -42,9 +44,17 @@ The wire format is the header of [`../tests/fake-relay.ts`](../tests/fake-relay.
 - The computer's socket closes: every phone in the room gets `[0x05]`, so it stops waiting for answers that will not come.
 - A phone's message over 6 MiB + 64 KiB (6,356,992 bytes) closes that phone with 1009. The computer's limit is 8 MiB.
 
-Other answers: `GET /` is a one-line text, `GET /v1/health` is `{"ok":true}`. A wrong room name or any other path is 404. A plain GET on a room path is 426. A phone without its subprotocol is 400. Only GET is served; any other method is 404, and it is counted against the request limit like everything else.
+Other answers: `GET /` is a one-line text, `GET /v1/health` is `{"ok":true}` and `GET /join` serves the self-contained invite page. A wrong room name or any other path is 404. A plain GET on a room path is 426. A phone without its subprotocol is 400. Other unsupported methods are 404 and are counted against the request limit like everything else.
 
 `conn` is 8 random bytes made for each phone socket. `from` is the first 8 bytes of `SHA-256(room + ":" + network)`. The network is the address in `CF-Connecting-IP`, or `local` when Cloudflare gives none. An IPv6 address counts as its /64 (the first four groups), so one network can not look like many sources. An IPv4-mapped IPv6 address counts as the IPv4 address. The Worker makes the headers that carry the socket kind and `from` to the Durable Object. It never forwards the client's headers.
+
+## Team invites
+
+The host can publish an encrypted invite card for a code at `PUT /v1/invites/<lookup>`, where the 43-character lookup is `base64url(SHA-256("botkins-invite-v1:" + CODE))`. The body is `{ card, expiresAt }`. The host proves ownership with the same Ed25519 key that owns its relay room and signs the lookup, expiry, card hash and request time. Only that key may replace or delete the card. A card is at most 4096 decoded bytes and expires in at most 30 days.
+
+`GET /v1/invites/<lookup>` returns `{ card }`, or 404 when the invite is missing or expired. `DELETE /v1/invites/<lookup>` removes it after the same ownership proof. The invite Durable Object sets an alarm for `expiresAt`, so expired cards are not kept.
+
+Invite links use `https://relay.botkins.app/join#c=<CODE>&k=<serverKey>`. The code and key stay in the URL fragment, which the browser never sends to the Worker. The page validates the fragment, formats the code and offers the `botkins://join` deep link. It has no external assets, sends no referrer and is not cached.
 
 ## Run and test on this machine
 
@@ -68,12 +78,12 @@ npx wrangler login   # once
 npm run deploy
 ```
 
-The Durable Object class is SQLite-backed (`new_sqlite_classes`), the only kind the Free plan allows. The first deploy creates the class from the `v1` migration.
+The Durable Object classes are SQLite-backed (`new_sqlite_classes`), the only kind the Free plan allows. The `v1` migration creates `Room`; `v2` adds `Invite`.
 
 ## Limits
 
 - A phone's message: 6 MiB + 64 KiB. The computer's message: 8 MiB. (The platform's own limit is 32 MiB.) Anything bigger must be split.
-- 1 computer and 16 phones per room, at most 4 phones from one network address.
+- 1 computer and 48 phones per room, at most 8 phones from one network address.
 - One Durable Object handles about 1,000 requests a second, a soft limit.
 - Free plan: 100,000 Worker requests and 100,000 Durable Object requests a day, 13,000 GB-s of duration a day, 10 ms of CPU per request. Checking a signature and forwarding a message take little CPU.
 
@@ -83,9 +93,10 @@ The Worker limits how often one network may knock, with the Workers Rate Limitin
 
 - `SOCKETS`: 30 new sockets a minute for each network.
 - `REQUESTS`: 120 of everything else a minute for each network (pages, health checks, wrong paths, other methods, bad room names, and every call to `/v1/push`).
+- `INVITES`: 20 GET lookups a minute for each network, in addition to `REQUESTS`.
 - `PUSHES`: 240 push items a minute for each computer key (not each network). See "Push notifications".
 
-A network is an IPv4 address or an IPv6 /64. Over the limit the answer is 429, before any other work. The counts are kept per Cloudflare location and are approximate: they stop a flood, they are not an exact gate, and a new deployment takes a few minutes to start enforcing them. Both were seen working on this account's plan (a burst of 320 requests got 194 answers of 429).
+A network is an IPv4 address or an IPv6 /64. Over the limit the answer is 429, before any other work. The counts are kept per Cloudflare location and are approximate: they stop a flood, they are not an exact gate, and a new deployment takes a few minutes to start enforcing them. The limits were seen working on this account's plan (a burst of 320 requests got 194 answers of 429).
 
 Local tests pass `--var=RATE_LIMITS:off`, because every socket of a test run comes from one address. (`test/push.test.mjs` also runs one Worker with the limits on: locally the `PUSHES` and `REQUESTS` bindings do trip, 429 after 240 items and after 120 calls. They are still approximate on Cloudflare.) A phone and a computer that meet a 429 wait and try again by themselves (the phone backs off to 15 seconds, the computer to 60).
 
@@ -147,7 +158,7 @@ An answer never holds a token, a key or a payload, and neither does a log line. 
 
 - `PUSHES`: 240 items a minute for each `key`, checked after the signature, so nobody can use up another computer's allowance. The binding's `delta` option weights one `limit()` call by the number of items, so a request costs its item count. The binding allows a call while the count is under the limit, so one request can end up to 7 items over. A request over the limit is refused whole.
 - The `REQUESTS` limit for the network applies first, as on every other route, with one count for each call.
-- `RATE_LIMITS=off` turns both off, for local tests.
+- `RATE_LIMITS=off` turns all of them off, for local tests.
 - The Worker makes at most 8 calls to Apple for one request, which is far below the Worker's own subrequest limits.
 
 ### APNs token
@@ -182,7 +193,7 @@ npx wrangler secret put APNS_SANDBOX_KEY_ID
 
 With a key for another app Apple answers `TopicDisallowed`; with a key for one environment it answers `BadEnvironmentKeyInToken` on the other. A second key that can't be read stops only the sandbox: its items answer `503 KeyUnusable`. A made-up device address does not show a wrong topic: Apple answers `BadDeviceToken` first, so only a real phone's "Send a test" proves the key. (It does show that Apple knows the key: a key Apple does not know answers `InvalidProviderToken`.)
 
-Or, to read the key from the file without printing it: `npx wrangler secret put APNS_KEY_P8 < /path/to/AuthKey_XXXXXXXXXX.p8`. Until the first three are set, the route answers `503 push_off`. `APNS_TOPIC` is a plain var in `wrangler.jsonc`. Deploy the Worker first (`npm run deploy`), then set the secrets: each `wrangler secret put` makes a new version live. The `PUSHES` rate limit has `namespace_id` 47613: namespace ids are shared by every Worker on the account, so change it if another Worker already uses it.
+Or, to read the key from the file without printing it: `npx wrangler secret put APNS_KEY_P8 < /path/to/AuthKey_XXXXXXXXXX.p8`. Until the first three are set, the route answers `503 push_off`. `APNS_TOPIC` is a plain var in `wrangler.jsonc`. Deploy the Worker first (`npm run deploy`), then set the secrets: each `wrangler secret put` makes a new version live. The rate limits have `namespace_id` values starting at 47611: namespace ids are shared by every Worker on the account, so change them if another Worker already uses them.
 
 ### What the Worker can and can not see
 

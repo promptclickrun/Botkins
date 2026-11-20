@@ -21,9 +21,9 @@
 //              Anything else is refused (the socket fails to open).
 //   Phone:     wss://<relay>/v1/room/<room>   subprotocols ["botkins.phone.v1"]
 //   A room has one computer socket (a new one replaces the old, which is closed with 4000).
-//   A room has up to 16 phone sockets, and up to 8 from one network address (`from`, below). A new
+//   A room has up to 48 phone sockets, and up to 8 from one network address (`from`, below). A new
 //   phone socket is never turned away: when its address already has 8, that address's oldest socket
-//   is closed with 4008; then, when the room has 16, the room's oldest is closed with 4008.
+//   is closed with 4008; then, when the room has 48, the room's oldest is closed with 4008.
 //   The text message "ping" is answered with "pong" on either socket; nothing else is text.
 //
 // MESSAGES (binary; numbers are big-endian).
@@ -49,7 +49,7 @@ export const HOST_PROTOCOL = "botkins.host.v2";
 export const PHONE_PROTOCOL = "botkins.phone.v1";
 export const MAX_MESSAGE = 8 * 1024 * 1024;
 export const MAX_PHONE_MESSAGE = 6 * 1024 * 1024 + 64 * 1024;
-export const MAX_PHONES = 16;
+export const MAX_PHONES = 48;
 export const MAX_PER_FROM = 8;
 export const MAX_SKEW = 300;
 
