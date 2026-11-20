@@ -27,7 +27,7 @@ These modules let a paired phone running Botkins use a desktop app over the loca
 
 ## Adopting it in a desktop app
 
-Copy every file except `mock-backend.mjs` and `dev-host.mjs` into the app (Commander keeps them in `desktop/link/`), then create one `LinkHost` in the main process:
+Copy every file except `mock-backend.mjs` and `dev-host.mjs` into the app (the Botkins desktop app keeps them in `desktop/link/`), then create one `LinkHost` in the main process:
 
 ```js
 import { LinkHost } from "./link/index.mjs";
@@ -35,7 +35,7 @@ import { LinkHost } from "./link/index.mjs";
 const link = new LinkHost({
   dir: join(dataDir, "link"),
   backend: {
-    info: () => ({ app: "commander", version: app.getVersion(), platform: process.platform }),
+    info: () => ({ app: "botkins", version: app.getVersion(), platform: process.platform }),
     snapshot: () => workspace.snapshot(),
     call: (name, args) => handlers[name](...args),
     subscribe: (listener) => onChange(listener), // returns a function that stops it
