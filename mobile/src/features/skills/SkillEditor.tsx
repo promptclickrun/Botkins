@@ -3,7 +3,7 @@ import { Trash2 } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import type { SkillDetail, SkillInfo } from "@/link/types";
-import { refresh, useOnline, useSkills } from "@/state/hooks";
+import { refresh, useCan, useOnline, useSkills } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Badge, EmptyState, Field, Group, IconTile, Loading, Row, Sheet, useTheme } from "@/ui";
 import { canEdit, readableName } from "./shared";
@@ -15,18 +15,21 @@ export default function SkillEditor() {
   const skills = useSkills();
   const online = useOnline();
   const isNew = name === "new";
+  const canRead = useCan("skills", "read");
+  const canCreate = useCan("skills", "create");
   const info = skills?.find((skill) => skill.name === name);
   const [loaded, setLoaded] = useState<{ name: string; detail?: SkillDetail }>();
 
   useEffect(() => {
-    if (isNew || !online) return;
+    if (isNew || !online || !canRead) return;
     let live = true;
     void attempt(api.readSkill(name)).then((detail) => live && setLoaded({ name, detail }));
     return () => {
       live = false;
     };
-  }, [isNew, online, name]);
+  }, [isNew, online, name, canRead]);
 
+  if (!canRead || (isNew && !canCreate)) return <Sheet title="Skill"><EmptyState title="Your team role can't use this skill screen" action="Close" onAction={() => router.back()} /></Sheet>;
   if (isNew) return <Editor key="new" />;
   const detail = loaded?.name === name ? loaded : undefined;
   if (!detail || !skills)
@@ -50,8 +53,11 @@ function Editor({ info, detail }: { info?: SkillInfo; detail?: SkillDetail }) {
   const [draft, setDraft] = useState(start);
   const [checked, setChecked] = useState(false);
   const [saving, setSaving] = useState(false);
+  const canManage = useCan("skills", "manage");
+  const canCreate = useCan("skills", "create");
+  const canDelete = useCan("skills", "delete");
   const isNew = !info;
-  const editable = !info || canEdit(info);
+  const editable = (!info ? canCreate : canManage && canEdit(info));
   const set = (patch: Partial<SkillDetail>) => setDraft((held) => ({ ...held, ...patch }));
   const changed = draft.name !== start.name || draft.description !== start.description || draft.instructions !== start.instructions;
   const problems = { name: draft.name.trim() ? undefined : "Give the skill a name.", instructions: draft.instructions.trim() ? undefined : "Write what the bot should do." };
@@ -125,7 +131,7 @@ function Editor({ info, detail }: { info?: SkillInfo; detail?: SkillDetail }) {
         error={shown.instructions}
         style={{ minHeight: 280 }}
       />
-      {info && editable && (
+      {info && canDelete && (
         <Group>
           <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Remove skill" tone="danger" onPress={remove} />
         </Group>

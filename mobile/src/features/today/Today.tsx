@@ -8,7 +8,7 @@ import Animated, { FadeIn } from "react-native-reanimated";
 import { actOnIdea, discussBoardItem } from "@/features/chat/open";
 import type { BoardItem, Bot, Panel } from "@/link/types";
 import { cronLabel } from "@/features/work/cron";
-import { useBots, usePart } from "@/state/hooks";
+import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
@@ -132,6 +132,8 @@ const GOAL_KINDS = [
 /** "More like this" rates an item up (again: not any more). "Less like this" asks why first, as the computer does. */
 function Rate({ item, value }: { item: BoardItem; value: "up" | "down" }) {
   const { colors } = useTheme();
+  const canUse = useCan("today", "use");
+  if (!canUse) return null;
   const on = item.rating === value;
   const Icon = value === "up" ? ThumbsUp : ThumbsDown;
   const label = value === "up" ? "More like this" : "Less like this";
@@ -164,10 +166,14 @@ function noteOf(item: BoardItem) {
 
 function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
   const { colors } = useTheme();
+  const canUse = useCan("today", "use");
+  const canCreate = useCan("today", "create");
+  const canDelete = useCan("today", "delete");
+  const canChat = useCan("agents", "chat");
   const seen = useContext(Seen);
   const card = useRef<ComponentRef<typeof View>>(null);
   useEffect(() => {
-    if (item.read || markedRead.has(item.id)) return;
+    if (!canUse || item.read || markedRead.has(item.id)) return;
     const mark = () => {
       markedRead.add(item.id);
       // Quietly: a failed read mark isn't worth a toast.
@@ -186,7 +192,7 @@ function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
       stop();
       clearTimeout(first);
     };
-  }, [item.id, item.read, seen]);
+  }, [item.id, item.read, seen, canUse]);
   const act = (action: "clear" | "goal" | "notToday" | "done" | "reopen" | "delete", done?: string, value?: string) => void attempt(api.boardAct(item.id, action, value), done);
   const remove = () =>
     Alert.alert("Delete " + item.title + "?", undefined, [
@@ -195,7 +201,7 @@ function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
     ]);
   const finished = item.status !== "open";
   // Discuss starts a chat with the bot with this item pinned to it, so the bot knows what it is about.
-  const discuss = <Button title="Discuss" icon={MessageCircle} variant="ghost" size="sm" onPress={() => void discussBoardItem(item)} accessibilityLabel={"Discuss with " + (bot?.name ?? "the bot")} />;
+  const discuss = canChat ? <Button title="Discuss" icon={MessageCircle} variant="ghost" size="sm" onPress={() => void discussBoardItem(item)} accessibilityLabel={"Discuss with " + (bot?.name ?? "the bot")} /> : null;
   return (
     <Card inner={card}>
       <Byline bot={bot} time={item.createdAt} unread={!item.read} note={noteOf(item)} />
@@ -227,23 +233,23 @@ function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
       )}
       {finished ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }}>
-          <Button title="Reopen" variant="secondary" size="sm" onPress={() => act("reopen", "Reopened")} />
-          <Button title="Delete" variant="ghost" size="sm" onPress={remove} />
+          {canUse && <Button title="Reopen" variant="secondary" size="sm" onPress={() => act("reopen", "Reopened")} />}
+          {canDelete && <Button title="Delete" variant="ghost" size="sm" onPress={remove} />}
         </View>
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }}>
-          {item.kind === "feed" && <Button title="Clear" variant="secondary" size="sm" onPress={() => act("clear")} />}
-          {item.kind === "idea" && (
+          {canUse && item.kind === "feed" && <Button title="Clear" variant="secondary" size="sm" onPress={() => act("clear")} />}
+          {canCreate && item.kind === "idea" && (
             <>
               {/* The bot is told to go ahead, in a chat of its own, and the idea is marked as taken up. */}
-              <Button title="Let's do it" size="sm" onPress={() => void actOnIdea(item)} />
+              {canChat && <Button title="Let's do it" size="sm" onPress={() => void actOnIdea(item)} />}
               <MenuView title="What kind of goal?" actions={GOAL_KINDS.map((kind) => ({ id: kind.id, title: kind.name }))} onPressAction={({ nativeEvent }) => act("goal", "Added to goals", nativeEvent.event)}>
                 <Button title="Make it a goal" variant="secondary" size="sm" onPress={() => {}} />
               </MenuView>
               <Button title="Not now" variant="ghost" size="sm" onPress={() => act("clear")} />
             </>
           )}
-          {item.kind === "goal" && (
+          {canUse && item.kind === "goal" && (
             <>
               <Button title="Mark done" size="sm" onPress={() => act("done", "Goal done")} />
               <Button title="Not today" variant="ghost" size="sm" onPress={() => act("notToday", "Back tomorrow")} />
@@ -262,11 +268,13 @@ function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
 /** The panel's Manage menu: refresh, size, order, its own routine, its chats, hide and remove (the computer's Manage dialog). */
 function PanelMenu({ panel, first, last }: { panel: Panel; first: boolean; last: boolean }) {
   const { colors } = useTheme();
+  const canUse = useCan("today", "use");
+  const canManage = useCan("today", "manage");
+  const canDelete = useCan("today", "delete");
   const refreshing = useRefreshing(panel);
   const routine = panel.routine;
   const off = (disabled: boolean) => (disabled ? { attributes: { disabled: true } } : {});
-  const actions: MenuAction[] = [
-    { id: "refresh", title: "Refresh", image: "arrow.clockwise", ...off(refreshing) },
+  const managed: MenuAction[] = [
     {
       id: "size",
       title: "Panel size",
@@ -292,7 +300,7 @@ function PanelMenu({ panel, first, last }: { panel: Panel; first: boolean; last:
           subactions: [
             { id: "routine:edit", title: "Edit routine", image: "pencil" },
             routine.enabled ? { id: "routine:pause", title: "Pause routine", image: "pause" } : { id: "routine:resume", title: "Resume routine", image: "play" },
-            { id: "routine:remove", title: "Remove routine", image: "trash", attributes: { destructive: true } },
+            ...(canDelete ? [{ id: "routine:remove", title: "Remove routine", image: "trash", attributes: { destructive: true } }] : []),
           ],
         }
       : { id: "routine:edit", title: "Set a routine", image: "calendar.badge.clock" },
@@ -303,7 +311,11 @@ function PanelMenu({ panel, first, last }: { panel: Panel; first: boolean; last:
       subactions: [{ id: "chat", title: "Open original chat", image: "bubble.left" }, ...(panel.refreshChatId ? [{ id: "history", title: "Open refresh history", image: "clock.arrow.circlepath" }] : [])],
     },
     { id: "hide", title: panel.hidden ? "Show on Today" : "Hide from Today", image: panel.hidden ? "eye" : "eye.slash" },
-    { id: "delete", title: "Remove panel", image: "trash", attributes: { destructive: true } },
+  ];
+  const actions: MenuAction[] = [
+    ...(canUse ? [{ id: "refresh", title: "Refresh", image: "arrow.clockwise", ...off(refreshing) } as MenuAction] : []),
+    ...(canManage ? managed : []),
+    ...(canDelete ? [{ id: "delete", title: "Remove panel", image: "trash", attributes: { destructive: true } } as MenuAction] : []),
   ];
   const remove = () =>
     Alert.alert(routine ? "Remove " + panel.title + " and its refresh routine?" : "Remove " + panel.title + "?", undefined, [
@@ -352,6 +364,9 @@ function panelCaption(panel: Panel, bot: Bot | undefined, refreshing: boolean) {
 /** A panel as a card. `order` places it among all the panels, for Earlier and Later; without it the card has no menu. */
 export function PanelCard({ panel, bot, order }: { panel: Panel; bot?: Bot; order?: { first: boolean; last: boolean } }) {
   const refreshing = useRefreshing(panel);
+  const canUse = useCan("today", "use");
+  const canManage = useCan("today", "manage");
+  const canDelete = useCan("today", "delete");
   return (
     <Card>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
@@ -364,7 +379,7 @@ export function PanelCard({ panel, bot, order }: { panel: Panel; bot?: Bot; orde
             {panelCaption(panel, bot, refreshing)}
           </T>
         </View>
-        {order && <PanelMenu panel={panel} first={order.first} last={order.last} />}
+        {order && (canUse || canManage || canDelete) && <PanelMenu panel={panel} first={order.first} last={order.last} />}
       </View>
       <Blocks blocks={panel.blocks} title={panel.title} />
     </Card>
@@ -372,8 +387,11 @@ export function PanelCard({ panel, bot, order }: { panel: Panel; bot?: Bot; orde
 }
 
 export default function Today() {
+  const canView = useCan("today", "view");
+  const canCreate = useCan("today", "create");
+  if (!canView) return <Page title="Today"><EmptyState title="Your team role can't view Today" /></Page>;
   return (
-    <Page title="Today" actions={<IconButton icon={Plus} label="Create panel" variant="accent" size={44} onPress={openNewPanel} />}>
+    <Page title="Today" actions={canCreate ? <IconButton icon={Plus} label="Create panel" variant="accent" size={44} onPress={openNewPanel} /> : undefined}>
       <TodayContent />
     </Page>
   );
@@ -387,6 +405,10 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
   const panels = usePart("panels");
   const [chosen, setChosen] = useState<Segment>("feed");
   const [finished, setFinished] = useState(false);
+  const canView = useCan("today", "view");
+  const canCreate = useCan("today", "create");
+  const canManage = useCan("today", "manage");
+  const canChat = useCan("agents", "chat");
 
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const primary = allBots[0];
@@ -407,6 +429,7 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
   const segment = options.some((option) => option.value === chosen) ? chosen : options[0].value;
   const showing = segment !== "panels" && finished;
   const list = segment === "panels" ? [] : (showing ? done : items).filter((item) => item.kind === segment).slice(0, 30);
+  if (!canView) return <EmptyState title="Your team role can't view Today" />;
 
   return (
     <Seen.Provider value={seen ?? null}>
@@ -424,8 +447,8 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                   <EmptyState
                     art={<Mascot size={96} state={segment === "feed" ? "completed" : "idle"} />}
                     title={EMPTY[segment]}
-                    action={primary ? "Ask " + primary.name : undefined}
-                    onAction={primary ? () => void askBot(primary.id, ASK[segment]) : undefined}
+                    action={primary && canChat ? "Ask " + primary.name : undefined}
+                    onAction={primary && canChat ? () => void askBot(primary.id, ASK[segment]) : undefined}
                   />
                 )
               ) : (
@@ -439,13 +462,13 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                 (hiddenPanels.length ? (
                   <EmptyState art={<Mascot size={96} />} title="All panels are hidden" />
                 ) : (
-                  <EmptyState art={<Mascot size={96} />} title={EMPTY.panels} action="Ask a bot" onAction={openNewPanel} />
+                  <EmptyState art={<Mascot size={96} />} title={EMPTY.panels} action={canCreate ? "Ask a bot" : undefined} onAction={canCreate ? openNewPanel : undefined} />
                 ))}
               {shownPanels.map((panel) => {
                 const index = all.indexOf(panel);
                 return <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} order={{ first: index === 0, last: index === all.length - 1 }} />;
               })}
-              {shownPanels.length > 0 && <Button title="Create panel" icon={Plus} variant="secondary" size="sm" onPress={openNewPanel} style={{ alignSelf: "center" }} />}
+              {shownPanels.length > 0 && canCreate && <Button title="Create panel" icon={Plus} variant="secondary" size="sm" onPress={openNewPanel} style={{ alignSelf: "center" }} />}
               {hiddenPanels.length > 0 && (
                 <View style={{ marginTop: space.sm }}>
                   <Label>Hidden</Label>
@@ -458,7 +481,7 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                           leading={<BotAvatar bot={bot} size={32} badge={false} />}
                           title={panel.title}
                           subtitle={bot?.name}
-                          trailing={<Button title="Show" variant="ghost" size="sm" onPress={() => void attempt(api.changePanel(panel.id, "show"))} accessibilityLabel={"Show " + panel.title} />}
+                          trailing={canManage ? <Button title="Show" variant="ghost" size="sm" onPress={() => void attempt(api.changePanel(panel.id, "show"))} accessibilityLabel={"Show " + panel.title} /> : undefined}
                         />
                       );
                     })}

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Alert, Switch, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel, RunSummary } from "@/link/types";
-import { type RoutineEntry, useBots, useChats, usePart, useRoutines } from "@/state/hooks";
+import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
@@ -54,6 +54,10 @@ function NeedsYou({ needs }: { needs: Need[] }) {
 
 function RoutineRow({ routine }: { routine: RoutineEntry }) {
   const { colors } = useTheme();
+  const canUse = useCan("today", "use");
+  const canCreate = useCan("today", "create");
+  const canManage = useCan("today", "manage");
+  const canDelete = useCan("today", "delete");
   const name = routineName(routine);
   const on = routine.entry.enabled !== false;
   const finished = isFinished(routine);
@@ -65,10 +69,10 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
   return (
     <HoldMenu
       actions={[
-        { id: "run", title: "Run now", image: "play" },
+        ...(canUse ? [{ id: "run", title: "Run now", image: "play" }] : []),
         { id: "chat", title: "Open chat", image: "bubble.left" },
-        { id: "duplicate", title: "Duplicate", image: "plus.square.on.square" },
-        { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+        ...(canCreate ? [{ id: "duplicate", title: "Duplicate", image: "plus.square.on.square" }] : []),
+        ...(canDelete ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
       ]}
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
@@ -84,9 +88,9 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
         subtitle={routineSubtitle(routine)}
         muted={!on || finished}
         hint="Long press for more"
-        onPress={() => openRoutine(routine.id)}
+        onPress={canManage ? () => openRoutine(routine.id) : () => openChat(routine.id)}
         accessory={
-          !finished && (
+          canManage && !finished && (
             <Switch
               value={on}
               onValueChange={(next) => {
@@ -106,13 +110,14 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
 
 function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; chats: ChatSummary[]; bots: Map<string, Bot> }) {
   const panels = usePart("panels");
+  const canCreate = useCan("today", "create");
   const withRoutine = useMemo(() => (panels ?? []).filter((panel) => panel.routine), [panels]);
   // Schedules a bot made in a chat with /every or /after: every schedule that isn't a routine.
   const schedules = useMemo(() => chats.flatMap((chat) => (chat.schedules ?? []).filter((entry) => !entry.routine).map((entry) => ({ chat, entry }))), [chats]);
   return (
     <View style={{ gap: space.xl }}>
       {routines.length === 0 ? (
-        <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action="New routine" onAction={() => openRoutine("new")} />
+        <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action={canCreate ? "New routine" : undefined} onAction={canCreate ? () => openRoutine("new") : undefined} />
       ) : (
         <Group>
           {routines.map((routine) => (
@@ -170,6 +175,8 @@ function PanelRoutineRow({ panel, bot }: { panel: Panel; bot?: Bot }) {
 function ScheduleRow({ chat, entry, bot }: { chat: ChatSummary; entry: ChatSchedule; bot?: Bot }) {
   const { colors } = useTheme();
   const paused = entry.enabled === false;
+  const canManage = useCan("today", "manage");
+  const canDelete = useCan("today", "delete");
   const when = paused ? "Paused" : entry.nextAt != null ? "Next " + upcoming(entry.nextAt) : undefined;
   const change = (action: "pause" | "resume" | "delete", done?: string) => void attempt(api.changeSchedule(chat.id, entry.id, action), done);
   const remove = () =>
@@ -185,10 +192,10 @@ function ScheduleRow({ chat, entry, bot }: { chat: ChatSummary; entry: ChatSched
       muted={paused}
       onPress={() => openChat(chat.id)}
       accessory={
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <Button title={paused ? "Resume" : "Pause"} variant="ghost" size="sm" onPress={() => change(paused ? "resume" : "pause")} accessibilityLabel={(paused ? "Resume " : "Pause ") + entry.prompt} />
-          <IconButton icon={Trash2} label={"Delete " + entry.prompt} size={44} color={colors.faint} onPress={remove} />
-        </View>
+        (canManage || canDelete) ? <View style={{ flexDirection: "row", alignItems: "center" }}>
+          {canManage && <Button title={paused ? "Resume" : "Pause"} variant="ghost" size="sm" onPress={() => change(paused ? "resume" : "pause")} accessibilityLabel={(paused ? "Resume " : "Pause ") + entry.prompt} />}
+          {canDelete && <IconButton icon={Trash2} label={"Delete " + entry.prompt} size={44} color={colors.faint} onPress={remove} />}
+        </View> : undefined
       }
     />
   );
@@ -311,6 +318,10 @@ export default function Work() {
   const allTasks = usePart("tasks");
   const runs = usePart("runs") ?? [];
   const requests = usePart("live")?.requests;
+  const canToday = useCan("today", "view");
+  const canCreateToday = useCan("today", "create");
+  const member = useMember();
+  const options = SEGMENTS.filter((option) => option.value === "tasks" ? !member : option.value === "routines" ? canToday : true);
 
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const tasks = useMemo(() => (allTasks ?? []).filter((task) => task.status !== "archived"), [allTasks]);
@@ -328,17 +339,18 @@ export default function Work() {
     return out;
   }, [requests, tasks, bots]);
 
-  const add = segment === "routines" ? () => openRoutine("new") : segment === "tasks" ? () => openTask("new") : undefined;
+  const shownSegment = options.some((option) => option.value === segment) ? segment : options[0]?.value ?? "activity";
+  const add = shownSegment === "routines" && canCreateToday ? () => openRoutine("new") : shownSegment === "tasks" ? () => openTask("new") : undefined;
 
   return (
     <Page tab title="Work" actions={add && <IconButton icon={Plus} label={segment === "routines" ? "New routine" : "New task"} variant="accent" size={44} onPress={add} />}>
       {synced && <NeedsYou needs={needs} />}
-      <Segmented options={SEGMENTS} value={segment} onChange={setSegment} />
+      <Segmented options={options} value={shownSegment} onChange={setSegment} />
       {!synced ? (
         <Loading />
       ) : (
-        <Animated.View key={segment} entering={FadeIn.duration(180)}>
-          {segment === "routines" ? <Routines routines={routines} chats={chats} bots={bots} /> : segment === "tasks" ? <Tasks tasks={tasks} bots={bots} /> : <Activity runs={runs} chats={chats} bots={bots} />}
+        <Animated.View key={shownSegment} entering={FadeIn.duration(180)}>
+          {shownSegment === "routines" ? <Routines routines={routines} chats={chats} bots={bots} /> : shownSegment === "tasks" ? <Tasks tasks={tasks} bots={bots} /> : <Activity runs={runs} chats={chats} bots={bots} />}
         </Animated.View>
       )}
     </Page>

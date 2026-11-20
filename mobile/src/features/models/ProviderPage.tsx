@@ -4,7 +4,7 @@ import * as WebBrowser from "expo-web-browser";
 import { Copy, ExternalLink, LogOut, Power } from "lucide-react-native";
 import { Alert, StyleSheet, View } from "react-native";
 import type { ProviderStatus } from "@/link/types";
-import { refresh, useModels, useProviders } from "@/state/hooks";
+import { refresh, useMember, useModels, useProviders } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Badge, Button, EmptyState, Group, IconButton, IconTile, Label, Loading, Page, ProviderIcon, radius, Row, space, T, useTheme } from "@/ui";
@@ -14,7 +14,9 @@ import { providerBadge } from "./status";
 export default function ProviderPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const providers = useProviders();
+  const member = useMember();
   const provider = providers?.find((entry) => entry.id === id);
+  if (member) return <Page><EmptyState title="Only the owner can manage providers" /></Page>;
   if (!providers) return (
       <Page>
         <Loading />

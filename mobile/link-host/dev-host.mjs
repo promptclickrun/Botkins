@@ -10,10 +10,12 @@
 //   BOTKINS_DEV_PRS=1                     answer pull request lookups with made-up ones (a stand-in gh)
 //   BOTKINS_DEV_TIMELINE=off              act as an older computer, without "turn-timeline-v1" (docs/turn-timeline.md)
 //   BOTKINS_DEV_PLUGINS=off               act as an older computer, without "plugins-v1" (docs/plugins.md)
+//   BOTKINS_DEV_AUTO_APPROVE=1            approve team join requests after a short wait
 // The pairing link is also written to <dir>/pairing-url.txt for scripts and simulators.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { createInterface } from "node:readline";
 import { LinkHost, qrText } from "./index.mjs";
 import { MockBackend } from "./mock-backend.mjs";
 import { jpegSize } from "./screen.mjs";
@@ -106,4 +108,28 @@ host.on("paired", (device) => {
 });
 await open();
 
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => host.stop().finally(() => process.exit(0)));
+let latestRequest;
+host.on("joinRequest", (request) => {
+  latestRequest = request;
+  console.log("\nTeam request  " + request.name + " (" + request.id + ")");
+  console.log("Type approve " + request.id + " or deny " + request.id + " in this console.");
+  if (process.env.BOTKINS_DEV_AUTO_APPROVE === "1") {
+    const id = request.id;
+    setTimeout(() => {
+      void host.approve(id).then(() => console.log("Approved " + request.name + "."), (error) => console.log("Approval failed: " + error.message));
+    }, 2500);
+  }
+});
+const input = createInterface({ input: process.stdin, output: process.stdout });
+input.on("line", (line) => {
+  const [action, id = latestRequest?.id] = line.trim().split(/\s+/);
+  if (action !== "approve" && action !== "deny") return;
+  if (!id) return console.log("There is no team request waiting.");
+  const work = action === "approve" ? host.approve(id) : host.deny(id);
+  void work.then(() => console.log((action === "approve" ? "Approved " : "Denied ") + id + "."), (error) => console.log("That didn't work: " + error.message));
+});
+
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
+  input.close();
+  host.stop().finally(() => process.exit(0));
+});

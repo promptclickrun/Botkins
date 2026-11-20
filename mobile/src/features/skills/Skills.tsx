@@ -3,9 +3,9 @@ import { BookOpen, Folder, FolderPlus, Plus, Puzzle, Sparkles } from "lucide-rea
 import { useState } from "react";
 import { Alert, View } from "react-native";
 import type { SkillInfo } from "@/link/types";
-import { refresh, useCapability, useOnline, usePart, useSkills } from "@/state/hooks";
+import { refresh, useCan, useCapability, useMember, useOnline, usePart, useSkills } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { brand, Button, Field, Group, IconButton, IconTile, Label, Loading, Page, Row, space, T } from "@/ui";
+import { brand, Button, EmptyState, Field, Group, IconButton, IconTile, Label, Loading, Page, Row, space, T } from "@/ui";
 import { FILTER_FROM, filterSkills, folderName, isBuiltIn, readableName, skillOrigin, skillsIn } from "./shared";
 
 const open = (name: string) => router.push({ pathname: "/skills/[name]", params: { name } });
@@ -13,7 +13,11 @@ const open = (name: string) => router.push({ pathname: "/skills/[name]", params:
 /** The skills on the computer: the person's own and the ones that ship with it, then the linked folders and plugins. */
 export default function Skills() {
   const online = useOnline();
-  const canFolders = useCapability("folders-v1");
+  const canRead = useCan("skills", "read");
+  const canCreate = useCan("skills", "create");
+  const canManage = useCan("skills", "manage");
+  const member = useMember();
+  const canFolders = !member && useCapability("folders-v1");
   const skills = useSkills();
   const part = usePart("skills");
   const off = part?.disabled;
@@ -52,8 +56,8 @@ export default function Skills() {
       leading={<IconTile icon={isBuiltIn(skill) ? Sparkles : skill.origin === "folder" ? Folder : BookOpen} color={isBuiltIn(skill) ? brand.tide : brand.clay} size={36} />}
       title={readableName(skill.name)}
       subtitle={[skillOrigin(skill, folders), skill.description].filter(Boolean).join(" · ")}
-      toggled={pending[skill.name] ?? (skill.enabled && !off?.includes(skill.name))}
-      onToggle={(on) => void toggle(skill.name, on)}
+      toggled={canManage ? (pending[skill.name] ?? (skill.enabled && !off?.includes(skill.name))) : undefined}
+      onToggle={canManage ? (on) => void toggle(skill.name, on) : undefined}
       onPress={() => open(skill.name)}
     />
   );
@@ -71,15 +75,17 @@ export default function Skills() {
         leading={<IconTile icon={plugin ? Puzzle : Folder} color={brand.clay} size={36} />}
         title={folderName(item.path)}
         subtitle={count === undefined ? item.path : count + (count === 1 ? " skill · " : " skills · ") + item.path}
-        trailing={<Button title="Remove" variant="secondary" size="sm" disabled={!online} accessibilityLabel={(plugin ? "Remove the plugin " : "Remove the folder ") + folderName(item.path)} onPress={() => unlink(item, plugin)} />}
+        trailing={canManage ? <Button title="Remove" variant="secondary" size="sm" disabled={!online} accessibilityLabel={(plugin ? "Remove the plugin " : "Remove the folder ") + folderName(item.path)} onPress={() => unlink(item, plugin)} /> : undefined}
       />
     );
   };
 
   return (
     <Page title="Skills" caption="What your bots know how to do" keyboard>
-      <Stack.Screen options={{ headerRight: () => <IconButton icon={Plus} label="New skill" size={44} onPress={() => open("new")} /> }} />
-      {!skills ? (
+      <Stack.Screen options={{ headerRight: canCreate ? () => <IconButton icon={Plus} label="New skill" size={44} onPress={() => open("new")} /> : undefined }} />
+      {!canRead ? (
+        <EmptyState title="Your team role can't view skills" />
+      ) : !skills ? (
         <Loading />
       ) : (
         <>
@@ -87,7 +93,7 @@ export default function Skills() {
           {(!filtering || yours.length > 0) && (
             <View>
               <Label>Yours</Label>
-              <Group>{yours.length ? yours.map(row) : <Row leading={<IconTile icon={Plus} />} title="Write your first skill" tone="accent" onPress={() => open("new")} />}</Group>
+              <Group>{yours.length ? yours.map(row) : canCreate ? <Row leading={<IconTile icon={Plus} />} title="Write your first skill" tone="accent" onPress={() => open("new")} /> : <Row title="No personal skills yet" />}</Group>
             </View>
           )}
           {builtIn.length > 0 && (
@@ -101,7 +107,7 @@ export default function Skills() {
               {"No skills match “" + query.trim() + "”."}
             </T>
           )}
-          {(folders.length > 0 || canFolders) && (
+          {!member && (folders.length > 0 || canFolders) && (
             <View>
               <Label>Linked folders</Label>
               <Group>
@@ -119,7 +125,7 @@ export default function Skills() {
               </Group>
             </View>
           )}
-          {plugins.length > 0 && (
+          {!member && plugins.length > 0 && (
             <View>
               <Label>Plugins</Label>
               <Group>{plugins.map((item) => folderRow(item, true))}</Group>

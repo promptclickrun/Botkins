@@ -12,7 +12,7 @@ import { openBotChat } from "@/features/chat/open";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBotActivity, useBots, useChats, usePart } from "@/state/hooks";
+import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
@@ -29,10 +29,11 @@ const TOP = 4;
 function TopBot({ bot, size }: { bot: Bot; size: number }) {
   const state = useBotActivity(bot.id);
   const status = activityLabel(state);
+  const canChat = useCan("agents", "chat");
   return (
     <View style={{ flex: 1, alignItems: "center" }}>
       <BotMenu bot={bot}>
-        <Tap onPress={() => void openBotChat(bot.id)} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
+        <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
           <BotAvatar bot={bot} state={state} size={size} />
           <T variant="caption" color="ink2" numberOfLines={1} center>
             {bot.name}
@@ -80,9 +81,10 @@ function Placeholder() {
  */
 function FirstBot() {
   const online = useApp((state) => state.link === "online");
+  const canCreate = useCan("agents", "create");
   const [found, setFound] = useState(0);
   useEffect(() => {
-    if (!online) return;
+    if (!online || !canCreate) return;
     let live = true;
     api.importableAgents().then(
       (list) => live && setFound(addable(list).length),
@@ -91,7 +93,8 @@ function FirstBot() {
     return () => {
       live = false;
     };
-  }, [online]);
+  }, [online, canCreate]);
+  if (!canCreate) return <EmptyState art={<Mascot size={104} state="waiting" />} title="No bots are available yet" text="Your team role doesn't give you a bot to use." />;
   if (!found) return <EmptyState art={<Mascot size={104} state="completed" />} title="Make your first bot" action="Create a bot" onAction={() => router.push("/bot/new")} />;
   return (
     <View>
@@ -210,6 +213,9 @@ export default function Home() {
   const requests = usePart("live")?.requests;
   const board = usePart("board");
   const panels = usePart("panels");
+  const canCreate = useCan("agents", "create");
+  const canManage = useCan("agents", "manage");
+  const canSeeToday = useCan("today", "view");
 
   const shown = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)), [bots]);
   const top = useMemo(() => {
@@ -271,7 +277,7 @@ export default function Home() {
             </T>
           </Tap>
         </HoldMenu>
-        <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />
+        {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
       </View>
 
       {waiting.length > 0 && (
@@ -287,7 +293,7 @@ export default function Home() {
       ) : bots.length === 0 ? (
         <FirstBot />
       ) : shown.length === 0 ? (
-        <EmptyState art={<Mascot size={104} state="completed" />} title="Make your first bot" action="Create a bot" onAction={() => router.push("/bot/new")} />
+        <EmptyState art={<Mascot size={104} state="completed" />} title={canCreate ? "Make your first bot" : "No bots are available yet"} action={canCreate ? "Create a bot" : undefined} onAction={canCreate ? () => router.push("/bot/new") : undefined} />
       ) : (
         <Animated.View entering={FadeIn.duration(240)} style={{ gap: space.lg }}>
           <View style={{ flexDirection: "row", justifyContent: "space-evenly" }}>
@@ -320,21 +326,24 @@ export default function Home() {
               scroll={scroll}
               onDrop={order.drop}
               onDragging={setDragging}
+              manageable={canManage}
             />
           )}
           {/* Today is always under the bots, even with nothing open: it has its own empty states. */}
-          <View style={{ gap: space.lg }}>
-            <Group flat>
-              <Row
-                leading={<IconTile icon={Sunrise} />}
-                title="Today"
-                value={todayRow(todayOpen, today).value}
-                trailing={<Fold size={18} color={colors.faint} strokeWidth={2.2} />}
-                onPress={() => setPrefs({ todayOpen: !todayOpen })}
-              />
-            </Group>
-            {todayOpen && <TodayContent seen={seen} />}
-          </View>
+          {canSeeToday && (
+            <View style={{ gap: space.lg }}>
+              <Group flat>
+                <Row
+                  leading={<IconTile icon={Sunrise} />}
+                  title="Today"
+                  value={todayRow(todayOpen, today).value}
+                  trailing={<Fold size={18} color={colors.faint} strokeWidth={2.2} />}
+                  onPress={() => setPrefs({ todayOpen: !todayOpen })}
+                />
+              </Group>
+              {todayOpen && <TodayContent seen={seen} />}
+            </View>
+          )}
         </Animated.View>
       )}
     </HomeFrame>

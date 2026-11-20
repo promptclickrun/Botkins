@@ -7,7 +7,7 @@ import { fetch as expoFetch } from "expo/fetch";
 import { forget, keep, readKept } from "@/state/keep";
 import * as Network from "expo-network";
 import { AppState, Platform } from "react-native";
-import { type FetchLike, LinkClient, LinkError, pair, type Pairing } from "@/link/client";
+import { checkJoin, findHost, findInvite, type FetchLike, type JoinAttempt, type JoinTarget, LinkClient, LinkError, pair, type Pairing, startJoin } from "@/link/client";
 import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import { relayFetch } from "@/link/relay";
@@ -191,6 +191,56 @@ export async function pairWith(target: PairTarget) {
   }
   if (presence) pairing = { ...pairing, presenceTag: presence.tag };
   // Pairing again with a computer the phone has: the key of the pairing before goes with it.
+  removePresenceKey(kept.list.find((item) => item.serverId === pairing.serverId)?.presenceTag);
+  const next = withPairing(kept, pairing);
+  await savePairing(pairing);
+  kept = next;
+  await saveIndex();
+  startOver();
+  return pairing;
+}
+
+/** Finds a team invite from its relay card and checks that the host still supports joins. */
+export async function findTeamInvite(code: string, expectedServerKey?: string) {
+  let target: Awaited<ReturnType<typeof findInvite>>;
+  try {
+    target = await findInvite(fetcher, code, { serverKey: expectedServerKey });
+  } catch (error) {
+    if (!__DEV__) throw error;
+    const demo = await findHost(fetcher, ["127.0.0.1:47620"], expectedServerKey ? { serverKey: expectedServerKey } : undefined).catch(() => {
+      throw error;
+    });
+    target = {
+      code,
+      serverId: demo.hello.serverId,
+      serverKey: demo.hello.publicKey,
+      name: demo.hello.name || "Demo team",
+      hosts: [demo.host],
+      room: "",
+      relayBase: "",
+    };
+  }
+  const { hello } = await findHost(fetcher, target.hosts, { serverId: target.serverId, serverKey: target.serverKey }).catch((error: unknown) => {
+    if (error instanceof LinkError && error.code === "not-found") throw new LinkError("offline", "Can't reach " + target.name + " right now. Try again when the owner's computer is on.");
+    throw error;
+  });
+  if (hello.join !== true) throw new LinkError("protocol", "Update Botkins on the owner's computer");
+  return { target, computerName: hello.name };
+}
+
+/** Starts a join request for this phone, keeping the same encrypted client key for later checks. */
+export function startTeamJoin(target: JoinTarget) {
+  if (!hasRoom(kept, target.serverId)) return Promise.reject(new LinkError("closed", TOO_MANY));
+  return startJoin(fetcher, target, { name: deviceName(), platform: Platform.OS, kind: "phone" });
+}
+
+export function checkTeamJoin(attempt: JoinAttempt) {
+  return checkJoin(fetcher, attempt);
+}
+
+/** Adds an approved member pairing and makes that computer the one in use. */
+export async function joinWithPairing(pairing: Pairing) {
+  if (!hasRoom(kept, pairing.serverId)) throw new LinkError("closed", TOO_MANY);
   removePresenceKey(kept.list.find((item) => item.serverId === pairing.serverId)?.presenceTag);
   const next = withPairing(kept, pairing);
   await savePairing(pairing);

@@ -1,14 +1,16 @@
 import "react-native-reanimated";
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
+import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Appearance } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { boot } from "@/state/link";
+import { readKept } from "@/state/keep";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
+import { JOIN_ATTEMPT_KEY } from "@/features/pair/joinLogic";
 import { ToastHost, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
@@ -18,6 +20,8 @@ export default function RootLayout() {
   const { colors } = theme;
   const booted = useApp((state) => state.booted);
   const paired = useApp((state) => !!state.pairing);
+  const pathname = usePathname();
+  const resumeChecked = useRef(false);
 
   const mode = usePrefs((prefs) => prefs.mode);
 
@@ -31,6 +35,18 @@ export default function RootLayout() {
   useEffect(() => {
     if (booted) void SplashScreen.hideAsync();
   }, [booted]);
+  useEffect(() => {
+    if (!booted || resumeChecked.current) return;
+    resumeChecked.current = true;
+    if (pathname === "/join") return;
+    let live = true;
+    void readKept(JOIN_ATTEMPT_KEY).then((saved) => {
+      if (live && saved) router.replace({ pathname: "/join", params: { resume: "1" } });
+    }, () => {});
+    return () => {
+      live = false;
+    };
+  }, [booted, pathname]);
   if (!booted) return null;
 
   const base = theme.dark ? DarkTheme : DefaultTheme;
@@ -116,6 +132,8 @@ export default function RootLayout() {
               <Stack.Screen name="settings/access" />
               <Stack.Screen name="settings/window" />
               <Stack.Screen name="settings/bubble" options={half} />
+              <Stack.Screen name="settings/team/index" />
+              <Stack.Screen name="settings/team/role" options={tall} />
               <Stack.Screen name="tools/import" options={tall} />
               <Stack.Screen name="folders" options={tall} />
               <Stack.Screen name="voice/live" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
@@ -133,6 +151,7 @@ export default function RootLayout() {
             <Stack.Screen name="pair/index" options={{ ...sheet, sheetAllowedDetents: [0.5] }} />
             <Stack.Screen name="pair/scan" options={{ presentation: "fullScreenModal", headerShown: false, animation: "slide_from_bottom" }} />
             <Stack.Screen name="pair/manual" options={{ ...sheet, sheetAllowedDetents: [0.62, 1] }} />
+            <Stack.Screen name="join" options={{ ...sheet, sheetAllowedDetents: [0.72, 1] }} />
           </Stack>
           <ToastHost />
         </ThemeProvider>

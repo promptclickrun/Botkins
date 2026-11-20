@@ -3,7 +3,7 @@ import { Check } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, View } from "react-native";
 import type { Bot, ChatMode } from "@/link/types";
-import { useBots, usePart } from "@/state/hooks";
+import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { BotAvatar, Chip, EmptyState, Group, Label, Mascot, Segmented, Sheet, space, T, Tap, useTheme } from "@/ui";
 
@@ -42,6 +42,8 @@ export default function NewChat() {
   const { botId } = useLocalSearchParams<{ botId?: string }>();
   const allBots = useBots();
   const projects = usePart("projects");
+  const canChat = useCan("agents", "chat");
+  const canCreate = useCan("agents", "create");
   const bots = useMemo(() => {
     const shown = allBots.filter((bot) => !bot.hidden || bot.id === botId);
     return [...shown].sort((a, b) => Number(b.id === botId) - Number(a.id === botId) || Number(!!b.pinned) - Number(!!a.pinned));
@@ -66,11 +68,12 @@ export default function NewChat() {
   const toggle = (id: string) => setPicked(picked.includes(id) ? picked.filter((p) => p !== id) : picked.length >= MAX_GROUP ? picked : [...picked, id]);
   const multi = kind === "group";
   const ready = picked.length >= 2 && picked.length <= MAX_GROUP;
+  if (!canChat) return <Sheet title="New chat"><EmptyState title="You can view, not chat" /></Sheet>;
 
   if (bots.length === 0)
     return (
       <Sheet title="New chat">
-        <EmptyState art={<Mascot state="happy" size={88} />} title="No bots yet" action="Create a bot" onAction={() => router.replace("/bot/new")} />
+        <EmptyState art={<Mascot state="happy" size={88} />} title="No bots yet" action={canCreate ? "Create a bot" : undefined} onAction={canCreate ? () => router.replace("/bot/new") : undefined} />
       </Sheet>
     );
 

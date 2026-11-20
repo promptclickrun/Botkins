@@ -3,7 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Bell, MessageCircle, Play, Send, Trash2 } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Alert, View } from "react-native";
-import { type RoutineEntry, useBots, usePart, useRoutines } from "@/state/hooks";
+import { type RoutineEntry, useBots, useCan, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { EmptyState, Field, Group, IconTile, Label, Loading, Row, Sheet, space, T, useTheme } from "@/ui";
@@ -28,7 +28,10 @@ export default function RoutineEditor() {
   const routines = useRoutines();
   const synced = useApp((state) => state.synced);
   const isNew = id === "new";
+  const canCreate = useCan("today", "create");
+  const canManage = useCan("today", "manage");
   const routine = routines.find((item) => item.id === id);
+  if (isNew ? !canCreate : !canManage) return <Sheet title="Routine"><EmptyState title="Your team role can't edit routines" /></Sheet>;
   if (!isNew && !routine)
     return <Sheet title="Routine">{synced ? <EmptyState title="This routine is gone" action="Close" onAction={() => router.back()} /> : <Loading />}</Sheet>;
   return <Editor key={routine?.id ?? "new"} routine={routine} botId={botId ?? null} />;
@@ -39,6 +42,8 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
   const bots = useBots();
   const shownBots = useMemo(() => bots.filter((bot) => !bot.hidden), [bots]);
   const capabilities = usePart("meta")?.capabilities;
+  const canUse = useCan("today", "use");
+  const canDelete = useCan("today", "delete");
   const [draft, setDraft] = useState<Draft>(() => draftOf(routine, botId ?? (shownBots.length === 1 ? shownBots[0].id : null), capabilities));
   const [saving, setSaving] = useState(false);
   const set = (patch: Partial<Draft>) => setDraft((last) => ({ ...last, ...patch }));
@@ -121,9 +126,9 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
 
       {routine && (
         <Group>
-          <Row leading={<IconTile icon={Play} />} title="Run now" onPress={() => void attempt(api.runRoutine(routine.id), "Running now")} />
+          {canUse && <Row leading={<IconTile icon={Play} />} title="Run now" onPress={() => void attempt(api.runRoutine(routine.id), "Running now")} />}
           <Row leading={<IconTile icon={MessageCircle} color={colors.info} />} title="Open chat" chevron onPress={openChat} />
-          <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Delete routine" tone="danger" onPress={remove} />
+          {canDelete && <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Delete routine" tone="danger" onPress={remove} />}
         </Group>
       )}
     </Sheet>

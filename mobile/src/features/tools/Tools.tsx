@@ -4,7 +4,7 @@ import { useState } from "react";
 import { View } from "react-native";
 import { countOn } from "@/device/tools";
 import { useDevicePrefs } from "@/state/devicePrefs";
-import { usePart } from "@/state/hooks";
+import { useCan, useMember, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Badge, brand, EmptyState, Group, IconButton, IconTile, Loading, Page, Row, space, useTheme } from "@/ui";
 import { attentionOf, whereOf } from "./shared";
@@ -15,6 +15,11 @@ const add = () => router.push({ pathname: "/tools/[id]", params: { id: "new" } }
 export default function Tools() {
   const { colors } = useTheme();
   const servers = usePart("mcp");
+  const canView = useCan("mcp", "view");
+  const canCreate = useCan("mcp", "create");
+  const canManage = useCan("mcp", "manage");
+  const canPlugins = useCan("plugins", "view");
+  const member = useMember();
   const deviceOn = useDevicePrefs((state) => countOn(state.sources));
   // A switch holds its new place until the computer says it changed.
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -29,21 +34,23 @@ export default function Tools() {
     <Page title="Tools" caption="MCP servers your bots can use">
       <Stack.Screen
         options={{
-          headerRight: () => (
+          headerRight: canCreate ? () => (
             <View style={{ flexDirection: "row" }}>
-              <IconButton icon={Import} label="Import MCP servers" size={44} onPress={() => router.push("/tools/import" as Href)} />
+              {!member && <IconButton icon={Import} label="Import MCP servers" size={44} onPress={() => router.push("/tools/import" as Href)} />}
               <IconButton icon={Plus} label="Add a tool" size={44} onPress={add} />
             </View>
-          ),
+          ) : undefined,
         }}
       />
-      <Group>
+      {!member && <Group>
         <Row leading={<IconTile icon={Smartphone} color={brand.tide} size={36} />} title="Device access" subtitle="Calendar, contacts, Health and more" value={deviceOn ? deviceOn + " on" : "Off"} chevron onPress={() => router.push("/tools/device")} />
-      </Group>
-      {!servers ? (
+      </Group>}
+      {!canView ? (
+        <EmptyState title="Your team role can't view tools" />
+      ) : !servers ? (
         <Loading />
       ) : servers.length === 0 ? (
-        <EmptyState icon={Wrench} title="No tools yet" action="Add a tool" onAction={add} />
+        <EmptyState icon={Wrench} title="No tools yet" action={canCreate ? "Add a tool" : undefined} onAction={canCreate ? add : undefined} />
       ) : (
         <Group>
           {servers.map((server) => {
@@ -55,19 +62,19 @@ export default function Tools() {
                 title={server.name}
                 subtitle={whereOf(server) || undefined}
                 trailing={attention ? <Badge label={attention} tone="warning" /> : undefined}
-                toggled={pending[server.id] ?? server.enabled}
-                onToggle={(on) => void toggle(server.id, on)}
+                toggled={canManage ? (pending[server.id] ?? server.enabled) : undefined}
+                onToggle={canManage ? (on) => void toggle(server.id, on) : undefined}
                 onPress={() => router.push({ pathname: "/tools/[id]", params: { id: server.id } })}
               />
             );
           })}
         </Group>
       )}
-      <View style={{ marginTop: servers?.length === 0 ? -space.lg : 0 }}>
+      {canPlugins && <View style={{ marginTop: servers?.length === 0 ? -space.lg : 0 }}>
         <Group>
           <Row leading={<IconTile icon={Store} color={colors.ink2} />} title="Add from the Marketplace" chevron onPress={() => router.push("/market")} />
         </Group>
-      </View>
+      </View>}
     </Page>
   );
 }

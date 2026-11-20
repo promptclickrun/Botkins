@@ -1,13 +1,14 @@
 import { type Href, router } from "expo-router";
 import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FolderKanban, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, ScreenShare, ShieldCheck, SunMoon, Users, Wrench } from "lucide-react-native";
-import { View } from "react-native";
+import { Alert, View } from "react-native";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Preferences } from "@/link/types";
 import { useModels, usePart, useSettings, useSkills } from "@/state/hooks";
-import { api, attempt } from "@/state/link";
+import { api, attempt, unpair } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { brand, Group, IconTile, Label, Page, ProviderIcon, Row, useTheme } from "@/ui";
+import { can } from "@/state/team";
+import { Badge, brand, Group, IconTile, Label, Page, ProviderIcon, Row, useTheme } from "@/ui";
 import { harnessName } from "./Harness";
 import { linkLabel } from "./shared";
 
@@ -26,7 +27,12 @@ export default function Settings() {
   const skills = useSkills();
   const skillsOff = usePart("skills")?.disabled;
   const projects = usePart("projects");
+  const meta = usePart("meta");
+  const team = usePart("team");
   const mode = usePrefs((prefs) => prefs.mode);
+  const member = meta?.you?.kind === "member" && team && "me" in team ? team : undefined;
+  const permission = (scope: Parameters<typeof can>[1], action: string) => can({ meta, team }, scope, action);
+  const owner = meta?.you?.kind !== "member";
 
   const model = describeChoice(settings?.model, models, defaultProvider);
   const toolsOn = servers?.filter((server) => server.enabled).length;
@@ -38,30 +44,63 @@ export default function Settings() {
     <Page tab title="Settings">
       <Group>
         <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={() => router.push("/settings/desktop")} />
-        <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle="See and control your computer" chevron onPress={() => router.push("/remote")} />
+        {owner && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle="See and control your computer" chevron onPress={() => router.push("/remote")} />}
+        {owner && meta?.capabilities.includes("teams-v1") && (
+          <Row
+            leading={<IconTile icon={Users} color={brand.tide} />}
+            title="Team"
+            subtitle={team && "roles" in team ? team.name : undefined}
+            trailing={team && "requests" in team && team.requests.length > 0 ? <Badge label={String(team.requests.length)} tone="warning" /> : undefined}
+            chevron
+            onPress={() => router.push("/settings/team")}
+          />
+        )}
       </Group>
 
-      <View>
-        <Label>Your bots' toolbox</Label>
+      {member && (
         <Group>
-          <Row leading={<ProviderIcon provider={model.provider} name={model.providerLabel} size={32} tile />} title="Models" value={models && settings ? model.name : undefined} chevron onPress={() => router.push("/models")} />
-          <Row leading={<IconTile icon={Wrench} color={brand.clay} />} title="Tools" value={count(toolsOn, "on")} chevron onPress={() => router.push("/tools")} />
-          <Row leading={<IconTile icon={BookOpen} color={brand.clay} />} title="Skills" value={count(skillsOn, "on")} chevron onPress={() => router.push("/skills")} />
-          <Row leading={<IconTile icon={KeyRound} color={brand.clay} />} title="Credentials" chevron onPress={() => router.push("/credentials")} />
-          <Row leading={<IconTile icon={FolderKanban} color={brand.clay} />} title="Projects" value={projects ? String(projects.length) : undefined} chevron onPress={() => router.push("/projects")} />
-          <Row leading={<IconTile icon={LibraryBig} color={brand.clay} />} title="Wiki" chevron onPress={() => router.push("/wiki")} />
+          <Row
+            leading={<IconTile icon={Users} color={brand.fern} />}
+            title={"Member of " + member.team.name}
+            subtitle={member.me.group.name + " · " + member.me.role.name}
+            trailing={<Badge label="Member" tone="accent" />}
+          />
+          <Row
+            title="Leave team"
+            tone="danger"
+            onPress={() =>
+              Alert.alert("Leave " + member.team.name + "?", "This phone will be disconnected from the team.", [
+                { text: "Cancel", style: "cancel" },
+                { text: "Leave", style: "destructive", onPress: () => void unpair() },
+              ])
+            }
+          />
         </Group>
-      </View>
+      )}
+
+      {(permission("agents", "view") || permission("mcp", "view") || permission("skills", "read") || owner) && (
+        <View>
+          <Label>Your bots' toolbox</Label>
+          <Group>
+            {permission("agents", "view") && <Row leading={<ProviderIcon provider={model.provider} name={model.providerLabel} size={32} tile />} title="Models" value={models && settings ? model.name : undefined} chevron onPress={() => router.push("/models")} />}
+            {permission("mcp", "view") && <Row leading={<IconTile icon={Wrench} color={brand.clay} />} title="Tools" value={count(toolsOn, "on")} chevron onPress={() => router.push("/tools")} />}
+            {permission("skills", "read") && <Row leading={<IconTile icon={BookOpen} color={brand.clay} />} title="Skills" value={count(skillsOn, "on")} chevron onPress={() => router.push("/skills")} />}
+            {owner && <Row leading={<IconTile icon={KeyRound} color={brand.clay} />} title="Credentials" chevron onPress={() => router.push("/credentials")} />}
+            {owner && <Row leading={<IconTile icon={FolderKanban} color={brand.clay} />} title="Projects" value={projects ? String(projects.length) : undefined} chevron onPress={() => router.push("/projects")} />}
+            {owner && <Row leading={<IconTile icon={LibraryBig} color={brand.clay} />} title="Wiki" chevron onPress={() => router.push("/wiki")} />}
+          </Group>
+        </View>
+      )}
 
       <View>
         <Label>How bots work</Label>
         <Group>
-          <Row leading={<IconTile icon={ShieldCheck} color={brand.fern} />} title="Approvals" value={settings ? APPROVAL_SHORT[settings.approval] : undefined} chevron onPress={() => router.push("/settings/approvals")} />
-          {!!settings?.access && <Row leading={<IconTile icon={FolderLock} color={brand.fern} />} title="Access" value={settings.access.allBots ? "Every project" : "By bot"} chevron onPress={() => router.push("/settings/access" as Href)} />}
-          {!!settings?.harness && <Row leading={<IconTile icon={Cpu} color={brand.fern} />} title="Harness" value={harnessName(settings.harness)} chevron onPress={() => router.push("/settings/harness")} />}
-          <Row leading={<IconTile icon={Users} color={brand.fern} />} title="Teamwork" subtitle="Bots can ask each other for help" toggled={settings?.teamwork !== false} disabled={!settings} onToggle={(teamwork) => set({ teamwork })} />
-          <Row leading={<IconTile icon={MessagesSquare} color={brand.fern} />} title="Chat" subtitle="Thinking, steps, rich replies" chevron onPress={() => router.push("/settings/chat")} />
-          <Row leading={<IconTile icon={AudioLines} color={brand.fern} />} title="Voice" subtitle="Dictation, reading aloud, live voice" chevron onPress={() => router.push("/settings/voice")} />
+          {owner && <Row leading={<IconTile icon={ShieldCheck} color={brand.fern} />} title="Approvals" value={settings ? APPROVAL_SHORT[settings.approval] : undefined} chevron onPress={() => router.push("/settings/approvals")} />}
+          {owner && !!settings?.access && <Row leading={<IconTile icon={FolderLock} color={brand.fern} />} title="Access" value={settings.access.allBots ? "Every project" : "By bot"} chevron onPress={() => router.push("/settings/access" as Href)} />}
+          {owner && !!settings?.harness && <Row leading={<IconTile icon={Cpu} color={brand.fern} />} title="Harness" value={harnessName(settings.harness)} chevron onPress={() => router.push("/settings/harness")} />}
+          {owner && <Row leading={<IconTile icon={Users} color={brand.fern} />} title="Teamwork" subtitle="Bots can ask each other for help" toggled={settings?.teamwork !== false} disabled={!settings} onToggle={(teamwork) => set({ teamwork })} />}
+          {permission("settings", "view") && <Row leading={<IconTile icon={MessagesSquare} color={brand.fern} />} title="Chat" subtitle="Thinking, steps, rich replies" chevron onPress={() => router.push("/settings/chat")} />}
+          {owner && <Row leading={<IconTile icon={AudioLines} color={brand.fern} />} title="Voice" subtitle="Dictation, reading aloud, live voice" chevron onPress={() => router.push("/settings/voice")} />}
           <Row leading={<IconTile icon={Bell} color={brand.fern} />} title="Notifications" subtitle="Replies, requests, Live Activities" chevron onPress={() => router.push("/settings/notifications")} />
         </Group>
       </View>
@@ -74,7 +113,7 @@ export default function Settings() {
       </View>
 
       <Group>
-        <Row leading={<IconTile icon={ChartColumn} color={colors.ink2} />} title="Usage" chevron onPress={() => router.push("/settings/usage")} />
+        {owner && <Row leading={<IconTile icon={ChartColumn} color={colors.ink2} />} title="Usage" chevron onPress={() => router.push("/settings/usage")} />}
         <Row leading={<IconTile icon={Info} color={colors.ink2} />} title="About" chevron onPress={() => router.push("/settings/about")} />
       </Group>
     </Page>

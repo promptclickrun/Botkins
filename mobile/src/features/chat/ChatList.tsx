@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Alert, TextInput, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBots, useChatActivity, useChats } from "@/state/hooks";
+import { activityLabel, isConversation, useBots, useCan, useChatActivity, useChats } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, dayBucket } from "@/state/time";
@@ -44,6 +44,7 @@ function ChatRow({ chat, bots }: { chat: ChatSummary; bots: Map<string, Bot> }) 
   const bot = bots.get(chat.botId);
   const live = activityLabel(state);
   const group = chat.botIds && chat.botIds.length > 1;
+  const canChat = useCan("agents", "chat");
   const speaker = chat.last?.role === "user" ? "You" : group && chat.last?.botId ? bots.get(chat.last.botId)?.name : undefined;
   const preview = chat.last ? (speaker ? speaker + ": " : "") + plainPreview(chat.last.text) : "No messages yet";
   const title = chat.title || bot?.name || "Chat";
@@ -62,7 +63,7 @@ function ChatRow({ chat, bots }: { chat: ChatSummary; bots: Map<string, Bot> }) 
       ];
   return (
     <HoldMenu
-      actions={actions}
+      actions={canChat ? actions : []}
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
         if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }));
@@ -171,6 +172,7 @@ export default function ChatList() {
   const synced = useApp((state) => state.synced);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const canChat = useCan("agents", "chat");
 
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const conversations = useMemo(() => chats.filter(isConversation), [chats]);
@@ -202,11 +204,11 @@ export default function ChatList() {
   const empty = synced && conversations.length === 0 && archived.length === 0;
 
   return (
-    <Page tab title="Chats" actions={<IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} />}>
+    <Page tab title="Chats" actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
       {!synced ? (
         <Skeleton />
       ) : empty ? (
-        <EmptyState art={<Mascot size={104} />} title="No chats yet" action="New chat" onAction={() => router.push("/chat/new")} />
+        <EmptyState art={<Mascot size={104} />} title="No chats yet" action={canChat ? "New chat" : undefined} onAction={canChat ? () => router.push("/chat/new") : undefined} />
       ) : (
         <Animated.View entering={FadeIn.duration(220)} style={{ gap: space.xl }}>
           <View style={{ gap: space.md }}>

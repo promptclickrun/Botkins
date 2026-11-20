@@ -20,7 +20,7 @@ import { plainPreview } from "@/features/chat/bits";
 import { newBotChat, openBotChat } from "@/features/chat/open";
 import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_ACTIONS, toggleHidden } from "@/features/bots/menus";
 import type { Bot, ChatSummary, Section } from "@/link/types";
-import { activityLabel, useBotActivity, useBots, usePart } from "@/state/hooks";
+import { activityLabel, useBotActivity, useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
 import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
@@ -35,17 +35,25 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
   const bots = useBots();
   const sections = usePart("sections");
   const primary = bots[0]?.id === bot.id;
+  const canChat = useCan("agents", "chat");
+  const canCreate = useCan("agents", "create");
+  const canManage = useCan("agents", "manage");
+  const canDelete = useCan("agents", "delete");
   return (
     <HoldMenu
       actions={[
-        { id: "new", title: "New chat", image: "square.and.pencil" },
+        ...(canChat ? [{ id: "new", title: "New chat", image: "square.and.pencil" }] : []),
         { id: "page", title: "Bot page", image: "person.crop.circle" },
-        { id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" },
-        moveToSection(bot, sections),
-        { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } },
-        { id: "duplicate", title: "Duplicate", image: "doc.on.doc" },
-        hideAction(bot, primary),
-        { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true, disabled: bots.length < 2 } },
+        ...(canManage
+          ? [
+              { id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" },
+              moveToSection(bot, sections),
+              { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } },
+            ]
+          : []),
+        ...(canCreate ? [{ id: "duplicate", title: "Duplicate", image: "doc.on.doc" }] : []),
+        ...(canManage ? [hideAction(bot, primary)] : []),
+        ...(canDelete ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true, disabled: bots.length < 2 } }] : []),
       ]}
       onPressAction={({ nativeEvent }) => {
         const event = nativeEvent.event;
@@ -74,6 +82,7 @@ type RowActions = { list: { name: string; label: string }[]; run: (name: string)
 /** One bot in the list: its face, its name, one line, and when it last spoke. */
 export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSummary; unread: boolean; actions?: RowActions }) {
   const state = useBotActivity(bot.id);
+  const canChat = useCan("agents", "chat");
   const status = activityLabel(state);
   const last = chat?.last ? plainPreview(chat.last.text) : undefined;
   const line = status || last || bot.role || "Bot";
@@ -81,7 +90,7 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
   return (
     <BotMenu bot={bot}>
       <Tap
-        onPress={() => void openBotChat(bot.id)}
+        onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })}
         feel="select"
         sink={0.98}
         hitSlop={0}
@@ -117,6 +126,7 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
 /** A section's heading: its name and count fold it; its menu renames or deletes it. */
 function SectionHead({ section, count, open, onToggle, note }: { section: Section; count: number; open: boolean; onToggle: () => void; note?: string }) {
   const { colors } = useTheme();
+  const canManage = useCan("agents", "manage");
   const Fold = open ? ChevronDown : ChevronRight;
   return (
     <View>
@@ -136,11 +146,13 @@ function SectionHead({ section, count, open, onToggle, note }: { section: Sectio
           </T>
           <Fold size={14} color={colors.faint} strokeWidth={2.4} />
         </Tap>
-        <MenuView title={section.name} actions={SECTION_ACTIONS} onPressAction={({ nativeEvent }) => runSectionAction(section, nativeEvent.event)}>
-          <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-            <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
-          </View>
-        </MenuView>
+        {canManage && (
+          <MenuView title={section.name} actions={SECTION_ACTIONS} onPressAction={({ nativeEvent }) => runSectionAction(section, nativeEvent.event)}>
+            <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+              <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
+            </View>
+          </MenuView>
+        )}
       </View>
       {!!note && (
         <T variant="footnote" color="faint" style={{ paddingHorizontal: space.xs, paddingBottom: space.sm }}>
@@ -240,7 +252,7 @@ function Cell({ item, line, children }: { item: BoardItem; line: boolean; childr
 }
 
 /** A bot that can be dragged: the pan that waits for a rest and then a move (see the top of this file). */
-function DragHandle({ itemKey, children }: { itemKey: string; children: ReactNode }) {
+function DragHandle({ itemKey, children, disabled }: { itemKey: string; children: ReactNode; disabled?: boolean }) {
   const board = use(BoardContext)!;
   const down = useSharedValue({ t: 0, x: 0, y: 0 });
   const pan = usePanGesture({
@@ -274,6 +286,7 @@ function DragHandle({ itemKey, children }: { itemKey: string; children: ReactNod
       board.end(itemKey);
     },
   });
+  if (disabled) return <View>{children}</View>;
   return (
     <GestureDetector gesture={pan}>
       <View collapsable={false}>{children}</View>
@@ -302,9 +315,10 @@ export type BotBoardProps = {
   onDrop: (id: string, zone: Zone, index: number) => void;
   /** A drag started or ended: Home stops the page's own scrolling while one is under way. */
   onDragging: (on: boolean) => void;
+  manageable: boolean;
 };
 
-export function BotBoard({ bots, sections, latest, folded, onFold, scroll, onDrop, onDragging }: BotBoardProps) {
+export function BotBoard({ bots, sections, latest, folded, onFold, scroll, onDrop, onDragging, manageable }: BotBoardProps) {
   const [dragging, setDragging] = useState<string | null>(null);
   const arranged = useMemo(() => arrangeBots(bots, sections), [bots, sections]);
   const items = useMemo(() => boardItems(arranged, folded, !!dragging), [arranged, folded, dragging]);
@@ -445,13 +459,13 @@ export function BotBoard({ bots, sections, latest, folded, onFold, scroll, onDro
   const actionsFor = (bot: Bot, from: Zone): RowActions => {
     const up = stepSlot(steps, bot.id, -1);
     const down = stepSlot(steps, bot.id, 1);
-    const list = [
+    const list = manageable ? [
       ...(up ? [{ name: "up", label: "Move up" }] : []),
       ...(down ? [{ name: "down", label: "Move down" }] : []),
       { name: "pin", label: bot.pinned ? "Unpin" : "Pin" },
       ...arranged.sections.filter(({ section }) => from !== "section:" + section.id).map(({ section }) => ({ name: "section:" + section.id, label: "Move to " + section.name })),
       ...(from !== "rest" && arranged.sections.length > 0 ? [{ name: "section:none", label: "Move to Other bots" }] : []),
-    ];
+    ] : [];
     return {
       list,
       run: (name) => {
@@ -496,7 +510,7 @@ export function BotBoard({ bots, sections, latest, folded, onFold, scroll, onDro
             );
           return (
             <Cell key={item.key} item={item} line={line}>
-              <DragHandle itemKey={item.key}>
+              <DragHandle itemKey={item.key} disabled={!manageable}>
                 <BotRow bot={bot} chat={entry?.chat} unread={!!entry?.unread} actions={actionsFor(bot, item.zone)} />
               </DragHandle>
             </Cell>

@@ -7,10 +7,10 @@ import { type BotkinLook, cleanLook, lookOf, needsLooksV2, randomLook } from "@/
 import { STARTERS } from "@/data/templates";
 import type { BotInput, BotTemplate, ImportableAgent } from "@/link/types";
 import { pickTextFile, shareFrom } from "@/state/files";
-import { useCapability, usePart } from "@/state/hooks";
+import { useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
-import { BotAvatar, Button, Chip, Field, HoldMenu, Label, Sheet, space, T } from "@/ui";
+import { BotAvatar, Button, Chip, EmptyState, Field, HoldMenu, Label, Sheet, space, T } from "@/ui";
 import { LookEditor, useLooksV2 } from "./LookEditor";
 import { LookStage } from "./LookStage";
 import { addable } from "./agents";
@@ -64,6 +64,12 @@ function renameTemplate(template: BotTemplate) {
 
 /** Makes a bot: a look, a name, a role, a line about it and what it should do. */
 export default function NewBot() {
+  if (!useCan("agents", "create")) return <Sheet title="New bot"><EmptyState title="Your team role can't create bots" /></Sheet>;
+  return <NewBotEditor />;
+}
+
+function NewBotEditor() {
+  const canManage = useCan("agents", "manage");
   const saved = usePart("templates");
   const advanced = useLooksV2();
   const [look, setLook] = useState<BotkinLook>(() => randomLook());
@@ -121,7 +127,7 @@ export default function NewBot() {
       if (fields.role !== agent.role) patch.role = fields.role;
       if (fields.summary !== agent.summary.trim()) patch.summary = fields.summary;
       if (fields.instructions !== agent.instructions.trim()) patch.instructions = fields.instructions;
-      if (id && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
+      if (id && canManage && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
     } else {
       const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: start?.face ?? "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }) };
       id = await attempt(api.addBot(bot));
@@ -129,7 +135,7 @@ export default function NewBot() {
     if (id) {
       // An older computer can't save eyes or custom colors; it keeps the character and palette.
       const keep = !advanced && needsLooksV2(look) ? { head: look.head, palette: look.palette === "custom" ? "original" : look.palette } : look;
-      await attempt(api["link.setLook"](id, cleanLook(keep)));
+      if (canManage) await attempt(api["link.setLook"](id, cleanLook(keep)));
       router.replace({ pathname: "/bot/[id]", params: { id } });
     }
     setBusy(false);

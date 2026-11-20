@@ -4,7 +4,7 @@ import { MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
 import { ChevronsUpDown, Monitor, Moon, SunMoon, Sun, Vibrate } from "lucide-react-native";
 import { Platform, StyleSheet, View } from "react-native";
-import { useSettings } from "@/state/hooks";
+import { useMember, useSettings } from "@/state/hooks";
 import { type Prefs, setPrefs, usePrefs } from "@/state/prefs";
 import { BotAvatar, brand, Button, type Colors, DEFAULT_FONT, type FontId, fontsFor, Group, IconTile, Label, Page, radius, Row, Segmented, Slider, space, T, Tap, TEXT_SIZES, THEMES, type ThemeDef, themeById, useTheme } from "@/ui";
 
@@ -188,6 +188,7 @@ export default function Appearance() {
   const controlSize = usePrefs((prefs) => prefs.controlSize);
   const haptics = usePrefs((prefs) => prefs.haptics);
   const paired = !!useSettings();
+  const member = useMember();
   const fixed = { maxFontSizeMultiplier: 1 } as const;
 
   return (
@@ -255,7 +256,7 @@ export default function Appearance() {
         <Row leading={<IconTile icon={Vibrate} color={brand.rose} />} title="Haptics" toggled={haptics} onToggle={(next) => setPrefs({ haptics: next })} />
       </Group>
 
-      {paired && (
+      {paired && !member && (
         <Group>
           <Row leading={<IconTile icon={Monitor} color={brand.tide} />} title="Your computer's window" subtitle="Its theme, text and side menu" chevron onPress={() => router.push("/settings/window" as Href)} />
         </Group>

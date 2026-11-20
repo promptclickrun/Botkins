@@ -9,6 +9,10 @@ export default function TabsLayout() {
   const badge = badgeColors(theme);
   const unread = useApp((state) => state.parts.chats?.filter((chat) => chat.unread && isConversation(chat)).length ?? 0);
   const waiting = useApp((state) => (state.parts.live?.requests.length ?? 0) + (state.parts.tasks?.filter((task) => task.status === "review" || task.status === "blocked").length ?? 0));
+  const teamRequests = useApp((state) => {
+    const team = state.parts.team;
+    return state.parts.meta?.you?.kind !== "member" && team && "requests" in team ? team.requests.length : 0;
+  });
   return (
     <NativeTabs tintColor={colors.accent} backgroundColor={colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
       <NativeTabs.Trigger name="index">
@@ -33,6 +37,7 @@ export default function TabsLayout() {
       <NativeTabs.Trigger name="settings">
         <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} md="settings" />
+        {teamRequests > 0 && <NativeTabs.Trigger.Badge>{String(teamRequests)}</NativeTabs.Trigger.Badge>}
       </NativeTabs.Trigger>
     </NativeTabs>
   );

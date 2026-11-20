@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { useState } from "react";
 import { View } from "react-native";
-import { refresh, useModels, useProviders, useSettings } from "@/state/hooks";
+import { refresh, useCan, useMember, useModels, useProviders, useSettings } from "@/state/hooks";
 import { api } from "@/state/link";
 import { Badge, Group, Label, Loading, Page, ProviderIcon, Row } from "@/ui";
 import { defaultProviderOf, describeChoice } from "./shared";
@@ -12,6 +12,8 @@ export default function Providers() {
   const settings = useSettings();
   const models = useModels();
   const providers = useProviders();
+  const member = useMember();
+  const canManage = useCan("agents", "manage");
   const [refreshing, setRefreshing] = useState(false);
   const fallback = describeChoice(settings?.model, models, defaultProviderOf(providers));
 
@@ -30,12 +32,12 @@ export default function Providers() {
           leading={<ProviderIcon provider={fallback.provider} name={fallback.providerLabel} size={36} tile />}
           title="Default model"
           subtitle={models ? fallback.label : undefined}
-          chevron
-          onPress={() => router.push({ pathname: "/chat/model", params: { scope: "global" } })}
+          chevron={canManage}
+          onPress={canManage ? () => router.push({ pathname: "/chat/model", params: { scope: "global" } }) : undefined}
         />
       </Group>
 
-      <View>
+      {!member && <View>
         <Label>Providers</Label>
         {!providers ? (
           <Loading />
@@ -57,7 +59,7 @@ export default function Providers() {
             })}
           </Group>
         )}
-      </View>
+      </View>}
     </Page>
   );
 }

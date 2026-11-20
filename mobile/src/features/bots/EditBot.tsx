@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { View } from "react-native";
 import type { Bot } from "@/link/types";
-import { useBot } from "@/state/hooks";
+import { useBot, useCan } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { EmptyState, Field, Sheet, space } from "@/ui";
 import { counter, LIMITS } from "./limits";
@@ -10,6 +10,8 @@ import { counter, LIMITS } from "./limits";
 export default function EditBot() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const bot = useBot(id);
+  const canManage = useCan("agents", "manage");
+  if (!canManage) return <Sheet title="Edit bot"><EmptyState title="Your team role can't edit bots" /></Sheet>;
   if (!bot)
     return (
       <Sheet title="Edit bot">

@@ -4,7 +4,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ModelChoice, ModelInfo } from "@/link/types";
-import { useBot, useChat, useModels, useProviders, useSettings } from "@/state/hooks";
+import { useBot, useCan, useChat, useModels, useProviders, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { chooseModel, effortLabel, findModel, groupModels, modelKey } from "@/state/models";
@@ -86,6 +86,12 @@ const modelSubtitle = (model: ModelInfo) => (model.available ? [contextFact(mode
 
 /** Picks the model and thinking level for the computer, a bot, or a chat. */
 export default function ModelPicker() {
+  const canManage = useCan("agents", "manage");
+  if (!canManage) return <Sheet title="Model"><EmptyState title="Your team role can't change models" /></Sheet>;
+  return <Picker />;
+}
+
+function Picker() {
   const params = useLocalSearchParams<{ scope?: string; id?: string }>();
   const scope: Scope = params.scope === "bot" || params.scope === "chat" ? params.scope : "global";
   const chat = useChat(scope === "chat" ? params.id : undefined);
