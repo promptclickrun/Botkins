@@ -44,7 +44,8 @@ import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, REMOTE_HOSTS, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
 import { FOLDERS, Folders, deviceArgs } from "./folders.mjs";
-import { VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
+import { performSecureUse } from "./secure-input.mjs";
+import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { desktopUpdates } from "./mac-update.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
@@ -160,10 +161,11 @@ const hostOf = (url) => {
 };
 // The chat open in the window, as the page last said (handlers.viewing).
 let viewingChat = null;
+const viewerGuests = new Set();
 // What this app supports that a phone has to ask about by name (the link adds them to its own):
 // model details in the catalog, a Botkin's eyes and own colors, where a routine's result goes and
 // whether it notifies, and a Today item carried by a message.
-const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS];
+const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1"];
 /**
  * What the window shows: this computer's workspace, or the state of the other computer in use
  * (with this window's own look). `remote` says which, and lists the computers this app is paired to.
@@ -315,7 +317,11 @@ function openWindow() {
     },
   });
   win.webContents.on("will-attach-webview", attachViewer);
-  win.webContents.on("did-attach-webview", (_event, guest) => guardGuest(guest));
+  win.webContents.on("did-attach-webview", (_event, guest) => {
+    guardGuest(guest);
+    viewerGuests.add(guest);
+    guest.once("destroyed", () => viewerGuests.delete(guest));
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   // Nothing in this window talks peer to peer; a page a bot wrote (an html block) must not either.
   win.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
@@ -456,6 +462,12 @@ else
     } });
     workspace = new Workspace(dataDir, providers, notify, {
       updates,
+      secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => {
+        if (remote?.inUse() || viewingChat !== plan.chatId) throw new Error("Open the chat on this computer.");
+        const matches = [...viewerGuests].filter(g => !g.isDestroyed() && g.getURL() === plan.url);
+        if (matches.length !== 1) throw new Error("Open the requested page in this chat.");
+        return fillSecurePage(matches[0], plan, values, signal);
+      } }),
       ...(keychain && {
         vaultKey: keys,
         // Keys an earlier version encrypted into the workspace file are read once, to move them into the vault.
