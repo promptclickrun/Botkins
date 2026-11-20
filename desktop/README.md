@@ -167,7 +167,16 @@ Open **Settings → About → Check for updates**. The installed app also checks
 
 You can download releases and check for updates without signing in to GitHub. Trial data folders skip automatic checks.
 
-Publish a stable desktop release as `v<version>`. Upload the signed, notarized Mac ZIP produced by electron-builder together with its corresponding `latest-mac.yml` and blockmap before making the release latest. The updater compares semantic versions and checks the release tag against the installer manifest before downloading.
+**Prepare a release draft.** Starting with the first release after 0.16.4, the desktop and terminal hosts ship together. On the Mac signing host, check out the clean commit tagged `v<version>` on GitHub, run `npm ci` in `desktop/`, then run `npm run release`. To use prepared notes, pass `-- --notes /path/to/notes.md`. Otherwise GitHub generates them. The command uses the signing configuration above, the GitHub CLI with release write access, GPG, and osslsigncode with trusted Windows signing and timestamp roots (`BOTKINS_WINDOWS_CA_FILE` can point to a PEM bundle).
+
+The command builds all platforms, checks the Mac signature and notarization ticket, verifies Windows Authenticode, and checks the signed manifest. It uploads 16 files to one draft, including the four terminal tarballs and `install.sh`. It compares the uploaded digests with the local files and runs `node scripts/check-release.mjs <version>` against the draft. After a transfer failure, use `npm run release -- --resume` in the same checkout. It rechecks the packages and uploads the missing files.
+
+**Publish.** Once the draft is approved, run the gate again immediately before marking it Latest. Replace `VERSION` with the package version in both arguments.
+
+```sh
+node scripts/check-release.mjs VERSION && gh release edit vVERSION --repo promptclickrun/Botkins --draft=false --latest
+```
+
 
 ## Implementation
 
