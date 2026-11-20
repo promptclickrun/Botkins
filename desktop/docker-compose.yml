@@ -1,6 +1,9 @@
 name: botkins
 
 # `docker compose up -d` runs the terminal host: Botkins as one small Node service, with no display.
+# It uses the image each release publishes (ghcr.io/promptclickrun/botkins). BOTKINS_VERSION picks
+# a release ("0.17.0"); without it, the latest. `docker compose up -d --build` builds this checkout
+# instead. To update: `docker compose pull && docker compose up -d`.
 # Pair a phone with `docker compose exec botkins botkins pair`. See docs/terminal.md.
 #
 # `docker compose --profile display up -d` runs the earlier setup instead, for a phone that should
@@ -8,6 +11,7 @@ name: botkins
 # setups keep separate data; run one of them.
 services:
   botkins:
+    image: ghcr.io/promptclickrun/botkins:${BOTKINS_VERSION:-latest}
     build:
       context: .
       target: terminal

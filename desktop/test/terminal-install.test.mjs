@@ -13,7 +13,7 @@ import { ownCommand } from "../cli/commands/install.mjs";
 import { keyFrom } from "../desktop/host/keystore.mjs";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
 import { launchdJob, systemUnit, updateUnits, userUnit } from "../desktop/terminal/units.mjs";
-import { applyUpdate, asOwnerOf, assetName, cleanLastUpdate, folderName, installLayout, lastUpdateFile, readLastUpdate, switchTo, takeRequest, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
+import { applyUpdate, asOwnerOf, assetName, cleanLastUpdate, folderName, installLayout, lastUpdateFile, readLastUpdate, switchTo, takeRequest, unmanaged, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
 import { defaults } from "../desktop/terminal/config.mjs";
 import { terminalUpdates } from "../desktop/terminal/updates.mjs";
 import { AppUpdates } from "../desktop/updates.mjs";
@@ -616,8 +616,28 @@ test("a host that can install tells how it stands, installs by itself only when 
   await assert.rejects(container.install(), /runs from a Docker image.*pull the new image \(ghcr\.io\/promptclickrun\/botkins\)/);
 });
 
+test("a container is updated by pulling its image, and the image is the one each release publishes", { skip }, async () => {
+  const image = "ghcr.io/promptclickrun/botkins";
+  assert.match(unmanaged({ BOTKINS_IMAGE: image }), /runs from the Docker image ghcr\.io\/promptclickrun\/botkins.*docker compose pull && docker compose up -d.*The data volume stays\./);
+  assert.match(unmanaged({}), /wasn't installed from a release.*git pull/);
+  await assert.rejects(applyUpdate({ entry: fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url)), env: { BOTKINS_IMAGE: image } }), { code: "UNMANAGED", message: /pulling the new image/ });
+  // The image names itself, and Compose uses the published one unless a checkout is built on purpose.
+  const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /^\s+BOTKINS_IMAGE=ghcr\.io\/promptclickrun\/botkins \\$/m);
+  assert.match(dockerfile, /ENTRYPOINT \["\/usr\/bin\/tini", "--", "botkins"\]\nCMD \["serve"\]\n$/, "`docker run <image> --version` prints the version");
+  const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  assert.match(compose, /^  botkins:\n    image: ghcr\.io\/promptclickrun\/botkins:\$\{BOTKINS_VERSION:-latest\}\n    build:\n      context: \.\n      target: terminal$/m);
+});
+
 test("the installer and the launcher are plain sh, and the installer checks before it installs", { skip }, () => {
   for (const file of ["install.sh", "botkins"]) execFileSync("sh", ["-n", fileURLToPath(new URL("../install/" + file, import.meta.url))]);
+  // The check that runs after a release is published is plain sh too, and stands in for nothing: it
+  // names no key and no address of its own unless it is told to try a mirror.
+  const fromRelease = fileURLToPath(new URL("./terminal-e2e/from-release.sh", import.meta.url));
+  execFileSync("sh", ["-n", fromRelease]);
+  const check = readFileSync(fromRelease, "utf8");
+  assert.match(check, /download=\$\{BOTKINS_E2E_RELEASE_URL:-https:\/\/github\.com\/\$REPO\/releases\/download\}/);
+  assert.doesNotMatch(check, /--checksum-only|--release-fingerprint [0-9A-F]{40}/);
   const script = readFileSync(new URL("../install/install.sh", import.meta.url), "utf8");
   // The release key's fingerprint is the one the updater checks too.
   const helper = readFileSync(new URL("../desktop/linux-service/botkins-update-helper.mjs", import.meta.url), "utf8");

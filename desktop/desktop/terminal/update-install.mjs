@@ -278,8 +278,14 @@ export async function applyUpdate({ report = () => {}, now = () => new Date(), .
     throw error;
   }
 }
-async function install({ entry, layout, found, manager, say = () => {}, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), fetcher = fetch, verifier, healthMs }) {
-  if (!layout) throw Object.assign(new Error("This copy of Botkins wasn't installed from a release, so it doesn't update itself. Update it the way it was installed (a checkout: `git pull`; Docker: pull the new image)."), { code: "UNMANAGED" });
+/** Why a copy that wasn't installed from a release doesn't update itself, and what to do instead. */
+export function unmanaged(env = process.env) {
+  // A container is replaced by a new image, never updated from inside.
+  if (env.BOTKINS_IMAGE) return "This Botkins runs from the Docker image " + env.BOTKINS_IMAGE + ", so it is updated by pulling the new image, not from inside the container. On the computer that runs it: `docker compose pull && docker compose up -d` (or `docker pull " + env.BOTKINS_IMAGE + ":latest` and start the container again). The data volume stays.";
+  return "This copy of Botkins wasn't installed from a release, so it doesn't update itself. Update it the way it was installed (a checkout: `git pull`).";
+}
+async function install({ entry, layout, found, env = process.env, manager, say = () => {}, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), fetcher = fetch, verifier, healthMs }) {
+  if (!layout) throw Object.assign(new Error(unmanaged(env)), { code: "UNMANAGED" });
   const { version, assets } = await latest();
   if (!semver.gt(version, layout.version)) return { status: "current", current: layout.version };
   found(version);
