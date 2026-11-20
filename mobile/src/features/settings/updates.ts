@@ -44,10 +44,13 @@ export function updateButton(update: AppUpdate | undefined): { kind: "install" |
   return { kind: install ? "install" : "check", title: install ? "Update and restart" : "Check for updates", disabled: !update || updateBusy(update) };
 }
 
-/** How the last install ended, in a sentence (`last`, kept across the restart). */
+/**
+ * How the last install ended, in a sentence (`last`, kept across the restart). An install that
+ * worked can carry a note from the computer (`message` with `ok: true`): it follows the result.
+ */
 export function lastLine(last: AppUpdate["last"]): string | null {
   if (!last) return null;
-  if (last.ok) return "Updated from " + last.from + " to " + last.to + ".";
+  if (last.ok) return "Updated from " + last.from + " to " + last.to + "." + (last.message ? " " + last.message : "");
   return last.message || "The update to " + last.to + " didn't finish, so " + last.from + " is back.";
 }
 

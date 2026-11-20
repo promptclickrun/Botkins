@@ -55,6 +55,10 @@ test("how the last install ended is said once the computer is back, a rollback t
   assert.equal(lastLine({ at: "2026-11-20T20:00:00Z", from: "0.16.4", to: "0.16.5", ok: false, message: "0.16.5 didn't stay up, so 0.16.4 is back." }), "0.16.5 didn't stay up, so 0.16.4 is back.");
   assert.equal(lastLine({ at: "2026-11-20T20:00:00Z", from: "0.16.4", to: "0.16.5", ok: false }), "The update to 0.16.5 didn't finish, so 0.16.4 is back.");
   assert.equal(lastLine(undefined), null);
+  // An install that worked can carry a note from the computer: it follows the result, as it comes.
+  const kept = "The service still uses its older system files.";
+  assert.equal(lastLine({ at: "2026-11-20T20:00:00Z", from: "0.16.5", to: "0.16.6", ok: true, message: kept }), "Updated from 0.16.5 to 0.16.6. " + kept);
+  assert.equal(lastLine({ at: "2026-11-20T20:00:00Z", from: "0.16.5", to: "0.16.6", ok: true, message: "" }), "Updated from 0.16.5 to 0.16.6.");
 
   const since = Date.parse("2026-11-20T20:00:00Z");
   const old = { at: "2026-11-01T00:00:00Z", from: "0.16.2", to: "0.16.3", ok: true };
@@ -62,6 +66,7 @@ test("how the last install ended is said once the computer is back, a rollback t
   // While it downloads or restarts there is nothing to say yet.
   assert.deepEqual(afterRestart(pending, update({ status: "restarting", last: old })), { done: false });
   assert.deepEqual(afterRestart(pending, update({ status: "current", current: "0.16.5", last: { at: "2026-11-20T20:01:00Z", from: "0.16.4", to: "0.16.5", ok: true } })), { done: true, ok: true, text: "Updated from 0.16.4 to 0.16.5." });
+  assert.deepEqual(afterRestart(pending, update({ status: "current", current: "0.16.5", last: { at: "2026-11-20T20:01:00Z", from: "0.16.4", to: "0.16.5", ok: true, message: "Kept the older system files." } })), { done: true, ok: true, text: "Updated from 0.16.4 to 0.16.5. Kept the older system files." });
   assert.deepEqual(afterRestart(pending, update({ status: "idle", last: { at: "2026-11-20T20:01:00Z", from: "0.16.4", to: "0.16.5", ok: false, message: "Rolled back." } })), { done: true, ok: false, text: "Rolled back." });
   // The two clocks are never compared: a computer whose clock is an hour behind the phone's still
   // has its rollback told in its own words.
