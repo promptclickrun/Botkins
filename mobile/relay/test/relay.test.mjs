@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import http from "node:http";
+import { once } from "node:events";
+import ResettableSocket from "ws";
 import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -13,6 +15,7 @@ import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const HOST = "botkins.host.v2";
+const HOST_V3 = "botkins.host.v3";
 const PHONE = "botkins.phone.v1";
 const MiB = 1024 * 1024;
 const MAX_PHONE = 6 * MiB + 64 * 1024; // a phone's largest message
@@ -237,6 +240,12 @@ async function connect(url, protocols, address) {
   return client;
 }
 const host = (r, options) => connect(`${wsBase}/v1/host/${r.room}`, proof(r, options));
+function proofV3(r, group, { seconds = nowSeconds(), signedRoom = r.room, signer = r.privateKey, key = r.key } = {}) {
+  const signature = sign(null, Buffer.from(`botkins-relay-host-v3:${signedRoom}:${group}:${seconds}`), signer).toString("base64url");
+  secrets.add(signature);
+  return [HOST_V3, "k." + key, "g." + group, "t." + seconds, "s." + signature];
+}
+const hostV3 = (r, group, options) => connect(`${wsBase}/v1/host/${r.room}`, proofV3(r, group, options));
 const phone = (r, address) => connect(`${wsBase}/v1/room/${r.room}`, [PHONE], address);
 
 /** Resolves when a socket that must be refused fails to open, and fails if it ever opens. */
@@ -558,6 +567,67 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     assert.equal((await firstClosed).code, 4000);
   });
 
+  it("keeps same-group v3 active/standby sockets and takes over on a new group", { timeout: 60_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const nextGroup = randomBytes(32).toString("base64url");
+    const active = await hostV3(r, group);
+    const p = await phone(r);
+    const standby = await hostV3(r, group);
+
+    // The first same-group socket is active; the second is standby. There is no promotion frame.
+    p.send(request(31, "active"));
+    const first = await active.next();
+    assert.ok(first.subarray(16).equals(request(31, "active")));
+    await standby.silent(100);
+    active.send(bytes(first.subarray(0, 8), 0x02, u32(31), Buffer.from([0, 200])));
+    await p.next();
+
+    const activeClosed = active.closed();
+    active.close();
+    await activeClosed;
+    await p.silent(250);
+    p.send(request(32, "standby"));
+    const second = await standby.next();
+    assert.ok(second.subarray(16).equals(request(32, "standby")));
+
+    // A distinct authenticated runtime group takes over all old sockets. The room sends one normal
+    // host-closed notice during that gap; the new group then receives traffic without a promotion frame.
+    const standbyClosed = standby.closed();
+    const replacement = await hostV3(r, nextGroup);
+    assert.equal((await standbyClosed).code, 4000);
+    assert.ok((await p.next()).equals(bytes(0x05)));
+    p.send(request(33, "replacement"));
+    const third = await replacement.next();
+    assert.ok(third.subarray(16).equals(request(33, "replacement")));
+  });
+
+  it("holds bounded v3 requests through a short reconnect and forwards them in order", { timeout: 60_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const active = await hostV3(r, group);
+    const p = await phone(r);
+    p.send(request(41, "before-drop"));
+    const first = await active.next();
+    assert.equal(first.readUInt32BE(17), 41);
+
+    const activeClosed = active.closed();
+    active.close();
+    await activeClosed;
+    await sleep(150);
+    p.send(request(42, "during-reconnect"));
+    await p.silent(100);
+
+    const resumed = await hostV3(r, group);
+    const replayOne = await resumed.next();
+    const replayTwo = await resumed.next();
+    assert.equal(replayOne.readUInt32BE(17), 41);
+    assert.equal(replayTwo.readUInt32BE(17), 42);
+    for (const replay of [replayOne, replayTwo]) resumed.send(bytes(replay.subarray(0, 8), 0x02, u32(replay.readUInt32BE(17)), Buffer.from([0, 200])));
+    assert.equal((await p.next()).readUInt32BE(1), 41);
+    assert.equal((await p.next()).readUInt32BE(1), 42);
+  });
+
   it("passes CF-Connecting-IP through, and gives one `from` to one network (IPv6 by /64)", async () => {
     const r = newRoom();
     const h = await host(r);
@@ -717,6 +787,124 @@ describe("relay (wrangler dev)", { timeout: 300_000 }, () => {
     // proves it hibernated and the sockets, tags and attachments survived.
     t.diagnostic(`the object woke ${wakes} time(s) after the pause`);
     assert.ok(wakes >= 1, "the object never hibernated, so this test proved nothing");
+  });
+
+  it("keeps a current phone waiting through abrupt loss and new requests", async () => {
+    const room = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const host = new ResettableSocket(wsBase + "/v1/host/" + room.room, proofV3(room, group));
+    try {
+      await once(host, "open");
+      const phoneSocket = await phone(room);
+      const forwarded = once(host, "message");
+      phoneSocket.send(request(41));
+      const [first] = await forwarded;
+      const closed = once(host, "close");
+      host.terminate(); // TCP teardown without a WebSocket close frame.
+      await closed;
+      await sleep(100);
+      phoneSocket.send(request(42));
+      await sleep(100);
+      const notices = phoneSocket.queue.map((frame) => frame[0]);
+      assert.deepEqual(notices, [], "A transport reset must not send host-closed/offline to a waiting phone");
+      const replacement = await hostV3(room, group);
+      const replay = [await replacement.next(), await replacement.next()];
+      assert.deepEqual(replay.map((frame) => frame.readUInt32BE(17)), [41, 42]);
+      for (const frame of replay) {
+        assert.deepEqual(frame.subarray(0, 16), first.subarray(0, 16));
+        const answer = bytes(0x02, frame.subarray(17, 21), 0, 200);
+        replacement.send(bytes(frame.subarray(0, 8), answer));
+        assert.deepEqual(await phoneSocket.next(), answer);
+      }
+    } finally {
+      host.terminate();
+    }
+  });
+
+  it("recovers a held request and its original connection after the room hibernates", { timeout: 35_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const h = await hostV3(r, group);
+    const p = await phone(r);
+    p.send(request(10, "in flight"));
+    const original = await h.next();
+    h.close();
+    await h.closed();
+    p.send(request(11, "in the gap"));
+    await sleep(200);
+    const wakesBefore = (output.match(/"event":"wake"/g) ?? []).length;
+    await sleep(11_500);
+    const replacement = await hostV3(r, group);
+    for (const id of [10, 11]) {
+      const replay = await replacement.next();
+      assert.deepEqual(replay.subarray(0, 16), original.subarray(0, 16));
+      assert.equal(replay.readUInt32BE(17), id);
+      const reply = bytes(0x02, u32(id), 0, 200);
+      replacement.send(bytes(replay.subarray(0, 8), reply));
+      assert.deepEqual(await p.next(), reply);
+    }
+    assert.ok((output.match(/"event":"wake"/g) ?? []).length > wakesBefore, "the room must wake during recovery");
+  });
+
+  it("refuses overflow with an offline answer and preserves earlier held requests", { timeout: 30_000 }, async () => {
+    for (const [count, payload] of [[48, Buffer.alloc(0)], [3, Buffer.alloc(5 * MiB)]]) {
+      const room = newRoom();
+      const group = randomBytes(32).toString("base64url");
+      const host = await hostV3(room, group);
+      const client = await phone(room);
+      client.send(request(1, payload));
+      const initial = await host.next();
+      host.close();
+      await host.closed();
+      for (let id = 2; id <= count + 1; id++) client.send(request(id, payload));
+      assert.deepEqual(await client.next(), bytes(0x03, u32(count + 1)));
+      const replacement = await hostV3(room, group);
+      for (let id = 1; id <= count; id++) {
+        const frame = await replacement.next();
+        assert.deepEqual(frame.subarray(0, 16), initial.subarray(0, 16));
+        assert.equal(frame.readUInt32BE(17), id);
+        assert.equal(frame.length, initial.length);
+      }
+      client.close();
+      replacement.close();
+    }
+  });
+
+  it("tells a returning host which phone left during the gap", async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const host = await hostV3(r, group);
+    const leaving = await phone(r);
+    const staying = await phone(r);
+    leaving.send(request(1));
+    const first = await host.next();
+    staying.send(request(1));
+    const second = await host.next();
+    host.close();
+    await host.closed();
+    leaving.close();
+    await leaving.closed();
+    const back = await hostV3(r, group);
+    const notice = await back.next();
+    assert.deepEqual(notice, bytes(first.subarray(0, 16), 0x04));
+    assert.deepEqual(await back.next(), second);
+  });
+
+  it("ends outstanding phone calls at grace expiry and refuses later requests until a host returns", { timeout: 35_000 }, async () => {
+    const r = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const h = await hostV3(r, group);
+    const p = await phone(r);
+    p.send(request(21)); await h.next();
+    h.close(); await h.closed();
+    p.send(request(22));
+    assert.deepEqual(await p.next(22_000), bytes(0x05));
+    p.send(request(23));
+    assert.deepEqual(await p.next(), bytes(0x03, u32(23)));
+    const replacement = await hostV3(r, group);
+    await replacement.silent(150);
+    p.send(request(24));
+    assert.equal((await replacement.next()).readUInt32BE(17), 24);
   });
 
   it("never logs an invite lookup, card, key, signature, room name, conn or from tag", () => {

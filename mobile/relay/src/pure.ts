@@ -1,9 +1,12 @@
 // The relay's pure helpers: no Cloudflare imports, so Node can load them for unit tests.
 
 export const HOST_PROTOCOL = "botkins.host.v2";
+export const HOST_PROTOCOL_V3 = "botkins.host.v3";
 export const PHONE_PROTOCOL = "botkins.phone.v1";
 /** How far a computer's clock may be from ours, in seconds. */
 export const MAX_SKEW = 300;
+/** A fresh 32-byte identifier shared by the active/standby sockets of one host runtime/config. */
+export const HOST_GROUP_LENGTH = 43;
 
 const text = new TextEncoder();
 
@@ -40,6 +43,10 @@ export async function roomOf(publicKey: string): Promise<string> {
 /** What the computer signs to take its seat. */
 export const hostChallenge = (room: string, seconds: string) => "botkins-relay-host-v2:" + room + ":" + seconds;
 
+/** What a v3 computer signs to take its room seat, including its runtime/config group. */
+export const hostChallengeV3 = (room: string, group: string, seconds: string) =>
+  "botkins-relay-host-v3:" + room + ":" + group + ":" + seconds;
+
 /** Whether a computer's offer (its subprotocols) proves it owns `room` at our time `now` (seconds). */
 export async function hostProof(offered: string[], room: string, now: number): Promise<boolean> {
   // Exactly one of each, so nothing can be smuggled past the check in a second entry.
@@ -54,6 +61,23 @@ export async function hostProof(offered: string[], room: string, now: number): P
   if (!/^\d{1,12}$/.test(seconds) || Math.abs(now - Number(seconds)) > MAX_SKEW) return false;
   if ((await roomOf(publicKey)) !== room) return false;
   return verifyEd25519(publicKey, signature, hostChallenge(room, seconds));
+}
+
+/** Whether a v3 computer's offer proves both room ownership and its authenticated runtime group. */
+export async function hostProofV3(offered: string[], room: string, now: number): Promise<boolean> {
+  const one = (prefix: string) => {
+    const found = offered.filter((entry) => entry.startsWith(prefix));
+    return found.length === 1 ? found[0]!.slice(prefix.length) : null;
+  };
+  const publicKey = one("k.");
+  const group = one("g.");
+  const seconds = one("t.");
+  const signature = one("s.");
+  if (!offered.includes(HOST_PROTOCOL_V3) || publicKey === null || group === null || seconds === null || signature === null) return false;
+  if (!new RegExp(`^[A-Za-z0-9_-]{${HOST_GROUP_LENGTH}}$`).test(group)) return false;
+  if (!/^\d{1,12}$/.test(seconds) || Math.abs(now - Number(seconds)) > MAX_SKEW) return false;
+  if ((await roomOf(publicKey)) !== room) return false;
+  return verifyEd25519(publicKey, signature, hostChallengeV3(room, group, seconds));
 }
 
 /**

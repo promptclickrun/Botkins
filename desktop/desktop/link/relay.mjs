@@ -15,13 +15,15 @@
 //   relay → computer   [conn 8][from 8][0x01][id u32][route u8][n u8][session n][body…]   a request
 //   computer → relay   [conn 8][0x02][id u32][status u16][body…]                          its answer
 //   relay → computer   [conn 8][from 8][0x04]                                             that phone left
+//   v3 relay → computer [conn 8][from 8][0x06][id u32]                                      answer accepted
 //
 // Nothing here throws into the caller: a failure is logged and the link goes on, or tries again.
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 
 /** The relay a new install uses. */
 export const DEFAULT_RELAY_URL = "https://relay.botkins.app";
 export const HOST_PROTOCOL = "botkins.host.v2";
+export const HOST_PROTOCOL_V3 = "botkins.host.v3";
 export const MAX_MESSAGE = 8 * 1024 * 1024;
 /** The most a phone's message may be (the relay's limit), and so the most a request frame may be, with its 16 bytes of addressing. */
 export const MAX_REQUEST_FRAME = 6 * 1024 * 1024 + 64 * 1024 + 16;
@@ -39,6 +41,7 @@ const SLOWEST_MS = 60_000;
 
 export const roomOf = (publicKey) => createHash("sha256").update("botkins-relay-room-v1:" + publicKey).digest("base64url");
 export const hostChallenge = (room, seconds) => "botkins-relay-host-v2:" + room + ":" + seconds;
+export const hostChallengeV3 = (room, group, seconds) => "botkins-relay-host-v3:" + room + ":" + group + ":" + seconds;
 const KEY = /^[A-Za-z0-9_-]{43}$/;
 
 /** A new relay key pair: raw 32-byte Ed25519 keys, base64url. The private one never leaves this computer. */
@@ -64,6 +67,13 @@ export function hostOffer(key, seconds) {
   const room = roomOf(key.publicKey);
   const signature = sign(null, Buffer.from(hostChallenge(room, seconds), "utf8"), privateObject(key)).toString("base64url");
   return [HOST_PROTOCOL, "k." + key.publicKey, "t." + seconds, "s." + signature];
+}
+
+/** The v3 seat proof. The group is shared by the active and standby sockets of one runtime. */
+export function hostOfferV3(key, group, seconds) {
+  const room = roomOf(key.publicKey);
+  const signature = sign(null, Buffer.from(hostChallengeV3(room, group, seconds), "utf8"), privateObject(key)).toString("base64url");
+  return [HOST_PROTOCOL_V3, "k." + key.publicKey, "g." + group, "t." + seconds, "s." + signature];
 }
 
 /**
@@ -387,6 +397,540 @@ export class RelayLink {
     }
     try {
       socket.send(bytes);
+    } catch (error) {
+      this.say("relay: " + (error?.message ?? error));
+    }
+  }
+}
+
+// v3 keeps the phone side of a relay session alive while the computer's transport is replaced.
+// It deliberately lives beside RelayLink: old releases and old relays continue to use the v2 class,
+// while LinkServer can opt into the two-seat transport without changing the sealed link protocol.
+const V3_GROUP = /^[A-Za-z0-9_-]{43}$/;
+const V3_GRACE_MS = 15_000;
+const V3_CACHE_MS = 5 * 60_000;
+const V3_RESULT_BYTES = MAX_MESSAGE - 15;
+const V3_CACHE_BYTES = 48 * V3_RESULT_BYTES;
+const V3_RETIRED_MAX = 8192;
+const V3_MAX_CONNS = 64;
+const V3_PER_CONN = 8;
+const V3_IN_ALL = 256;
+
+/**
+ * A v3 host relay. The relay routes phone requests to its first seat and keeps the second seat hot.
+ * The host therefore treats either socket as a transport, and treats requests as durable by
+ * conn+id until the phone leaves or the reconnect grace window expires.
+ */
+export class RelayHost {
+  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
+    this.key = key;
+    this.secret = key?.privateKey;
+    this.publicKey = key?.publicKey;
+    this.serve = serve;
+    this.onGoneCallback = onGone;
+    this.onChangeCallback = onChange;
+    this.onTakenCallback = onTaken;
+    this.logTo = log;
+    this.WebSocketClass = WebSocket;
+    this.timers = {
+      setTimeout: timers.setTimeout ?? ((fn, ms) => globalThis.setTimeout(fn, ms)),
+      clearTimeout: timers.clearTimeout ?? ((id) => globalThis.clearTimeout(id)),
+      random: timers.random ?? Math.random,
+      now: timers.now ?? Date.now,
+    };
+    this.running = false;
+    this.sockets = new Map(); // socket -> { slot, mode, ping, dead, stable }
+    this.socket = null; // active socket, retained for LinkServer's status/debug callers
+    this.standby = null;
+    this.standbyRetry = null;
+    this.standbyAttempt = 0;
+    this.up = false;
+    this.mode = "v3";
+    this.everV3 = false;
+    this.fallbackFromV3 = false;
+    this.fallbackV2 = fallbackV2 !== false;
+    this.group = V3_GROUP.test(group ?? "") ? group : randomBytes(32).toString("base64url");
+    this.attempt = 0;
+    this.retry = null;
+    this.grace = null;
+    this.conns = new Map(); // conn hex -> durable request state
+    this.cacheBytes = 0;
+    this.reservedBytes = 0;
+    this.inFlight = 0;
+    this.taken = false;
+    this.takenInARow = 0;
+    this.endpoint = null;
+    try {
+      const origin = cleanRelayUrl(url);
+      if (!validRelayKey(key)) throw new Error("no key");
+      this.room = roomOf(key.publicKey);
+      this.endpoint = origin.replace(/^http/, "ws") + "/v1/host/" + this.room;
+    } catch (error) {
+      this.say("relay: not started: " + (error?.message ?? error));
+    }
+  }
+
+  get connected() {
+    return this.up;
+  }
+
+  say(text) {
+    try {
+      this.logTo(this.secret ? String(text).split(this.secret).join("•••") : String(text));
+    } catch {}
+  }
+
+  later(ms, fn) {
+    const id = this.timers.setTimeout(() => {
+      try {
+        fn();
+      } catch (error) {
+        this.say("relay: " + (error?.message ?? error));
+      }
+    }, ms);
+    id?.unref?.();
+    return id;
+  }
+
+  clear(id) {
+    if (id !== undefined && id !== null) this.timers.clearTimeout(id);
+  }
+
+  start() {
+    if (this.running || !this.endpoint) return;
+    this.running = true;
+    this.connect("active");
+  }
+
+  stop() {
+    this.running = false;
+    this.clear(this.retry);
+    this.retry = null;
+    this.clear(this.standbyRetry);
+    this.standbyRetry = null;
+    this.clear(this.grace);
+    this.grace = null;
+    for (const [socket] of [...this.sockets]) this.finishSocket(socket, 1000, true);
+    for (const conn of [...this.conns.keys()]) this.leave(conn);
+    this.conns.clear();
+    this.clear(this.retry);
+    this.retry = null;
+  }
+
+  connect(slot) {
+    if (!this.running || !this.endpoint || this.socketsFor(slot).length) return;
+    const Socket = this.WebSocketClass;
+    if (typeof Socket !== "function") {
+      this.say("relay: this system has no WebSocket");
+      return;
+    }
+    const seconds = Math.floor(this.timers.now() / 1000);
+    const protocols = this.mode === "v3" ? hostOfferV3(this.key, this.group, seconds) : hostOffer(this.key, seconds);
+    let socket;
+    try {
+      socket = new Socket(this.endpoint, protocols);
+      socket.binaryType = "arraybuffer";
+    } catch (error) {
+      this.say("relay: couldn't open the socket: " + (error?.message ?? error));
+      if (this.mode === "v3" && this.fallbackV2 && !this.everV3) {
+        this.mode = "v2";
+        this.fallbackFromV3 = true;
+        return this.connect(slot);
+      }
+      if (this.mode === "v3" && slot === "standby") {
+        this.scheduleStandby();
+        return;
+      }
+      this.schedule(1006);
+      return;
+    }
+    const meta = { slot, mode: this.mode, ping: null, dead: null, stable: null, opened: false };
+    this.sockets.set(socket, meta);
+    const mine = (fn) => (event) => {
+      if (this.sockets.get(socket) !== meta) return;
+      try {
+        fn(event);
+      } catch (error) {
+        this.say("relay: " + (error?.message ?? error));
+      }
+    };
+    socket.onopen = mine(() => this.opened(socket, meta));
+    socket.onmessage = mine((event) => this.heard(socket, event.data));
+    socket.onclose = mine((event) => this.lost(socket, Number(event?.code) || 1006));
+    socket.onerror = () => {};
+  }
+
+  socketsFor(slot) {
+    return [...this.sockets.values()].filter((meta) => meta.slot === slot);
+  }
+
+  opened(socket, meta) {
+    if (!this.running || this.sockets.get(socket) !== meta) return;
+    meta.opened = true;
+    if (meta.mode === "v3") this.everV3 = true;
+    this.clear(this.grace);
+    this.grace = null;
+    const wasUp = this.up;
+    if (meta.slot === "active" || !this.socket) {
+      this.socket = socket;
+      meta.slot = "active";
+      this.standby = null;
+      this.up = true;
+    } else {
+      this.standby = socket;
+      this.clear(this.standbyRetry);
+      this.standbyRetry = null;
+      this.standbyAttempt = 0;
+      this.up = true;
+    }
+    this.armStable(socket, meta);
+    this.say("relay: connected");
+    if (!wasUp) {
+      try {
+        this.onChangeCallback(true);
+      } catch (error) {
+        this.say("relay: " + (error?.message ?? error));
+      }
+    }
+    this.nextPing(socket, meta);
+    // The relay accepts two sockets for one v3 group. A v2 relay is left with one seat.
+    if (meta.mode === "v3" && !this.standby && meta.slot === "active") this.scheduleStandby(true);
+  }
+
+  nextPing(socket, meta) {
+    this.clear(meta.ping);
+    meta.ping = this.later(PING_MS, () => {
+      if (this.sockets.get(socket) !== meta) return;
+      try {
+        socket.send("ping");
+      } catch {
+        return this.drop(socket);
+      }
+      this.clear(meta.dead);
+      meta.dead = this.later(DEAD_MS, () => this.drop(socket));
+      this.nextPing(socket, meta);
+    });
+  }
+
+  armStable(socket, meta) {
+    if (meta.slot !== "active") return;
+    this.clear(meta.stable);
+    meta.stable = this.later(STABLE_MS, () => {
+      if (this.sockets.get(socket) !== meta) return;
+      this.attempt = 0;
+      this.takenInARow = 0;
+      if (this.taken) {
+        this.taken = false;
+        this.say("relay: the seat is ours again");
+        try { this.onChangeCallback(true); } catch (error) { this.say("relay: " + (error?.message ?? error)); }
+      }
+    });
+  }
+
+  drop(socket) {
+    if (!this.sockets.has(socket)) return;
+    this.lost(socket, 1006);
+    try {
+      socket.close();
+    } catch {}
+  }
+
+  lost(socket, code) {
+    const meta = this.sockets.get(socket);
+    if (!meta) return;
+    const wasOpened = meta.opened;
+    const takenCode = code === 4000;
+    this.clear(meta.ping);
+    this.clear(meta.dead);
+    this.clear(meta.stable);
+    this.sockets.delete(socket);
+    // A 4000 is a group-level seat loss. Do not promote the standby: a sibling
+    // with the same proof would immediately take the room back from its owner.
+    if (takenCode) {
+      this.clear(this.standbyRetry);
+      this.standbyRetry = null;
+      this.standbyAttempt = 0;
+      for (const [sibling, siblingMeta] of [...this.sockets]) {
+        this.clear(siblingMeta.ping);
+        this.clear(siblingMeta.dead);
+        this.clear(siblingMeta.stable);
+        this.sockets.delete(sibling);
+        try { sibling.close(4000); } catch {}
+      }
+      this.socket = null;
+      this.standby = null;
+    } else if (this.socket === socket) {
+      this.socket = this.standby && this.sockets.has(this.standby) ? this.standby : null;
+      if (this.socket) {
+        const promoted = this.sockets.get(this.socket);
+        if (promoted) {
+          promoted.slot = "active";
+          this.armStable(this.socket, promoted);
+        }
+        this.standby = null;
+      }
+    } else if (this.standby === socket) {
+      this.standby = null;
+    }
+    const anyOpen = [...this.sockets.values()].some((entry) => entry.opened);
+    if (anyOpen) {
+      this.up = true;
+      if (this.mode === "v3" && !this.standby) this.scheduleStandby();
+    } else {
+      this.up = false;
+      if (this.mode === "v3") {
+        if (this.conns.size) this.armGrace();
+      } else {
+        for (const conn of [...this.conns.keys()]) this.leave(conn);
+      }
+      try {
+        this.onChangeCallback(false);
+      } catch (error) {
+        this.say("relay: " + (error?.message ?? error));
+      }
+    }
+    if (!this.running) return;
+    // A v3-only relay refuses the v3 seat before `open`; retrying v2 keeps old relays usable.
+    if (!wasOpened && meta.mode === "v3" && this.fallbackV2 && !this.everV3) {
+      this.say("relay: disconnected (" + code + ")");
+      this.mode = "v2";
+      this.fallbackFromV3 = true;
+      this.connect(meta.slot);
+      return;
+    }
+    if (this.mode === "v2" && this.fallbackFromV3 && wasOpened && !takenCode) {
+      this.mode = "v3";
+      this.everV3 = false;
+      this.fallbackFromV3 = false;
+      this.schedule(code);
+      return;
+    }
+    if (takenCode) {
+      this.takenInARow++;
+      this.say("relay: another computer took over this room; trying again later");
+    } else {
+      this.takenInARow = 0;
+      this.say("relay: disconnected (" + code + ")");
+    }
+    if (this.takenInARow >= TAKEN_AFTER && !this.taken) {
+      this.taken = true;
+      this.say("relay: another computer keeps taking this room with the same key; trying again every 10 minutes");
+      try {
+        this.onTakenCallback();
+      } catch (error) {
+        this.say("relay: " + (error?.message ?? error));
+      }
+    }
+    this.schedule(code);
+  }
+
+  finishSocket(socket, code, stopping = false) {
+    const meta = this.sockets.get(socket);
+    if (!meta) return;
+    this.lost(socket, code);
+    try {
+      socket.close(code);
+    } catch {}
+    if (stopping) this.sockets.delete(socket);
+  }
+
+  schedule(code) {
+    if (!this.running || this.retry) return;
+    const base = this.taken && code === 4000 ? TAKEN_RETRY_MS : code === 4000 ? SLOWEST_MS : Math.min(SLOWEST_MS, FIRST_MS * 2 ** this.attempt);
+    this.attempt = Math.min(this.attempt + 1, 16);
+    const wait = Math.min(base, Math.round(base * (0.75 + 0.5 * this.timers.random())));
+    this.retry = this.later(wait, () => {
+      this.retry = null;
+      this.connect("active");
+    });
+  }
+
+  scheduleStandby(immediate = false) {
+    if (!this.running || this.mode !== "v3" || this.standby || this.standbyRetry || this.socketsFor("standby").length) return;
+    const base = immediate ? 0 : Math.min(SLOWEST_MS, FIRST_MS * 2 ** this.standbyAttempt++);
+    const wait = immediate ? 0 : Math.min(base, Math.round(base * (0.75 + 0.5 * this.timers.random())));
+    this.standbyRetry = this.later(wait, () => {
+      this.standbyRetry = null;
+      this.connect("standby");
+    });
+  }
+
+  armGrace() {
+    if (this.grace || !this.conns.size) return;
+    this.grace = this.later(V3_GRACE_MS, () => {
+      this.grace = null;
+      for (const conn of [...this.conns.keys()]) this.leave(conn);
+      this.conns.clear();
+    });
+  }
+
+  heard(socket, data) {
+    // Any frame, including pong, proves this transport is alive.
+    const meta = this.sockets.get(socket);
+    if (!meta) return;
+    this.clear(meta.dead);
+    meta.dead = null;
+    if (typeof data === "string") return;
+    if (data?.byteLength > MAX_REQUEST_FRAME) return;
+    let frame;
+    if (data instanceof ArrayBuffer) frame = Buffer.from(data);
+    else if (ArrayBuffer.isView(data)) frame = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    else return;
+    if (frame.length < 17) return;
+    const conn = hex(frame.subarray(0, 8));
+    if (frame[16] === 0x04) return this.leave(conn);
+    if (frame[16] === 0x06) return meta.mode === "v3" && this.ack(frame, conn);
+    if (frame[16] === 0x01) return this.request(socket, frame, conn, meta.mode === "v3");
+  }
+
+  /** The v3 room acknowledges an answer after accepting it; keep only a replay tombstone. */
+  ack(frame, conn) {
+    if (frame.length < 21) return;
+    const state = this.conns.get(conn);
+    const id = frame.readUInt32BE(17);
+    const entry = state?.entries.get(id);
+    if (!entry || entry.kind !== "done") return;
+    state.entries.delete(id);
+    this.reservedBytes -= V3_RESULT_BYTES;
+    this.cacheBytes -= entry.body.length;
+    this.retire(state, id);
+  }
+
+  stateFor(conn) {
+    let state = this.conns.get(conn);
+    if (state) return state;
+    if (this.conns.size >= V3_MAX_CONNS) return null;
+    state = { busy: 0, entries: new Map(), retired: new Set(), retiredOrder: [], gone: null, release: null };
+    state.gone = new Promise((resolve) => (state.release = resolve));
+    this.conns.set(conn, state);
+    return state;
+  }
+
+  prune(state) {
+    const now = this.timers.now();
+    for (const [id, entry] of [...state.entries]) {
+      if (entry.kind === "done" && now - entry.at > V3_CACHE_MS) {
+        state.entries.delete(id);
+        this.reservedBytes -= V3_RESULT_BYTES;
+        this.cacheBytes -= entry.body.length;
+        this.retire(state, id);
+      }
+    }
+  }
+
+  pruneAll() {
+    for (const state of this.conns.values()) this.prune(state);
+  }
+
+  retire(state, id) {
+    state.retired.add(id);
+    state.retiredOrder.push(id);
+    while (state.retiredOrder.length > V3_RETIRED_MAX) state.retired.delete(state.retiredOrder.shift());
+  }
+
+  request(socket, frame, conn, isV3 = true) {
+    // [conn 8][from 8][0x01][id u32][route u8][n u8][session n][body…]
+    if (frame.length < 23) return;
+    const id = frame.readUInt32BE(17);
+    const route = ROUTES[frame[21]];
+    const n = frame[22];
+    if (!route || 23 + n > frame.length) return;
+    if (isV3) this.pruneAll();
+    const state = this.stateFor(conn);
+    if (!state) return this.answer(socket, frame.subarray(0, 8), id, 429, json({ error: "slow_down" }));
+    this.prune(state);
+    const existing = state.entries.get(id);
+    if (existing) {
+      if (existing.kind === "done") this.answer(socket, frame.subarray(0, 8), id, existing.status, existing.body);
+      // A duplicate pending request deliberately does not call serve again.
+      return;
+    }
+    if (state.retired.has(id)) return this.answer(socket, frame.subarray(0, 8), id, 409, json({ error: "replay" }));
+    if (state.busy >= V3_PER_CONN || this.inFlight >= V3_IN_ALL) return this.answer(socket, frame.subarray(0, 8), id, 429, json({ error: "slow_down" }));
+    if (isV3 && this.reservedBytes + V3_RESULT_BYTES > V3_CACHE_BYTES) return this.answer(socket, frame.subarray(0, 8), id, 429, json({ error: "slow_down" }));
+    const item = {
+      id,
+      connBytes: frame.subarray(0, 8),
+      from: hex(frame.subarray(8, 16)),
+      route,
+      session: frame.subarray(23, 23 + n).toString("latin1"),
+      body: frame.subarray(23 + n),
+      isV3,
+    };
+    if (isV3) this.reservedBytes += V3_RESULT_BYTES;
+    state.entries.set(id, { kind: "pending", at: this.timers.now() });
+    state.busy++;
+    this.inFlight++;
+    Promise.resolve()
+      .then(() => this.serve({ route: item.route, session: item.session, body: item.body, from: item.from, conn: item.connBytes.toString("hex"), gone: state.gone }))
+      .then(
+        (answer) => this.complete(state, item, Number(answer?.status) || 500, Buffer.from(answer?.body ?? "")),
+        (error) => {
+          this.say("relay: " + (error?.message ?? error));
+          this.complete(state, item, 500, json({ error: "failed" }));
+        },
+      )
+      .finally(() => {
+        this.inFlight--;
+        state.busy--;
+        if (!item.isV3 && state.busy === 0 && this.conns.get(item.connBytes.toString("hex")) === state) {
+          this.conns.delete(item.connBytes.toString("hex"));
+          state.entries.clear();
+        }
+      });
+  }
+
+  complete(state, item, status, body) {
+    const entry = state.entries.get(item.id);
+    if (!entry || entry.kind !== "pending") return;
+    if (body.length + 15 > MAX_MESSAGE) {
+      status = 413;
+      body = json({ error: "too_large" });
+    }
+    if (!item.isV3) {
+      this.answer(this.socket ?? this.standby, item.connBytes, item.id, status, body);
+      state.entries.delete(item.id);
+      return;
+    }
+    this.cacheBytes += body.length;
+    state.entries.set(item.id, { kind: "done", status, body, at: this.timers.now() });
+    this.prune(state);
+    this.answer(this.socket ?? this.standby, item.connBytes, item.id, status, body);
+  }
+
+  answer(socket, conn, id, status, body) {
+    if (!socket || !this.sockets.has(socket)) return;
+    let bytes = Buffer.concat([conn, Buffer.alloc(7), body]);
+    bytes[8] = 0x02;
+    bytes.writeUInt32BE(id, 9);
+    bytes.writeUInt16BE(status, 13);
+    if (bytes.length > MAX_MESSAGE) {
+      bytes = Buffer.concat([conn, Buffer.alloc(7), json({ error: "too_large" })]);
+      bytes[8] = 0x02;
+      bytes.writeUInt32BE(id, 9);
+      bytes.writeUInt16BE(413, 13);
+    }
+    try {
+      socket.send(bytes);
+    } catch (error) {
+      this.say("relay: " + (error?.message ?? error));
+    }
+  }
+
+  leave(conn) {
+    const state = this.conns.get(conn);
+    if (!state) return;
+    this.conns.delete(conn);
+    for (const entry of state.entries.values()) {
+      this.reservedBytes -= V3_RESULT_BYTES;
+      if (entry.kind === "done") this.cacheBytes -= entry.body.length;
+    }
+    state.entries.clear();
+    try {
+      state.release?.();
+    } catch {}
+    try {
+      this.onGoneCallback(conn);
     } catch (error) {
       this.say("relay: " + (error?.message ?? error));
     }
