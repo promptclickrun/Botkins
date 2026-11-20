@@ -151,6 +151,7 @@ export default function RootLayout() {
             <Stack.Screen name="pair/index" options={{ ...sheet, sheetAllowedDetents: [0.5] }} />
             <Stack.Screen name="pair/scan" options={{ presentation: "fullScreenModal", headerShown: false, animation: "slide_from_bottom" }} />
             <Stack.Screen name="pair/manual" options={{ ...sheet, sheetAllowedDetents: [0.62, 1] }} />
+            <Stack.Screen name="pair/name" options={{ ...sheet, sheetAllowedDetents: [0.5, 1] }} />
             <Stack.Screen name="join" options={{ ...sheet, sheetAllowedDetents: [0.72, 1] }} />
           </Stack>
           <ToastHost />

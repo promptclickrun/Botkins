@@ -3,10 +3,14 @@ import { useState } from "react";
 import { LinkError } from "@/link/client";
 import type { PairTarget } from "@/link/pairing";
 import { pairWith } from "@/state/link";
+import { askPersonName } from "./askName";
 import { showToast } from "@/state/store";
 import { haptic } from "@/ui";
 
-/** Pairs with a computer and lands on Home. `error` is what to tell the person when it fails. */
+/**
+ * Asks "Your name", then pairs with a computer and lands on Home. `error` is what to tell the person
+ * when it fails. Closing "Your name" sends nothing.
+ */
 export function usePairing() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +21,9 @@ export function usePairing() {
     setError(null);
     setErrorCode(null);
     try {
-      const pairing = await pairWith(target);
+      const person = await askPersonName();
+      if (!person) return false;
+      const pairing = await pairWith(target, person);
       haptic.success();
       showToast("Paired with " + pairing.name, "success");
       router.dismissTo("/");
