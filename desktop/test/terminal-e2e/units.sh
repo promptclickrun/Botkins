@@ -21,14 +21,14 @@
 # Then the unit is changed by hand, the ways a person might: `botkins doctor` says what it finds,
 # and `botkins service refresh` keeps what it can carry and leaves alone what it can't.
 #
-# The releases are this run's own: a mirror on this computer, signed with a key made for this
-# run. The three versions name that mirror and that key where the program names GitHub and the
+# The releases are this run's own: a mirror on this computer (test/terminal-e2e/mirror.mjs, which
+# answers as GitHub's release pages do), signed with a key made for this run. The three versions name that mirror and that key where the program names GitHub and the
 # Botkins release key, and are otherwise the code as it is. So this proves the update, and
 # proves nothing about a release of the project (test/terminal-e2e/from-release.sh does that).
 #
 #   test/terminal-e2e/units.sh [--keep]
 #
-# Needs Docker, Node.js 24, GnuPG and python3 on this computer. Everything it makes is in a
+# Needs Docker, Node.js 24 and GnuPG on this computer. Everything it makes is in a
 # temporary folder and one container, both removed at the end (--keep leaves them to look at).
 set -euo pipefail
 
@@ -76,10 +76,8 @@ running_on() {
   box 'systemctl status botkins --no-pager -l | tail -n 15' || true
   fail "The service is not running on Botkins $1."
 }
-# Says which release is the latest, as GitHub's own list would.
-latest() {
-  node -e 'const [version, target] = process.argv.slice(1); const file = "botkins-terminal-" + version + "-" + target + ".tar.gz"; console.log(JSON.stringify({ tag_name: "v" + version, draft: false, prerelease: false, assets: [file, "SHA256SUMS", "SHA256SUMS.asc"].map((name) => ({ name })) }))' "$1" "$target" > "$work/release/latest.json"
-}
+# Says which release is the latest: the mirror's /releases/latest then leads to it, as GitHub's does.
+latest() { printf '%s\n' "$1" > "$work/release/latest"; }
 # The update, asked for the way a phone asks: the service's own user asks the service, and the root job does the rest.
 update_as_a_phone_would() {
   printf '$ (as botkins) botkins update\n'
@@ -123,17 +121,14 @@ for version in "$a" "$b" "$c"; do
 done
 unset GNUPGHOME
 latest "$a"
-# HTTP/1.1, which keeps a connection open, as a release's own server does. With the default (1.0)
-# the server closes the connection after each file, and Node's HTTP client can then end the whole
-# updater with an assertion of its own in the middle of a download.
-(cd "$work/release" && exec python3 -m http.server "$port_release" --bind 0.0.0.0 --protocol HTTP/1.1) >"$work/http.log" 2>&1 &
+node "$here/mirror.mjs" "$work/release" "$port_release" 0.0.0.0 >"$work/http.log" 2>&1 &
 server_pid=$!
 
 step "A clean Debian container with systemd, and version A ($a) installed by the real installer"
 docker build -q -t botkins-e2e-debian "$here" >/dev/null
 docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock --tmpfs /tmp --add-host host.docker.internal:host-gateway botkins-e2e-debian >/dev/null
 for _ in $(seq 1 30); do [ "$(in_box systemctl is-system-running 2>/dev/null || true)" = running ] && break; sleep 1; done
-box "curl -fsSL $base/v$a/install.sh | sh -s -- --release-url $base --version $a --release-fingerprint $fingerprint" | tail -n 6
+box "curl -fsSL $base/releases/download/v$a/install.sh | sh -s -- --release-url $base/releases/download --version $a --release-fingerprint $fingerprint" | tail -n 6
 box 'mkdir -p /srv/projects && botkins service install --allow-path /srv/projects' | tail -n 6
 running_on "$a"
 choices | tee "$work/choices-a.txt"

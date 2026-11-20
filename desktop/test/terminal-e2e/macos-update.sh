@@ -17,8 +17,8 @@
 # A installs B: the job file is B's, the service runs on B, and the PATH it was installed with
 # is kept. B installs C: C doesn't stay up, so B is put back, under B's job file.
 #
-# The releases are this run's own: a mirror on this computer, signed with a key made for this
-# run. The three versions name that mirror and that key where the program names GitHub and the
+# The releases are this run's own: a mirror on this computer (test/terminal-e2e/mirror.mjs, which
+# answers as GitHub's release pages do), signed with a key made for this run. The three versions name that mirror and that key where the program names GitHub and the
 # Botkins release key, and are otherwise the code as it is.
 #
 # WARNING: this changes two things of yours for the length of the run, and puts both back:
@@ -28,7 +28,7 @@
 #
 #   test/terminal-e2e/macos-update.sh
 #
-# Needs Node.js 24, GnuPG and python3. A computer under heavy load can fail this for no reason
+# Needs Node.js 24 and GnuPG. A computer under heavy load can fail this for no reason
 # of the code's: launchd starts a background job late, and the watch on a new version is 30 seconds.
 set -euo pipefail
 
@@ -75,10 +75,8 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-# Says which release is the latest, as GitHub's own list would.
-latest() {
-  node -e 'const [version, target] = process.argv.slice(1); const file = "botkins-terminal-" + version + "-" + target + ".tar.gz"; console.log(JSON.stringify({ tag_name: "v" + version, draft: false, prerelease: false, assets: [file, "SHA256SUMS", "SHA256SUMS.asc"].map((name) => ({ name })) }))' "$1" "$target" > "$work/release/latest.json"
-}
+# Says which release is the latest: the mirror's /releases/latest then leads to it, as GitHub's does.
+latest() { printf '%s\n' "$1" > "$work/release/latest"; }
 # Asks the running service to install the latest release: what a paired phone's request comes to.
 ask_the_service() {
   printf '$ (the service'"'"'s own call, as a phone makes it) update.install\n'
@@ -118,10 +116,7 @@ for version in "$a" "$b" "$c"; do
 done
 unset GNUPGHOME
 latest "$a"
-# HTTP/1.1, which keeps a connection open, as a release's own server does. With the default (1.0)
-# the server closes the connection after each file, and Node's HTTP client can then end the whole
-# updater with an assertion of its own in the middle of a download.
-(cd "$work/release" && exec python3 -m http.server "$port_release" --bind 127.0.0.1 --protocol HTTP/1.1) >"$work/http.log" 2>&1 &
+node "$here/mirror.mjs" "$work/release" "$port_release" 127.0.0.1 >"$work/http.log" 2>&1 &
 server_pid=$!
 
 step "Version A ($a), unpacked as an install has it and installed as a LaunchAgent in this session"

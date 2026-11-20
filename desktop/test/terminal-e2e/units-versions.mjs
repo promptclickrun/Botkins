@@ -16,8 +16,9 @@
 // update` takes only the latest signed release from the project's own address, checked against
 // the project's own key, and has no setting that says otherwise, on purpose. So that a test can
 // run a whole update (the service asks, the updater downloads, checks the signature, installs,
-// watches), these copies name this run's mirror and this run's key in the four places the
-// program names GitHub and the Botkins release key. The code that does the update is untouched.
+// watches), these copies name this run's mirror (test/terminal-e2e/mirror.mjs) and this run's
+// key in the places the program names GitHub and the Botkins release key. The code that does the
+// update is untouched.
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -61,8 +62,13 @@ function next(earlier, version, changes) {
 // A: the built tarball, taking its releases from this run's mirror and trusting this run's key.
 execFileSync("tar", ["-xzf", values.tarball, "-C", work]);
 const a = { folder: join(work, "botkins-terminal-" + from + "-" + system), version: from };
-edit(a.folder, "desktop/updates.mjs", [["https://api.github.com/repos/promptclickrun/Botkins/releases/latest", values.mirror + "/latest.json"]]);
-edit(a.folder, "desktop/terminal/update-install.mjs", [['const RELEASES = "https://github.com/promptclickrun/Botkins/releases/download/";', 'const RELEASES = "' + values.mirror + '/";']]);
+edit(a.folder, "desktop/updates.mjs", [
+  ['export const releasePage = "https://github.com/promptclickrun/Botkins/releases/latest";', 'export const releasePage = "' + values.mirror + '/releases/latest";'],
+  ['const base = "https://github.com/promptclickrun/Botkins/releases/download/" + tag + "/";', 'const base = "' + values.mirror + '/releases/download/" + tag + "/";'],
+  // The second try, GitHub's API, leads nowhere here: the release is found from the release page, as it is first on a real computer.
+  ["https://api.github.com/repos/promptclickrun/Botkins/releases/latest", values.mirror + "/no-api-here"],
+]);
+edit(a.folder, "desktop/terminal/update-install.mjs", [['const RELEASES = "https://github.com/promptclickrun/Botkins/releases/download/";', 'const RELEASES = "' + values.mirror + '/releases/download/";']]);
 edit(a.folder, "desktop/linux-service/botkins-update-helper.mjs", [[/const fingerprint = "[0-9A-F]{40}";/.exec(readFileSync(join(a.folder, "desktop/linux-service/botkins-update-helper.mjs"), "utf8"))[0], 'const fingerprint = "' + values.fingerprint + '";']]);
 writeFileSync(join(a.folder, "desktop/linux-service/botkins-release.asc"), readFileSync(values.key));
 pack(a.folder, from);
