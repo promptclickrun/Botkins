@@ -29,6 +29,8 @@ export type Shape = {
 
 /** The narrowest content that gets a second pane: the opened iPhone Duo (669 points upright) and up. */
 export const WIDE_MIN = 640;
+/** And the least height: a phone on its side is wide enough but too short for a list beside a chat. */
+const TALL_MIN = 500;
 /** A side inset this big on one side only is the rail; the notch's inset in landscape is on both. */
 const RAIL_MIN = 44;
 
@@ -37,7 +39,7 @@ const RAIL_MIN = 44;
  * the tab bar stays at the bottom there).
  */
 export function shapeOf(input: { width: number; height: number; insets: Insets; tabBar: number; native?: NativeFoldState | null; rtl?: boolean; ios?: boolean }): Shape {
-  const { width, insets, tabBar, native, rtl = false, ios = true } = input;
+  const { width, height, insets, tabBar, native, rtl = false, ios = true } = input;
   const left = Math.max(0, insets.left);
   const right = Math.max(0, insets.right);
   let rail: Shape["rail"] = null;
@@ -46,7 +48,7 @@ export function shapeOf(input: { width: number; height: number; insets: Insets; 
   else if (ios && left >= RAIL_MIN && right < RAIL_MIN / 2) rail = "left";
   const fold = native?.hinge === "partial" && native.fold && native.fold.width >= 0 && native.fold.height >= 0 ? native.fold : null;
   const pose = !fold ? "flat" : fold.height >= fold.width ? "book" : "laptop";
-  return { rail, left, right, tabRoom: rail ? 0 : tabBar, wide: width - left - right >= WIDE_MIN, pose, fold };
+  return { rail, left, right, tabRoom: rail ? 0 : tabBar, wide: width - left - right >= WIDE_MIN && height >= TALL_MIN, pose, fold };
 }
 
 /**

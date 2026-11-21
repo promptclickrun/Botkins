@@ -14,6 +14,7 @@ test("a phone, the Duo closed and opened, and the fold: rail, tab room, two pane
   const sideways = shapeOf({ width: 874, height: 402, insets: { top: 0, right: 59, bottom: 21, left: 59 }, tabBar: 64 });
   assert.equal(sideways.rail, null);
   assert.equal(sideways.tabRoom, 64);
+  assert.equal(sideways.wide, false, "too short for a list beside a chat");
 
   // Android on its side: its buttons sit on one side, and the tab bar stays at the bottom.
   const android = shapeOf({ width: 915, height: 412, insets: { top: 24, right: 48, bottom: 0, left: 0 }, tabBar: 96, ios: false });
