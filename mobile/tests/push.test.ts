@@ -134,6 +134,32 @@ test("a finished reply reaches the phone sealed: the relay carries no message te
   }
 });
 
+test("a phone that paired again with its old entry still there gets each alert once, sealed for the new pairing", async () => {
+  const { link, call, until, done, sent } = await setup();
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production", start: START });
+    // The same phone pairs again with a new key; its first entry is left behind.
+    const again = await pair(fetcher, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "Test phone", platform: "ios" });
+    const client = new LinkClient(again, { fetch: fetcher, onParts() {}, onState() {} });
+    client.start();
+    try {
+      await (client as any).call("link.push.register", { token: TOKEN, env: "production", start: START });
+      assert.equal(link.status().push.length, 1, "the address is held once");
+      await call("send", "chat-blog", "Once.");
+      await until(() => sent.some((item) => item.type === "alert"), "the notification");
+      await delay(500);
+      const alerts = sent.filter((item) => item.type === "alert");
+      assert.equal(alerts.length, 1);
+      assert.equal(unseal(again, alerts[0].payload.b).c, "chat-blog");
+      assert.equal(sent.filter((item) => item.type === "liveactivity").length, 0, "the old entry starts no Live Activity");
+    } finally {
+      client.stop();
+    }
+  } finally {
+    await done();
+  }
+});
+
 test("a phone that is showing the chat is not notified; one in the background is", async () => {
   const { call, until, done, sent } = await setup();
   try {

@@ -116,8 +116,17 @@ export class Push {
 
   register(deviceId, target, prefs) {
     const before = this.store.push(deviceId);
+    const clean = cleanTarget(target);
+    // An Apple address belongs to one app on one phone. A phone that paired again (or whose old
+    // entry was never removed) leaves an entry holding the same address: it would get every alert
+    // twice, one sealed with a key the phone no longer has, and a Live Activity start on every send.
+    for (const device of this.store.data.devices) {
+      if (device.id === deviceId) continue;
+      const other = this.store.push(device.id);
+      if (other && (other.token === clean.token || (clean.start && other.start === clean.start))) this.store.setPush(device.id, null);
+    }
     // The newest version this phone was told about stays: registering again doesn't tell it twice.
-    this.store.setPush(deviceId, { ...cleanTarget(target), prefs: cleanPrefs(prefs, before?.prefs), activities: before?.activities ?? {}, ...(before?.updateSeen && { updateSeen: before.updateSeen }) });
+    this.store.setPush(deviceId, { ...clean, prefs: cleanPrefs(prefs, before?.prefs), activities: before?.activities ?? {}, ...(before?.updateSeen && { updateSeen: before.updateSeen }) });
     this.changed();
   }
   setPrefs(deviceId, prefs) {
