@@ -16,6 +16,26 @@ if (process.isMainFrame === false) {
   };
   window.addEventListener("pointerdown", tell, true);
   window.addEventListener("keydown", tell, true);
+  // A second layer under the guard a view's page starts with (desktop/view-guard.mjs). The ways
+  // to open a peer-to-peer connection are taken away in the page's own world from here, before
+  // any of its code runs and where it cannot reach to stop it. This also holds in a frame the
+  // page makes from markup of its own. It does not run for the empty document that a
+  // "javascript:" address runs in, which is why the guard keeps every nested frame out as well.
+  try {
+    contextBridge.executeInMainWorld({
+      func: () => {
+        for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "RTCSessionDescription", "RTCIceCandidate", "RTCRtpSender", "RTCRtpReceiver", "WebTransport"]) {
+          try {
+            Object.defineProperty(window, name, { value: undefined, configurable: false, writable: false });
+          } catch {
+            // Already taken away by the page's guard.
+          }
+        }
+      },
+    });
+  } catch {
+    // An Electron without this call: the guard in the page still stands.
+  }
 }
 const api = {};
 for (const name of [
