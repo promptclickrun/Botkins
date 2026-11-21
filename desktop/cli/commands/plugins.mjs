@@ -494,7 +494,7 @@ export const pluginCommands = {
   },
   "sign-in": {
     summary: "Sign in a tool of a plugin that signs in, with a browser on any device",
-    usage: "botkins plugins sign-in <id> [--tool <name>] [--start | --finish | --cancel]",
+    usage: "botkins plugins sign-in <id> [--tool <name>] [--start | --finish | --cancel] [--no-input]",
     options: { tool: { type: "string", value: "name", about: "Which tool, when the plugin has more than one that signs in (the tool's name in `botkins plugins show`)" }, ...SIGN_IN_OPTIONS },
     arguments: [{ name: "id", required: true }],
     details: "A plugin with one tool that signs in needs no --tool. With several, the command refuses and lists their names.\n\n" + SIGN_IN_DETAILS,

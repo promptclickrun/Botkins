@@ -687,10 +687,23 @@ export class Plugins {
   answerSignIn(id, address) {
     this.oauth.answer(id, address);
   }
-  async signIn(id, { open, patience } = {}) {
-    const server = this.authServer(id);
-    if (!server) throw new Error("This plugin sign-in is unavailable.");
-    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }) });
+  /**
+   * The tool of a plugin that signs in, for a sign-in to start: the tool's address and client id are read from the
+   * copy's files, so the copy is checked first, as a switch-on and a session check it (assertIntact). Every way in
+   * to a plugin's sign-in (the window, a phone, the command line) goes through this.
+   */
+  signInServer(id) {
+    for (const row of this.records) {
+      const server = this.knownOAuthServers(row).find((entry) => entry.id === id);
+      if (!server) continue;
+      this.assertIntact(row);
+      return server;
+    }
+    throw new Error("This plugin sign-in is unavailable.");
+  }
+  async signIn(id, { open, patience, finished } = {}) {
+    const server = this.signInServer(id);
+    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }) });
     if (!this.authServer(id)) {
       this.vault.remove(this.oauth.entry(server));
       throw new Error("The plugin changed during sign-in.");

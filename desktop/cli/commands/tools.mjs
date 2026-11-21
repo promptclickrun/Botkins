@@ -135,6 +135,7 @@ export const SIGN_IN_OPTIONS = {
   start: { type: "boolean", about: "With no terminal, step 1: print the page to open, and leave the sign-in open" },
   finish: { type: "boolean", about: "With no terminal, step 2: read the address the browser was sent back to from standard input, and wait for the end" },
   cancel: { type: "boolean", about: "End a sign-in that is open" },
+  "no-input": { type: "boolean", about: "Never ask a question, even at a terminal. The plain form fails at once and names the two steps. --finish reads standard input only when it is not a terminal" },
 };
 /** What a sign-in from a terminal is, for the details of both commands. */
 export const SIGN_IN_DETAILS = [
@@ -145,6 +146,9 @@ export const SIGN_IN_DETAILS = [
   "  --start     prints the page, and the start of the address to look for, and leaves the sign-in open (a second --start gives the same page again)",
   "  --finish    reads the pasted address from standard input, and waits for the end",
   "The pasted address is never a word on the command line: it holds a code.",
+  "--no-input is for an agent, or a script, that has a terminal it cannot type at: the command then never asks. The plain form fails at once and names the two steps. --finish reads the address from standard input when that is not a terminal, and fails at once when it is. A pipe that is never closed makes --finish wait.",
+  "",
+  "The page that the command prints is the key to the sign-in: whoever opens it can sign in with their own account, and whoever gives the address that follows to --finish signs the tool in as that account. So open only a page from your own command's output. Paste only the address that your own browser was sent to. Read which account the last lines name.",
   "",
   "What is accepted: only the address this sign-in named, with the mark (`state`) of this sign-in. The tool's sign-in server is checked by its name in the address (`iss`) when it gives one. The code in the address works one time, and only with a secret this computer made for this sign-in. A wrong `state`, another address or no code is turned away, and the sign-in stays open for the right one. An answer in which the server names itself wrongly (`iss`) ends the sign-in: start it again. The address and the code are never in the log.",
 ].join("\n");
@@ -157,35 +161,52 @@ export const SIGN_IN_DETAILS = [
  */
 export async function signInCommand(context, { calls, target, next }) {
   const { start, finish, cancel } = context.options;
+  const noInput = context.options["no-input"] === true;
   if ([start, finish, cancel].filter(Boolean).length > 1) throw usage("Use one of --start, --finish and --cancel.");
   const { client } = context;
-  if (cancel) return void context.print(await client.call(calls + ".end", ...target), (done) => (done.cancelled ? "The sign-in to " + safe(done.name) + " is ended." : safe(done.name) + " has no open sign-in."));
-  if (finish) {
-    // From standard input, or typed without being shown: never from the command line.
-    const address = await secret(context, "The address the browser was sent back to (not shown): ").catch((error) => {
-      if (error.code === "USAGE") throw usage("No address was given. Give the address the browser was sent back to on standard input.");
-      throw error;
-    });
-    let done;
-    try {
-      done = await client.call(calls + ".answer", ...target, address);
-    } catch (error) {
-      // The reason is the service's own sentence and never has the address.
-      // BAD_ADDRESS: this address was turned away, and the sign-in is open still.
-      if (error.code === "BAD_ADDRESS") throw new CliError(error.message + " The sign-in is still open: run --finish again with the right address.", EXIT.failed, "BAD_ADDRESS");
-      // ANSWERED: the sign-in has its answer, and nothing more is asked of the person.
-      if (error.code === "ANSWERED") throw new CliError(error.message + " Look at the result with `botkins " + (calls.startsWith("plugins") ? "plugins show " + shellWord(target[0], "<the plugin>") : "tools show " + shellWord(target[0], "<the tool>")) + "`.", EXIT.failed, "ANSWERED");
-      throw error;
-    }
-    return void context.print({ done: true, ...done }, () => safe(done.name) + " is signed in.");
+  const word = calls.startsWith("plugins") ? "plugin" : "tool";
+  if (cancel) {
+    const done = await client.call(calls + ".end", ...target);
+    return void context.print(done, (done) => (done.cancelled ? "The sign-in to " + safe(done.name) + " is ended." : done.finished ? "The sign-in to " + safe(done.name) + " was done already, so it is not ended. The tool is signed in." : safe(done.name) + " has no open sign-in."));
   }
-  if (!start && (!context.stdin.isTTY || context.json))
+  if (finish) {
+    // With --no-input a question is never asked: the address comes from standard input, which is not a terminal.
+    if (noInput && context.stdin.isTTY)
+      throw usage("With --no-input this step reads the address from standard input, and standard input is a terminal. Give the address on standard input, for example: botkins " + (word === "plugin" ? "plugins" : "tools") + " sign-in <" + word + "> --finish < address.txt");
+    // Ctrl-C and a hang-up end the sign-in: the command is not left to write a sign-in that its person stopped.
+    const stop = () => void client.call(calls + ".end", ...target).catch(() => {});
+    process.once("SIGINT", stop);
+    process.once("SIGHUP", stop);
+    try {
+      // From standard input, or typed without being shown: never from the command line.
+      const address = await secret(context, "The address that your own browser was sent to, from a page that you opened from this output (not shown): ").catch((error) => {
+        if (error.code === "USAGE") throw usage("No address was given. Give the address the browser was sent back to on standard input.");
+        throw error;
+      });
+      let done;
+      try {
+        done = await client.call(calls + ".answer", ...target, address);
+      } catch (error) {
+        // The reason is the service's own sentence and never has the address.
+        // BAD_ADDRESS: this address was turned away, and the sign-in is open still.
+        if (error.code === "BAD_ADDRESS") throw new CliError(error.message + " The sign-in is still open: run --finish again with the right address.", EXIT.failed, "BAD_ADDRESS");
+        // ANSWERED: the sign-in has its answer, and nothing more is asked of the person.
+        if (error.code === "ANSWERED") throw new CliError(error.message + " Look at the result with `botkins " + (calls.startsWith("plugins") ? "plugins show " + shellWord(target[0], "<the plugin>") : "tools show " + shellWord(target[0], "<the tool>")) + "`.", EXIT.failed, "ANSWERED");
+        throw error;
+      }
+      return void context.print({ done: true, ...done }, () => signedIn(done));
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGHUP", stop);
+    }
+  }
+  if (!start && (noInput || !context.stdin.isTTY || context.json))
     throw usage("With no terminal this sign-in has two steps. Run it with --start: it prints the page to open, and leaves the sign-in open. Then run it with --finish: it reads the address the browser was sent back to from standard input.");
   // `hold`: with --start nobody follows the sign-in. It stays open for --finish, and a second --start gets it again.
   const started = await client.call(calls, ...target, ...(start ? [{ hold: true }] : []));
   if (!start) {
-    const done = await followSignIn(context, started.session, "tools.signIn", { intro: "Sign in to " + safe(started.name) + "." });
-    return void context.print({ done: true, ...done }, () => safe(done?.name ?? started.name) + " is signed in.");
+    const done = await followSignIn(context, started.session, "tools.signIn", { intro: (page) => "Sign in to " + safe(started.name) + onHost(page.host) + "." });
+    return void context.print({ done: true, ...done }, () => signedIn({ name: started.name, ...done }));
   }
   // Step 1 only: wait for the page, say it, and leave the sign-in open for step 2.
   for (let after = 0; ; ) {
@@ -196,17 +217,17 @@ export async function signInCommand(context, { calls, target, next }) {
       const command = next(started);
       const { session: _session, ...about } = started;
       const left = started.minutes + (started.minutes === 1 ? " minute" : " minutes");
-      return void context.print({ ...about, open: page.url, back: page.back, next: command }, () =>
+      return void context.print({ ...about, open: page.url, back: page.back, host: page.host, next: command }, () =>
         [
           ...(started.already ? ["This sign-in is already open. It stays open for " + (started.minutes === 1 ? "1 more minute" : started.minutes + " more minutes") + ".", ""] : []),
-          "Sign in to " + safe(started.name) + ".",
+          "Sign in to " + safe(started.name) + onHost(page.host) + ".",
           "",
           "Open this page on any device and sign in:",
           "",
           "    " + safe(page.url),
           "",
           "The browser then goes to an address that starts with " + safe(page.back) + ". On another device than this computer that page does not load, which is expected.",
-          "Copy the whole address from the browser's address bar, and give it to the second step in the next " + left + ":",
+          "Copy the whole address from the browser's address bar, and give it to the second step in the next " + left + ". Give only the address that your own browser was sent to, from a page that you opened from this output:",
           "",
           "    " + command,
           "",
@@ -218,6 +239,14 @@ export async function signInCommand(context, { calls, target, next }) {
     if (view.done) throw new CliError(view.error ?? "The sign-in ended before it gave a page.", EXIT.failed, "SIGN_IN_FAILED");
   }
 }
+/** ", on login.example.com" for a page's host, as safe text. */
+const onHost = (host) => (host ? ", on " + safe(host) : "");
+/** The last lines of a sign-in that is done: which account the sign-in server says it is, and whether it replaced one. */
+const signedIn = (done) =>
+  [
+    done.account ? "The sign-in server says that the account is " + safe(done.account) + "." : "Botkins cannot tell which account this is. Check it at " + (done.host ? safe(done.host) : "the sign-in server") + ".",
+    done.again ? "Signed in to " + safe(done.name) + " again. This replaces the sign-in that was there." : safe(done.name) + " is signed in.",
+  ].join("\n");
 const toolLine = (tool) => (tool.kind === "command" ? shown(tool.runs) : safe(tool.url));
 const toolText = (tool) =>
   [
@@ -413,7 +442,7 @@ export const tools = {
       },
       "sign-in": {
         summary: "Sign a tool on the web in, with a browser on any device",
-        usage: "botkins tools sign-in <tool> [--start | --finish | --cancel]",
+        usage: "botkins tools sign-in <tool> [--start | --finish | --cancel] [--no-input]",
         options: SIGN_IN_OPTIONS,
         details: SIGN_IN_DETAILS,
         async run(context) {

@@ -83,6 +83,26 @@ async function capped(response) {
 }
 /** An error with a code, for a caller that tells one refusal from another (a terminal host). */
 const coded = (message, code) => Object.assign(new Error(message), { code });
+/**
+ * The account that the sign-in server says the person signed in as, from the `id_token` of the
+ * token answer (a JWT): `email`, else `preferred_username`, else `name`, cut to 120 characters.
+ * The payload is read and not verified: it is the server's own word, shown as that. Nothing is
+ * asked of any server for it, and the id token is never kept. Null when the answer has none.
+ */
+export function accountOf(reply) {
+  const token = reply?.id_token;
+  if (typeof token !== "string" || token.length > 20_000) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    for (const key of ["email", "preferred_username", "name"]) {
+      const value = claims?.[key];
+      if (typeof value === "string" && value.trim()) return value.trim().slice(0, 120);
+    }
+  } catch {}
+  return null;
+}
 const sameAddress = (a, b) => String(a).replace(/\/+$/, "") === String(b).replace(/\/+$/, "");
 /** The value of one parameter in a WWW-Authenticate header. */
 export function challengeParam(header, name) {
@@ -413,11 +433,19 @@ export class McpOAuth {
    * person entered an app registration by hand, and `hint` what the server said it needs.
    * A terminal host has no browser: it passes its own `open(address, { redirect })`, which shows
    * the address to the person, and gives the answer with `answer()`. `patience` is how long the
-   * answer may take, in milliseconds.
+   * answer may take, in milliseconds. `finished({ account, again })` is called once the tokens
+   * are written: `again` is true when a sign-in was there before and is replaced, and `account` is
+   * what the sign-in server says the account is (accountOf), or null.
+   *
+   * A cancel (`cancel()`) ends the sign-in in any state: before the page, while it waits, after
+   * the address was taken and while the token request is out. Nothing is written after it.
    */
-  async signIn(server, { client, scope, hint, open = this.open, patience } = {}) {
+  async signIn(server, { client, scope, hint, open = this.open, patience, finished } = {}) {
     if (this.flows.has(server.id)) throw new Error("A sign-in for " + server.name + " is already open in your browser.");
-    const flow = { cancelled: false, cancel: () => {} };
+    const flow = { cancelled: false, cancel: () => {}, abort: () => {}, name: server.name, port: null };
+    // Rejects when the sign-in is cancelled: a request that is out is not waited for then.
+    const aborted = new Promise((_resolve, reject) => (flow.abort = () => reject(new Error("Sign-in was cancelled."))));
+    aborted.catch(() => {});
     this.flows.set(server.id, flow);
     this.changed();
     let listener;
@@ -430,14 +458,22 @@ export class McpOAuth {
       const port = approved ? Number(approved.callback.port || 80) : this.port;
       const missingClient = () => new Error("Ask your administrator or the server operator to configure an approved OAuth client for " + server.name + ". You can also enter a client ID in this server's advanced sign-in settings.");
       if (!approved && !client && !meta.registration_endpoint && !saved.registered) throw missingClient();
-      // The answer comes back to a fixed port. When something else holds it, a registration made
-      // for another port can be made again; one typed in by hand can't.
+      // The answer comes back to a fixed port. Another sign-in of this one holds it: say so, and do not
+      // try another port (that would register one more client for a sign-in that waits). When something
+      // else holds it, a registration made for another port can be made again; one typed in by hand can't.
+      const holder = () => (port ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
+      const held = (other) => new Error("Another sign-in (to " + other.name + ") is open on this computer and holds the port. Finish it or cancel it, then try again.");
+      if (holder()) throw held(holder());
+      flow.port = port || null;
       try {
         listener = await this.listen(port, approved?.callback, patience);
       } catch (error) {
+        flow.port = null;
+        if (holder()) throw held(holder());
         if (approved || client || !meta.registration_endpoint) throw new Error("Botkins couldn't listen for the sign-in on port " + port + ". Close what is using it and try again.");
         listener = await this.listen(0, undefined, patience);
       }
+      flow.port = listener.port;
       flow.cancel = listener.cancel;
       if (flow.cancelled) throw new Error("Sign-in was cancelled.");
       const redirect = approved?.redirectUri ?? redirectUri(listener.port);
@@ -448,9 +484,11 @@ export class McpOAuth {
         throw new Error(
           server.name + " now signs in at " + new URL(meta.token_endpoint).host + ", not where its client secret was first used. If that is right, enter the client secret again in this server's sign-in settings.",
         );
-      // A registration Botkins made is reused only with the very sign-in server it was made at.
-      if (!app && saved.registered && saved.clientId && saved.redirectUri === redirect && saved.issuer === found.issuer && saved.tokenEndpoint === meta.token_endpoint)
-        app = { clientId: saved.clientId, clientSecret: saved.clientSecret, registered: true };
+      // A registration Botkins made is reused only with the very sign-in server it was made at, and for the
+      // same return address. One of a sign-in that was done is in the saved sign-in itself; one of a sign-in
+      // that was cancelled or ran out of time is `registration` (below). Neither holds a token.
+      const reusable = [saved.registered && saved, saved.registration].find((kept) => kept?.clientId && kept.redirectUri === redirect && kept.issuer === found.issuer && kept.tokenEndpoint === meta.token_endpoint);
+      if (!app && reusable) app = { clientId: reusable.clientId, clientSecret: reusable.clientSecret, registered: true };
       if (!app) {
         if (!meta.registration_endpoint) throw missingClient();
         const reply = await this.json(meta.registration_endpoint, {
@@ -469,6 +507,9 @@ export class McpOAuth {
         if (!reply.ok || !reply.body?.client_id)
           throw new Error(server.name + " didn't accept Botkins' registration" + (reply.body?.error_description ? ": " + String(reply.body.error_description).slice(0, 200) : "."));
         app = { clientId: String(reply.body.client_id), ...(reply.body.client_secret && { clientSecret: String(reply.body.client_secret) }), registered: true };
+        // Kept now, in the same place as the sign-in and with the same care, so that a start that is cancelled or
+        // runs out of time does not make a new client at the next start. An earlier sign-in's own values stay as they are.
+        this.write(server, { ...(this.read(server) ?? {}), registration: { clientId: app.clientId, ...(app.clientSecret && { clientSecret: app.clientSecret }), redirectUri: redirect, issuer: found.issuer, tokenEndpoint: meta.token_endpoint } });
       }
       const verifier = b64(randomBytes(48));
       const state = b64(randomBytes(24));
@@ -488,17 +529,26 @@ export class McpOAuth {
       flow.take = (address) => listener.take(address, redirect);
       await open(authorize.href, { redirect });
       const { code, iss } = await answered;
+      // A cancel after the address was taken ends the sign-in too: the token request is not sent.
+      if (flow.cancelled) throw new Error("Sign-in was cancelled.");
       // When the server names itself in the answer it must be the one that was asked (RFC 9207),
       // and a server that says it names itself must do so.
       if ((iss && !sameAddress(iss, found.issuer)) || (!iss && meta.authorization_response_iss_parameter_supported === true))
         throw new Error("The sign-in answer came from a different server than the one asked. The sign-in is over. Start it again.");
-      const reply = await this.tokenRequest(meta, app, {
+      const request = this.tokenRequest(meta, app, {
         grant_type: "authorization_code",
         code,
         redirect_uri: redirect,
         code_verifier: verifier,
         resource: found.resource,
       });
+      request.catch(() => {});
+      // A cancel while the request is out ends the sign-in at once; what the request brings is dropped.
+      const reply = await Promise.race([request, aborted]);
+      // Nothing between this look and the write waits: a cancel is either before it, and nothing is written, or after it.
+      if (flow.cancelled) throw new Error("Sign-in was cancelled.");
+      const again = !!this.read(server)?.accessToken;
+      const account = accountOf(reply);
       this.write(server, {
         issuer: found.issuer,
         tokenEndpoint: meta.token_endpoint,
@@ -512,6 +562,7 @@ export class McpOAuth {
         ...(app.registered && { registered: true, ...(app.clientSecret && { clientSecret: app.clientSecret }) }),
         ...this.tokens(reply, { scope: wanted }),
       });
+      finished?.({ account, again });
       return this.status(server);
     } finally {
       listener?.close();
@@ -578,8 +629,10 @@ export class McpOAuth {
   cancel(serverId) {
     const flow = this.flows.get(serverId);
     if (!flow) return false;
+    // Whatever state the sign-in is in: before the page, waiting, after the address was taken, with the token request out.
     flow.cancelled = true;
     flow.cancel();
+    flow.abort();
     return true;
   }
   /** Forgets a server's tokens, telling the sign-in server when it offers a way to. */

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../cli/main.mjs";
 import { argumentsOf, COMMANDS, describe, find } from "../cli/commands/index.mjs";
-import { CHANGES, LINK, PARTS, READS, REASONS, thingForLog, WORKSPACE } from "../desktop/terminal/coverage.mjs";
+import { CHANGES, LINK, LOGS_ITSELF, PARTS, READS, REASONS, thingForLog, WORKSPACE } from "../desktop/terminal/coverage.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -61,10 +61,12 @@ test("every call the app's window can make has a command, a reason from the list
   assert.deepEqual(gone(workspace, WORKSPACE), [], "These entries name calls that the app no longer has. Take them out.");
   for (const [name, entry] of Object.entries(WORKSPACE)) checkEntry(name, entry);
   // The service's own calls: each one either changes something, and then leaves a line in the log, or only reads.
-  const known = [...Object.keys(CHANGES), ...READS, "call"];
+  // (A sign-in's calls write their own line when a sign-in is done: LOGS_ITSELF, and test/terminal-signin.test.mjs holds them to it.)
+  const known = [...Object.keys(CHANGES), ...READS, ...LOGS_ITSELF, "call"];
   assert.deepEqual(control.filter((name) => !known.includes(name)), [], "These calls of the service are in neither CHANGES nor READS (coverage.mjs). Say which: a change leaves a line in the log.");
   assert.deepEqual(known.filter((name) => !control.includes(name)), [], "CHANGES or READS name calls that the service no longer has.");
   assert.deepEqual(Object.keys(CHANGES).filter((name) => READS.includes(name)), []);
+  assert.deepEqual(LOGS_ITSELF.filter((name) => name in CHANGES || READS.includes(name)), [], "a call is in one list only");
   // The debt, said where a person reads the test's output.
   const owed = Object.entries({ ...WORKSPACE, ...LINK }).filter(([, entry]) => "owed" in entry);
   for (const part of Object.keys(PARTS)) t.diagnostic("Part " + part + " owes commands for " + owed.filter(([, entry]) => entry.owed === part).length + " calls: " + PARTS[part] + ".");

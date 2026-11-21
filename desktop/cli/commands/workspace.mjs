@@ -97,7 +97,10 @@ async function turn(context, chatId, message, { live }) {
  * `calls` names the service's calls for it: a provider's, or a tool's (`tools.signIn`). What it
  * says can be a sign-in server's own words, so each is written as `shownText` writes it. A line
  * that holds a code (a prompt with `secret`) is asked for without showing it.
- * `intro` is a line that says what the sign-in is for, before the page is shown (already safe text).
+ * `intro` is a line that says what the sign-in is for, before the page is shown (safe text), or a function of the
+ * page's event that gives it (a tool's line names the page's host).
+ * A line that the service turns away is explained and the same question is asked again.
+ * Ctrl-C, a hang-up and the close of the terminal's input end the sign-in.
  *
  * While a question is open the session is still read. The sign-in can end another way (the
  * browser was on this computer and answered by itself, or it was ended from elsewhere): the
@@ -108,6 +111,11 @@ export async function followSignIn(context, session, calls = "providers.login", 
   const { client, color } = context;
   const cancel = () => void client.call(calls + ".cancel", session).catch(() => {});
   process.once("SIGINT", cancel);
+  // A hang-up of the terminal ends the sign-in as Ctrl-C does: it is not left to wait for nobody. So does the
+  // close of the terminal's own input.
+  process.once("SIGHUP", cancel);
+  const closed = context.stdin.isTTY && typeof context.stdin.once === "function";
+  if (closed) context.stdin.once("close", cancel);
   // Standard input, a line at a time, for a run with no terminal.
   let lines = null;
   let reader = null;
@@ -139,7 +147,7 @@ export async function followSignIn(context, session, calls = "providers.login", 
   const show = (event) => {
     if (context.json) context.stdout.write(JSON.stringify(event) + "\n");
     else if (event.type === "code") context.stdout.write("\nOpen this page on any device:\n\n    " + color.bold(shownText(event.url)) + "\n\nand enter the code:\n\n    " + color.bold(shownText(event.code)) + "\n\nWaiting for you to finish there…\n");
-    else if (event.type === "open") context.stdout.write("\n" + (intro ? intro + "\n" : "") + "Open this page on any device to sign in:\n\n    " + color.bold(shownText(event.url)) + "\n\n");
+    else if (event.type === "open") context.stdout.write("\n" + (intro ? (typeof intro === "function" ? intro(event) : intro) + "\n" : "") + "Open this page on any device to sign in:\n\n    " + color.bold(shownText(event.url)) + "\n\n");
     else if (event.type === "output") context.stdout.write(color.dim("  " + shownText(event.text)) + "\n");
   };
   try {
@@ -182,7 +190,9 @@ export async function followSignIn(context, session, calls = "providers.login", 
           cancel();
           throw new CliError("This sign-in asks for something to be typed, and there is nothing more on standard input. Run it at a terminal, or sign in with --token.", EXIT.failed, "NEEDS_INPUT");
         }
-        await client.call(calls + ".input", session, line).catch((error) => context.note(error.message));
+        // A line that is turned away is explained, and the same question is asked again: nothing else would ask it.
+        const refused = await client.call(calls + ".input", session, line).then(() => false, (error) => (context.note(shownText(error.message)), true));
+        if (refused) queue.unshift(event);
       }
       if (ended) {
         if (ended.error) throw new CliError(shownText(ended.error), EXIT.failed, "SIGN_IN_FAILED");
@@ -196,6 +206,8 @@ export async function followSignIn(context, session, calls = "providers.login", 
     throw error;
   } finally {
     process.off("SIGINT", cancel);
+    process.off("SIGHUP", cancel);
+    if (closed) context.stdin.off("close", cancel);
     reader?.close();
   }
 }

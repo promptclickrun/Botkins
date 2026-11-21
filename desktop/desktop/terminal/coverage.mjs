@@ -295,15 +295,6 @@ export const CHANGES = {
   "tools.test": (args, value) => value?.name ?? args?.[0],
   "tools.import": (args, value) => some(value?.added),
   "tools.signOut": (args, value) => value?.name ?? args?.[0],
-  // A sign-in: the tool's name only (for a plugin's tool, the plugin's name and the tool's). The page's
-  // address, the pasted address and its code are never the thing: when a call fails, only a first
-  // argument that is a name is used, and one that looks like an address or holds a code is left out.
-  "tools.signIn": (args, value) => value?.name ?? nameOnly(args?.[0]),
-  "tools.signIn.answer": (args, value) => value?.name ?? nameOnly(args?.[0]),
-  "tools.signIn.end": (args, value) => value?.name ?? nameOnly(args?.[0]),
-  "plugins.signIn": (args, value) => value?.name ?? nameOnly(args?.[0]),
-  "plugins.signIn.answer": (args, value) => value?.name ?? nameOnly(args?.[0]),
-  "plugins.signIn.end": (args, value) => value?.name ?? nameOnly(args?.[0]),
   "tools.forgetApprovals": (args) => args?.[0] ?? "every chat",
   "skills.save": (args) => args?.[0]?.name,
   "skills.remove": 0,
@@ -397,7 +388,7 @@ export const CHANGES = {
   // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
   // ── Voice (control-voice.mjs) ──
 };
-/** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
+/** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
@@ -412,8 +403,14 @@ export const MORE_READS = {
 };
 READS.push(...Object.values(MORE_READS).flat());
 
-/** The first argument of a sign-in's call when it is a name (what the command line gives), and nothing when it could be an address with a code. */
-const nameOnly = (value) => (typeof value === "string" && !/[:?=&#]/.test(value) ? value : null);
+/**
+ * The calls of a tool's sign-in. They are in neither list above: the dispatcher writes no line for them, not when they start,
+ * not when an address is turned away, not for a cancel and not for a time-out. The sign-in writes its own line once, when it
+ * is done (`startToolSignIn` in control-tools.mjs): "Changed from the command line: tools.signIn <name> (signed in)", or
+ * "(signed in again)" when it replaces one. The name is the service's own record of the tool, never a word the caller typed
+ * (so a code in the place of a name is nowhere in the log), and the page, the pasted address and its code are never there.
+ */
+export const LOGS_ITSELF = ["tools.signIn", "tools.signIn.answer", "tools.signIn.end", "plugins.signIn", "plugins.signIn.answer", "plugins.signIn.end"];
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);

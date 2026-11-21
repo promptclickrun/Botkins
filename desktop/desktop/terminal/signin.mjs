@@ -20,7 +20,7 @@
 //
 // A sign-in is a session with a numbered list of events the command line reads as they come:
 //   { type: "code", url, code }     open the page, type the code
-//   { type: "open", url }           open the page on any device ("back" too, for a tool on the web: where the browser ends up)
+//   { type: "open", url }           open the page on any device ("back" and "host" too, for a tool on the web: where the browser ends up, and the page's host)
 //   { type: "output", text }        a line the tool printed
 //   { type: "prompt", text }        the tool waits for a line (the command line asks for one; with `secret` it does not show it)
 // Nothing of a session is written to the log: a page's address and a code are for the person
@@ -56,6 +56,14 @@ const KEEP_MS = 60_000;
 const ANSWER_WAIT_MS = 30_000;
 /** A sign-in server's own words can be in a refusal. What would move or hide text on a terminal is written as its number (desktop/shown-text.mjs). */
 const plain = (text) => shownText(String(text)).slice(0, 600);
+/** The host of an address, as text that is safe to show. */
+const hostOf = (address) => {
+  try {
+    return plain(new URL(String(address)).host);
+  } catch {
+    return "";
+  }
+};
 /** An error with a code, for the command line to tell one refusal from another. */
 const refusal = (message, code) => Object.assign(new Error(message), { code });
 /** The codes of desktop/oauth.mjs for a refusal that is not "this address is turned away, and the sign-in is open". */
@@ -238,7 +246,8 @@ export class SignIns {
    * time for each.
    */
   async follow({ key, what, busy, run, finish, patience = ABANDONED_MS, held = false }) {
-    for (const other of this.sessions.values()) {
+    // (The sessions as they are now. One that another caller makes while this one waits is found by the look below.)
+    for (const other of [...this.sessions.values()]) {
       if (other.key !== key || other.done) continue;
       // One that was started to be answered later (`held`) is nobody's to take over: only its end, or `--cancel`, frees it.
       // One nobody follows any more is ended; one somebody is still following is theirs.
@@ -276,6 +285,7 @@ export class SignIns {
         clearTimeout(limit);
         clearInterval(watch);
         session.done = true;
+        session.ended = Date.now();
         ended();
         for (const wake of [...session.waiting]) wake();
         setTimeout(() => this.sessions.delete(session.id), KEEP_MS).unref?.();
@@ -294,9 +304,11 @@ export class SignIns {
    * @param hold  The sign-in is for a second step with no terminal (`--start`): nobody follows it. It is
    *              not taken over. Another `--start` for the same tool gets the same sign-in again
    *              (`already`), and the plain form, which follows, is refused (HELD).
+   * @param done  ({ again, account }) → called once, when the sign-in is done (the tokens are written). Not for a
+   *              sign-in that was started, cancelled, refused or timed out.
    * @returns { session, minutes, already? }  `minutes`: how long the sign-in waits for the address.
    */
-  async startTool(tool, how, { patience = TOOL_PATIENCE_MS, hold = false } = {}) {
+  async startTool(tool, how, { patience = TOOL_PATIENCE_MS, hold = false, done } = {}) {
     const key = "tool:" + tool.id;
     const again = () => {
       const open = this.open(key);
@@ -318,7 +330,13 @@ export class SignIns {
         patience,
         held: hold,
         run: (session) => this.toolFlow(session, how, patience),
-        finish: async () => ({ id: tool.id, name: tool.name, signedIn: true }),
+        finish: async (outcome) => {
+          // (The account is the sign-in server's word: shown as text, and cut.)
+          const account = outcome?.account ? plain(outcome.account).slice(0, 120) : undefined;
+          const result = { id: tool.id, name: tool.name, signedIn: true, again: outcome?.again === true, host: outcome?.host, ...(account && { account }) };
+          done?.(result);
+          return result;
+        },
       });
     } catch (error) {
       // Two `--start` at once: the one that lost gets the sign-in of the one that won.
@@ -336,6 +354,7 @@ export class SignIns {
     session.limit = 8000;
     let over = false;
     let wake = null;
+    let host = null;
     // An address that is turned away says why, with a code that tells the command line the sign-in is still open.
     // (The reason never holds the address: it is made in desktop/oauth.mjs from what this sign-in itself named.)
     session.take = (address) => {
@@ -348,7 +367,7 @@ export class SignIns {
       }
     };
     const paste = async (back) => {
-      let text = "When you have signed in, the browser goes to an address that starts with " + back + ". On another device than this computer that page does not load, which is expected. Copy the whole address from the browser's address bar and paste it here.";
+      let text = "When you have signed in, the browser goes to an address that starts with " + back + ". On another device than this computer that page does not load, which is expected. Copy the whole address from the browser's address bar and paste it here. Paste only the address that your own browser was sent to, from a page that you opened from this output.";
       while (!over) {
         // `secret`: the command line asks for it without showing it. The address holds a code.
         session.emit({ type: "prompt", text, secret: true });
@@ -370,14 +389,19 @@ export class SignIns {
         }
       }
     };
+    let outcome = null;
     try {
-      return await how.signIn({
+      await how.signIn({
         open: async (url, { redirect } = {}) => {
-          session.emit({ type: "open", url: String(url), back: redirect });
+          // The page's host, from the address the service made: it is the one thing in the page that the person can check.
+          host = hostOf(url);
+          session.emit({ type: "open", url: String(url), back: redirect, host });
           void paste(redirect);
         },
+        finished: (value) => (outcome = value),
         patience,
       });
+      return { ...outcome, host };
     } catch (error) {
       throw new Error(plain(error?.message ?? error));
     } finally {
@@ -418,12 +442,25 @@ export class SignIns {
     if (session.error) throw new Error(session.error);
     return session.result;
   }
-  /** Ends a tool's open sign-in, and waits until it is over. True when there was one. */
+  /**
+   * Ends a tool's open sign-in, and waits until it is over. Says what is true: { cancelled: true } when it
+   * was ended, { cancelled: false, finished: true } when it was done already (before the cancel, or while the
+   * cancel waited: the tokens are written and stay), { cancelled: false } when none was open.
+   */
   async cancelTool(toolId) {
     const session = this.toolSession(toolId);
-    if (!session || !(await this.cancel(session.id))) return false;
+    if (!session || !(await this.cancel(session.id))) {
+      const last = this.last("tool:" + toolId);
+      return last?.result && !last.error ? { cancelled: false, finished: true } : { cancelled: false };
+    }
     await Promise.race([session.over, new Promise((resolve) => setTimeout(resolve, 5000).unref?.())]);
-    return true;
+    return session.done && session.result && !session.error ? { cancelled: false, finished: true } : { cancelled: true };
+  }
+  /** The latest session with this key that is over and still kept, or null. */
+  last(key) {
+    let found = null;
+    for (const session of this.sessions.values()) if (session.key === key && session.done && (!found || session.ended > found.ended)) found = session;
+    return found;
   }
 
   /** One provider's way of signing in with the person's help. Resolves when it is done. */
@@ -565,7 +602,7 @@ export class SignIns {
     const session = this.sessions.get(id);
     if (!session || session.done) throw new Error("That sign-in is over.");
     if (!session.input) throw new Error("This sign-in isn't waiting for anything to be typed.");
-    if (typeof text !== "string" || text.length > (session.limit ?? 4000)) throw new Error("That is too long to be a code.");
+    if (typeof text !== "string" || text.length > (session.limit ?? 4000)) throw new Error("That is too long to be " + (session.limit ? "the address" : "a code") + ".");
     session.input(text.trim());
   }
   async cancel(id) {

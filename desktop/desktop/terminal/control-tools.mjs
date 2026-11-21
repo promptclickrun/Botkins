@@ -9,6 +9,7 @@
 // A secret (an environment value, a header's value, a client secret) goes in through these calls
 // and never comes out: every answer names the keys that have a value, not the values.
 import { parseServers } from "../integrations.mjs";
+import { thingForLog } from "./coverage.mjs";
 import { ControlError } from "./socket.mjs";
 
 const text = (value, max, what) => {
@@ -39,11 +40,18 @@ export const runs = (server) => (server.type === "stdio" || (!server.type && !se
  * the person added (Integrations) and for a tool of a plugin (Plugins): both sign in, take the
  * pasted address and end a sign-in by the tool's id. The answer is { session, minutes, id, name }.
  * With `options.hold` a second start for the same tool gives the same sign-in again, with `already: true`.
- * Nothing of it, the page or the address, reaches the log (desktop/terminal/coverage.mjs).
+ * Nothing of it, the page or the address, reaches the log (desktop/terminal/coverage.mjs). The one line
+ * the log has is written here, when the sign-in is done: `call` and the tool's name, "signed in" or
+ * "signed in again". A sign-in that is started, cancelled, turned away or runs out of time leaves none.
+ * The name is the service's own record of the tool, never a word the caller typed.
  */
-export const startToolSignIn = async (signIns, owner, { id, name }, options) => {
+export const startToolSignIn = async (signIns, owner, { id, name }, options, { call, log } = {}) => {
   // `hold`: step 1 of the two steps (`--start`): nobody follows the sign-in, and it is not taken over.
-  const started = await signIns.startTool({ id, name }, { signIn: (opened) => owner.signIn(id, opened), answer: (address) => owner.answerSignIn(id, address), cancel: () => owner.cancelSignIn(id) }, { hold: options?.hold === true });
+  const done = ({ again }) => {
+    const thing = thingForLog(name);
+    log?.("Changed from the command line: " + call + (thing ? " " + thing : "") + " (signed in" + (again ? " again" : "") + ")");
+  };
+  const started = await signIns.startTool({ id, name }, { signIn: (opened) => owner.signIn(id, opened), answer: (address) => owner.answerSignIn(id, address), cancel: () => owner.cancelSignIn(id) }, { hold: options?.hold === true, done });
   return { ...started, id, name };
 };
 /**
@@ -51,8 +59,9 @@ export const startToolSignIn = async (signIns, owner, { id, name }, options) => 
  * @param handlers   `runtime.handlers`.
  * @param bot        (ref) → a bot, by id or by a name only one bot has (desktop/terminal/control.mjs).
  * @param signIns    The service's sign-in sessions (desktop/terminal/signin.mjs).
+ * @param log        (line) → writes a line to the service's log, for a sign-in that is done.
  */
-export function toolsApi({ workspace, handlers, bot, signIns }) {
+export function toolsApi({ workspace, handlers, bot, signIns, log }) {
   const state = () => workspace.state;
   const servers = () => workspace.integrations.publicServers();
   const tool = (ref) => pick(servers(), ref, "tool", "botkins tools list");
@@ -194,7 +203,7 @@ export function toolsApi({ workspace, handlers, bot, signIns }) {
     async "tools.signIn"([ref, options]) {
       const found = tool(ref);
       if (runs(found)) throw new ControlError(found.name + " is a program on this computer. It signs in with its environment values (`botkins tools edit`).", "BAD_ARGUMENT");
-      return startToolSignIn(signIns, workspace.integrations, found, options);
+      return startToolSignIn(signIns, workspace.integrations, found, options, { call: "tools.signIn", log });
     },
     // The session is read, typed to and ended by its id, for a tool of the list and for a tool of a plugin alike.
     "tools.signIn.read": ([session, after], { signal } = {}) => signIns.read(String(session), { after: Number(after) || 0, signal }),
@@ -207,7 +216,7 @@ export function toolsApi({ workspace, handlers, bot, signIns }) {
     /** Ends a tool's open sign-in, whoever started it. */
     async "tools.signIn.end"([ref]) {
       const found = tool(ref);
-      return { id: found.id, name: found.name, cancelled: await signIns.cancelTool(found.id) };
+      return { id: found.id, name: found.name, ...(await signIns.cancelTool(found.id)) };
     },
     /** Forgets the tool approvals a person gave "for this chat", in one chat or in all of them. */
     "tools.forgetApprovals": ([chatId]) => void handlers.clearApprovals(chatId === undefined || chatId === null ? undefined : text(chatId, 200, "a chat's id")),

@@ -36,6 +36,10 @@ export async function oauthMcpServer(options = {}) {
     tokenStatus: null,
     /** The `token_type` the token endpoint answers with. Some servers say "bearer" in lower case. */
     tokenType: options.tokenType ?? "Bearer",
+    /** Claims of an `id_token` that the token answer has (a JWT with no signature check): { email, … }, or a whole string. */
+    idToken: options.idToken ?? null,
+    /** A promise that /token waits for before it answers: the answer is held until it settles. */
+    tokenGate: null,
     /** The word the server's one tool returns. */
     word: options.word ?? "heron-7",
   };
@@ -87,6 +91,7 @@ export async function oauthMcpServer(options = {}) {
       return response.end();
     }
     if (url.pathname === "/token" && request.method === "POST") {
+      if (state.tokenGate) await state.tokenGate;
       if (state.tokenStatus) return json(state.tokenStatus, { error: "temporarily_unavailable" });
       const form = new URLSearchParams(text);
       let clientId = form.get("client_id");
@@ -99,7 +104,8 @@ export async function oauthMcpServer(options = {}) {
         const refresh = "refresh-" + randomBytes(8).toString("hex");
         state.access.set(access, { scope, client: clientId, expiresAt: Date.now() + state.expiresIn * 1000 });
         state.refresh.set(refresh, { scope, client: clientId });
-        return json(200, { access_token: access, token_type: state.tokenType, expires_in: state.expiresIn, refresh_token: refresh, scope });
+        const id = state.idToken && (typeof state.idToken === "string" ? state.idToken : "e30." + Buffer.from(JSON.stringify(state.idToken)).toString("base64url") + ".c2ln");
+        return json(200, { access_token: access, token_type: state.tokenType, expires_in: state.expiresIn, refresh_token: refresh, scope, ...(id && { id_token: id }) });
       };
       if (form.get("grant_type") === "authorization_code") {
         const code = state.codes.get(form.get("code"));
