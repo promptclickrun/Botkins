@@ -76,6 +76,10 @@ const appSnapshot = () => {
   return {
     ...(using ? remote.snapshot(workspace.state.settings) : workspace.snapshot()),
     ...(!using && link ? { team: link.team() } : {}),
+    // The app's own list of spaces is never the window's. The window gets the owner's view of it,
+    // which the link makes as it does for every person. A link from before spaces makes none:
+    // the window then has no `spaces`, and that is how it knows to show the Today page as before.
+    ...(!using && { spaces: link?.spacesFor?.("owner") }),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },
   };
