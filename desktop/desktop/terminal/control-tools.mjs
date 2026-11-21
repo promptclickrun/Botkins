@@ -200,7 +200,16 @@ export function toolsApi({ workspace, handlers, bot }) {
     },
     /** Adds a skill folder, or a folder of skills, by its full path on this computer. */
     // A plugin folder is refused here: it can run commands, and this call shows nothing before it links.
-    "skills.addFolder": ([path]) => handlers.addSkillFolderAt(text(path, 4000, "a folder's full path"), { plugins: false }),
+    "skills.addFolder": async ([path]) => {
+      const folder = text(path, 4000, "a folder's full path");
+      try {
+        return await handlers.addSkillFolderAt(folder, { plugins: false });
+      } catch (error) {
+        // The plugins' own command takes such a folder: it adds it switched off and shows what it would run.
+        if (/This folder is a plugin/.test(String(error?.message))) throw new ControlError(error.message + " Add it with `botkins plugins add-folder`, which adds it switched off and shows what it runs.", "BAD_ARGUMENT");
+        throw error;
+      }
+    },
     async "skills.removeFolder"([id]) {
       const folders = skillList();
       const found = [...(folders.folders ?? []), ...(folders.plugins ?? [])].find((entry) => entry.id === id || entry.path === id);

@@ -14,6 +14,7 @@ import { ControlError } from "./socket.mjs";
 import { DESKTOP_ONLY } from "../host/headless.mjs";
 import { CHANGES, thingForLog } from "./coverage.mjs";
 import { toolsApi } from "./control-tools.mjs";
+import { pluginsApi } from "./control-plugins.mjs";
 
 const WAIT_MS = 25_000;
 const text = (value, max, what) => {
@@ -359,7 +360,6 @@ export function controlApi(service) {
     },
 
     // ── Plugins ──────────────────────────────────────────────────────────────────────────────
-    "plugins.list": () => workspace.plugins.list(),
 
     // ── Settings of the host ─────────────────────────────────────────────────────────────────
     "config.get": ([key]) => {
@@ -414,7 +414,9 @@ export function controlApi(service) {
   };
   // Tools (MCP servers), skills, and a bot's tools, skills and access (desktop/terminal/control-tools.mjs).
   Object.assign(api, toolsApi({ workspace, handlers, bot }));
-  // The plugin calls go by their own names ("plugins.install", …), as a phone makes them.
+  // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
+  Object.assign(api, pluginsApi({ workspace, handlers, bot }));
+  // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
   for (const name of Object.keys(handlers)) if (name.startsWith("plugins.") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   return api;
 }
@@ -437,7 +439,16 @@ export function dispatcher(api, { log } = {}) {
   };
   return async (method, args, context) => {
     if (!Object.hasOwn(api, method)) throw new ControlError("The service has no call named " + method + ". Is the command line newer than the service? Run `botkins status`.", "UNKNOWN_METHOD");
-    const value = await api[method](args, context);
+    let value;
+    try {
+      value = await api[method](args, context);
+    } catch (error) {
+      // A change that fails can still have done a part of its work (a plugin's files written, then
+      // an error). So it leaves a line too, with other first words: no value, and no error text.
+      const tried = log && method !== "call" && said(method, args, undefined);
+      if (tried) log("Tried from the command line: " + tried.trim() + " (it failed)");
+      throw error;
+    }
     const line = log && said(method, args, value);
     if (line) log("Changed from the command line: " + line.trim());
     return value;

@@ -122,7 +122,7 @@ test("`botkins help --json` names every command with its usage, its arguments an
   assert.deepEqual(edit.arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(edit.options.find((option) => option.name === "--instructions-file"), { name: "--instructions-file", takes: "path", about: edit.options.find((option) => option.name === "--instructions-file").about });
   // A command that asks a person first says which flag answers it, for a caller with no terminal.
-  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => [entry.command, entry.asks]), [["service uninstall", "--yes"], ["devices remove", "--yes"], ["relay reset", "--yes"], ["bots remove", "--yes"], ["plugins uninstall", "--yes"], ["tools add", "--yes"], ["tools edit", "--yes"], ["tools remove", "--yes"], ["tools enable", "--yes"], ["tools test", "--yes"], ["tools import", "--yes"], ["skills remove", "--yes"]]);
+  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["bots remove --yes", "devices remove --yes", "plugins enable --yes", "plugins install --yes", "plugins uninstall --yes", "plugins update --yes", "relay reset --yes", "service uninstall --yes", "skills remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes"]);
   out = "";
   const asked = { ...io, stdin: { isTTY: false }, stderr: { write: (text) => void (out += text) }, client: { call: async () => ({ id: "nova", name: "Nova" }) } };
   assert.equal(await main(["bots", "remove", "Nova"], asked), 2);

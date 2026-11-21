@@ -169,7 +169,7 @@ Other commands for bots:
 - `botkins bots edit <bot>` opens the bot in your editor. With `--name`, `--role`, `--instructions`, `--instructions-file` or `--model`, it changes that field directly.
 - `botkins bots remove <bot>` removes a bot and its chats.
 - `botkins routines list`, `run`, `pause` and `resume` operate the routines of your bots.
-- `botkins plugins list`, `browse`, `install` and `uninstall` operate plugins.
+- `botkins plugins` installs and manages plugins. See "Plugins" below.
 
 A paired phone does everything else for now: tasks, the wiki, projects and credentials.
 
@@ -199,6 +199,28 @@ botkins bots skills Nova --off weekly-report
 - `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills. The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk; `botkins folders` lists what you can choose, and on a server you copy the folder there first. A plugin folder is not taken as a folder of skills, because a plugin can run commands.
 - `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers; like each turn of the bot, it starts the bot's tools that are programs and are on.
 - `botkins tools forget-approvals` forgets the approvals that were given to tools "for this chat".
+
+## Plugins
+
+A plugin adds skills, agents, commands, tools and hooks to bots. A hook, and a tool that is a local program, run commands on this computer. Thus a plugin is looked at before it is installed, updated or switched on.
+
+```sh
+botkins plugins browse memory
+botkins plugins show memory@some-market
+botkins plugins install memory@some-market --settings settings.json
+botkins plugins configure memory
+botkins plugins bots memory --bot Nova
+```
+
+- **`botkins plugins show <id>` is the look.** It prints what the plugin holds, each command that it runs on this computer, the web addresses that it reaches, the settings that it needs, and its revision. The revision names the plugin's source exactly as it is at that moment.
+- **A plugin that runs commands needs your yes.** At a terminal, `plugins install` and `plugins update` show it and ask. With no terminal they fail, and say to look first and then to give `--yes --revision <its revision>`. The computer refuses the plugin when its source changed after that revision, so what you looked at is what is installed.
+- A plugin that runs nothing installs with no question. Its revision still goes with the install.
+- `botkins plugins enable <id>` asks too, for a plugin that runs commands. `botkins plugins disable <id>` does not.
+- **Settings**: `botkins plugins configure <id>` asks for each setting at a terminal and does not show a secret one. From a script, give `--settings <file>`, a JSON file of `{ "KEY": "value" }`, or `--settings -` for standard input. No command prints a setting's value; `plugins show` marks the settings that have one.
+- `botkins plugins bots <id> --all`, or `--bot <bot>` for each bot, says which bots have the plugin.
+- `botkins plugins add-folder <path>` adds a plugin from a folder of this computer. It is added switched off, so nothing of it runs, and what it would run is shown. Switch it on with `plugins enable`.
+- `botkins plugins sign-out <id>` forgets the sign-ins of a plugin's tools.
+- A change that the computer refuses part of the way is in the log too, as "Tried from the command line: … (it failed)".
 
 ## Pair a phone
 
