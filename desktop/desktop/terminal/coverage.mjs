@@ -28,7 +28,7 @@ export const REASONS = {
   window: "needs a window", // a file dialog, the clipboard, a folder opened in the file manager, a notification, a microphone
   "window's own": "the window's own", // what only the window uses to draw itself: a pane, a preview, a thumbnail
   "phone's own": "a phone's own", // what only a paired phone uses: its notifications, the screen it is shown, its uploads
-  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until the owner says otherwise. The owner has the choice in front of him.
+  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone."
   person: "needs a person at the app: the window, or a phone with its owner check", // a call that reaches a secret which a caller of the socket cannot read by itself, or sends one somewhere: the socket cannot know that a person is there
 };
 
@@ -50,8 +50,20 @@ export const WORKSPACE = {
   addBot: cmd("bots add"),
   updateBot: cmd("bots edit"),
   deleteBot: cmd("bots remove"),
-  ...each("duplicateBot reorderBots makePrimary setBotFlags botMemory setBotMemory addSection renameSection deleteSection importableAgents importAgents", owed("d")),
-  ...each("saveTemplate renameTemplate deleteTemplate exportTemplateText importTemplateText", owed("d")),
+  duplicateBot: cmd("bots duplicate"),
+  reorderBots: cmd("bots order"),
+  makePrimary: cmd("bots primary"),
+  setBotFlags: cmd("bots flags"),
+  ...each("botMemory setBotMemory", cmd("bots memory")),
+  ...each("addSection", cmd("bots sections add")),
+  renameSection: cmd("bots sections rename"),
+  deleteSection: cmd("bots sections remove"),
+  ...each("importableAgents importAgents", cmd("bots import")),
+  saveTemplate: cmd("templates save"),
+  renameTemplate: cmd("templates rename"),
+  deleteTemplate: cmd("templates remove"),
+  exportTemplateText: cmd("templates export"),
+  importTemplateText: cmd("templates import"),
   setBotIntegrations: cmd("bots tools"),
   setBotAccess: cmd("bots access"),
   catalog: cmd("bots menu"),
@@ -69,12 +81,33 @@ export const WORKSPACE = {
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
-  ...each("renameChat deleteChat forkChat compact setChatFlags setChatProject createGroupChat retry unqueue sendNow mentionables sideQuestion", owed("d")),
-  ...each("link.chats.addSection link.chats.renameSection link.chats.deleteSection link.chats.orderSections link.chats.setSection", owed("d")), // sections on the Chats page, by the link's names
+  renameChat: cmd("chats rename"),
+  deleteChat: cmd("chats delete"),
+  forkChat: cmd("chats fork"),
+  compact: cmd("chats compact"),
+  setChatFlags: cmd("chats flags"),
+  setChatProject: cmd("chats project"),
+  createGroupChat: cmd("chats group"),
+  retry: cmd("chats retry"),
+  unqueue: cmd("chats unqueue"),
+  sendNow: cmd("chats send-now"),
+  mentionables: cmd("chats mentions"),
+  sideQuestion: cmd("chats aside"),
+  // Sections on the Chats page, by the link's names: the window's own calls, made as the owner. The link keeps them.
+  "link.chats.addSection": cmd("chats sections add"),
+  "link.chats.renameSection": cmd("chats sections rename"),
+  "link.chats.deleteSection": cmd("chats sections delete"),
+  "link.chats.orderSections": cmd("chats sections order"),
+  "link.chats.setSection": cmd("chats sections set"),
   // ── Routines ──
   runRoutine: cmd("routines run"),
   setRoutineEnabled: cmd("routines pause"),
-  ...each("createRoutine updateRoutine deleteRoutine duplicateRoutine previewCadence changeSchedule", owed("d")),
+  createRoutine: cmd("routines add"),
+  updateRoutine: cmd("routines edit"),
+  deleteRoutine: cmd("routines remove"),
+  duplicateRoutine: cmd("routines duplicate"),
+  previewCadence: cmd("routines when"),
+  changeSchedule: cmd("routines schedule"),
   // ── Plugins ──
   "plugins.marketplaces": cmd("plugins marketplaces"),
   "plugins.addMarketplace": cmd("plugins add-marketplace"),
@@ -109,12 +142,45 @@ export const WORKSPACE = {
   addSkillFolderAt: cmd("skills add-folder"),
   removeSkillFolder: cmd("skills remove-folder"),
   // ── Projects ──
-  ...each("createProject addProject renameProject updateProject removeProject addProjectFolder addProjectArtifact removeProjectArtifact projectArtifacts projectChanges projectDiff projectCommit startProjectChat", owed("d")),
-  ...each("addTodo updateTodo moveTodo deleteTodo", owed("d")),
+  ...each("createProject addProjectFolder", cmd("projects add")),
+  addProject: no("window"), // a folder dialog; `projects add <folder>` takes the path itself
+  renameProject: cmd("projects rename"),
+  updateProject: cmd("projects edit"),
+  removeProject: cmd("projects remove"),
+  addProjectArtifact: cmd("projects add-artifact"),
+  removeProjectArtifact: cmd("projects remove-artifact"),
+  projectArtifacts: cmd("projects artifacts"),
+  projectChanges: cmd("projects changes"),
+  projectDiff: cmd("projects diff"),
+  projectCommit: cmd("projects commit"),
+  startProjectChat: cmd("projects chat"),
+  addTodo: cmd("todos add"),
+  updateTodo: cmd("todos edit"),
+  moveTodo: cmd("todos move"),
+  deleteTodo: cmd("todos remove"),
   // ── Tasks, the wiki, artifacts ──
-  ...each("saveTask moveTask startTask deleteTask", owed("d")),
-  ...each("wikiTree wikiPage searchWiki createWikiPage createWikiPageFor createWikiFolder saveWikiPage moveWiki deleteWiki wikiHistory wikiVersion restoreWikiVersion wikiExportPlan wikiExportPages exportWikiFile", owed("d")),
-  ...each("artifacts.list artifacts.read artifacts.resolve", owed("d")),
+  saveTask: cmd("tasks add"), // and `tasks edit`
+  moveTask: cmd("tasks move"),
+  startTask: cmd("tasks start"),
+  deleteTask: cmd("tasks remove"),
+  wikiTree: cmd("wiki tree"),
+  wikiPage: cmd("wiki show"),
+  searchWiki: cmd("wiki search"),
+  // A new page: from a title, from a text, or for a project (`--for`: the app's only record kind).
+  ...each("createWikiPage createWikiPageFor", cmd("wiki add")),
+  createWikiFolder: cmd("wiki add-folder"),
+  saveWikiPage: cmd("wiki save"),
+  moveWiki: cmd("wiki move"),
+  deleteWiki: cmd("wiki remove"),
+  wikiHistory: cmd("wiki history"),
+  wikiVersion: cmd("wiki version"),
+  restoreWikiVersion: cmd("wiki restore"),
+  // The export: the window's save dialog has no place on a command line. `wiki export` asks for the plan (`--list` shows it),
+  // takes the pages' text through the same calls the web page's layout uses, and writes the file where --output says.
+  ...each("wikiExportPlan wikiExportPages exportWikiFile", cmd("wiki export")),
+  "artifacts.list": cmd("artifacts list"),
+  "artifacts.read": cmd("artifacts read"),
+  "artifacts.resolve": cmd("artifacts resolve"),
   // ── Preferences, credentials, usage, voice ──
   setPreferences: owed("d"),
   ...each("credentials removeCredential savedCredentials saveSavedCredential checkSavedCredential removeSavedCredential resetVault", owed("d")),
@@ -165,7 +231,11 @@ export const LINK = {
   ...each("link.team.get link.team.rename link.team.saveRole link.team.deleteRole link.team.saveGroup link.team.deleteGroup link.team.createInvite link.team.revokeInvite link.team.approve link.team.deny link.team.moveMember link.team.removeMember link.team.inviteToChat link.team.removeFromChat link.team.setLinkSharing", owed("e")),
   ...each("link.spaces.share link.spaces.newLink link.spaces.arrange link.spaces.seen link.spaces.notify link.spaces.here", owed("e")),
   // Sections on the Chats screen ("chat-sections-v1"): a person's own way to group their chats.
-  ...each("link.chats.addSection link.chats.renameSection link.chats.deleteSection link.chats.orderSections link.chats.setSection", owed("d")),
+  "link.chats.addSection": cmd("chats sections add"),
+  "link.chats.renameSection": cmd("chats sections rename"),
+  "link.chats.deleteSection": cmd("chats sections delete"),
+  "link.chats.orderSections": cmd("chats sections order"),
+  "link.chats.setSection": cmd("chats sections set"),
   // Admin mode is each owner device's own way of looking: the command line shows everything, as an owner with it on.
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal uses the app's own calls for them (part d).
@@ -233,12 +303,113 @@ export const CHANGES = {
   "skills.removeFolder": (args, value) => value?.path ?? args?.[0],
   "bots.tools.set": 0,
   "bots.access.set": 0,
+  // ── More of a bot, and templates (control-bots.mjs) ──
+  // (By the name of the bot, the section or the template, as the answer has it. The text of a memory, an agent's instructions and a template's words are never in a line.)
+  "bots.duplicate": (args, value) => value?.name ?? args?.[0],
+  "bots.order": null,
+  "bots.primary": (args, value) => value?.name ?? args?.[0],
+  "bots.flags.set": (args, value) => value?.name ?? args?.[0],
+  "bots.memory.set": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.add": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.remove": (args, value) => value?.name ?? args?.[0],
+  "bots.import": (args, value) => some(value?.added?.map((bot) => bot.name)),
+  "templates.save": (args, value) => value?.name ?? args?.[0],
+  "templates.rename": (args, value) => value?.name ?? args?.[0],
+  "templates.remove": (args, value) => value?.name ?? args?.[0],
+  // An export also keeps a copy of the file among the bot's files: it is a change, by the file's name.
+  "templates.export": (args, value) => value?.name,
+  "templates.import": (args, value) => value?.name,
+  // ── Chats (control-chats.mjs) ──
+  // A chat is named by its id: a title is a text that a person (or a model) wrote, so it is not in the log. A section is by its id too, and a new one by its name.
+  "chats.rename": (args, value) => value?.id,
+  "chats.delete": (args, value) => value?.id,
+  "chats.fork": (args, value) => value?.from,
+  "chats.compact": (args, value) => value?.id,
+  "chats.flags": (args, value) => value?.id,
+  // By the chat's id and the mode that it has now ("<id> (yolo)"), so that a log line shows a chat that was given yolo.
+  "chats.project": (args, value) => (value?.id ? value.id + " (" + (value.mode ?? "default") + ")" : null),
+  "chats.group": (args, value) => value?.id,
+  "chats.retry": (args, value) => value?.id,
+  "chats.unqueue": (args, value) => value?.id,
+  "chats.sendNow": (args, value) => value?.id,
+  "chats.sections.add": (args, value) => value?.name,
+  "chats.sections.rename": (args, value) => value?.id,
+  "chats.sections.delete": (args, value) => value?.id,
+  "chats.sections.order": null,
+  "chats.sections.set": (args, value) => value?.id,
+  // ── Routines (control-routines.mjs) ──
+  // (By the routine's name, which the answer has, whether the caller gave its name or its id. Never the prompt.)
+  // A routine that runs often says so: `Check (each 5 minutes)`, or `(each 5 minutes)` alone when the name cannot be in a line.
+  "routines.add": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0]?.name)),
+  "routines.edit": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
+  "routines.remove": (args, value) => value?.name ?? args?.[0],
+  "routines.duplicate": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
+  // A chat's own schedule (a prompt it set with /every or /after): the chat's title. The line does not say pause or delete.
+  "routines.schedule": (args, value) => value?.chat ?? args?.[0],
+  // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
+  // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
+  "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
+  "projects.rename": (args, value) => value?.name ?? args?.[0],
+  "projects.edit": (args, value) => value?.name ?? args?.[0],
+  "projects.remove": (args, value) => value?.name ?? args?.[0],
+  "projects.addArtifact": (args, value) => value?.project?.name ?? args?.[0],
+  "projects.removeArtifact": (args, value) => value?.project?.name ?? args?.[0],
+  // A commit is in the log by the project's name: not its message, not its files.
+  "projects.commit": (args, value) => value?.name ?? args?.[0],
+  // A chat in the mode yolo says so: `Site (yolo)`, or `(yolo)` alone when the name cannot be in a line. (Its mode is the one the chat got: a project with no folder gives default.)
+  "projects.chat": (args, value) => {
+    const name = value?.project?.name ?? args?.[0];
+    if ((value ? value.mode : args?.[1]?.mode) !== "yolo") return name;
+    return thingForLog(name) && name.length <= 73 ? name + " (yolo)" : "(yolo)";
+  },
+  // A to-do is a person's own text: its line names the project.
+  "todos.add": (args, value) => value?.project?.name ?? args?.[0],
+  "todos.edit": (args, value) => value?.project?.name ?? args?.[0],
+  "todos.move": (args, value) => value?.project?.name ?? args?.[0],
+  "todos.remove": (args, value) => value?.project?.name ?? args?.[0],
+  // A task is named by its title (a title longer than 80 characters, or with a line break in it, is left out of the line by `thingForLog`). Not its details, its result or its bot's words.
+  "tasks.add": (args, value) => value?.title ?? args?.[0]?.title,
+  "tasks.edit": (args, value) => value?.title ?? args?.[0],
+  "tasks.move": (args, value) => value?.title ?? args?.[0],
+  "tasks.start": (args, value) => value?.title ?? args?.[0],
+  "tasks.remove": (args, value) => value?.title ?? args?.[0],
+  // ── The wiki (control-wiki.mjs) ──
+  // (By the page's or section's path: the name that the wiki gives it, not its text.)
+  "wiki.add": (args, value) => value?.path ?? args?.[0]?.title,
+  "wiki.addFolder": (args, value) => value?.path ?? args?.[0]?.name,
+  "wiki.save": (args, value) => value?.path ?? args?.[0],
+  "wiki.move": (args, value) => value?.from ?? args?.[0],
+  "wiki.remove": (args, value) => value?.removed ?? args?.[0],
+  "wiki.restore": (args, value) => value?.path ?? args?.[0],
+  // An export is kept among the artifacts of the first bot: the scope, and the page it started from.
+  "wiki.export": (args) => (args?.[0]?.scope === "all" ? "all pages" : args?.[0]?.page),
+  // ── Preferences, usage, the cache and the Mac tools (control-prefs.mjs) ──
+  // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
+  // ── Voice (control-voice.mjs) ──
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
 export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+// The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
+export const MORE_READS = {
+  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
+  chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
+  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
+  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
+  wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
+  prefs: [],
+  credentials: [],
+  voice: [],
+};
+READS.push(...Object.values(MORE_READS).flat());
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);
 
 /** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. It uses the short list (shown-text.mjs): a bot named with a flag or a family emoji is still in its line, and a name with a control character or a mark that turns text around is not. */
 export const thingForLog = (value) => (typeof value === "string" && value.length >= 1 && value.length <= 80 && !hasUnplain(value) ? value : null);
+/** A routine's name with how often it runs, for a routine that runs often: `Check (each 5 minutes)`. */
+const withRate = (name, minutes) => {
+  const rate = "(each " + (minutes === 1 ? "minute" : minutes + " minutes") + ")";
+  return thingForLog(name) && name.length <= 80 - rate.length - 1 ? name + " " + rate : rate;
+};

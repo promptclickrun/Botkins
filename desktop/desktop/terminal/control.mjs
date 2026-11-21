@@ -16,9 +16,17 @@ import { DESKTOP_ONLY } from "../host/headless.mjs";
 import { CHANGES, thingForLog, WORKSPACE } from "./coverage.mjs";
 import { toolsApi } from "./control-tools.mjs";
 import { pluginsApi } from "./control-plugins.mjs";
+import { botsApi } from "./control-bots.mjs";
+import { chatsApi } from "./control-chats.mjs";
+import { routinesApi } from "./control-routines.mjs";
+import { projectsApi } from "./control-projects.mjs";
+import { wikiApi } from "./control-wiki.mjs";
+import { prefsApi } from "./control-prefs.mjs";
+import { credentialsApi } from "./control-credentials.mjs";
+import { voiceApi } from "./control-voice.mjs";
 
 const WAIT_MS = 25_000;
-export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // The owner's choice (asked 2026-11-21, not answered yet): false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them.
+export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them. The owner agreed to false on 2026-11-21: nothing that reaches a saved secret runs from the command line.
 /**
  * A reference to a saved credential, { "$credential": id }, is resolved by the app to the saved
  * secret. A caller on the socket cannot read a saved credential, but it could send one to an
@@ -44,8 +52,12 @@ const refuseReferences = (name, args) => {
  * sends such a secret somewhere, is not for the socket. It stays where a person is known to be
  * there: the window, or a phone with its owner check. Everything else the window can do, the
  * socket does, with what it starts shown and a line in the log.
- * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until
- * the owner says otherwise. The owner has the choice in front of him.)
+ * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The
+ * owner agreed to this on 2026-11-21, in these words: "nothing that reaches a saved secret runs from
+ * the command line, so unlocking a password manager and using a saved credential by reference stay
+ * in the window and on the phone." Two things follow from that sentence and are its working-out, not
+ * his words: a saved credential gets no new label from the socket, and `voice set` takes no address
+ * without its key.)
  */
 export const REFUSED_BY_REASON = {
   window: (name) => "`" + name + "` needs the app's window (a dialog, the clipboard, a notification, a microphone or a permission on the screen). It is done there, not from a terminal.",
@@ -58,7 +70,6 @@ export const COVERED_BY_COMMAND = (name, command) => "`" + name + "` is done by 
 const IN_THE_APP = "Do it in the app's window or on a paired phone. A command for it comes.";
 const takesSecret = (name) => "`" + name + "` takes a secret as an argument, and a secret is never a word on the command line. " + IN_THE_APP;
 const removesSecrets = (name) => "`" + name + "` removes saved secrets with no question. Do it in the app's window or on a paired phone, where a person is asked. A command for it comes, and it asks first.";
-const givesYes = (name) => "`" + name + "` with the mode yolo gives each request of the chat a yes, with no question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks.";
 const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 // Every field of the voice settings that is a provider's web address (desktop/link/voice.mjs `merge`).
 const VOICE_ADDRESSES = [["openai", "baseUrl"], ["azure", "endpoint"], ["azure", "region"], ["custom", "baseUrl"]];
@@ -88,9 +99,6 @@ export const HELD = {
   // A key that the person gives later goes to the address that is set then, so the address is set where it is shown.)
   // Choices that are no address run.
   setVoice: (args, name) => (setsVoiceAddress(args[0]) ? "`" + name + "` with a provider's web address says where that provider's key goes. Set an address in the app's window or on a paired phone, where it is shown. A command for it comes. Choices that are no address run here." : null),
-  // The mode yolo gives each request of a chat a yes with no question. The others run.
-  setChatProject: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
-  startProjectChat: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
   // The level of approval: telling a looser one needs the present value, so any change is held.
   setPreferences: (args, name) => (isPlain(args[0]) && (Object.hasOwn(args[0], "approval") || Object.hasOwn(args[0], "access")) ? "`" + name + "` with an approval level or an access changes what the bots may do without a question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks." : null),
   // A Mac tool that is switched on lets the bots read or use an app of this Mac. Switching one off runs.
@@ -517,6 +525,13 @@ export function controlApi(service) {
   Object.assign(api, toolsApi({ workspace, handlers, bot }));
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
   Object.assign(api, pluginsApi({ workspace, handlers, bot }));
+  // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
+  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi]) {
+    for (const [name, call] of Object.entries(area({ workspace, handlers, bot }))) {
+      if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
+      api[name] = call;
+    }
+  }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
   for (const name of Object.keys(handlers)) if (name.startsWith("plugins.") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   // A reference to a saved credential is refused by the named call too, before its own work starts.

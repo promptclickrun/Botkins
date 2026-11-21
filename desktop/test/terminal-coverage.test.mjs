@@ -79,7 +79,7 @@ test("every call of the phone link has a command, a reason from the list, or a p
   assert.deepEqual(missing(names, LINK), [], "These calls of the phone link have no entry. " + ADD);
   assert.deepEqual(gone(names, LINK), [], "These entries name calls that the phone link no longer has. Take them out.");
   for (const [name, entry] of Object.entries(LINK)) checkEntry(name, entry);
-  // The fourth, "person", was decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until the owner says otherwise (the owner has the choice in front of him): a call that reaches a secret which a caller of the socket cannot read, or sends one somewhere, stays where a person is known to be there.
+  // The fourth, "person", was decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, and the owner agreed to it on 2026-11-21: a call that reaches a secret which a caller of the socket cannot read, or sends one somewhere, stays where a person is known to be there.
   assert.deepEqual(Object.keys(REASONS), ["window", "window's own", "phone's own", "person"], "the reasons are a fixed list: a new one is a decision");
 });
 
@@ -116,14 +116,14 @@ test("`botkins help --json` names every command with its usage, its arguments an
   // One area or one command, by its words.
   out = "";
   assert.equal(await main(["help", "bots", "--json"], io), 0);
-  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu"]]]);
+  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu", "bots duplicate", "bots order", "bots primary", "bots flags", "bots memory", "bots sections list", "bots sections add", "bots sections rename", "bots sections remove", "bots import"]]]);
   out = "";
   assert.equal(await main(["help", "bots", "edit", "--json"], io), 0);
   const [edit] = JSON.parse(out).areas[0].commands;
   assert.deepEqual(edit.arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(edit.options.find((option) => option.name === "--instructions-file"), { name: "--instructions-file", takes: "path", about: edit.options.find((option) => option.name === "--instructions-file").about });
   // A command that asks a person first says which flag answers it, for a caller with no terminal.
-  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["bots remove --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "relay reset --yes", "service uninstall --yes", "skills remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes"]);
+  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["artifacts read --yes", "bots import --yes", "bots memory --yes", "bots remove --yes", "bots sections remove --yes", "chats delete --yes", "chats project --yes", "chats sections delete --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "projects chat --yes", "projects commit --yes", "projects remove --yes", "relay reset --yes", "routines add --yes", "routines duplicate --yes", "routines edit --yes", "routines remove --yes", "routines schedule --yes", "service uninstall --yes", "skills remove --yes", "tasks remove --yes", "templates export --yes", "templates import --yes", "templates remove --yes", "todos remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes", "wiki export --yes", "wiki remove --yes", "wiki restore --yes"]);
   out = "";
   const asked = { ...io, stdin: { isTTY: false }, stderr: { write: (text) => void (out += text) }, client: { call: async () => ({ id: "nova", name: "Nova" }) } };
   assert.equal(await main(["bots", "remove", "Nova"], asked), 2);

@@ -233,6 +233,166 @@ botkins plugins bots memory --bot Nova
 - **A command that Botkins prints for you to run** has each word quoted for a shell when it needs it. An id that has a character that cannot be shown is not printed as a command: take it from `botkins plugins list --json`.
 - Only the text of a plugin gets this care. A name that you gave (a bot's name in an error, or in the log) is printed as it is, with its emoji and its joiners. Only a control character and a mark that turns text around are written as a number.
 
+## The rest of the workspace
+
+Each thing that the app's window manages has commands too. Each command has `--help`, works with `--json`, and asks no question when there is no terminal.
+
+### More of a bot, and templates
+
+A bot has a place in the list, flags, a memory and, if you like, a section. A **template** is a bot's setup without its history: its name, role, about text, instructions and look. An **agent** is a helper that a model provider already has (for Copilot, a file in `~/.copilot/agents`) and that can become a bot.
+
+```sh
+botkins bots duplicate Nova
+botkins bots order Orbit Nova
+botkins bots primary Orbit
+botkins bots flags Nova --pin --no-teamwork --section Work
+botkins bots sections add Work
+botkins bots memory Nova
+botkins bots memory Nova --file memory.md --yes
+botkins bots import
+botkins bots import Reviewer
+botkins templates save Nova --name "Research starter"
+botkins templates export "Research starter" --file starter.json
+botkins templates import starter.json
+```
+
+- **`bots duplicate <bot>`** makes a copy named `<name> copy`. It has the same role, instructions and model. It has no chats and no memory yet.
+- **`bots order`** lists the bots in their order. `bots order <bot>…` puts the bots that you name first, in the order that you give them. The other bots follow in the order they have. The first bot is the primary bot. `bots primary <bot>` makes one bot the first. The primary bot is never hidden.
+- **`bots flags <bot>`** shows the flags. `--pin` and `--unpin`, `--hide` and `--show`, `--teamwork` and `--no-teamwork` (whether other bots may ask this bot for help), `--section <section>` and `--no-section` change them. Only what you name changes. `bots sections list`, `add`, `rename` and `remove` keep the sections. `sections remove` asks first. Its bots stay, in no section.
+- **A long text comes from a file or standard input.** `bots memory <bot>` prints a bot's memory. `--json` gives the text as it is. `--file <path>` replaces the memory with the text of a file, and `--file -` reads standard input. `--clear` clears it. A memory that has text is gone after a replace, so the command asks first. With no terminal, and when the text comes from standard input, it needs `--yes`. The log names the bot and never the text.
+- **`bots import` lists the agents** of the providers that are on, and whether each one is a bot already. `bots import <agent>…` makes a bot of each agent that you name, by name, by the start of a name or by its key (`copilot:Reviewer`). An agent that is a bot already is left out. The bot is a copy: later changes to the agent do not reach it.
+- **Words from elsewhere are shown first.** An agent's instructions, and a template file, steer a bot. So `bots import <agent>` and `templates import <file>` print the whole text first: the name, the role, the model, the file the agent comes from, and the instructions. Then they ask. With no terminal they fail and name `--yes`. The text is printed on standard error with `--yes` and with `--json` too. A template that is imported is saved as a template only. No bot is made.
+- **A text that is shown has each character that hides or turns text written as its number**, as `\u{202e}`. This holds for memory, instructions and templates in the text form. `--json` has them as they are, and so has a file that `templates export --file` writes.
+- **`templates`** keeps the templates. `save <bot>` saves a bot's setup (`--name` gives another name). `list`, `show`, `rename` and `remove` work as their names say. `export <template>` or `export --bot <bot>` prints the file, or writes it with `--file <path>`. An existing file is replaced only after a yes. The file holds the name, role, about text, instructions and look, and nothing of the bot's folders, chats or credentials. The app keeps a copy of an export among the bot's files, as it does for a phone.
+- **A removal needs the whole name or the id.** `sections remove` and `templates remove` ask first, and with no terminal they need `--yes`. They do not take the start of a name, so a short word does not remove something else. The other commands take the start of a name when only one thing has it, and name the matches when more than one does.
+- The log has one line for each change, by the name of the bot, the section or the template (`bots.order` has no name): `bots.duplicate`, `bots.order`, `bots.primary`, `bots.flags.set`, `bots.memory.set`, `bots.sections.add`, `bots.sections.rename`, `bots.sections.remove`, `bots.import`, `templates.save`, `templates.rename`, `templates.remove`, `templates.export` and `templates.import`.
+
+### Chats
+
+`botkins chat <bot>` talks to a bot. `botkins chats` keeps the chats that the Chats page of the window shows.
+
+```sh
+botkins chats list
+botkins chats rename "Quarterly plan" "Plan for the third quarter"
+botkins chats flags "Plan for" --pin
+botkins chats fork "Plan for" --at 4
+botkins chats group Nova Orbit --title "Launch team"
+botkins chats project "Launch team" Website --mode plan
+botkins chats queue "Plan for"
+botkins chats send-now "Plan for" 1
+botkins chats aside "Plan for" "What did we decide about the budget?"
+botkins chats sections add Work
+botkins chats sections set "Plan for" Work
+botkins chats delete "Fork of Plan" --yes
+```
+
+- **A chat is named by its id or by its title.** The title can be all of it or the start of it, when only one chat starts so. When more than one chat matches, the command lists them with their ids. `botkins chats list` shows ids and titles, and `--json` gives each chat's flags, project, mode and section too. A title is text that someone wrote, so in text form it is made safe before it is printed.
+- **Delete cannot be undone, so it asks first.** `botkins chats delete <chat>` shows the chat and asks. With no terminal it fails and names `--yes`. A chat that is working is refused: stop it first. Deleting a section is asked the same way, but it keeps its chats.
+- **Three commands start a turn of a model.** `chats retry` sends the message of a stopped or failed turn again, `chats compact` asks the model to summarize the conversation, and `chats aside` asks a side question, as `/btw` does on the phone. Each uses the chat's provider and counts against its plan. `chats aside` does not add the question or the answer to the chat. `chats send-now` can start one too, when the chat is free. `chats retry <chat>` sends the chat's latest turn again (`botkins chats show <chat> --json` names it in `latestTurn`), and refuses a chat that is working.
+- **A long question comes from `--file <path>` or from standard input.** `botkins chats aside <chat> -` reads the question from standard input.
+- **`--mode yolo` gives a chat a yes to each request, so it asks.** `botkins chats project <chat> <project> --mode yolo` makes each request of the bot in that chat get a yes with no question, but for a request that leaves the sandbox. The command first shows the chat (title and id), the project and its folder, and that sentence, on standard error. Then it asks. With no terminal it fails and names `--yes`. The text is shown with `--yes` and with `--json` too. A chat that asks the person first shows this very command on its card before it runs. The same holds for a chat that is in `yolo` and moves to another project. `--mode default` and `--mode plan` ask nothing, and so does taking a chat out of `yolo`. Without a project and without `--none`, only the mode changes. A project with no folder takes no mode.
+- **Pin, archive and unread give no yes.** `chats flags` sets only those three flags, and none of them removes a question from a chat.
+- **`chats fork --at <number>` counts messages from 0.** Without it, the new chat holds the whole conversation. A group chat cannot be forked.
+- **A group chat has 2 to 6 bots**, each named once. Talk in it with `botkins chat <bot> --chat <id>`.
+- **A waiting message is named by its number or its id.** `botkins chats queue <chat>` lists the messages that wait for the chat to be free. `chats unqueue` takes one out of the line. `chats send-now` moves one to the front and sends it.
+- **The sections are yours.** They are kept by the phone link, and a paired phone shows the same ones. They change nothing about a chat. `chats sections order` puts the named sections first, in that order. If the link is not ready (it is still opening), the commands say so: try again in a moment.
+- **The log names a chat by its id**, never by its title. A new section is in the log by its name. The line of `chats.project` has the mode that the chat has now after the id, for example `chats.project <id> (yolo)`.
+
+### Routines
+
+A **routine** is work that a bot does on a schedule, with nobody watching. Each routine has its own chat, where its runs are kept.
+
+```sh
+botkins routines when "0 9 * * 1-5" --timezone Europe/London
+botkins routines add "Morning brief" --bot Nova --cadence weekdays --at 07:30 --timezone Europe/London --file brief.md
+botkins routines show "Morning brief"
+botkins routines edit "Morning brief" --at 08:00
+botkins routines duplicate "Morning brief" --bot Orbit --name "Orbit's brief"
+botkins routines remove "Morning brief"
+botkins routines schedules
+botkins routines schedule "Daily standup" 1 pause
+```
+
+- **A routine is named by its id or its name.** When two routines have a name, the command says which ones (their ids) and you use an id. `routines duplicate` gives the copy the same name unless you give `--name`.
+- **`routines add` and `routines edit` show the whole routine before they save, and ask.** The bot will run it with nobody watching. The text has the bot, the schedule in words, the time zone, the next two times and the whole prompt. It goes to standard error with `--yes` and with `--json` too. With no terminal the command fails and names `--yes`.
+- **A time says its zone.** `--timezone` takes a zone such as `Europe/London`. Without it the zone of the computer that runs Botkins is used, and the commands print it. `--json` gives each time in UTC (`next`) with the zone beside it (`timezone`).
+- **A schedule is a kind with its fields:** `--cadence once` (`--date` and `--at`), `daily` or `weekdays` (`--at`), `weekly` (`--at` and `--days mon,wed`), or a cron line (`--cron "0 9 * * 1-5"`, which means `--cadence custom`). `routines edit` changes only the part you name: `--at 10:00` moves a daily routine and keeps the rest. A new `--cadence` replaces the schedule, so give its fields. A field that the kind does not have is refused.
+- **`routines when` says what a schedule means.** It takes the same options, or a cron line as its one word, and prints the meaning, the zone and the next five times. It saves nothing.
+- **A prompt is a long text.** Give it with `--prompt <text>`, with `--file <path>`, or on standard input with the word `-`. The prompt shown on a screen is made safe: a control character is written as its number. `--json` has the text as it is (`instructions`).
+- **Where the result goes** is `--deliver routine` (the routine's own chat, the usual way), `none`, `chat` (with `--chat <chat>`, else the bot's latest chat), `feed`, `idea` or `goal` (with `--category`). `--quiet` stops the notification when a run ends, and `--notify` turns it back on.
+- `botkins routines show <routine>` shows one routine whole: the bot, the schedule, its next three times and its prompt. `routines pause`, `resume` and `run` are as before.
+- **`routines remove` asks first.** It removes the routine, its chat and every run it kept. With no terminal it needs `--yes`. `routines pause` stops a routine and keeps it.
+- **A chat can schedule a prompt for itself** (`/every` and `/after`). These are not routines. `routines schedules` lists them with a number for each. `routines schedule <chat> <number> pause|resume|delete` changes one, by the chat's id or title. Deleting asks first.
+- The log has one line for each change, by the routine's name (`routines.add Morning brief`). It has no prompt. A change to a chat's schedule names the chat.
+- A bot's own routine tool makes none that runs more often than every 15 minutes (and at most 25 for a bot). These commands do not stop such a schedule: `routines add`, `edit` and `duplicate` show a cost line for it (how often it runs, and that each run uses the model and can cost money) and need `--yes` with no terminal, and the socket calls refuse it unless the call carries `{ fastSchedule: true }`, which the commands send after the yes.
+
+### Projects, to-dos, tasks and artifacts
+
+A **project** keeps a folder, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
+
+```sh
+botkins folders
+botkins projects add ~/code/site --name Site
+botkins projects changes Site
+botkins projects commit Site --message "Fix the header"
+botkins projects chat Site --bot Nova
+botkins todos add Site "Check the mobile menu"
+botkins todos done Site 1
+botkins tasks add "Write the release notes" --bot Nova --status ready
+botkins tasks list --status review
+botkins artifacts list --bot Nova
+botkins artifacts read <artifact> --output ./notes.pdf
+```
+
+- **A project's folder is a path on this computer.** It must be one that the window's folder chooser can show a paired phone: in the home folder of the user that runs Botkins, or on a plugged-in disk (`botkins folders` lists what you can choose). `projects add <folder>`, `projects edit --folder` use the app's own check and its own refusal; there is no second rule. A folder that has a project is not added twice. `projects edit --no-folder` takes the folder away.
+- **`projects remove` asks first.** The question says what goes with the project (its to-do list, its list of attached artifacts) and that its chats stay, with no project. The folder and its files are not touched. With no terminal it needs `--yes`.
+- **`projects commit` shows the files first and asks.** It prints the folder, the branch and each file that goes into the commit, then asks (`--yes` with no terminal). It stages every change in the project's folder (`git add -A`), so a project in a folder of a larger repository commits only that folder's files, and the files that were staged before. `projects changes` marks each file with whether a commit takes it. Git hooks do not run. The message comes from `--message <text>`, from `--file <path>` or `--message -` or `--file -` (standard input), or, at a terminal, from a question. If the changes are not the files that were shown, nothing is committed. The log has the project's name, never the message or the files.
+- **`projects changes` and `projects diff` read the folder** with git, with the repository's hooks, filters and external programs switched off. A diff is made safe to show at a terminal; in a pipe and with `--json` it is as git wrote it.
+- **`projects chat` opens a chat and sends nothing.** No turn of a model starts. The answer gives the command that sends the first message (`botkins chat <bot> --chat <id> -m <message>`); that starts a turn. `--mode yolo` gives more: each request of the bot in that chat gets a yes with no question, but for one that leaves the sandbox. So it asks. The command prints the project and its folder, the bot, and that sentence, then asks (`--yes` with no terminal, and with `--json`; the refusal names the flag). The block goes to standard error also with `--yes` and `--json`, so a caller's own record has it. The modes `default` and `plan` ask nothing. A project with no folder has no modes, so its chat opens in `default`. The log line has the project's name and `(yolo)`: `projects.chat Site (yolo)`. A project with a folder takes one bot, and a project with no folder can take a group of up to 6 (`--bot` more than once).
+- **To-dos are a project's own.** Name a to-do by its id, its words, the start of its words, or its number in `botkins todos list <project>` (1 is the first). `todos remove` asks first. The log has the project's name, never a to-do's words.
+- **A task has a lane.** The lanes are later, ready, working, review, blocked, done and archived. Only Botkins puts a task in working. **A task that is Ready and has a bot starts by itself** when the bot is free: a turn of the bot's model, in a chat of its own. `tasks start` does the same now. It says what starts, and a tool that needs an approval waits for a person. `tasks remove` asks first. The log names a task by its title (a title that is longer than 80 characters or has a line break is left out), never by its details.
+- **`artifacts read` prints text and saves anything.** A text artifact (a text type, JSON, XML and the like) goes to standard output: exact in a pipe, made safe to show at a terminal, and the `text` field with `--json`. An artifact that is not text (an image, a PDF, a program) is never printed: give `--output <path>`. The file is written whole or not at all, and a file that is there already is replaced only after a yes (`--yes` with no terminal). An artifact is named by its id or its full path; `artifacts list --bot <bot>` shows both. `projects add-artifact` and `projects remove-artifact` change only the list on the project, not the file.
+- **A name is found as in the other commands:** its id, then its exact name, then the start of a name when only one has it. When more than one matches, the error says which.
+
+### The wiki
+
+The wiki is a set of Markdown pages in sections (folders). You and your bots keep it. The app keeps earlier versions of each page.
+
+```sh
+botkins wiki tree
+botkins wiki add "Launch plan" --folder projects --file plan.md
+botkins wiki show projects/launch-plan > plan.md
+botkins wiki save projects/launch-plan --file plan.md --base 3f9c1a2b7d4e5f60
+botkins wiki search launch friday
+botkins wiki history projects/launch-plan
+botkins wiki restore projects/launch-plan 1732190000000-You --yes
+botkins wiki move projects/launch-plan archive/launch-plan.md
+botkins wiki export --format zip --output ~/Documents
+```
+
+- **A page is named by its path**, as `wiki tree` prints it: `projects/launch-plan.md`. The `.md` and the letter case may be left off. A title works when only one page has it. If two pages have it, the command lists their paths. A section is named by its path too (`wiki move`, `wiki remove`, `wiki add --folder`).
+- **`wiki show` prints the page as it is.** The text goes to standard output and nothing else does, so a pipe or a file gets the page. A note with the revision goes to standard error. A page is a person's or a bot's text, so a terminal that shows it can be moved or changed by what it holds. `wiki version` prints an earlier version the same way. The titles in `wiki tree`, `wiki search` and `wiki history` are made safe: a control character is written as its number. `--json` has every value as it is.
+- **The text of a page comes from a file or from standard input.** `wiki add` and `wiki save` take `--file <path>`, and `--file -` reads standard input. Without `--file`, `wiki add` makes the page from the section's template, and `wiki save` at a terminal opens your editor with the page. With no terminal, `wiki save` with no `--file` is refused and names `--file`. `wiki add --for <project>` makes a page from a project's record (its name or id).
+- **A save can check that nobody changed the page.** `wiki show --json` has the page's revision as `base`, and the plain `wiki show` prints it on standard error. Give it back with `wiki save --base <revision>`. If the page changed since, nothing is saved, and the refusal says to read the page again for its current revision. Without `--base`, the save replaces the text. The old text is kept as a version, so a save can be undone with `wiki restore`. The editor form always checks.
+- **`wiki history <page>` lists the versions**, newest first, each with an id. `wiki version` and `wiki restore` take the whole id or the start of it. The app keeps 20 versions of a page. A restore keeps the text the page had before it.
+- **A removal and a restore ask first.** `wiki remove` (a page, or a section with its pages) and `wiki restore` ask at a terminal. With no terminal they print what they would do on standard error, fail, and name `--yes`. A removed page is kept in the `.trash` folder inside the wiki's folder, with its versions. No command brings it back: copy it out of that folder.
+- **`wiki move <page or section> <new path>`** takes the whole new path (`archive/launch-plan.md`). The links to the page in other pages follow it.
+- **`wiki export` writes the file itself.** The window's save dialog has no place on a command line. Give `--output <path>`: a file, or a folder that exists (the file then has the name that the app makes, such as `Wiki wiki export.zip`). A file that is there already is replaced only with `--yes`, or when you say yes at a terminal. `--scope all` is the whole wiki, the default with no page. With a page the default scope is `page`: the page and the pages that link with it. `--scope project` goes two steps of links out. `--list` shows the pages that an export would hold and why, and writes nothing. The formats are `zip` (Markdown files) and `html` (one web page). A PDF is laid out by the app's window and is not offered: export `html` and print it to PDF in a browser. The export is also kept among the artifacts of the first bot, as it is for a phone.
+- Every command works with `--json` and with no terminal. A change leaves a line in the log with the page's path and never its words: `wiki.add`, `wiki.addFolder`, `wiki.save`, `wiki.move`, `wiki.remove`, `wiki.restore` and `wiki.export`.
+- The wiki's own log (`log.md`) and the list of versions say "You" for a change made from here, as they do for the window. They do not tell a person from a bot. `botkins logs` shows which commands ran, and on which page.
+
+### Preferences, usage, the cache and the Mac tools
+
+The commands for this part come in a later change.
+
+### Credentials, the vault, password managers and the rest of a provider
+
+The commands for this part come in a later change.
+
+### Voice
+
+The commands for this part come in a later change.
+
 ## Pair a phone
 
 ```sh
@@ -493,7 +653,7 @@ What a person can do in the app's window, a person or an agent can do from a ter
 - one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), it is a phone's own (its notifications, the screen it is shown), or it needs a person at the app (a call that reaches a secret which the terminal cannot read by itself, or sends one somewhere), or
 - the part of the work that still owes its command. This third kind goes away when the last part is done.
 
-The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, `setChatProject` and `startProjectChat` with the mode `yolo`, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
+The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
 
 `test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason. The test's output says how many calls each part still owes.
 
