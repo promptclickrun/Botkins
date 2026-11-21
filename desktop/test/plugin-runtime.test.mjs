@@ -419,3 +419,29 @@ test("hook output has every supplied value redacted, secret or not", async () =>
   const output = await result.hooks.handlers.onUserPromptSubmitted({ prompt: "p" });
   assert.equal(output.additionalContext, "port [redacted] key [redacted] ok");
 });
+
+test("one plugin's hook keeps a turn going three times in a row and no more, and the turn's activity is told one time", async () => {
+  const { STOP_BLOCKS } = await import("../desktop/plugin-runtime.mjs");
+  assert.equal(STOP_BLOCKS, 3);
+  const dir = temp();
+  const plugin = join(dir, "keeps-going");
+  mkdirSync(plugin, { recursive: true });
+  // The form of Claude's own tool: the event is named Stop, which Botkins takes as agentStop.
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "keeps-going", hooks: { hooks: { Stop: [{ hooks: [{ type: "command", command: "check" }] }] } } }));
+  const notes = [];
+  const session = pluginSession([{ id: "keeps-going@folder", folder: plugin, config: [] }], { dir, chatId: "chat-1", botId: "bot-1", note: (line) => notes.push(line) }, { run: async () => JSON.stringify({ decision: "block", reason: "go on" }) });
+  const stop = session.hooks.handlers.onAgentStop;
+  // The first end of a turn, then each end that follows a block.
+  const answers = [await stop({ stopHookActive: false })];
+  for (let turn = 0; turn < 5; turn++) answers.push(await stop({ stopHookActive: true }));
+  assert.deepEqual(answers.map((answer) => answer?.decision), ["block", "block", "block", undefined, undefined, undefined]);
+  assert.deepEqual(notes, ["The plugin keeps-going@folder kept this turn going 3 times. Botkins did not let it do that again."]);
+  // The next turn of the person starts a new count.
+  assert.equal((await stop({ stopHookActive: false }))?.decision, "block");
+  assert.equal(notes.length, 1);
+  // A runtime that does not say whether the end follows a block: the count is not started again, so the limit holds.
+  const quiet = pluginSession([{ id: "keeps-going@folder", folder: plugin, config: [] }], { dir, chatId: "chat-2", botId: "bot-1" }, { run: async () => JSON.stringify({ decision: "block", reason: "go on" }) }).hooks.handlers.onAgentStop;
+  const unsaid = [];
+  for (let turn = 0; turn < 6; turn++) unsaid.push((await quiet({}))?.decision);
+  assert.deepEqual(unsaid, ["block", "block", "block", undefined, undefined, undefined]);
+});

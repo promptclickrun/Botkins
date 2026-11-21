@@ -442,6 +442,8 @@ export class Plugins {
       enabled: row.enabled,
       bots: row.bots,
       installedAt: row.installedAt,
+      // (The revision of the installed copy: the one that a switch-on and a choice of bots are compared with.)
+      revision: row.revision ?? basename(row.folder),
       status,
       // The way back for a copy that is changed, gone or not readable is an update: it writes the
       // reviewed files again and keeps the settings. A client offers Update from this mark, not
@@ -681,6 +683,6 @@ export class Plugins {
     const rows = sound.filter((r) => this.public(r).status === "ready");
     if (!rows.length) return { directories: [], mcpServers: {}, hooks: undefined };
     const plugins = rows.map((row) => (skillsOnly ? { id: row.preview.id, folder: row.folder } : this.runtimeRecord(row)));
-    return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly });
+    return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line) });
   }
 }

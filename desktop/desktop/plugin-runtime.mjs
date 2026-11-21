@@ -13,6 +13,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, wr
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILT_IN_VALUES, EVENTS, folderReader, handedOn, PLACEHOLDER, pluginStarts, RESERVED } from "./plugin-reading.mjs";
+import { shownText } from "./shown-text.mjs";
 
 const MAX_HOOK_OUTPUT = 256_000;
 const MAX_CONTEXT = 12_000;
@@ -228,8 +229,21 @@ function runHook(command, input, options) {
 }
 
 /** The handlers for a plugin's hooks. `hooks` is the reading's list: what is in it runs, in that order, and nothing else. */
+/**
+ * How many times in a row one plugin's hook may stop a turn from ending. A hook for the end of a
+ * turn (`agentStop`) can answer "block", and the runtime then starts one more turn of the model,
+ * and asks the hook again at the end of that one. The runtime itself did not end such a chain in
+ * a run of six, and each turn is paid for by the person. A hook that checks the bot's work ("run
+ * the tests before you stop") needs to send it back a few times. One that sent it back three
+ * times and is still not content will not be content the fourth time. After this many, a block
+ * from that plugin is not passed on, and the turn's activity says so.
+ */
+export const STOP_BLOCKS = 3;
+
 function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run) {
   const handlers = {};
+  // The blocks of this plugin's hook in the chain that is open now, and whether the person was told.
+  const stop = { blocks: 0, told: false };
   const byEvent = new Map();
   for (const hook of hooks) byEvent.set(hook.event, [...(byEvent.get(hook.event) ?? []), hook]);
   for (const [event, entries] of byEvent) {
@@ -250,6 +264,20 @@ function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run
         combined = mergeHookOutput(event, combined, parsed);
         if (parsed?.modifiedPrompt) currentInput = { ...currentInput, prompt: parsed.modifiedPrompt };
         if (parsed?.modifiedArgs) currentInput = { ...currentInput, toolArgs: parsed.modifiedArgs, arguments: parsed.modifiedArgs };
+      }
+      if (event === "agentStop") {
+        // The runtime says whether this end of a turn follows a block (`stopHookActive`). A first end starts a new
+        // count. Without that word from the runtime the count is never started again: the limit holds for the session.
+        if (input?.stopHookActive === false) Object.assign(stop, { blocks: 0, told: false });
+        if (combined.decision === "block") {
+          if (stop.blocks < STOP_BLOCKS) stop.blocks++;
+          else {
+            delete combined.decision;
+            delete combined.reason;
+            if (!stop.told) context.note?.("The plugin " + shownText(String(plugin.id)).slice(0, 80) + " kept this turn going " + STOP_BLOCKS + " times. Botkins did not let it do that again.");
+            stop.told = true;
+          }
+        }
       }
       return Object.keys(combined).length ? combined : undefined;
     };
@@ -472,6 +500,8 @@ export function pluginSession(plugins, context = {}, { run = runHook } = {}) {
     dir,
     chatId: text(String(context.chatId ?? ""), 200) ?? "",
     botId: text(String(context.botId ?? ""), 200) ?? "",
+    // One line for the turn's activity, when Botkins itself stops something of a plugin.
+    note: typeof context.note === "function" ? context.note : null,
   };
   const directories = [];
   const mcpServers = {};

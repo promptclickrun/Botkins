@@ -786,3 +786,23 @@ test("a row that is already at the current reading is not hashed in the construc
   await again.plugins.queue;
   assert.equal(again.plugins.checked.size, 2);
 });
+
+test("when Botkins stops a plugin's hook from keeping a turn going, the turn that runs in that chat gets one line", { skip: process.platform === "win32" }, async (t) => {
+  const { open, source } = managed(t);
+  const folder = source("loops", { "plugin.json": { name: "loop-fixture", version: "1.0.0" }, "hooks.json": { hooks: { agentStop: [{ command: "echo '{\"decision\":\"block\",\"reason\":\"go on\"}'" }] } } });
+  const ws = open();
+  const added = await ws.plugins.addFolder(folder);
+  await ws.plugins.setEnabled(added.id, true);
+  const session = await ws.plugins.session(ws.bot("pip"), { id: "chat-1" });
+  // A turn runs in the chat: its steps are the turn's activity.
+  const run = { id: "run-1", steps: [] };
+  ws.active.set("chat-1", { run });
+  const stop = session.hooks.handlers.onAgentStop;
+  const decisions = [(await stop({ stopHookActive: false }))?.decision];
+  for (let turn = 0; turn < 4; turn++) decisions.push((await stop({ stopHookActive: true }))?.decision);
+  ws.active.delete("chat-1");
+  assert.deepEqual(decisions, ["block", "block", "block", undefined, undefined]);
+  assert.deepEqual(run.steps.map((step) => [step.name, step.label, step.status]), [["Botkins", "The plugin " + added.id + " kept this turn going 3 times. Botkins did not let it do that again.", "Done"]]);
+  // An installed plugin's answer names the revision that a switch-on is compared with: the row's own.
+  assert.equal(ws.plugins.list()[0].revision, ws.plugins.records[0].revision);
+});

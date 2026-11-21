@@ -539,6 +539,19 @@ export class Workspace {
       }
     });
   }
+  /**
+   * One line in the activity of the turn that runs in a chat now, for a thing that Botkins itself
+   * did about a plugin (it did not let a plugin's hook keep the turn going again). With no turn
+   * that runs, there is nothing to write it in.
+   */
+  pluginNote(chatId, text) {
+    const run = this.active.get(chatId)?.run;
+    if (!run || typeof text !== "string" || !text) return;
+    const now = Date.now();
+    run.steps ??= [];
+    run.steps.push({ id: "plugin-note-" + randomUUID(), name: "Botkins", label: text.split("\n")[0].slice(0, 180), status: "Done", started: now, finished: now });
+    this.notify();
+  }
   bot(id) {
     const bot = this.state.bots.find((b) => b.id === id);
     if (!bot) throw new Error("Unknown bot");

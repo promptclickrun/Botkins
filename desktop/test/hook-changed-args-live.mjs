@@ -18,12 +18,15 @@
 //   C  as B, the permission handler rejects
 //   D  preToolUse returns permissionDecision "deny"; "ask"; "ask" with modifiedArgs; "allow" with modifiedArgs
 //   E  agentStop returns { decision: "block", reason } twice, then nothing; and on every call (capped at 6)
+//   F  Botkins' limit (STOP_BLOCKS) on a plugin's agentStop hook: a plugin folder whose Stop hook is a
+//      real shell command that always answers block, run through Botkins' own pluginSession() handler
 //
+
 // Environment: BOTKINS_PROBE_LIMIT_MS (whole run, default 900000), BOTKINS_PROBE_CASE_MS (one
-// session, default 90000), QUICK=1 (a short run: A, B, D deny, E twice), BOTKINS_PROBE_DEBUG=1
+// session, default 90000), QUICK=1 (a short run: A, B, D deny, E twice, F), BOTKINS_PROBE_DEBUG=1
 // (print the raw permission requests and hook inputs).
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -132,6 +135,7 @@ if (process.argv[2] !== "--isolated") {
     const { sessionOptions } = await import("../desktop/providers/copilot/index.mjs");
     const { decide } = await import("../desktop/providers/copilot/permissions.mjs");
     const { planModel } = await import("../desktop/harness/index.mjs");
+    const { pluginSession } = await import("../desktop/plugin-runtime.mjs");
 
     const workingDirectory = join(root, "work");
     mkdirSync(workingDirectory, { recursive: true });
@@ -313,6 +317,48 @@ if (process.argv[2] !== "--isolated") {
       if (DEBUG) console.log("  [debug] events: " + JSON.stringify(s.events));
     }
 
+    // ---- F: Botkins' limit on a plugin's agentStop hook. The plugin's hook is a real shell command that
+    // always answers block; the handler is Botkins' own (pluginSession), wrapped only to record what the
+    // runtime sends it. My own cap of 10 calls ends the case if the limit does not hold.
+    {
+      const FCAP = 10;
+      const row = await runWithRetry({
+        label: "F",
+        answer: "approve",
+        callsShell: false,
+        hooks: (s) => {
+          const folder = join(s.dir, "loops-plugin");
+          mkdirSync(folder, { recursive: true });
+          writeFileSync(join(folder, "plugin.json"), JSON.stringify({ name: "loops" }));
+          writeFileSync(join(folder, "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo '{\"decision\":\"block\",\"reason\":\"go on\"}'" }] }] } }));
+          s.notes = [];
+          s.capped = false;
+          const session = pluginSession([{ id: "loops@folder", folder, config: [] }], { dir: join(s.dir, "data"), chatId: "chat", botId: "bot", note: (line) => s.notes.push(line) });
+          const real = session.hooks.handlers.onAgentStop;
+          s.handlerFound = typeof real === "function";
+          if (!s.handlerFound) return {};
+          return {
+            onAgentStop: async (input, invocation) => {
+              s.hookCalls.agentStop += 1;
+              const n = s.hookCalls.agentStop;
+              s.stopInputs.push({ n, stopReason: input?.stopReason, stopHookActive: input?.stopHookActive });
+              if (n > FCAP) { s.capped = true; return undefined; }
+              const out = await real(input, invocation);
+              note("hook agentStop #" + n, out?.decision === "block" ? "block" : "allow stop");
+              return out;
+            },
+          };
+        },
+      });
+      rows.F = row;
+      const s = row.state;
+      console.log(
+        `F Botkins' limit on a plugin's agentStop hook (hook command always answers block): handler calls=${s.hookCalls.agentStop} (each runs the real hook command once) model requests=${s.modelRequests} ` +
+          `stop inputs=[${s.stopInputs.map((i) => "#" + i.n + ":" + (i.stopReason ?? "?") + "/active=" + i.stopHookActive).join(", ")}] notes=${JSON.stringify(s.notes ?? [])}${s.capped ? " (MY CAP of " + FCAP + " calls ended it)" : ""} ${tail(row)}`,
+      );
+      if (DEBUG) console.log("  [debug] events: " + JSON.stringify(s.events));
+    }
+
     console.log("tools offered by the runtime: " + [...offered].sort().join(", "));
     console.log("shape of a bash call's arguments as the preToolUse hook gets them: " + (argShape ?? "(never seen)"));
 
@@ -359,6 +405,14 @@ if (process.argv[2] !== "--isolated") {
     console.log("SHOWN vs RUN: " + shownVsRun);
     console.log("ORDER: " + order);
     console.log("AGENT STOP: " + agentStop);
+    const F = rows.F;
+    let stopLimit;
+    if (!F || !F.state.handlerFound) stopLimit = "could not determine: pluginSession gave no onAgentStop handler for the plugin" + (F ? ` (session=${F.outcome})` : "");
+    else if (F.state.hookCalls.agentStop === 0) stopLimit = `could not determine: the agentStop handler was never called (session=${F.outcome})`;
+    else if (F.state.capped) stopLimit = `did not end: the handler was still being called after ${F.state.hookCalls.agentStop - 1} calls, ${F.state.modelRequests} model requests, notes=${JSON.stringify(F.state.notes)} (my cap ended it)`;
+    else if (/timed out|timeout/i.test(F.outcome)) stopLimit = `could not determine: the session ${F.outcome} after ${F.state.modelRequests} model requests`;
+    else stopLimit = `the turn ended by itself after ${F.state.modelRequests} model requests (handler calls=${F.state.hookCalls.agentStop}, session=${F.outcome}); Botkins' note: ${F.state.notes.length ? F.state.notes.map((l) => JSON.stringify(l)).join(" / ") : "(none)"}`;
+    console.log("STOP LIMIT: " + stopLimit);
   } catch (error) {
     console.log("SHOWN vs RUN: could not determine: " + String(error?.stack ?? error).slice(0, 400));
     process.exitCode = 1;
