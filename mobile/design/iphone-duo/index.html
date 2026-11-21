@@ -36,7 +36,7 @@
   .pane+.pane{border-left:1px solid var(--bk-border)}
 
   /* rail */
-  .rail{width:var(--rail);flex:none;display:flex;flex-direction:column;align-items:center;padding:14px 0 14px;gap:10px;position:relative;z-index:2}
+  .rail{width:var(--rail);flex:none;display:flex;flex-direction:column;align-items:center;padding:14px 0 20px;gap:10px;position:relative;z-index:2;overflow:hidden}
   .rail.left{order:-1}
   .island{width:38px;height:38px;border-radius:19px;background:#0d0907;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:12px;flex:none}
   .island .lens{width:12px;height:12px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#3a4a5a,#0a0a0a 60%);flex:none}
@@ -399,8 +399,15 @@ const $=id=>document.getElementById(id);
 
 /* anatomy */
 $("anatomy").innerHTML=`<div class="content"><div class="pane" style="flex:1">${chatBody()}</div></div>
- ${rail({live:"patch",tools:[["back"],["plus",1],["model"],["context"],["more"]],active:"Chats",badges:{Work:1}})}
- ${[[18,"1"],[160,"2"],[238,"3"],[290,"4"],[340,"5"],[440,"6"],[560,"7"]].map(([t,n])=>`<span class="note-pin" style="top:${t}px;right:60px">${n}</span>`).join("")}`;
+ ${rail({live:"patch",tools:[["back"],["plus",1],["model"],["more"]],active:"Chats",badges:{Work:1}})}`;
+{
+  const s=$("anatomy"),r=s.querySelector(".rail"),b=r.querySelectorAll(".btn");
+  r.style.gap="6px";r.querySelector(".tools").style.gap="6px";
+  [r.querySelector(".island"),r.querySelector(".status"),b[0],b[1],b[2],b[3],r.querySelector(".tabs")].forEach((el,i)=>{
+    const p=document.createElement("span");p.className="note-pin";p.textContent=i+1;
+    p.style.top=(el.offsetTop+Math.min(el.offsetHeight,44)/2-11)+"px";p.style.right="60px";s.appendChild(p);
+  });
+}
 
 /* closed */
 $("closedHome").innerHTML=`<div class="content"><div class="pane" style="flex:1">
