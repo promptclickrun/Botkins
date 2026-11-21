@@ -322,7 +322,7 @@ test("a team member has their own spaces on the terminal host, and not the owner
   assert.match(invite.link, /join/);
   // The member's phone asks to join; the owner's phone approves; the member then does what the owner did, as themselves.
   const members = join(dir, "member.json");
-  const joining = phoneDoes(["--join", invite.link, "--host", address, "--server", first.device.server, "--save", members, "--name", "Avery's phone", "--space", "Launch", "--call", JSON.stringify([["spaces.read", plan], ["spaces.rename", plan, "Mine now"]])]);
+  const joining = phoneDoes(["--join", invite.link, "--host", address, "--server=" + first.device.server, "--save", members, "--name", "Avery's phone", "--space", "Launch", "--call", JSON.stringify([["spaces.read", plan], ["spaces.rename", plan, "Mine now"]])]);
   let request;
   for (let tries = 0; tries < 100 && !request; tries++) {
     await new Promise((resolve) => setTimeout(resolve, 200));
