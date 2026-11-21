@@ -47,6 +47,7 @@ import { phonePage } from "./phonepage.mjs";
 import { LOOKS_CAPABILITY } from "./looks.mjs";
 import { ROUTINE_DELIVERY, ROUTINE_OWNER } from "./routines.mjs";
 import { SPACES } from "./spaces.mjs";
+import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
 import { BOARD_MENTIONS } from "./mentions.mjs";
 import { computerName, nearby } from "./nearby.mjs";
 // Voice in the app's window (Settings › Voice, dictation, reading aloud, Live Voice): desktop/voicedesk.mjs.
@@ -117,7 +118,17 @@ export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", 
  * @returns What the program around it uses: `handlers`, `workspace`, `providers`, `link`, `phone`,
  *   `listening` (settles when the link's first start is over), and `begin()` / `stop()`.
  */
+/**
+ * Whether this process is the workspace container of the two-container host: Linux, with the
+ * socket that the link's container reaches it through. Only then is the team a cut that the link
+ * tells (desktop/headless/team-cut.mjs). Everywhere else (the desktop app, `botkins serve`) the
+ * link is in this process and is asked itself.
+ */
+export const isSplitHost = (platform = process.platform, env = process.env) => platform === "linux" && !!env.BOTKINS_WORKSPACE_SOCKET;
+
 export async function createRuntime({ host, dataDir, trial = false, pushed = () => {}, link: linkOptions = {}, copilot: copilotOptions = {} }) {
+  // The two-container host: this process is the workspace, and the public link is another container.
+  const splitHost = isSplitHost();
   let workspace,
     // Signing a provider in without a browser here, and installing its tool: from a phone, or the
     // terminal host's command line (desktop/terminal/signin.mjs). A token pasted there is kept in the vault.
@@ -243,18 +254,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     if (!updates) throw new Error("This copy of Botkins doesn't look for updates.");
     return updates;
   };
+  // On the two-container host the team is in the link's container, and this process is told a cut
+  // of it through the socket (desktop/headless/team-cut.mjs). It is kept in memory only, and what
+  // the workspace asks about the team is answered from it. Everywhere else the link is here.
+  const heldTeam = splitHost ? new HeldCut() : null;
+  const told = heldTeam && teamFromCut(heldTeam, (chatId) => workspace.state.chats.find((chat) => chat.id === chatId));
   workspace = new Workspace(dataDir, providers, notify, {
     updates,
-    team: () => link?.team(),
+    team: told ? told.team : () => link?.team(),
     // A chat's people and whether its alerts are the owner's: the link keeps invites (capability
     // "team-people-v1"). A link without them answers nothing, and a chat has its creator only.
-    people: (chatId) => link?.chatPeople?.(chatId),
+    people: told ? told.people : (chatId) => link?.chatPeople?.(chatId),
     // What a person may do with a space: the link keeps who each one is shared with. A link from
     // before spaces answers nothing, and the app's own rules hold (desktop/spaces.mjs).
-    spaceCan: (space, person) => link?.spaceCan?.(space, person),
+    spaceCan: told ? told.spaceCan : (space, person) => link?.spaceCan?.(space, person),
     // A person wrote a note or changed an app panel: the link picks who is told, and how often.
     spaceEvent: (event) => link?.spaceEvent?.(event),
-    notifiesOwner: (chatId) => link?.notifiesOwner?.(chatId),
+    notifiesOwner: told ? told.notifiesOwner : (chatId) => link?.notifiesOwner?.(chatId),
     secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => host.window.fillSecurePage(plan, values, signal) }),
     ...(keys && {
       vaultKey: keys,
@@ -875,7 +891,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const screens = host.screen;
   // Whether a phone can find this computer by itself on the network (desktop/nearby.mjs), and the
   // way to the page of System Settings where macOS lets Botkins use the local network.
-  const workspaceSocket = process.platform === "linux" && process.env.BOTKINS_WORKSPACE_SOCKET;
+  const workspaceSocket = splitHost && process.env.BOTKINS_WORKSPACE_SOCKET;
   const phone = phonePage({
     managed: !!workspaceSocket,
     link: () => link,
@@ -970,6 +986,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     // Spaces, for the link itself and never for a device: a person's four built-in spaces, the
     // copy of a space that a link opens, and (`release`) what stays to do when a member leaves the team.
+    // The cut of the team that the link's container tells this one (the two-container host only).
+    ...(heldTeam && { teamCut: heldTeam }),
     spaces: {
       ensure: (person) => Object.fromEntries(Object.entries(workspace.spaces.ensure(person)).map(([builtin, space]) => [builtin, space.id])),
       // A space that is gone has no copy: null, and the link takes its copy back.
