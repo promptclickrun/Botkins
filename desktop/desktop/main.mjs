@@ -80,6 +80,15 @@ const appSnapshot = () => {
     remote: { using, hosts: remote?.list() ?? [] },
   };
 };
+/** The id of the custom view whose frame loaded from this address, or null. */
+function frameIdOf(address) {
+  try {
+    const url = new URL(address);
+    return url.protocol === APP_SCHEME + ":" ? (/^frame-([0-9a-f-]{36})$/.exec(url.hostname)?.[1] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 /** The window hears of a change at most every 35 ms. */
 function push() {
   if (pending) return;
@@ -163,6 +172,13 @@ function openWindow() {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // The preload also runs inside each custom view's frame, in a world of its own that the
+      // view's page cannot reach. There it does one thing: it says when the person touched,
+      // clicked or pressed a key in that view (desktop/preload.cjs, "frame-gesture" below). The
+      // window cannot see input in a frame of another origin, and the page's word for it is not
+      // enough. The frame gets no bridge and no call: the preload gives the app's bridge to the
+      // main frame only, and every call below is refused unless the window's own page made it.
+      nodeIntegrationInSubFrames: true,
       // The side pane's website viewer is a guest of this window. What a guest may be is decided
       // below, in the main process (desktop/webviewer.mjs), whatever the page asks for.
       webviewTag: true,
@@ -365,6 +381,15 @@ else
         return value;
       },
     };
+    // A real touch, click or key press inside a custom view (desktop/preload.cjs). The view is named
+    // by the address its frame loaded from, never by what was sent; anything else is not heard.
+    // The window is told which view, and decides what that allows (a save of an app panel's state).
+    ipcMain.on("frame-gesture", (event) => {
+      const frame = event.senderFrame;
+      if (!win || win.isDestroyed() || event.sender !== win.webContents || !frame || frame === win.webContents.mainFrame) return;
+      const id = frameIdOf(frame.url);
+      if (id) win.webContents.send("frame-gesture", { frame: id });
+    });
     for (const [name, fn] of Object.entries(handlers))
       ipcMain.handle(name, (event, ...args) => {
         if (

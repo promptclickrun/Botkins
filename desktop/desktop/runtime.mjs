@@ -395,10 +395,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       // A view in a panel: the text goes to the box of an ask about that panel, which is the
       // asker's own chat. It never goes to the chat the panel was made in, which may be another person's.
       const panel = workspace.frames.panelOf(id);
-      const chatId = panel ? null : workspace.frames.chatFor(id);
+      const chatId = workspace.frames.chatFor(id);
       if (!panel && !chatId) throw new Error("This view's chat no longer exists.");
       frameAnswers.set(id, now);
-      host.window.send("prefill", panel ? { panelId: panel.id, spaceId: panel.spaceId, text: text.slice(0, 32000) } : { chatId, text: text.slice(0, 32000) });
+      // This window is the owner's. The chat a panel was made in is named too when it is still
+      // there and is the owner's own: a window that knows nothing of spaces puts the text there, as before.
+      const own = panel && chatId && !workspace.state.chats.find((chat) => chat.id === chatId)?.createdBy;
+      host.window.send("prefill", panel ? { panelId: panel.id, spaceId: panel.spaceId, ...(own && { chatId }), text: text.slice(0, 32000) } : { chatId, text: text.slice(0, 32000) });
     },
     // A frame asks to open a web page: the person decides, one question at a time.
     frameOpenLink: async (id, url) => {
