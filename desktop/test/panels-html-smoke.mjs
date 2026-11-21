@@ -14,6 +14,7 @@ import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
 import { openToday, showsSpaces } from "./spaces-helper.mjs";
 import { starterBots } from "./starter.mjs";
+import { probeListeners, probePage } from "./webrtc-probe.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-html-"));
 const dataDir = join(dir, "app");
@@ -77,6 +78,9 @@ const page = (label) => `<!doctype html><html><head><title>${label}</title>
   }
 </script></body></html>`;
 
+// A page that tries to reach the network through WebRTC, and listeners that must hear nothing.
+const probe = await probeListeners();
+const probeFrame = randomUUID();
 const now = Date.now();
 const panelFrame = randomUUID();
 const cardFrame = randomUUID();
@@ -85,6 +89,7 @@ for (const [id, html, json] of [
   [panelFrame, page("Acme"), { title: "Quarter at a glance" }],
   [cardFrame, page("Contoso"), { title: "Card chart" }],
   [smallFrame, "<p style='margin:0;padding:6px 0;color:var(--muted)'>A short note in a small panel.</p>", null],
+  [probeFrame, probePage(probe), null],
 ]) {
   writeFileSync(join(data, "frames", id + ".html"), html);
   writeFileSync(join(data, "frames", id + ".json"), JSON.stringify(json));
@@ -120,10 +125,12 @@ const panels = [
   panel("panel-wide", "chat-panel", "Acme dashboard", "wide", [{ type: "html", frame: panelFrame, height: 120 }]),
   panel("panel-small", "chat-panel", "Note", "small", [{ type: "html", frame: smallFrame, height: 60 }]),
   panel("panel-plain", "chat-panel", "Numbers", "small", [{ type: "metric", label: "Seats", value: "52" }]),
+  panel("panel-probe", "chat-panel", "Probe", "small", [{ type: "html", frame: probeFrame, height: 60 }]),
 ];
 const frames = [
   { id: panelFrame, owner: "panel:panel-wide", botId: "pip", createdAt: now },
   { id: smallFrame, owner: "panel:panel-small", botId: "pip", createdAt: now },
+  { id: probeFrame, owner: "panel:panel-probe", botId: "pip", createdAt: now },
   { id: cardFrame, owner: "chat:chat-card", botId: "scout", createdAt: now },
 ];
 writeFileSync(join(data, "workspace.json"), JSON.stringify({ bots: starterBots, chats, runs, panels, frames }));
@@ -189,6 +196,19 @@ try {
   await expect.poll(() => frame.evaluate(() => document.getElementById("title").textContent)).toBe("Quarter at a glance");
   await expect(panelEl.locator(".html-frame")).not.toHaveClass(/loading/);
   console.log("The panel draws its page in a sandboxed frame (allow-scripts only) with its data.");
+
+  // ---- A page cannot reach the network through WebRTC, from itself or from a frame it makes.
+  const probeFrameHandle = await frameOf(win.locator(".live-panel", { has: win.getByRole("heading", { name: "Probe" }) }).locator("iframe"));
+  await expect.poll(() => probeFrameHandle.evaluate(() => document.getElementById("probe-title")?.textContent)).toBe("Probe");
+  // Long enough for a connection to be tried, and for the frame made after the page loaded.
+  await win.waitForTimeout(4000);
+  const found = await probeFrameHandle.evaluate(() => ({ ...window.probe, frames: document.querySelectorAll("iframe,frame,object,embed").length }));
+  assert.equal(found.has, "undefined", "a view's page has RTCPeerConnection");
+  assert.equal(found.tried, "refused");
+  assert.deepEqual(found.nested, [], "a frame inside a view's page ran its code");
+  assert.equal(found.frames, 0, "a frame was left in a view's page");
+  assert.deepEqual(probe.heard, { tcp: 0, udp: 0 }, "a view's page reached the network through WebRTC");
+  console.log("A view's page has no WebRTC, no frame it makes is left to run, and nothing reached the test's listeners.");
 
   // ---- The app's colors reach the page and follow a theme change.
   const frameVar = (name) => frame.evaluate((name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), name);
@@ -346,5 +366,6 @@ try {
 } finally {
   await app?.close().catch(() => {});
   server.close();
+  probe.close();
   rmSync(dir, { recursive: true, force: true });
 }

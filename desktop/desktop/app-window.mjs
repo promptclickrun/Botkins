@@ -2,6 +2,7 @@
 // no Node, no permissions, and a small bridge for data and answers (desktop/app-preload.cjs).
 import { BrowserWindow, dialog, ipcMain, protocol, session, shell } from "electron";
 import { fileURLToPath } from "node:url";
+import { guardedPage, unshadow } from "./view-guard.mjs";
 
 export const APP_SCHEME = "commander-app";
 const CSP = [
@@ -92,6 +93,13 @@ export class AppWindows {
     const ses = session.fromPartition("botkins-app-" + id);
     ses.setPermissionRequestHandler((_wc, _permission, done) => done(false));
     ses.setPermissionCheckHandler(() => false);
+    // WebRTC is not a request and not under the page's policy: a page could open a TCP connection
+    // to a TURN server of its choosing. The window's WebRTC setting below stops UDP and sends TCP
+    // through the session's proxy, so the session is given a proxy that is not there (a closed port
+    // on this computer; "<-loopback>" so that addresses of this computer go to it too). The app's
+    // own page does not go through a proxy. This holds whatever the page's code does; the guard in
+    // the page (desktop/view-guard.mjs) is the first layer.
+    const noNetwork = ses.setProxy({ proxyRules: "http://127.0.0.1:1", proxyBypassRules: "<-loopback>" }).catch((error) => console.error("App window proxy:", error.message));
     // Belt and braces with the CSP: cancel every request that isn't the app's own page or inline data.
     ses.webRequest.onBeforeRequest((details, callback) => {
       const own = details.url.startsWith(APP_SCHEME + "://" + id + "/") || /^(data|blob):/i.test(details.url);
@@ -102,7 +110,8 @@ export class AppWindows {
         const url = new URL(request.url);
         if (url.hostname !== id || (url.pathname !== "/" && url.pathname !== "/index.html"))
           return new Response("Not found", { status: 404 });
-        return new Response(this.apps.page(id), {
+        // The guard runs before anything of the app's own (desktop/view-guard.mjs).
+        return new Response(guardedPage(unshadow(this.apps.page(id))), {
           headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": CSP },
         });
       });
@@ -148,7 +157,8 @@ export class AppWindows {
       this.open.delete(id);
       this.owners.delete(wcId);
     });
-    void w.loadURL(APP_SCHEME + "://" + id + "/");
+    // The page loads once the session has its proxy, so nothing of it runs before that.
+    void noNetwork.then(() => !w.isDestroyed() && w.loadURL(APP_SCHEME + "://" + id + "/"));
   }
   closeAll() {
     for (const w of this.open.values()) if (!w.isDestroyed()) w.close();

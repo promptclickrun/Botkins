@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { guardedPage, unshadow } from "./view-guard.mjs";
 
 export const MAX_FRAME_HTML = 300_000;
 export const MAX_FRAME_DATA = 200_000;
@@ -177,8 +178,9 @@ export class Frames {
     }
   }
   /** The page the frame loads, bridge included. */
+  /** The page as the window's frame loads it: the guard first, then the bridge, then what the bot wrote. */
   page(id) {
-    return framePage(this.html(id), this.data(id));
+    return guardedPage(framePage(unshadow(this.html(id)), this.data(id)));
   }
   remove(ids) {
     const gone = new Set(ids);
