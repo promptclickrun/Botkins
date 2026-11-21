@@ -35,6 +35,100 @@ export const FRAME_GUARD = String.raw`(() => {
   }
 })();true;`;
 
+/**
+ * Runs first in a view's page: no frame is ever left inside it. FRAME_GUARD runs in every frame the
+ * web view makes, but not in a frame whose address is code (`javascript:`): that one ran with WebRTC
+ * still in it, and packets left (seen on a simulator, 2026-11-20). So each `iframe`, `frame`,
+ * `object` and `embed` is taken out the moment it is put in, before anything in it can run, also
+ * inside a shadow root; and the ways to make a shadow root from markup are removed. The functions
+ * it uses are kept apart, so a page cannot swap them. The relay's frame for a shared space's panel
+ * (relay/src/space-frame.js.txt) holds this block word for word; tests/space-page.test.ts fails
+ * when the two differ.
+ */
+export const NESTED_FRAME_GUARD = String.raw`  (() => {
+    const un = (fn) => Function.prototype.call.bind(fn);
+    const getter = (proto, name) => un(Object.getOwnPropertyDescriptor(proto, name).get);
+    const matches = un(Element.prototype.matches);
+    const queryAll = un(Element.prototype.querySelectorAll);
+    const removeNode = un(Element.prototype.remove);
+    const addedOf = getter(MutationRecord.prototype, "addedNodes");
+    const countOf = getter(NodeList.prototype, "length");
+    const itemOf = un(NodeList.prototype.item);
+    const observe = un(MutationObserver.prototype.observe);
+    const Observer = MutationObserver;
+    const NESTED = "iframe,frame,object,embed,portal,fencedframe";
+    const drop = (node) => {
+      try {
+        if (matches(node, NESTED)) return removeNode(node);
+        const inside = queryAll(node, NESTED);
+        for (let i = countOf(inside) - 1; i >= 0; i--) removeNode(itemOf(inside, i));
+      } catch (e) {
+        // Not an element (text, a comment): nothing to take out.
+      }
+    };
+    const watch = (root) =>
+      observe(
+        new Observer((records) => {
+          for (let r = 0; r < records.length; r++) {
+            const added = addedOf(records[r]);
+            for (let i = countOf(added) - 1; i >= 0; i--) drop(itemOf(added, i));
+          }
+        }),
+        root,
+        { childList: true, subtree: true },
+      );
+    watch(document);
+    // What is inside a shadow root is not seen from the document, so each one made is watched too, and
+    // the ways to make one from markup are removed.
+    const attach = Element.prototype.attachShadow;
+    if (attach) {
+      const attachTo = un(attach);
+      Object.defineProperty(Element.prototype, "attachShadow", {
+        value: function attachShadow(init) {
+          const root = attachTo(this, init);
+          watch(root);
+          return root;
+        },
+        writable: false,
+        configurable: false,
+      });
+    }
+    for (const [owner, name] of [[Element.prototype, "setHTMLUnsafe"], [typeof ShadowRoot === "function" ? ShadowRoot.prototype : null, "setHTMLUnsafe"], [Document, "parseHTMLUnsafe"]]) {
+      try { if (owner && name in owner) Object.defineProperty(owner, name, { value: undefined, configurable: false, writable: false }); } catch (e) {}
+    }
+    // Markup that makes a shadow root would hide what is inside it from the watch above, so that
+    // attribute is unnamed in everything written here. (It is done by hand: the usual ways to search a
+    // string can be swapped by a page.)
+    const codeAt = un(String.prototype.charCodeAt);
+    const sliceOf = un(String.prototype.slice);
+    const WORD = "shadowroot";
+    const plain = (value) => {
+      const html = "" + value;
+      let out = "";
+      let from = 0;
+      for (let i = 0; i + WORD.length <= html.length; i++) {
+        let hit = true;
+        for (let j = 0; j < WORD.length && hit; j++) hit = (codeAt(html, i + j) | 32) === codeAt(WORD, j);
+        if (!hit) continue;
+        out += sliceOf(html, from, i) + "data-no-";
+        from = i;
+      }
+      return out + sliceOf(html, from);
+    };
+    const writeTo = un(Document.prototype.write);
+    for (const name of ["write", "writeln"]) {
+      Object.defineProperty(Document.prototype, name, {
+        value: function (...parts) {
+          let text = "";
+          for (let i = 0; i < parts.length; i++) text += parts[i];
+          return writeTo(this, plain(text) + (name === "writeln" ? "\n" : ""));
+        },
+        writable: false,
+        configurable: false,
+      });
+    }
+  })();`;
+
 export const MIN_HEIGHT = 48;
 export const MAX_HEIGHT = 4000;
 /** The longest message a page may send (an answer's text is cut well below this). */
@@ -198,7 +292,7 @@ export function framePage(html: string, data: unknown, theme: FrameTheme, option
     '<meta http-equiv="Content-Security-Policy" content="' + FRAME_CSP + '">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1' + (options.fill ? "" : ", maximum-scale=1, user-scalable=no") + '">' +
     "<style>:root{color-scheme:" + theme.mode + ";" + vars + ";" + BASE_STYLE + (options.fill ? "" : "html{overflow:hidden}") + "</style>" +
-    "<script>" + BRIDGE.replace("__DATA__", () => inlineJson(data)).replace("__MODE__", () => JSON.stringify(theme.mode)) + "</script>";
+    "<script>" + NESTED_FRAME_GUARD + "\n" + BRIDGE.replace("__DATA__", () => inlineJson(data)).replace("__MODE__", () => JSON.stringify(theme.mode)) + "</script>";
   // The policy has to come before anything of the bot's, so the head is always the app's own.
   return "<!doctype html><html><head>" + head + "</head><body>" + html + "</body></html>";
 }

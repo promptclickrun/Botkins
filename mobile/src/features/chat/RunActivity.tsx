@@ -169,7 +169,7 @@ export default function RunActivity() {
   const took = run.finished ? duration(run.finished - run.time) : run.usage?.durationMs ? duration(run.usage.durationMs) : undefined;
   const model = run.usage?.model ?? (run.model ? modelName(run.model, models) : undefined);
   const facts = [took, model, run.usage ? compactNumber(run.usage.input) + " in · " + compactNumber(run.usage.output) + " out" : undefined].filter(Boolean).join(" · ");
-  // A helper's own steps are listed in its own activity (Helpers, below).
+  // A helper's own steps are listed in its own activity (Helpers, at the top).
   const everyStep = (run.steps ?? []).filter((step) => !step.agentId);
   // "Failed only" narrows the list to what went wrong; the rest is a tap away.
   const picked = stepId ? everyStep.find((step) => step.id === stepId) : undefined;
@@ -196,6 +196,49 @@ export default function RunActivity() {
           </T>
         )}
       </View>
+
+      {/* The owner's order (2026-11-20): helpers first, then the to-do list, then the steps and everything else. */}
+      {!!run.agents?.length && (
+        <View>
+          <Label>Helpers</Label>
+          <Group>
+            {run.agents.map((agent) => (
+              <Tap key={agent.id} onPress={() => router.push(helperSheet(chatId, run.id, agent.id))} sink={1} feel="select" hitSlop={0} accessibilityLabel={agent.name + ", " + agent.status + ", show activity"}>
+                <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
+                  <StepMark status={agent.status} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <T variant="callout" weight="500" numberOfLines={1}>
+                      {agent.name}
+                    </T>
+                    {!!(agent.intent || agent.detail || agent.description) && (
+                      <T variant="footnote" color="muted" numberOfLines={2}>
+                        {(agent.status === "Running" && agent.intent) || agent.detail || agent.description}
+                      </T>
+                    )}
+                  </View>
+                  <ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />
+                </View>
+              </Tap>
+            ))}
+          </Group>
+        </View>
+      )}
+
+      {!!run.todos?.length && (
+        <View>
+          <Label>To do</Label>
+          <Group>
+            {run.todos.map((todo) => (
+              <View key={todo.id} style={{ minHeight: 48, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }} accessibilityLabel={todo.title + ", " + todo.status.replace("_", " ")}>
+                <TodoMark status={todo.status} />
+                <T variant="callout" color={todo.status === "done" || todo.status === "cancelled" ? "muted" : "ink"} style={{ flex: 1, textDecorationLine: todo.status === "cancelled" ? "line-through" : "none" }}>
+                  {todo.title}
+                </T>
+              </View>
+            ))}
+          </Group>
+        </View>
+      )}
 
       {steps.length > 0 && (
         <View>
@@ -225,22 +268,6 @@ export default function RunActivity() {
         </View>
       )}
 
-      {!!run.todos?.length && (
-        <View>
-          <Label>To do</Label>
-          <Group>
-            {run.todos.map((todo) => (
-              <View key={todo.id} style={{ minHeight: 48, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }} accessibilityLabel={todo.title + ", " + todo.status.replace("_", " ")}>
-                <TodoMark status={todo.status} />
-                <T variant="callout" color={todo.status === "done" || todo.status === "cancelled" ? "muted" : "ink"} style={{ flex: 1, textDecorationLine: todo.status === "cancelled" ? "line-through" : "none" }}>
-                  {todo.title}
-                </T>
-              </View>
-            ))}
-          </Group>
-        </View>
-      )}
-
       {!!run.teamwork?.length && (
         <View>
           <Label>Teamwork</Label>
@@ -254,32 +281,6 @@ export default function RunActivity() {
                 subtitleLines={2}
                 trailing={<Badge label={ask.status} tone={TEAM_TONE[ask.status]} />}
               />
-            ))}
-          </Group>
-        </View>
-      )}
-
-      {!!run.agents?.length && (
-        <View>
-          <Label>Helpers</Label>
-          <Group>
-            {run.agents.map((agent) => (
-              <Tap key={agent.id} onPress={() => router.push(helperSheet(chatId, run.id, agent.id))} sink={1} feel="select" hitSlop={0} accessibilityLabel={agent.name + ", " + agent.status + ", show activity"}>
-                <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
-                  <StepMark status={agent.status} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T variant="callout" weight="500" numberOfLines={1}>
-                      {agent.name}
-                    </T>
-                    {!!(agent.intent || agent.detail || agent.description) && (
-                      <T variant="footnote" color="muted" numberOfLines={2}>
-                        {(agent.status === "Running" && agent.intent) || agent.detail || agent.description}
-                      </T>
-                    )}
-                  </View>
-                  <ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />
-                </View>
-              </Tap>
             ))}
           </Group>
         </View>

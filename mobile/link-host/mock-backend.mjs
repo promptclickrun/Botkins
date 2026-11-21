@@ -590,8 +590,8 @@ const DEMO_VIEW_DATA = {
 
 // A view that tries to get out, for checking a phone's web view by hand ("sandbox" in a message).
 // Each line says whether one way out was blocked. It tries example.com, which is reserved, or the
-// address in BOTKINS_DEV_PROBE (a listener of your own, with a STUN port one below its port), which
-// shows for certain what left the view.
+// address in BOTKINS_DEV_PROBE (a listener of your own, with a STUN port one below its port and a
+// TURN port over TCP one above it), which shows for certain what left the view.
 const PROBE = process.env.BOTKINS_DEV_PROBE || "https://example.com";
 const SANDBOX_VIEW = String.raw`<pre id="out" style="font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;margin:0"></pre>
 <script>
@@ -629,6 +629,15 @@ const SANDBOX_VIEW = String.raw`<pre id="out" style="font:12px/1.5 ui-monospace,
       } catch (e) { log("frame WebRTC gathers addresses", true); }
     }
   } catch (e) { log("frame", true); }
+  // A frame with a page of its own (srcdoc), and one whose address is code (javascript:). Each says
+  // whether it ran and whether it has WebRTC, and tries STUN (UDP) and TURN over TCP at the listener.
+  const turn = "turn:" + at.hostname + ":" + (at.port ? Number(at.port) + 1 : 3479) + "?transport=tcp";
+  const inner = "(function(via){var r={via:via,rtc:typeof RTCPeerConnection};try{var pc=new RTCPeerConnection({iceServers:[{urls:" + JSON.stringify(stun) + "},{urls:" + JSON.stringify(turn) + ",username:via,credential:'x'}]});pc.createDataChannel('x');pc.createOffer().then(function(o){return pc.setLocalDescription(o)})}catch(e){}parent.postMessage({sandboxProbe:r},'*')})";
+  const ran = {};
+  addEventListener("message", (event) => { const r = event.data && event.data.sandboxProbe; if (r) { ran[r.via] = true; log(r.via + " frame has RTCPeerConnection", r.rtc === "undefined"); } });
+  try { const f = document.createElement("iframe"); f.srcdoc = "<scr" + "ipt>" + inner + "('srcdoc')</scr" + "ipt>"; document.body.appendChild(f); } catch (e) {}
+  try { const f = document.createElement("iframe"); f.src = "javascript:" + inner + "('javascript')"; document.body.appendChild(f); } catch (e) {}
+  setTimeout(() => { for (const via of ["srcdoc", "javascript"]) if (!ran[via]) log(via + " frame runs", true); }, 2500);
   try { localStorage.setItem("a", "b"); log("localStorage", false); } catch (e) { log("localStorage", true); }
   try { document.cookie = "a=b"; log("cookie", document.cookie === ""); } catch (e) { log("cookie", true); }
   lines.push("app handle offers: " + (Object.keys(window.ReactNativeWebView || {}).join(", ") || "nothing"));

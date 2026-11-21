@@ -123,6 +123,8 @@ export const LINK = {
   "link.devices.remove": cmd("devices remove"),
   ...each("link.team.get link.team.rename link.team.saveRole link.team.deleteRole link.team.saveGroup link.team.deleteGroup link.team.createInvite link.team.revokeInvite link.team.approve link.team.deny link.team.moveMember link.team.removeMember link.team.inviteToChat link.team.removeFromChat link.team.setLinkSharing", owed("e")),
   ...each("link.spaces.share link.spaces.newLink link.spaces.arrange link.spaces.seen link.spaces.notify link.spaces.here", owed("e")),
+  // Sections on the Chats screen ("chat-sections-v1"): a person's own way to group their chats.
+  ...each("link.chats.addSection link.chats.renameSection link.chats.deleteSection link.chats.orderSections link.chats.setSection", owed("d")),
   // Admin mode is each owner device's own way of looking: the command line shows everything, as an owner with it on.
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal uses the app's own calls for them (part d).

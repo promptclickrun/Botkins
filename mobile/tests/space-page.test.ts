@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { shareIdOf as hostShareId } from "../link-host/spaces.mjs";
 import { shareIdOf as relayShareId } from "../relay/src/shared.ts";
 import { FRAME_CSP as RELAY_FRAME_CSP } from "../relay/src/space.ts";
-import { FRAME_CSP, FRAME_GUARD, frameColors } from "../src/ui/frame";
+import { FRAME_CSP, FRAME_GUARD, frameColors, framePage, NESTED_FRAME_GUARD } from "../src/ui/frame";
 import { themeById } from "../src/ui/themes";
 
 const read = (name: string) => readFileSync(new URL("../relay/src/" + name, import.meta.url), "utf8");
@@ -19,7 +19,15 @@ test("a panel's page on a shared link runs under the phone's own custom-view pol
   const removed = [...FRAME_GUARD.matchAll(/"([A-Za-z]+)"/g)].map((match) => match[1]!);
   assert.ok(removed.length >= 10);
   for (const name of removed) assert.ok(frame.includes(`"${name}"`), name + " is removed there too");
+  // No frame is left inside a view's page: the relay's frame and the phone's views run one block, word for word.
+  assert.ok(frame.includes(NESTED_FRAME_GUARD), "the relay's frame holds the phone's nested-frame guard");
+  assert.ok(NESTED_FRAME_GUARD.length > 2000 && NESTED_FRAME_GUARD.includes("MutationObserver") && NESTED_FRAME_GUARD.includes("attachShadow"));
+  // On the phone it runs before the bridge and before anything of the bot's.
+  const page = framePage("<p id=bot>hi</p>", null, { mode: "light", colors: {} });
+  assert.ok(page.indexOf(NESTED_FRAME_GUARD) > 0 && page.indexOf(NESTED_FRAME_GUARD) < page.indexOf("window.ReactNativeWebView") && page.indexOf("window.ReactNativeWebView") < page.indexOf("<p id=bot>"));
+  new Function(NESTED_FRAME_GUARD.replace(/^/, "return;"));
   // Nothing in either script can end the <script> it is served in.
+  assert.ok(!/<\/script/i.test(NESTED_FRAME_GUARD));
   for (const name of ["space-frame.js.txt", "space-page.js.txt"]) assert.ok(!/<\/script/i.test(read(name)), name);
 });
 
