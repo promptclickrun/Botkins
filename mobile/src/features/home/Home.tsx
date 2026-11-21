@@ -208,6 +208,7 @@ export default function Home() {
   const synced = useApp((state) => state.synced);
   const online = useApp((state) => state.link === "online");
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
+  const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computers = useApp((state) => state.pairings);
   const inUse = useApp((state) => state.pairing?.serverId);
   const requests = useApp((state) => state.parts.live?.requests);
@@ -267,7 +268,7 @@ export default function Home() {
           <Tap
             onPress={() => router.push("/settings/desktop")}
             feel="select"
-            accessibilityLabel={computer + (online ? ", connected" : ", not connected")}
+            accessibilityLabel={computer + (online ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
             accessibilityHint="Hold to switch computers"
             style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: 7, height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: colors.surface }}
           >
@@ -275,6 +276,12 @@ export default function Home() {
             <T variant="footnote" weight="600" color="ink2" numberOfLines={1}>
               {computer}
             </T>
+            {/* While Admin mode is on, the lists hold every member's things: the tag says so. */}
+            {adminOn && (
+              <T variant="caption" weight="600" color="accentText" numberOfLines={1}>
+                Admin mode
+              </T>
+            )}
           </Tap>
         </HoldMenu>
         {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}

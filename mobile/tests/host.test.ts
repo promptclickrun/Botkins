@@ -1044,8 +1044,8 @@ test("a call is checked before its body is read, and the host takes only so many
 
 test("a phone has two waits open at most, and a newer one ends the oldest", async () => {
   const { link, client, call, until, done } = await setup({}, false);
-  link.refresh([]);
-  const have = Object.fromEntries([...link.parts].map(([name, part]: [string, any]) => [name, part.v]));
+  // What this phone holds: the versions of its own view, as one sync gave them.
+  const { v: have } = await (client as any).call("link.sync", { epoch: link.epoch, have: {} });
   const wait = () => (client as any).call("link.sync", { epoch: link.epoch, have, wait: 20_000 });
   const first = wait().then((news: any) => ({ first: true, news }));
   await until(() => link.waiters.size === 1, "the first wait");

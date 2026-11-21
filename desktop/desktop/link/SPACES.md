@@ -21,7 +21,7 @@ Written 2026-11-20 against `origin/main` at `42c6445`, and reviewed once against
 9. Spaces can be pinned and put in order by each person. Panels can be moved and resized.
 10. Today, Feed, Ideas and Goals each become a space.
 
-**One choice here is this contract's, not the owner's, and the owner has been asked:** the host's owner can open every space on their host, a member's private one included. `TEAMS.md` already lets the owner read every member's chat, and a member's panel is built in such a chat, so a space the owner could not open would be a promise the host does not keep. "Private" therefore means: no other member. If the owner decides otherwise, the change is in `spaceCan`, and then `panels`, `board`, `spaces`, the frame calls, a space's chats and its refresh alerts all need a cut for owner devices too.
+**The owner and a member's space** (the owner's answer, 2026-11-20): the host's owner can open every space on their host, a member's private one included, but is not shown them by default. `spaceCan` answers `"own"` for the owner on every space. What an owner device is *sent* follows **Admin mode** (`link-contract.md`, "Admin mode"): off at first, the owner's `spaces` holds the spaces the owner made and those shared with the owner; on, every space, with "From members". "Private" therefore means: no other member, and not in the owner's lists unless the owner turns Admin mode on.
 
 ## Words
 
@@ -92,7 +92,7 @@ A space with no entry in `team.spaces` is private.
 `spaceCan(team, space, person)` in `team.mjs` (pure, tested) answers `"own"`, `"edit"`, `"view"` or `null`. The link host, the window and the app all use this one function.
 
 - The maker (`createdBy`, or the owner when there is none): `"own"`.
-- The owner: `"own"` for every space on the host.
+- The owner: `"own"` for every space on the host. Which of them an owner device is sent follows Admin mode (above).
 - `access: "members"`: a person with a grant gets that grant's `can`.
 - `access: "team"` or `"link"`: every person gets `teamCan`.
 - Anyone else: `null`. The space does not exist for them: it is in no part, and a call that names it, one of its panels, one of its cards or one of its custom views fails as an unknown id does.
@@ -176,7 +176,7 @@ botkins.state.onChange(fn)          // fn(state) when someone else changed it; r
 
 ## What each device is sent
 
-**The `spaces` part**: the spaces the person can open, in that person's order (pinned first, in pinned order; a space new to the person goes last, unpinned).
+**The `spaces` part**: the spaces the person can open (for an owner device with Admin mode off: the ones the owner is part of), in that person's order (pinned first, in pinned order; a space new to the person goes last, unpinned).
 
 ```ts
 type SpaceSummary = {
@@ -244,6 +244,12 @@ Host-side only, never remote, on `backend.spaces`: `ensure(person)` (the four bu
 | `link.team.setLinkSharing(on)` | Owner only. Whether members may share by link. |
 
 **For the app on the host** (its own window has no device): the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `spacesFor(person)` → `SpaceSummary[]`, `spaceCan(space, person)` (`space` is an id or the app's own `SpaceRecord`), `shareSpace(person, id, input)`, `newSpaceLink(person, id)`, `arrangeSpaces(person, input)`, `seenSpace(person, id)`, `notifySpace(person, id, mode)`, `hereInSpace(person, id | null, panelId?)`, `setLinkSharing(on)`. `LinkHost` emits `"status"` when a list changes.
+
+What a device's call gets from the link by itself, the window's own call has to ask for:
+
+- `spaceContent(principal, answer, state)`: the app's `spaces.read` answer as that person is sent it, with `seenAt`. For the window, `principal` is `{ kind: "owner" }`.
+- `spaceRemoved(id)`: after the window's own `spaces.remove`. The sharing goes, and a link's copy leaves the relay.
+- A space made in the window is pinned for the owner by the app, with `spacesFor("owner")` and `arrangeSpaces("owner", …)`, as the link does for a device.
 
 **Sentences the link answers with**, shown as they come: "This space no longer exists.", "This panel no longer exists.", "This item no longer exists.", "You can look at this space, not change it.", "Only the person who made this space can do that.", "The owner hasn't turned on sharing by link for members.", "Turn on the relay on your computer to share by link.", "That person's role can't open spaces. Change their role in Team settings first.", "That person is no longer on the team.", "This space isn't shared by link.", "Choose who can open this space.", "Choose Off, Once a day or Every change."
 

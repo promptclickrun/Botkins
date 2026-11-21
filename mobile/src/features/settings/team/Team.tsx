@@ -1,6 +1,6 @@
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
-import { Copy, Link, Pencil, Plus, Share2, Trash2, UserMinus, UserPlus, Users } from "lucide-react-native";
+import { Copy, Eye, Link, Pencil, Plus, Share2, Trash2, UserMinus, UserPlus, Users } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, Share, View } from "react-native";
 import type { Group as TeamGroup, Invite, JoinRequest, Member, Role } from "@/link/types";
@@ -24,10 +24,13 @@ function roleName(roles: Role[], id: string) {
 export default function Team() {
   const part = usePart("team");
   const team = part && "roles" in part ? part : undefined;
+  const you = usePart("meta")?.you;
   const online = useOnline();
   const { colors } = useTheme();
   if (part && !team) return <Page title="Team"><EmptyState title="Only the owner can manage the team" /></Page>;
   if (!team) return <Page title="Team"><Loading label="Loading team" /></Page>;
+  // Told by a computer that has Admin mode; an older one says nothing, and shows everything as before.
+  const admin = you?.kind === "owner" ? you.admin : undefined;
 
   const rename = () =>
     Alert.prompt(
@@ -45,6 +48,18 @@ export default function Team() {
     <Page title="Team">
       <Group>
         <Row leading={<IconTile icon={Users} />} title={team.name} subtitle="Team name" trailing={<Pencil size={17} color={colors.faint} />} disabled={!online} onPress={rename} />
+        {/* Admin mode is this phone's own way of looking: off, it lists what you are part of; it never changes what you may do. */}
+        {typeof admin === "boolean" && (
+          <Row
+            leading={<IconTile icon={Eye} />}
+            title="Admin mode"
+            subtitle="See every member's spaces, bots and chats."
+            subtitleLines={2}
+            toggled={admin}
+            disabled={!online}
+            onToggle={(on) => void attempt(api["link.team.setAdminMode"](on))}
+          />
+        )}
       </Group>
 
       <Requests requests={team.requests} invites={team.invites} groups={team.groups} online={online} />
