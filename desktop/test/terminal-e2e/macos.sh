@@ -141,7 +141,8 @@ pid=$(pid_of)
 echo "RSS $(( $(ps -o rss= -p "$pid") / 1024 )) MB (pid $pid)"
 
 step "Doctor"
-run doctor || true
+run doctor | tee "$work/doctor.txt" || true
+grep -q "^ok .*A bot's shell: Finds .botkins. at .*reaches this service" "$work/doctor.txt" || fail "A bot's shell of the job does not find the botkins command, or it does not reach the service."
 
 step "Uninstall"
 run service uninstall --yes

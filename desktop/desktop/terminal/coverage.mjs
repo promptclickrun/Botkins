@@ -5,7 +5,11 @@
 //
 //   cmd("bots add")      the command that does it
 //   no("window")         it has no command, for one reason from the short list below
-//   owed("b")            its command is not written yet; the letter names the part of the work that owes it
+//
+// Nothing is owed: every call has a command or a reason. A new call of the app comes with its command,
+// or with a reason, in the same piece of work. (There is no hidden `botkins call`: nothing is left that
+// a command does not reach, and a call that a command covers must be done by that command, which shows
+// what it changes and leaves a line in the log.)
 //
 // test/terminal-coverage.test.mjs reads the calls from a running service and from the link, and
 // fails when a call has no entry, when an entry names a call that is gone, and when a command
@@ -13,34 +17,20 @@
 // command, or a stated reason. This is the command line's part of the rule the phone has
 // ("Parity with the computer", mobile/AGENTS.md): what a person can do in the window, a person
 // or an agent can do from a terminal, unless it needs the window itself.
-//
-// The table also decides what the hidden `botkins call` may reach (`callRule` in control.mjs). A call
-// that a command covers, or that has a reason, is refused there: the command shows what it changes
-// and leaves a line in the log, and a reason says where the call is done. Only `owed` calls run
-// through `call`, and a few of those are held (`HELD` in control.mjs) while their command is not
-// written. When nothing is owed any more, `call` has nothing left to reach that a command does not,
-// and `call` goes: take it out with the last `owed`.
 
-/** Why a call has no command. The list is fixed: a new reason is a decision, not an entry. */
 import { hasUnplain } from "../shown-text.mjs";
 
+/** Why a call has no command. The list is fixed: a new reason is a decision, not an entry. */
 export const REASONS = {
   window: "needs a window", // a file dialog, the clipboard, a folder opened in the file manager, a notification, a microphone
   "window's own": "the window's own", // what only the window uses to draw itself: a pane, a preview, a thumbnail
   "phone's own": "a phone's own", // what only a paired phone uses: its notifications, the screen it is shown, its uploads
-  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone."
+  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone."
   person: "needs a person at the app: the window, or a phone with its owner check", // a call that reaches a secret which a caller of the socket cannot read by itself, or sends one somewhere: the socket cannot know that a person is there
-};
-
-/** The parts of the work that still owe commands, in the order they are built. When all are done, `owed` is no longer accepted. */
-export const PARTS = {
-  d: "projects, routines, tasks, the wiki, chats, preferences, credentials, usage, and the rest of a bot",
-  e: "Spaces, panels and the team",
 };
 
 const cmd = (command) => ({ command });
 const no = (reason) => ({ reason });
-const owed = (part) => ({ owed: part });
 const each = (names, entry) => Object.fromEntries(names.split(/\s+/).filter(Boolean).map((name) => [name, entry]));
 
 /** The app's own calls: every key of `runtime.handlers`. */
@@ -70,13 +60,21 @@ export const WORKSPACE = {
   listFolders: cmd("folders"),
   // ── Model providers and models ──
   providers: cmd("providers list"),
-  harnesses: owed("d"),
+  harnesses: cmd("preferences harnesses"), // the programs that can run a turn (Pi) and which choice of the preference `harness` is set
   setProviderEnabled: cmd("providers enable"),
   providerServices: cmd("providers services"),
   ...each("providerSignInStart providerSignInRead providerSignInInput providerSignInCancel", cmd("providers login")),
   models: cmd("models"),
   setModel: cmd("models"),
-  ...each("auth signIn cancelSignIn signOut installProvider providerUseToken connectProviderService finishProviderService cancelProviderService disconnectProviderService providerUsage", owed("d")),
+  // `auth` says whether a provider is signed in and as whom: `providers list` shows that for each provider.
+  auth: cmd("providers list"),
+  // `providers login` is the sign-in of a provider from a terminal: its own sign-in, a pasted token (`--token`, from a hidden question or standard input),
+  // and an OpenCode model service's key or sign-in with its code (`--service`, `--method`). Ctrl-C ends one that is open.
+  ...each("signIn cancelSignIn providerUseToken connectProviderService finishProviderService cancelProviderService", cmd("providers login")),
+  signOut: cmd("providers logout"),
+  installProvider: cmd("providers install"),
+  disconnectProviderService: cmd("providers disconnect"),
+  providerUsage: cmd("providers usage"),
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
@@ -182,23 +180,73 @@ export const WORKSPACE = {
   "artifacts.read": cmd("artifacts read"),
   "artifacts.resolve": cmd("artifacts resolve"),
   // ── Preferences, credentials, usage, voice ──
-  setPreferences: owed("d"),
-  ...each("credentials removeCredential savedCredentials saveSavedCredential checkSavedCredential removeSavedCredential resetVault", owed("d")),
+  setPreferences: cmd("preferences set"),
+  // No command shows a value: a list has names, kinds and where each is read from. A new value comes from a hidden question or standard input.
+  credentials: cmd("vault list"),
+  removeCredential: cmd("vault remove"),
+  resetVault: cmd("vault reset"),
+  savedCredentials: cmd("credentials list"),
+  saveSavedCredential: cmd("credentials save"), // `credentials edit` changes one
+  checkSavedCredential: cmd("credentials check"),
+  removeSavedCredential: cmd("credentials remove"),
   // These five need a person at the app. After an unlock, a password manager's session stays in the
   // service's memory, so every later caller of the socket could list the person's logins. And a
   // field that is linked under a name that the caller chose is a secret that the person's own
-  // picker then hands over. (`passwordManagers` and `lockPasswordManager` get commands later.)
+  // picker then hands over. (`passwordManagers` and `lockPasswordManager` have commands.)
   ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField", no("person")),
-  ...each("passwordManagers lockPasswordManager", owed("d")),
-  ...each("usage exportUsageText cacheInfo clearCache", owed("d")),
-  ...each("voiceSettings voiceOptions setVoice setVoiceKey", owed("d")),
-  ...each("macToolsStatus setMacTool", owed("d")),
+  passwordManagers: cmd("password-managers list"),
+  lockPasswordManager: cmd("password-managers lock"),
+  usage: cmd("usage show"),
+  exportUsageText: cmd("usage export"),
+  cacheInfo: cmd("cache show"),
+  clearCache: cmd("cache clear"),
+  voiceSettings: cmd("voice show"),
+  voiceOptions: cmd("voice options"),
+  setVoice: cmd("voice set"),
+  setVoiceKey: cmd("voice key"),
+  macToolsStatus: cmd("mac-tools status"),
+  setMacTool: cmd("mac-tools set"),
   // ── Panels and the team ──
-  ...each("changePanel refreshPanel routine boardAct", owed("e")),
+  changePanel: cmd("panels hide"), // and `panels unhide`, `panels size`, `panels order`, `panels remove`: each is one action of this call
+  refreshPanel: cmd("panels refresh"),
+  routine: cmd("panels routine set"), // and `panels routine pause`, `resume` and `remove`
+  boardAct: cmd("cards act"),
   // Spaces ("spaces-v1"): the app's twelve calls, and the link's own for sharing, order and "Notify me", as the owner's window makes them.
-  ...each("spaces.read spaces.create spaces.rename spaces.remove spaces.setProject spaces.setPanelProject spaces.newPanel spaces.ask spaces.movePanel spaces.patchState spaces.note spaces.removeNote", owed("e")),
-  ...each("link.spaces.share link.spaces.newLink link.spaces.arrange link.spaces.seen link.spaces.notify link.spaces.here link.team.setLinkSharing", owed("e")),
-  ...each("team renameTeam saveTeamRole deleteTeamRole saveTeamGroup deleteTeamGroup createTeamInvite revokeTeamInvite approveTeamRequest denyTeamRequest moveTeamMember removeTeamMember chatPeople inviteToChat removeFromChat", owed("e")),
+  "spaces.read": cmd("spaces show"), // and `spaces list`
+  "spaces.create": cmd("spaces add"),
+  "spaces.rename": cmd("spaces rename"),
+  "spaces.remove": cmd("spaces remove"),
+  "spaces.setProject": cmd("spaces project"),
+  "spaces.setPanelProject": cmd("panels project"),
+  "spaces.newPanel": cmd("panels new"),
+  "spaces.ask": cmd("spaces ask"), // and `panels ask`
+  "spaces.movePanel": cmd("panels move"),
+  "spaces.patchState": cmd("panels set-state"),
+  "spaces.note": cmd("panels note"),
+  "spaces.removeNote": cmd("panels remove-note"),
+  // Sharing a space (control-sharing.mjs). `seen` and `here` say that a person opened a space on a device, or looks at it now: the window sends them on its own as a space comes into view, and a terminal is no device.
+  "link.spaces.share": cmd("sharing set"), // (a link is made by `sharing link`, which uses this call too)
+  "link.spaces.newLink": cmd("sharing link"),
+  "link.spaces.arrange": cmd("sharing order"), // and `sharing pin`
+  "link.spaces.notify": cmd("sharing notify"),
+  ...each("link.spaces.seen link.spaces.here", no("window's own")),
+  "link.team.setLinkSharing": cmd("sharing links"),
+  // The team (control-team.mjs): kept by the phone link, reached through the app's own calls.
+  team: cmd("team show"),
+  renameTeam: cmd("team rename"),
+  saveTeamRole: cmd("team roles save"),
+  deleteTeamRole: cmd("team roles remove"),
+  saveTeamGroup: cmd("team groups save"),
+  deleteTeamGroup: cmd("team groups remove"),
+  createTeamInvite: cmd("team invite"),
+  revokeTeamInvite: cmd("team invites revoke"),
+  approveTeamRequest: cmd("team requests approve"),
+  denyTeamRequest: cmd("team requests deny"),
+  moveTeamMember: cmd("team members move"),
+  removeTeamMember: cmd("team members remove"),
+  chatPeople: cmd("team chat list"),
+  inviteToChat: cmd("team chat invite"),
+  removeFromChat: cmd("team chat remove"),
   // ── This computer: updates, phones, the relay ──
   ...each("appUpdateStatus checkAppUpdate installAppUpdate", cmd("update")),
   setAppUpdateAuto: cmd("config set"),
@@ -228,8 +276,28 @@ export const LINK = {
   "link.devices.rename": cmd("devices rename"),
   "link.devices.setPerson": cmd("devices set-person"),
   "link.devices.remove": cmd("devices remove"),
-  ...each("link.team.get link.team.rename link.team.saveRole link.team.deleteRole link.team.saveGroup link.team.deleteGroup link.team.createInvite link.team.revokeInvite link.team.approve link.team.deny link.team.moveMember link.team.removeMember link.team.inviteToChat link.team.removeFromChat link.team.setLinkSharing", owed("e")),
-  ...each("link.spaces.share link.spaces.newLink link.spaces.arrange link.spaces.seen link.spaces.notify link.spaces.here", owed("e")),
+  // The team, as the link names the same calls (control-team.mjs).
+  "link.team.get": cmd("team show"),
+  "link.team.rename": cmd("team rename"),
+  "link.team.saveRole": cmd("team roles save"),
+  "link.team.deleteRole": cmd("team roles remove"),
+  "link.team.saveGroup": cmd("team groups save"),
+  "link.team.deleteGroup": cmd("team groups remove"),
+  "link.team.createInvite": cmd("team invite"),
+  "link.team.revokeInvite": cmd("team invites revoke"),
+  "link.team.approve": cmd("team requests approve"),
+  "link.team.deny": cmd("team requests deny"),
+  "link.team.moveMember": cmd("team members move"),
+  "link.team.removeMember": cmd("team members remove"),
+  "link.team.inviteToChat": cmd("team chat invite"),
+  "link.team.removeFromChat": cmd("team chat remove"),
+  // Sharing a space (control-sharing.mjs). The phone's own calls for what a person opened or looks at now: the phone sends them as a space comes into view.
+  "link.spaces.share": cmd("sharing set"),
+  "link.spaces.newLink": cmd("sharing link"),
+  "link.spaces.arrange": cmd("sharing order"),
+  "link.spaces.notify": cmd("sharing notify"),
+  ...each("link.spaces.seen link.spaces.here", no("phone's own")),
+  "link.team.setLinkSharing": cmd("sharing links"),
   // Sections on the Chats screen ("chat-sections-v1"): a person's own way to group their chats.
   "link.chats.addSection": cmd("chats sections add"),
   "link.chats.renameSection": cmd("chats sections rename"),
@@ -238,7 +306,7 @@ export const LINK = {
   "link.chats.setSection": cmd("chats sections set"),
   // Admin mode is each owner device's own way of looking: the command line shows everything, as an owner with it on.
   "link.team.setAdminMode": no("phone's own"),
-  // A phone's way to the computer's saved credentials and password managers. The owner at the terminal uses the app's own calls for them (part d).
+  // A phone's way to the computer's saved credentials and password managers. The owner at the terminal has the commands of the app's own calls for what a command covers; the rest needs a person at the app.
   ...each("link.credentials.check link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.save link.credentials.unlock link.credentials.vaults", no("phone's own")),
   ...each("link.device.answer link.device.file link.device.sources link.upload link.pullRequests", no("phone's own")),
   ...each("link.push.activity link.push.prefs link.push.presence link.push.register link.push.test link.push.unregister", no("phone's own")),
@@ -261,6 +329,8 @@ export const CHANGES = {
   "devices.rename": 0,
   "devices.setPerson": 0,
   "devices.remove": 0,
+  // An answer to a request that waits in a chat: the chat's id, the kind of the request (one of four fixed words) and yes or no. Never the request's text or the answer's, never a value.
+  "chat.respond": (args, value) => (value?.chatId && ["permission", "secure", "question", "form"].includes(value.kind) && ["yes", "no"].includes(value.answered) ? value.chatId + " " + value.kind + " " + value.answered : (value?.chatId ?? null)),
   "bots.add": (args) => args?.[0]?.name,
   "bots.edit": 0,
   "bots.remove": 0,
@@ -345,8 +415,8 @@ export const CHANGES = {
   "routines.edit": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
   "routines.remove": (args, value) => value?.name ?? args?.[0],
   "routines.duplicate": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
-  // A chat's own schedule (a prompt it set with /every or /after): the chat's title. The line does not say pause or delete.
-  "routines.schedule": (args, value) => value?.chat ?? args?.[0],
+  // A chat's own schedule (a prompt it set with /every or /after): the chat's title, and what was done (pause, resume or delete).
+  "routines.schedule": (args, value) => (["pause", "resume", "delete"].includes(value?.action) ? levelOf(value.chat ?? args?.[0], value.action) : (value?.chat ?? args?.[0])),
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
   // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
   "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
@@ -385,11 +455,84 @@ export const CHANGES = {
   // An export is kept among the artifacts of the first bot: the scope, and the page it started from.
   "wiki.export": (args) => (args?.[0]?.scope === "all" ? "all pages" : args?.[0]?.page),
   // ── Preferences, usage, the cache and the Mac tools (control-prefs.mjs) ──
+  // The key (a name in the list of preferences), never its value. The one exception is a switch that gives bots more room (`FIXED_WORDS`):
+  // its new value is one of a few fixed words, so its line has it ("approval to all", "teamwork to on"). A failure has the key only.
+  "preferences.set": (args, value) => fixedWord(value?.key, value?.value) ?? value?.key ?? (typeof args?.[0] === "string" && /^[A-Za-z][A-Za-z.]{0,39}$/.test(args[0]) ? args[0] : null),
+  "cache.clear": null,
+  // The tool, and the level that it has now (off, read or interact: a Mac tool's level says what bots may do on this computer). A failure has the tool only.
+  "macTools.set": (args, value) => (["imessage", "mail"].includes(value?.tool) && ["off", "read", "interact"].includes(value.levels?.[value.tool]) ? value.tool + " to " + value.levels[value.tool] : value?.tool ?? (["imessage", "mail"].includes(args?.[0]) ? args[0] : null)),
   // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
+  // A saved credential or a vault entry by its name (the answer has it, whether the caller gave its name or its id). Never a value, a user name or a note.
+  "credentials.save": (args, value) => value?.name ?? args?.[0]?.name,
+  "credentials.edit": (args, value) => value?.name ?? args?.[0],
+  "credentials.remove": (args, value) => value?.name ?? args?.[0],
+  "credentials.vaultRemove": (args, value) => value?.name ?? args?.[0],
+  // The line says that the vault was reset, and only when it was: a refused reset is a "Tried" line that does not say so.
+  "credentials.vaultReset": (args, value) => (value?.reset === true ? "the vault was reset" : null),
+  "credentials.managerLock": (args, value) => value?.id ?? args?.[0],
+  // The provider as the caller named it; the command that runs is the provider's own and is never in the line.
+  "providers.install": 0,
+  // The provider and the model service: `opencode/anthropic`.
+  "providers.disconnectService": (args, value) => value?.provider && value?.service ? value.provider + "/" + value.service : typeof args?.[0] === "string" && typeof args?.[1] === "string" ? args[0] + "/" + args[1] : null,
   // ── Voice (control-voice.mjs) ──
+  // The sections that were in the change (stt, tts, live), and the provider of an address that changed (`openai address`). Never a choice, a value or an address: an address can carry a token in its path.
+  "voice.set": (args, value) => {
+    const patch = args?.[0] && typeof args[0] === "object" ? args[0] : {};
+    const providers = patch.providers && typeof patch.providers === "object" ? Object.keys(patch.providers) : [];
+    return some(value ? [...(value.changed ?? []), ...(value.addressChanged ?? []).map((name) => name + " address")] : [...Object.keys(patch).filter((name) => ["stt", "tts", "live"].includes(name)), ...providers.filter((name) => ["openai", "azure", "custom"].includes(name)).map((name) => name + " address")]);
+  },
+  // The provider's name only. The key is the second argument and is never read here; on a failure only a known name is used.
+  "voice.key": (args, value) => value?.provider ?? (["openai", "azure", "elevenlabs", "gemini", "custom"].includes(args?.[0]) ? args[0] : null),
+  // ── Spaces and panels (control-spaces.mjs) ──
+  // (A space is named by its name, which the answer has: a person's own name for it. A panel and a card are by their ids, never by a title: that is a bot's text. Never a note, a state value, a routine's prompt or a message.)
+  "space.add": (args, value) => value?.name ?? args?.[0],
+  "space.rename": (args, value) => value?.name ?? args?.[0],
+  "space.remove": (args, value) => value?.name ?? args?.[0],
+  "space.project": (args, value) => value?.name ?? args?.[0],
+  // A question to a bot starts a turn: by the space.
+  "space.ask": (args, value) => value?.space?.name ?? args?.[0],
+  "panel.new": (args, value) => value?.space?.name ?? args?.[0]?.space,
+  "panel.ask": (args, value) => value?.panel?.id,
+  "panel.change": (args, value) => (value?.id ? value.id + " (" + value.action + ")" : null),
+  "panel.remove": (args, value) => value?.removed,
+  "panel.move": (args, value) => value?.id,
+  "panel.project": (args, value) => value?.id,
+  "panel.refresh": (args, value) => value?.id,
+  // A routine that runs often says so, as a bot's routine does: `<id> (each 5 minutes)`.
+  "panel.routine.set": (args, value) => (value?.id ? value.id + (value.routine?.fastMinutes ? " (each " + (value.routine.fastMinutes === 1 ? "minute" : value.routine.fastMinutes + " minutes") + ")" : "") : null),
+  "panel.routine.pause": (args, value) => value?.id,
+  "panel.routine.resume": (args, value) => (value?.id ? value.id + (value.routine?.fastMinutes ? " (each " + (value.routine.fastMinutes === 1 ? "minute" : value.routine.fastMinutes + " minutes") + ")" : "") : null),
+  "panel.routine.remove": (args, value) => value?.id,
+  "panel.state": (args, value) => value?.panel?.id,
+  "panel.note": (args, value) => value?.panel?.id,
+  "panel.noteRemove": (args, value) => value?.panel?.id,
+  "card.act": (args, value) => (value?.card?.id ? value.card.id + " (" + value.action + ")" : null),
+  // ── Sharing a space (control-sharing.mjs) ──
+  // By the space's name and the level it got: `Launch (link)`, `Launch (all members)`. A name that cannot be in a line leaves the level alone. Never the link, a person's name or a note.
+  "sharing.set": (args, value) => levelOf(value?.name ?? args?.[0], { private: "private", members: "picked people", team: "all members" }[value?.access ?? args?.[1]?.access]),
+  "sharing.link": (args, value) => levelOf(value?.name ?? args?.[0], "link"),
+  "sharing.setLinks": (args) => (args?.[0] === true ? "on" : args?.[0] === false ? "off" : null),
+  "sharing.order": null,
+  "sharing.pin": (args, value) => value?.name ?? args?.[0],
+  "sharing.notify": (args, value) => value?.name ?? args?.[0],
+  // ── The team (control-team.mjs) ──
+  // By the id of the role, group, member, invite or request: never a name (a member's name is what a stranger typed), and never an invite's code or link.
+  "team.rename": null,
+  "team.saveRole": (args, value) => value?.id,
+  "team.removeRole": (args, value) => value?.id,
+  "team.saveGroup": (args, value) => value?.id,
+  "team.removeGroup": (args, value) => value?.id,
+  "team.invite": (args, value) => value?.id,
+  "team.revokeInvite": (args, value) => value?.id,
+  "team.approve": (args, value) => value?.member?.id ?? value?.id,
+  "team.deny": (args, value) => value?.id,
+  "team.moveMember": (args, value) => value?.id,
+  "team.removeMember": (args, value) => value?.id,
+  "team.inviteToChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
+  "team.removeFromChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
@@ -397,9 +540,15 @@ export const MORE_READS = {
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
-  prefs: [],
-  credentials: [],
-  voice: [],
+  prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
+  credentials: ["credentials.list", "credentials.check", "credentials.vault", "credentials.managers", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"], // (`credentials.check` reads a value on this computer and drops it.)
+  voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
+  // (Spaces and panels)
+  spaces: ["space.list", "space.get", "panel.list", "panel.get", "panel.routine.review", "card.list", "card.get"],
+  // (Sharing a space)
+  sharing: ["sharing.list", "sharing.get"],
+  // (The team)
+  team: ["team.get", "team.roles", "team.role", "team.groups", "team.invites", "team.requests", "team.members", "team.chatPeople", "team.look"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 
@@ -417,6 +566,19 @@ const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4
 
 /** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. It uses the short list (shown-text.mjs): a bot named with a flag or a family emoji is still in its line, and a name with a control character or a mark that turns text around is not. */
 export const thingForLog = (value) => (typeof value === "string" && value.length >= 1 && value.length <= 80 && !hasUnplain(value) ? value : null);
+/** The preference switches that give bots more room, and the new value as one of a few fixed words (null for any other value). */
+const onOff = (value) => (typeof value === "boolean" ? (value ? "on" : "off") : null);
+const FIXED_WORDS = {
+  approval: (value) => (["ask", "read", "assisted", "all"].includes(value) ? value : null),
+  "access.allBots": onOff,
+  teamwork: onOff,
+};
+const fixedWord = (key, value) => {
+  const word = typeof key === "string" && Object.hasOwn(FIXED_WORDS, key) ? FIXED_WORDS[key](value) : null;
+  return word ? key + " to " + word : null;
+};
+/** A space's name with the level it was given, for one line: `Launch (link)`. A name that cannot be in a line leaves the level alone. */
+const levelOf = (name, level) => (level ? (thingForLog(name) && name.length <= 80 - level.length - 3 ? name + " (" + level + ")" : "(" + level + ")") : thingForLog(name) ? name : null);
 /** A routine's name with how often it runs, for a routine that runs often: `Check (each 5 minutes)`. */
 const withRate = (name, minutes) => {
   const rate = "(each " + (minutes === 1 ? "minute" : minutes + " minutes") + ")";

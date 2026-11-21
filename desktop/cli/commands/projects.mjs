@@ -445,7 +445,7 @@ export const projectsCommands = {
       start: {
         summary: "Start a task now: a turn of its bot's model",
         usage: "botkins tasks start <task>",
-        details: "This starts a turn of the model of the task's bot now, in a chat of its own. The bot reads the task and works on it with its tools. A tool that needs an approval waits for a person. When the reply ends, the task moves to review. The task needs a bot. A task that is working already is left as it is.",
+        details: "This starts a turn of the model of the task's bot now, in a chat of its own. A model turn can cost money. The bot reads the task and works on it with its tools. A tool that needs an approval waits for a person. When the reply ends, the task moves to review. The task needs a bot. A task that is working already is left as it is.",
         async run(context) {
           const ref = one(context, "Name the task (its title or id).");
           const before = await context.client.call("tasks.get", ref);

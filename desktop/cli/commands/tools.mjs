@@ -309,7 +309,7 @@ export const tools = {
             const signIn = o["client-id"] !== undefined || o.scope !== undefined;
             data = { name, type: o.sse ? "sse" : "http", url: o.url, headers: values.headers, ...(signIn && { oauth: { clientId: o["client-id"], scope: o.scope, ...(values.clientSecret && { clientSecret: values.clientSecret }) } }) };
           }
-          context.print(await context.client.call("tools.add", data), (tool) => "Added " + safe(tool.name) + ". Every bot has it now; `botkins bots tools <bot> --off " + shellWord(tool.name, "<the tool>") + "` takes it from one. Try it with `botkins tools test " + shellWord(tool.name, "<the tool>") + "`." + (hasUnshown(tool.name) ? " Take the tool's name from `botkins tools list --json`: it has a character that cannot be written in a command." : ""));
+          context.print(await context.client.call("tools.add", data, { agreed: o.command !== undefined }), (tool) => "Added " + safe(tool.name) + ". Every bot has it now; `botkins bots tools <bot> --off " + shellWord(tool.name, "<the tool>") + "` takes it from one. Try it with `botkins tools test " + shellWord(tool.name, "<the tool>") + "`." + (hasUnshown(tool.name) ? " Take the tool's name from `botkins tools list --json`: it has a character that cannot be written in a command." : ""));
         },
       },
       edit: {
@@ -338,6 +338,8 @@ export const tools = {
           const env = namesOnly(o.env, ENV_NAME, "--env", "API_KEY");
           const headers = namesOnly(o.header, HEADER_NAME, "--header", "Authorization");
           const patch = {};
+          // The mark that the person said yes: it is set only after the question above (the service refuses without it).
+          let agreed = false;
           if (o.name !== undefined) patch.name = o.name;
           if (local) {
             const line = [o.command ?? before.command, ...(newArgs ?? before.args)];
@@ -346,6 +348,7 @@ export const tools = {
             // line, another folder, or an environment value that is new, changed or taken away
             // (NODE_OPTIONS, LD_PRELOAD and PATH change what a program does as much as its line).
             if (JSON.stringify(line) !== JSON.stringify(before.runs) || (o.cwd !== undefined && o.cwd !== (before.cwd ?? "")) || env.length || gone.length) {
+              agreed = true;
               const names = [...new Set([...before.env.filter((name) => !gone.includes(name)), ...env])];
               if (!(await mayRun(context, { name: o.name ?? before.name, runs: line, cwd: o.cwd ?? before.cwd, env: names }))) return EXIT.failed;
             }
@@ -362,7 +365,7 @@ export const tools = {
             else if (o["client-id"] !== undefined || o.scope !== undefined || values.clientSecret) patch.oauth = { ...(o["client-id"] !== undefined && { clientId: o["client-id"] }), ...(o.scope !== undefined && { scope: o.scope }), ...(values.clientSecret && { clientSecret: values.clientSecret }) };
           }
           if (!Object.keys(patch).length) throw usage("Say what to change. `botkins help tools edit` lists the options.");
-          context.print(await context.client.call("tools.edit", before.id, patch), (tool) => "Saved " + tool.name + ".");
+          context.print(await context.client.call("tools.edit", before.id, patch, { agreed }), (tool) => "Saved " + tool.name + ".");
         },
       },
       remove: {
@@ -382,8 +385,9 @@ export const tools = {
         details: "A tool that is a program is shown before it is turned on, and needs your yes.",
         async run(context) {
           const tool = await context.client.call("tools.get", one(context, "Name the tool (its name or id)."));
-          if (tool.kind === "command" && !tool.enabled && !(await mayRun(context, tool))) return EXIT.failed;
-          context.print(await context.client.call("tools.enable", tool.id, true), (now) => now.name + " is on.");
+          const asked = tool.kind === "command" && !tool.enabled;
+          if (asked && !(await mayRun(context, tool))) return EXIT.failed;
+          context.print(await context.client.call("tools.enable", tool.id, true, { agreed: asked }), (now) => now.name + " is on.");
         },
       },
       disable: {
@@ -400,13 +404,15 @@ export const tools = {
         details: "A tool that is a program is started for this, as it is for a bot. One that is switched off is shown first and needs your yes, as `tools enable` does. The command ends with 1 when the tool did not connect.",
         async run(context) {
           const tool = await context.client.call("tools.get", one(context, "Name the tool (its name or id)."));
+          let agreed = false;
           if (tool.kind === "command") {
             // One that is on was approved when it was added or switched on. One that is off was not, or not as it is now.
             if (!tool.enabled) {
               if (!(await mayRun(context, tool))) return EXIT.failed;
+              agreed = true;
             } else show(context, "Starting: " + shown(tool.runs));
           }
-          const result = await context.client.call("tools.test", tool.id);
+          const result = await context.client.call("tools.test", tool.id, { agreed });
           context.print(result, (done) => safe(done.name) + ": " + done.status + (done.tools?.length ? "\n" + done.tools.map((name) => "  " + safe(name)).join("\n") : ""));
           return result.status === "connected" ? EXIT.ok : EXIT.failed;
         },
@@ -440,7 +446,7 @@ export const tools = {
           const programs = fresh.filter((tool) => tool.kind === "command");
           show(context, ["This file adds " + (fresh.length === 1 ? "this tool" : "these " + fresh.length + " tools") + ":", ...fresh.flatMap((tool) => (tool.kind === "command" ? programLines(tool) : ["  " + safe(tool.name) + ": reaches " + safe(tool.url), ...(tool.headers.length ? ["      with the headers " + tool.headers.map(safe).join(", ")] : [])])), ...(programs.length ? [(programs.length === 1 ? "One of them starts a program" : programs.length + " of them start programs") + " on this computer, as the user that runs Botkins. " + WHERE] : []), ...(taken.length ? ["Left out, because the name is taken: " + taken.map(safe).join(", ") + "."] : [])].join("\n"));
           if (!(await confirm(context, "Add " + (fresh.length === 1 ? "it" : "these " + fresh.length + " tools") + (programs.length ? " and let Botkins start " + (programs.length === 1 ? "the program" : "the " + programs.length + " programs") : "") + "?"))) return EXIT.failed;
-          context.print(await context.client.call("tools.import", json), (result) => (result.added.length ? "Added " + result.added.map(safe).join(", ") + "." : "Nothing was added.") + (result.skipped.length ? " Left out: " + result.skipped.map(safe).join(", ") + " (the name is taken, or the limit of 50 tools is reached)." : ""));
+          context.print(await context.client.call("tools.import", json, { agreed: programs.length > 0 }), (result) => (result.added.length ? "Added " + result.added.map(safe).join(", ") + "." : "Nothing was added.") + (result.skipped.length ? " Left out: " + result.skipped.map(safe).join(", ") + " (the name is taken, or the limit of 50 tools is reached)." : ""));
         },
       },
       "sign-in": {

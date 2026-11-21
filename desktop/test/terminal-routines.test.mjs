@@ -350,9 +350,9 @@ test("`routines schedules` and `routines schedule` list and change what chats sc
   assert.equal(ownChat.schedules.length, 2);
   assert.equal((await botkins(["routines", "schedule", own.id, "5", "pause"])).exit, 0);
   await botkins(["routines", "remove", "Own", "--yes"]);
-  // The log names the call and the chat; it does not say what was done to it, and holds no prompt.
+  // The log names the call, the chat and what was done (one of three words), and holds no prompt.
   const logged = (await changes()).filter((line) => line.startsWith("routines.schedule"));
-  assert.deepEqual(logged.slice(0, 3), ["routines.schedule Daily standup", "routines.schedule Daily standup", "routines.schedule Daily standup"]);
+  assert.deepEqual(logged.slice(0, 3), ["routines.schedule Daily standup (pause)", "routines.schedule Daily standup (resume)", "routines.schedule Daily standup (delete)"]);
   assert.equal(JSON.stringify(await changes()).includes("Post the standup"), false);
 });
 

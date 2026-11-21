@@ -35,6 +35,17 @@ function pick(list, ref, what, see) {
 /** What a tool starts on this computer, as one line, or null for a web address. */
 export const runs = (server) => (server.type === "stdio" || (!server.type && !server.url) || server.type === "local" ? [server.command, ...(server.args ?? [])] : null);
 
+/** Does this input of the app's own form start a program on this computer? */
+const startsProgram = (input) => !!input && typeof input === "object" && typeof input.command === "string" && runs(input) !== null;
+/**
+ * A change that starts a program is shown to the person first. The socket cannot show anything, so it takes the
+ * caller's word: `agreed: true` says that the caller showed the line and got a yes (the command line does: `--yes`,
+ * or the question at a terminal). Without it the call is refused.
+ */
+const needAgreed = (options, what) => {
+  if (options?.agreed !== true) throw new ControlError(what + " starts a program on this computer, as the user that runs Botkins. Show the person the line that will run, and give `agreed: true` (on the command line, `--yes`).", "NEEDS_YES");
+};
+
 /**
  * Starts the sign-in of a tool on the web through a browser on any device, for a tool of the list
  * the person added (Integrations) and for a tool of a plugin (Plugins): both sign in, take the
@@ -137,16 +148,21 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
     // ── Tools (MCP servers) ──
     "tools.list": () => servers().map(toolView),
     "tools.get": ([ref]) => toolView(tool(ref)),
-    /** A new tool. `data` is the app's own form: { name, command, args?, cwd?, env? } or { name, url, type?, headers?, oauth? }. */
-    async "tools.add"([data = {}]) {
+    /**
+     * A new tool. `data` is the app's own form: { name, command, args?, cwd?, env? } or { name, url, type?, headers?, oauth? }.
+     * A tool that is a program needs `options.agreed: true`.
+     */
+    async "tools.add"([data = {}, options]) {
       if (data?.id !== undefined) throw new ControlError("A new tool has no id. Use `tools.edit` to change one.", "BAD_ARGUMENT");
+      if (startsProgram(data)) needAgreed(options, "A tool with a command");
       return toolView(tool(await handlers.saveMcpServer(data)));
     },
     /**
      * Changes a tool. `patch` holds only what changes. `env` and `headers` are { NAME: value } to
      * set a value and { NAME: false } to take a name away; every other stored value is kept.
+     * A change to what a program starts (its line, its folder, an environment value) needs `options.agreed: true`.
      */
-    async "tools.edit"([ref, patch = {}]) {
+    async "tools.edit"([ref, patch = {}, options]) {
       const found = tool(ref);
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
       const input = asInput(found.id);
@@ -164,6 +180,11 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       if (input.type === "stdio") input.env = merge(input.env, patch.env, "environment values");
       else input.headers = merge(input.headers, patch.headers, "headers");
       if (patch.oauth !== undefined) input.oauth = patch.oauth === null ? null : { ...(input.oauth ?? {}), ...patch.oauth };
+      if (startsProgram(input)) {
+        const before = toolView(found);
+        const same = before.kind === "command" && JSON.stringify([input.command, ...(input.args ?? [])]) === JSON.stringify(before.runs) && (input.cwd ?? "") === (before.cwd ?? "") && !Object.keys(patch.env ?? {}).length;
+        if (!same) needAgreed(options, "This change to \"" + found.name + "\"");
+      }
       await handlers.saveMcpServer(input);
       return toolView(tool(found.id));
     },
@@ -172,21 +193,25 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       await handlers.removeMcpServer(found.id);
       return { removed: found.id, name: found.name };
     },
-    async "tools.enable"([ref, on]) {
+    /** Turning on a tool that is a program needs `options.agreed: true`. */
+    async "tools.enable"([ref, on, options]) {
       const found = tool(ref);
+      if (on === true && found.enabled === false && runs(found)) needAgreed(options, "Turning on \"" + found.name + "\"");
       await handlers.setMcpServerEnabled(found.id, on === true);
       return toolView(tool(found.id));
     },
-    /** Connects the tool once and lists what it offers. A tool that is a command is started for it. */
-    async "tools.test"([ref]) {
+    /** Connects the tool once and lists what it offers. A tool that is a command is started for it; one that is switched off needs `options.agreed: true`. */
+    async "tools.test"([ref, options]) {
       const found = tool(ref);
+      if (found.enabled === false && runs(found)) needAgreed(options, "Testing \"" + found.name + "\"");
       return { id: found.id, name: found.name, ...(await handlers.testMcpServer(found.id)) };
     },
     /** What a file of tools holds, before anything is saved: each one's name, and what it would start or reach. No value is answered. */
     "tools.import.preview": ([json]) => importPreview(json),
-    /** Adds the tools of a file. The answer names what was added and left out, and `starts`: each added tool that is a program, with its line, its folder and the names of its environment values. */
-    async "tools.import"([json]) {
+    /** Adds the tools of a file; one that is a program and is new needs `options.agreed: true`. The answer names what was added and left out, and `starts`: each added tool that is a program, with its line, its folder and the names of its environment values. */
+    async "tools.import"([json, options]) {
       const listed = importPreview(json);
+      if (listed.some((entry) => entry.kind === "command" && !entry.exists)) needAgreed(options, "This file");
       const result = await handlers.importMcpServers(json);
       return { ...result, starts: listed.filter((entry) => entry.kind === "command" && result.added.includes(entry.name)).map(({ name, runs: line, cwd, env }) => ({ name, runs: line, ...(cwd && { cwd }), env })) };
     },

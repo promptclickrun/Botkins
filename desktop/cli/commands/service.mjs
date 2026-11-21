@@ -86,6 +86,8 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
     const socketMode = existsSync(paths.socket) ? mode(paths.socket) : null;
     checks.push(check("Control socket", socketMode === null || (socketMode & 0o077) === 0, socketMode === null ? paths.socket : paths.socket + " is mode " + socketMode.toString(8) + (socketMode & 0o077 ? ": other users can reach the service." : ", this user only."), socketMode !== null && socketMode & 0o077 ? "chmod 600 '" + paths.socket + "'" : undefined));
     checks.push(check("Secrets at rest", seen.vault.locked ? false : seen.secrets.source === "file" ? null : true, seen.vault.locked ? "The credential vault can't be opened with this host key." : "The vault's key and the phone link's are wrapped by the host key from the " + seen.secrets.where + "." + (seen.secrets.source === "file" ? " A key file protects a copy of the data folder only when it is kept outside it." : ""), seen.vault.locked ? "Put the earlier host key back, or reset the vault from a paired phone (Settings › Credentials)." : undefined));
+    // What a bot's shell finds: the service asked it of itself, in the way a bot's shell does (desktop/terminal/reach.mjs).
+    if (seen.botShell) checks.push(check("A bot's shell", seen.botShell.ok, seen.botShell.ok ? "Finds `botkins` at " + seen.botShell.launcher + ", and it reaches this service (process " + seen.botShell.pid + ")." : seen.botShell.problem, seen.botShell.ok ? undefined : "Restart Botkins: it makes the command and BOTKINS_SOCKET for its bots when it starts."));
     checks.push(check("Phone link", seen.link.locked ? false : seen.link.enabled ? seen.link.listening : null, seen.link.locked ? "The link's identity can't be opened with this host key, so phone access is off." : !seen.link.enabled ? "Phone access is off." : seen.link.listening ? "Listening on port " + seen.link.port + "." : "Phone access is on, and the link is not listening on port " + (config?.link.port ?? "") + ".", seen.link.enabled && !seen.link.listening ? "Another program may hold the port. See `botkins logs`, or choose another with `botkins config set link.port`." : !seen.link.enabled ? "`botkins config set link.enabled true`" : undefined));
     for (const provider of seen.providers) {
       if (!provider.enabled) continue;
@@ -143,7 +145,7 @@ export const service = {
       process.umask(0o077);
       const trial = context.options.trial === true || context.env.BOTKINS_TRIAL === "1";
       const { terminalUpdates } = await import("../../desktop/terminal/updates.mjs").catch(() => ({}));
-      const running = await startService({ paths: context.paths, version: context.version, trial, out: context.env.BOTKINS_QUIET === "1" ? undefined : (line) => context.stdout.write(line), console: true, updates: terminalUpdates, env: context.env });
+      const running = await startService({ paths: context.paths, version: context.version, trial, reach: true, out: context.env.BOTKINS_QUIET === "1" ? undefined : (line) => context.stdout.write(line), console: true, updates: terminalUpdates, env: context.env });
       return new Promise((resolve) => {
         let asked = false;
         // The service has saved its work and closed what it had open. The process ends now, even

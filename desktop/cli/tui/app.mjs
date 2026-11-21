@@ -9,7 +9,17 @@
 // only draws a few lists. The host this runs on may have 1 GB in all. The screen here is a
 // header, six lists and a line of keys, so it is drawn with plain escape sequences and Node's own
 // key events, with no dependency.
+//
+// The six tabs and their one-key edits are what the dashboard had first. The commands screen (the
+// `:` key) is the way in to everything else: it lists the areas of the command line from the command
+// tree, shows an area's state by running its list command with --json, and runs a command that the
+// person writes as a line of text. The command is the real one, run as it would be from the shell:
+// the dashboard never adds a flag to it and never answers a question of it.
 import { emitKeypressEvents } from "node:readline";
+import { PassThrough, Writable } from "node:stream";
+import { plainText } from "../../desktop/shown-text.mjs";
+import { COMMANDS } from "../commands/index.mjs";
+import { areasOf, editLine, leavesOf, listOf, rowsOf, splitLine, startLine } from "./menu.mjs";
 import { KEYS, render, TABS } from "./view.mjs";
 
 const MAX_LOGS = 2000;
@@ -20,9 +30,12 @@ const CSI = "\u001b[";
  * @param options.write   (text) → the terminal.
  * @param options.size    () → { width, height }.
  * @param options.colors  False for a terminal without them.
+ * @param options.commands The command tree (cli/commands/index.mjs COMMANDS).
+ * @param options.read    (words) → { exit, out, err }: runs a command with no terminal and keeps what it prints (for a list).
+ * @param options.exec    (words) → exit code: runs a command in the person's terminal, which the dashboard has left until it ends.
  * @returns { state, start(), stop(), key(input), refresh(), frame(), idle() }
  */
-export function createApp({ client, write, size, colors = true, now = () => Date.now() }) {
+export function createApp({ client, write, size, colors = true, now = () => Date.now(), commands = COMMANDS, read: readCommand, exec }) {
   const state = { tab: "Overview", selected: 0, logs: [], follow: true, scroll: 0, now: now() };
   let running = false;
   let revision = 0;
@@ -37,7 +50,7 @@ export function createApp({ client, write, size, colors = true, now = () => Date
   const frame = () => render({ ...state, now: now() }, size(), { colors });
   let last = "";
   const draw = () => {
-    if (!running) return;
+    if (!running || state.away) return;
     const text = frame().join("\r\n");
     if (text === last) return;
     last = text;
@@ -193,6 +206,108 @@ export function createApp({ client, write, size, colors = true, now = () => Date
     Routines: { r: "runRoutine", space: "toggleRoutine" },
     Logs: {},
   };
+  // ---- The commands screen.
+  const openMenu = () => {
+    state.menu = { level: "areas", areas: areasOf(commands), selected: 0, view: "state", row: 0, picked: 0 };
+    draw();
+  };
+  /** The state of the open area: what its list command says, read by running that command with --json. */
+  async function loadArea() {
+    const menu = state.menu;
+    if (menu?.level !== "area" && menu?.level !== "command") return;
+    if (!menu.list || !readCommand) return;
+    const word = menu.word;
+    if (!menu.data) menu.data = { loading: true };
+    draw();
+    let data;
+    try {
+      const result = await readCommand([...menu.list.path, "--json"]);
+      let value;
+      try {
+        value = JSON.parse(result.out);
+      } catch {
+        value = undefined;
+      }
+      if (result.exit !== 0) data = { error: value?.error?.message ?? (result.err.trim() || "The command ended with exit code " + result.exit + ".") };
+      else if (value === undefined) data = { error: "The command printed nothing that can be shown here. Run it with its own line." };
+      else data = rowsOf(value, now());
+    } catch (error) {
+      data = { error: String(error?.message ?? error) };
+    }
+    if (state.menu !== menu || menu.word !== word) return;
+    menu.data = data;
+    menu.row = Math.max(0, Math.min(menu.row, (data.rows?.length ?? 1) - 1));
+    draw();
+  }
+  function openArea(area) {
+    const leaves = leavesOf(area);
+    Object.assign(state.menu, { level: "area", word: area.word, leaves, list: listOf(leaves), data: null, view: "state", row: 0, picked: 0, chosen: null, last: null });
+    // An area that is one command (`status`) goes straight to its line.
+    if (area.command.run) return openCommand(leaves[0]);
+    if (!state.menu.list) state.menu.view = "commands";
+    track(loadArea());
+  }
+  function openCommand(leaf) {
+    const { menu } = state;
+    // The row that the person picked in the state list gives its name to the line.
+    const text = startLine(leaf, menu.chosen);
+    Object.assign(menu, { level: "command", leaf, line: { text, cursor: text.length }, last: null });
+  }
+  /** Runs the line. The dashboard leaves its screen; the command has the terminal until it ends. */
+  async function runLine() {
+    const { menu } = state;
+    const parsed = splitLine(menu.line.text);
+    if (parsed.error) return fail(parsed.error);
+    if (parsed.words[0] === "tui") return fail("The dashboard is open already.");
+    if (!exec) return fail("This dashboard cannot run a command.");
+    state.away = true;
+    let code;
+    try {
+      code = await exec(parsed.words);
+    } catch (error) {
+      code = 1;
+    }
+    state.away = false;
+    last = "";
+    menu.last = { words: parsed.words.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word))).join(" "), exit: code };
+    draw();
+    // What the command changed shows in the state again.
+    await Promise.all([refresh(), loadArea()]);
+  }
+  /** One key on the commands screen. */
+  function menuKey({ name, ch, ctrl }) {
+    const menu = state.menu;
+    const up = name === "up" ? -1 : name === "down" ? 1 : 0;
+    const enter = name === "return" || name === "enter";
+    if (menu.level === "command") {
+      if (enter) track(runLine().catch(fail));
+      else editLine(menu.line, { name, ch, ctrl });
+    } else if (menu.level === "areas") {
+      menu.selected = Math.max(0, Math.min(menu.areas.length - 1, menu.selected + up));
+      if (enter) openArea(menu.areas[menu.selected]);
+    } else if (name === "tab" || name === "left" || name === "right") {
+      if (menu.list) Object.assign(menu, { view: menu.view === "state" ? "commands" : "state", chosen: null });
+    } else if (menu.view === "state") {
+      const count = menu.data?.rows?.length ?? 0;
+      menu.row = Math.max(0, Math.min(count - 1, menu.row + up));
+      if (enter && count) Object.assign(menu, { view: "commands", chosen: menu.data.rows[menu.row] });
+      else if (ch === "r") track(loadArea());
+    } else {
+      menu.picked = Math.max(0, Math.min(menu.leaves.length - 1, menu.picked + up));
+      if (enter && menu.leaves[menu.picked]) openCommand(menu.leaves[menu.picked]);
+    }
+    draw();
+  }
+  /** Esc: one step back. */
+  function menuBack() {
+    const menu = state.menu;
+    if (menu.level === "command") {
+      // An area that is one command has no screen of its own to go back to.
+      menu.level = menu.leaves.length === 1 && menu.leaves[0].path.length === 1 ? "areas" : "area";
+    } else if (menu.level === "area") menu.level = "areas";
+    else state.menu = null;
+  }
+
   const run = (name) =>
     track(
       Promise.resolve()
@@ -225,6 +340,7 @@ export function createApp({ client, write, size, colors = true, now = () => Date
     if (name === "escape") {
       if (state.help) state.help = false;
       else if (state.overlay) state.overlay = null;
+      else if (state.menu) menuBack();
       else if (state.reading) state.reading = null;
       return void draw();
     }
@@ -233,7 +349,19 @@ export function createApp({ client, write, size, colors = true, now = () => Date
       Object.assign(state, { help: false, overlay: null });
       return void draw();
     }
+    if (state.menu) {
+      // In a line being written, `q` and `?` are letters.
+      if (state.menu.level !== "command") {
+        if (ch === "q") return "quit";
+        if (ch === "?") {
+          state.help = true;
+          return void draw();
+        }
+      }
+      return void menuKey({ name, ch, ctrl });
+    }
     if (ch === "q") return "quit";
+    if (ch === ":") return void openMenu();
     if (ch === "?") state.help = true;
     else if (ch >= "1" && ch <= String(TABS.length)) Object.assign(state, { tab: TABS[Number(ch) - 1], selected: 0, reading: null });
     else if (name === "right" || name === "tab") Object.assign(state, { tab: TABS[(TABS.indexOf(state.tab) + 1) % TABS.length], selected: 0, reading: null });
@@ -258,6 +386,8 @@ export function createApp({ client, write, size, colors = true, now = () => Date
       try {
         ({ revision } = await client.call("events.wait", revision));
         if (running) await refresh();
+        // A change from anywhere (a phone, a bot, a command) shows in the open area too.
+        if (running && !state.away && state.menu?.level === "area") await loadArea();
       } catch {
         if (running) await Promise.all([refresh(), new Promise((resolve) => setTimeout(resolve, 2000))]);
       }
@@ -308,34 +438,79 @@ export function createApp({ client, write, size, colors = true, now = () => Date
   };
 }
 
-/** Runs the dashboard on a real terminal until the person quits. */
-export function runDashboard({ client, stdin, stdout, env = process.env }) {
+/**
+ * Runs the dashboard on a real terminal until the person quits.
+ * @param options.run  (words, io) → exit code: runs one command as `botkins <words>` would, on the streams in `io`.
+ */
+export function runDashboard({ client, stdin, stdout, stderr = process.stderr, env = process.env, run }) {
   return new Promise((resolve) => {
     const colors = !env.NO_COLOR && env.TERM !== "dumb";
-    const app = createApp({ client, write: (text) => stdout.write(text), size: () => ({ width: stdout.columns || 80, height: stdout.rows || 24 }), colors });
-    const leave = () => {
-      app.stop();
+    // A list: the command runs with no terminal, and what it prints is kept.
+    const read = async (words) => {
+      let out = "";
+      let err = "";
+      const sink = (take) => new Writable({ write: (chunk, _encoding, done) => (take(String(chunk)), done()) });
+      const input = new PassThrough();
+      input.end();
+      const exit = await run(words, { stdin: input, stdout: sink((text) => void (out += text)), stderr: sink((text) => void (err += text)) });
+      return { exit, out, err };
+    };
+    const app = createApp({ client, write: (text) => stdout.write(text), size: () => ({ width: stdout.columns || 80, height: stdout.rows || 24 }), colors, read, exec });
+    let away = false;
+    const enter = () => {
+      // Its own screen, with no cursor; the one before comes back on the way out.
+      stdout.write(CSI + "?1049h" + CSI + "?25l" + CSI + "2J");
+      stdin.setRawMode?.(true);
+      stdin.resume();
+      stdin.on("keypress", onKey);
+    };
+    const step = () => {
       stdin.off("keypress", onKey);
-      stdout.off("resize", onResize);
       stdin.setRawMode?.(false);
       stdin.pause();
-      // Back to the terminal as it was: the cursor, and the screen that was there before.
       stdout.write(CSI + "?25h" + CSI + "?1049l");
+    };
+    const leave = () => {
+      app.stop();
+      stdout.off("resize", onResize);
+      step();
       resolve(0);
     };
+    /**
+     * A command of the commands screen. The dashboard steps aside: the command has the terminal, as if it
+     * were typed in the shell, so a question is asked and a hidden answer stays hidden. The dashboard
+     * answers nothing and adds no flag. When the command ends, a key brings the dashboard back.
+     */
+    async function exec(words) {
+      away = true;
+      step();
+      stdout.write("$ botkins " + words.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(plainText(word)))).join(" ") + "\n");
+      let code;
+      try {
+        code = await run(words, { stdin, stdout, stderr });
+      } catch (error) {
+        stderr.write("botkins: " + plainText(String(error?.message ?? error)) + "\n");
+        code = 1;
+      }
+      stdout.write("\nThe command ended with exit code " + code + ". Press a key to go back to the dashboard.\n");
+      stdin.setRawMode?.(true);
+      stdin.resume();
+      await new Promise((done) => stdin.once("keypress", done));
+      stdin.pause();
+      away = false;
+      enter();
+      return code;
+    }
     const onKey = (ch, info = {}) => {
       if (app.key({ name: info.name, ch, ctrl: info.ctrl }) === "quit") leave();
     };
     const onResize = () => {
+      if (away) return;
       stdout.write(CSI + "2J");
       app.draw();
     };
-    // Its own screen, with no cursor; the one before comes back on the way out.
-    stdout.write(CSI + "?1049h" + CSI + "?25l" + CSI + "2J");
     emitKeypressEvents(stdin);
-    stdin.setRawMode?.(true);
-    stdin.resume();
-    stdin.on("keypress", onKey);
+    enter();
     stdout.on("resize", onResize);
     process.once("SIGTERM", leave);
     void app.start();

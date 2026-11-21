@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { injectorFor } from "../link/input.mjs";
 import { REMOTE_METHODS } from "../link/methods.mjs";
 import { callContext } from "./backend.mjs";
+import { LOOK_LIMIT } from "./space-events.mjs";
 import { listenWorkspace } from "./transport.mjs";
 
 export function workspaceActions(backend, inject) {
@@ -16,8 +17,8 @@ export function workspaceActions(backend, inject) {
     async state(known, teamRev) {
       const displays = await backend.screen.displays().catch(() => []);
       const version = epoch + "/" + revision;
-      // What people did in a space since the last look: told once, then forgotten (headless/space-events.mjs).
-      const spaceEvents = backend.takeSpaceEvents?.() ?? [];
+      // What people did in a space since the last look: told once, then forgotten. One look takes at most LOOK_LIMIT; the rest wait for the next (headless/space-events.mjs).
+      const spaceEvents = backend.takeSpaceEvents?.(LOOK_LIMIT) ?? [];
       return {
         version, display: displays.some((d) => d.width > 0 && d.height > 0),
         team: backend.teamCut?.heard(teamRev) ?? null,

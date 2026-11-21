@@ -18,7 +18,7 @@ version=$2
 
 # One word for each area the image's command line must have. A pull request that adds an area
 # to the command line adds its word here.
-areas="artifacts bots chat chats config devices folders models pair plugins projects providers relay routines service skills status tasks templates todos tools update wiki"
+areas="artifacts bots cache cards chat chats config credentials devices doctor folders logs mac-tools models pair panels password-managers plugins preferences projects providers relay routines serve service sharing skills spaces status stop tasks team templates todos tools tui update usage vault voice wiki"
 
 name=botkins-check-$$
 status=$(mktemp)

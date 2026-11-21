@@ -300,7 +300,7 @@ test("a name is a name: a word with a value in it is refused before anything is 
   await botkins(["tools", "add", "ok", "--url", "https://x.example.com"]);
   assert.equal((await botkins(["tools", "edit", "ok", "--header", "Authorization: Bearer " + SECRET])).exit, 2);
   await assert.rejects(client.call("tools.add", { name: "direct", url: "https://x.example.com", headers: { ["Authorization: Bearer " + SECRET]: "v" } }), /A header is given by its name only, such as Authorization\./);
-  await assert.rejects(client.call("tools.add", { name: "direct", command: "node", env: { ["API_KEY=" + SECRET]: "v" } }), (error) => !error.message.includes(SECRET));
+  await assert.rejects(client.call("tools.add", { name: "direct", command: "node", env: { ["API_KEY=" + SECRET]: "v" } }, { agreed: true }), (error) => !error.message.includes(SECRET));
   assert.deepEqual((await client.call("tools.list")).map((tool) => tool.name), ["ok"]);
   assert.equal(everything().includes(SECRET), false);
 
@@ -366,8 +366,8 @@ test("a folder that is a plugin is not taken as a folder of skills, and two skil
   mkdirSync(join(hooked, "hooks"), { recursive: true });
   writeFileSync(join(hooked, "plugin.json"), JSON.stringify({ name: "hooked" }));
   writeFileSync(join(hooked, "hooks", "hooks.json"), JSON.stringify({ hooks: { sessionStart: [{ command: "touch /tmp/hooked" }] } }));
-  // (Not through `call`: the call of the app is covered by `skills add-folder`, so `call` refuses it.)
-  await assert.rejects(client.call("call", "addSkillFolderAt", [hooked]), { code: "NOT_FOR_CALL", message: /`addSkillFolderAt` is done by `botkins skills add-folder`\./ });
+  // (The socket has no way to the app's raw call: `call` is not a method of the service.)
+  await assert.rejects(client.call("call", "addSkillFolderAt", [hooked]), { code: "UNKNOWN_METHOD" });
   const sent = await running.runtime.handlers.addSkillFolderAt(hooked);
   assert.deepEqual([sent.kind, sent.name, sent.enabled], ["plugin", "hooked", false]);
   const [installed] = await client.call("plugins.list");
@@ -399,6 +399,31 @@ async function fake(answers, argv) {
   const exit = await main(argv, { stdout: sink((text) => void (out += text)), stderr: sink((text) => void (err += text)), stdin, env: {}, client });
   return { exit, out, err };
 }
+
+test("the socket's own calls refuse a change that starts a program unless the caller marks that it agreed", { skip }, async (t) => {
+  const { client, botkins, put } = await service(t);
+  const refused = /needs a yes|starts a program on this computer/;
+  const file = JSON.stringify({ mcpServers: { local: { command: "node", args: ["a.js"] } } });
+  // Nothing that starts a program goes in with no mark: not an add, not an import.
+  await assert.rejects(client.call("tools.add", { name: "prog", command: "node", args: ["a.js"] }), refused);
+  await assert.rejects(client.call("tools.import", file), refused);
+  assert.deepEqual(await client.call("tools.list"), []);
+  // With the mark it goes in. A web address needs none.
+  assert.equal((await client.call("tools.add", { name: "prog", command: "node", args: ["a.js"] }, { agreed: true })).kind, "command");
+  assert.equal((await client.call("tools.add", { name: "site", url: "https://x.example.com" })).kind, "web");
+  // A change of what runs needs it; a change of the name or a switch off does not; a switch on needs it again.
+  await assert.rejects(client.call("tools.edit", "prog", { args: ["b.js"] }), refused);
+  await assert.rejects(client.call("tools.edit", "prog", { env: { NODE_OPTIONS: "x" } }), refused);
+  assert.equal((await client.call("tools.edit", "prog", { name: "renamed" })).name, "renamed");
+  assert.equal((await client.call("tools.edit", "renamed", { args: ["b.js"] }, { agreed: true })).runs[1], "b.js");
+  assert.equal((await client.call("tools.enable", "renamed", false)).enabled, false);
+  await assert.rejects(client.call("tools.enable", "renamed", true), refused);
+  await assert.rejects(client.call("tools.test", "renamed"), refused);
+  assert.equal((await client.call("tools.enable", "renamed", true, { agreed: true })).enabled, true);
+  // The command line sends the mark only after the yes.
+  assert.equal((await botkins(["tools", "add", "viaCli", "--command", "node", "--yes"])).exit, 0);
+  assert.equal((await botkins(["tools", "import", put("f.json", JSON.stringify({ mcpServers: { more: { command: "node" } } })), "--yes"])).exit, 0);
+});
 
 test("a word of a command that Botkins prints for someone to run is quoted for a shell, and a word that cannot be written has no runnable form", { skip }, async () => {
   const turn = String.fromCodePoint(0x202e);
