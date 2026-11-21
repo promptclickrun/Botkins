@@ -360,7 +360,7 @@ BOTKINS_PAIR_ADDRESS=192.168.1.20
 
 To keep the host key out of the data volume, give it as a Compose secret. The comments in `docker-compose.yml` show the lines.
 
-The earlier setup, with an Electron workspace on a virtual display, is still there for a phone that must see and control a screen. Start it with `docker compose --profile display up -d`. See [the display setup](../desktop/README.md). The two setups keep separate data. Run only one of them.
+The earlier setup, with an Electron workspace on a virtual display, is still there for a phone that must see and control a screen. Start it with `docker compose --profile display up -d host workspace`. The command names the two services, because a `docker compose up` without them also starts the terminal host. See [the display setup](../desktop/README.md). The two setups keep separate data. Run only one of them.
 
 ## Scripts and JSON
 
@@ -383,6 +383,46 @@ If a command fails, it prints one sentence on standard error. With `--json`, it 
 | 4 | This user has no permission to talk to the service. |
 
 Each command talks to the service through a Unix socket, `run/botkins.sock` in the data folder. To use a different data folder, add `--data-dir <dir>` or set `BOTKINS_DATA_DIR`.
+
+## For agents
+
+The command line has two readers: a person, and an agent that changes Botkins because its person asked. An agent is a bot of this host with a shell, or a coding agent that runs on the server. This part is for the second reader.
+
+**Find a command without the source.** `botkins help --json` prints each command as data. `botkins help bots --json` prints one area, and `botkins help bots edit --json` one command.
+
+```json
+{ "botkins": "0.16.6",
+  "usage": "botkins <command> [options]",
+  "everyCommand": [{ "name": "--json", "takes": null, "about": "…" }],
+  "exit": [{ "code": 0, "means": "Done." }],
+  "areas": [{ "name": "bots", "summary": "…", "commands": [
+    { "command": "bots edit", "path": ["bots", "edit"], "summary": "…",
+      "usage": "botkins bots edit <bot> [--name <text>] …",
+      "arguments": [{ "name": "bot", "required": true }],
+      "options": [{ "name": "--instructions-file", "takes": "path", "about": "…" }] }] }] }
+```
+
+- An option with `"takes": null` is a switch. An argument with `"many": true` can be given more than one time.
+- A command with `asks` puts a question to a person at a terminal. With no terminal it does not ask: it fails with exit code 2 and one sentence that names the flag that answers the question (`--yes`).
+- The shape is kept. Fields are added to it; a field is not renamed or removed.
+
+**Use each command with no terminal.** Add `--json`: the answer is one JSON document on standard output, and a failure is `{"error": {"message": "…", "code": "…"}}` with a non-zero exit code. A long value comes from a file (`--instructions-file <path>`). Name a thing by its id when you have one; a name works when only one thing has it.
+
+**A secret is never a word on the command line.** A command line shows in the process list and in the shell's history. A command that takes a secret reads it from standard input or from a hidden prompt (`botkins providers login <provider> --token`). No command prints one.
+
+**A change leaves a line in the log.** Each call that changes something writes one line when it is done: `Changed from the command line: bots.edit Nova`. The line names the call and the thing. It never has a value. Thus a person can see afterwards (`botkins logs`) what an agent changed.
+
+**What an agent can do here.** A program that runs as the service's user is the owner already (see the security model below). These commands give it nothing that it could not do. They make it easy and they put it on record.
+
+### The rule that keeps the command line complete
+
+What a person can do in the app's window, a person or an agent can do from a terminal, unless it needs the window itself. One table holds this: `desktop/desktop/terminal/coverage.mjs`. Each call that the window can make, and each call of the phone link, has one entry there:
+
+- the command that does it, or
+- one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), or it is a phone's own (its notifications, the screen it is shown), or
+- the part of the work that still owes its command. This third kind goes away when the last part is done.
+
+`test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason. The test's output says how many calls each part still owes.
 
 ## Security model
 

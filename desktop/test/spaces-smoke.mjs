@@ -3,7 +3,8 @@
 // `spaces` and the team's people, `spaces.read` answers a space's content, and every other spaces
 // call is recorded and answered as the contract says. Changes reach the window as the app sends
 // them, on "changed". Set SPACES_SHOTS to a folder for pictures at 1040 px wide: a space in light,
-// and its Share popover in dark. Names are invented.
+// its Share popover in dark, a panel pulled by its corner, and a project's "Spaces and panels" with
+// Attach open. Names are invented.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,6 +64,11 @@ writeFileSync(
     chats,
     runs: [],
     projects: [{ id: "p_web", name: "Website relaunch", color: "blue", todos: [], lastUsed: now, createdAt: now }],
+    // A single panel attached to the project, as the project page shows it under its spaces.
+    panels: [
+      { id: "p_speed", key: "page-speed", botId: "morel", chatId: "chat-morel", title: "Page speed", hidden: false, size: "small", revision: 1, updatedAt: now - 30 * MIN, routine: null, projectId: "p_web",
+        blocks: [{ type: "metric", label: "Score", value: "94", note: "Up 6 since Monday" }] },
+    ],
     frames: [
       { id: checklistFrame, owner: "panel:p_check", botId: "luna", createdAt: now },
       { id: pricingFrame, owner: "panel:p_price", botId: "pip", createdAt: now },
@@ -159,7 +165,10 @@ try {
     const window = BrowserWindow.getAllWindows()[0];
     const t = (globalThis.__spaces = { ...fixture, calls: [], refuse: null });
     const real = ipcMain._invokeHandlers.get("snapshot");
-    const team = (s) => ({ name: "Studio", roles: [], groups: [], members: [], invites: [], requests: [], ...(s.team ?? {}), people: t.people });
+    const team = (s) => {
+      const own = s.team ?? {};
+      return { name: "Studio", groups: [], members: [], invites: [], requests: [], ...own, roles: own.roles?.length ? own.roles : t.roles, people: t.people, linkSharing: t.linkSharing };
+    };
     const add = (s) => (s && typeof s === "object" ? { ...s, spaces: t.spaces, team: team(s) } : s);
     ipcMain.removeHandler("snapshot");
     ipcMain.handle("snapshot", async (e, ...args) => add(await real(e, ...args)));
@@ -201,8 +210,46 @@ try {
         t.spaces = order.map((id) => ({ ...find(id), pinned: pinned.includes(id) }));
       },
       "link.spaces.notify": (id, mode) => void (find(id).notify = mode),
+      // A panel leaves its space and goes in front of `before`, or to the end.
+      "spaces.movePanel": (panelId, { spaceId, before }) => {
+        const from = Object.values(t.content).find((c) => c.panels.some((p) => p.id === panelId));
+        const panel = from.panels.find((p) => p.id === panelId);
+        from.panels = from.panels.filter((p) => p !== panel);
+        const to = (t.content[spaceId] ??= { id: spaceId, seenAt: 0, panels: [], cards: [] });
+        const at = before ? to.panels.findIndex((p) => p.id === before) : -1;
+        to.panels.splice(at < 0 ? to.panels.length : at, 0, { ...panel, spaceId });
+        for (const id of new Set([from.id, spaceId])) {
+          find(id).count = t.content[id].panels.length;
+          bump(find(id));
+        }
+      },
+      "spaces.note": (panelId, text) => {
+        const c = Object.values(t.content).find((c) => c.panels.some((p) => p.id === panelId));
+        const panel = c.panels.find((p) => p.id === panelId);
+        const id = "n" + (t.notes = (t.notes ?? 2) + 1);
+        panel.notes = [...(panel.notes ?? []), { id, by: "owner", name: "Studio Mac", text, at: Date.now() }];
+        bump(find(c.id));
+        return id;
+      },
+      "spaces.removeNote": (panelId, noteId) => {
+        const c = Object.values(t.content).find((c) => c.panels.some((p) => p.id === panelId));
+        const panel = c.panels.find((p) => p.id === panelId);
+        panel.notes = panel.notes.filter((n) => n.id !== noteId);
+        bump(find(c.id));
+      },
+      "spaces.setProject": (id, projectId) => {
+        if (projectId) find(id).projectId = projectId;
+        else delete find(id).projectId;
+      },
+      "link.team.setLinkSharing": (on) => void (t.linkSharing = on),
+      // The computer's own call for a panel's size and order, for the panels the stand-in holds.
+      changePanel: (panelId, action) => {
+        const c = Object.values(t.content).find((c) => c.panels.some((p) => p.id === panelId));
+        if (["small", "wide", "tall"].includes(action)) c.panels.find((p) => p.id === panelId).size = action;
+        bump(find(c.id));
+      },
     };
-    const names = ["spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject", "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote", "link.spaces.share", "link.spaces.newLink", "link.spaces.arrange", "link.spaces.seen", "link.spaces.notify", "link.spaces.here", "link.team.setLinkSharing"];
+    const names = ["changePanel", "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject", "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote", "link.spaces.share", "link.spaces.newLink", "link.spaces.arrange", "link.spaces.seen", "link.spaces.notify", "link.spaces.here", "link.team.setLinkSharing"];
     for (const name of names) {
       ipcMain.removeHandler(name);
       ipcMain.handle(name, async (_e, ...args) => {
@@ -221,7 +268,7 @@ try {
     for (const name of ["phoneLink", "copyText"]) ipcMain.removeHandler(name);
     ipcMain.handle("phoneLink", () => ({ enabled: false, listening: false, port: 0, name: "Studio Mac", addresses: [], devices: [], pairing: null }));
     ipcMain.handle("copyText", (_e, text) => void t.calls.push(["copyText", text]));
-  }, { spaces, content, people: [owner, maya, dev] });
+  }, { spaces, content, people: [owner, maya, dev], linkSharing: false, roles: [{ id: "r_member", name: "Member", perms: { agents: ["view", "chat"], today: ["view", "use"], skills: [], mcp: [], plugins: [], settings: [] }, bots: "all" }] });
   await win.reload();
   win = await skipWelcome(win);
   await size(1040, 720);
@@ -374,6 +421,23 @@ try {
   await expect.poll(() => callsOf("link.spaces.here")).toContainEqual([null]);
   console.log("The ask bar asks the first panel's bot and opens its chat; leaving the space says so.");
 
+  // ---- An app panel opens large, with "Ask <bot> to change it" under it; a panel that is not an app has no Open.
+  await menu.getByRole("button", { name: "Launch", exact: true }).click();
+  await expect(win.getByRole("button", { name: "Open Signups" })).toHaveCount(0);
+  await win.getByRole("button", { name: "Open Launch checklist" }).click();
+  const openedPanel = win.getByRole("dialog", { name: "Launch checklist" });
+  await expect(openedPanel.getByRole("heading", { name: "Launch checklist" })).toBeVisible();
+  await expect(openedPanel.locator(".space-app")).toHaveText("App");
+  await expect(openedPanel.locator(".html-frame")).not.toHaveClass(/loading/);
+  if (shots) await win.screenshot({ path: join(shots, "space-panel-opened-light.png") });
+  await clearCalls();
+  const askLuna = openedPanel.getByRole("textbox", { name: "Ask Luna to change it" });
+  await askLuna.fill("Add a row for the press release");
+  await askLuna.press("Enter");
+  await expect.poll(() => callsOf("spaces.ask")).toEqual([[{ spaceId: "s_launch", botId: "luna", text: "Add a row for the press release", panelId: "p_check" }]]);
+  await expect(win.locator(".chathead h2")).toHaveText("Luna");
+  console.log("An app panel opens large; asking there is about that panel and goes to its bot.");
+
   // ---- Add panel: the sheet "New panel".
   await menu.getByRole("button", { name: "Launch", exact: true }).click();
   await head.getByRole("button", { name: "Add panel", exact: true }).click();
@@ -389,6 +453,277 @@ try {
   await expect.poll(() => callsOf("spaces.newPanel")).toEqual([[{ spaceId: "s_launch", botId: "luna", prompt: "A countdown to launch day", start: "checklist" }]]);
   await expect(win.locator(".chathead h2")).toHaveText("Luna");
   console.log("Add panel opens New panel and makes one from a sentence, a bot and a start.");
+
+  // ---- Arranging, with no edit mode. What the stand-in holds now is put back afterwards, so the
+  // checks after this block see the spaces as they were.
+  await app.evaluate(() => {
+    const t = globalThis.__spaces;
+    t.saved = structuredClone({ spaces: t.spaces, content: t.content });
+  });
+  const pinnedNow = ["s_today", "s_feed", "s_money", "s_ideas", "s_goals", "s_launch"];
+  const restOrder = ["s_reading", "s_trip", "s_maya_today"];
+  // Dragging a pinned space in the side menu: a line shows where it lands; dropping sends the new order.
+  await clearCalls();
+  const spaceRow = (name) => menu.getByRole("button", { name, exact: true });
+  await spaceRow("Launch").dragTo(spaceRow("Feed"), { targetPosition: { x: 30, y: 3 } });
+  await expect.poll(() => callsOf("link.spaces.arrange")).toEqual([
+    [{ order: ["s_today", "s_launch", "s_feed", "s_money", "s_ideas", "s_goals", ...restOrder], pinned: ["s_today", "s_launch", "s_feed", "s_money", "s_ideas", "s_goals"] }],
+  ]);
+  await expect(menu.getByRole("button")).toHaveText(["Today", "Launch", "Feed", "Money", "Ideas", "Goals", "All spaces"]);
+  // The line while dragging: shown on the row it lands next to, and gone after.
+  const ideasBox = await spaceRow("Ideas").boundingBox();
+  const goalsBox = await spaceRow("Goals").boundingBox();
+  await win.mouse.move(ideasBox.x + 30, ideasBox.y + ideasBox.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(goalsBox.x + 30, goalsBox.y + goalsBox.height - 3, { steps: 6 });
+  await expect(spaceRow("Goals")).toHaveAttribute("data-drop", "after");
+  await win.mouse.up();
+  await expect.poll(async () => (await callsOf("link.spaces.arrange")).at(-1)?.[0].pinned).toEqual(["s_today", "s_launch", "s_feed", "s_money", "s_goals", "s_ideas"]);
+  await expect(menu.locator("[data-drop]")).toHaveCount(0);
+  // Move up and Move down, from the row's menu.
+  await spaceRow("Launch").click({ button: "right" });
+  await win.getByRole("menuitem", { name: "Move down", exact: true }).click();
+  await expect.poll(async () => (await callsOf("link.spaces.arrange")).at(-1)?.[0].pinned).toEqual(["s_today", "s_feed", "s_launch", "s_money", "s_goals", "s_ideas"]);
+  await spaceRow("Launch").click({ button: "right" });
+  await win.getByRole("menuitem", { name: "Move up", exact: true }).click();
+  await expect.poll(async () => (await callsOf("link.spaces.arrange")).at(-1)?.[0].pinned).toEqual(["s_today", "s_launch", "s_feed", "s_money", "s_goals", "s_ideas"]);
+  await spaceRow("Today").click({ button: "right" });
+  await expect(win.getByRole("menuitem", { name: "Move up", exact: true })).toBeDisabled();
+  await win.keyboard.press("Escape");
+  console.log("Spaces are dragged up and down the side menu with a line where they land; Move up and Move down work too.");
+
+  // Dragging a panel by its header: the panel is the dashed slot where it lands, and dropping says in front of which.
+  // Tall enough for every panel of Launch to be in view at once.
+  await size(1040, 940);
+  await spaceRow("Launch").click();
+  await expect(panels).toHaveCount(5);
+  await clearCalls();
+  // By its title as text: a panel being dragged hides its content, so its heading is not a heading then.
+  const card = (title) => panels.filter({ has: win.locator("h2", { hasText: new RegExp("^" + title + "$") }) });
+  const titles = () => win.locator(".space-page .live-panel > h2").allTextContents();
+  // The order the grid shows, by CSS order while dragging.
+  const shownTitles = () =>
+    win.evaluate(() =>
+      [...document.querySelectorAll(".space-page .live-panel")]
+        .map((el, i) => [Number(getComputedStyle(el).order) || 0, i, el.querySelector("h2").textContent])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+        .map((x) => x[2]),
+    );
+  // The custom views settle their heights first; then the boxes stay where they are measured.
+  await expect(win.locator(".space-page iframe")).toHaveCount(2);
+  await win.waitForTimeout(800);
+  const grab = await card("Open pull requests").locator(".panel-top small").boundingBox();
+  await win.mouse.move(grab.x + 4, grab.y + grab.height / 2);
+  await win.mouse.down();
+  const daysBox = await card("Days to launch").boundingBox();
+  await win.mouse.move(daysBox.x + 24, daysBox.y + daysBox.height / 2, { steps: 8 });
+  // A browser sends dragover while the pointer rests; the test sends one more after the slot moved under it.
+  await win.mouse.move(daysBox.x + 28, daysBox.y + daysBox.height / 2, { steps: 2 });
+  await expect(win.locator(".space-page .panel-slot")).toHaveCount(1);
+  await expect(card("Open pull requests")).toHaveClass(/panel-slot/);
+  assert.deepEqual(await shownTitles(), ["Signups", "Open pull requests", "Days to launch", "Launch checklist", "Pricing calculator"]);
+  await win.mouse.up();
+  await expect.poll(() => callsOf("spaces.movePanel")).toEqual([["p_prs", { spaceId: "s_launch", before: "p_days" }]]);
+  await expect.poll(titles).toEqual(["Signups", "Open pull requests", "Days to launch", "Launch checklist", "Pricing calculator"]);
+  await expect(win.locator(".space-page .panel-slot")).toHaveCount(0);
+  // The header's buttons and the views inside a panel still take clicks.
+  await card("Days to launch").getByRole("button", { name: "Manage Days to launch" }).click();
+  await expect(win.locator("dialog[open]").getByRole("button", { name: /Earlier/ })).toBeVisible();
+  await win.locator("dialog[open]").getByRole("button", { name: "Close dialog" }).click();
+  console.log("A panel is dragged by its header to another slot; the dashed slot shows where, and movePanel names the panel after it.");
+
+  // Pulling a corner: Small, Wide or Tall, the one it snaps to marked; letting go sets it.
+  const days = card("Days to launch");
+  await days.hover();
+  const corner = days.getByRole("slider", { name: "Size of Days to launch" });
+  await expect(corner).toHaveAttribute("aria-valuetext", "Small");
+  const c = await corner.boundingBox();
+  const gridBox = await win.locator(".space-page .panel-grid").boundingBox();
+  await win.mouse.move(c.x + c.width / 2, c.y + c.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(gridBox.x + gridBox.width - 6, c.y + c.height / 2, { steps: 8 });
+  await expect(days.locator(".panel-sizes span")).toHaveText(["Small", "Wide", "Tall"]);
+  await expect(days.locator(".panel-sizes .on")).toHaveText("Wide");
+  await expect(days).toHaveClass(/\bwide\b/);
+  if (shots) {
+    await win.waitForTimeout(300);
+    await win.screenshot({ path: join(shots, "space-resize-light.png") });
+  }
+  await win.mouse.up();
+  await expect.poll(() => callsOf("changePanel")).toEqual([["p_days", "wide"]]);
+  await expect(days.locator(".panel-sizes")).toHaveCount(0);
+  await expect(days).toHaveClass(/\bwide\b/);
+  // With the keyboard: arrow keys on the focused corner.
+  const signupsCorner = card("Signups").getByRole("slider", { name: "Size of Signups" });
+  await signupsCorner.focus();
+  await expect(signupsCorner).toBeVisible();
+  await win.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await callsOf("changePanel")).at(-1)).toEqual(["p_signups", "wide"]);
+  await expect(signupsCorner).toHaveAttribute("aria-valuetext", "Wide");
+  await signupsCorner.focus();
+  await win.keyboard.press("ArrowLeft");
+  await expect.poll(async () => (await callsOf("changePanel")).at(-1)).toEqual(["p_signups", "small"]);
+  console.log("Pulling a corner snaps to Small, Wide or Tall and sets it on letting go; arrow keys do it too.");
+
+  // Moving a panel to another space, from its ⋯; into a space shared by link, after the question.
+  await clearCalls();
+  await card("Pricing calculator").getByRole("button", { name: "Manage Pricing calculator" }).click();
+  const manage = win.locator("dialog[open]");
+  const where = manage.getByRole("combobox", { name: "Space" });
+  await expect(where).toHaveValue("s_launch");
+  await expect(where.locator("option")).not.toContainText(["Maya's Today"]);
+  await where.selectOption({ label: "Money" });
+  await expect.poll(() => callsOf("spaces.movePanel")).toEqual([["p_price", { spaceId: "s_money", before: null }]]);
+  await expect(card("Pricing calculator")).toHaveCount(0);
+  await change(() => void (globalThis.__spaces.spaces.find((s) => s.id === "s_reading").access = "link"));
+  await card("Open pull requests").getByRole("button", { name: "Manage Open pull requests" }).click();
+  await manage.getByRole("combobox", { name: "Space" }).selectOption({ label: "Reading list" });
+  const linkQuestion = win.getByRole("dialog", { name: "Move to Reading list?" });
+  await expect(linkQuestion).toContainText("Anyone with the link will see this panel.");
+  await linkQuestion.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal((await callsOf("spaces.movePanel")).length, 1, "nothing moves before the question is answered");
+  await manage.getByRole("combobox", { name: "Space" }).selectOption({ label: "Reading list" });
+  await win.getByRole("dialog", { name: "Move to Reading list?" }).getByRole("button", { name: "Move", exact: true }).click();
+  await expect.poll(async () => (await callsOf("spaces.movePanel")).at(-1)).toEqual(["p_prs", { spaceId: "s_reading", before: null }]);
+  await expect(card("Open pull requests")).toHaveCount(0);
+  console.log("A panel moves to another space from its ⋯, and into a link-shared one only after the question.");
+
+  // New panel: the rows Space and Refresh.
+  await clearCalls();
+  await head.getByRole("button", { name: "Add panel", exact: true }).click();
+  await expect(sheet.getByRole("combobox", { name: "Space" })).toHaveValue("s_launch");
+  await sheet.getByLabel("What should it show?").fill("Signups by day");
+  await sheet.getByRole("combobox", { name: "Bot" }).selectOption({ label: "Pip" });
+  await sheet.getByRole("combobox", { name: "Space" }).selectOption({ label: "Money" });
+  await expect(sheet.getByRole("combobox", { name: "Refresh" }).locator("option")).toHaveText(["Off", "On a schedule"]);
+  await sheet.getByRole("combobox", { name: "Refresh" }).selectOption("on");
+  await expect(sheet.getByRole("radiogroup", { name: "Repeats" })).toBeVisible();
+  await sheet.getByLabel("Time zone").fill("UTC");
+  await sheet.getByRole("button", { name: "Create", exact: true }).click();
+  await expect.poll(() => callsOf("spaces.newPanel")).toEqual([
+    [{ spaceId: "s_money", botId: "pip", prompt: "Signups by day", refresh: { cron: "0 9 * * 1-5", timezone: "UTC" } }],
+  ]);
+  console.log("New panel sends the chosen space and a refresh schedule.");
+
+  // Notes: the count opens them; a note is added and removed.
+  await spaceRow("Launch").click();
+  await clearCalls();
+  await card("Launch checklist").getByRole("button", { name: "2 notes" }).click();
+  const notes = win.getByRole("dialog", { name: "Launch checklist" });
+  await expect(notes.getByRole("heading", { level: 2 })).toHaveText("Launch checklist");
+  await expect(notes.getByRole("heading", { level: 3 })).toHaveText("Notes");
+  const noteRows = notes.getByRole("list", { name: "Notes" }).getByRole("listitem");
+  await expect(noteRows).toHaveCount(2);
+  await expect(noteRows.first()).toContainText("Maya");
+  await expect(noteRows.first()).toContainText("3m");
+  await expect(noteRows.first()).toContainText("Press kit is in the drive.");
+  // The owner removes any note.
+  await expect(notes.getByRole("button", { name: /^Remove the note from / })).toHaveCount(2);
+  await notes.getByRole("textbox", { name: "Write a note" }).fill("Booked the venue.");
+  await notes.getByRole("button", { name: "Add", exact: true }).click();
+  await expect.poll(() => callsOf("spaces.note")).toEqual([["p_check", "Booked the venue."]]);
+  await expect(noteRows).toHaveCount(3);
+  await expect(noteRows.last()).toContainText("Booked the venue.");
+  await expect(notes.getByRole("textbox", { name: "Write a note" })).toHaveValue("");
+  await expect(notes.getByRole("textbox", { name: "Write a note" })).toHaveAttribute("maxlength", "2000");
+  await notes.getByRole("button", { name: "Remove the note from Maya" }).click();
+  await expect.poll(() => callsOf("spaces.removeNote")).toEqual([["p_check", "n1"]]);
+  await expect(noteRows).toHaveCount(2);
+  await notes.getByRole("button", { name: "Close dialog" }).click();
+  await expect(card("Launch checklist").getByRole("button", { name: "2 notes" })).toBeVisible();
+  // A panel with no notes gets its first from its ⋯.
+  await card("Signups").getByRole("button", { name: "Manage Signups" }).click();
+  await manage.getByRole("button", { name: "Notes", exact: true }).click();
+  await expect(win.getByRole("dialog", { name: "Signups" }).getByRole("textbox", { name: "Write a note" })).toBeVisible();
+  await win.getByRole("dialog", { name: "Signups" }).getByRole("button", { name: "Close dialog" }).click();
+  console.log("Notes list, add and remove, and open from a panel's ⋯.");
+
+  // ---- A project's "Spaces and panels": the attached spaces as rows, then single panels; Attach.
+  await change(() => {
+    const t = globalThis.__spaces;
+    const launch = t.spaces.find((s) => s.id === "s_launch");
+    Object.assign(launch, { access: "members", count: 5, updatedAt: Date.now() - 5 * 60_000, people: [{ id: "m_maya", name: "Maya Chen", can: "edit" }, { id: "m_dev", name: "Dev Patel", can: "view" }] });
+    Object.assign(t.spaces.find((s) => s.id === "s_reading"), { projectId: "p_web", access: "private" });
+  });
+  await places.getByRole("button", { name: "Work", exact: true }).click();
+  await win.getByRole("tab", { name: "Projects", exact: true }).click();
+  await win.getByRole("button", { name: /Website relaunch/ }).click();
+  const projectMenu = win.getByRole("navigation", { name: "Project sections" });
+  await expect(projectMenu.getByRole("button", { name: /panels/i })).toHaveText(/^Spaces and panels/);
+  await projectMenu.getByRole("button", { name: /Spaces and panels/ }).click();
+  const rows = win.locator(".project-space-list .space-row");
+  await expect(rows.locator("strong")).toHaveText(["Launch", "Reading list"]);
+  await expect(rows.first().locator("small")).toHaveText("5 panels · Maya and Dev · Updated 5m");
+  await expect(rows.first().locator(".space-dot")).toHaveCount(1);
+  await expect(win.locator(".project-spaces .panel-grid .live-panel h2")).toHaveText(["Page speed"]);
+  const attach = win.getByRole("button", { name: "Attach", exact: true });
+  await attach.click();
+  const attachMenu = win.getByRole("menu", { name: "Attach" });
+  await expect(attachMenu.getByRole("menuitem")).toHaveText(["New panel…", "New space…"]);
+  await expect(attachMenu.getByText("Attach a space", { exact: true })).toBeVisible();
+  await expect(attachMenu.getByRole("menuitemcheckbox")).toHaveText(["Launch", "Money", "Reading list"]);
+  await expect(attachMenu.getByRole("menuitemcheckbox", { name: "Launch" })).toHaveAttribute("aria-checked", "true");
+  await expect(attachMenu.getByRole("menuitemcheckbox", { name: "Money" })).toHaveAttribute("aria-checked", "false");
+  if (shots) {
+    await win.waitForTimeout(300);
+    await win.screenshot({ path: join(shots, "project-attach-light.png") });
+  }
+  await clearCalls();
+  await attachMenu.getByRole("menuitemcheckbox", { name: "Money" }).click();
+  await expect.poll(() => callsOf("spaces.setProject")).toEqual([["s_money", "p_web"]]);
+  await expect(attachMenu.getByRole("menuitemcheckbox", { name: "Money" })).toHaveAttribute("aria-checked", "true");
+  await attachMenu.getByRole("menuitemcheckbox", { name: "Reading list" }).click();
+  await expect.poll(async () => (await callsOf("spaces.setProject")).at(-1)).toEqual(["s_reading", null]);
+  await expect(rows.locator("strong")).toHaveText(["Launch", "Money"]);
+  await win.keyboard.press("Escape");
+  await expect(attachMenu).toHaveCount(0);
+  // New panel… opens the sheet for the owner's Today.
+  await attach.click();
+  await attachMenu.getByRole("menuitem", { name: "New panel…" }).click();
+  await expect(sheet.getByRole("combobox", { name: "Space" })).toHaveValue("s_today");
+  await sheet.getByRole("button", { name: "Close dialog" }).click();
+  // New space… makes one, attaches it and opens it.
+  await attach.click();
+  await attachMenu.getByRole("menuitem", { name: "New space…" }).click();
+  await win.getByRole("dialog", { name: "New space" }).getByLabel("Name").fill("Research");
+  await win.getByRole("dialog", { name: "New space" }).getByRole("button", { name: "Create", exact: true }).click();
+  await expect.poll(() => callsOf("spaces.create")).toEqual([[{ name: "Research" }]]);
+  await expect.poll(async () => (await callsOf("spaces.setProject")).at(-1)).toEqual(["s_new9", "p_web"]);
+  await expect(head.getByRole("heading", { level: 1 })).toHaveText("Research");
+  await expect(head.getByRole("button", { name: "Website relaunch" })).toBeVisible();
+  console.log("A project's Spaces and panels lists its spaces and panels; Attach ticks, unticks and makes new ones.");
+
+  // ---- Team settings: the scope Today is shown as Spaces; the switch Members may share by link.
+  await clearCalls();
+  await win.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = win.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "Team", exact: true }).click();
+  const linkSwitch = settings.getByRole("switch", { name: "Members may share by link" });
+  await expect(linkSwitch).not.toBeChecked();
+  await linkSwitch.check();
+  await expect.poll(() => callsOf("link.team.setLinkSharing")).toEqual([[true]]);
+  await expect(linkSwitch).toBeChecked();
+  await app.evaluate(() => void (globalThis.__spaces.refuse = { name: "link.team.setLinkSharing", message: "Turn on the relay on your computer to share by link." }));
+  await linkSwitch.click();
+  await expect(settings.getByRole("alert")).toHaveText("Turn on the relay on your computer to share by link.");
+  await expect(linkSwitch).toBeChecked();
+  await settings.getByRole("tab", { name: "Roles", exact: true }).click();
+  await settings.getByRole("button", { name: "Edit", exact: true }).first().click();
+  await expect(settings.locator(".team-scope strong")).toContainText(["Agents", "Spaces"]);
+  await expect(settings.locator(".team-scope strong", { hasText: "Today" })).toHaveCount(0);
+  await settings.getByRole("button", { name: "Close dialog" }).click();
+  await expect(settings).toBeHidden();
+  console.log("Team settings show Spaces for the scope Today, and the switch Members may share by link.");
+
+  // Back as it was before this block.
+  await change(() => {
+    const t = globalThis.__spaces;
+    const rev = Math.max(...t.spaces.map((s) => s.rev)) + 1;
+    t.spaces = t.saved.spaces.map((s) => ({ ...s, rev }));
+    t.content = t.saved.content;
+  });
+  await expect(menu.getByRole("button")).toHaveText(["Today", "Feed", "Money", "Ideas", "Goals", "Launch", "All spaces"]);
+  await size(1040, 720);
 
   // ---- All spaces.
   await menu.getByRole("button", { name: "All spaces", exact: true }).click();
@@ -417,7 +752,9 @@ try {
   await expect(win.getByRole("textbox", { name: "Ask about this space, or describe a new panel" })).toHaveCount(0);
   await expect(win.getByRole("button", { name: "Manage Maya's week" })).toHaveCount(0);
   await expect(win.getByRole("button", { name: "Refresh Maya's week" })).toHaveCount(0);
-  console.log("A view-only space offers no Add panel, no Share, no ask bar and no panel actions.");
+  await expect(win.locator(".space-page .panel-corner")).toHaveCount(0);
+  await expect(win.locator('.space-page [draggable="true"]')).toHaveCount(0);
+  console.log("A view-only space offers no Add panel, no Share, no ask bar, no panel actions and nothing to drag or pull.");
 
   // ---- Feed draws its cards as Today's board does.
   await menu.getByRole("button", { name: "Feed", exact: true }).click();

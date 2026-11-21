@@ -453,7 +453,8 @@ export class Routines {
         target.posted = [...(target.posted ?? []), { text: text.slice(0, 6000), from: entry.name, time }].slice(-5);
         run.delivery = { to, chatId: target.id };
       } else {
-        const item = this.ws.board.post(chat.botId, { kind: to, ...boardText(text), category, source: entry.name });
+        // The card goes to the Feed, Ideas or Goals of the person the routine is: a member's routine never writes into the owner's.
+        const item = this.ws.board.post(chat.botId, { kind: to, ...boardText(text), category, source: entry.name }, this.ws.spaces.forCards(entry.createdBy ?? chat.createdBy ?? "owner", to).id);
         run.delivery = { to, itemId: item.id };
       }
     } catch (error) {

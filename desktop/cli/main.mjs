@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { controlClient, ControlError } from "../desktop/terminal/socket.mjs";
 import { CliError, EXIT, paint, usage } from "./output.mjs";
-import { COMMANDS, find, help } from "./commands/index.mjs";
+import { COMMANDS, describe, find, help } from "./commands/index.mjs";
 
 /**
  * Root becomes the user the data folder belongs to before it does anything there, so `sudo
@@ -34,9 +34,9 @@ export const version = () => JSON.parse(readFileSync(new URL("../package.json", 
 
 /** The options every command takes. */
 export const GLOBAL = {
-  json: { type: "boolean" },
-  "data-dir": { type: "string" },
-  socket: { type: "string" },
+  json: { type: "boolean", about: "Print one JSON document (a JSON line for each item of a stream)" },
+  "data-dir": { type: "string", value: "dir", about: "The data folder of the service to talk to (or BOTKINS_DATA_DIR)" },
+  socket: { type: "string", value: "path", about: "The control socket of the service to talk to" },
   help: { type: "boolean", short: "h" },
   version: { type: "boolean", short: "V" },
 };
@@ -82,6 +82,15 @@ export async function main(argv, io = {}) {
     if (!words.length || words[0] === "help") {
       const about = find(words.slice(1));
       if (words.length > 1 && !about) throw usage("There is no command `botkins " + words[1] + "`.");
+      // For a program: every command with its usage, its arguments and its options, as one document.
+      // With a command or an area named, only that part of it.
+      if (json) {
+        const all = describe(version(), GLOBAL);
+        const named = about && about.path.join(" ");
+        const areas = about ? all.areas.filter((area) => area.name === about.path[0]).map((area) => ({ ...area, commands: area.commands.filter((command) => command.command === named || command.command.startsWith(named + " ")) })) : all.areas;
+        stdout.write(JSON.stringify({ ...all, areas }) + "\n");
+        return EXIT.ok;
+      }
       stdout.write(help(about) + "\n");
       return EXIT.ok;
     }

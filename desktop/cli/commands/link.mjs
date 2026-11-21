@@ -9,7 +9,7 @@ const deviceRows = (devices) => devices.map((device) => [device.name, device.per
 export const link = {
   pair: {
     summary: "Show a pairing code (QR code, code and link) for a phone",
-    usage: "botkins pair [--ttl <minutes>] [--no-wait] [--no-qr]",
+    usage: "botkins pair [--ttl <minutes>] [--no-wait | --wait] [--no-qr]",
     options: {
       ttl: { type: "string", value: "minutes", about: "How long the code stays open, from 1 to 1440 minutes (5)" },
       "no-wait": { type: "boolean", about: "Print the code and return, without waiting for the phone" },

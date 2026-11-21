@@ -30,6 +30,8 @@ import "./workspaces.css";
 
 import { WorkBar, type WorkNav } from "./WorkBar";
 import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from "./ProjectExtras";
+import ProjectSpaces from "./ProjectSpaces";
+import { hasSpaces } from "./spaces";
 const api = window.botkins;
 const COLORS: ProjectColor[] = ["coral", "amber", "green", "teal", "blue", "violet", "pink", "gray"];
 const clean = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
@@ -49,6 +51,8 @@ export default function Projects({
   actions,
   openChat,
   botPage,
+  openSpace,
+  openNew,
   fail,
 }: {
   state: State;
@@ -58,6 +62,9 @@ export default function Projects({
   work: WorkNav;
   openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
+  /** With Spaces: opens a space, and a chat the computer just made. */
+  openSpace: (id: string) => void;
+  openNew: (chatId: string) => void;
   fail: (e: unknown) => void;
 }) {
   const [selected, setSelected] = useState(target.projectId ?? "");
@@ -75,6 +82,8 @@ export default function Projects({
           actions={actions}
           openChat={openChat}
           botPage={botPage}
+          openSpace={openSpace}
+          openNew={openNew}
           fail={fail}
         />
       ) : (
@@ -209,6 +218,8 @@ function ProjectPage({
   actions,
   openChat,
   botPage,
+  openSpace,
+  openNew,
   fail,
 }: {
   state: State;
@@ -217,6 +228,8 @@ function ProjectPage({
   actions: PageActions;
   openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
+  openSpace: (id: string) => void;
+  openNew: (chatId: string) => void;
   fail: (e: unknown) => void;
 }) {
   const [section, setSection] = useState<Section>("overview");
@@ -225,6 +238,9 @@ function ProjectPage({
   const panels = state.panels.filter((p) => p.projectId === project.id);
   const open = project.todos.filter((t) => !t.done).length;
   const allowed = state.bots.filter((b) => canUseProject(state, b, project)).length;
+  // With Spaces, Panels becomes "Spaces and panels": the attached spaces, then the single panels.
+  const spaces = hasSpaces(state);
+  const attached = spaces ? (state.spaces ?? []).filter((s) => s.projectId === project.id).length : 0;
   // Changes shows only for a folder that is a git repository.
   useEffect(() => {
     setRepo(false);
@@ -248,7 +264,7 @@ function ProjectPage({
     ["todos", "To-do", ListTodo, open ? String(open) : ""],
     ["chats", "Chats", MessagesSquare, chats.length ? String(chats.length) : ""],
     ...(hasProjectArtifacts(state) ? ([["artifacts", "Artifacts", Paperclip, project.artifacts?.length ? String(project.artifacts.length) : ""]] as [Section, string, typeof Info, string][]) : []),
-    ["panels", "Panels", LayoutDashboard, panels.length ? String(panels.length) : ""],
+    ["panels", spaces ? "Spaces and panels" : "Panels", LayoutDashboard, panels.length + attached ? String(panels.length + attached) : ""],
     ["access", "Access", ShieldCheck, globalAccess(state) ? "All" : allowed + "/" + state.bots.length],
     ...(repo ? ([["changes", "Changes", GitCompareArrows, ""]] as [Section, string, typeof Info, string][]) : []),
   ];
@@ -284,7 +300,17 @@ function ProjectPage({
         <div className="project-section">
           {section === "overview" && <Overview key={project.id} state={state} project={project} deleted={back} fail={fail} />}
           {section === "chats" && <ProjectChats state={state} project={project} chats={chats} actions={actions} openChat={openChat} botPage={botPage} />}
-          {section === "panels" && <ProjectPanels state={state} panels={panels} />}
+          {section === "panels" && !spaces && <ProjectPanels state={state} panels={panels} />}
+          {section === "panels" && spaces && (
+            <ProjectSpaces
+              state={state}
+              project={project}
+              panels={(panels.length > 0 || !attached) && <ProjectPanels state={state} panels={panels} />}
+              openSpace={openSpace}
+              openNew={openNew}
+              fail={fail}
+            />
+          )}
           {section === "todos" && <TodoList project={project} fail={fail} />}
           {section === "artifacts" && <ProjectArtifacts state={state} project={project} openChat={openChat} />}
           {section === "access" && <ProjectAccess state={state} project={project} botPage={botPage} fail={fail} />}

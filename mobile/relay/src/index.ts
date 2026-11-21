@@ -1,4 +1,5 @@
-// The Botkins relay: a Worker in front of Durable Objects for rooms and invite cards.
+// The Botkins relay: a Worker in front of Durable Objects for rooms, invite cards and the sealed
+// copies of spaces shared by link.
 //
 // The host and phone wire formats are documented in ../README.md. A v3 room retains a bounded
 // set of opaque requests for transport recovery. It never inspects their bodies. Logs contain only
@@ -7,7 +8,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "./pure.ts";
 import { handlePush } from "./push.ts";
+import { spaceFrame, spacePage } from "./space.ts";
+import spaceFrameScript from "./space-frame.js.txt";
+import spacePageScript from "./space-page.js.txt";
 import {
+  BASE64URL_22,
   BASE64URL_43,
   INVITE_ROUTE,
   MAX_MESSAGE,
@@ -25,6 +30,9 @@ import {
   REQUEST,
   ROOM_NAME,
   ROUTE,
+  SPACE_PAGE_ROUTE,
+  SPACE_PIECE,
+  SPACE_ROUTE,
   V3_FAST_HEARTBEAT,
   V3_FAST_SILENCE,
   V3_HEARTBEAT_PROBE,
@@ -32,12 +40,20 @@ import {
   V3_RECONNECT_WINDOW,
   V3_RESEAT_CLOSE,
   type InviteBody,
+  type SpaceOwnerState,
+  MAX_SPACE_BYTES_ALL,
+  admitSpace,
   checkInviteDelete,
   checkInvitePut,
+  checkSpaceDelete,
+  checkSpacePut,
   joinPage,
   plain,
   prefixed,
   readU32,
+  spaceBytes,
+  spaceGoneUntil,
+  spacePutAllowed,
   u32Bytes,
 } from "./shared.ts";
 
@@ -77,6 +93,48 @@ async function deleteInvite(request: Request, env: Env, lookup: string): Promise
   return env.INVITE.getByName(lookup).fetch(forwarded);
 }
 
+const SPACE_TIME_HEADER = "x-relay-space-time";
+const SPACE_EXPIRES_HEADER = "x-relay-space-expires";
+const SPACE_OWNER_HEADER = "x-relay-space-owner";
+
+/** A space's sealed copy: put and taken back by its computer, read by anyone with the link. */
+async function handleSpace(request: Request, env: Env, limited: boolean, network: string, shareId: string): Promise<Response> {
+  if (limited && !(await env.REQUESTS.limit({ key: network })).success) return plain("Too many requests", 429);
+  if (!BASE64URL_22.test(shareId)) return plain("Not found", 404);
+  const copy = env.SPACE.getByName(shareId);
+  if (request.method === "GET") {
+    if (limited && !(await env.SPACES.limit({ key: network })).success) return plain("Too many requests", 429);
+    return copy.fetch(new Request("https://space.internal/"));
+  }
+  if (request.method === "PUT") {
+    const checked = await checkSpacePut(request, shareId);
+    if (checked instanceof Response) return checked;
+    // How many copies one computer holds, and how often it puts one.
+    const admitted = await env.SPACE_OWNER.getByName(checked.owner).fetch(
+      new Request("https://owner.internal/admit", { method: "POST", headers: { [SPACE_OWNER_HEADER]: checked.owner }, body: JSON.stringify({ shareId, expiresAt: checked.expiresAt, size: checked.body.length }) }),
+    );
+    if (admitted.status === 507) return plain("Insufficient storage", 507);
+    if (!admitted.ok) return plain("Too many requests", 429);
+    return copy.fetch(
+      new Request("https://space.internal/", {
+        method: "PUT",
+        headers: { [SPACE_TIME_HEADER]: String(checked.time), [SPACE_EXPIRES_HEADER]: String(checked.expiresAt) },
+        body: checked.body,
+      }),
+    );
+  }
+  if (request.method === "DELETE") {
+    const checked = await checkSpaceDelete(request, shareId);
+    if (checked instanceof Response) return checked;
+    const answer = await copy.fetch(new Request("https://space.internal/", { method: "DELETE", headers: { [SPACE_TIME_HEADER]: String(checked.time) } }));
+    if (answer.status === 204 || answer.status === 404) {
+      await env.SPACE_OWNER.getByName(checked.owner).fetch(new Request("https://owner.internal/forget", { method: "POST", headers: { [SPACE_OWNER_HEADER]: checked.owner }, body: JSON.stringify({ shareId }) }));
+    }
+    return answer;
+  }
+  return plain("Not found", 404);
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -86,6 +144,8 @@ export default {
     const limited = (env.RATE_LIMITS as string) !== "off";
     // Push notifications: its own checks, in ./push.ts. It counts against the network limit first.
     if (url.pathname === "/v1/push") return handlePush(request, env, limited, network);
+    const space = SPACE_ROUTE.exec(url.pathname);
+    if (space) return handleSpace(request, env, limited, network, space[1]!);
     const invite = INVITE_ROUTE.exec(url.pathname);
     if (invite) {
       const lookup = invite[1]!;
@@ -112,6 +172,10 @@ export default {
       if (url.pathname === "/") return plain("Botkins relay. Messages pass through sealed.");
       if (url.pathname === "/v1/health") return Response.json({ ok: true });
       if (url.pathname === "/join") return joinPage();
+      // A shared space's page is the same for every id: the relay never learns what a link opens.
+      if (url.pathname === "/s/frame") return spaceFrame(spaceFrameScript);
+      const page = SPACE_PAGE_ROUTE.exec(url.pathname);
+      if (page) return BASE64URL_22.test(page[1]!) ? spacePage(spacePageScript) : plain("Not found", 404);
       if (!route || !ROOM_NAME.test(room)) return plain("Not found", 404);
       return plain("Expected a WebSocket", 426);
     }
@@ -211,6 +275,174 @@ export class Invite extends DurableObject<Env> {
   private async clear(): Promise<void> {
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+  }
+}
+
+type StoredSpace = { time: number; expiresAt: number; size: number; pieces: number };
+
+/**
+ * One space's sealed copy, named by its share id. The bytes are opaque here: the key that opens
+ * them is in the link's fragment and never reaches the relay. `gone` is the signed time of the last
+ * DELETE, kept for a while so a PUT that was on its way cannot put the space out again.
+ */
+export class Space extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    // The body is read before anything is read from storage: from the first read to the write no other
+    // request can run in between, so a DELETE is either wholly before this PUT's check or after its write.
+    const body = request.method === "PUT" ? new Uint8Array(await request.arrayBuffer()) : null;
+    const now = Date.now();
+    const storage = this.ctx.storage;
+    let held = (await storage.get<StoredSpace>("meta")) ?? null;
+    let gone = (await storage.get<number>("gone")) ?? null;
+    if (held && held.expiresAt <= now) {
+      await this.drop(held);
+      held = null;
+    }
+    if (gone !== null && spaceGoneUntil(gone) <= now) {
+      await storage.delete("gone");
+      gone = null;
+    }
+
+    if (request.method === "GET") {
+      if (!held) return plain("Not found", 404);
+      const pieces = await storage.get<Uint8Array>(pieceKeys(held.pieces));
+      const whole = new Uint8Array(held.size);
+      let at = 0;
+      for (const key of pieceKeys(held.pieces)) {
+        const piece = pieces.get(key);
+        if (!piece || at + piece.length > held.size) return plain("Not found", 404);
+        whole.set(piece, at);
+        at += piece.length;
+      }
+      if (at !== held.size) return plain("Not found", 404);
+      return new Response(whole, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+    }
+    const time = Number(request.headers.get(SPACE_TIME_HEADER));
+    if (!Number.isSafeInteger(time)) return plain("Bad request", 400);
+    if (request.method === "PUT") {
+      const expiresAt = Number(request.headers.get(SPACE_EXPIRES_HEADER));
+      if (!Number.isSafeInteger(expiresAt)) return plain("Bad request", 400);
+      if (!body || !spacePutAllowed(held?.time ?? null, gone, time)) return plain("Conflict", 409);
+      const entries: Record<string, unknown> = {};
+      const count = Math.ceil(body.length / SPACE_PIECE);
+      for (let n = 0; n < count; n++) entries["p:" + n] = body.subarray(n * SPACE_PIECE, (n + 1) * SPACE_PIECE);
+      entries.meta = { time, expiresAt, size: body.length, pieces: count } satisfies StoredSpace;
+      // One write: no await between them, so a reader sees the old copy or the new one, never a mix.
+      const writes: Promise<unknown>[] = [];
+      if (held && held.pieces > count) writes.push(storage.delete(pieceKeys(held.pieces).slice(count)));
+      writes.push(storage.put(entries));
+      await Promise.all(writes);
+      await this.settle(expiresAt, gone);
+      return new Response(null, { status: 204 });
+    }
+    if (request.method === "DELETE") {
+      if (held && time <= held.time) return plain("Conflict", 409);
+      const last = Math.max(gone ?? 0, time);
+      if (held) await this.drop(held);
+      await storage.put("gone", last);
+      await this.settle(null, last);
+      return new Response(null, { status: held ? 204 : 404 });
+    }
+    return plain("Not found", 404);
+  }
+
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    const held = (await this.ctx.storage.get<StoredSpace>("meta")) ?? null;
+    const gone = (await this.ctx.storage.get<number>("gone")) ?? null;
+    const live = held && held.expiresAt > now ? held : null;
+    const remembered = gone !== null && spaceGoneUntil(gone) > now ? gone : null;
+    if (!live && remembered === null) {
+      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAll();
+      return;
+    }
+    if (held && !live) await this.drop(held);
+    if (gone !== null && remembered === null) await this.ctx.storage.delete("gone");
+    await this.settle(live?.expiresAt ?? null, remembered);
+  }
+
+  /** Wakes when the copy ends or when the taken-back time may be forgotten, whichever is first. */
+  private async settle(expiresAt: number | null, gone: number | null): Promise<void> {
+    const times = [expiresAt, gone === null ? null : spaceGoneUntil(gone)].filter((time): time is number => time !== null);
+    if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
+  }
+
+  private async drop(held: StoredSpace): Promise<void> {
+    await this.ctx.storage.delete(["meta", ...pieceKeys(held.pieces)]);
+  }
+}
+
+const pieceKeys = (count: number) => Array.from({ length: count }, (_unused, n) => "p:" + n);
+
+/** One computer's copies, named by its relay key: how many it holds, how large they are together, and how often it puts one. */
+export class SpaceOwner extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const owner = request.headers.get(SPACE_OWNER_HEADER) ?? "";
+    const body = (await request.json()) as { shareId: string; expiresAt?: number; size?: number };
+    const state = (await this.ctx.storage.get<SpaceOwnerState>("state")) ?? null;
+    if (url.pathname === "/admit") {
+      const next = admitSpace(state, body.shareId, Number(body.expiresAt), Number(body.size) || 0, Date.now());
+      if (!next) return plain("Too many requests", 429);
+      // The relay's storage for all copies together has room for this, or the copy is not taken.
+      if (!(await this.tell(owner, next)).ok) return plain("Insufficient storage", 507);
+      await this.ctx.storage.put("state", next);
+      await this.ctx.storage.setAlarm(Math.max(...Object.values(next.live).map((copy) => copy.until)));
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === "/forget" && state && Object.hasOwn(state.live, body.shareId)) {
+      const { [body.shareId]: _gone, ...live } = state.live;
+      const next = { ...state, live };
+      await this.ctx.storage.put("state", next);
+      await this.tell(owner, next);
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  /** Tells the relay's one count of all copies what this computer holds now. */
+  private tell(owner: string, state: SpaceOwnerState): Promise<Response> {
+    const copies = Object.values(state.live);
+    return this.env.SPACE_BUDGET.getByName("all").fetch(
+      new Request("https://budget.internal/", { method: "POST", body: JSON.stringify({ owner, bytes: spaceBytes(state.live), until: Math.max(0, ...copies.map((copy) => copy.until)) }) }),
+    );
+  }
+
+  /** Nothing is kept for a computer whose copies have all ended. */
+  async alarm(): Promise<void> {
+    const state = (await this.ctx.storage.get<SpaceOwnerState>("state")) ?? null;
+    const ends = Object.values(state?.live ?? {}).map((copy) => copy.until).filter((time) => time > Date.now());
+    if (ends.length) await this.ctx.storage.setAlarm(Math.max(...ends));
+    else await this.ctx.storage.deleteAll();
+  }
+}
+
+/**
+ * How much all computers' copies take together: one object for the whole relay, asked only when a
+ * copy is put or taken back, never when one is read. A computer's row says what it holds and until
+ * when; a row is counted until then, so the count can only be too high, never too low.
+ */
+export class SpaceBudget extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS owners (owner TEXT PRIMARY KEY, bytes INTEGER NOT NULL, until INTEGER NOT NULL)");
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const { owner, bytes, until } = (await request.json()) as { owner: string; bytes: number; until: number };
+    if (typeof owner !== "string" || !owner || !Number.isSafeInteger(bytes) || !Number.isSafeInteger(until)) return plain("Bad request", 400);
+    const sql = this.ctx.storage.sql;
+    sql.exec("DELETE FROM owners WHERE until <= ?", Date.now());
+    if (bytes <= 0) {
+      sql.exec("DELETE FROM owners WHERE owner = ?", owner);
+      return new Response(null, { status: 204 });
+    }
+    const others = Number(sql.exec("SELECT COALESCE(SUM(bytes), 0) AS total FROM owners WHERE owner != ?", owner).one().total);
+    const before = Number(sql.exec("SELECT COALESCE(SUM(bytes), 0) AS total FROM owners WHERE owner = ?", owner).one().total);
+    // A computer that holds less than before is always let through, also on a full relay.
+    if (bytes > before && others + bytes > (Number(this.env.SPACE_BYTES_MAX) || MAX_SPACE_BYTES_ALL)) return plain("Insufficient storage", 507);
+    sql.exec("INSERT INTO owners (owner, bytes, until) VALUES (?, ?, ?) ON CONFLICT (owner) DO UPDATE SET bytes = excluded.bytes, until = excluded.until", owner, bytes, until);
+    return new Response(null, { status: 204 });
   }
 }
 

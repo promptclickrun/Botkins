@@ -53,6 +53,8 @@ for (const name of [
   "link.spaces.notify",
   "link.spaces.here",
   "link.team.setLinkSharing",
+  // Admin mode ("link.team.setAdminMode"): this computer keeps its own window's choice.
+  "link.team.setAdminMode",
   "artifacts.list",
   "artifacts.read",
   "artifacts.resolve",

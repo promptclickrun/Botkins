@@ -1,7 +1,7 @@
 name: botkins-clone
 label: Botkins Clone
 kind: standalone
-version: 2.0.0
+version: 2.0.1
 description: >
   Clone a Hermes profile as a Botkins bot. `hermes botkins-clone light` brings the SOUL as the
   bot's instructions; `full` also brings USER, IDENTITY and MEMORY, with the SOUL condensed into

@@ -13,6 +13,7 @@ import {
   Plus,
   SquarePen,
   X,
+  ShieldCheck,
 } from "lucide-react";
 import { MOD, placeOrder } from "./places";
 import { PlaceIcon } from "./PlaceIcon";
@@ -90,6 +91,11 @@ function App() {
   const [chatId, setChatId] = useState("");
   /** The space whose page is open (page "Space"). */
   const [spaceId, setSpaceId] = useState("");
+  /** Text a panel's view handed over, for the ask bar of its space. */
+  const [spaceAbout, setSpaceAbout] = useState<{ spaceId: string; panelId: string; text: string; n: number }>();
+  useEffect(() => {
+    if (spaceAbout) openSpaceRef.current(spaceAbout.spaceId);
+  }, [spaceAbout?.n]);
   const host = state?.remote?.using?.id ?? "local";
   const pendingVisit = useRef<{ host: string; id: string } | null>(null);
   const [messageTarget, setMessageTarget] = useState<{ chatId: string; index: number } | null>(null);
@@ -266,7 +272,10 @@ function App() {
   // An HTML app's answer waits in its chat's message box; the person reviews and sends it.
   useEffect(() => {
     // The answer joins whatever is already typed in that chat, so nothing the person wrote is lost.
-    const place = ({ chatId, text }: { chatId: string; text: string }) => {
+    // From a view in a panel of a space, it waits in that space's ask bar, about that panel.
+    const place = ({ chatId, text, panelId, spaceId }: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => {
+      if (panelId && spaceId && spacesRef.current(spaceId)) return void setSpaceAbout((was) => ({ spaceId, panelId, text, n: (was?.n ?? 0) + 1 }));
+      if (!chatId) return;
       setDrafts((prev) => ({ ...prev, [chatId]: prev[chatId]?.trim() ? prev[chatId] + "\n\n" + text : text }));
       openRef.current(chatId);
     };
@@ -310,6 +319,11 @@ function App() {
       setSpaceId(id);
     });
   }
+  // For listeners set up once: the way to a space as it is now, and whether a space is one the window knows.
+  const openSpaceRef = useRef(openSpace);
+  openSpaceRef.current = openSpace;
+  const spacesRef = useRef<(id: string) => boolean>(() => false);
+  spacesRef.current = (id) => !!state?.spaces?.some((s) => s.id === id);
   /** Today: the Today space when the computer has Spaces, else the Today page. */
   function openToday() {
     const today = hasSpaces(state!) && (state!.spaces ?? []).find((s) => s.builtin === "today" && s.mine);
@@ -700,6 +714,12 @@ function App() {
             <span className="nav-label">Settings</span>
             {teamRequests > 0 && <span className="settings-badge" aria-hidden="true">{teamRequests}</span>}
           </button>
+          {/* With no other computer paired there is no computer's name in the menu, so the tag stands here. */}
+          {state.adminMode && !state.remote?.hosts.length && (
+            <button className="admin-tag" aria-label="Admin mode" title={collapsed ? "Admin mode" : undefined} onClick={() => settings("Team")}>
+              {collapsed ? <ShieldCheck size={15} /> : "Admin mode"}
+            </button>
+          )}
           {!collapsed && toggle}
         </div>
         <HostSwitcher state={state} collapsed={collapsed} connect={() => settings("Phone")} />
@@ -803,6 +823,7 @@ function App() {
             openNew={(id) => void openNew(id).catch(fail)}
             openProject={(projectId) => projects({ projectId })}
             boardChat={boardChat}
+            about={spaceAbout?.spaceId === openedSpace.id ? spaceAbout : undefined}
             removed={() => {
               hadSpace.current = "";
               const first = state.spaces?.find((s) => s.pinned && s.id !== openedSpace.id);
@@ -863,6 +884,8 @@ function App() {
                 actions={actions}
                 openChat={open}
                 botPage={botPage}
+                openSpace={openSpace}
+                openNew={(id) => void openNew(id).catch(fail)}
                 fail={fail}
               />
             )}

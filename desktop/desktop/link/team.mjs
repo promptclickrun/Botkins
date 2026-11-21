@@ -453,10 +453,22 @@ export function spacesViewOf(team, person) {
 }
 
 /**
+ * What a space's maker and the owner are told of its link: its address while it is out; "leaving"
+ * while a copy is still being taken back from the relay; "off" while the space is shared by link
+ * and links are off (the relay is off).
+ */
+function linkFields(share, context, spaceId) {
+  const link = share.access === "link" && share.share && context.linkOf ? context.linkOf(share.share) : null;
+  const leaving = context.leaving?.has?.(spaceId) === true;
+  return { ...(link && { link }), ...(leaving ? { linkState: "leaving" } : share.access === "link" && !link && context.linkOf && { linkState: "off" }) };
+}
+
+/**
  * The `spaces` part for one person: the spaces they can open, pinned first, as `SpaceSummary[]`.
  * `records` is the app's list (`SpaceRecord & { items }`), which is never sent as it is.
  * `context`: `role` (a member's; none for the owner), `names` (person id → name), `here`
- * (space id → people looking now) and `linkOf(share)` (a link's address).
+ * (space id → people looking now), `linkOf(share)` (a link's address, or null while links are off)
+ * and `leaving` (the ids of spaces whose link is still being taken back).
  */
 export function spaceView(team, records, person, context = {}) {
   const role = person === OWNER ? null : context.role;
@@ -490,7 +502,7 @@ export function spaceView(team, records, person, context = {}) {
       can,
       ...(share.access === "members" && { people: share.grants.map((grant) => ({ id: grant.id, name: nameOf(grant.id), can: grant.can })) }),
       ...((share.access === "team" || share.access === "link") && { teamCan: share.teamCan }),
-      ...(can === "own" && share.access === "link" && share.share && context.linkOf && { link: context.linkOf(share.share) }),
+      ...(can === "own" && linkFields(share, context, space.id)),
       ...(person === OWNER && space.projectId && { projectId: space.projectId }),
       count: items.length,
       changed: Math.min(99, items.filter((item) => (Number(item.updatedAt) || 0) > seen).length),
@@ -682,7 +694,7 @@ export function ownerParts(parts, team, extra = {}) {
   const used = new Set(listed.flatMap((chat) => [chat.botId, ...(chat.botIds ?? [])]));
   const records = Array.isArray(extra.spaces) ? extra.spaces : null;
   if (records) {
-    out.spaces = spaceView(team, records, OWNER, { names: extra.names, here: extra.here, linkOf: extra.linkOf, partOnly: true });
+    out.spaces = spaceView(team, records, OWNER, { names: extra.names, here: extra.here, linkOf: extra.linkOf, leaving: extra.leaving, partOnly: true });
     const mine = new Set(out.spaces.map((space) => space.id));
     out.panels = (parts.panels ?? []).filter((panel) => !panel.spaceId || mine.has(panel.spaceId));
     out.board = (parts.board ?? []).filter((item) => !item.spaceId || mine.has(item.spaceId));
@@ -931,7 +943,7 @@ export function filterParts(parts, principal, team, extra = {}) {
     const byId = new Map(records.map((space) => [space.id, space]));
     const canOpen = (id) => spaceCan(team, byId.get(id), me);
     const cut = (panel) => panelView(panel, { member: true, inChat: (chatId) => ownChats.has(chatId), mayChange: acts(canOpen(panel.spaceId)) && can("today", "manage") });
-    out.spaces = spaceView(team, records, me, { role, names: extra.names, here: extra.here, linkOf: extra.linkOf });
+    out.spaces = spaceView(team, records, me, { role, names: extra.names, here: extra.here, linkOf: extra.linkOf, leaving: extra.leaving });
     out.panels = can("today") ? (parts.panels ?? []).filter((panel) => botIds.has(panel.botId) && byId.get(panel.spaceId)?.builtin === "today" && canOpen(panel.spaceId)).map(cut) : [];
     out.board = can("today") ? (parts.board ?? []).filter((item) => botIds.has(item.botId) && BUILTINS.includes(byId.get(item.spaceId)?.builtin) && canOpen(item.spaceId)) : [];
   } else {

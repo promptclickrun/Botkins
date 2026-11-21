@@ -603,7 +603,11 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, author, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, author, also: rawAlso, ...context } = options;
+    // People whose limits apply to this turn beside the chat's maker and the message's writer:
+    // someone else wrote text that runs in it (a routine's prompt on a panel that another person
+    // refreshes). Members only: the owner narrows nothing.
+    const also = [...new Set((Array.isArray(rawAlso) ? rawAlso : []).filter((id) => typeof id === "string" && id && id !== "owner"))].slice(0, 8);
     // A routine that sends its result elsewhere tells the bot so, in this turn's prompt (desktop/routines.mjs).
     const where = context.scheduleId != null ? this.panels.routines.destinationNote(this.state.chats.find((c) => c.id === chatId), context.scheduleId) : "";
     const prompt = textField(text, 32000, "message");
@@ -652,6 +656,7 @@ export class Workspace {
       runId: run.id,
       time: chat.time,
       ...(author && { author }),
+      ...(also.length && { also }),
       ...(attachments.length && { attachments }),
       ...(quote && { quote }),
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
@@ -683,6 +688,7 @@ export class Workspace {
       attachments: [...attachments, ...mentionedFiles],
       quote,
       author: message.author,
+      also: message.also,
       context: extra ? (message.context || "") + "\n\n" + extra : message.context,
     };
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
@@ -854,6 +860,7 @@ export class Workspace {
       attachments,
       quote: message.quote,
       author: message.author,
+      ...(message.also?.length && { also: message.also }),
       ...(mentions.length && { mentions }),
       ...(run.panelId && { panelId: run.panelId }),
       // A retried routine or task run is still unattended work: it keeps its read-only memory and wiki.
@@ -1010,8 +1017,11 @@ export class Workspace {
    */
   turnPeople(chat, task) {
     const starter = chat?.createdBy ?? "owner";
-    const writer = (task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author)?.memberId;
-    const people = [...new Set([starter, ...(writer ? [writer] : [])])];
+    const last = [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user");
+    const writer = (task?.author ?? last?.author)?.memberId;
+    // And anyone else whose text runs in the turn (see `send`, `also`).
+    const also = (task?.also ?? last?.also ?? []).filter((id) => typeof id === "string" && id);
+    const people = [...new Set([starter, ...(writer ? [writer] : []), ...also])];
     const members = people.filter((person) => person !== "owner");
     const allows = (action) => members.every((person) => memberCanSpaces(person, this.teamOf(), action));
     return {
@@ -1066,9 +1076,13 @@ export class Workspace {
     // only when both may use it. So a member's chat keeps that member's limits when the owner
     // writes in it, and an invited member's turn in the owner's chat has the member's. A provider
     // gets a turn's tools with the turn (a warm session with other tools is not reused).
+    // A third kind of person joins them when their text runs in the turn: whoever set the routine
+    // whose prompt a refresh sends, when another person started that refresh (`also`).
     const team = this.teamOf();
-    const writer = task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
-    return narrower(turnAccess(chat?.createdBy ? { memberId: chat.createdBy } : null, team), turnAccess(writer, team));
+    const last = [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user");
+    const writer = task?.author ?? last?.author;
+    const also = (task?.also ?? last?.also ?? []).filter((id) => typeof id === "string" && id);
+    return [turnAccess(writer, team), ...also.map((memberId) => turnAccess({ memberId }, team))].reduce(narrower, turnAccess(chat?.createdBy ? { memberId: chat.createdBy } : null, team));
   }
   /**
    * Opens the provider session for a chat (or a member's or teammate's view of one). `run` and

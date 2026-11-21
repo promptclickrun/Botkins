@@ -6,11 +6,20 @@
 /* ---- The side menu. The spaces are places: `aside > nav` in style.css draws them, open and collapsed. */
 /* Pinned spaces stay in view, as the places do, and the bots list gets the rest. Very many pins
    scroll; the rows keep their height (a row's overflow is hidden, so a grid row could shrink to nothing). */
+/* The spaces take the room they need, up to two fifths of the window, and the bots get the rest.
+   In a short window the bots give way first, down to one row; only then do the spaces give way
+   and scroll, so Settings stays on screen. */
 .spacenav {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 40px;
   max-height: 40vh;
   overflow: auto;
   grid-auto-rows: max-content;
+}
+/* The far larger share of what must be given up is the bots', until they are down to one row. */
+.spacenav ~ .botnav {
+  flex-shrink: 1000;
+  min-height: 40px;
 }
 .spacenav > button > i {
   background: var(--ink);
@@ -534,4 +543,381 @@ button.space-tag:hover {
   border-radius: var(--radius-sm);
   color: var(--muted);
   flex: none;
+}
+
+/* ---- Arranging, with no edit mode (src/SpaceArrange.tsx). */
+/* A pinned space dragged in the side menu: faded where it was, a line where it lands. */
+.spacenav > button {
+  position: relative;
+}
+.spacenav > button[data-dragging] {
+  opacity: 0.45;
+}
+.spacenav > button[data-drop]::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  pointer-events: none;
+}
+.spacenav > button[data-drop="before"]::before {
+  top: -1px;
+}
+.spacenav > button[data-drop="after"]::before {
+  bottom: -1px;
+}
+/* A panel is dragged by its header. While one is dragged it is the dashed slot where it lands,
+   and the custom views let the drag pass over them. */
+.today-panel .panel-handle {
+  cursor: grab;
+}
+.today-panel .panel-handle:active {
+  cursor: grabbing;
+}
+.live-panel.today-panel.panel-slot {
+  background: transparent;
+  outline: 1.5px dashed var(--line-strong);
+  outline-offset: -1.5px;
+}
+.live-panel.today-panel.panel-slot > * {
+  visibility: hidden;
+}
+.panel-grid.arranging iframe {
+  pointer-events: none;
+}
+/* A panel's corner: shown on hover and on keyboard focus, pulled to Small, Wide or Tall. The dot is
+   small; the place that takes the pointer is larger. */
+.space-page .live-panel.today-panel {
+  position: relative;
+}
+.panel-corner {
+  position: absolute;
+  right: -11px;
+  bottom: -11px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+  border-radius: 50%;
+  z-index: 2;
+  transition: opacity 120ms ease;
+}
+.panel-corner::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 3px var(--canvas);
+}
+.today-panel:hover > .panel-corner,
+.panel-corner:focus-visible,
+.today-panel.pulling > .panel-corner {
+  opacity: 1;
+}
+.panel-corner:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.live-panel.today-panel.pulling {
+  box-shadow: 0 0 0 2px var(--ink);
+}
+/* The choice shown while pulling: the size it snaps to is raised. */
+.panel-sizes {
+  position: absolute;
+  right: 18px;
+  bottom: -17px;
+  z-index: 3;
+  width: 204px;
+  display: flex;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--sunken);
+  box-shadow: var(--glass-shadow), 0 6px 18px rgb(0 0 0 / 0.16);
+  font-size: calc(12.5px * var(--text-scale));
+  pointer-events: none;
+}
+.panel-sizes span {
+  flex: 1;
+  padding: 6px 0;
+  text-align: center;
+  border-radius: 8px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.panel-sizes span.on {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-corner {
+    transition: none;
+  }
+}
+
+/* The note count in a panel's footer opens its notes. */
+.today-panel footer > button.space-notes {
+  width: auto;
+  min-width: 32px;
+  padding: 0 8px;
+  display: inline-flex;
+  gap: 5px;
+  font-size: calc(12px * var(--text-scale));
+}
+
+/* ---- A panel's notes. */
+.space-notes-label {
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+  margin: 4px 0 8px;
+}
+.space-note-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.space-note-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.space-note-list .space-person {
+  width: 26px;
+  height: 26px;
+  font-size: calc(11px * var(--text-scale));
+}
+.space-note-text {
+  flex: 1;
+  min-width: 0;
+}
+.space-note-text > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.space-note-text strong {
+  font-weight: 600;
+  font-size: calc(13.5px * var(--text-scale));
+}
+.space-note-text small {
+  color: var(--faint);
+  font-size: calc(12px * var(--text-scale));
+}
+.space-note-text p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: calc(14px * var(--text-scale));
+}
+.textbutton.space-note-remove {
+  flex: none;
+  color: var(--muted);
+  font-size: calc(12.5px * var(--text-scale));
+}
+.space-note-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.space-note-form textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+}
+
+/* ---- New panel: the Refresh row's schedule. */
+.space-refresh .cadence {
+  margin: 4px 0 12px;
+}
+.space-refresh .cadence-fields label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+
+/* ---- A project's "Spaces and panels" (src/ProjectSpaces.tsx): Attach at the top right, the
+   attached spaces as rows, then the single panels. */
+.project-spaces-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+.project-attach-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.project-attach {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 250px;
+  max-height: min(420px, calc(100vh - 160px));
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--raised);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow), var(--shadow);
+  font-size: calc(13.5px * var(--text-scale));
+  text-align: left;
+}
+.project-attach button {
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-weight: 450;
+  color: var(--ink);
+  text-align: left;
+}
+.project-attach button:hover,
+.project-attach button:focus-visible {
+  background: var(--hover);
+}
+.project-attach button:disabled {
+  color: var(--faint);
+}
+.project-attach hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px -8px;
+}
+.project-attach-heading {
+  padding: 6px 8px 2px;
+  color: var(--faint);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.project-attach [role="group"] {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.project-tick {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1.5px solid var(--line-strong);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.project-tick.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--canvas);
+}
+.space-group.project-space-list {
+  margin-top: 0;
+}
+.project-space-list + .panel-grid {
+  margin-top: 16px;
+}
+.space-row .space-row-go {
+  color: var(--faint);
+  flex: none;
+}
+
+/* The panel an ask is about, in the ask bar: its title, and a way back to asking about the whole space. */
+.space-ask-about {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 40%;
+  padding: 3px 4px 3px 10px;
+  border-radius: 99px;
+  background: var(--sunken);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.space-ask-about button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+/* "Admin mode", beside the computer's name while it is on: the owner sees every member's spaces, bots and chats. */
+.admin-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.shell.collapsed .sidebar-foot .admin-tag {
+  margin: 0;
+  padding: 6px;
+}
+
+/* An app panel, opened: the same panel with the window's room, and the ask bar under it. */
+.space-opened {
+  width: min(960px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  padding: 20px 20px 16px;
+}
+.space-opened[open] {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 14px;
+}
+.space-opened-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--muted);
+}
+.space-opened-panel {
+  min-height: 0;
+  overflow: auto;
+}
+.space-opened-panel > .live-panel {
+  margin: 0;
+  box-shadow: none;
+  background: none;
+  padding: 0 36px 0 0;
+}
+/* In the opened view the ask bar is part of the sheet, not floating over a page. */
+.space-ask.space-opened-ask {
+  position: static;
+  transform: none;
+  width: auto;
+  margin: 0;
 }

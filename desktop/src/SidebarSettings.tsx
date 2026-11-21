@@ -11,8 +11,10 @@ type Sidebar = { order: string[]; collapsed: boolean };
 const save = (sidebar: Partial<Sidebar>) => api.setPreferences({ sidebar } as Parameters<typeof api.setPreferences>[0]);
 
 /** Settings › Side menu: the order of the places (drag, or Move up and Move down) and collapsing the menu to icons. */
-export default function SidebarSettings({ settings, fail }: { settings: Preferences; fail: (e: unknown) => void }) {
-  const saved = placeOrder(settings.sidebar?.order);
+export default function SidebarSettings({ settings, spaces = false, fail }: { settings: Preferences; /** The computer has Spaces: Today is a space there, not a place to put in order here. */ spaces?: boolean; fail: (e: unknown) => void }) {
+  const places = spaces ? PLACES.filter((place) => place !== "Today") : PLACES;
+  // A place left out here keeps its position in what is saved: the computer puts back any place an order doesn't name.
+  const saved = placeOrder(settings.sidebar?.order).filter((place) => places.includes(place));
   const [order, setOrder] = useState<Place[]>(saved);
   const [collapsed, setCollapsed] = useState(!!settings.sidebar?.collapsed);
   const [dragging, setDragging] = useState<Place>();
@@ -58,7 +60,7 @@ export default function SidebarSettings({ settings, fail }: { settings: Preferen
     next.splice(at, 0, place);
     if (next.join() !== order.join()) apply(next, place + " moved to position " + (at + 1) + " of " + next.length + ".");
   }
-  const usual = order.join() === PLACES.join();
+  const usual = order.join() === places.join();
   return (
     <>
       <Group
@@ -69,7 +71,7 @@ export default function SidebarSettings({ settings, fail }: { settings: Preferen
             <span className="set-wait sidebar-status" role="status">
               {status}
             </span>
-            <button type="button" className="set-button" disabled={usual} onClick={() => apply([...PLACES], "The usual order is back.")}>
+            <button type="button" className="set-button" disabled={usual} onClick={() => apply([...places], "The usual order is back.")}>
               Reset to the usual order
             </button>
           </>

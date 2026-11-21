@@ -57,6 +57,15 @@ test("the host's parts become the state the window reads", () => {
   assert.deepEqual(state.runs.map((run) => [run.id, run.status, !!run.steps]), [["r1", "Completed", true], ["r0", "Completed", false], ["r9", "Working", true]], "a followed chat's runs come with their steps, and its running turn is among them");
   assert.deepEqual([state.streams, state.intents, state.requests], [{ c2: "Wor" }, { c2: "Thinking" }, [{ id: "q", kind: "permission" }]]);
   assert.deepEqual([state.tasks, state.mcpServers, state.wiki, state.providers], [[{ id: "t" }], [{ id: "m" }], { revision: 7 }, { revision: 3 }]);
+  // A host with Spaces names them for the paired person; one without sends none, and the window keeps its Today page.
+  const space = { id: "s_launch", name: "Launch", by: { id: "owner", name: "Studio" }, mine: true, access: "private", can: "own", count: 2, changed: 1, pinned: true, notify: "daily", here: [], rev: 4, updatedAt: 9 };
+  assert.deepEqual(snapshotOf({ ...parts, spaces: [space] }).spaces, [space]);
+  assert.equal("spaces" in state, false);
+  // Admin mode is the owner's own devices': the window is told how the host keeps it for this one.
+  assert.equal("adminMode" in state, false);
+  assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: false } } }).adminMode, false);
+  assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: true } } }).adminMode, true);
+  assert.equal("adminMode" in snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "member", memberId: "m_avery" } } }), false);
   const empty = snapshotOf({});
   assert.deepEqual([empty.bots, empty.chats, empty.runs, empty.requests, empty.streams, empty.settings], [[], [], [], [], {}, {}], "a host that hasn't answered yet is an empty workspace, not a crash");
 });

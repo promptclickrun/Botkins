@@ -345,6 +345,13 @@ export type State = {
   board?: BoardItem[];
   /** With "spaces-v1": the spaces this person can open, in their order (src/spaces.ts). Its content is asked for with spaces.read. */
   spaces?: SpaceSummary[];
+  /**
+   * Admin mode for the owner looking through this window: on, the window is shown every member's
+   * spaces, bots and chats; off (as at first), only what the owner is part of. It changes what is
+   * shown, never what the owner may do. Missing when the computer in use has no Admin mode, or the
+   * person looking is a member.
+   */
+  adminMode?: boolean;
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
   /** Project workspaces. One with a folder is also a coding project. */
@@ -635,14 +642,16 @@ declare global {
       moveTodo(projectId: string, todoId: string, delta: -1 | 1): Promise<void>;
       setBotAccess(botId: string, access: BotAccessGrant): Promise<void>;
       openApp(id: string): Promise<void>;
-      takePrefill(): Promise<{ chatId: string; text: string } | null>;
+      takePrefill(): Promise<{ chatId?: string; text: string; panelId?: string; spaceId?: string } | null>;
       linkPreview(url: string): Promise<LinkPreview | null>;
       // Tasks board
       saveTask(data: TaskInput): Promise<string>;
       moveTask(id: string, status: TaskStatus | "archived"): Promise<void>;
       startTask(id: string): Promise<void>;
       deleteTask(id: string): Promise<void>;
-      onPrefill(fn: (data: { chatId: string; text: string }) => void): () => void;
+      onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
+      /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
+      onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
       boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): Promise<string | undefined>;
       // Chat canvas
       chooseFiles(): Promise<Attachment[]>;
@@ -952,6 +961,8 @@ declare global {
       /** Invites a person into a chat, or takes one out. Each answers the invited list afterwards. */
       inviteToChat(chatId: string, personId: string): Promise<string[]>;
       removeFromChat(chatId: string, personId: string): Promise<string[]>;
+      /** Turns Admin mode on or off for this window (the owner's own devices only). Answers how it is now. */
+      "link.team.setAdminMode"(on: boolean): Promise<boolean>;
       saveTeamRole(role: TeamRole): Promise<OwnerTeam>;
       deleteTeamRole(id: string): Promise<OwnerTeam>;
       saveTeamGroup(group: TeamGroup): Promise<OwnerTeam>;

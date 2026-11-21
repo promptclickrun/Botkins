@@ -152,7 +152,7 @@ export async function startService({ paths, version, trial = false, out, console
     await apply(config);
     service.stop = stop;
     const api = controlApi(service);
-    closeSocket = await listenControl(paths.socket, dispatcher(api), () => ({ version, pid: process.pid }));
+    closeSocket = await listenControl(paths.socket, dispatcher(api, { log: (line) => log.info(line) }), () => ({ version, pid: process.pid }));
     runtime.begin();
     const status = runtime.link.status();
     log.info("Ready. Control socket: " + paths.socket + (status.listening ? ". Phone link on port " + status.port + (status.relay.enabled ? ", relay on" : "") + "." : ". Phone access is off."));
