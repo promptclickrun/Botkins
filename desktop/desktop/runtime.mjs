@@ -56,6 +56,7 @@ import { CodexVoice } from "./codexvoice.mjs";
 // Settings › Credentials: the link's saved credentials and password managers, for the app's window.
 import { SavedCredentials, trialToolDirs } from "./savedcredentials.mjs";
 import { forgetChatPeople, teamHandlers } from "./team-ipc.mjs";
+import { chatSectionHandlers, withOwnerChatSections } from "./chat-sections-ipc.mjs";
 
 /**
  * How a trial run's Copilot runtime signs in to GitHub without the keychain: with the token in
@@ -313,6 +314,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const handlers = {
     ...pluginHandlers(workspace.plugins, savedCredentials),
     ...teamHandlers(() => link),
+    ...chatSectionHandlers(() => link),
     pickPluginFolder: async () => {
       const paths = await host.dialogs.open({ title: "Choose a plugin folder", properties: ["openDirectory"] });
       return paths ? paths[0] ?? null : null;
@@ -1086,13 +1088,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     const { serveWorkspace } = await import("./headless/workspace.mjs");
     closeWorkspaceSocket = await serveWorkspace(workspaceSocket, linkBackend);
   } else listening = link.start().then(announce, (error) => console.error("Phone link:", error.message));
-  /** What the app's own view shows of this computer: the workspace, the team, and a number that goes up when a phone changes. */
+  /** What the app's own view shows of this computer: the workspace, the team, the owner's chat sections, and a number that goes up when a phone changes. */
   // `spaces` is the owner's own list, as the link makes one for every person. A link from before
   // spaces makes none, and the window then has no `spaces`, which is how it knows.
   // (This one is for a caller with no window: the terminal host's own status and its command
   // line, which show everything, as an owner with Admin mode on. The desktop app's window gets
   // its snapshot from desktop/main.mjs, cut by the window's own Admin mode: desktop/admin-view.mjs.)
-  const snapshot = () => ({ ...workspace.snapshot(), spaces: link?.spacesFor?.("owner"), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
+  const snapshot = () => ({ ...withOwnerChatSections(workspace.snapshot(), link), spaces: link?.spacesFor?.("owner"), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
   const tick = () => {
     tickChatSchedules(workspace);
     try {
