@@ -38,7 +38,7 @@ export default function SharePopover({ state, space, name, close }: { state: Sta
     if (!state.remote?.using) void api.phoneLink().then((l) => setComputer(l.name)).catch(() => {});
   }, []);
   // The summary is what counts: follow it when it changes and nothing is on its way.
-  const said = JSON.stringify([space.access, space.people, space.teamCan, space.link, space.notify]);
+  const said = JSON.stringify([space.access, space.people, space.teamCan, space.link, space.linkState, space.notify]);
   useEffect(() => {
     if (busy) return;
     setAccess(space.access);
@@ -205,7 +205,13 @@ export default function SharePopover({ state, space, name, close }: { state: Sta
           <option value="all">Every change</option>
         </select>
       </div>
-      {access === "link" && !link && <p className="space-share-note">Links are off while the relay is off.</p>}
+      {/* The computer says what is in the way of the link. One that says nothing about it has no link while its relay is off. */}
+      {space.linkState === "leaving" && (
+        <p className="space-share-note" role="status">
+          Taking the link back…
+        </p>
+      )}
+      {(space.linkState === "off" || (space.linkState === undefined && access === "link" && !link)) && <p className="space-share-note">Links are off while the relay is off.</p>}
       <hr />
       <div className="space-share-foot">
         {access === "link" && link && (
