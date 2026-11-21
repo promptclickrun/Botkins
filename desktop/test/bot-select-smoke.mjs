@@ -1,7 +1,7 @@
 // Selecting a bot, and leaving a new chat nobody wrote in, in an isolated data folder. No turns.
 // Settings › Chat › "When you select a bot" is kept on this device: "Open the latest chat" (the
 // usual) or "Start a new chat". A new chat with no message is archived when the person leaves it;
-// one with typed text is kept. Set BOTKINS_SELECT_SHOTS to a folder for a screenshot of the setting.
+// one with typed text is kept. "Start a new chat" reuses such an empty chat, archived or not. Set BOTKINS_SELECT_SHOTS to a folder for a screenshot of the setting.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,6 +97,21 @@ try {
   await place("Home");
   await expect.poll(async () => (await chats("scout")).find((c) => c.id === scout.id).archived).toBe(true);
   console.log("A new chat nobody wrote in is archived when it is left; one with typed text is kept until the text is gone.");
+
+  // Selecting the bot again takes its archived empty chat out of the archive instead of making a third chat.
+  await select("Pip");
+  await expect(title).toHaveText("Pip");
+  await expect(page.locator("article")).toHaveCount(0);
+  await expect.poll(async () => (await chats("pip")).find((c) => c.id === blank.id).archived).not.toBe(true);
+  assert.equal((await chats("pip")).length, 2, "no third chat");
+  await select("Scout");
+  await expect(title).toHaveText("Scout");
+  await expect.poll(async () => (await chats("scout")).find((c) => c.id === scout.id).archived).not.toBe(true);
+  assert.equal((await chats("scout")).length, 1, "nor a second for Scout");
+  await expect.poll(async () => (await chats("pip")).find((c) => c.id === blank.id).archived).toBe(true);
+  await place("Home");
+  await expect.poll(async () => (await chats("scout")).find((c) => c.id === scout.id).archived).toBe(true);
+  console.log("Selecting a bot again reuses its archived empty chat; nothing piles up in the archive.");
 
   // Back to the usual: the latest chat, not an archived one.
   await choose("latest");
