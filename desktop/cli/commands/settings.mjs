@@ -109,7 +109,7 @@ export const settings = {
   },
   update: {
     summary: "Install the latest signed release",
-    usage: "botkins update [--check]",
+    usage: "botkins update [--check | --apply]",
     options: { check: { type: "boolean", about: "Only say whether there is a newer release" }, apply: { type: "boolean", about: "Install now, in this process (what the service's own update job runs)" } },
     details: "An update is taken only from the project's own releases, and only when its checksums carry the Botkins release key's signature (GnuPG checks it). The new version is unpacked beside the old one and the service restarts on it; if it doesn't stay up, the old one is put back. For the whole computer's service, run it as root (with sudo).",
     async run(context) {

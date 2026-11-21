@@ -9,6 +9,7 @@ import {
   LayoutList,
   Lightbulb,
   Lock,
+  Maximize2,
   MessageSquare,
   Pencil,
   Pin,
@@ -28,6 +29,7 @@ import { useAsk, useMenu, type MenuItem } from "./Pages";
 import { PanelCard, usePanelManager } from "./Today";
 import SharePopover, { isOwner } from "./SpaceShare";
 import NotesSheet from "./SpaceNotes";
+import OpenedPanel from "./SpacePanelOpen";
 import { usePanelDrag, usePanelResize, useSpaceDrag } from "./SpaceArrange";
 import { CadencePicker, ZoneInput, cronFromCadence } from "./Routines";
 import { memberTeam, teamCan } from "./teamAccess";
@@ -373,6 +375,8 @@ export function SpacePage({
   const [hidden, showHidden] = useState(false);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
+  /** The app panel that is opened large, or "". */
+  const [openedId, setOpenedId] = useState("");
   /** The panel the ask is about ("Ask Pip to change it"), or "" for the whole space. */
   const [aboutPanel, setAboutPanel] = useState("");
   useEffect(() => {
@@ -536,6 +540,7 @@ export function SpacePage({
     }
   }
 
+  const opened = panels.find((p) => p.id === openedId);
   let body: ReactNode = null;
   if (content && !shown.length && !board && !hidden)
     body = addAllowed ? (
@@ -573,6 +578,13 @@ export function SpacePage({
                   {panelChanged(p, seenAt.current) && <i className="space-dot" aria-label="Changed" />}
                 </>
               }
+              tools={
+                p.blocks.some((b) => b.type === "html") && (
+                  <button aria-label={"Open " + p.title} title="Open" onClick={() => setOpenedId(p.id)}>
+                    <Maximize2 size={16} />
+                  </button>
+                )
+              }
               foot={p.last && <small className="space-last">{lastLine(p.last)}</small>}
               side={
                 notes > 0 && (
@@ -606,7 +618,7 @@ export function SpacePage({
             {project && (
               <button className="space-tag space-project" title="Open project" onClick={() => openProject(project.id)}>
                 <span className={"space-project-dot project-color " + (project.color ?? "")} aria-hidden="true" />
-                {project.name}
+                <span className="space-project-name">{project.name}</span>
               </button>
             )}
           </div>
@@ -690,6 +702,33 @@ export function SpacePage({
             <ArrowUp size={16} />
           </button>
         </form>
+      )}
+      {opened && (
+        <OpenedPanel
+          title={opened.title}
+          bot={askAllowed ? state.bots.find((b) => b.id === opened.botId) : undefined}
+          close={() => setOpenedId("")}
+          ask={async (said) => {
+            try {
+              const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: opened.botId, text: said, panelId: opened.id });
+              setOpenedId("");
+              openNew(chatId);
+            } catch (e) {
+              fail(e);
+            }
+          }}
+        >
+          <PanelCard
+            state={state}
+            panel={{ ...opened, size: "wide" }}
+            fail={fail}
+            readOnly={view}
+            store={{ state: opened.state ?? {}, rev: opened.stateRev ?? 0, ...(canNote && { set: (patch, label) => api["spaces.patchState"](opened.id, patch, label).then((answer) => answer.rev) }) }}
+            when={(t) => spaceWhen(t)}
+            badges={<span className="space-app">App</span>}
+            foot={opened.last && <small className="space-last">{lastLine(opened.last)}</small>}
+          />
+        </OpenedPanel>
       )}
       {adding && (
         <NewPanel

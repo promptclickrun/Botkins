@@ -56,3 +56,53 @@ export function help(found) {
   lines.push("", "Every command:", ...GLOBAL_HELP);
   return lines.join("\n");
 }
+
+/** The words a command takes after its name, read from its usage line: `<bot>` is needed, `[<search>]` may be left out, `…` means more than one. */
+export function argumentsOf(usage, path) {
+  const after = String(usage ?? "").replace("botkins " + path.join(" "), "");
+  // Options are in brackets that start with a dash ("[--role <text>]", "[-m <message>]", "[--system | --user]"); what they take is not a word of its own.
+  const words = after.replace(/\[-[^\]]*\]…?/g, " ");
+  return [...words.matchAll(/(\[)?<([^>]+)>(…)?\]?(…)?/g)].map(([, optional, name, many, more]) => ({ name, required: !optional, ...((many || more) && { many: true }) }));
+}
+
+const EXITS = [
+  { code: 0, means: "Done." },
+  { code: 1, means: "It failed. With --json the reason is { error: { message, code? } } on standard output; otherwise a sentence on standard error." },
+  { code: 2, means: "The command was not understood: an unknown word, a missing value, or a question that needs a flag because there is no terminal to ask at." },
+  { code: 3, means: "The service is not running." },
+  { code: 4, means: "This user may not talk to the service." },
+];
+
+/**
+ * Every command as data, for a program that has to find one without reading the source
+ * (`botkins help --json`). The shape is kept: fields are added, never renamed or removed.
+ *
+ *   { botkins, usage, everyCommand: [option…], exit: [{ code, means }…],
+ *     areas: [{ name, summary, commands: [{ command, path, summary, usage, arguments, options, details? }…] }…] }
+ *
+ * An option is { name: "--role", short?: "-r", takes: "text" | null, about }. `takes: null` is a
+ * switch. An argument is { name, required, many? }. A command with `asks` puts a question to the
+ * person at a terminal; with no terminal it fails and names the flag that answers it.
+ */
+export function describe(version, global = {}) {
+  const option = ([name, spec]) => ({ name: "--" + name, ...(spec.short && { short: "-" + spec.short }), takes: spec.type === "string" ? (spec.value ?? "value") : null, about: spec.about ?? "", ...(spec.multiple && { many: true }), ...(spec.secret && { secret: true }) });
+  const leaf = (command, path) => ({
+    command: path.join(" "),
+    path,
+    summary: command.summary,
+    usage: command.usage ?? "botkins " + path.join(" "),
+    arguments: command.arguments ?? argumentsOf(command.usage, path),
+    options: Object.entries(command.options ?? {}).map(option),
+    // A command with --yes asks a person first. With no terminal it fails and names that flag.
+    ...((command.asks || command.options?.yes) && { asks: command.asks ?? "--yes" }),
+    ...(command.details && { details: command.details }),
+  });
+  const walk = (command, path) => (command.commands ? Object.entries(command.commands).filter(([, sub]) => !sub.hidden).flatMap(([name, sub]) => walk(sub, [...path, name])) : [leaf(command, path)]);
+  return {
+    botkins: version,
+    usage: "botkins <command> [options]",
+    everyCommand: Object.entries(global).filter(([name]) => name !== "help" && name !== "version").map(option),
+    exit: EXITS,
+    areas: Object.entries(COMMANDS).filter(([, command]) => !command.hidden).map(([name, command]) => ({ name, summary: command.summary, commands: walk(command, [name]) })),
+  };
+}
