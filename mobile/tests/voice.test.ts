@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { botVoiceField, cleanBotVoice, LIVE_LIMITS, liveContextOf, liveInstructions, liveTranscript, Voice, wavFromPcm } from "../link-host/voice.mjs";
 import { remoteArgs } from "../link-host/methods.mjs";
+import { missing } from "../src/features/voice/choices";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { LinkHost } from "../link-host/server.mjs";
 
@@ -1045,6 +1046,40 @@ test("live with Codex goes through the app's helper, and ends there", async () =
   state.present = false;
   assert.deepEqual(voice.settings().providers.codex, { available: false, signedIn: false });
   await assert.rejects(voice.live({ provider: "codex", sdp: "v=0 offer" }), { message: "Codex isn't available in this app." });
+});
+
+test("a ChatGPT sign-in made under Model providers counts for phones and for live voice", async () => {
+  // Shaped like the app's helper (desktop/desktop/codexvoice.mjs): `signedIn()` is its last answer,
+  // and only `refresh()` asks Codex. Nothing on the computer asks on a phone's behalf, so the link does.
+  const codex = { codexSays: true, last: false, asked: 0, signedIn: () => codex.last, refresh: async () => ((codex.asked += 1), (codex.last = codex.codexSays)), live: async () => ({ sdp: "v=0 codex answer", id: "codex-2" }), end() {} };
+  let clock = NOW;
+  let sent = 0;
+  const { voice } = make({}, { adapter: () => ({ codex }), onChange: () => sent++, now: () => clock });
+  // The first read answers at once with what the app knew, and asks again behind it.
+  assert.equal(voice.settings().providers.codex.signedIn, false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(codex.asked, 1);
+  assert.equal(sent, 1, "the settings are sent again with the new answer");
+  const phone = voice.settings();
+  assert.equal(phone.providers.codex.signedIn, true);
+  // The phone's live voice and a bot's own voice offer ChatGPT once nothing is missing.
+  assert.equal(missing("live", "codex", phone), null);
+  // Reads close together don't ask Codex each time.
+  voice.settings();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(codex.asked, 1);
+  // A sign-out is seen at the next read after a while, and sent again.
+  codex.codexSays = false;
+  clock += 20_000;
+  voice.settings();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(voice.settings().providers.codex.signedIn, false);
+  assert.equal(missing("live", "codex", voice.settings()), "Sign in to ChatGPT on your computer");
+  assert.equal(sent, 2);
+  // A live call asks Codex itself first, so a sign-in a moment ago counts.
+  codex.codexSays = true;
+  voice.set({ live: { provider: "codex" } });
+  assert.deepEqual(await voice.live({ sdp: "v=0 offer" }), { id: "codex-2", kind: "webrtc", sdp: "v=0 codex answer" });
 });
 
 test("live: input is checked, and a session of another provider ends without calling Codex", async () => {
