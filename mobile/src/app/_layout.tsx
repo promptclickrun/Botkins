@@ -146,6 +146,7 @@ export default function RootLayout() {
               <Stack.Screen name="market/app/[slug]" options={half} />
               <Stack.Screen name="market/category/[id]" />
               <Stack.Screen name="market/plugin" />
+              <Stack.Screen name="market/agent" />
               <Stack.Screen name="market/plugin-install" options={tall} />
               <Stack.Screen name="market/plugin-update" options={tall} />
               <Stack.Screen name="market/add-marketplace" options={half} />

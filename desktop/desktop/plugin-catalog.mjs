@@ -29,11 +29,38 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { configFile, declaredPath, dependencyFolder, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
+import { parseTemplateFile } from "./templates.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
 export const MAX_PLUGIN_FILES = 1000;
 export const MAX_PLUGIN_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Agent templates in a marketplace ("agent-templates-v1"; the contract is the phone's
+ * docs/agent-templates.md). A catalog lists them under `agents`, beside `plugins`; each names a bot
+ * template file in the same repository or folder, the file "Export template…" writes. The files are
+ * read when someone browses templates, at most once for each read of the catalog (an hour), and
+ * only read: a template becomes a bot only when a person creates it in Create a bot.
+ */
+export const AGENT_TEMPLATES = "agent-templates-v1";
+export const MAX_AGENT_TEMPLATES = 200;
+export const MAX_AGENT_FILE = 256 * 1024;
+/** The category words a catalog may use, with the words shown. Another word is shown as Other. */
+export const AGENT_CATEGORIES = Object.freeze({
+  writing: "Writing",
+  research: "Research",
+  productivity: "Productivity",
+  work: "Work",
+  dev: "Development",
+  learning: "Learning",
+  health: "Health",
+  finance: "Finance",
+  home: "Home",
+  media: "Media",
+  life: "Life",
+  other: "Other",
+});
 
 const BUILT_INS = [
   {
@@ -321,6 +348,58 @@ function listingFromEntry(entry, marketplace) {
     name,
     marketplace: marketplace.id,
     ...normalizeMetadata(entry),
+  };
+}
+
+/** A catalog's agent entry, cut to what is shown and where its file is, or null when it isn't one. */
+function agentEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const name = typeof entry.name === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(entry.name) ? entry.name : null;
+  const source = typeof entry.source === "string" ? entry.source.replace(/^\.\//, "") : "";
+  if (!name || !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.json$/.test(source) || source.split("/").some((part) => part === ".." || part === ".")) return null;
+  const word = typeof entry.category === "string" ? entry.category.trim().toLowerCase() : "";
+  const author = normalizeAuthor(entry.author);
+  const keywords = Array.isArray(entry.keywords) ? entry.keywords.filter((k) => typeof k === "string" && k.trim()).map((k) => k.trim().slice(0, 40)).slice(0, 12) : [];
+  return {
+    name,
+    source,
+    ...(word && { category: Object.hasOwn(AGENT_CATEGORIES, word) ? word : "other" }),
+    ...(typeof entry.version === "string" && entry.version.trim() && { version: entry.version.trim().slice(0, 40) }),
+    ...(typeof author === "string" && author.trim() && { author: author.trim().slice(0, 80) }),
+    ...(keywords.length && { keywords }),
+  };
+}
+
+/** The agent entries of a catalog, each once, at most MAX_AGENT_TEMPLATES. */
+function agentEntries(value) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of Array.isArray(value?.agents) ? value.agents : []) {
+    const entry = agentEntry(raw);
+    if (!entry || seen.has(entry.name)) continue;
+    seen.add(entry.name);
+    out.push(entry);
+    if (out.length >= MAX_AGENT_TEMPLATES) break;
+  }
+  return out;
+}
+
+/** What a client shows of a template that was read (`agent`: the entry with its `template`). */
+function agentListing(agent, marketplace) {
+  const { template } = agent;
+  return {
+    id: `${agent.name}@${marketplace.id}`,
+    name: template.name,
+    role: template.role,
+    summary: template.summary ?? "",
+    ...(template.look && { look: template.look }),
+    ...(agent.category && { category: agent.category, categoryName: AGENT_CATEGORIES[agent.category] }),
+    marketplace: marketplace.id,
+    marketplaceName: marketplace.name,
+    builtIn: Boolean(marketplace.builtIn),
+    ...(agent.version && { version: agent.version }),
+    ...(agent.author && { author: agent.author }),
+    ...(agent.keywords && { keywords: [...agent.keywords] }),
   };
 }
 
@@ -738,6 +817,7 @@ export class PluginCatalog {
     this.folderPlugins = new Map();
     this.loaded = false;
     this.loadingMarketplaces = new Map();
+    this.loadingAgents = new Map();
   }
 
   async _init() {
@@ -758,8 +838,9 @@ export class PluginCatalog {
         const saved = JSON.parse(readFileSync(this.statePath, "utf8"));
         for (const item of Array.isArray(saved.marketplaces) ? saved.marketplaces : []) {
           if (!item || typeof item.id !== "string") continue;
-          if (item.builtIn && this.marketplacesById.has(item.id)) this.marketplacesById.set(item.id, { ...this.marketplacesById.get(item.id), ...item, builtIn: true, _entries: item.entries });
-          else if (!item.builtIn) this.marketplacesById.set(item.id, { ...item, _entries: item.entries });
+          const kept = { _entries: item.entries, _agentEntries: item.agentEntries, _agents: item.agents, _agentsAt: item.agentsAt };
+          if (item.builtIn && this.marketplacesById.has(item.id)) this.marketplacesById.set(item.id, { ...this.marketplacesById.get(item.id), ...item, builtIn: true, ...kept });
+          else if (!item.builtIn) this.marketplacesById.set(item.id, { ...item, ...kept });
         }
         for (const item of Array.isArray(saved.folders) ? saved.folders : []) {
           if (item && typeof item.id === "string" && typeof item.path === "string") this.folderPlugins.set(item.id, item);
@@ -783,6 +864,8 @@ export class PluginCatalog {
         ...(item.count !== undefined ? { count: item.count } : {}),
         ...(item.error ? { error: item.error } : {}),
         ...(item._entries ? { entries: item._entries } : {}),
+        ...(item._agentEntries?.length ? { agentEntries: item._agentEntries } : {}),
+        ...(item._agents?.length ? { agents: item._agents, agentsAt: item._agentsAt } : {}),
       })),
       folders: [...this.folderPlugins.values()],
     };
@@ -853,6 +936,7 @@ export class PluginCatalog {
       count: entries.length,
       updatedAt: Date.now(),
       _entries: entries,
+      _agentEntries: agentEntries(value),
       _sourceInfo: sourceInfo,
     };
     return marketplace;
@@ -922,8 +1006,11 @@ export class PluginCatalog {
       count: loaded.count,
       updatedAt: loaded.updatedAt,
       _entries: loaded._entries,
+      _agentEntries: loaded._agentEntries,
       _sourceInfo: sourceInfo,
     };
+    delete record._agents;
+    delete record._agentsAt;
     this.marketplacesById.set(id, record);
     await this._save();
     return {
@@ -944,6 +1031,100 @@ export class PluginCatalog {
     if (record.builtIn) fail("Built-in marketplaces cannot be removed.");
     this.marketplacesById.delete(id);
     await this._save();
+  }
+
+  /** One template file of a marketplace, read and checked as an imported template is. */
+  async _readAgentFile(sourceInfo, path) {
+    let bytes;
+    if (sourceInfo.type === "local") bytes = readLocalFile(sourceInfo.root, path).bytes;
+    else if (sourceInfo.type === "github") bytes = await fetchBytes(githubRawUrl(sourceInfo.repo, sourceInfo.ref, path), { limit: MAX_AGENT_FILE });
+    else {
+      const base = new URL(sourceInfo.url);
+      base.pathname = `${base.pathname.slice(0, base.pathname.lastIndexOf("/") + 1)}${path}`;
+      bytes = await fetchBytes(base.toString(), { limit: MAX_AGENT_FILE });
+    }
+    if (bytes.length > MAX_AGENT_FILE) fail("That template file is too large.");
+    return parseTemplateFile(bytes.toString("utf8"));
+  }
+
+  /**
+   * The templates a marketplace offers, read once for each read of its catalog. A file that can't be
+   * read now keeps the copy read before, if there is one; one that was never read is left out.
+   */
+  async _ensureAgents(record) {
+    await this._ensureMarketplace(record);
+    const entries = record._agentEntries || [];
+    if (!entries.length) return [];
+    if (record._agents && record._agentsAt && record._agentsAt >= (record.updatedAt || 0)) return record._agents;
+    if (this.loadingAgents.has(record.id)) return this.loadingAgents.get(record.id);
+    const loading = (async () => {
+      const before = new Map((record._agents || []).map((agent) => [agent.name + "\0" + agent.source, agent]));
+      const read = [];
+      let sourceInfo;
+      try {
+        sourceInfo = record._sourceInfo || await this._marketplaceSource(record.source);
+      } catch {
+        return record._agents || [];
+      }
+      for (let i = 0; i < entries.length; i += 6) {
+        const batch = entries.slice(i, i + 6);
+        read.push(...await Promise.all(batch.map(async (entry) => {
+          try {
+            return { ...entry, template: await this._readAgentFile(sourceInfo, entry.source) };
+          } catch {
+            const kept = before.get(entry.name + "\0" + entry.source);
+            return kept ? { ...entry, template: kept.template } : null;
+          }
+        })));
+      }
+      record._agents = read.filter(Boolean);
+      record._agentsAt = Date.now();
+      await this._save();
+      return record._agents;
+    })().finally(() => this.loadingAgents.delete(record.id));
+    this.loadingAgents.set(record.id, loading);
+    return loading;
+  }
+
+  /**
+   * The agent templates of every marketplace (the built-in Botkins catalog first), each in its
+   * catalog's own order: { agents, categories }. `categories` counts what the search and the
+   * marketplace leave, before the category itself narrows the list.
+   */
+  async agents(query = {}) {
+    await this._init();
+    const options = query && typeof query === "object" ? query : {};
+    if (options.query !== undefined && (typeof options.query !== "string" || options.query.length > 200 || options.query.includes("\0"))) fail("That search is too long.");
+    const text = typeof options.query === "string" ? options.query.trim().toLowerCase() : "";
+    const marketplaceFilter = options.marketplace ? assertString(options.marketplace, "Marketplace id") : undefined;
+    const category = options.category ? assertString(options.category, "Category") : undefined;
+    const found = [];
+    for (const record of this.marketplacesById.values()) {
+      if (marketplaceFilter && record.id !== marketplaceFilter) continue;
+      for (const agent of await this._ensureAgents(record)) {
+        const listing = agentListing(agent, record);
+        const haystack = [listing.name, listing.role, listing.summary, listing.categoryName, ...(listing.keywords || [])].filter(Boolean).join(" ").toLowerCase();
+        if (!text || haystack.includes(text)) found.push(listing);
+      }
+    }
+    const counts = new Map();
+    for (const listing of found) counts.set(listing.category ?? "other", (counts.get(listing.category ?? "other") ?? 0) + 1);
+    const categories = [...counts]
+      .map(([id, count]) => ({ id, name: AGENT_CATEGORIES[id] ?? AGENT_CATEGORIES.other, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    return { agents: category ? found.filter((listing) => (listing.category ?? "other") === category) : found, categories };
+  }
+
+  /** One template with its instructions, for Create a bot. */
+  async agentTemplate(id) {
+    await this._init();
+    assertString(id, "Template id");
+    const at = id.lastIndexOf("@");
+    const record = at > 0 ? this.marketplacesById.get(id.slice(at + 1)) : undefined;
+    if (!record) fail("That template can't be found.");
+    const agent = (await this._ensureAgents(record)).find((item) => item.name === id.slice(0, at));
+    if (!agent) fail("That template is no longer in " + record.name + ".");
+    return { ...agentListing(agent, record), instructions: agent.template.instructions };
   }
 
   _folderListing(record) {

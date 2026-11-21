@@ -9,7 +9,7 @@ export const LOOK_AT_PHONE = "The bot needs the person to answer something first
 export const STILL_WORKING = "The bot is still working on it. Tell the person the answer will be in the chat.";
 export const NO_REPLY = "The bot finished without a written reply.";
 
-export type ChatMessage = { role: "assistant" | "user" | "command"; text: string };
+export type ChatMessage = { role: "assistant" | "user" | "command"; text: string; voiceId?: string; runId?: string; steeredRunId?: string };
 /** What the phone knows about the chat right now. */
 export type ChatSnapshot = {
   /** A turn is running or queued. */
@@ -22,7 +22,7 @@ export type ChatSnapshot = {
   after(from: number): ChatMessage[];
 };
 export type ChatAccess = {
-  send(text: string): Promise<void>;
+  send(text: string, voiceId?: string): Promise<void>;
   snapshot(): ChatSnapshot;
   subscribe(listener: () => void): () => void;
 };
@@ -44,14 +44,14 @@ export function replyText(messages: ChatMessage[]): string {
   return text.slice(0, MAX_REPLY - CUT_NOTE.length).trimEnd() + CUT_NOTE;
 }
 
-export async function askBot(message: string, chat: ChatAccess, options: { timeoutMs?: number; settleMs?: number } = {}): Promise<string> {
+export async function askBot(message: string, chat: ChatAccess, options: { timeoutMs?: number; settleMs?: number; voiceId?: string } = {}): Promise<string> {
   const text = message.trim();
   if (!text) return "Say what to ask the bot.";
   const timeoutMs = options.timeoutMs ?? 10 * 60_000;
   const settleMs = options.settleMs ?? 800;
   const before = chat.snapshot().total;
   try {
-    await chat.send(text);
+    await chat.send(text, options.voiceId);
   } catch (error) {
     return "The message didn't reach the bot: " + (error instanceof Error && error.message ? error.message : "your computer didn't answer.");
   }
@@ -66,16 +66,20 @@ export async function askBot(message: string, chat: ChatAccess, options: { timeo
       if (settle) clearTimeout(settle);
       resolve(answer);
     };
-    const finished = (snapshot: ChatSnapshot) => {
-      if (snapshot.busy || snapshot.total < before + 2) return false;
-      const after = snapshot.after(before);
-      const last = after[after.length - 1];
-      return !!last && last.role === "assistant" && after.some((item) => item.role === "user");
+    const replies = (snapshot: ChatSnapshot) => {
+      if (snapshot.busy) return [];
+      const after = snapshot.after(before).filter(item => !item.voiceId || item.runId || item.steeredRunId);
+      if (options.voiceId) {
+        const heard = snapshot.after(0).find(item => item.voiceId === options.voiceId);
+        const runId = heard?.runId ?? heard?.steeredRunId;
+        if (runId) return after.filter(item => item.role === "assistant" && item.runId === runId);
+      }
+      return after.at(-1)?.role === "assistant" && after.some(item => item.role === "user") ? after : [];
     };
     const check = () => {
       const snapshot = chat.snapshot();
       if (snapshot.asking) return finish(LOOK_AT_PHONE);
-      if (!finished(snapshot)) {
+      if (!replies(snapshot).length) {
         if (settle) clearTimeout(settle);
         settle = null;
         return;
@@ -86,7 +90,10 @@ export async function askBot(message: string, chat: ChatAccess, options: { timeo
         settle = null;
         const now = chat.snapshot();
         if (now.asking) finish(LOOK_AT_PHONE);
-        else if (finished(now)) finish(replyText(now.after(before)));
+        else {
+          const messages = replies(now);
+          if (messages.length) finish(replyText(messages));
+        }
       }, settleMs);
     };
     const unsubscribe = chat.subscribe(check);
@@ -96,12 +103,13 @@ export async function askBot(message: string, chat: ChatAccess, options: { timeo
 }
 
 /** The runner every transport uses: `ask_bot` goes to the chat; anything else is refused. */
-export function chatTools(chat: ChatAccess, onBusy?: (busy: boolean) => void) {
+export function chatTools(chat: ChatAccess, onBusy?: (busy: boolean) => void, speechFor?: (text: string) => string | undefined) {
   return async (name: string, args: Record<string, unknown>): Promise<string> => {
     if (name !== ASK_BOT) return "There is no tool named " + name + ".";
     onBusy?.(true);
     try {
-      return await askBot(typeof args.message === "string" ? args.message : "", chat);
+      const text = typeof args.message === "string" ? args.message : "";
+      return await askBot(text, chat, { voiceId: speechFor?.(text) });
     } finally {
       onBusy?.(false);
     }

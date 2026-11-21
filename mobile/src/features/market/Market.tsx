@@ -8,6 +8,7 @@ import { useCan, useOnline } from "@/state/hooks";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { AppLogo, Button, EmptyState, Group, IconTile, Label, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { AppRow, AppTile, RowSkeleton, SearchField, TileSkeleton } from "./parts";
+import { AgentsPage } from "./agents/Agents";
 import { PluginsPage } from "./plugins/Plugins";
 
 const RESULTS = 60;
@@ -167,18 +168,24 @@ function SignedInLine({ email }: { email?: string }) {
   );
 }
 
-const VIEWS: { value: "apps" | "plugins"; label: string }[] = [
+type MarketView = "apps" | "agents" | "plugins";
+const VIEWS: { value: MarketView; label: string }[] = [
   { value: "apps", label: "Apps" },
+  { value: "agents", label: "Agents" },
   { value: "plugins", label: "Plugins" },
 ];
 
-/** The tab: Apps (Composio) or Plugins, with the last choice remembered on this phone. */
+/** The tab: Apps (Composio), Agents (templates to start a bot from) or Plugins, with the last choice remembered on this phone. */
 export default function Market() {
+  const canAgents = useCan("agents", "create");
   const canPlugins = useCan("plugins", "view");
   const savedView = usePrefs((prefs) => prefs.marketView);
-  const view = canPlugins ? savedView : "apps";
-  const switcher = canPlugins ? <Segmented options={VIEWS} value={view} onChange={(marketView) => setPrefs({ marketView })} /> : undefined;
-  return view === "plugins" ? <PluginsPage switcher={switcher} /> : <Apps switcher={switcher} />;
+  const views = VIEWS.filter((item) => (item.value === "agents" ? canAgents : item.value === "plugins" ? canPlugins : true));
+  const view = views.some((item) => item.value === savedView) ? savedView : "apps";
+  const switcher = views.length > 1 ? <Segmented options={views} value={view} onChange={(marketView) => setPrefs({ marketView })} /> : undefined;
+  if (view === "plugins") return <PluginsPage switcher={switcher} />;
+  if (view === "agents") return <AgentsPage switcher={switcher} />;
+  return <Apps switcher={switcher} />;
 }
 
 function Apps({ switcher }: { switcher: ReactNode }) {

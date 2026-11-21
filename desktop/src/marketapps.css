@@ -1,0 +1,169 @@
+/* Marketplace › Apps: the person's Composio apps (MarketApps.tsx). Theme tokens only. */
+.market-apps { min-width: 0; }
+
+/* An app's logo, or its first letter when there is none. Logos are drawn for a light page, so they
+   sit on a white plate in both themes, as on the phone (its src/ui/AppLogo.tsx). */
+.app-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+:root[data-mode="dark"] .app-logo { box-shadow: none; }
+.app-logo.app-logo-letter { background: var(--sunken); box-shadow: none; }
+.app-logo img { width: 72%; height: 72%; object-fit: contain; }
+.app-logo-letter {
+  color: var(--ink-2);
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1;
+}
+.app-check {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--success);
+  color: var(--canvas);
+}
+
+/* Popular and Your apps: tiles, four to a row on the narrowest pane, more when there is room. */
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 14px 8px;
+  padding: 14px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.app-shelf {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 14px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.app-shelf .app-tile { flex: 0 0 88px; }
+.app-tile {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+}
+.app-tile:hover { background: var(--hover); filter: none; }
+.app-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.app-tile-logo { position: relative; }
+.app-tile-logo .app-check { position: absolute; top: -5px; right: -5px; box-shadow: 0 0 0 2px var(--surface); }
+.app-tile-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.app-tile-ghost:hover { background: transparent; }
+.app-ghost-line { width: 56px; height: 10px; border-radius: 5px; background: var(--sunken); }
+
+.app-row .app-logo + .plugin-listing-copy { margin-left: 1px; }
+.app-head { margin: 0; font-size: calc(13px * var(--text-scale)); font-weight: 600; color: var(--muted); }
+.app-none { padding: 26px 0; text-align: center; }
+
+/* Categories: rows that are buttons. */
+.set-row.app-category {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+.set-card > .set-row.app-category + .set-row.app-category { border-top: 1px solid var(--line); }
+.set-row.app-category:hover { background: var(--hover); filter: none; }
+.set-row.app-category .set-name { flex: 1; min-width: 0; }
+.app-category-count { color: var(--muted); font-size: calc(13px * var(--text-scale)); font-variant-numeric: tabular-nums; }
+.set-row.app-category > svg { flex: none; color: var(--muted); }
+
+/* Signed out: a few logos fanned out, and the way in. */
+.app-hero {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 30px 24px 22px;
+  text-align: center;
+}
+.app-fan { display: flex; align-items: center; justify-content: center; height: 76px; margin-bottom: 6px; color: var(--muted); }
+.app-fan-item { padding: 3px; border-radius: 16px; background: var(--surface); }
+.app-fan-item + .app-fan-item { margin-left: -10px; }
+.app-fan-0 { transform: rotate(-14deg) translateY(8px); z-index: 1; }
+.app-fan-1 { transform: rotate(-7deg) translateY(4px); z-index: 2; }
+.app-fan-2 { z-index: 3; }
+.app-fan-3 { transform: rotate(7deg) translateY(4px); z-index: 2; }
+.app-fan-4 { transform: rotate(14deg) translateY(8px); z-index: 1; }
+.app-hero-title { font-family: var(--font-display); font-size: calc(19px * var(--text-scale)); font-weight: 700; }
+.app-hero p { margin: 0 0 8px; color: var(--muted); font-size: calc(13px * var(--text-scale)); }
+.app-hero small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.app-hero-button { min-width: 220px; min-height: 36px; margin-bottom: 4px; }
+.app-hero-wait { display: flex; align-items: center; gap: 12px; min-height: 36px; margin-bottom: 4px; color: var(--ink-2); font-size: calc(13px * var(--text-scale)); }
+.app-hero-wait > span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Whether the bots can use these apps. */
+.app-bots {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding: 11px 14px 11px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.app-bots > span:not(.plugin-listing-icon) { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.app-bots strong { font-size: calc(14px * var(--text-scale)); font-weight: 600; }
+.app-bots small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.app-bots.ready { background: var(--success-soft); color: var(--success); }
+.app-bots.ready strong, .app-bots.ready small { color: var(--success); }
+.app-bots > svg { flex: none; }
+
+.app-signed-in { display: flex; align-items: center; gap: 12px; margin: 0 2px 8px; }
+.app-signed-in small { flex: 1; min-width: 0; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+
+/* One app's page. */
+.app-detail-head { display: flex; align-items: center; gap: 16px; margin: 0 2px 12px; }
+.app-detail-head > div { display: grid; gap: 2px; min-width: 0; }
+.app-detail-head h3 { margin: 0; font-family: var(--font-display); font-size: calc(20px * var(--text-scale)); font-weight: 700; overflow-wrap: anywhere; }
+.app-detail-head small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.app-description { margin: 0 2px 16px; max-width: 620px; color: var(--ink-2); font-size: calc(13px * var(--text-scale)); line-height: 1.5; }
+.app-account { justify-content: flex-start; }
+.app-account .set-label { flex: 1; min-width: 0; }
+.app-account-icon { display: inline-flex; flex: none; }
+.app-account-icon.good { color: var(--success); }
+.app-account-icon.warn { color: var(--warning); }
+.app-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--ink-2);
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+}
+.app-waiting > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.app-told { color: var(--success); }
+.app-foot { margin: 8px 2px 0; }
+.market-apps .plugin-detail-actions { margin-bottom: 4px; }

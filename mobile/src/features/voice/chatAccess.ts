@@ -7,7 +7,7 @@ import type { ChatAccess } from "./live/index";
 /** The chat as `ask_bot` sees it: from the phone's store, which the computer keeps in step. */
 export function chatAccess(chatId: string): ChatAccess {
   return {
-    send: (text) => api.send(chatId, text),
+    send: (text, voiceId) => api.send(chatId, text, voiceId ? { voiceId } : undefined),
     snapshot: () => {
       const state = useApp.getState();
       const live = state.parts.live;

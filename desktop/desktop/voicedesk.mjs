@@ -253,7 +253,7 @@ export class VoiceDesk {
       const instructions = sharedLiveInstructions({ bot, messages, bots: workspace.state.bots ?? [], notes });
       // `about` reaches the Codex helper, which names the bot to its voice and says whose chat the session is for (noteSession).
       session = await this.voice.live({ ...(typeof sdp === "string" && sdp && { sdp }), instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name }, override: cleanBotVoice(bot.voice)?.live });
-      this.sessions.set(session.id, { chatId: chat.id, own: true });
+      this.sessions.set(session.id, { ...this.sessions.get(session.id), chatId: chat.id, own: true });
     } finally {
       this.starting--;
       // Tool calls that came in while it started: their session is known now, or never will be.
@@ -268,11 +268,11 @@ export class VoiceDesk {
    * the link, not here, and its tool calls still arrive on this computer: this is how they find
    * their chat. A chat that isn't one of this workspace's is not taken.
    */
-  noteSession(sessionId, { chatId } = {}) {
+  noteSession(sessionId, { chatId, author } = {}) {
     const id = String(sessionId ?? "");
     if (!id || typeof chatId !== "string" || !this.workspaceOf().state.chats.some((chat) => chat.id === chatId)) return false;
     // The window's own session is one that is being started here, for this chat, right now.
-    this.sessions.set(id, { chatId, own: (this.starting ?? 0) > 0 && chatId === this.startingChat });
+    this.sessions.set(id, { chatId, author, own: !author && (this.starting ?? 0) > 0 && chatId === this.startingChat });
     // A session that ended without saying so is not kept for ever.
     for (const old of [...this.sessions.keys()].slice(0, Math.max(0, this.sessions.size - 64))) this.sessions.delete(old);
     for (const resolve of this.waiters.get(id) ?? []) resolve();
@@ -283,9 +283,39 @@ export class VoiceDesk {
   isOwn(sessionId) {
     return this.sessions.get(String(sessionId ?? ""))?.own === true;
   }
-  /** A session is over: its chat is no longer looked up. */
+  /** Codex delivers deltas here directly. The window also sends snapshots or deltas from its providers. */
+  heardUser(id, text, final, { item, replace } = {}) {
+    const session = this.sessions.get(id);
+    if (!session || typeof text !== "string" || typeof final !== "boolean") return;
+    const ws = this.workspaceOf();
+    if (!ws.state.chats.some(chat => chat.id === session.chatId) || (session.author && !ws.inChat(session.chatId, session.author.memberId))) return;
+    session.line ??= 1;
+    session.partial ??= new Map();
+    session.finished ??= new Set();
+    const key = typeof item === "string" && item.length > 0 && item.length <= 128 ? "item-" + item : String(session.line);
+    if (session.finished.has(key)) return;
+    const previous = session.partial.get(key) ?? "";
+    const words = (final ? text || previous : replace ? text : previous + text).slice(0, 32000);
+    if (!words.trim()) return;
+    const voiceId = id + ":" + key;
+    ws.recordVoiceLine(session.chatId, voiceId, words, final, session.author);
+    session.lastSpeech = { id: voiceId, text: words };
+    if (final) {
+      session.partial.delete(key);
+      if (key.startsWith("item-")) session.finished.add(key);
+      else session.line++;
+    } else {
+      session.partial.set(key, words);
+    }
+  }
+  /** A session is over. Keep the last words even if the provider has not sent a final. */
   forget(sessionId) {
-    this.sessions.delete(String(sessionId ?? ""));
+    const id = String(sessionId ?? "");
+    const session = this.sessions.get(id);
+    for (const [key, text] of session?.partial ?? []) {
+      this.heardUser(id, text, true, { item: key.startsWith("item-") ? key.slice(5) : undefined });
+    }
+    this.sessions.delete(id);
   }
   /** The session's chat. A tool call can come in (from Codex) just before startLive has returned. */
   async sessionOf(sessionId) {
@@ -319,6 +349,7 @@ export class VoiceDesk {
     if (name !== ASK_BOT.name) throw new Failure("The voice asked for a tool it doesn't have.");
     const { chatId } = entry;
     const workspace = this.workspaceOf();
+    if (entry.author && !workspace.inChat(chatId, entry.author.memberId)) throw new Failure("This chat is no longer shared with you.");
     const chat = workspace.chat(chatId);
     const botName = workspace.state.bots.find((bot) => bot.id === (chat.botId ?? chat.botIds?.[0]))?.name ?? "The bot";
     // A request from earlier in this session: its reply is waiting to be said, or it is still under way.
@@ -333,6 +364,7 @@ export class VoiceDesk {
     const request = String(args?.request ?? args?.message ?? "").trim().slice(0, 32000);
     if (!request) return "The request was empty.";
     let before = 0;
+    let requestRunId;
     let done;
     for (let waits = 0; ; waits++) {
       const running = workspace.active.get(chatId);
@@ -343,7 +375,12 @@ export class VoiceDesk {
       }
       before = chat.messages.length;
       try {
-        done = Promise.resolve(workspace.send(chatId, request));
+        const heard = entry.lastSpeech;
+        const voiceId = heard?.text.trim() === request && heard.id !== entry.claimed ? heard.id : undefined;
+        done = Promise.resolve(workspace.send(chatId, request, { ...(voiceId && { voiceId }), ...(entry.author && { author: entry.author }) }));
+        if (voiceId) entry.claimed = voiceId;
+        const sent = voiceId && chat.messages.findLast(message => message.voiceId === voiceId);
+        requestRunId = (sent || chat.messages[before])?.runId;
         break;
       } catch (error) {
         // Another message started the chat in between: wait for it, then send.
@@ -355,7 +392,7 @@ export class VoiceDesk {
       const said = chat.messages.slice(before).findLast((m) => m.role === "assistant" && !m.interim && m.text);
       if (said) return cutForSpeech(speakable(said.text), SPOKEN_REPLY);
       // No reply: the run says why, when it knows.
-      const run = (workspace.state.runs ?? []).find((r) => r.chatId === chatId && r.id === chat.messages[before]?.runId);
+      const run = (workspace.state.runs ?? []).find((r) => r.chatId === chatId && r.id === requestRunId);
       const why = run && run.status !== "Completed" && run.detail ? cutForSpeech(speakable(run.detail), 300) : "";
       return why ? botName + " couldn't finish that: " + why : "The bot didn't answer that. Its reply, if any, is in the chat.";
     };
@@ -414,7 +451,7 @@ export class VoiceDesk {
 
   endLive(sessionId) {
     const id = String(sessionId ?? "");
-    this.sessions.delete(id);
+    this.forget(id);
     this.voiceOf?.()?.endLive(id);
   }
   /** Ends every live session (when the app quits). */

@@ -11,6 +11,7 @@
 //   BOTKINS_DEV_APPENDS=off               act as an older computer, with full-string streaming replies and thinking
 //   BOTKINS_DEV_TIMELINE=off              act as an older computer, without "turn-timeline-v1" (docs/turn-timeline.md)
 //   BOTKINS_DEV_PLUGINS=off               act as an older computer, without "plugins-v1" (docs/plugins.md)
+//   BOTKINS_DEV_AGENTS=off                act as an older computer, without "agent-templates-v1" (docs/agent-templates.md)
 //   BOTKINS_DEV_BOT_VOICE=off             act as an older computer, without "bot-voice-v1" (a voice of its own for each bot)
 //   BOTKINS_DEV_AUTO_APPROVE=1            approve team join requests after a short wait
 // The pairing link is also written to <dir>/pairing-url.txt for scripts and simulators.

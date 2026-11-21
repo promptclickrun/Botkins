@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Plus,
   SquarePen,
+  Store,
   X,
   ShieldCheck,
 } from "lucide-react";
@@ -41,7 +42,7 @@ import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
 import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
-import type { Attachment, BoardItem, Bot, Chat, MentionInput, State } from "./types";
+import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
@@ -100,6 +101,15 @@ function App() {
   const pendingVisit = useRef<{ host: string; id: string } | null>(null);
   const [messageTarget, setMessageTarget] = useState<{ chatId: string; index: number } | null>(null);
   const [modal, setModal] = useState<Modal>("");
+  /** An agent template from Marketplace › Agents that Create a bot opens filled in from. */
+  const [botStart, setBotStart] = useState<MarketAgentTemplate>();
+  useEffect(() => {
+    if (modal !== "bot") setBotStart(undefined);
+  }, [modal]);
+  function createBot(template: MarketAgentTemplate) {
+    setBotStart(template);
+    setModal("bot");
+  }
   const [settingsTab, setSettingsTab] = useState("General");
   const [settingsRevision, setSettingsRevision] = useState(0);
   const [teamJoinUrl, setTeamJoinUrl] = useState("");
@@ -651,7 +661,12 @@ function App() {
         <div className="brand">
           <img className="brand-name for-light" src="./wordmark.png" alt="Botkins" />
           <img className="brand-name for-dark" src="./wordmark-dark.png" alt="Botkins" />
-          {/* New chat sits at the top of the list, as the + does in the phone app. */}
+          {/* Marketplace, then New chat, at the top of the list, as the + is in the phone app. */}
+          {teamCan(state, "plugins") && (
+            <button type="button" className="newchat market" aria-label="Marketplace" title="Marketplace" onClick={() => settings("marketplace")}>
+              <Store size={17} />
+            </button>
+          )}
           {canChat && (
             <button type="button" className="newchat" aria-label="New chat" title="New chat" onClick={() => setModal("chat")}>
               <SquarePen size={17} />
@@ -963,6 +978,7 @@ function App() {
             initialBot={settingsBot || bot?.id || state.bots[0]?.id || ""}
             runCount={state.runs.length}
             initialJoin={teamJoinUrl}
+            createBot={createBot}
           />
         )}
         {modal === "chat" && canChat && (
@@ -977,6 +993,8 @@ function App() {
         )}
         {modal === "bot" && (
           <BotForm
+            key={botStart?.id ?? "blank"}
+            start={botStart}
             fail={fail}
             cancel={() => setModal("")}
             saved={state.templates}

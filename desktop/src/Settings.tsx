@@ -22,7 +22,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import type { AppUpdate, AppInfo, Bot, Catalog, Preferences, State, NotificationSettings } from "./types";
+import type { AppUpdate, AppInfo, Bot, Catalog, MarketAgentTemplate, Preferences, State, NotificationSettings } from "./types";
 import ModelPicker from "./ModelPicker";
 import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings } from "./Preferences";
 import Usage from "./Usage";
@@ -148,6 +148,7 @@ export default function Settings({
   initialJoin,
   runCount = 0,
   close,
+  createBot,
 }: {
   state: State;
   bots: Bot[];
@@ -158,6 +159,8 @@ export default function Settings({
   /** Refreshes Usage when runs change. */
   runCount?: number;
   close?: () => void;
+  /** Opens Create a bot filled in from an agent template (Marketplace › Agents). */
+  createBot?: (template: MarketAgentTemplate) => void;
 }) {
   const [start] = useState<{ section: SectionId; view?: BotView; teamView?: TeamView }>(() => {
     const s = sectionFor(initialTab);
@@ -463,7 +466,7 @@ export default function Settings({
               }}
             />
           )}
-          {section === "marketplace" && <PluginsSettings key={pluginToOpen ?? ""} state={state} bots={bots} open={pluginToOpen} />}
+          {section === "marketplace" && <PluginsSettings key={pluginToOpen ?? ""} state={state} bots={bots} open={pluginToOpen} createBot={createBot} />}
           {section === "mcp" && <McpSettings state={state} credentials={() => setSection("credentials")} />}
           {section === "credentials" && <CredentialsSettings state={state} mcp={() => setSection("mcp")} />}
           {section === "teamwork" && (

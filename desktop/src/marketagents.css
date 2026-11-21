@@ -1,0 +1,54 @@
+/* Marketplace › Agents: agent templates from the marketplaces (MarketAgents.tsx). */
+.agent-chip-count {
+  margin-left: 3px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+.agent-listing {
+  gap: 12px;
+}
+.agent-listing-face {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+.agent-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 2px 18px;
+}
+.agent-detail-head > div {
+  min-width: 0;
+}
+.agent-detail-head h3 {
+  margin: 0 0 2px;
+  font-family: var(--font-display, inherit);
+  font-size: calc(22px * var(--text-scale));
+  font-weight: 700;
+}
+.agent-detail-head p {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.agent-detail-head p.agent-detail-role {
+  color: var(--ink);
+  font-weight: 600;
+}
+.agent-detail-head small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.set-row.agent-instructions p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.5;
+  max-height: 340px;
+  overflow-y: auto;
+}

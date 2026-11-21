@@ -119,12 +119,12 @@ export class CodexVoice {
    * `chatId`, `botId` and `botName` say whom the voice speaks for; the link passes them for a
    * phone's session, and the desktop's own (desktop/voicedesk.mjs) passes them too.
    */
-  async live({ sdp, voice, instructions, tools = [], chatId, botId, botName, name }) {
+  async live({ sdp, voice, instructions, tools = [], chatId, botId, botName, name, author }) {
     const id = "codex-" + randomUUID();
     const session = { id, threadId: null, rpc: null, dir: null, ended: false };
     this.sessions.set(id, session);
     // Before anything is started: a tool call must find its chat as soon as the voice can speak.
-    if (chatId) this.onSession(id, { chatId, botId });
+    if (chatId) this.onSession(id, { chatId, botId, ...(author && { author }) });
     try {
       session.dir = await mkdtemp(join(tmpdir(), "botkins-voice-"));
       const rpc = (session.rpc = await this.connect());
@@ -143,7 +143,7 @@ export class CodexVoice {
         } else if (method === "thread/realtime/transcript/delta" || method === "thread/realtime/transcript/done") {
           const final = method.endsWith("/done");
           const text = final ? params.text : params.delta;
-          if ((params.role === "user" || params.role === "assistant") && typeof text === "string" && text) this.onEvent(id, { type: "transcript", role: params.role, text, final });
+          if ((params.role === "user" || params.role === "assistant") && typeof text === "string" && (text || final)) this.onEvent(id, { type: "transcript", role: params.role, text, final });
         }
       });
       rpc.onRequest(async (method, params) => {

@@ -52,6 +52,20 @@ To add context when someone sends a message, add a command hook in `hooks/hooks.
 
 In `recall.mjs`, read the prompt event as JSON from standard input. Read `process.env.MEMORY_API_KEY` inside the process to call your service. Write one JSON object with an `additionalContext` string to standard output. Only return material you intend the model to read. A command hook runs with the OS permissions of the account running Botkins.
 
+## Agent templates
+
+A marketplace can also offer agent templates: a bot's name, role, about line, instructions and look. Open **Settings → Marketplace → Agents** (or the Marketplace button left of New chat), choose a template and select **Install**. Create a bot opens filled in from it. Change anything, the look too, and create the bot. Nothing else is installed.
+
+List templates under `agents` in the marketplace's `marketplace.json`, beside `plugins`. Each entry names a template file in the same repository: the file **Export template…** writes.
+
+```json
+"agents": [
+  { "name": "inbox-triage", "source": "./agents/inbox-triage.json", "category": "productivity", "version": "1.0.0", "keywords": ["email"], "author": { "name": "Botkins" } }
+]
+```
+
+`name` is lowercase letters, digits and dashes; the id is `name@marketplace`. `category` is one of `writing`, `research`, `productivity`, `work`, `dev`, `learning`, `health`, `finance`, `home`, `media`, `life` or `other`. The host reads the files when someone browses templates, at most once an hour for each marketplace, checks them as an imported template is checked, and leaves out one it can't read. At most 200 templates are read from a marketplace, and a file is at most 256 KB. The phone's contract is `mobile/docs/agent-templates.md`. From a terminal: `botkins templates browse`, `botkins templates show <id>` and `botkins templates use <id>`.
+
 ## What a plugin starts, and what you are shown
 
 A plugin can start two kinds of things on the computer: a tool that is a program (a local MCP server), and a hook (a shell command that runs at an event of a chat). Before you install or switch on a plugin, Botkins shows each of them. The rule is: **what is shown is what starts, and all of it.**

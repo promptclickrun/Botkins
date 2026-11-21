@@ -225,6 +225,9 @@ export type Mention =
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
 export type Message = {
+  /** One utterance in live voice, identified across partials and the final transcript. */
+  voiceId?: string;
+  voicePartial?: true;
   role: "assistant" | "user" | "command";
   text: string;
   mentions?: Mention[];
@@ -932,6 +935,8 @@ export type UsageReport = {
  * "plugins-v1" (the app's: plugins from GitHub's catalogs, other marketplaces or a folder on the
  * computer, each adding skills, tools, hooks, agents and commands to the person's bots; the part
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
+ * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
+ * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
  */
 export type Meta = {
   app: string;
@@ -1008,6 +1013,36 @@ export type PluginMarketplace = {
   /** A sentence when it couldn't be read. */
   error?: string;
 };
+
+/**
+ * An agent template in a marketplace ("agent-templates-v1", docs/agent-templates.md). `id` is
+ * opaque (`name@marketplace`): never read anything out of it. `name` is the bot's name and the title.
+ */
+export type MarketAgent = {
+  id: string;
+  name: string;
+  role: string;
+  /** Shown as the description. */
+  summary: string;
+  /** The look the bot starts with. */
+  look?: BotkinLook;
+  /** One of writing, research, productivity, work, dev, learning, health, finance, home, media, life, other. */
+  category?: string;
+  /** The category's words, such as "Productivity". */
+  categoryName?: string;
+  marketplace: string;
+  /** Such as "Botkins". */
+  marketplaceName: string;
+  /** A marketplace that comes with Botkins. */
+  builtIn: boolean;
+  version?: string;
+  author?: string;
+  keywords?: string[];
+};
+/** A category's chip: how many templates the other filters leave in it. */
+export type MarketAgentCategory = { id: string; name: string; count: number };
+/** A template with what Create a bot is filled in with. */
+export type MarketAgentTemplate = MarketAgent & { instructions: string };
 
 /** A plugin in a catalog. `id` is opaque: never read anything out of it; show `name` and `marketplace`. */
 export type PluginListing = {
@@ -1315,7 +1350,8 @@ export type Calls = {
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
-  send(chatId: string, text: string, options?: { notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
+  recordVoiceLine(chatId: string, id: string, text: string, final: boolean): void;
+  send(chatId: string, text: string, options?: { voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;
@@ -1482,6 +1518,11 @@ export type Calls = {
   /** `revision` is the preview's the person reviewed; the computer refuses another. */
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;
+  // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
+  /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
+  /** Refused with a sentence when the template is gone. */
+  "agents.template"(id: string): MarketAgentTemplate;
   // Spaces ("spaces-v1"; docs/spaces.md). The app's calls, then the link's own.
   "spaces.read"(id: string): SpaceContent;
   /** A new private space, pinned for its maker. Answers its id. */

@@ -135,7 +135,7 @@ function Stamp({ time, align }: { time?: number; align: "flex-start" | "flex-end
   );
 }
 
-function UserBubble({ message, index, timestamps, id, actions, paths, media }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[] }) {
+export function UserBubble({ message, index, timestamps, id, actions, paths, media }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[] }) {
   const { colors } = useTheme();
   const selecting = useSelecting((state) => state.id === id);
   // A Today item the person chose to discuss is a card here: it comes as a record the computer kept

@@ -23,6 +23,7 @@ export class GeminiTransport extends LiveBase {
   private talking = new OutputLevel((on) => this.setStatus(on ? "talking" : "listening"));
   private turn = 0;
   private youOpen = false;
+  private confirmedInput = "";
   private botOpen = false;
   private cancelled = new Set<string>();
   private speaker = true;
@@ -123,13 +124,16 @@ export class GeminiTransport extends LiveBase {
     const content = obj(message.serverContent);
     if (message.serverContent) {
       const input = str(obj(content.inputTranscription).text);
-      if (input) {
+      const tentative = str(obj(content.interimInputTranscription).text);
+      if (input || tentative) {
         if (!this.youOpen) {
           this.turn += 1;
           this.youOpen = true;
         }
-        this.line("you-" + this.turn, "you", input, { append: true });
+        this.confirmedInput += input;
+        this.line("you-" + this.turn, "you", this.confirmedInput + tentative);
       }
+      if (obj(content.inputTranscription).finished === true) this.closeYou();
       const parts = Array.isArray(obj(content.modelTurn).parts) ? (obj(content.modelTurn).parts as unknown[]).map(obj) : [];
       for (const part of parts) {
         const sound = str(obj(part.inlineData).data);
@@ -141,7 +145,6 @@ export class GeminiTransport extends LiveBase {
       }
       const output = str(obj(content.outputTranscription).text);
       if (output) {
-        this.closeYou();
         this.botOpen = true;
         this.line("bot-" + this.turn, "bot", output, { append: true });
       }
@@ -168,6 +171,7 @@ export class GeminiTransport extends LiveBase {
   private closeYou() {
     if (this.youOpen) this.line("you-" + this.turn, "you", "", { append: true, final: true });
     this.youOpen = false;
+    this.confirmedInput = "";
   }
   private closeBot() {
     if (this.botOpen) this.line("bot-" + this.turn, "bot", "", { append: true, final: true });

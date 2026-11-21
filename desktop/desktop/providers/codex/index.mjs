@@ -717,7 +717,11 @@ export class CodexProvider extends ModelProvider {
     try {
       started = await rpc.request("initialize", {
         clientInfo: { name: "botkins", title: "Botkins", version: this.appVersion },
-        capabilities: { experimentalApi: false, requestAttestation: false },
+        // The approval policy of "Run everything" is Codex's granular one (approvalSettings), which
+        // Codex 0.169 and later take only from a client that says it uses the experimental API:
+        // without this every turn of such a bot ended "askForApproval.granular requires
+        // experimentalApi capability". A request Botkins doesn't know is answered as unsupported.
+        capabilities: { experimentalApi: true, requestAttestation: false },
       });
     } catch (error) {
       // A CLI that started but won't shake hands is not left running.

@@ -29,6 +29,16 @@ export const PLUGIN_METHODS = [
   "plugins.install", "plugins.addFolder", "plugins.configure", "plugins.setBots", "plugins.setEnabled", "plugins.update", "plugins.uninstall",
 ];
 
+/** Agent templates in a marketplace ("agent-templates-v1", docs/agent-templates.md): reads only. */
+export const AGENT_METHODS = ["agents.browse", "agents.template"];
+
+/**
+ * Marketplace › Apps on the computer: the apps of the person's Composio account, through the
+ * computer's own Composio tool and its sign-in (desktop/composio.mjs). A phone signs in to Composio
+ * itself; these are for a window that uses this computer from another one.
+ */
+export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "composio.accounts", "composio.connect", "composio.removeAccount"];
+
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
@@ -51,7 +61,7 @@ export const REMOTE_METHODS = new Set([
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
   "createChat", "createGroupChat", "setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat",
-  "setChatProject", "startProjectChat",
+  "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
   // Models and providers
@@ -91,6 +101,9 @@ export const REMOTE_METHODS = new Set([
   "sidePane",
   // Plugins ("plugins-v1", docs/plugins.md): catalogs, installing, settings, bots, on and off
   ...PLUGIN_METHODS,
+  // Agent templates ("agent-templates-v1") and the computer's Composio apps
+  ...AGENT_METHODS,
+  ...COMPOSIO_METHODS,
 ]);
 
 const MAX_ATTACHMENTS = 10;
@@ -260,6 +273,39 @@ function pluginValues(value) {
 /** Whether a saved credential's reference is anywhere in `value`. */
 const holdsRef = (value, depth = 0) => depth <= 8 && value !== null && typeof value === "object" && (Object.hasOwn(value, "$credential") || Object.values(value).some((inner) => holdsRef(inner, depth + 1)));
 
+/** The arguments of an agent template call or a Composio call, cut to its shape, or null when `method` is not one. */
+const APP_SLUG = /^[a-z0-9_]{1,64}$/;
+function marketArgs(method, args) {
+  if (!AGENT_METHODS.includes(method) && !COMPOSIO_METHODS.includes(method)) return null;
+  const first = args[0];
+  switch (method) {
+    case "agents.browse": {
+      const query = plain(first) ? first : {};
+      if (query.query !== undefined && (typeof query.query !== "string" || query.query.length > PLUGIN_LIMITS.query)) refuse("That search is too long.");
+      for (const key of ["category", "marketplace"]) if (query[key] !== undefined && !pluginText(query[key], PLUGIN_LIMITS.id)) refuse("That list can't be shown.");
+      const words = typeof query.query === "string" ? query.query.trim() : "";
+      return [{ ...(words && { query: words }), ...(query.category !== undefined && { category: query.category }), ...(query.marketplace !== undefined && { marketplace: query.marketplace }) }];
+    }
+    case "agents.template":
+      if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("That template can't be found.");
+      return [first];
+    case "composio.catalog":
+    case "composio.connected":
+      return [];
+    case "composio.accounts":
+      if (!Array.isArray(first) || first.length > 50 || !first.every((slug) => typeof slug === "string" && APP_SLUG.test(slug))) refuse("Those apps can't be found.");
+      return [[...new Set(first)]];
+    case "composio.connect":
+      if (typeof first !== "string" || !APP_SLUG.test(first)) refuse("That app can't be found.");
+      return [first];
+    case "composio.removeAccount":
+      if (typeof first !== "string" || !APP_SLUG.test(first) || !pluginText(args[1], 200)) refuse("That account can't be found.");
+      return [first, args[1]];
+    default:
+      return null;
+  }
+}
+
 /** The arguments of a plugin call, cut to its shape, or null when `method` is not one. */
 function pluginArgs(method, args) {
   if (!PLUGIN_METHODS.includes(method)) return null;
@@ -339,7 +385,7 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
 }
 
 /**

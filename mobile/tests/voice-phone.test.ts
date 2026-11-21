@@ -208,7 +208,10 @@ test("OpenAI socket: token, first message, microphone, transcripts and sound", a
   assert.equal(socket.sent.length, 2, "nothing is sent while muted");
   transport.mute(false);
 
+  socket.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "u1", delta: "What is" });
+  assert.deepEqual(seen.lines.get("u1"), { id: "u1", who: "you", text: "What is", final: false });
   socket.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "What's on my list?" });
+  socket.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "u1", delta: " late" });
   socket.receive({ type: "response.output_audio.delta", item_id: "b1", delta: "AAAAAAAA" });
   socket.receive({ type: "response.output_audio_transcript.delta", item_id: "b1", delta: "You have " });
   socket.receive({ type: "response.output_audio_transcript.delta", item_id: "b1", delta: "three things." });
@@ -219,7 +222,9 @@ test("OpenAI socket: token, first message, microphone, transcripts and sound", a
   // The person talks over the bot: playing stops and the item is cut.
   socket.receive({ type: "input_audio_buffer.speech_started", item_id: "u2" });
   assert.equal(h.audio.flushed, 1);
+  socket.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "u2", delta: "One more thing" });
   transport.end();
+  assert.equal(seen.lines.get("u2")?.final, true, "hanging up keeps the last words heard");
   assert.ok(socket.closed);
   assert.equal(transport.status, "ended");
   assert.equal(seen.statuses[seen.statuses.length - 1], "ended");
@@ -293,9 +298,13 @@ test("Gemini: setup first, sound after setupComplete, transcripts, interruption 
   h.audio.frame("CCCC");
   assert.deepEqual(socket.sent[1], { realtimeInput: { audio: { data: "CCCC", mimeType: "audio/pcm;rate=16000" } } });
 
+  socket.receive({ serverContent: { interimInputTranscription: { text: "Hallo" } } });
+  assert.equal(seen.lines.get("you-1")?.text, "Hallo");
   socket.receive({ serverContent: { inputTranscription: { text: "Hello " } } });
-  socket.receive({ serverContent: { inputTranscription: { text: "there" } } });
+  socket.receive({ serverContent: { interimInputTranscription: { text: "their" } } });
+  assert.equal(seen.lines.get("you-1")?.text, "Hello their");
   socket.receive({ serverContent: { modelTurn: { parts: [{ inlineData: { mimeType: "audio/pcm;rate=24000", data: "DDDD" } }] }, outputTranscription: { text: "Hi!" } } });
+  socket.receive({ serverContent: { inputTranscription: { text: "there" } } });
   socket.receive({ serverContent: { turnComplete: true } });
   assert.deepEqual(h.audio.played, ["DDDD"]);
   assert.deepEqual(seen.lines.get("you-1"), { id: "you-1", who: "you", text: "Hello there", final: true });
@@ -348,7 +357,10 @@ test("ElevenLabs: init, formats from the first message, pong, tools and interrup
   h.audio.frame("EEEE");
   assert.deepEqual(socket.sent[1], { user_audio_chunk: "EEEE" });
 
-  socket.receive({ type: "user_transcript", user_transcription_event: { user_transcript: "What's new?" } });
+  socket.receive({ type: "tentative_user_transcript", tentative_user_transcription_event: { event_id: 1, user_transcript: "What" } });
+  socket.receive({ type: "tentative_user_transcript", tentative_user_transcription_event: { event_id: 2, user_transcript: "What's knew" } });
+  assert.deepEqual(seen.lines.get("you-1"), { id: "you-1", who: "you", text: "What's knew", final: false });
+  socket.receive({ type: "user_transcript", user_transcription_event: { event_id: 3, user_transcript: "What's new?" } });
   socket.receive({ type: "audio", audio_event: { audio_base_64: "FFFF", event_id: 3 } });
   socket.receive({ type: "agent_response", agent_response_event: { agent_response: "Not much" } });
   socket.receive({ type: "agent_response_correction", agent_response_correction_event: { original_agent_response: "Not much", corrected_agent_response: "Not much at" } });
@@ -971,4 +983,28 @@ test("each provider says in one line what it still needs", () => {
   assert.equal(providerState("openai", settings({ openai: { baseUrl: "x", hasKey: true } })), "Key saved");
   assert.equal(providerState("codex", base), "Not signed in");
   assert.equal(providerState("local", local), "1 installed");
+});
+
+test("ask_bot reads the reply when the spoken message already occupies its chat row", async () => {
+  const chat = fakeChat([{ role: "user", text: "Check the time", voiceId: "call:u1", runId: "r" }]);
+  const answer = askBot("Check the time", chat.access, { voiceId: "call:u1", timeoutMs: 70, settleMs: 1 });
+  chat.push({ role: "assistant", text: "It is noon.", runId: "r" });
+  chat.push({ role: "user", text: "Thanks", voiceId: "call:u2" });
+  assert.equal(await answer, "It is noon.");
+});
+
+test("the voice canvas keeps typed and spoken rows in order as the computer acknowledges them", async () => {
+  const { updateSpoken, voiceCanvas } = await import("../src/features/voice/live/history");
+  const one: Line = { id: "a:1", who: "you", text: "Fir", final: false };
+  const two: Line = { id: "a:2", who: "you", text: "Second", final: true };
+  let spoken = updateSpoken([], one, 1);
+  spoken = updateSpoken(spoken, two, 1);
+  spoken = updateSpoken(spoken, { ...one, text: "First", final: true }, 3);
+  const typed = { role: "user" as const, text: "Typed" };
+  const ack = { role: "user" as const, text: "Fir", voiceId: one.id, voicePartial: true as const };
+  const rows = (messages: any[]) => voiceCanvas(messages, 0, spoken).reverse().map(row => [row.key, row.message.text]);
+  const expected = [["m:0", "Typed"], ["v:a:1", "First"], ["v:a:2", "Second"]];
+  assert.deepEqual(rows([typed]), expected);
+  assert.deepEqual(rows([typed, ack]), expected);
+  assert.deepEqual(rows([typed, { ...ack, voicePartial: undefined, text: "First" }, { ...typed, voiceId: two.id, text: "Second" }]), expected);
 });

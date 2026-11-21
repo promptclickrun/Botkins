@@ -152,6 +152,10 @@ How the caller connects (from the same documentation):
 
 A session is kept by id until `endLive(id)` (the 32 newest are kept). `endLive` calls `adapter().codex.end(id)` for a Codex session, and for the others only forgets the id: the caller closes its own socket or peer connection. Unknown ids are ignored.
 
+### Spoken messages in chat history
+
+A computer with `voice-history-v1` accepts `recordVoiceLine(chatId, voiceId, text, final)`. Send the current text of one user utterance on each update, using the same session-scoped ID through the final correction. The watched chat publishes the partial text, and the computer saves the final as a user message. For Codex, the computer receives and records the transcript directly. A matching `ask_bot` request can pass the same `voiceId` to `send` to run the request on that message.
+
 ## A voice of a bot's own (`bot-voice-v1`)
 
 A bot may keep a voice of its own, saved with the bot by the app (`bot.voice`, sent to phones in the `bots` part; `updateBot(id, { voice })` sets it and `voice: null` clears it):

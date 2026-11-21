@@ -304,3 +304,19 @@ test("a stopped turn stays stopped across a crash, and its queued message is del
   pending.resolve({ data: { content: "" } });
   await old;
 });
+
+test("live speech streams into the chat and reopens as one user message", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-voice-history-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const open = () => new Workspace(dir, async () => ({}), () => {});
+  const ws = open();
+  const id = ws.createChat("pip");
+  assert.equal(typeof ws.recordVoiceLine, "function");
+  ws.recordVoiceLine(id, "call:u1", "Turn", false);
+  assert.equal(ws.chat(id).messages.at(-1).text, "Turn");
+  ws.recordVoiceLine(id, "call:u1", "Turn left.", true);
+  const restored = open();
+  restored.recordVoiceLine(id, "call:u1", "Turn", false);
+  assert.deepEqual(restored.chat(id).messages.map(m => [m.role, m.text]), [["user", "Turn left."]]);
+  assert.equal(restored.state.runs.filter(r => r.chatId === id).length, 0);
+});

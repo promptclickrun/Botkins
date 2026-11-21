@@ -494,8 +494,9 @@ test("through the real Voice module: Codex's voices are offered for live voice, 
   const offered = await voice.options("live", "codex");
   assert.deepEqual(offered.voices.map((v) => v.id), ["juniper", "maple"]);
   // As the link does for a phone: whom the session is for travels in `about`.
-  const session = await voice.live({ provider: "codex", sdp: "v=0 offer", instructions: "Be brief.", tools: [ASK_BOT], about: { chatId: "chat-1", botId: "bot-1", botName: "Pip" } });
-  assert.deepEqual(noted, [{ chatId: "chat-1", botId: "bot-1" }]);
+  const author = { memberId: "m_avery", name: "Avery" };
+  const session = await voice.live({ provider: "codex", sdp: "v=0 offer", instructions: "Be brief.", tools: [ASK_BOT], about: { chatId: "chat-1", botId: "bot-1", botName: "Pip", author } });
+  assert.deepEqual(noted, [{ chatId: "chat-1", botId: "bot-1", author }]);
   assert.match(peers.at(-1).seen.find(([method]) => method === "thread/realtime/appendText")[1].text, /Pip/);
   voice.endLive(session.id);
   await peers.at(-1).exited;
@@ -672,4 +673,41 @@ test("the window resolves and names a bot's own voice as the main process does",
   assert.equal(botVoiceSummary({ tts: { provider: "device" } }, shared), "This computer");
   // Another provider keeps the speed and drops the model and voice that wouldn't fit it.
   assert.deepEqual(withProvider({ tts: { provider: "openai", model: "tts-1", voice: "nova", speed: 1.25 } }, "tts", "gemini"), { tts: { provider: "gemini", speed: 1.25 } });
+});
+
+test("a phone's Codex transcript is recorded in its chat and hangup keeps the last partial", () => {
+  const ws = fakeWorkspace();
+  const writes = [];
+  ws.recordVoiceLine = (...args) => writes.push(args);
+  const desk = new VoiceDesk({ voice: fakeVoice, workspace: () => ws });
+  desk.noteSession("codex-1", { chatId: "chat-1" });
+  desk.heardUser("codex-1", "What ", false);
+  desk.heardUser("codex-1", "time", false);
+  desk.heardUser("codex-1", "What time?", true);
+  desk.heardUser("codex-1", "Tomorrow", false);
+  desk.forget("codex-1");
+  assert.deepEqual(writes.map(([chatId, , text, final]) => [chatId, text, final]), [
+    ["chat-1", "What ", false], ["chat-1", "What time", false], ["chat-1", "What time?", true],
+    ["chat-1", "Tomorrow", false], ["chat-1", "Tomorrow", true],
+  ]);
+  assert.equal(writes[0][1], writes[2][1]);
+  assert.notEqual(writes[2][1], writes[3][1]);
+});
+
+test("desktop speech keeps overlapping items separate and finalizes the last revision on hangup", async () => {
+  const ws = fakeWorkspace();
+  const writes = [];
+  ws.recordVoiceLine = (...args) => writes.push(args);
+  const desk = new VoiceDesk({ voice: fakeVoice, workspace: () => ws });
+  const { id } = await desk.startLive("chat-1");
+  desk.heardUser(id, "One", false, { item: "u1" });
+  desk.heardUser(id, "Two", false, { item: "u2" });
+  desk.heardUser(id, "One!", true, { item: "u1" });
+  desk.heardUser(id, " stale", false, { item: "u1" });
+  desk.heardUser(id, "Twenty", false, { item: "u2", replace: true });
+  desk.endLive(id);
+  assert.deepEqual(writes.map(([, key, words, final]) => [key, words, final]), [
+    [id + ":item-u1", "One", false], [id + ":item-u2", "Two", false], [id + ":item-u1", "One!", true],
+    [id + ":item-u2", "Twenty", false], [id + ":item-u2", "Twenty", true],
+  ]);
 });

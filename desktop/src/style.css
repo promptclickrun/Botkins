@@ -1611,6 +1611,10 @@ article .command-output {
 .brand .newchat:hover {
   color: var(--ink);
 }
+/* Marketplace sits just left of New chat; the pair keeps to the right of the name. */
+.brand .newchat.market + .newchat {
+  margin-left: -6px;
+}
 .shell.collapsed .brand {
   flex-direction: column;
   gap: 4px;

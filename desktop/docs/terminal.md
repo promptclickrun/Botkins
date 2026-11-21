@@ -246,6 +246,23 @@ botkins plugins bots memory --bot Nova
 - **A command that Botkins prints for you to run** has each word quoted for a shell when it needs it. An id that has a character that cannot be shown is not printed as a command: take it from `botkins plugins list --json`.
 - Only the text of a plugin gets this care. A name that you gave (a bot's name in an error, or in the log) is printed as it is, with its emoji and its joiners. Only a control character and a mark that turns text around are written as a number.
 
+## Apps (Composio)
+
+Marketplace › Apps: the apps of your own Composio account. The computer's Composio tool (the tool at `https://connect.composio.dev/mcp`) does the work with its own sign-in, so the apps you connect are the ones your bots can use. Sign it in once: Sign in with Composio in the app's window, or `botkins tools add composio --url https://connect.composio.dev/mcp` and then `botkins tools sign-in composio`.
+
+```sh
+botkins apps list gmail
+botkins apps connected
+botkins apps connect gmail --wait
+botkins apps accounts gmail
+botkins apps remove gmail <account> --yes
+```
+
+- **`apps list [<search>]`** is Composio's public list, kept on this computer and checked again at most once an hour. `--category <id>` narrows it, `--categories` lists the categories, `--limit <n>` shows more. It needs no sign-in.
+- **`apps connect <app>`** prints the page to sign in to the app on. Open it in any browser. With `--wait` the command ends when the new account is connected (ten minutes at most; Ctrl-C stops), and an account that was never finished is taken away again.
+- `apps accounts <app>…` shows each account with its id and whether it is connected. `apps remove <app> <account>` removes one from your Composio account, after a yes (`--yes` with no terminal).
+- The log has `apps.connect` and `apps.remove` with the app's slug, never the page, an account or its email. Without the tool's sign-in, each command but `apps list` says "Sign in with Composio first."
+
 ## The rest of the workspace
 
 Each thing that the app's window manages has commands too. Each command has `--help`, works with `--json`, and asks no question when there is no terminal.
@@ -267,6 +284,9 @@ botkins bots import Reviewer
 botkins templates save Nova --name "Research starter"
 botkins templates export "Research starter" --file starter.json
 botkins templates import starter.json
+botkins templates browse inbox
+botkins templates show inbox-sorter@botkins
+botkins templates use inbox-sorter@botkins --name Sorter
 ```
 
 - **`bots duplicate <bot>`** makes a copy named `<name> copy`. It has the same role, instructions and model. It has no chats and no memory yet.
@@ -277,8 +297,9 @@ botkins templates import starter.json
 - **Words from elsewhere are shown first.** An agent's instructions, and a template file, steer a bot. So `bots import <agent>` and `templates import <file>` print the whole text first: the name, the role, the model, the file the agent comes from, and the instructions. Then they ask. With no terminal they fail and name `--yes`. The text is printed on standard error with `--yes` and with `--json` too. A template that is imported is saved as a template only. No bot is made.
 - **A text that is shown has each character that hides or turns text written as its number**, as `\u{202e}`. This holds for memory, instructions and templates in the text form. `--json` has them as they are, and so has a file that `templates export --file` writes.
 - **`templates`** keeps the templates. `save <bot>` saves a bot's setup (`--name` gives another name). `list`, `show`, `rename` and `remove` work as their names say. `export <template>` or `export --bot <bot>` prints the file, or writes it with `--file <path>`. An existing file is replaced only after a yes. The file holds the name, role, about text, instructions and look, and nothing of the bot's folders, chats or credentials. The app keeps a copy of an export among the bot's files, as it does for a phone.
+- **Agent templates in the marketplaces.** `templates browse [<search>] [--category <id>] [--marketplace <id>]` lists what Marketplace › Agents shows, with each template's id (`name@marketplace`). `templates show <id>` shows one with its instructions. `templates use <id>` makes a bot from it, as Install and then Create a bot do in the window: it shows the whole template first and asks (with no terminal it needs `--yes`); `--name` gives the bot another name.
 - **A removal needs the whole name or the id.** `sections remove` and `templates remove` ask first, and with no terminal they need `--yes`. They do not take the start of a name, so a short word does not remove something else. The other commands take the start of a name when only one thing has it, and name the matches when more than one does.
-- The log has one line for each change, by the name of the bot, the section or the template (`bots.order` has no name): `bots.duplicate`, `bots.order`, `bots.primary`, `bots.flags.set`, `bots.memory.set`, `bots.sections.add`, `bots.sections.rename`, `bots.sections.remove`, `bots.import`, `templates.save`, `templates.rename`, `templates.remove`, `templates.export` and `templates.import`.
+- The log has one line for each change, by the name of the bot, the section or the template (`bots.order` has no name): `bots.duplicate`, `bots.order`, `bots.primary`, `bots.flags.set`, `bots.memory.set`, `bots.sections.add`, `bots.sections.rename`, `bots.sections.remove`, `bots.import`, `templates.save`, `templates.rename`, `templates.remove`, `templates.export`, `templates.import` and `templates.use`.
 
 ### Chats
 

@@ -2,6 +2,7 @@
 // It keeps a small workspace in memory, shaped like the desktop's, and answers a message with a
 // scripted reply: thinking, one tool step, then streamed text. A message with "approve" in it asks
 // for an approval first; one with "which" asks a question.
+import { addUserMessage, recordVoiceLine } from "./voice-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -1083,6 +1084,83 @@ function pluginWarnings(entry, old = false) {
   ];
 }
 
+// ── Agent templates ("agent-templates-v1", docs/agent-templates.md) ─────────────────────────────────
+// Made-up templates from two marketplaces, read from nowhere: the built-in "Botkins" and a team's own
+// ("Team picks", not built in). The order is the catalogs' own, Botkins first. BOTKINS_DEV_AGENTS=off
+// leaves the capability out, as an older computer would.
+const AGENT_CATEGORIES = { writing: "Writing", research: "Research", productivity: "Productivity", work: "Work", dev: "Development", learning: "Learning", health: "Health", finance: "Finance", home: "Home", media: "Media", life: "Life", other: "Other" };
+const agentTemplate = (marketplace, marketplaceName, builtIn, name, entry) => ({ id: name + "@" + marketplace, marketplace, marketplaceName, builtIn, ...entry, ...(entry.category && { categoryName: AGENT_CATEGORIES[entry.category] ?? "Other" }) });
+const DEMO_AGENTS = [
+  agentTemplate("botkins", "Botkins", true, "inbox-triage", {
+    name: "Inbox Triage",
+    role: "Email sorter",
+    summary: "Reads your new mail, sorts what matters from what can wait, and drafts short replies for you to check.",
+    look: { head: "beacon", palette: "tidepool" },
+    category: "productivity",
+    version: "1.0.0",
+    author: "Botkins",
+    keywords: ["email", "inbox", "mail"],
+    instructions: "You help the person keep their inbox under control.\n\n- Sort new mail into: needs a reply today, can wait, and can be archived.\n- For each that needs a reply, draft a short answer in the person's own tone.\n- Never send anything yourself. Show the drafts and wait.\n- When you are not sure what a message wants, say so in one line.",
+  }),
+  agentTemplate("botkins", "Botkins", true, "meeting-prep", {
+    name: "Meeting Prep",
+    role: "Briefing writer",
+    summary: "Before each meeting, gathers who is coming, what was said last time and what to decide, on one page.",
+    look: { head: "spool", palette: "honey" },
+    category: "productivity",
+    version: "1.2.0",
+    author: "Botkins",
+    keywords: ["calendar", "meetings", "notes"],
+    instructions: "Before a meeting, write a one-page brief:\n\n1. Who is coming, and what each of them cares about.\n2. What was agreed or left open last time.\n3. The decisions this meeting should make.\n\nKeep it short enough to read in two minutes.",
+  }),
+  agentTemplate("botkins", "Botkins", true, "plain-editor", {
+    name: "Plain Editor",
+    role: "Editor",
+    summary: "Makes your writing shorter and clearer without changing what you mean.",
+    look: { head: "muse", palette: "fig" },
+    category: "writing",
+    version: "1.0.0",
+    author: "Botkins",
+    keywords: ["editing", "clarity", "style"],
+    instructions: "Edit the person's text for clarity.\n\n- Cut words that add nothing.\n- Prefer short sentences and common words.\n- Keep the person's meaning and voice.\n- Show the edited text first, then a short list of what you changed and why.",
+  }),
+  agentTemplate("botkins", "Botkins", true, "story-spark", {
+    name: "Story Spark",
+    role: "Writing partner",
+    summary: "Helps you start a story: a premise, a few characters and the first scene, then follows your lead.",
+    look: { head: "luna", palette: "bluebell" },
+    category: "writing",
+    version: "0.9.1",
+    author: "Botkins",
+    keywords: ["fiction", "stories", "ideas"],
+    instructions: "You are a writing partner for fiction.\n\nOffer three short premises when asked to start. Once the person picks one, suggest characters and a first scene. Follow the person's choices; never take the story over.",
+  }),
+  agentTemplate("botkins", "Botkins", true, "habit-coach", {
+    name: "Habit Coach",
+    role: "Coach",
+    summary: "Checks in each day on the habits you chose, keeps count, and helps you plan around a missed day.",
+    look: { head: "sprig", palette: "fern" },
+    category: "health",
+    version: "1.0.0",
+    author: "Botkins",
+    keywords: ["habits", "fitness", "routine"],
+    instructions: "Help the person keep the habits they chose.\n\n- Ask once a day how each habit went.\n- Keep a running count, and say it plainly.\n- When a day is missed, help plan the next one. No guilt.\n- You are not a doctor: for anything medical, suggest they ask one.",
+  }),
+  agentTemplate("team-picks", "Team picks", false, "release-notes", {
+    name: "Release Notes",
+    role: "Changelog writer",
+    summary: "Turns a list of merged pull requests into release notes people want to read.",
+    look: { head: "tinker", palette: "terracotta" },
+    category: "dev",
+    version: "2.0.0",
+    author: "Acme platform team",
+    keywords: ["github", "changelog", "releases"],
+    instructions: "Write release notes from the merged pull requests you are given.\n\n- Group them as New, Better and Fixed.\n- One line each, in plain words a customer understands.\n- Leave out internal changes (tests, CI, refactors).\n- End with the list of contributors.",
+  }),
+];
+const marketAgentOf = ({ instructions: _instructions, ...listing }) => listing;
+const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.role, agent.summary, agent.category ?? "", agent.categoryName ?? "", ...(agent.keywords ?? [])].some((part) => part.toLowerCase().includes(word)));
+
 export class MockBackend {
   constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
@@ -1095,7 +1173,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1119,6 +1197,8 @@ export class MockBackend {
     // "app-update-v1": made-up updates of this computer's own Botkins (mock-update.mjs, BOTKINS_DEV_UPDATE).
     this.updates = new DemoUpdates(this, process.env.BOTKINS_DEV_UPDATE);
     if (this.updates.capable) this.capabilities.push("app-update-v1");
+    // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
+    if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
@@ -1347,18 +1427,17 @@ export class MockBackend {
     if (!fn) throw new Error("The demo computer doesn't do " + method + " yet.");
     // The person a call is made for (spaces are a person's): "owner", or a member's id and name.
     this.caller = context.principal?.kind === "member" ? { id: context.principal.memberId, name: context.principal.name || "A member" } : { id: "owner", name: OWNER_NAME };
-    const result = await fn.apply(this, args);
+    const callArgs = method === "send"
+      ? [args[0], args[1], { ...args[2], author: this.caller.id === "owner" ? undefined : { memberId: this.caller.id, name: this.caller.name } }]
+      : args;
+    const result = await fn.apply(this, callArgs);
     const principal = context.principal;
     if (principal?.kind === "member") {
       if (method === "createChat" || method === "createGroupChat" || method === "forkChat" || method === "spaces.newPanel" || method === "spaces.ask") {
         const chat = this.state.chats.find((item) => item.id === (result?.chatId ?? result));
         if (chat) chat.createdBy = principal.memberId;
       }
-      if (method === "send") {
-        const chat = this.chat(args[0]);
-        const message = [...chat.messages].reverse().find((item) => item.role === "user" && item.text === args[1]);
-        if (message) message.author = { memberId: principal.memberId, name: principal.name };
-      }
+
     }
     this.changed();
     return result;
@@ -1689,7 +1768,7 @@ export class MockBackend {
     const next = this.state.queued[id]?.shift();
     if (next) {
       if (!this.state.queued[id].length) delete this.state.queued[id];
-      this.handlers.send.call(this, id, next.text);
+      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author });
     }
   }
   /** A scripted turn: thinking, a tool step, an approval or question when asked for, then the reply. */
@@ -1860,7 +1939,7 @@ export class MockBackend {
     const next = this.state.queued[id]?.shift();
     if (next) {
       if (!this.state.queued[id].length) delete this.state.queued[id];
-      this.handlers.send.call(this, id, next.text);
+      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author });
     }
   }
   handlers = {
@@ -2030,6 +2109,10 @@ export class MockBackend {
       this.state.chats = this.state.chats.filter((c) => c.id !== id);
     },
     warmChat() {},
+    recordVoiceLine(chatId, id, text, final) {
+      const author = this.caller?.id && this.caller.id !== "owner" ? { memberId: this.caller.id, name: this.caller.name } : undefined;
+      recordVoiceLine(this.chat(chatId), id, text, final, author);
+    },
     // A new chat with the messages up to and including `messageIndex`.
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
@@ -2072,7 +2155,7 @@ export class MockBackend {
       const prompt = text(value, 32000, "message");
       if (this.turns.has(id)) {
         if (options?.delivery === "steer" && this.turns.get(id).steer?.(prompt)) return;
-        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt });
+        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt, ...(options?.author && { author: options.author }), ...(options?.voiceId && { voiceId: options.voiceId }) });
         return;
       }
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
@@ -2080,7 +2163,7 @@ export class MockBackend {
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
-      chat.messages.push({ role: "user", text: prompt, runId: run.id, time: now() });
+      addUserMessage(chat, { role: "user", text: prompt, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
       if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
       chat.time = now();
       // Today › New panel sends "/today-panel <what it should show>"; the demo bot makes one at once.
@@ -2953,6 +3036,21 @@ export class MockBackend {
       const servers = new Set(Object.values(record.serverIds ?? {}));
       this.state.mcpServers = this.state.mcpServers.filter((server) => !servers.has(server.id));
       this.plugins.installed = this.plugins.installed.filter((item) => item !== record);
+    },
+    // Agent templates ("agent-templates-v1", docs/agent-templates.md). Nothing here reaches the network.
+    "agents.browse"({ query, category, marketplace } = {}) {
+      const words = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+      // The categories count what the other filters leave, so the chips can show their counts.
+      const left = DEMO_AGENTS.filter((agent) => (marketplace === undefined || agent.marketplace === marketplace) && agentMatches(agent, words));
+      const counts = new Map();
+      for (const agent of left) if (agent.category) counts.set(agent.category, (counts.get(agent.category) ?? 0) + 1);
+      const categories = [...counts].map(([id, count]) => ({ id, name: AGENT_CATEGORIES[id] ?? "Other", count }));
+      return { agents: left.filter((agent) => category === undefined || agent.category === category).map(marketAgentOf), categories };
+    },
+    "agents.template"(id) {
+      const agent = DEMO_AGENTS.find((item) => item.id === id);
+      if (!agent) throw new Error("That template isn't in its marketplace any more.");
+      return structuredClone(agent);
     },
     sidePane(chatId, action, panelId) {
       const chat = this.chat(chatId);
