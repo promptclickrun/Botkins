@@ -179,6 +179,8 @@ The key is derived each time from the phone's pairing key, so the computer store
 
 The host takes at most 256 connections, and at most 24 from one address. A connection that sends nothing is dropped after 10 seconds. A call without a known session, or with a body larger than 6 MB (64 KB for pairing), is refused before any of its body is read, and a call from a phone that was removed while its body was on the way is refused too.
 
+A sync follows up to four chats. With `stream-appends-v1`, each cursor has a chat ID and text ID of up to 128 UTF-16 units, plus two non-negative safe integer offsets. Text-only changes flush to a waiting session at most every 200 ms. Other changes use the 60 ms pump, including stream starts, first text and ends. See [the sync contract](CONTRACT.md#streaming-text).
+
 Pairing and session tries are counted per address: 20 in 10 seconds, then that address is told to slow down. A phone keeps at most 6 sessions (its oldest end first) and may have two `link.sync` waits open in each; a newer wait ends the oldest. A phone may have 8 unfinished uploads at once.
 
 A message's mentions are checked for shape, and a path in one may not climb with `..`; a wiki page is named from the wiki's own top. The desktop app itself checks that a mentioned file is inside the chat's own folders. A mention is a project, a Today card (`board`), a file or a wiki page.

@@ -1,10 +1,11 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { Ban, Brain, ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleX, MessageCircle } from "lucide-react-native";
-import { useState } from "react";
-import { ScrollView, Text, View } from "react-native";
-import type { Run, Step, TeamAsk, Todo } from "@/link/types";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import type { Run, Step, StepDetail, TeamAsk, Todo } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useBots, useModels, useWatchedChat } from "@/state/hooks";
+import { api } from "@/state/link";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
@@ -31,11 +32,33 @@ function Mono({ label, text }: { label: string; text: string }) {
   );
 }
 
-/** One step: its state, its label and how long it took. A tap shows its input and output. */
-export function StepRow({ step, startOpen = false }: { step: Step; /** The step a person tapped in a chat's fold. */ startOpen?: boolean }) {
+/**
+ * One step: its state, its label and how long it took. A tap shows its input and output. A step
+ * that came without them (`more`, "step-details-v1") reads them from the computer when it opens,
+ * and again when it finishes; `chatId` and `runId` say which step that is.
+ */
+export function StepRow({ step, chatId, runId, startOpen = false }: { step: Step; chatId?: string; runId?: string; /** The step a person tapped in a chat's fold. */ startOpen?: boolean }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(startOpen);
-  const more = !!step.input || !!step.output;
+  const [detail, setDetail] = useState<StepDetail | "failed">();
+  const fetches = open && !!step.more && !!chatId && !!runId;
+  const stepId = step.id;
+  const finished = step.finished;
+  useEffect(() => {
+    if (!fetches || !chatId || !runId) return;
+    let live = true;
+    api["link.step"](chatId, runId, stepId).then(
+      (value) => live && setDetail(value ?? {}),
+      () => live && setDetail((held) => held ?? "failed"),
+    );
+    return () => {
+      live = false;
+    };
+  }, [fetches, chatId, runId, stepId, finished]);
+  const read = typeof detail === "object" ? detail : undefined;
+  const input = read?.input ?? step.input;
+  const output = read?.output ?? step.output;
+  const more = !!step.input || !!step.output || !!step.more;
   const took = step.finished ? duration(step.finished - step.started) : undefined;
   const head = (
     <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
@@ -66,8 +89,14 @@ export function StepRow({ step, startOpen = false }: { step: Step; /** The step 
       </Tap>
       {open && (
         <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg, gap: space.md }}>
-          {!!step.input && <Mono label="Input" text={step.input} />}
-          {!!step.output && <Mono label="Output" text={step.output} />}
+          {!!input && <Mono label="Input" text={input} />}
+          {!!output && <Mono label="Output" text={output} />}
+          {fetches && !detail && <ActivityIndicator color={colors.muted} style={{ alignSelf: "flex-start" }} />}
+          {fetches && detail === "failed" && (
+            <T variant="footnote" color="muted">
+              Couldn't read this step from your computer.
+            </T>
+          )}
         </View>
       )}
     </View>
@@ -173,7 +202,7 @@ export default function RunActivity() {
           <Label>{onlyFailed ? (steps.length === 1 ? "1 failed step" : steps.length + " failed steps") : steps.length === 1 ? "1 step" : steps.length + " steps"}</Label>
           <Group>
             {steps.map((step) => (
-              <StepRow key={step.id} step={step} startOpen={step.id === stepId} />
+              <StepRow key={step.id} step={step} chatId={chatId} runId={runId} startOpen={step.id === stepId} />
             ))}
           </Group>
           {onlyFailed && <Button title={"Show all " + everyStep.length + " steps"} variant="ghost" size="sm" wide onPress={() => setAllSteps(true)} style={{ marginTop: space.xs }} />}

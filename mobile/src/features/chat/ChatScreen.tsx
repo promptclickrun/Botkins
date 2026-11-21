@@ -21,7 +21,7 @@ import { completions } from "./completion";
 import { HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
-import { MAX_MENTIONS, withBoardQuote } from "./compose";
+import { arrived, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ContextMeter } from "./ContextMeter";
 import { latestTurn } from "./helpers";
@@ -544,38 +544,66 @@ export default function ChatScreen() {
     setText("");
     setParked(false);
     list.current?.scrollToOffset({ offset: 0, animated: true });
+    const before = { length: view ? view.from + view.messages.length : 0, waiting: waitingCopies(message, queued) };
     // While the chat works, the message steers the turn where the provider takes one, as on the desktop app.
     return api.send(chatId, message, working ? { ...sent, delivery: "steer" } : sent).then(
       () => true,
       (error: unknown) => {
+        // The computer can take a message and its answer still be lost on the way back. Then the
+        // message is in the chat (or waiting its turn), and putting the draft back would show it twice.
+        const now = useApp.getState();
+        if (arrived(message, before, now.chats[chatId], now.parts.live?.queued[chatId])) return true;
         if (card) setPinnedId(card.id);
         if (quoted) setQuote((current) => current || quoted);
         setText((current) => current || typed);
+        // It can also arrive a moment after the failure: the draft is taken out again then (below).
+        setUnsure({ text: typed, message, before });
         showToast(error instanceof Error ? error.message : "Couldn't send that.", "error");
         return false;
       },
     );
   };
+  // A draft put back after a send that seemed to fail, while it is still as it was put back.
+  const [unsure, setUnsure] = useState<{ text: string; message: string; before: { length: number; waiting: number } } | null>(null);
+  const landed = !!unsure && arrived(unsure.message, unsure.before, view, queued);
+  useEffect(() => {
+    if (!unsure) return;
+    if (text !== unsure.text) setUnsure(null);
+    else if (landed) {
+      setUnsure(null);
+      setText("");
+    }
+  }, [unsure, text, landed]);
+  // What every row of the list is handed stays the same function from one render to the next. This
+  // screen renders on every keystroke and on every change from the computer, and a row whose props
+  // changed is drawn again: with a new function each time, every message in view was.
+  const latest = useRef({ send });
+  useEffect(() => {
+    latest.current = { send };
+  });
   // A reply's own buttons send plain text; a pinned card waits for the person's message.
-  const sendText = (value: string) => void send(value, undefined, false);
+  const sendText = useCallback((value: string) => void latest.current.send(value, undefined, false), []);
   // A custom view hands over text: it goes after what is already written, for the person to read and send.
-  const draftText = (value: string) => setText((current) => (current.trim() ? current.replace(/\s+$/, "") + "\n" + value : value));
+  const draftText = useCallback((value: string) => setText((current) => (current.trim() ? current.replace(/\s+$/, "") + "\n" + value : value)), []);
   // The side pane a bot opened beside this chat: its sheet opens when a bot asks, and text a view in it hands over lands in the message box.
   const pane = usePane(chatId, draftText);
   // Reply and Fork from here, in each message's menu. A group chat can't be forked.
-  const messageActions: MessageActions = {
-    onReply: (value) => {
-      setQuote(quoteOf(value));
-      input.current?.focus();
-    },
-    onFork: group
-      ? undefined
-      : (index) =>
-          void attempt(api.forkChat(chatId, index)).then((id) => {
-            if (id) router.push({ pathname: "/chat/[id]", params: { id } });
-          }),
-    busy: working,
-  };
+  const messageActions = useMemo<MessageActions>(
+    () => ({
+      onReply: (value) => {
+        setQuote(quoteOf(value));
+        input.current?.focus();
+      },
+      onFork: group
+        ? undefined
+        : (index) =>
+            void attempt(api.forkChat(chatId, index)).then((id) => {
+              if (id) router.push({ pathname: "/chat/[id]", params: { id } });
+            }),
+      busy: working,
+    }),
+    [group, chatId, working],
+  );
   const pick = (starter: string) => {
     setText(starter);
     input.current?.focus();

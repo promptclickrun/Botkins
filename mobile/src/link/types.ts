@@ -396,7 +396,11 @@ export type Step = {
   botId?: string;
   /** The helper (`Subagent.id`) that ran this step ("turn-timeline-v1"). Missing: the turn's own step, or a computer that doesn't say. */
   agentId?: string;
+  /** The step has a longer input or output than it carries here ("step-details-v1"): `link.step` reads them. */
+  more?: boolean;
 };
+/** One step's input and output, read when the step is opened (`link.step`). */
+export type StepDetail = { input?: string; output?: string };
 export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
 /**
@@ -811,6 +815,7 @@ export type UsageReport = {
  * computer, by its own page and code, its own questions, or a pasted token; and a provider's
  * command-line tool installed from a phone).
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
+ * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
  * as interim messages, answers to requests as messages, a time on every reply, each helper's own
  * steps marked, and how a turn ended; docs/turn-timeline.md).
@@ -1279,6 +1284,8 @@ export type Calls = {
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;
   "link.messages"(chatId: string, before: number, limit?: number): ChatDetail | null;
+  /** A step's input and output, for a step that says `more` ("step-details-v1"). Null when the step is gone. */
+  "link.step"(chatId: string, runId: string, stepId: string): StepDetail | null;
   "link.unpair"(): boolean;
   /** Sends a file to the computer for the next message. `data` is base64, at most about 3 MB a call; a larger file goes in parts with the same `id`. */
   /** The devices paired with the computer. Needs "devices-v1". */

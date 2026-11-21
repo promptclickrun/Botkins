@@ -86,3 +86,27 @@ export function joinDictation(base: string, heard: string): string {
   if (!base || /\s$/.test(base)) return base + words;
   return base + " " + words;
 }
+
+/** How many copies of `text` wait their turn in a chat. */
+export const waitingCopies = (text: string, queued: { text: string }[] | undefined) => (queued ?? []).filter((item) => item.text === text).length;
+
+/**
+ * Whether a message the phone sent is on the computer although its send seemed to fail (the answer
+ * was lost on the way back): it is a person's message at or after `before.length`, the chat's length
+ * when it was sent, or one more copy of it waits its turn than `before.waiting`. `text` is what was sent.
+ */
+export function arrived(
+  text: string,
+  before: { length: number; waiting: number },
+  view: { from: number; messages: { role: string; text: string }[] } | undefined,
+  queued: { text: string }[] | undefined,
+): boolean {
+  if (!text) return false;
+  if (waitingCopies(text, queued) > before.waiting) return true;
+  if (!view) return false;
+  for (let i = Math.max(0, before.length - view.from); i < view.messages.length; i++) {
+    const message = view.messages[i];
+    if (message.role === "user" && message.text === text) return true;
+  }
+  return false;
+}

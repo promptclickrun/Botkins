@@ -139,6 +139,45 @@ export function runsByChat(state, chatIds) {
   return wanted;
 }
 
+/** The longest input or output a light step keeps. Longer ones are fetched when the step is opened. */
+export const LIGHT_STEP_TEXT = 400;
+/** Steps that a chat draws from their input or output, so they keep both: a question the bot asked. */
+const KEEPS_TEXT = /^(ask_user|ask)$/i;
+
+/**
+ * A run for a client that asked for light steps ("step-details-v1"): a step's input and output stay
+ * only when they are short, when the chat itself reads them (a question), or when the step started
+ * a helper. Any other step says `more: true` instead, and the client asks for it with `link.step`.
+ * Most of a long turn's bytes are these two fields, and a chat only shows them when a step is opened.
+ */
+export function lightRun(run) {
+  if (!run || !Array.isArray(run.steps)) return run;
+  const helpers = new Set((run.agents ?? []).map((agent) => agent.id));
+  const light = (step) => {
+    const long = (text) => typeof text === "string" && text.length > LIGHT_STEP_TEXT;
+    if ((!long(step.input) && !long(step.output)) || KEEPS_TEXT.test(step.name ?? "") || helpers.has(step.id)) return step;
+    const { input, output, ...rest } = step;
+    return { ...rest, ...(!long(input) && input !== undefined && { input }), ...(!long(output) && output !== undefined && { output }), more: true };
+  };
+  return {
+    ...run,
+    steps: run.steps.map(light),
+    ...(run.teamwork && { teamwork: run.teamwork.map((ask) => ({ ...ask, ...(ask.steps && { steps: ask.steps.map(light) }) })) }),
+  };
+}
+/** A chat's page, or a chat's run part, with light steps. */
+export const lightPart = (part) => (!part ? part : Array.isArray(part.runs) ? { ...part, runs: part.runs.map(lightRun) } : lightRun(part));
+
+/** One step's input and output, as a client that holds light steps asks for them. Null when the step is gone. */
+export function stepDetail(state, chatId, runId, stepId) {
+  const run = (state.runs ?? []).find((r) => r.id === runId && r.chatId === chatId);
+  if (!run) return null;
+  const all = [...(run.steps ?? []), ...(run.teamwork ?? []).flatMap((ask) => ask.steps ?? [])];
+  const step = all.find((s) => s.id === stepId);
+  if (!step) return null;
+  return { ...(step.input && { input: clip(step.input, STEP_TEXT) }), ...(step.output && { output: clip(step.output, STEP_TEXT) }) };
+}
+
 /**
  * One chat's page of messages, with the finished runs they point to. `before` is the index of the
  * first message already held; the page ends just before it.

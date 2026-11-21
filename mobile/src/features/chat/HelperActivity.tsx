@@ -87,7 +87,7 @@ export default function HelperActivity() {
         ) : steps.length ? (
           <Group>
             {steps.map((step) => (
-              <StepRow key={step.id} step={step} />
+              <StepRow key={step.id} step={step} chatId={chatId} runId={runId} />
             ))}
           </Group>
         ) : (

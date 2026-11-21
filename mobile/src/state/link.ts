@@ -40,6 +40,7 @@ function follow(pairing: Pairing) {
   client = new LinkClient(pairing, {
     fetch: fetcher,
     streamAppends: true,
+    lightSteps: true,
     onParts: applyParts,
     onState: (link) => {
       useApp.setState({ link });

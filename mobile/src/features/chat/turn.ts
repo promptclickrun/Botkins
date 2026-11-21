@@ -46,6 +46,7 @@ export type Item =
       workUnder?: boolean;
     }
   /** What the bot did between two things it said or the person said: steps, and its thinking while the turn runs. */
+  /** `run` is for its id only: a row kept by `reuseItems` can hold the run as it was a moment ago. */
   | { kind: "work"; key: string; run: Run; steps: Step[]; thinking: string; live: boolean; /** A finished part's line ("Ran 2 commands"). */ label: string }
   /** Text the bot wrote before it moved on: an interim message, or a piece this phone noted from an older computer. */
   | { kind: "text"; key: string; text: string; /** The turn ended right after it. */ unfinished?: boolean }
@@ -576,7 +577,14 @@ export function reuseItems(held: Map<string, Item> | undefined, next: Item[]): {
   const items = next.map((item) => {
     const before = held?.get(item.key);
     const keys = Object.keys(item);
-    const same = !!before && keys.length === Object.keys(before).length && keys.every((key) => sameValue((item as Record<string, unknown>)[key], (before as Record<string, unknown>)[key]));
+    const same = !!before && keys.length === Object.keys(before).length && keys.every((key) => {
+      const now = (item as Record<string, unknown>)[key];
+      const was = (before as Record<string, unknown>)[key];
+      // A work row draws its own steps and reads only its run's id (LiveTurn.tsx). The run under way
+      // is a new object with every step, so by the object each of its rows would be drawn again.
+      if (key === "run" && item.kind === "work") return (now as Run | undefined)?.id === (was as Run | undefined)?.id;
+      return sameValue(now, was);
+    });
     const kept = same ? before : item;
     byKey.set(item.key, kept);
     return kept;

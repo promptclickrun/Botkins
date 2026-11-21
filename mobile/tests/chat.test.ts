@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { HIDE_AT, SHOW_AT, showsAt } from "../src/features/chat/scroll";
 import { test } from "node:test";
 import type { BoardItem, Bot, ModelInfo, RunSummary } from "../src/link/types";
-import { boardMessage, boardQuote, findTrigger, joinDictation, mentionKey, teammates, tokenOf, toInput, withBoardQuote } from "../src/features/chat/compose";
+import { boardMessage, boardQuote, findTrigger, joinDictation, mentionKey, teammates, tokenOf, toInput, withBoardQuote, arrived, waitingCopies } from "../src/features/chat/compose";
 import { chatRuns, contextParts, contextPercent, contextTone, tokens, usageSummary } from "../src/features/chat/contextMath";
 import { contextFact, effortRows, modelFacts } from "../src/features/models/facts";
 
@@ -161,4 +161,23 @@ test("the scroll-to-latest button shows when the newest message is well out of v
   assert.equal(showsAt(SHOW_AT - 40, false), false);
   // The list can be pulled past its end (a negative offset): never shown there.
   assert.equal(showsAt(-30, true), false);
+});
+
+test("a send that seemed to fail is not put back as a draft when the message did arrive", () => {
+  const view = { from: 40, messages: [{ role: "user", text: "yes" }, { role: "assistant", text: "Done." }, { role: "user", text: "ship it" }] };
+  // In the chat, at or after where the chat ended when it was sent.
+  assert.equal(arrived("ship it", { length: 42, waiting: 0 }, view, undefined), true);
+  // The same words from before the send don't count, nor a bot's message with them.
+  assert.equal(arrived("yes", { length: 42, waiting: 0 }, view, undefined), false);
+  assert.equal(arrived("Done.", { length: 40, waiting: 0 }, view, undefined), false);
+  // Waiting its turn while the bot works: one more copy than before.
+  assert.equal(arrived("and tests", { length: 43, waiting: 0 }, view, [{ text: "and tests" }]), true);
+  assert.equal(arrived("yes", { length: 43, waiting: 1 }, view, [{ text: "yes" }]), false);
+  assert.equal(arrived("yes", { length: 43, waiting: 1 }, view, [{ text: "yes" }, { text: "yes" }]), true);
+  assert.equal(waitingCopies("yes", [{ text: "yes" }, { text: "no" }, { text: "yes" }]), 2);
+  // Nothing loaded, or nothing sent: not arrived.
+  assert.equal(arrived("ship it", { length: 0, waiting: 0 }, undefined, undefined), false);
+  assert.equal(arrived("", { length: 0, waiting: 0 }, view, undefined), false);
+  // A page that starts after the send's place is read from its start.
+  assert.equal(arrived("ship it", { length: 10, waiting: 0 }, view, undefined), true);
 });
