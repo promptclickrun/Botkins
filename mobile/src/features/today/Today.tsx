@@ -3,7 +3,7 @@ import { type MenuAction, MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { Ellipsis, ExternalLink, MessageCircle, Plus, ThumbsDown, ThumbsUp } from "lucide-react-native";
-import { Children, type ComponentRef, createContext, type ReactNode, type RefObject, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentRef, createContext, type ReactNode, type RefObject, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Dimensions, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { actOnIdea, discussBoardItem } from "@/features/chat/open";
@@ -13,7 +13,7 @@ import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, useShape, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, TwoUp, useTheme } from "@/ui";
 
 type Segment = "feed" | "idea" | "goal" | "panels";
 const SEGMENTS: { value: Segment; label: string }[] = [
@@ -496,35 +496,5 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
         </Animated.View>
       )}
     </Seen.Provider>
-  );
-}
-
-/**
- * Cards two to a row when there is room (iPhone Duo opened, an iPad): an even count splits cleanly
- * at the fold. One column otherwise, as before.
- */
-function TwoUp({ children }: { children: ReactNode }) {
-  const shape = useShape();
-  const cards = Children.toArray(children);
-  if (!shape.wide) return <>{cards}</>;
-  // Half folded like a book, the columns are the two pages: the first ends before the fold and the
-  // second starts after it. Today sits in a page's padding (`space.xl` beside the safe area).
-  const fold = shape.pose === "book" ? shape.fold : null;
-  const first = fold ? Math.max(0, fold.x - shape.left - space.xl - space.sm) : undefined;
-  const rows: ReactNode[][] = [];
-  for (let at = 0; at < cards.length; at += 2) rows.push(cards.slice(at, at + 2));
-  return (
-    <>
-      {rows.map((row, index) => (
-        <View key={index} style={{ flexDirection: "row", alignItems: "flex-start", gap: fold ? fold.width + space.sm * 2 : space.lg }}>
-          {row.map((card, column) => (
-            <View key={column} style={column === 0 && first !== undefined ? { width: first } : { flex: 1, minWidth: 0 }}>
-              {card}
-            </View>
-          ))}
-          {row.length === 1 && <View style={{ flex: 1 }} />}
-        </View>
-      ))}
-    </>
   );
 }

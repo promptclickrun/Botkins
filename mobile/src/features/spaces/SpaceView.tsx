@@ -8,7 +8,7 @@ import type { Bot, PanelView, SpaceSummary } from "@/link/types";
 import { myself } from "@/features/chat/people";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { ago } from "@/state/time";
-import { Badge, Blocks, BotAvatar, Dot, EmptyState, lift, Loading, Mascot, radius, space, T, Tap, useTheme } from "@/ui";
+import { Badge, Blocks, BotAvatar, Dot, EmptyState, lift, Loading, Mascot, radius, space, T, Tap, useTheme, TwoUp } from "@/ui";
 import { markSeen, openNewPanel, openPanel, panelState, useSpaceContent } from "./data";
 import { changedLine, changedSince, lastLine, panelRows } from "./logic";
 
@@ -100,16 +100,21 @@ export function SpaceView({ space: summary, visit }: { space: SpaceSummary; visi
           {line}
         </T>
       )}
-      {panelRows(panels).map((row) => (
-        <View key={row.map((panel) => panel.id).join("+")} style={{ flexDirection: "row", gap: space.md }}>
-          {row.map((panel) => (
-            <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} half={row.length > 1} space={summary} />
-          ))}
-        </View>
-      ))}
-      {cards.map((card) => (
-        <ItemCard key={card.id} item={card} bot={bots.get(card.botId)} />
-      ))}
+      {/* With room, two rows of panels side by side (the even split the Duo's fold wants). */}
+      <TwoUp>
+        {panelRows(panels).map((row) => (
+          <View key={row.map((panel) => panel.id).join("+")} style={{ flexDirection: "row", gap: space.md }}>
+            {row.map((panel) => (
+              <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} half={row.length > 1} space={summary} />
+            ))}
+          </View>
+        ))}
+      </TwoUp>
+      <TwoUp>
+        {cards.map((card) => (
+          <ItemCard key={card.id} item={card} bot={bots.get(card.botId)} />
+        ))}
+      </TwoUp>
     </View>
   );
 }

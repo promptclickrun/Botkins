@@ -4,6 +4,7 @@ export { Blocks } from "./Blocks";
 export { AvatarMotion, useAvatarMotion } from "./avatarMotion";
 export { BotAvatar } from "./BotAvatar";
 export { foldGap, listWidth, type Shape, shapeOf, WIDE_MIN } from "./shape";
+export { TwoUp } from "./TwoUp";
 export { useShape } from "./useShape";
 export { Button, IconButton } from "./Button";
 export { ColorPicker } from "./ColorPicker";
