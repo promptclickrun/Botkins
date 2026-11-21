@@ -17,6 +17,23 @@ struct Snapshot: Decodable {
     let usage: [Usage]?
     let usageAt: Double?
     let models: [String: String]
+    /// The panels of the person's spaces ("spaces-v1"), pinned spaces first.
+    let panels: [Panel]?
+  }
+
+  /// A panel of a space, as its widget draws it: its title, the one thing it says, its space and its bot's Botkin.
+  struct Panel: Decodable, Hashable {
+    let id: String
+    let spaceId: String
+    let space: String
+    let title: String
+    let value: String?
+    let note: String?
+    let head: String
+    let palette: String
+    let eyes: String
+    /// When it last changed, in Unix seconds.
+    let at: Double
   }
 
   struct Bot: Decodable, Hashable {
@@ -108,6 +125,13 @@ struct Snapshot: Decodable {
     return (parts[0], computer, bot)
   }
 
+  /// A panel by its widget id ("<computer>|<panel>"), with its computer.
+  func panel(_ entity: String) -> (host: String, computer: Computer, panel: Panel)? {
+    let parts = entity.split(separator: "|", maxSplits: 1).map(String.init)
+    guard parts.count == 2, let computer = computers[parts[0]], let panel = computer.panels?.first(where: { $0.id == parts[1] }) else { return nil }
+    return (parts[0], computer, panel)
+  }
+
   /// Every paired computer's part, the one in use first.
   var ordered: [(id: String, computer: Computer)] {
     computers.map { ($0.key, $0.value) }.sorted { a, b in a.id == inUse ? true : b.id == inUse ? false : a.computer.name < b.computer.name }
@@ -131,6 +155,7 @@ enum Links {
   static func chat(_ id: String, host: String?) -> URL { url("/chat/" + id, ["host": host]) }
   static func answer(request: String, chat: String, host: String?) -> URL { url("/answer", ["request": request, "chat": chat, "host": host]) }
   static func usage(host: String?) -> URL { url("/usage", ["host": host]) }
+  static func panel(_ id: String, space: String, host: String?) -> URL { url("/panel", ["id": id, "space": space, "host": host]) }
 }
 
 // ── Plans and limits, in the app's words (src/features/models/limits.ts) ──────────────────────

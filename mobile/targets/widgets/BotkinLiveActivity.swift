@@ -19,6 +19,8 @@ struct BotkinsWidgets: WidgetBundle {
       BotkinWidget()
       CrewWidget()
       UsageWidget()
+      // A panel of a space (PanelWidget.swift).
+      PanelWidget()
     }
     // Control Center, the Lock Screen's buttons and the Action button (Controls.swift).
     if #available(iOS 18.0, *) {

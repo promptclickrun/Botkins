@@ -2,7 +2,7 @@
 // it to its App Group (`widgets.json`, docs/live-cards.md section 8) and asks iOS to draw the
 // widgets again; nothing in it leaves the phone. Each paired computer keeps its own part, so a widget
 // for a Botkin on another computer still shows it. No React Native imports: tests/widgets.test.ts runs it.
-import type { Bot, ChatSummary, ModelInfo, ProviderUsage, RunSummary } from "@/link/types";
+import type { Bot, ChatSummary, ModelInfo, PanelBlock, PanelView, ProviderUsage, RunSummary, SpaceSummary } from "@/link/types";
 import { activityLabel, type AvatarState, botActivity, chatActivity } from "./sessionActivity";
 import type { QuietLive } from "./store";
 
@@ -25,6 +25,12 @@ export type WidgetBot = {
 };
 /** One of a Botkin's newest chats. Times are Unix seconds. */
 export type WidgetChat = { id: string; title: string; provider?: string; state: "working" | "needs-you" | "done" | "failed" | "idle"; label: string; startedAt?: number; finishedAt?: number };
+/**
+ * A panel of a space as a widget draws it ("spaces-v1"): its title, the one thing it says (a number
+ * and a short line under it), its space and its bot's Botkin. `at` is when it last changed, in Unix
+ * seconds. A tap opens the panel in its space.
+ */
+export type WidgetPanel = { id: string; spaceId: string; space: string; title: string; value?: string; note?: string; head: string; palette: string; eyes: string; at: number };
 export type WidgetComputer = {
   name: string;
   /** When this part was written, in Unix seconds. */
@@ -36,6 +42,8 @@ export type WidgetComputer = {
   usageAt?: number;
   /** A model's name by its id, so a card or a widget can name a chat's model. */
   models: Record<string, string>;
+  /** The panels of the person's spaces, pinned spaces first. A space the phone has not read since it started keeps the panels it had. */
+  panels?: WidgetPanel[];
 };
 export type WidgetSnapshot = { v: 1; at: number; inUse?: string; computers: Record<string, WidgetComputer> };
 
@@ -55,7 +63,109 @@ type Input = {
   usage?: { items?: ProviderUsage[]; fetchedAt?: number };
   look: (bot: Looked) => { head: string; palette: string; eyes?: string };
   now: number;
+  /** The panels a widget can show (`panelParts`). */
+  panels?: WidgetPanel[];
 };
+
+// ── A panel as a widget shows it ────────────────────────────────────────────────────────────────
+
+export const PANEL_WIDGET = { panels: 24, title: 60, value: 24, note: 90 };
+const cut = (text: string, max: number) => (text.length > max ? text.slice(0, max - 1).trimEnd() + "…" : text);
+/** One line of a bot's text with no Markdown marks. */
+const plain = (text: unknown) =>
+  String(text ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/[*_`~]+/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1") ?? "";
+/** A number as a person reads it: "1,284", "62.5". */
+const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? (Math.round(value * 100) / 100).toLocaleString("en-US") : "");
+
+/** What one block says in a number and a line, or nothing. */
+function said(block: PanelBlock): { value?: string; note?: string } | undefined {
+  switch (block.type) {
+    case "metric":
+      return { value: plain(block.value), note: plain(block.note ?? block.label) };
+    case "progress":
+      return { value: number(block.value) + " of " + number(block.max), note: plain(block.note ?? block.label) };
+    case "bars": {
+      const top = [...block.items].sort((a, b) => b.value - a.value)[0];
+      return top ? { value: number(top.value), note: plain(top.label) } : undefined;
+    }
+    case "line": {
+      const last = block.series[0]?.values.at(-1);
+      return last === undefined ? undefined : { value: number(last), note: plain(block.label) };
+    }
+    case "list":
+      return block.items.length ? { note: plain(block.items[0]) } : undefined;
+    case "table":
+      return block.rows.length ? { note: block.rows[0].map(plain).filter(Boolean).join(" · ") } : undefined;
+    case "badges":
+      return block.items.length ? { note: block.items.map((item) => plain(item.label)).filter(Boolean).join(" · ") } : undefined;
+    case "markdown":
+      return plain(block.text) ? { note: plain(block.text) } : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The one thing a panel says, for a widget: its first number (a metric, else a progress), else what
+ * its first block says. An app panel says what a person last did in it ("Maya ticked Press kit").
+ * Nothing is made up: a panel that says nothing shows its title alone.
+ */
+export function panelHeadline(panel: Pick<PanelView, "blocks" | "last">): { value?: string; note?: string } {
+  const blocks = Array.isArray(panel.blocks) ? panel.blocks : [];
+  const first = blocks.find((block) => block.type === "metric") ?? blocks.find((block) => block.type === "progress");
+  let found = first ? said(first) : undefined;
+  for (const block of blocks) {
+    if (found) break;
+    found = said(block);
+  }
+  if (!found && panel.last) {
+    const label = panel.last.label?.trim();
+    const name = panel.last.name.trim().split(/\s+/)[0] || panel.last.name;
+    found = { note: name + " " + (label ? label[0]!.toLowerCase() + label.slice(1) : "changed this") };
+  }
+  const value = found?.value ? cut(found.value, PANEL_WIDGET.value) : "";
+  const note = found?.note ? cut(found.note, PANEL_WIDGET.note) : "";
+  return { ...(value && { value }), ...(note && { note }) };
+}
+
+/**
+ * The panels a widget can show: those of the person's spaces, pinned spaces first, in the person's
+ * order. `contents` is each space's panels as the phone read them since it started, by space id; a
+ * space it has not read keeps the panels the widgets had (`previous`), and a space that is gone
+ * takes its panels with it. Hidden panels are left out.
+ */
+export function panelParts(
+  spaces: Pick<SpaceSummary, "id" | "name" | "builtin" | "mine" | "by" | "pinned">[],
+  contents: Record<string, Pick<PanelView, "id" | "title" | "blocks" | "last" | "hidden" | "botId" | "updatedAt">[] | undefined>,
+  bots: Looked[],
+  look: Input["look"],
+  title: (space: Pick<SpaceSummary, "name" | "builtin" | "mine" | "by">) => string,
+  previous: WidgetPanel[] = [],
+): WidgetPanel[] {
+  const out: WidgetPanel[] = [];
+  for (const space of [...spaces.filter((one) => one.pinned), ...spaces.filter((one) => !one.pinned)]) {
+    const read = contents[space.id];
+    const name = cut(title(space), PANEL_WIDGET.title);
+    const panels = read
+      ? read
+          .filter((panel) => !panel.hidden)
+          .map((panel): WidgetPanel => {
+            const bot = bots.find((one) => one.id === panel.botId);
+            const face = bot ? look(bot) : { head: "beacon", palette: "original" };
+            return { id: panel.id, spaceId: space.id, space: name, title: cut(panel.title, PANEL_WIDGET.title), ...panelHeadline(panel), head: face.head, palette: face.palette, eyes: face.eyes ?? "oval", at: secs(panel.updatedAt) };
+          })
+      : previous.filter((panel) => panel.spaceId === space.id).map((panel) => ({ ...panel, space: name }));
+    out.push(...panels);
+  }
+  return out.slice(0, PANEL_WIDGET.panels);
+}
 
 /** The newest run of each chat a person started (not a routine's or a panel's). */
 function latestRuns(runs: RunSummary[]) {
@@ -69,7 +179,7 @@ function latestRuns(runs: RunSummary[]) {
 }
 
 /** One computer's part of the snapshot. */
-export function computerPart({ name, bots, chats, runs, live, defaultProvider, models, usage, look, now }: Input): WidgetComputer {
+export function computerPart({ name, bots, chats, runs, live, defaultProvider, models, usage, look, now, panels }: Input): WidgetComputer {
   const latest = latestRuns(runs);
   const own = (botId: string) => chats.filter((chat) => chat.botId === botId && !chat.botIds && !chat.panelId && !chat.archived && !chat.schedules?.some((schedule) => schedule.routine)).sort((a, b) => b.time - a.time);
   const chatParts: Record<string, WidgetChat[]> = {};
@@ -125,6 +235,7 @@ export function computerPart({ name, bots, chats, runs, live, defaultProvider, m
     chats: chatParts,
     ...(usage?.items && { usage: usage.items, ...(usage.fetchedAt && { usageAt: secs(usage.fetchedAt) }) }),
     models: names,
+    ...(panels?.length && { panels }),
   };
 }
 

@@ -4,9 +4,11 @@
 import { AppState } from "react-native";
 import { Activities } from "../../modules/botkins-activity";
 import { lookOf } from "@/data/botLook";
+import { readPanels, readSpaceOnce, watchSpaceContents } from "@/features/spaces/data";
+import { spaceTitle } from "@/features/spaces/logic";
 import { loadProviderUsage, providerUsageNow, watchProviderUsage } from "./providerUsage";
 import { useApp } from "./store";
-import { computerPart, sameSnapshot, type WidgetSnapshot, withComputer } from "./widgetData";
+import { computerPart, panelParts, sameSnapshot, type WidgetSnapshot, withComputer } from "./widgetData";
 
 const QUIET_MS = 1500;
 /** Plans and limits older than this are asked for again when the app comes to the front and a usage widget is on show. */
@@ -19,9 +21,13 @@ function snapshotNow(): WidgetSnapshot | undefined {
   const state = useApp.getState();
   const pairing = state.pairing;
   if (!pairing || !state.synced) return undefined;
+  const bots = state.parts.bots ?? [];
+  // A panel's widget ("spaces-v1"): the panels of the person's spaces, as the phone last read them.
+  const spaces = state.parts.meta?.capabilities.includes("spaces-v1") ? (state.parts.spaces ?? []) : [];
   const part = computerPart({
     name: state.parts.meta?.name ?? pairing.name ?? "Your computer",
-    bots: state.parts.bots ?? [],
+    panels: panelParts(spaces, readPanels(), bots, lookOf, spaceTitle, saved?.computers[pairing.serverId]?.panels),
+    bots,
     chats: state.parts.chats ?? [],
     runs: state.parts.runs ?? [],
     live: state.parts.live,
@@ -59,6 +65,18 @@ async function freshUsage() {
   }
 }
 
+/** Reads the pinned spaces the phone has not read yet, when a panel's widget is on show: its panels are then up to date without the person opening each space. */
+async function freshPanels() {
+  const state = useApp.getState();
+  if (!state.parts.meta?.capabilities.includes("spaces-v1") || !Activities?.installedWidgets) return;
+  try {
+    if (!(await Activities.installedWidgets()).includes("BotkinsPanel")) return;
+    for (const space of (useApp.getState().parts.spaces ?? []).filter((one) => one.pinned).slice(0, 8)) readSpaceOnce(space.id);
+  } catch {
+    // The widget keeps the panels it has.
+  }
+}
+
 let started = false;
 /** Called once when the app starts. */
 export async function startWidgets() {
@@ -72,12 +90,19 @@ export async function startWidgets() {
   }
   useApp.subscribe((state, before) => {
     if (state.parts.bots !== before.parts.bots || state.parts.chats !== before.parts.chats || state.parts.runs !== before.parts.runs || state.parts.live !== before.parts.live || state.models !== before.models || state.pairing !== before.pairing || state.synced !== before.synced) soon();
-    if (state.synced && !before.synced) void freshUsage();
+    if (state.parts.spaces !== before.parts.spaces) soon();
+    if (state.synced && !before.synced) {
+      void freshUsage();
+      void freshPanels();
+    }
   });
   watchProviderUsage(soon);
+  watchSpaceContents(soon);
   AppState.addEventListener("change", (next) => {
-    if (next === "active") void freshUsage();
-    else write();
+    if (next === "active") {
+      void freshUsage();
+      void freshPanels();
+    } else write();
   });
   soon();
 }
