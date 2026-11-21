@@ -1,7 +1,7 @@
 import AppIntents
 internal import BotkinsActivity
 internal import Expo
-internal import React
+import React
 import UIKit
 
 enum ShortcutError: LocalizedError {
