@@ -275,6 +275,10 @@ export class Panels {
     const panel = this.owned(botId, key, space);
     if (run?.panelId && panel?.id !== run.panelId)
       throw new Error("This refresh can only update its assigned panel");
+    // A refresh that runs the text of someone who left the team has that person as one of its
+    // people, and they open no space. Said so that the owner knows what to do.
+    if (run?.panelId && turn.people.some((person) => person !== "owner" && !this.ws.teamOf()?.members?.some((member) => member.id === person)))
+      throw new Error("This panel's routine was written by someone who is no longer on the team, so it can't update the panel. Set the routine again and it runs for the person who sets it.");
     this.mayChange(space, turn, panel ? "use" : "create");
     if (!panel && this.ws.spaces.panels(space.id).length >= LIMITS.panels) throw new Error(space.name + " has " + LIMITS.panels + " panels, which is the most a space holds. Remove one, or use another space.");
     // An app panel's saved state is kept unless the bot sends a new one.
@@ -339,13 +343,21 @@ export class Panels {
       const expression = textField(cron, 160, "cron");
       const zone = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
       const nextAt = nextTime(expression, zone);
+      const text = textField(prompt, 4000, "refresh instructions");
+      // The writer of a prompt stays one of its people until the text changes. Someone who saves
+      // the routine with the same words (to change its time) does not take another member's text
+      // as their own: its writer is kept (`promptBy`), and a refresh that runs the text runs under
+      // their limits too.
+      const before = p.routine;
+      const writer = before && before.prompt === text ? (before.promptBy ?? before.setBy) : undefined;
       p.routine = {
         cron: expression,
         timezone: zone,
-        prompt: textField(prompt, 4000, "refresh instructions"),
+        prompt: text,
         enabled: true,
         nextAt,
         ...(by && by !== "owner" && { setBy: by }),
+        ...(writer && writer !== "owner" && writer !== (by ?? "owner") && { promptBy: writer }),
       };
     } else if (action === "remove") p.routine = null;
     else {
@@ -472,8 +484,9 @@ export class Panels {
     const request =
       p.routine?.prompt ||
       "Check the information in the panel and update it using available sources.";
-    // The routine's prompt is a person's text. When it runs for someone else, its writer's limits apply as well.
-    const setter = p.routine?.prompt && p.routine.setBy && p.routine.setBy !== "owner" && p.routine.setBy !== by ? p.routine.setBy : null;
+    // The routine's prompt is a person's text. When it runs for someone else, the limits of the
+    // one who set the routine apply as well, and those of the one who wrote the text when that is another person.
+    const others = p.routine?.prompt ? [...new Set([p.routine.setBy, p.routine.promptBy].filter((person) => person && person !== "owner" && person !== (by ?? "owner")))] : [];
     const prompt =
       'Refresh your Today panel "' +
       p.key +
@@ -484,7 +497,7 @@ export class Panels {
       trigger,
       title: "Update " + p.title,
       ...(author && { author }),
-      ...(setter && { also: [setter] }),
+      ...(others.length && { also: others }),
     });
   }
   async tick(now = Date.now()) {

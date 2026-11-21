@@ -480,10 +480,10 @@ export class Spaces {
         delete panel.createdBy;
         changed = true;
       }
-      // The routine they set stops. It keeps their name as its writer: its prompt is their text, and
+      // The routine they set, or whose prompt they wrote, stops. It keeps their name as its writer: its prompt is their text, and
       // run again as it is (by hand, or resumed) it gets the limits of someone who is on no team,
       // which are the narrowest. Setting the routine anew makes it the setter's.
-      if (panel.routine?.setBy === memberId && panel.routine.enabled !== false) {
+      if ((panel.routine?.setBy === memberId || panel.routine?.promptBy === memberId) && panel.routine.enabled !== false) {
         panel.routine.enabled = false;
         panel.routine.nextAt = null;
         changed = true;

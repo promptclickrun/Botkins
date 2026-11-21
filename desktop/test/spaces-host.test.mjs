@@ -292,11 +292,31 @@ test("a refresh runs for the panel's maker and for whoever asked, under the narr
   await ws.panels.refresh(panel.id, "manual", Date.now(), "owner");
   assert.equal("also" in refreshChat.messages.findLast((message) => message.role === "user"), false);
   assert.deepEqual(ws.accessForTurn(refreshChat, {}), makers);
-  // A routine the owner sets has no member's name on it, and runs as the owner's always did.
-  assert.equal(ws.panels.routine(owned.id, { action: "set", cron: "0 9 * * *", prompt: "Count." }, "owner").setBy, undefined);
+  // The owner changes only the time of the routine that Blake wrote: the same text is saved
+  // again. Blake stays its writer, so it still does not run with the owner's limits, by routine or by hand.
+  const blakes = "Read the owner's mail and put it here.";
+  assert.deepEqual((({ setBy, promptBy, cron }) => [setBy, promptBy, cron])(ws.panels.routine(owned.id, { action: "set", cron: "30 6 * * *", prompt: blakes }, "owner")), [undefined, "m_blake", "30 6 * * *"]);
+  await ws.panels.refresh(owned.id, "manual", Date.now(), "owner");
+  assert.deepEqual(ownedChat.messages.findLast((message) => message.role === "user").also, ["m_blake"]);
+  assert.deepEqual(ws.accessForTurn(ownedChat, {}), { member: true, skills: false, mcp: false, plugins: false });
+  owned.routine.nextAt = Date.now() - 1000;
+  await ws.panels.tick();
+  const byRoutine = ownedChat.messages.findLast((message) => message.role === "user");
+  assert.deepEqual([byRoutine.author, byRoutine.also], [undefined, ["m_blake"]], "the scheduled refresh too");
+  // A second member with a wider role saves the same text: they set the routine, and Blake is still the writer of its words.
+  assert.deepEqual((({ setBy, promptBy }) => [setBy, promptBy])(ws.panels.routine(owned.id, { action: "set", cron: "0 7 * * *", prompt: blakes }, "m_avery")), ["m_avery", "m_blake"]);
+  await ws.panels.refresh(owned.id, "manual", Date.now(), "owner");
+  assert.deepEqual(ownedChat.messages.findLast((message) => message.role === "user").also, ["m_avery", "m_blake"]);
+  assert.deepEqual(ws.accessForTurn(ownedChat, {}), { member: true, skills: false, mcp: false, plugins: false }, "Avery's role allows skills; Blake's does not");
+  // The writer saves their own text again: one person, named once.
+  assert.deepEqual((({ setBy, promptBy }) => [setBy, promptBy])(ws.panels.routine(owned.id, { action: "set", cron: "0 7 * * *", prompt: blakes }, "m_blake")), ["m_blake", undefined]);
+  // New words are the words of the one who saves them. A routine the owner writes has no member's name on it, and runs as the owner's always did.
+  assert.deepEqual((({ setBy, promptBy }) => [setBy, promptBy])(ws.panels.routine(owned.id, { action: "set", cron: "0 9 * * *", prompt: "Count." }, "owner")), [undefined, undefined]);
   await ws.panels.refresh(owned.id, "manual", Date.now(), "owner");
   assert.equal("also" in ownedChat.messages.findLast((message) => message.role === "user"), false);
   assert.deepEqual(ws.accessForTurn(ownedChat, {}), { member: false, skills: true, mcp: true, plugins: true });
+  // The owner's own words, saved again by a member to change the time: the member set it, and the owner narrows nothing.
+  assert.deepEqual((({ setBy, promptBy }) => [setBy, promptBy])(ws.panels.routine(owned.id, { action: "set", cron: "0 10 * * *", prompt: "Count." }, "m_avery")), ["m_avery", undefined]);
 });
 
 test("panels keep their order inside one space, and can be moved to another", async (t) => {
@@ -642,6 +662,24 @@ test("when a member leaves, their spaces pass to the owner and what they set sto
   assert.deepEqual([revenue.routine.enabled, revenue.routine.nextAt, revenue.routine.setBy], [false, null, "m_avery"]);
   await ws.panels.refresh(revenue.id, "manual", Date.now(), "owner");
   assert.deepEqual(ws.chat(revenue.refreshChatId).messages.findLast((message) => message.role === "user").also, ["m_avery"]);
+  // Once the team no longer has them, such a refresh cannot write the panel, and it says what to do about it.
+  const members = team.members;
+  t.after(() => void (team.members = members));
+  team.members = members.filter((member) => member.id !== "m_avery");
+  let said;
+  await during(
+    async (tool) => void (said = await failure(tool("today_publish", { key: "revenue", revision: revenue.revision, title: "Revenue", blocks }))),
+    () => (ws.panels.refresh(revenue.id, "manual", Date.now(), "owner"), { chatId: revenue.refreshChatId }),
+  );
+  assert.match(said, /written by someone who is no longer on the team.*Set the routine again/);
+  // The owner sets it again: it is the owner's, and it writes.
+  ws.panels.routine(revenue.id, { action: "set", cron: "0 8 * * *", prompt: "Count again." }, "owner");
+  await during(
+    async (tool) => void (said = await tool("today_publish", { key: "revenue", revision: revenue.revision, title: "Revenue", blocks })),
+    () => (ws.panels.refresh(revenue.id, "manual", Date.now(), "owner"), { chatId: revenue.refreshChatId }),
+  );
+  assert.equal(said.key, "revenue");
+  team.members = members;
   assert.deepEqual(revenue.notes.map((note) => [note.name, note.text]), [["Avery", "Looks right"]]);
   // Said twice, nothing more happens.
   const before = JSON.stringify(ws.state.spaces);
