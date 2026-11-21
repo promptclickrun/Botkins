@@ -864,6 +864,8 @@ declare global {
        * State.providers.revision goes up when the answer may have changed.
        */
       providers(refresh?: boolean): Promise<ProviderStatus[]>;
+      /** The harnesses that are programs of their own (Pi), with whether each is installed. Missing on an older app. */
+      harnesses?(): Promise<HarnessStatus[]>;
       installProvider(id: string): Promise<{ session: string }>;
       providerSignInRead(session: string, after: number): Promise<ProviderSignInView>;
       providerSignInCancel(session: string): Promise<unknown>;
@@ -1413,6 +1415,18 @@ export type ProviderSignInView = {
   result?: { installed?: boolean; connected?: boolean; version?: string | null; account?: string | null; plan?: string | null };
 };
 /** A model provider as Settings › Model providers shows it (desktop/providers). */
+/** A harness that is a program of its own (Pi), as harnesses() reports it. */
+export type HarnessStatus = {
+  id: string;
+  name: string;
+  description: string;
+  harness: true;
+  installed: boolean;
+  version?: string;
+  message?: string;
+  error?: string;
+  install?: { url: string; command?: string };
+};
 export type ProviderStatus = {
   signInWays?: { guided: boolean; token: boolean };
   id: string;
@@ -1563,9 +1577,10 @@ export type Preferences = {
   /**
    * What runs a turn around the model (desktop/harness). "copilot": one harness, the Copilot
    * runtime, runs every chat it can, and the model's own plan answers (GitHub Copilot, ChatGPT,
-   * Claude). "provider": each provider's own tool runs its chats.
+   * Claude). "provider": each provider's own tool runs its chats. "pi": Pi runs ChatGPT and Claude
+   * plan chats, and the Copilot runtime GitHub Copilot's.
    */
-  harness?: "copilot" | "provider";
+  harness?: "copilot" | "provider" | "pi";
   /**
    * Staying on (desktop/startup.mjs). keepRunning: closing the window leaves Botkins running, with
    * its icon in the menu bar or the taskbar's notification area. runAtStartup: Botkins starts,

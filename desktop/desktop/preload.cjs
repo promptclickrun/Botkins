@@ -272,6 +272,7 @@ for (const name of [
   "cancelSignIn",
   "signOut",
   "providers",
+  "harnesses",
   "setProviderEnabled",
   "providerServices",
   "connectProviderService",

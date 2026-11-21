@@ -311,7 +311,13 @@ export default function Settings({
                   <ModelPicker scope="global" id={null} value={settings.model} openProviders={() => setSection("account")} />
                 </div>
               </Group>
-              <HarnessSettings settings={preferences} change={changePreferences} fail={fail} />
+              <HarnessSettings
+                settings={preferences}
+                change={changePreferences}
+                fail={fail}
+                setup={!state.remote?.using || state.remote.using.capabilities.includes("provider-signin-v1")}
+                windows={!state.remote?.using && /Windows/i.test(navigator.userAgent)}
+              />
               <BackgroundSettings settings={preferences} change={changePreferences} fail={fail} />
             </>
           )}

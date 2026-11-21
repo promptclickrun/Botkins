@@ -8,6 +8,9 @@
 //               uses, because one program carries them. This is the usual choice.
 //   "provider"  Each provider's own tool runs the turn, as before: Codex for ChatGPT, Claude Code
 //               for Claude, the Copilot runtime for GitHub Copilot.
+//   "pi"        Pi (pi.dev, desktop/providers/pi) runs the turns of ChatGPT and Claude plan
+//               models, and the plan answers through the same gateway. GitHub Copilot's models
+//               stay on the Copilot runtime, which their plan needs.
 //
 // OpenCode and the ACP agents are whole agents, not model endpoints, so they always run
 // themselves, whichever is chosen.
@@ -16,13 +19,15 @@ import { Gateway } from "./gateway.mjs";
 import { chatgptSignIn } from "./chatgpt.mjs";
 import { friendlyModel } from "../modelnames.mjs";
 
-export const HARNESSES = ["copilot", "provider"];
+export const HARNESSES = ["copilot", "provider", "pi"];
 export const DEFAULT_HARNESS = "copilot";
 /** A saved choice made whole: anything unknown is the usual one. */
 export const harnessField = (value) => (HARNESSES.includes(value) ? value : DEFAULT_HARNESS);
 
 /** The provider whose runtime is the one harness. */
 export const HOST = "copilot";
+/** The harness provider Pi (desktop/providers/pi). */
+export const PI = "pi";
 /**
  * The plans the Copilot runtime can use for model requests, by the provider whose plan it is:
  * the name the runtime knows the connection by, and the format it speaks to the gateway.
@@ -66,10 +71,37 @@ export function planModel(provider, model) {
   };
 }
 
+/**
+ * The plans as Pi is told of them (desktop/providers/pi/extension.mjs registers each): the name Pi
+ * knows the connection by, and Pi's API for the gateway's path. The ChatGPT path takes the bot's
+ * instructions as `instructions`, which Pi sends only when it isn't told to use a developer message.
+ */
+export const PI_PLANS = {
+  codex: { name: "botkins-chatgpt", title: "ChatGPT", api: "openai-responses", path: "/chatgpt", compat: { supportsDeveloperRole: false } },
+  claude: { name: "botkins-claude", title: "Claude", api: "anthropic-messages", path: "/claude" },
+};
+/**
+ * A plan's model as Pi is told of it. Pi needs a window and a reply size; a model that states
+ * neither gets Pi's own defaults. Pi reads `compat` from each model, not from its connection.
+ */
+export function piModel(model, compat) {
+  return {
+    ...(compat && { compat }),
+    id: model.id,
+    name: model.name ?? friendlyModel(model.id),
+    reasoning: (model.efforts?.length ?? 0) > 0,
+    input: model.vision === false ? ["text"] : ["text", "image"],
+    contextWindow: model.contextWindow ?? 128000,
+    maxTokens: model.maxOutput ?? 16384,
+    // The plan pays; Pi counts nothing.
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+}
+
 export class Harness {
   /**
    * @param options.providers  The registry (desktop/providers/index.mjs).
-   * @param options.choice     () => "copilot" | "provider", the person's setting.
+   * @param options.choice     () => "copilot" | "provider" | "pi", the person's setting.
    * @param options.dir        The data folder, for Claude Code's working folder.
    * @param options.bridge     The local tool server, which lists the runtime's tools to Claude Code.
    * @param options.version    Botkins' version.
@@ -97,12 +129,27 @@ export class Harness {
    * provider's: the person chose one harness, and that provider's plan can answer its requests.
    */
   hosts(selection) {
-    const owner = this.providers.for(selection);
-    return harnessField(this.choice()) === "copilot" && !!this.host && owner !== this.host && Object.hasOwn(PLANS, owner.id);
+    return this.via(selection) === HOST;
   }
-  /** The provider that runs a selection's turns. */
-  runner(selection) {
-    return this.hosts(selection) ? this.host : this.providers.for(selection);
+  /** Pi, when this app has it. */
+  get pi() {
+    return this.providers.byId.get(PI) ?? null;
+  }
+  /**
+   * Which harness runs a selection's turns when it isn't the model's own provider: "copilot" (the
+   * Copilot runtime), "pi", or null. Only a plan the gateway carries can be run by another.
+   */
+  via(selection) {
+    const owner = this.providers.for(selection);
+    if (!Object.hasOwn(PLANS, owner.id)) return null;
+    const choice = harnessField(this.choice());
+    if (choice === "copilot" && this.host && owner !== this.host) return HOST;
+    if (choice === "pi" && this.pi) return PI;
+    return null;
+  }
+  /** The provider that runs a selection's turns (`route` as via() says, when known). */
+  runner(selection, route = this.via(selection)) {
+    return route === PI ? this.pi : route === HOST ? this.host : this.providers.for(selection);
   }
   /**
    * What the Copilot runtime is given to run a selection of another provider's plan:
@@ -110,7 +157,7 @@ export class Harness {
    * connections to the gateway and the models each plan offers, so a chat can change model
    * without a new session.
    */
-  async session(selection) {
+  async session(selection, route = HOST) {
     const base = await this.gateway.start();
     const owner = this.providers.for(selection);
     const plan = PLANS[owner.id];
@@ -118,13 +165,28 @@ export class Harness {
     // starting when the first message comes (harness/claude.mjs).
     if (owner.id === "claude") void this.gateway.warm?.(selection.model);
     const catalog = await this.providers.models().catch(() => []);
-    const models = [];
-    for (const [id, each] of Object.entries(PLANS)) {
-      const listed = catalog.filter((model) => model.provider === id && model.available !== false);
+    const listed = (id) => {
+      const list = catalog.filter((model) => model.provider === id && model.available !== false);
       // The chosen model is offered even when its provider's list couldn't be read just now.
-      if (id === owner.id && !listed.some((model) => model.id === selection.model)) listed.push({ id: selection.model, name: friendlyModel(selection.model), efforts: selection.reasoningEffort ? [selection.reasoningEffort] : [] });
-      for (const model of listed) models.push(planModel(each.name, model));
+      if (id === owner.id && !list.some((model) => model.id === selection.model)) list.push({ id: selection.model, name: friendlyModel(selection.model), efforts: selection.reasoningEffort ? [selection.reasoningEffort] : [] });
+      return list;
+    };
+    if (route === PI) {
+      // Pi is given a connection for each plan that has models, with those models (extension.mjs).
+      const providers = Object.entries(PI_PLANS)
+        .map(([id, each]) => ({ id, each, models: listed(id) }))
+        .filter(({ models }) => models.length)
+        .map(({ each, models }) => ({
+          name: each.name,
+          config: { name: each.title, baseUrl: base + each.path, api: each.api, apiKey: this.gateway.secret, ...(each.api === "openai-responses" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
+        }));
+      return {
+        model: { model: selection.model, source: PI_PLANS[owner.id].name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
+        inference: { providers },
+      };
     }
+    const models = [];
+    for (const [id, each] of Object.entries(PLANS)) for (const model of listed(id)) models.push(planModel(each.name, model));
     const named = new Set(models.map((model) => model.provider));
     return {
       model: { model: selection.model, source: plan.name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
