@@ -232,7 +232,8 @@ export async function verify({ dir, name, keyFile, verifier = verifyRelease }) {
  * updater is the old version's, and can't know what the new one's files say.
  */
 const refreshWith = (exec) => async (folder) => {
-  const { stdout } = await exec(join(folder, "bin", "botkins"), ["service", "refresh", "--no-restart", "--json"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+  // A transient systemd unit may have no Node on PATH. Use the one already running this updater.
+  const { stdout } = await exec(process.execPath, [join(folder, "cli", "botkins.mjs"), "service", "refresh", "--no-restart", "--json"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
   // The files it wrote, so that undoing the update takes away the ones it added and no others.
   // null when it didn't say: then nothing tells its files from anyone else's.
   try {

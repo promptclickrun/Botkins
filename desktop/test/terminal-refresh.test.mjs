@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { examine } from "../cli/commands/service.mjs";
@@ -506,13 +506,14 @@ test("on macOS a changed job is taken out and loaded again, because launchd read
 });
 
 /** A release tarball as scripts/package-terminal.mjs makes one, small. */
-function release(dir, version) {
+function release(dir, version, cli = "// " + version + "\n") {
   const name = folderName(version, "linux", "arm64");
   const stage = join(dir, "stage-" + version);
-  for (const [file, text] of Object.entries({ "bin/botkins": "#!/bin/sh\n", "cli/botkins.mjs": "// " + version + "\n", "package.json": JSON.stringify({ version }), "desktop/linux-service/botkins-release.asc": "KEY" })) {
+  for (const [file, text] of Object.entries({ "bin/botkins": readFileSync(new URL("../install/botkins", import.meta.url)), "cli/botkins.mjs": cli, "package.json": JSON.stringify({ version }), "desktop/linux-service/botkins-release.asc": "KEY" })) {
     mkdirSync(join(stage, name, file, ".."), { recursive: true });
     writeFileSync(join(stage, name, file), text);
   }
+  chmodSync(join(stage, name, "bin/botkins"), 0o755);
   const archive = join(dir, name + ".tar.gz");
   execFileSync("tar", ["-czf", archive, "-C", stage, name]);
   return { name, archive };
@@ -547,11 +548,21 @@ test("an update has the new version write the service's files before the restart
   const done = await switchTo({ ...options, archive: release(dir, "1.3.0").archive, version: "1.3.0", manager: service(steady), refresh: writes });
   assert.deepEqual(done, { version: "1.3.0", folder: join(installRoot, folderName("1.3.0", "linux", "arm64")), previous: "1.2.3" });
   assert.deepEqual(steps, ["snapshot", "refresh by 1.3.0", "restart on 1.3.0 under: as 1.3.0 writes it"]);
-  // By default the one asked is the new version's own program, told not to restart anything.
-  const ran = [];
-  const exec = async (file, args, opts) => (file === "tar" ? { stdout: execFileSync(file, args, { encoding: "utf8", ...opts }) } : (ran.push([file, ...args].join(" ")), { stdout: "{}" }));
-  await switchTo({ ...options, archive: release(dir, "1.3.1").archive, version: "1.3.1", manager: service(steady), exec });
-  assert.deepEqual(ran, [join(installRoot, folderName("1.3.1", "linux", "arm64"), "bin", "botkins") + " service refresh --no-restart --json"]);
+  // A transient user service can have system tools on PATH but no Node. Run the release's CLI
+  // under those conditions and check which executable the new version actually received.
+  const path = join(dir, "system-bin");
+  mkdirSync(path);
+  symlinkSync("/usr/bin/dirname", join(path, "dirname"));
+  const receipt = join(dir, "refresh.json");
+  const cli = `import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(receipt)}, JSON.stringify([process.execPath, ...process.argv.slice(1)]));
+    console.log(JSON.stringify({ changed: [] }));`;
+  const exec = async (file, args, opts) => ({
+    stdout: execFileSync(file, args, { encoding: "utf8", ...opts, ...(file !== "tar" && { env: { PATH: path } }) }),
+  });
+  const refreshed = await switchTo({ ...options, archive: release(dir, "1.3.1", cli).archive, version: "1.3.1", manager: service(steady), exec });
+  assert.equal(refreshed.note, undefined);
+  assert.deepEqual(JSON.parse(readFileSync(receipt, "utf8")), [process.execPath, join(refreshed.folder, "cli", "botkins.mjs"), "service", "refresh", "--no-restart", "--json"]);
   // A new version that doesn't stay up: the old one is back, under the files it had.
   steps.length = 0;
   files.unit = "as 1.3.1 wrote it";
@@ -653,7 +664,7 @@ test("with the real service manager: what a failed refresh added is taken away, 
 test("an install that went well, with files that could not be written, says so in its record", { skip }, async (t) => {
   const dir = tempDir(t);
   const { entry } = installed(dir, "1.2.3");
-  const next = release(dir, "1.3.0");
+  const next = release(dir, "1.3.0", 'throw new Error("The service file could not be written.");');
   const fetcher = async (url) => {
     const file = url.split("/").at(-1);
     const body = file === next.name + ".tar.gz" ? readFileSync(next.archive) : Buffer.from("sums");
@@ -668,7 +679,6 @@ test("an install that went well, with files that could not be written, says so i
     return t.skip("GnuPG is not installed here, and an update needs it to read the release key.");
   }
   const manager = { snapshot: () => ({}), restore: async () => {}, restart: async () => {}, status: async () => ({ active: true, pid: 1 }) };
-  // The stand-in for the new version's program fails: its tarball holds only a line of sh.
   const result = await applyUpdate({ entry, platform: "linux", arch: "arm64", manager, healthMs: 30, latest: async () => ({ version: "1.3.0", assets: [next.name + ".tar.gz", "SHA256SUMS", "SHA256SUMS.asc"] }), fetcher, verifier: async () => {}, report: (record) => records.push(record), now: () => new Date("2026-02-03T04:05:06Z") });
   assert.equal(result.status, "installed");
   assert.match(result.note, /^The service's files could not be brought up to date with Botkins 1\.3\.0 \(.+\)\. On the computer, `botkins doctor` says what to do\.$/);
