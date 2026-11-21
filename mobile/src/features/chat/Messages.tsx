@@ -12,8 +12,9 @@ import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { clockTime } from "@/state/time";
 import { speakText, stopSpeech, useSpeakingNow } from "@/features/voice/tts";
-import { ArtifactChips } from "@/features/artifacts/ArtifactBits";
+import { ArtifactChips, InlineMedia } from "@/features/artifacts/ArtifactBits";
 import { useMessageLinks } from "@/features/artifacts/data";
+import type { MessagePart } from "@/features/artifacts/logic";
 import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
@@ -267,7 +268,7 @@ function ReadAloud({ id, text }: { id: string; text: string }) {
 }
 
 /** A bot's reply. A long press offers Copy, Select text, Read aloud (or Stop reading), Share, Reply and Fork from here. */
-function Reply({ message, index, id, markdown, actions, paths }: { message: Message; index: number; id: string; markdown: boolean; actions?: MessageActions; paths?: PathLinks }) {
+function Reply({ message, index, id, markdown, actions, paths, parts }: { message: Message; index: number; id: string; markdown: boolean; actions?: MessageActions; paths?: PathLinks; /** The text and its MEDIA: attachments in order, when it has any the computer knows. */ parts?: MessagePart[] }) {
   const reading = useSpeakingNow((state) => state.id === id);
   const selecting = useSelecting((state) => state.id === id);
   // While its text is being selected the message is one native text view, outside the menu: a
@@ -298,7 +299,14 @@ function Reply({ message, index, id, markdown, actions, paths }: { message: Mess
       }}
     >
       <DoubleTap id={id}>
-        <Markdown text={message.text} plain={!markdown} paths={paths} />
+        {parts ? (
+          // Each attachment is drawn where it was written, and its raw MEDIA: line is not shown.
+          <View style={{ gap: space.md }}>
+            {parts.map((part, at) => (part.kind === "text" ? <Markdown key={at} text={part.text} plain={!markdown} paths={paths} /> : <InlineMedia key={part.artifact.id} artifact={part.artifact} />))}
+          </View>
+        ) : (
+          <Markdown text={message.text} plain={!markdown} paths={paths} />
+        )}
       </DoubleTap>
     </HoldMenu>
   );
@@ -310,7 +318,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
   const { message, run, end, latest } = item;
-  // Paths the computer knows become links, and MEDIA: attachments show under the text. A reply still
+  // Paths the computer knows become links, and a reply's MEDIA: attachments are drawn where they were
+  // written (under the text in the person's own message). A reply still
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
   if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
@@ -320,8 +329,7 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   return (
     <View style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      <Reply message={message} index={item.index} id={chatId + ":" + item.key} markdown={markdown} actions={actions} paths={links.paths} />
-      {links.media.length > 0 && <ArtifactChips items={links.media} align="flex-start" />}
+      <Reply message={message} index={item.index} id={chatId + ":" + item.key} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       {!!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} />
