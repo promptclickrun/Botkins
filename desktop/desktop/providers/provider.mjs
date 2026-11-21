@@ -156,6 +156,14 @@ export class ModelProvider {
   /** Forgets a conversation's state. Missing sessions are fine. */
   async deleteSession(_sessionId) {}
   /**
+   * The folder this provider's runtime gives one conversation for its own files, or null when it
+   * gives none. A bot's tools write there when the bot names no other place, so a file in it is
+   * that conversation's bot's own (desktop/artifact-events.mjs).
+   */
+  sessionFiles(_sessionId) {
+    return null;
+  }
+  /**
    * Releases any warm session held for this id without deleting its state. With `busy`, a
    * session that is in a turn is released when that turn ends.
    */

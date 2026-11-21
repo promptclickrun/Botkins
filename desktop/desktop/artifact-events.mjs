@@ -2,6 +2,8 @@ import { lstatSync, opendirSync, watch } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileDetails, absoluteFilePath } from "./artifact-files.mjs";
 import { toolKind } from "./canvas.mjs";
+import { memberSessionId } from "./groups.mjs";
+import { helperSessionId } from "./teamwork.mjs";
 import { findPathSpans } from "./path-detector.mjs";
 
 const contained = (root, path) => {
@@ -49,6 +51,9 @@ function destinations(name, args) {
   return [...new Set(paths.filter((p) => typeof p === "string" && !!p))];
 }
 
+/** Raised when the rule for which `MEDIA:` files are a bot's own widens, so old messages are read once more. */
+const MEDIA_PASS = 1;
+
 export class ArtifactEvents {
   constructor(ws) {
     this.ws = ws;
@@ -57,12 +62,30 @@ export class ArtifactEvents {
     this.watchers = new Map();
   }
   folder(chat, botId) { return this.ws.projects.folderFor(chat) || join(this.ws.dir, "files", botId); }
+  /**
+   * The folders that are a bot's own in one chat: the chat's project folder (or the bot's files
+   * folder), and the folder that the model's runtime gives that chat's own session for its files.
+   * A bot that names no place writes its pictures into the second one. It is one chat's folder:
+   * another chat's session, or anything else on the computer, is not in it.
+   */
+  roots(chat, botId) {
+    const sessions = [chat.sessionId ?? chat.id, memberSessionId(chat, botId), helperSessionId(chat, botId)];
+    const folders = [this.folder(chat, botId), ...sessions.flatMap((id) => this.ws.providers.sessionFolders(id))];
+    return folders.map((folder) => fileDetails(folder)).filter((found) => found?.kind === "folder").map((found) => found.path);
+  }
 
   restore(indexed) {
     if (indexed) {
-      for (const chat of this.ws.state.chats) this.counts.set(chat, chat.messages.length);
+      // Once more over what was already said, the first time after a rule for `MEDIA:` lines
+      // widened: a picture that an earlier version did not take as the bot's own (it was in the
+      // session's own folder) is found now. Recording is safe to repeat.
+      const again = this.ws.state.mediaPass !== MEDIA_PASS;
+      for (const chat of this.ws.state.chats) this.counts.set(chat, again ? 0 : chat.messages.length);
+      if (again) this.ws.artifacts.batch(() => void this.ws.state.chats.forEach((chat) => this.messages(chat)));
+      this.ws.state.mediaPass = MEDIA_PASS;
       return;
     }
+    this.ws.state.mediaPass = MEDIA_PASS;
     this.ws.artifacts.batch(() => {
       this.history();
       for (const chat of this.ws.state.chats) this.messages(chat);
@@ -78,13 +101,14 @@ export class ArtifactEvents {
         const context = { botId, chatId: chat.id, messageIndex: index, time: message.time ?? this.ws.state.runs.find((r) => r.id === message.runId)?.time ?? chat.time ?? 0 };
         for (const file of message.attachments ?? []) this.ws.artifacts.record(file.path, { ...context, source: message.role === "user" ? "upload" : "media" });
         if (message.role !== "assistant" || !message.text?.includes("MEDIA:")) continue;
-        const root = fileDetails(this.folder(chat, botId))?.path;
+        const roots = this.roots(chat, botId);
         for (const { path, media } of findPathSpans(message.text)) {
           if (!media) continue;
           const file = fileDetails(path);
           // Prose cannot grant remote access to an unrelated host path. Files outside
-          // the bot/project folder need independent provenance from an upload or write.
-          if (file && file.kind !== "folder" && ((root && contained(root, file.path)) || this.ws.artifacts.rows.some((r) => r.botId === botId && r.path === file.path && r.identity === file.identity))) {
+          // the bot's own folders for this chat (its project or files folder, and the chat's
+          // session folder) need independent provenance from an upload or write.
+          if (file && file.kind !== "folder" && (roots.some((root) => contained(root, file.path)) || this.ws.artifacts.rows.some((r) => r.botId === botId && r.path === file.path && r.identity === file.identity))) {
             this.ws.artifacts.record(file.path, { ...context, source: "media" });
           }
         }

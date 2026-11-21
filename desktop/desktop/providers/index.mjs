@@ -59,6 +59,10 @@ export class Providers {
   get(id) {
     return this.byId.get(id) ?? this.default;
   }
+  /** The folders that the providers' runtimes give one conversation for its own files (most give none). */
+  sessionFolders(sessionId) {
+    return this.list.map((provider) => provider.sessionFiles(sessionId)).filter(Boolean);
+  }
   /** The provider with this id. Unlike get(), an unknown id is an error. */
   require(id) {
     const provider = this.byId.get(id);
