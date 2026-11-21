@@ -63,6 +63,16 @@ for (const [, id, body] of icon.matchAll(/\n  (\w+): \{\n([\s\S]*?)\n  \},/g)) {
   execFileSync(renderer, [svg, join(OUT, "provider-" + id + ".png"), String(MARK)]);
   marks.push(id + (own ? " (own color)" : ""));
 }
+// Kiro's four colored paths are shared constants in ProviderIcon, outside the inline marks above.
+const kiroPath = (part) => {
+  const path = new RegExp('^  ' + part + ': "([^"]+)"', 'm').exec(icon)?.[1];
+  if (!path) throw new Error("Missing Kiro path: " + part);
+  return path;
+};
+const kiro = join(work, "provider-kiro.svg");
+writeFileSync(kiro, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200">' + [["tile", "#9046ff"], ["ghost", "white"], ["left", "black"], ["right", "black"]].map(([part, color]) => '<path fill="' + color + '" d="' + kiroPath(part) + '"/>').join("") + '</svg>');
+execFileSync(renderer, [kiro, join(OUT, "provider-kiro.png"), String(MARK)]);
+marks.push("kiro (own color)");
 // Antigravity's mark is a picture in the app too.
 execFileSync("sips", ["-Z", String(MARK), "assets/images/providers/antigravity.png", "--out", join(OUT, "provider-antigravity.png")], { stdio: "ignore" });
 marks.push("antigravity (picture)");

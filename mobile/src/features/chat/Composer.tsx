@@ -15,7 +15,7 @@ import { myPlace, myself } from "./people";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
-import { endTalk, openLiveVoice, startTalk, useLiveVoiceReady, useTalk, useTalkReady } from "../voice/api";
+import { endTalk, startChatVoice, useLiveVoiceReady, useTalk, useTalkReady } from "../voice/api";
 import { boardKindLabel, teammates, toInput } from "./compose";
 import { documentPickerModule, imagePickerModule, NEEDS_UPDATE } from "./native";
 import {
@@ -419,8 +419,7 @@ export function Composer({
   const sendDisabled = !stop && !voice && (empty || uploading);
   const startVoice = () => {
     if (!botId) return;
-    if (liveReady) openLiveVoice(chatId, botId);
-    else startTalk(chatId);
+    startChatVoice(chatId, botId);
   };
   const submit = async () => {
     if (empty || uploading) return;

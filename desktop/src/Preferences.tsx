@@ -1,7 +1,8 @@
 import { saveChatDisplay } from "./chatDisplay";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
-import type { Preferences as Values, Appearance } from "./types";
+import type { Preferences as Values, Appearance, HarnessStatus } from "./types";
+import { ProviderInstall } from "./ProviderSetup";
 import { Group, Row, SwitchRow, ValueRow } from "./SettingsRows";
 import { modeOf } from "./appearance";
 import { TEXT_SIZES, THEMES, fontShown, fontsHere, themeOf } from "./themes";
@@ -16,15 +17,25 @@ type Props = {
 const HARNESSES: { id: NonNullable<Values["harness"]>; name: string }[] = [
   { id: "copilot", name: "Copilot SDK" },
   { id: "provider", name: "Provider default" },
+  { id: "pi", name: "Pi" },
 ];
 const HARNESS_HELP: Record<NonNullable<Values["harness"]>, string> = {
   copilot: "One harness runs every chat. GitHub Copilot, ChatGPT and Claude models each answer on their own plan, with the same tools, skills and connections.",
   provider: "Each model's own tool runs its chats: Codex for ChatGPT, Claude Code for Claude, and the Copilot SDK for GitHub Copilot.",
+  pi: "Pi runs ChatGPT and Claude chats, and each answers on its own plan. GitHub Copilot models stay on the Copilot SDK.",
 };
 
 /** Settings › General › Harness: one harness for every plan (the Copilot SDK), or each provider's own. */
-export function HarnessSettings({ settings, change, fail }: Props) {
+export function HarnessSettings({ settings, change, fail, setup = true, windows = false }: Props & { setup?: boolean; windows?: boolean }) {
   const harness = settings.harness ?? "copilot";
+  const [pi, setPi] = useState<HarnessStatus>();
+  const load = () =>
+    (window.botkins.harnesses?.() ?? Promise.resolve([]))
+      .then((list) => setPi(list.find((item) => item.id === "pi")))
+      .catch(() => setPi(undefined));
+  useEffect(() => void load(), []);
+  // An app without Pi (an older computer this window is connected to) offers only its own choices.
+  const options = HARNESSES.filter((option) => option.id !== "pi" || pi || harness === "pi");
   return (
     <Group title="Harness" footer="A chat keeps its conversation when you switch; its next reply starts on the other harness. OpenCode and other agents always run themselves.">
       <div className="set-row">
@@ -33,9 +44,12 @@ export function HarnessSettings({ settings, change, fail }: Props) {
           <small>{HARNESS_HELP[harness]}</small>
         </div>
         <div className="set-control">
-          <Choices label="Harness" value={harness} options={HARNESSES} onChange={(id) => void change({ harness: id }).catch(fail)} />
+          <Choices label="Harness" value={harness} options={options} onChange={(id) => void change({ harness: id }).catch(fail)} />
         </div>
       </div>
+      {pi?.installed && <ValueRow label="Pi" value={pi.version ? "Version " + pi.version : "Installed"} />}
+      {/* Kept mounted after an install, so its result stays; it shows nothing while Pi is installed and idle. */}
+      {pi && <ProviderInstall provider={{ ...pi, message: pi.message || "Pi isn't on this computer. Install it to use it as the harness." }} available={setup} windows={windows} onInstalled={load} />}
     </Group>
   );
 }

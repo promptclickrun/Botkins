@@ -27,6 +27,12 @@ Botkins is the phone app for the Botkins app on your computer. Pair your phone w
 - **Make it yours.** Settings › Appearance has eight themes, each for day and night, seven fonts (San Francisco to begin with), a text size and a control size. The app starts in Ink (black on white, white on black) until you pick another. Home shows Today open under your bots; tap its row to fold it.
 - **Connect apps in the Marketplace.** Sign in with your own Composio account, browse more than 1,000 apps with their logos, connect the ones you use, and turn them on for your bots.
 
+### iPhone Shortcuts
+
+In Shortcuts, search for **Botkins**. **Send a Botkins Chat** takes text from a previous action or asks for a prompt. It starts a new chat with your primary bot by default. You can choose another agent, a model and a thinking level. Leave **Wait for Result** on to pass the reply to the next action. Turn **Notify Me** off to silence the reply alert for that turn. Quiet replies need a paired computer running a version with this feature.
+
+**Start a Voice Chat** opens a new chat with the selected agent and starts the same voice mode as the microphone button. The two actions are available together on iOS 17 and later.
+
 ## Development
 
 Use Node.js 22 or newer and Xcode (for iOS) or Android Studio.

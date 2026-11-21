@@ -42,6 +42,11 @@ const PROVIDERS = [
   { id: "grok", name: "Grok", description: "Grok, through the Grok CLI.", default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://x.ai/cli", command: "curl -fsSL https://example.com/demo/grok-install.sh | bash" }, message: "Install the Grok CLI on your computer." },
 ];
 
+// The harnesses that are programs of their own (harnesses()): Pi, not on the demo computer until the phone installs it.
+const HARNESS_TOOLS = [
+  { id: "pi", name: "Pi", description: "The Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" }, message: "Install Pi on your computer to use it as the harness." },
+];
+
 const SKILLS = [
   { name: "weekly-review", description: "Run a weekly review: wins, misses and next steps.", path: "/skills/weekly-review", origin: "botkins", enabled: true, editable: true, instructions: "# Weekly review\n\n1. List what shipped.\n2. List what slipped and why.\n3. Propose three priorities for next week." },
   { name: "meeting-notes", description: "Turn a transcript into decisions and action items.", path: "/skills/meeting-notes", origin: "botkins", enabled: true, editable: true, instructions: "# Meeting notes\n\nSummarize decisions first, then action items with owners." },
@@ -1089,7 +1094,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
@@ -1858,7 +1863,7 @@ export class MockBackend {
     appInfo: () => ({ version: this.updates?.current ?? "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};
-      if ("harness" in rest && !["copilot", "provider"].includes(rest.harness)) throw new Error("Choose a harness");
+      if ("harness" in rest && !["copilot", "provider", "pi"].includes(rest.harness)) throw new Error("Choose a harness");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       const settings = this.state.settings;
@@ -2060,7 +2065,7 @@ export class MockBackend {
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
       const scheduled = this.scheduled;
       this.scheduled = null;
-      const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
+      const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
       chat.messages.push({ role: "user", text: prompt, runId: run.id, time: now() });
       if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
@@ -2201,6 +2206,12 @@ export class MockBackend {
       };
       return MODELS.filter((m) => on[m.provider]?.enabled).map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
     },
+    harnesses() {
+      return HARNESS_TOOLS.map((p) => {
+        const { enabled: _enabled, default: _default, connected: _connected, signIn: _signIn, signOut: _signOut, ...status } = this.signIns.status(p, true);
+        return status;
+      });
+    },
     providers() {
       const capable = this.capabilities.includes("provider-signin-v1");
       return PROVIDERS.map((p) => ({ ...this.signIns.status(p, capable), enabled: !!this.state.settings.providers[p.id]?.enabled }));
@@ -2255,7 +2266,7 @@ export class MockBackend {
       return this.signIns.useToken(PROVIDERS.find((p) => p.id === id), token, options ?? {});
     },
     installProvider(id) {
-      return this.signIns.install(PROVIDERS.find((p) => p.id === id));
+      return this.signIns.install([...PROVIDERS, ...HARNESS_TOOLS].find((p) => p.id === id));
     },
     providerServices() {
       const on = (this.servicesOn ??= new Set(["opencode-zen"]));

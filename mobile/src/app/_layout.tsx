@@ -7,6 +7,7 @@ import { Appearance } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { boot } from "@/state/link";
+import { listenForShortcuts } from "@/features/shortcuts/bridge";
 import { forget, readKept } from "@/state/keep";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
@@ -51,6 +52,9 @@ export default function RootLayout() {
       if (next.kind === "drop") void forget(JOIN_ATTEMPT_KEY).catch(() => {});
       if (next.kind === "resume" && where.current !== "/join") router.push({ pathname: "/join", params: { resume: "1" } });
     }, () => {});
+  }, [booted]);
+  useEffect(() => {
+    if (booted) return listenForShortcuts(true);
   }, [booted]);
   if (!booted) return null;
 
