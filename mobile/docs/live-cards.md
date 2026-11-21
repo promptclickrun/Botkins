@@ -119,3 +119,11 @@ A risky approval opens the app and asks for Face ID first. Nothing secret is eve
 Widgets read a snapshot the app writes to its App Group (`group.app.botkins.mobile`,
 `widgets.json`). It holds each paired computer's Botkins (looks, states, the newest chats), plans
 and limits, and model names. Nothing in it leaves the phone. The computer is not involved.
+
+With spaces (`spaces-v1`) it also holds `panels`: for each panel of the person's spaces, pinned
+spaces first, its title, the one thing it says (`value` and `note`: `panelHeadline` in
+`src/state/widgetData.ts`), its space and its bot's Botkin, and when it last changed. The **Panel**
+widget (`BotkinsPanel`, `targets/widgets/PanelWidget.swift`: Lock Screen and Home Screen) draws one
+of them and opens it with `botkins://open/panel?space=…&id=…&host=…`. The phone reads a space only
+when it is opened or pinned and a Panel widget is on show, so a space it has not read since it
+started keeps the panels the snapshot had.

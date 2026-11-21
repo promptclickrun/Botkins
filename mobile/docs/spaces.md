@@ -330,6 +330,18 @@ type SpaceSnapshot = {
   - `frame-src 'self'` on the page also holds a panel's frame to this relay: a panel's page that sends its own frame elsewhere is stopped by the browser.
 - The self-hosted Node relay (`relay/node`) gets the same routes.
 
+## The widget of a panel
+
+A panel can sit on the phone's Lock Screen and Home Screen (built 2026-11-21, on the phone only; the
+link and the app have no part in it). The widget shows the panel's title and the one thing the panel
+says: its first number (a metric, else a progress) with a short line under it, else what its first
+block says; an app panel says what a person last did in it. Nothing is made up: a panel that says
+nothing shows its title alone. The person picks the panel in Edit Widget; until they do it is the
+first panel of their first pinned space. A tap opens the panel in its space. The widget is as new
+as the last time the app ran (`mobile/docs/live-cards.md`, section 8), and on the Home Screen it
+says when the panel last changed. What it shows is marked private, so iOS hides it on a locked
+phone when the person has chosen that.
+
 ## Notifications
 
 A person's "Notify me" for a space is Off, Once a day or Every change.
@@ -385,5 +397,5 @@ Order: the link host and the demo computer first, since both apps and the host b
 - The desktop app's copy of `link/methods.mjs` does not list the space calls yet: its own test wants a handler and a `preload.cjs` entry for every listed call. The app's PR (Terminal Host thread) copies `mobile/link-host/methods.mjs` over it, byte for byte, with those.
 - A panel or card the app has put in no space is sent to the owner only.
 - The headless host's backend drops the call's context (`headless/backend.mjs`), so it cannot tell which person called. Spaces need the person on the host; it has to be passed through there. Whether it stamps `createdBy` on a member's chat today is unchecked.
-- The widget needs a new native build and a real phone to check.
+- The widget of a panel is built and its views were looked at as renders; it needs a new native build and a real phone to check on a Lock Screen.
 - Nothing here has been tried with a real team. The first check with two people on one host is owed before a release says it works.

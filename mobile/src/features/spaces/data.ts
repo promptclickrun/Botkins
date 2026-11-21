@@ -39,6 +39,15 @@ function read(id: string) {
     .finally(() => asking.delete(id));
 }
 
+/** Each space's panels as the phone has read them since it started, by space id (for the widgets' snapshot). */
+export const readPanels = (): Record<string, PanelView[]> => Object.fromEntries(Object.entries(useContents.getState()).flatMap(([id, held]) => (held.content ? [[id, held.content.panels]] : [])));
+/** Calls `listener` when a space's content was read. Answers a function that stops it. */
+export const watchSpaceContents = (listener: () => void) => useContents.subscribe(listener);
+/** Reads a space the phone has not read since it started, quietly (a panel widget is on show). */
+export function readSpaceOnce(id: string) {
+  if (!useContents.getState()[id]?.content) read(id);
+}
+
 /**
  * A space's panels and cards. Read when first asked for, and again when the space changed on the
  * computer (the list's `rev` passed the one held) or the computer came back. What is held stays on
