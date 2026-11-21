@@ -262,20 +262,29 @@ test("a sign-in can be cancelled, refused by the person, or answered wrongly", a
 });
 
 test("sign-in is only for secure addresses, and a busy port is worked around", async (t) => {
-  const { remote, ws, id } = await setup(t, {}, { oauthPort: undefined });
+  // Something else holds the port Botkins answers a sign-in on. A port this test asked the system
+  // for stands in for the app's usual one: no test listens on REDIRECT_PORT itself, because the
+  // installed app on the same computer answers its own sign-ins there.
+  const blocker = createServer(() => {});
+  await new Promise((resolve, reject) => blocker.once("error", reject).listen(0, "127.0.0.1", resolve));
+  t.after(() => blocker.close());
+  const usual = blocker.address().port;
+  assert.notEqual(usual, REDIRECT_PORT);
+  const { remote, ws, id } = await setup(t, {}, { oauthPort: usual });
+  assert.equal(ws.integrations.oauth.port, usual);
+  // Without a port of its own, the app uses its usual one. Nothing is opened to find that out.
+  assert.equal(new Workspace(tempDir(t), fakeClient().client, () => {}).integrations.oauth.port, REDIRECT_PORT);
   // A plain http address that isn't this computer never gets a sign-in.
   const lan = ws.integrations.saveServer({ name: "lan", type: "http", url: "http://192.168.1.20:8080/mcp" });
   await assert.rejects(ws.integrations.signIn(lan), /needs a secure \(https\) server address/);
   const local = ws.integrations.saveServer({ name: "local", command: "npx" });
   await assert.rejects(ws.integrations.signIn(local), /signs in with its environment values/);
-  // Something else holds Botkins' usual port: a self-registered sign-in uses another one.
-  const blocker = createServer(() => {});
-  const taken = await new Promise((resolve) => blocker.listen(REDIRECT_PORT, "127.0.0.1", () => resolve(true)).once("error", () => resolve(false)));
-  t.after(() => blocker.close());
+  // With the usual port held, a self-registered sign-in uses another one.
   ws.openExternal = remote.browser;
   await ws.integrations.signIn(id);
   const redirect = JSON.parse(remote.state.log.find((r) => r.path === "/register").body).redirect_uris[0];
-  if (taken) assert.notEqual(new URL(redirect).port, String(REDIRECT_PORT));
+  assert.notEqual(new URL(redirect).port, String(usual));
+  assert.notEqual(new URL(redirect).port, String(REDIRECT_PORT));
   assert.equal(ws.snapshot().mcpServers.find((s) => s.id === id).auth.signedIn, true);
 });
 

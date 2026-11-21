@@ -5,6 +5,7 @@
 // Set BOTKINS_INT_SHOTS to a folder to save light and dark screenshots at 1190×830 and 760×560.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
@@ -55,7 +56,16 @@ async function nowhere(secret, what) {
   assert.ok(!vaultText().includes(secret), what + " is readable in vault.json");
 }
 const oauth = await oauthMcpServer({ registration: false, staticClient: { id: "approved-desktop" } });
-const registeredRedirect = "http://127.0.0.1:47823/botkins/sign-in";
+// The approved client's callback is on a port this run asked the system for. The app listens there
+// during the sign-in, and a test never listens on the port the installed app answers sign-ins on.
+const callbackPort = await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.once("error", reject).listen(0, "127.0.0.1", () => {
+    const { port } = probe.address();
+    probe.close(() => resolve(port));
+  });
+});
+const registeredRedirect = "http://127.0.0.1:" + callbackPort + "/botkins/sign-in";
 env.BOTKINS_MCP_OAUTH_CLIENTS_FILE = join(dir, "approved-clients.json");
 writeFileSync(env.BOTKINS_MCP_OAUTH_CLIENTS_FILE, JSON.stringify({ clients: [{
   serverUrl: oauth.url, issuer: oauth.origin, clientId: "approved-desktop",
