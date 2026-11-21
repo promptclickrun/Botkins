@@ -9,6 +9,7 @@ import rehypeHighlight from "rehype-highlight";
 import { Check, Copy, Image as ImageIcon, Info, Lightbulb, MessageSquareWarning, OctagonAlert, TriangleAlert } from "lucide-react";
 import "./markdown.css";
 import { ChatFileContext, FileLink, pathMarkup, useChatFiles, type ChatFiles } from "./ChatFileLink";
+import { ChatMedia } from "./ChatMedia";
 
 const api = window.botkins;
 
@@ -155,6 +156,8 @@ const components: Components = {
   span: ({ node, children, ...props }) => {
     const marker = node?.properties?.["data-chat-file"] ?? node?.properties?.dataChatFile;
     if (marker != null) return <FileLink index={Number(marker)}>{children}</FileLink>;
+    const media = node?.properties?.["data-chat-media"] ?? node?.properties?.dataChatMedia;
+    if (media != null) return <ChatMedia index={Number(media)} />;
     return <span {...props}>{children}</span>;
   },
   table: ({ node: _node, ...props }) => (

@@ -40,6 +40,8 @@ export function withOwnerChatSections(state, host) {
   const list = Array.isArray(held?.list) ? held.list.map((section) => ({ id: section.id, name: section.name })) : [];
   const of = held?.of && typeof held.of === "object" ? held.of : {};
   const chats = (state.chats ?? []).map((chat) => {
+    // A chat in no section goes on as it is, the same object: nothing about it is changed here.
+    if (!Object.hasOwn(chat, "sectionId") && !Object.hasOwn(of, chat.id)) return chat;
     const { sectionId: _old, ...rest } = chat;
     return Object.hasOwn(of, chat.id) ? { ...rest, sectionId: of[chat.id] } : rest;
   });
