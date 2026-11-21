@@ -106,6 +106,12 @@ export default function RootLayout() {
               <Stack.Screen name="today" />
               <Stack.Screen name="today/new" options={half} />
               <Stack.Screen name="today/routine" options={tall} />
+              <Stack.Screen name="spaces" />
+              <Stack.Screen name="space/[id]" />
+              <Stack.Screen name="space/panel" />
+              <Stack.Screen name="space/share" options={tall} />
+              <Stack.Screen name="space/new-panel" options={tall} />
+              <Stack.Screen name="space/ask" options={half} />
               <Stack.Screen name="routine/[id]" options={tall} />
               <Stack.Screen name="task/[id]" options={tall} />
               <Stack.Screen name="tools/index" />

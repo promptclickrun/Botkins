@@ -1,0 +1,98 @@
+// New panel: one sentence and a bot, as on Today before. "Start from" only shapes the request; the
+// rows say which space it goes in and how often it refreshes. The computer starts a chat with the
+// bot in that space, and the chat opens.
+import { MenuView } from "@react-native-menu/menu";
+import { router, useLocalSearchParams } from "expo-router";
+import { AppWindow, ChartColumn, ChevronRight, FileText, ListChecks, type LucideIcon, Table, TrendingUp } from "lucide-react-native";
+import { useMemo, useState } from "react";
+import { View } from "react-native";
+import { BotChips } from "@/features/work/bits";
+import type { PanelStart } from "@/link/types";
+import { useBots, useCan } from "@/state/hooks";
+import { api, attempt } from "@/state/link";
+import { EmptyState, Field, Group, Label, radius, Row, Sheet, space as gap, T, Tap, useTheme } from "@/ui";
+import { useSpaces } from "./data";
+import { REFRESH, spaceTitle, STARTS } from "./logic";
+
+const START_ICONS: Record<PanelStart, LucideIcon> = { checklist: ListChecks, tracker: TrendingUp, chart: ChartColumn, table: Table, notes: FileText, app: AppWindow };
+
+export default function NewPanel() {
+  const { spaceId } = useLocalSearchParams<{ spaceId?: string }>();
+  const { colors } = useTheme();
+  const canCreate = useCan("today", "create");
+  const canChat = useCan("agents", "chat");
+  const bots = useBots();
+  const shown = useMemo(() => bots.filter((bot) => !bot.hidden), [bots]);
+  const spaces = useSpaces();
+  // A panel goes in a space the person may change.
+  const places = useMemo(() => spaces.filter((space) => space.can === "own" || space.can === "edit"), [spaces]);
+  const [place, setPlace] = useState<string | undefined>(spaceId);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [start, setStart] = useState<PanelStart | null>(null);
+  const [refresh, setRefresh] = useState("never");
+  const [text, setText] = useState("");
+  const [asking, setAsking] = useState(false);
+  if (!canCreate || !canChat) return <Sheet title="New panel"><EmptyState title="Your team role can't create panels" /></Sheet>;
+  const space = places.find((one) => one.id === place) ?? places[0];
+  const bot = chosen ?? shown[0]?.id ?? null;
+  const ready = !!bot && !!space && !!text.trim() && !asking;
+  const every = REFRESH.find((choice) => choice.value === refresh) ?? REFRESH[0]!;
+
+  const create = async () => {
+    if (!ready || !bot || !space) return;
+    setAsking(true);
+    const made = await attempt(
+      api["spaces.newPanel"]({ spaceId: space.id, botId: bot, prompt: text.trim(), ...(start && { start }), ...(every.cron && { refresh: { cron: every.cron, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } }) }),
+    );
+    setAsking(false);
+    if (!made) return;
+    router.back();
+    router.push({ pathname: "/chat/[id]", params: { id: made.chatId } });
+  };
+
+  return (
+    <Sheet title="New panel" action="Create" onAction={() => void create()} actionDisabled={!ready} actionLoading={asking}>
+      <View>
+        <Label>What should it show?</Label>
+        <Field placeholder="A checklist for launch week that the team can tick off" value={text} onChangeText={setText} area maxLength={8000} autoFocus accessibilityLabel="What should it show?" />
+      </View>
+      <View>
+        <Label>Bot</Label>
+        {shown.length ? <BotChips bots={shown} value={bot} onChange={(next) => next && setChosen(next)} /> : <T variant="subhead" color="muted">Make a bot first.</T>}
+      </View>
+      <View>
+        <Label>Start from</Label>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: gap.sm }}>
+          {STARTS.map((choice) => {
+            const Icon = START_ICONS[choice.value];
+            const on = start === choice.value;
+            return (
+              <Tap
+                key={choice.value}
+                onPress={() => setStart(on ? null : choice.value)}
+                feel="select"
+                sink={0.97}
+                accessibilityLabel={choice.label}
+                accessibilityState={{ selected: on }}
+                style={{ flexBasis: "30%", flexGrow: 1, minHeight: 64, alignItems: "center", justifyContent: "center", gap: 4, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: on ? 2 : 0, borderColor: colors.ink }}
+              >
+                <Icon size={18} color={colors.ink} strokeWidth={2.2} />
+                <T variant="footnote" weight="600">
+                  {choice.label}
+                </T>
+              </Tap>
+            );
+          })}
+        </View>
+      </View>
+      <Group>
+        <MenuView title="Space" actions={places.map((one) => ({ id: one.id, title: spaceTitle(one), state: one.id === space?.id ? ("on" as const) : ("off" as const) }))} onPressAction={({ nativeEvent }) => setPlace(nativeEvent.event)}>
+          <Row title="Space" value={space ? spaceTitle(space) : "None"} trailing={<ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />} />
+        </MenuView>
+        <MenuView title="Refresh" actions={REFRESH.map((choice) => ({ id: choice.value, title: choice.label, state: choice.value === refresh ? ("on" as const) : ("off" as const) }))} onPressAction={({ nativeEvent }) => setRefresh(nativeEvent.event)}>
+          <Row title="Refresh" value={every.label} trailing={<ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />} />
+        </MenuView>
+      </Group>
+    </Sheet>
+  );
+}

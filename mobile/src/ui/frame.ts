@@ -191,6 +191,7 @@ const BRIDGE = String.raw`(() => {
   const data = __DATA__;
   const pending = new Map();
   const themed = new Set();
+  const stated = new Set();
   let seq = 0;
   let mode = __MODE__;
   // Nothing here talks peer to peer either: the policy can't say so, so the ways in are removed.
@@ -214,6 +215,9 @@ const BRIDGE = String.raw`(() => {
       root.style.colorScheme = mode;
       for (const [name, value] of Object.entries(m.colors || {})) if (/^--[a-z-]+$/.test(name)) root.style.setProperty(name, String(value));
       for (const fn of themed) { try { fn(mode); } catch (e) {} }
+    } else if (m.type === "state") {
+      // Someone else changed the panel's state.
+      for (const fn of stated) { try { fn(m.state && typeof m.state === "object" ? m.state : {}); } catch (e) {} }
     } else if (m.type === "result") {
       const waiting = pending.get(m.id);
       pending.delete(m.id);
@@ -229,6 +233,13 @@ const BRIDGE = String.raw`(() => {
     theme: () => mode,
     onTheme: (fn) => (themed.add(fn), () => themed.delete(fn)),
     close: () => {},
+    // A panel's saved state ("spaces-v1"): what people did in an app, kept on the computer. The app
+    // answers; outside a panel get() is {} and set() is false.
+    state: Object.freeze({
+      get: () => ask("state").then((value) => (value && typeof value === "object" ? value : {}), () => ({})),
+      set: (patch, label) => ask("setState", { patch, label: label === undefined ? undefined : String(label) }).then((saved) => saved === true, () => false),
+      onChange: (fn) => (stated.add(fn), () => stated.delete(fn)),
+    }),
   };
   api.sendMessage = api.sendAnswer;
   // window.commander and window.bighelp (the app's earlier names) are the same bridge.
@@ -304,7 +315,39 @@ export type FrameMessage =
   | { type: "refused"; id: number }
   | { type: "size"; height: number }
   | { type: "answer"; id: number; text: string }
-  | { type: "open"; id: number; url: string };
+  | { type: "open"; id: number; url: string }
+  /** A panel's page asks for its saved state, or to change it ("spaces-v1"). */
+  | { type: "state"; id: number }
+  | { type: "setState"; id: number; patch: Record<string, unknown>; label?: string };
+
+/** A panel's state as the computer takes it: 64 KiB of JSON and 200 top-level keys at most. */
+export const STATE_LIMITS = { bytes: 64 * 1024, keys: 200, label: 80 };
+/** A view may save only within this long after a touch in it, and this often at most. */
+export const STATE_TOUCH_MS = 3000;
+export const STATE_PACE_MS = 1000;
+
+/** A patch a page may send for its panel's state: a plain object within the limits. Anything else is refused. */
+export function statePatch(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = Object.keys(value);
+  if (!keys.length || keys.length > STATE_LIMITS.keys) return null;
+  try {
+    return JSON.stringify(value).length <= STATE_LIMITS.bytes ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One change a second from a view, however fast its page asks. */
+export class StatePace {
+  private last = new Map<string, number>();
+  allow(frame: string, now = Date.now()): boolean {
+    const before = this.last.get(frame);
+    if (before !== undefined && now - before < STATE_PACE_MS) return false;
+    this.last.set(frame, now);
+    return true;
+  }
+}
 
 /** What a page said, when it is one of the few things a page may say. Anything else is null. */
 export function readFrameMessage(raw: unknown): FrameMessage | null {
@@ -323,13 +366,19 @@ export function readFrameMessage(raw: unknown): FrameMessage | null {
   if (m.type === "size") return typeof m.height === "number" && Number.isFinite(m.height) ? { type: "size", height: m.height } : null;
   const id = typeof m.id === "number" && Number.isFinite(m.id) ? m.id : null;
   if (id === null) return null;
+  if (m.type === "state") return { type: "state", id };
+  if (m.type === "setState") {
+    const patch = statePatch(m.patch);
+    const label = typeof m.label === "string" && m.label.trim() ? m.label.trim().slice(0, STATE_LIMITS.label) : undefined;
+    return patch ? { type: "setState", id, patch, ...(label && { label }) } : { type: "refused", id };
+  }
   if (m.type === "answer") return typeof m.text === "string" && m.text.trim() ? { type: "answer", id, text: m.text.slice(0, MAX_ANSWER) } : { type: "refused", id };
   if (m.type === "open") return typeof m.url === "string" && m.url.length <= 2000 && /^https?:\/\/[^\s/?#]+/i.test(m.url) ? { type: "open", id, url: m.url } : { type: "refused", id };
   return null;
 }
 
 /** The script that hands the page a message from the app. */
-export function frameScript(message: { type: "theme"; mode: "light" | "dark"; colors: Record<string, string> } | { type: "result"; id: number; value?: unknown; error?: string }): string {
+export function frameScript(message: { type: "theme"; mode: "light" | "dark"; colors: Record<string, string> } | { type: "result"; id: number; value?: unknown; error?: string } | { type: "state"; state: Record<string, unknown> }): string {
   return "try{window.__botkinsIn(" + inlineJson(message) + ")}catch(e){};true;";
 }
 

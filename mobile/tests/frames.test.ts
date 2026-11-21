@@ -9,7 +9,7 @@ import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { ChatDetail, Meta } from "../src/link/types";
-import { AnswerPace, FRAME_CSP, allowsLoad, clampHeight, frameColors, framePage, frameScript, inlineJson, readFrameMessage } from "../src/ui/frame";
+import { AnswerPace, FRAME_CSP, allowsLoad, clampHeight, frameColors, framePage, frameScript, inlineJson, readFrameMessage, STATE_LIMITS, STATE_PACE_MS, statePatch, StatePace } from "../src/ui/frame";
 
 const theme = { mode: "dark" as const, colors: frameColors({ ink: "#ffffff", muted: "#aaaaaa", surface: "#111111", sunken: "#000000", accent: "#ef9e78", line: "#333333" }) };
 
@@ -163,4 +163,31 @@ test("a computer without custom views says so", async () => {
   await assert.rejects(client.call("link.frame.page", "00000000-0000-0000-0000-000000000000"), /Update the app on your computer/);
   client.stop();
   await link.stop();
+});
+
+test("a panel's page reads and changes its saved state only through the app, within limits", () => {
+  // The bridge offers it under the names the computer's own bridge uses.
+  const page = framePage("<p>hi</p>", null, { mode: "light", colors: {} });
+  for (const name of ["state: Object.freeze", 'ask("state")', 'ask("setState"', "onChange"]) assert.ok(page.includes(name), name);
+  // What a page may say.
+  assert.deepEqual(readFrameMessage(JSON.stringify({ botkins: 1, type: "state", id: 3 })), { type: "state", id: 3 });
+  assert.deepEqual(readFrameMessage(JSON.stringify({ botkins: 1, type: "setState", id: 4, patch: { ticked: { a: true } }, label: "  Ticked a  " })), { type: "setState", id: 4, patch: { ticked: { a: true } }, label: "Ticked a" });
+  assert.deepEqual(readFrameMessage(JSON.stringify({ botkins: 1, type: "setState", id: 5, patch: { a: null } })), { type: "setState", id: 5, patch: { a: null } });
+  assert.equal((readFrameMessage(JSON.stringify({ botkins: 1, type: "setState", id: 6, patch: { a: 1 }, label: "x".repeat(300) })) as { label: string }).label.length, STATE_LIMITS.label);
+  // A patch that is not a plain object with something in it, or is too large, is refused: the page is told no.
+  for (const patch of [null, "text", [1, 2], {}, 7]) assert.deepEqual(readFrameMessage(JSON.stringify({ botkins: 1, type: "setState", id: 7, patch })), { type: "refused", id: 7 });
+  assert.equal(statePatch(Object.fromEntries(Array.from({ length: STATE_LIMITS.keys + 1 }, (_unused, n) => ["k" + n, 1]))), null);
+  assert.ok(statePatch(Object.fromEntries(Array.from({ length: STATE_LIMITS.keys }, (_unused, n) => ["k" + n, 1]))));
+  // (A larger one never arrives: a page's whole message is read only up to 20,000 characters.)
+  assert.equal(statePatch({ big: "x".repeat(STATE_LIMITS.bytes) }), null);
+  assert.equal(readFrameMessage(JSON.stringify({ botkins: 1, type: "setState", id: 8, patch: { big: "x".repeat(30_000) } })), null);
+  assert.equal(readFrameMessage(JSON.stringify({ botkins: 1, type: "state" })), null, "no id, no answer to give");
+  // One change a second from a view, however fast its page asks; another view has its own pace.
+  const pace = new StatePace();
+  assert.equal(pace.allow("f1", 1000), true);
+  assert.equal(pace.allow("f1", 1000 + STATE_PACE_MS - 1), false);
+  assert.equal(pace.allow("f2", 1001), true);
+  assert.equal(pace.allow("f1", 1000 + STATE_PACE_MS), true);
+  // What the app tells a page when someone else changed the state.
+  assert.ok(frameScript({ type: "state", state: { ticked: { a: true }, text: "</script>" } }).includes("\\u003c/script"));
 });

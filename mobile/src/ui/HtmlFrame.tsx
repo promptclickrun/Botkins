@@ -10,7 +10,7 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { usePart } from "@/state/hooks";
 import { api } from "@/state/link";
 import { showToast } from "@/state/store";
-import { AnswerPace, allowsLoad, clampHeight, FRAME_GUARD, frameColors, framePage, frameScript, readFrameMessage } from "./frame";
+import { AnswerPace, allowsLoad, clampHeight, FRAME_GUARD, frameColors, framePage, frameScript, readFrameMessage, STATE_TOUCH_MS, StatePace } from "./frame";
 import { Tap } from "./Tap";
 import { T } from "./Text";
 import { radius, slopFor, space, useTheme } from "./theme";
@@ -37,6 +37,13 @@ function pageOf(frame: string): Promise<Loaded> {
 }
 
 const pace = new AnswerPace();
+const statePace = new StatePace();
+
+/**
+ * A panel's saved state for its view ("spaces-v1"): what it is now, a number that goes up when it
+ * changes, and how to change it. Without `set` the person may only look, and a change is refused.
+ */
+export type FrameState = { value: Record<string, unknown>; rev?: number; set?: (patch: Record<string, unknown>, label?: string) => Promise<boolean> };
 const quietUntil = new Map<string, number>();
 let asking = false;
 
@@ -80,9 +87,11 @@ export type HtmlFrameProps = {
   onAnswer?: (text: string) => void;
   /** The whole screen: the page scrolls and zooms by itself. */
   fill?: boolean;
+  /** The view is a panel's: its saved state. Without it `botkins.state.get()` is {} and `set` is false. */
+  state?: FrameState;
 };
 
-export function HtmlFrame({ frame, height, title, onAnswer, fill }: HtmlFrameProps) {
+export function HtmlFrame({ frame, height, title, onAnswer, fill, state }: HtmlFrameProps) {
   const { colors, dark } = useTheme();
   const supported = usePart("meta")?.capabilities.includes("frames-v1");
   // (The package types its props as `WebViewProps & P` with P undefined by default, which is nothing: P is named here.)
@@ -132,6 +141,15 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill }: HtmlFramePro
   useEffect(() => {
     if (phase === "ready") web.current?.injectJavaScript(frameScript({ type: "theme", ...theme }));
   }, [theme, phase]);
+  // The panel's state changed on the computer (someone else, or this phone's own change come back): the page is told.
+  const held = useRef(state);
+  useEffect(() => {
+    held.current = state;
+  });
+  const stateRev = state?.rev;
+  useEffect(() => {
+    if (phase === "ready" && stateRev !== undefined && held.current) web.current?.injectJavaScript(frameScript({ type: "state", state: held.current.value }));
+  }, [stateRev, phase]);
 
   if (supported === false)
     return (
@@ -184,6 +202,18 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill }: HtmlFramePro
     }
     if (message.type === "size") {
       if (!fill) setSize((now) => clampHeight(message.height, now));
+      return;
+    }
+    // A panel's saved state. Reading it is free. A change is passed on only within three seconds of
+    // a touch in this view and once a second at most, so a page cannot write under a person's name
+    // when they only opened it. Refused, it answers false and nothing is saved.
+    if (message.type === "state") {
+      void reply(message.id, Promise.resolve(state?.value ?? {}));
+      return;
+    }
+    if (message.type === "setState") {
+      const may = !!state?.set && Date.now() - touched.current <= STATE_TOUCH_MS && statePace.allow(frame);
+      void reply(message.id, may ? state!.set!(message.patch, message.label).catch(() => false) : Promise.resolve(false));
       return;
     }
     // Only a view the person is working in may hand over text or ask to open a page.
@@ -263,7 +293,7 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill }: HtmlFramePro
           <ActivityIndicator color={colors.muted} />
         </View>
       )}
-      {!fill && phase === "ready" && (
+      {!fill && !state && phase === "ready" && (
         <Tap
           onPress={() => router.push({ pathname: "/frame", params: { frame, title: title ?? "" } })}
           accessibilityLabel={"Open " + name + " full screen"}

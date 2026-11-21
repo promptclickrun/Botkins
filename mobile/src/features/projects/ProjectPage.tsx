@@ -1,7 +1,10 @@
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
+import { MenuView } from "@react-native-menu/menu";
 import { Check, ChevronDown, ChevronUp, FolderMinus, FolderOpen, MessagesSquare, Paperclip, Plus, Trash2 } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, TextInput, type TextInputInstance, View } from "react-native";
+import { openSpace, useSpaces, useSpacesOn } from "@/features/spaces/data";
+import { rowLine as spaceRowLine, spaceTitle } from "@/features/spaces/logic";
 import { PanelCard } from "@/features/today/Today";
 import { ArtifactRow } from "@/features/artifacts/ArtifactBits";
 import type { Artifact, ChatMode, Project, ProjectColor, ProjectTodo } from "@/link/types";
@@ -404,19 +407,41 @@ function Artifacts({ project }: { project: Project }) {
 
 /** The project's Today panels. Each is changed from its menu on Today. */
 function Panels({ project }: { project: Project }) {
+  const { colors } = useTheme();
   const panels = usePart("panels");
   const allBots = useBots();
   const mine = useMemo(() => (panels ?? []).filter((panel) => panel.projectId === project.id), [panels, project.id]);
+  // With spaces ("spaces-v1") a whole space can belong to a project, beside single panels.
+  const spacesOn = useSpacesOn();
+  const spaces = useSpaces();
+  const attached = spaces.filter((one) => one.projectId === project.id);
+  const free = spaces.filter((one) => one.mine && !one.projectId);
   return (
     <View>
-      <Label>Panels</Label>
+      <Label>{spacesOn ? "Spaces and panels" : "Panels"}</Label>
+      {spacesOn && (
+        <Group>
+          {attached.map((one) => (
+            <Row
+              key={one.id}
+              title={spaceTitle(one)}
+              subtitle={spaceRowLine(one)}
+              onPress={() => openSpace(one.id)}
+              trailing={<Button title="Remove" variant="ghost" size="sm" onPress={() => void attempt(api["spaces.setProject"](one.id, null))} accessibilityLabel={"Remove " + spaceTitle(one) + " from this project"} />}
+            />
+          ))}
+          <MenuView title="Attach a space" actions={free.length ? free.map((one) => ({ id: one.id, title: spaceTitle(one) })) : [{ id: "", title: "No space to attach", attributes: { disabled: true } }]} onPressAction={({ nativeEvent }) => nativeEvent.event && void attempt(api["spaces.setProject"](nativeEvent.event, project.id))}>
+            <Row title="Attach" tone="accent" trailing={<ChevronDown size={18} color={colors.faint} strokeWidth={2.2} />} />
+          </MenuView>
+        </Group>
+      )}
       {mine.length ? (
-        <View style={{ gap: space.lg }}>
+        <View style={{ gap: space.lg, marginTop: spacesOn ? space.lg : 0 }}>
           {mine.map((panel) => (
             <PanelCard key={panel.id} panel={panel} bot={allBots.find((bot) => bot.id === panel.botId)} />
           ))}
         </View>
-      ) : (
+      ) : spacesOn ? null : (
         <T variant="subhead" color="muted" style={{ paddingHorizontal: space.xs }}>
           Ask a bot in one of this project's chats for a Today panel.
         </T>

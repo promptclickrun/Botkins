@@ -3,7 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, View } from "react-native";
 import type { Role, Scope } from "@/link/types";
-import { useBots, useOnline, usePart } from "@/state/hooks";
+import { useBots, useOnline, usePart, useCapability } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { BotAvatar, Button, EmptyState, Field, Group, Label, Row, Segmented, Sheet, space, T } from "@/ui";
 import { SCOPE_ACTIONS, toggleRoleAction } from "@/state/team";
@@ -54,6 +54,7 @@ export default function RoleEditor() {
 function Editor({ ownerGroups, role, online, bots }: { ownerGroups: { id: string; name: string; roleId: string }[]; role?: Role; online: boolean; bots: ReturnType<typeof useBots> }) {
   const [original] = useState(() => role ?? blankRole());
   const [name, setName] = useState(original.name);
+  const spacesOn = useCapability("spaces-v1");
   const [perms, setPerms] = useState<Role["perms"]>(() => Object.fromEntries(SCOPES.map(({ id }) => [id, [...original.perms[id]]])) as Role["perms"]);
   const [visible, setVisible] = useState<Role["bots"]>(original.bots === "all" ? "all" : [...original.bots]);
   const [busy, setBusy] = useState(false);
@@ -80,7 +81,8 @@ function Editor({ ownerGroups, role, online, bots }: { ownerGroups: { id: string
       <Field label="Name" value={name} onChangeText={setName} maxLength={40} autoCapitalize="words" autoFocus={!role} />
       {SCOPES.map((scope) => (
         <View key={scope.id}>
-          <Label>{scope.label}</Label>
+          {/* The scope is still "today" on the wire. On a computer with spaces it governs every space, and is shown as Spaces. */}
+          <Label>{scope.id === "today" && spacesOn ? "Spaces" : scope.label}</Label>
           <Group>
             {SCOPE_ACTIONS[scope.id].map((action) => (
               <Row
