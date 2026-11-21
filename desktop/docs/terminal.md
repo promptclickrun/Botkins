@@ -490,8 +490,10 @@ A caller that takes an id from a `--json` answer does both always, and then no i
 What a person can do in the app's window, a person or an agent can do from a terminal, unless it needs the window itself. One table holds this: `desktop/desktop/terminal/coverage.mjs`. Each call that the window can make, and each call of the phone link, has one entry there:
 
 - the command that does it, or
-- one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), or it is a phone's own (its notifications, the screen it is shown), or
+- one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), it is a phone's own (its notifications, the screen it is shown), or it needs a person at the app (a call that reaches a secret which the terminal cannot read by itself, or sends one somewhere), or
 - the part of the work that still owes its command. This third kind goes away when the last part is done.
+
+The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, `setChatProject` and `startProjectChat` with the mode `yolo`, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
 
 `test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason. The test's output says how many calls each part still owes.
 
@@ -527,6 +529,7 @@ This does not protect against a person who is root on the computer while it runs
 The terminal host has no window and no screen. These features report "… is not available on this host." A phone and the terminal get that sentence, and nothing else fails.
 
 - Viewing and controlling the screen from a phone.
+- Unlocking a password manager, choosing one of its items, and linking a saved credential to a field of it. These are done in the app's window or on a paired phone, because the terminal host's socket cannot know that a person is there.
 - The window of the app: side panes drawn in the app, HTML apps in their own window, the website viewer, and typing a saved credential into a page. A phone still draws side panes itself.
 - File and folder dialogs, opening a file or a link on the computer, and the clipboard. A phone uses the calls that need no dialog.
 - Desktop notifications. A paired phone still gets its notifications.

@@ -13,6 +13,13 @@
 // command, or a stated reason. This is the command line's part of the rule the phone has
 // ("Parity with the computer", mobile/AGENTS.md): what a person can do in the window, a person
 // or an agent can do from a terminal, unless it needs the window itself.
+//
+// The table also decides what the hidden `botkins call` may reach (`callRule` in control.mjs). A call
+// that a command covers, or that has a reason, is refused there: the command shows what it changes
+// and leaves a line in the log, and a reason says where the call is done. Only `owed` calls run
+// through `call`, and a few of those are held (`HELD` in control.mjs) while their command is not
+// written. When nothing is owed any more, `call` has nothing left to reach that a command does not,
+// and `call` goes: take it out with the last `owed`.
 
 /** Why a call has no command. The list is fixed: a new reason is a decision, not an entry. */
 import { hasUnplain } from "../shown-text.mjs";
@@ -21,6 +28,8 @@ export const REASONS = {
   window: "needs a window", // a file dialog, the clipboard, a folder opened in the file manager, a notification, a microphone
   "window's own": "the window's own", // what only the window uses to draw itself: a pane, a preview, a thumbnail
   "phone's own": "a phone's own", // what only a paired phone uses: its notifications, the screen it is shown, its uploads
+  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until the owner says otherwise. The owner has the choice in front of him.
+  person: "needs a person at the app: the window, or a phone with its owner check", // a call that reaches a secret which a caller of the socket cannot read by itself, or sends one somewhere: the socket cannot know that a person is there
 };
 
 /** The parts of the work that still owe commands, in the order they are built. When all are done, `owed` is no longer accepted. */
@@ -109,7 +118,12 @@ export const WORKSPACE = {
   // ── Preferences, credentials, usage, voice ──
   setPreferences: owed("d"),
   ...each("credentials removeCredential savedCredentials saveSavedCredential checkSavedCredential removeSavedCredential resetVault", owed("d")),
-  ...each("passwordManagers passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField lockPasswordManager unlockPasswordManager", owed("d")),
+  // These five need a person at the app. After an unlock, a password manager's session stays in the
+  // service's memory, so every later caller of the socket could list the person's logins. And a
+  // field that is linked under a name that the caller chose is a secret that the person's own
+  // picker then hands over. (`passwordManagers` and `lockPasswordManager` get commands later.)
+  ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField", no("person")),
+  ...each("passwordManagers lockPasswordManager", owed("d")),
   ...each("usage exportUsageText cacheInfo clearCache", owed("d")),
   ...each("voiceSettings voiceOptions setVoice setVoiceKey", owed("d")),
   ...each("macToolsStatus setMacTool", owed("d")),

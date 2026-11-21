@@ -157,9 +157,11 @@ test("the service starts on its settings, keeps its folder to itself and answers
   assert.equal((await client.call("relay.status")).enabled, false);
   // What isn't a call is said so, and a call of the workspace's own is reached by name.
   await assert.rejects(client.call("nope"), { code: "UNKNOWN_METHOD" });
-  assert.equal((await client.call("call", "appInfo", [])).host, "terminal");
+  // (A call that a command covers, or that needs the window, is not made through `call`: test/terminal-call.test.mjs.)
+  assert.deepEqual(await client.call("call", "cacheInfo", []), { bytes: 0, catalogs: 0 });
   await assert.rejects(client.call("call", "nope", []), { code: "UNKNOWN_METHOD" });
-  await assert.rejects(client.call("call", "chooseFiles", []), /Choosing a file or folder is not available on this host\./);
+  await assert.rejects(client.call("call", "appInfo", []), { code: "NOT_FOR_CALL", message: /`appInfo` is done by `botkins status`\./ });
+  await assert.rejects(client.call("call", "chooseFiles", []), { code: "NOT_FOR_CALL", message: /`chooseFiles` needs the app's window/ });
   assert.ok((await client.call("methods")).control.includes("bots.add"));
   await assert.rejects(client.call("update.check"), { code: "UNSUPPORTED" });
   // Asked to stop, it stops, and leaves no socket behind.

@@ -5,14 +5,15 @@
 // calls do what the desktop app's own window can do. A few are the terminal host's own (status,
 // logs, config, pairing); the rest are thin: they look a bot or a routine up by the name a person
 // typed and hand the work to the workspace's own calls (`runtime.handlers`), which a paired phone
-// uses too. "call" reaches any of those by name, for what has no command of its own yet.
+// uses too. "call" reaches the ones that have no command of its own yet, by name, and keeps the
+// rules that the commands hold (see `callRule`).
 //
 // Every value is plain JSON: `--json` prints it as it is.
 import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
 import { DESKTOP_ONLY } from "../host/headless.mjs";
-import { CHANGES, thingForLog } from "./coverage.mjs";
+import { CHANGES, thingForLog, WORKSPACE } from "./coverage.mjs";
 import { toolsApi } from "./control-tools.mjs";
 import { pluginsApi } from "./control-plugins.mjs";
 
@@ -33,6 +34,80 @@ const holdsReference = (value, depth = 0) => depth <= 8 && value !== null && typ
 const refuseReferences = (name, args) => {
   if (!CREDENTIAL_REFERENCES_ON_THE_SOCKET && WITHOUT_REFERENCES.includes(name) && holdsReference(args)) throw new ControlError(NO_REFERENCES(name), "BAD_ARGUMENT");
 };
+/**
+ * What `call` may not reach, by the table of desktop/terminal/coverage.mjs. A call that a command
+ * covers is done by that command: it shows what it changes and leaves a line in the log. A call
+ * with a reason is done where that reason says. Only the calls that are still owed run through
+ * `call`, and some of those are held below until their command is written.
+ *
+ * The rule for secrets: a call that reaches a secret which the caller cannot read by itself, or that
+ * sends such a secret somewhere, is not for the socket. It stays where a person is known to be
+ * there: the window, or a phone with its owner check. Everything else the window can do, the
+ * socket does, with what it starts shown and a line in the log.
+ * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until
+ * the owner says otherwise. The owner has the choice in front of him.)
+ */
+export const REFUSED_BY_REASON = {
+  window: (name) => "`" + name + "` needs the app's window (a dialog, the clipboard, a notification, a microphone or a permission on the screen). It is done there, not from a terminal.",
+  "window's own": (name) => "`" + name + "` is what the app's window uses to draw itself (a pane, a preview or a thumbnail). The window makes it, and a terminal has no use for it.",
+  "phone's own": (name) => "`" + name + "` belongs to a paired phone (its notifications, its screen or its uploads). The phone makes it.",
+  person: (name) => "`" + name + "` needs a person at the app: the window, or a phone with its owner check. The terminal host cannot know that a person is there.",
+};
+export const COVERED_BY_COMMAND = (name, command) => "`" + name + "` is done by `botkins " + command + "`. Run that command: it shows what it changes and leaves a line in the log.";
+
+const IN_THE_APP = "Do it in the app's window or on a paired phone. A command for it comes.";
+const takesSecret = (name) => "`" + name + "` takes a secret as an argument, and a secret is never a word on the command line. " + IN_THE_APP;
+const removesSecrets = (name) => "`" + name + "` removes saved secrets with no question. Do it in the app's window or on a paired phone, where a person is asked. A command for it comes, and it asks first.";
+const givesYes = (name) => "`" + name + "` with the mode yolo gives each request of the chat a yes, with no question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks.";
+const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+// Every field of the voice settings that is a provider's web address (desktop/link/voice.mjs `merge`).
+const VOICE_ADDRESSES = [["openai", "baseUrl"], ["azure", "endpoint"], ["azure", "region"], ["custom", "baseUrl"]];
+const setsVoiceAddress = (patch) => isPlain(patch) && isPlain(patch.providers) && VOICE_ADDRESSES.some(([provider, field]) => isPlain(patch.providers[provider]) && patch.providers[provider][field] !== undefined);
+
+/**
+ * The calls that are owed a command (coverage.mjs) and that `call` still holds, until their command
+ * is merged: name → (arguments) → the sentence that refuses them, or nothing when they may run.
+ * Each entry goes when its command is merged: the table then says `cmd(...)`, and `callRule` refuses
+ * the call by that. Nothing here may be left when nothing is owed.
+ * Each rule looks at an argument by its place. The places were read from the handlers (desktop/runtime.mjs) on
+ * 2026-11-21: a handler that takes the same thing in another shape needs its rule here changed with it.
+ */
+export const HELD = {
+  // A secret as an argument (the arguments of `call` are on the command line).
+  setVoiceKey: (args, name) => takesSecret(name),
+  providerUseToken: (args, name) => takesSecret(name),
+  saveSavedCredential: (args, name) => takesSecret(name),
+  // A key for a service of a provider, or the code that finishes a sign-in.
+  connectProviderService: (args, name) => (typeof args[2]?.key === "string" ? takesSecret(name) : null),
+  finishProviderService: (args, name) => takesSecret(name),
+  // Saved secrets removed with no question.
+  resetVault: (args, name) => removesSecrets(name),
+  removeCredential: (args, name) => removesSecrets(name),
+  removeSavedCredential: (args, name) => removesSecrets(name),
+  // A provider's address is where its key goes. (The app drops a saved key when its address is set or changed, #137.
+  // A key that the person gives later goes to the address that is set then, so the address is set where it is shown.)
+  // Choices that are no address run.
+  setVoice: (args, name) => (setsVoiceAddress(args[0]) ? "`" + name + "` with a provider's web address says where that provider's key goes. Set an address in the app's window or on a paired phone, where it is shown. A command for it comes. Choices that are no address run here." : null),
+  // The mode yolo gives each request of a chat a yes with no question. The others run.
+  setChatProject: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
+  startProjectChat: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
+  // The level of approval: telling a looser one needs the present value, so any change is held.
+  setPreferences: (args, name) => (isPlain(args[0]) && (Object.hasOwn(args[0], "approval") || Object.hasOwn(args[0], "access")) ? "`" + name + "` with an approval level or an access changes what the bots may do without a question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks." : null),
+  // A Mac tool that is switched on lets the bots read or use an app of this Mac. Switching one off runs.
+  setMacTool: (args, name) => (args[1] !== "off" ? "`" + name + "` gives the bots a tool of this Mac. Switch it on in the app's window, where it is shown. A command for it comes, and it shows this and asks. Switching a tool off runs here." : null),
+};
+
+/**
+ * What `call` does with the app's call `name` given `args`, from the table: the sentence that
+ * refuses it, or null when it may run (it is owed a command, and it is not held). A pure function.
+ */
+export function callRule(name, args = []) {
+  const entry = Object.hasOwn(WORKSPACE, name) ? WORKSPACE[name] : null;
+  if (!entry) return null;
+  if ("command" in entry) return COVERED_BY_COMMAND(name, entry.command);
+  if ("reason" in entry) return REFUSED_BY_REASON[entry.reason](name);
+  return Object.hasOwn(HELD, name) ? HELD[name](args, name) : null;
+}
 const text = (value, max, what) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new ControlError("Give " + what + ".", "BAD_ARGUMENT");
   return value.trim();
@@ -424,12 +499,16 @@ export function controlApi(service) {
     call([name, args = []], context) {
       if (typeof name !== "string" || !Object.hasOwn(handlers, name)) throw new ControlError("The workspace has no call named " + name + ".", "UNKNOWN_METHOD");
       if (!Array.isArray(args)) throw new ControlError("A call's arguments are a list.", "BAD_ARGUMENT");
+      // A call with a dotted name that this service has its own version of as well ("plugins.setEnabled", …)
+      // runs that one, not the app's raw call. The rules are in the service's call: the revision that was
+      // looked at, and the log line. So `call` cannot be a way round them. (Only a dotted name: "stop" and
+      // "models" are other things here than in the app, and `call stop` must never stop the service.)
+      if (name.includes(".") && Object.hasOwn(api, name)) return api[name](args, context);
+      // The rest is by the table: a call that a command covers, or that has a reason, is not made here,
+      // and a call that is held is not either (see `callRule`). What is left runs raw.
+      const refusal = callRule(name, args);
+      if (refusal) throw new ControlError(refusal, "NOT_FOR_CALL");
       refuseReferences(name, args);
-      // A plugin call that this service has its own version of ("plugins.setEnabled", …) runs that
-      // one, not the app's raw call. The rules are in the service's call: the revision that was
-      // looked at, and the log line. So `call` cannot be a way round them. (Only plugin calls:
-      // "stop" and "models" are other things here than in the app.)
-      if (name.startsWith("plugins.") && Object.hasOwn(api, name)) return api[name](args, context);
       return handlers[name](...args);
     },
     methods: () => ({ control: Object.keys(api).sort(), workspace: Object.keys(handlers).sort() }),
@@ -462,7 +541,8 @@ export function controlApi(service) {
  */
 export function dispatcher(api, { log } = {}) {
   const said = (method, args, value) => {
-    if (method === "call") return "call " + (thingForLog(args?.[0]) ?? "");
+    // Only the name of a call that the app has: what else was typed there is not written down.
+    if (method === "call") return "call " + (typeof args?.[0] === "string" && Object.hasOwn(WORKSPACE, args[0]) ? (thingForLog(args[0]) ?? "") : "");
     if (!Object.hasOwn(CHANGES, method)) return null;
     const where = CHANGES[method];
     const thing = where === null ? null : thingForLog(typeof where === "function" ? where(args, value) : args?.[where]);
