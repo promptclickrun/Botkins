@@ -16,9 +16,12 @@ export function workspaceActions(backend, inject) {
     async state(known, teamRev) {
       const displays = await backend.screen.displays().catch(() => []);
       const version = epoch + "/" + revision;
+      // What people did in a space since the last look: told once, then forgotten (headless/space-events.mjs).
+      const spaceEvents = backend.takeSpaceEvents?.() ?? [];
       return {
         version, display: displays.some((d) => d.width > 0 && d.height > 0),
         team: backend.teamCut?.heard(teamRev) ?? null,
+        ...(spaceEvents.length && { spaceEvents }),
         ...(version !== known && { snapshot: backend.snapshot(), capabilities: backend.capabilities }),
       };
     },
