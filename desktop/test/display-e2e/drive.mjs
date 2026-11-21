@@ -78,7 +78,7 @@ try {
     state.role = { ...role, bots: "all", perms: { ...role.perms, agents: ["view", "chat"], today: ["view", "use", "create", "manage", "delete"] } };
     const [, invite] = await calls(owners, [["link.team.saveRole", state.role], ["link.team.createInvite", { groupId: "g_everyone", days: 1, maxUses: 1 }]]);
     assert.match(invite.link, /join/);
-    const joining = phoneDoes(["--join", invite.link, "--host", address, "--server", state.server, "--save", members, "--name", "Member's phone", "--space", "Member try", "--call", JSON.stringify([["spaces.read", LAUNCH], ["spaces.rename", LAUNCH, "Mine now"]])], 90);
+    const joining = phoneDoes(["--join", invite.link, "--host", address, "--server=" + state.server, "--save", members, "--name", "Member's phone", "--space", "Member try", "--call", JSON.stringify([["spaces.read", LAUNCH], ["spaces.rename", LAUNCH, "Mine now"]])], 90);
     joining.catch(() => {});
     const request = await until("the request to join to reach the owner", 60, async () => (await calls(owners, [["link.team.get"]]))[0].requests?.[0]);
     await calls(owners, [["link.team.approve", request.id]]);

@@ -10,7 +10,8 @@
 //   phone.mjs --pairing pairing.json [--via lan|relay] --bot <name> --message <text>
 //   phone.mjs --pairing pairing.json --space <name>
 //   phone.mjs --pairing pairing.json --call '[["link.team.get"], ["spaces.read", "s_…"]]'
-//   phone.mjs --join 'botkins://join?…' --host <address> --server <server id> [--save pairing.json] …
+//   phone.mjs --join 'botkins://join?…' --host <address> --server=<server id> [--save pairing.json] …
+//             (a server's id is random and can start with a dash: give it with "=", or it is read as an option)
 //
 // It prints one JSON document: { device, route, bots, chat: { id, pieces, reply, status } }.
 // `pieces` is how many times the reply grew while it was being written: more than one means the
