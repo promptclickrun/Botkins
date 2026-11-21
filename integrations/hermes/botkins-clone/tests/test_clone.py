@@ -53,6 +53,20 @@ def test_light_clone_is_soul_only(root):
     assert result.files == {}
 
 
+def test_markdown_escapes_are_dropped_outside_code(root):
+    (root / "profiles" / "ralph" / "SOUL.md").write_text(
+        "You are Ralph, a practical, warm assistant for life and work\\. Keep it short\\!\n\n"
+        "- Follow\\-through matters\\.\n\nRun `ls \\*.md` first.\n\n```\nC:\\\\path\\.txt\n```\n")
+    result = clone.build_clone(ralph(root), full=True)
+    assert result.agent.description == "A practical, warm assistant for life and work"
+    assert "work. Keep it short!" in result.agent.instructions
+    assert "- Follow-through matters." in result.agent.instructions
+    assert "`ls \\*.md`" in result.agent.instructions  # code keeps its backslashes
+    assert "C:\\\\path\\.txt" in result.agent.instructions
+    assert "\\" not in clone.render(result.agent).split("---")[1]  # front matter
+    assert result.files["AGENTS.md"] == result.agent.instructions
+
+
 def test_full_clone_maps_each_file(root):
     result = clone.build_clone(ralph(root), full=True)
     assert result.files["AGENTS.md"] == SOUL.strip()  # fits 4,000, so no model call
