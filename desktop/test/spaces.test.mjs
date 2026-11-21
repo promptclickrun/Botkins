@@ -21,6 +21,7 @@ import {
   lastLine,
   moveTargets,
   panelChanged,
+  panelProject,
   panelDrop,
   seenWords,
   spaceIcon,
@@ -114,6 +115,19 @@ test("a person's own tick or note is not news to them", () => {
   assert.equal(changedPanels(panels, seen, "owner"), 2);
   assert.equal(changedPanels(panels, seen, "m_maya"), 2);
   assert.equal(changedPanels(panels, 0, "owner"), 0);
+});
+
+test("a new panel's project: what was picked, else the space's own, and never one that is gone", () => {
+  const projects = [{ id: "p_web" }, { id: "p_app" }];
+  assert.equal(panelProject(undefined, { projectId: "p_web" }, projects), "p_web", "it starts on the space's own project");
+  assert.equal(panelProject(undefined, {}, projects), undefined, "else on None");
+  assert.equal(panelProject(null, { projectId: "p_web" }, projects), undefined, "None was picked");
+  assert.equal(panelProject("p_app", { projectId: "p_web" }, projects), "p_app");
+  assert.equal(panelProject("p_gone", { projectId: "p_web" }, projects), undefined);
+  assert.equal(panelProject(undefined, { projectId: "p_gone" }, projects), undefined);
+  // A member has no projects, so the row is not shown and nothing is sent.
+  assert.equal(panelProject(undefined, { projectId: "p_web" }, []), undefined);
+  assert.equal(panelProject(undefined, undefined, undefined), undefined);
 });
 
 test("a panel's asks are the bot's own words, cleaned: at most three, one line, 60 characters", () => {

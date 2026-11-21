@@ -487,10 +487,22 @@ try {
   await sheet.getByRole("button", { name: "Tracker", exact: true }).click();
   await sheet.getByRole("button", { name: "Checklist", exact: true }).click();
   await expect(sheet.getByRole("button", { name: "Tracker", exact: true })).toHaveAttribute("aria-pressed", "false");
+  // The owner's Project row starts on the space's own project.
+  const projectRow = sheet.getByRole("combobox", { name: "Project" });
+  await expect(projectRow.locator("option")).toHaveText(["None", "Website relaunch"]);
+  await expect(projectRow).toHaveValue("p_web");
   await sheet.getByRole("button", { name: "Create", exact: true }).click();
-  await expect.poll(() => callsOf("spaces.newPanel")).toEqual([[{ spaceId: "s_launch", botId: "luna", prompt: "A countdown to launch day", start: "checklist" }]]);
+  await expect.poll(() => callsOf("spaces.newPanel")).toEqual([[{ spaceId: "s_launch", botId: "luna", prompt: "A countdown to launch day", start: "checklist", projectId: "p_web" }]]);
   await expect(win.locator(".chathead h2")).toHaveText("Luna");
-  console.log("Add panel opens New panel and makes one from a sentence, a bot and a start.");
+  // With None chosen, the call has no project at all.
+  await clearCalls();
+  await menu.getByRole("button", { name: "Launch", exact: true }).click();
+  await head.getByRole("button", { name: "Add panel", exact: true }).click();
+  await sheet.getByLabel("What should it show?").fill("Notes for the team");
+  await projectRow.selectOption({ label: "None" });
+  await sheet.getByRole("button", { name: "Create", exact: true }).click();
+  await expect.poll(() => callsOf("spaces.newPanel")).toEqual([[{ spaceId: "s_launch", botId: "pip", prompt: "Notes for the team" }]]);
+  console.log("Add panel opens New panel and makes one from a sentence, a bot, a start and a project.");
 
   // ---- Arranging, with no edit mode. What the stand-in holds now is put back afterwards, so the
   // checks after this block see the spaces as they were.
@@ -632,7 +644,10 @@ try {
   await expect(sheet.getByRole("combobox", { name: "Space" })).toHaveValue("s_launch");
   await sheet.getByLabel("What should it show?").fill("Signups by day");
   await sheet.getByRole("combobox", { name: "Bot" }).selectOption({ label: "Pip" });
+  // Until the person picks a project, the row follows the chosen space: Money has none.
+  await expect(sheet.getByRole("combobox", { name: "Project" })).toHaveValue("p_web");
   await sheet.getByRole("combobox", { name: "Space" }).selectOption({ label: "Money" });
+  await expect(sheet.getByRole("combobox", { name: "Project" })).toHaveValue("");
   await expect(sheet.getByRole("combobox", { name: "Refresh" }).locator("option")).toHaveText(["Off", "On a schedule"]);
   await sheet.getByRole("combobox", { name: "Refresh" }).selectOption("on");
   await expect(sheet.getByRole("radiogroup", { name: "Repeats" })).toBeVisible();

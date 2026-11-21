@@ -46,6 +46,7 @@ import {
   lastLine,
   moveTargets,
   panelChanged,
+  panelProject,
   spaceIcon,
   spaceLine,
   spaceName,
@@ -224,8 +225,9 @@ const STARTS: { id: SpaceStart; label: string }[] = [
 
 /**
  * The sheet "New panel": a sentence, a bot, what to start from, the space it goes to and whether a
- * routine refreshes it. The contract's row Project is left out: a panel is attached to a project
- * once it exists, and it does not exist until the bot first publishes it.
+ * routine refreshes it. The owner also has the row Project (projects are the owner's): it starts on
+ * the space's own project when the space has one, else on None, and the computer sets it as the
+ * panel's project when the bot first publishes the panel. A member's sheet has no such row.
  */
 export function NewPanel({ state, space, botId, close, opened }: { state: State; space: SpaceSummary; botId: string; close: () => void; opened: (chatId: string) => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -240,6 +242,10 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
   const choices = [space, ...(state.spaces ?? []).filter((s) => s.id !== space.id && s.can !== "view")];
   // A routine is a change to the space: a member needs Can manage for it.
   const canRefresh = teamCan(state, "today", "manage");
+  // The owner's Project row. Until the person picks, it follows the chosen space's own project.
+  const projects = isOwner(state) ? (state.projects ?? []) : [];
+  const [pickedProject, setPickedProject] = useState<string | null | undefined>(undefined);
+  const projectId = panelProject(pickedProject, choices.find((s) => s.id === spaceId), projects);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -265,6 +271,7 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
               botId: bot,
               prompt: prompt.trim(),
               ...(start && { start }),
+              ...(projectId && { projectId }),
               ...(refresh && canRefresh && { refresh: { cron: cronFromCadence(cadence), timezone: zone } }),
             });
             opened(chatId);
@@ -305,6 +312,19 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
               {choices.map((s) => (
                 <option key={s.id} value={s.id}>
                   {spaceName(s)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {projects.length > 0 && (
+          <label>
+            Project
+            <select value={projectId ?? ""} onChange={(e) => setPickedProject(e.target.value || null)}>
+              <option value="">None</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
                 </option>
               ))}
             </select>
