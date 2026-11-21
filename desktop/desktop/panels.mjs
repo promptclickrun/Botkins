@@ -4,6 +4,7 @@ import { defineTool } from "./providers/provider.mjs";
 import { Routines } from "./routines.mjs";
 import { assertProject } from "./access.mjs";
 import { frameFields } from "./frames.mjs";
+import { checkedState, LIMITS } from "./spaces.mjs";
 
 const string = { type: "string" };
 const strings = { type: "array", items: string };
@@ -235,13 +236,47 @@ export class Panels {
     if (!p) throw new Error("Panel no longer exists");
     return p;
   }
-  write(botId, chatId, args, run) {
+  /**
+   * The space a bot's panel call is about, for the people the turn works for (`turn`, from
+   * workspace.turnPeople). Named: that space, when all of them can open it. Not named: the
+   * space the chat was started from, else the Today of the chat's starter. A refresh is always
+   * about its own panel's space.
+   */
+  spaceFor(chat, run, turn, named) {
+    const spaces = this.ws.spaces;
+    // A refresh whose panel is gone has no space of its own; the write that follows finds no panel and is refused.
+    const refreshed = run?.panelId && this.all.find((p) => p.id === run.panelId);
+    if (refreshed) return spaces.of(refreshed);
+    if (named != null && String(named).trim()) return spaces.find(named, turn.people);
+    const from = chat?.spaceId && spaces.all.find((space) => space.id === chat.spaceId);
+    if (from && spaces.canAll(from, turn.people)) return from;
+    return spaces.ensure(turn.starter).today;
+  }
+  /** Refuses unless every person the turn works for may change the space, and (for a member) their role allows the action. */
+  mayChange(space, turn, action) {
+    const can = this.ws.spaces.canAll(space, turn.people);
+    if (can !== "own" && can !== "edit") throw new Error(can ? "The people in this chat can look at " + space.name + ", not change it." : "Unknown space.");
+    turn.needs(action);
+  }
+  /**
+   * A bot's panel by its key. The key is the bot's within one space: a bot serves several people,
+   * and its panel in one person's space is not its panel in another's.
+   */
+  owned(botId, key, space) {
+    return this.all.find((p) => p.botId === botId && p.spaceId === space.id && p.key === key);
+  }
+  write(botId, chatId, args, run, turn = this.ws.turnPeople(this.ws.state.chats.find((c) => c.id === chatId))) {
     const key = textField(args.key, 72, "panel key");
     if (!/^[a-z0-9][a-z0-9-]*$/.test(key))
       throw new Error("Use lowercase letters, numbers and hyphens for key");
-    const panel = this.all.find((p) => p.botId === botId && p.key === key);
+    const space = this.spaceFor(this.ws.state.chats.find((c) => c.id === chatId), run, turn, args.space);
+    const panel = this.owned(botId, key, space);
     if (run?.panelId && panel?.id !== run.panelId)
       throw new Error("This refresh can only update its assigned panel");
+    this.mayChange(space, turn, panel ? "use" : "create");
+    if (!panel && this.ws.spaces.panels(space.id).length >= LIMITS.panels) throw new Error(space.name + " has " + LIMITS.panels + " panels, which is the most a space holds. Remove one, or use another space.");
+    // An app panel's saved state is kept unless the bot sends a new one.
+    const state = args.state === undefined ? undefined : checkedState(args.state);
     if ((args.revision ?? 0) !== (panel?.revision ?? 0))
       throw new Error(
         "Panel changed. List your panels and use the current revision.",
@@ -259,6 +294,9 @@ export class Panels {
       key,
       botId,
       chatId,
+      spaceId: space.id,
+      // The person who asked for it, when a member: its refreshes run for them and under their limits.
+      ...(turn.starter !== "owner" && { createdBy: turn.starter }),
       size: "wide",
       hidden: false,
       revision: 0,
@@ -276,11 +314,17 @@ export class Panels {
       updatedAt: now,
       lastWriter: run?.id,
     });
+    if (state !== undefined) {
+      result.state = state;
+      result.stateRev = (result.stateRev ?? 0) + 1;
+    }
     if (!panel) this.all.push(result);
+    this.ws.spaces.touch(space.id, now);
     this.ws.save();
-    return { key, revision: result.revision, title };
+    return { key, revision: result.revision, title, space: space.name };
   }
-  routine(id, { action, cron, prompt, timezone }) {
+  /** `by` is the person who set it ("owner" or a member's id): a routine a member set runs under their limits too. */
+  routine(id, { action, cron, prompt, timezone }, by) {
     const p = this.get(id);
     if (action === "set") {
       const expression = textField(cron, 160, "cron");
@@ -292,6 +336,7 @@ export class Panels {
         prompt: textField(prompt, 4000, "refresh instructions"),
         enabled: true,
         nextAt,
+        ...(by && by !== "owner" && { setBy: by }),
       };
     } else if (action === "remove") p.routine = null;
     else {
@@ -302,6 +347,7 @@ export class Panels {
         ? nextTime(p.routine.cron, p.routine.timezone)
         : null;
     }
+    this.ws.spaces.touch(p.spaceId);
     this.ws.save();
     return p.routine;
   }
@@ -316,16 +362,53 @@ export class Panels {
       p.hidden = action === "hide";
     else if (["small", "wide", "tall"].includes(action)) p.size = action;
     else if (action === "earlier" || action === "later") {
-      const j = i + (action === "earlier" ? -1 : 1);
+      // A panel's place is its place among the panels of its space: it changes places with the
+      // one before or after it there, wherever that one is in the whole list.
+      const step = action === "earlier" ? -1 : 1;
+      let j = i + step;
+      while (j >= 0 && j < this.all.length && this.all[j].spaceId !== p.spaceId) j += step;
       if (j >= 0 && j < this.all.length)
         [this.all[i], this.all[j]] = [this.all[j], p];
     } else throw new Error("Unknown panel action");
+    this.ws.spaces.touch(p.spaceId);
+    this.ws.save();
+  }
+  /**
+   * Puts a panel in a space, before another panel of that space or (with `before` null) at its
+   * end. The same space puts it in order there.
+   */
+  move(id, spaceId, before = null) {
+    const p = this.get(id);
+    const space = this.ws.spaces.get(spaceId);
+    const target = before == null ? null : this.get(before);
+    if (target && (target.spaceId !== space.id || target === p)) throw new Error("That panel is not in " + space.name + ".");
+    const from = p.spaceId;
+    if (from !== space.id) {
+      if (this.ws.spaces.panels(space.id).length >= LIMITS.panels) throw new Error(space.name + " has " + LIMITS.panels + " panels, which is the most a space holds.");
+      // A bot has one panel by a key in a space.
+      if (this.owned(p.botId, p.key, space)) throw new Error("Its bot already has a panel like this one in " + space.name + ".");
+    }
+    this.all.splice(this.all.indexOf(p), 1);
+    p.spaceId = space.id;
+    if (target) this.all.splice(this.all.indexOf(target), 0, p);
+    else {
+      // The end of the space: after its last panel.
+      const last = this.all.findLastIndex((item) => item.spaceId === space.id);
+      this.all.splice(last < 0 ? this.all.length : last + 1, 0, p);
+    }
+    const now = Date.now();
+    if (from !== space.id) this.ws.spaces.touch(from, now);
+    this.ws.spaces.touch(space.id, now);
     this.ws.save();
   }
   /** A panel as its bot reads it: an html block shows its data and the start of its page, or all of it with `full`. */
   readable(panel, full) {
+    const { state, ...rest } = panel;
     return {
-      ...panel,
+      ...rest,
+      space: this.ws.spaces.of(panel).name,
+      // What people changed in an app panel, when the whole of it is asked for.
+      ...(full && state && { state }),
       blocks: panel.blocks.map((b) => {
         if (b.type !== "html") return b;
         const html = this.ws.frames.html(b.frame);
@@ -338,20 +421,35 @@ export class Panels {
       }),
     };
   }
-  refresh(id, trigger = "manual", now = Date.now()) {
+  /**
+   * Has the panel's bot refresh it. `by` is the person who pressed Refresh ("owner" or a member's
+   * id); a routine's refresh is by the person who last set it.
+   *
+   * Whose limits it runs under: the refresh chat is the panel's maker's, and the request is
+   * written in the name of `by`, so the turn gets the narrower of the two people's limits
+   * (workspace.accessForTurn). A member who writes a routine's prompt on the owner's panel
+   * never gets the owner's tools that way, and the owner pressing Refresh on a member's panel
+   * does not lend the member theirs.
+   */
+  refresh(id, trigger = "manual", now = Date.now(), by) {
     const p = this.get(id);
     if (p.refreshChatId && this.ws.active.has(p.refreshChatId))
       throw new Error("This panel is already refreshing");
     if (trigger === "scheduled") {
       if (!p.routine?.enabled || p.routine.nextAt > now) return;
       p.routine.nextAt = nextTime(p.routine.cron, p.routine.timezone, now);
+      by = p.routine.setBy;
     }
-    if (!p.refreshChatId)
+    if (!p.refreshChatId || !this.ws.state.chats.some((c) => c.id === p.refreshChatId)) {
       p.refreshChatId = this.ws.createChat(
         p.botId,
         "Updates · " + p.title,
         p.id,
       );
+      // The chat is the panel's maker's, so what it has to say goes to them and not to the owner by default.
+      if (p.createdBy) this.ws.state.chats.find((c) => c.id === p.refreshChatId).createdBy = p.createdBy;
+    }
+    const author = by && by !== "owner" ? this.ws.memberAuthor(by) : undefined;
     const request =
       p.routine?.prompt ||
       "Check the information in the panel and update it using available sources.";
@@ -364,6 +462,7 @@ export class Panels {
       panelId: id,
       trigger,
       title: "Update " + p.title,
+      ...(author && { author }),
     });
   }
   async tick(now = Date.now()) {
@@ -386,10 +485,24 @@ export class Panels {
     }
   }
   tools(bot, chat, run, task) {
-    const owned = (key) => {
-      const p = this.all.find((p) => p.botId === bot.id && p.key === key);
-      if (!p || (run?.panelId && run.panelId !== p.id))
-        throw new Error("Unknown panel for this bot");
+    // The people this turn works for: the chat's starter and whoever wrote the message. The bot
+    // sees the spaces all of them can open, and changes the ones all of them can change.
+    const turn = this.ws.turnPeople(chat, task);
+    const spaces = this.ws.spaces;
+    const mine = () => {
+      const open = new Set(turn.sees() ? spaces.open(turn.people).map((space) => space.id) : []);
+      return this.all.filter((p) => p.botId === bot.id && open.has(p.spaceId) && (!run?.panelId || p.id === run.panelId));
+    };
+    /** This bot's panel by its key: in the space named, else in the space this chat is about, else the only one with that key the people can open. */
+    const owned = (key, named) => {
+      let p;
+      if (run?.panelId || (named != null && String(named).trim())) p = this.owned(bot.id, key, this.spaceFor(chat, run, turn, named));
+      else {
+        const all = mine().filter((item) => item.key === key);
+        p = all.find((item) => item.spaceId === this.spaceFor(chat, run, turn).id) ?? (all.length === 1 ? all[0] : undefined);
+        if (!p && all.length > 1) throw new Error("You have a panel with this key in " + all.map((item) => spaces.of(item).name).join(" and in ") + ". Name the space.");
+      }
+      if (!p || !mine().includes(p)) throw new Error("Unknown panel for this bot");
       return p;
     };
     const tool = (name, description, properties, required, handler) =>
@@ -412,36 +525,51 @@ export class Panels {
     const tools = [
       tool(
         "today_list",
-        "List your own Today panels and revisions. Supply a key to read the complete blocks. An html block comes back with its data and the start of its page; set full to get the whole page.",
-        { key: string, full: { type: "boolean" } },
+        "List your own panels and revisions, in the spaces the people in this chat can open (a space is a page of panels: a person's Today, or one they made). Supply a key to read the complete blocks, and `space` when you have that key in more than one space. An html block comes back with its data and the start of its page; set full to get the whole page and what people changed in it (`state`).",
+        { key: string, space: string, full: { type: "boolean" } },
         [],
-        ({ key, full }) =>
+        ({ key, space, full }) =>
           key
-            ? this.readable(owned(key), full)
-            : this.all
-                .filter(
-                  (p) =>
-                    p.botId === bot.id &&
-                    (!run?.panelId || p.id === run.panelId),
-                )
-                .map(({ key, title, revision, routine }) => ({
-                  key,
-                  title,
-                  revision,
-                  routine,
+            ? this.readable(owned(key, space), full)
+            : mine()
+                .filter((p) => !space || p.spaceId === spaces.find(space, turn.people).id)
+                .map((p) => ({
+                  key: p.key,
+                  title: p.title,
+                  revision: p.revision,
+                  routine: p.routine,
+                  space: spaces.of(p).name,
                 })),
       ),
       tool(
+        "space_list",
+        "List the spaces the people in this chat can open: each one's name, its id, whose it is, whether you may change it, and how many panels it holds. A panel you publish goes to the space this chat is about (usually the person's Today) unless you name another.",
+        {},
+        [],
+        () =>
+          (turn.sees() ? spaces.open(turn.people) : []).map((space) => ({
+            id: space.id,
+            name: space.name,
+            ...(space.builtin && { builtin: space.builtin }),
+            mine: spaces.maker(space) === turn.starter,
+            change: ["own", "edit"].includes(spaces.canAll(space, turn.people)),
+            panels: spaces.panels(space.id).length,
+            ...(space.id === this.spaceFor(chat, run, turn).id && { here: true }),
+          })),
+      ),
+      tool(
         "today_publish",
-"Create or update a rich Today panel owned by this bot. Reuse a stable key. Supply its current revision when updating; omit revision for creation. For a custom view (a chart, a dashboard, a timeline, anything interactive) use an html block: one self-contained HTML page or fragment with inline CSS and JavaScript. It has no network, so use inline SVG or data: URLs. It is drawn inside the panel and should use the app's colors through the CSS variables --ink, --muted, --line, --paper and --accent, which follow light and dark. Put changing values in the block's `data` and read them with `await botkins.getData()`; on a later update send the html block with only `data` to keep the page. `botkins.sendAnswer(text)` puts text in the person's message box and `botkins.openLink(url)` asks to open a web page.",
+"Create or update a rich Today panel owned by this bot. Reuse a stable key. Supply its current revision when updating; omit revision for creation. For a custom view (a chart, a dashboard, a timeline, anything interactive) use an html block: one self-contained HTML page or fragment with inline CSS and JavaScript. It has no network, so use inline SVG or data: URLs. It is drawn inside the panel and should use the app's colors through the CSS variables --ink, --muted, --line, --paper and --accent, which follow light and dark. Put changing values in the block's `data` and read them with `await botkins.getData()`; on a later update send the html block with only `data` to keep the page. `botkins.sendAnswer(text)` puts text in the person's message box and `botkins.openLink(url)` asks to open a web page. A page people use together (a checklist, a tracker, a vote) keeps what they change with `botkins.state`: `await botkins.state.get()` answers the saved object, `botkins.state.set({ key: value }, \"Ticked Press kit\")` merges top-level keys for everyone (null removes one; the second argument is a few words that say what the person did), and `botkins.state.onChange(fn)` hears what someone else changed. Updating the panel keeps that state; pass `state` only to replace it. The panel goes to the space this chat is about, the person's Today unless they started the chat from another space; name another with `space` (see space_list). A key is yours within one space.",
         {
           key: string,
+          space: string,
           revision: { type: "integer" },
           title: string,
           blocks: { type: "array", items: blockSchema },
+          state: { type: "object" },
         },
         ["key", "title", "blocks"],
-        (args) => this.write(bot.id, chat.id, args, run),
+        (args) => this.write(bot.id, chat.id, args, run, turn),
       ),
     ];
     if (!run?.panelId)
@@ -480,23 +608,30 @@ export class Panels {
           "Manage a panel's recurring Copilot refresh. Set a five-field cron expression and instructions when a recurring update is requested. Cadence uses the supplied IANA timezone or the computer's timezone.",
           {
             key: string,
+            space: string,
             action: { enum: ["set", "pause", "resume", "remove"] },
             cron: string,
             timezone: string,
             prompt: string,
           },
           ["key", "action"],
-          (args) => this.routine(owned(args.key).id, args),
+          (args) => {
+            const p = owned(args.key, args.space);
+            this.mayChange(spaces.of(p), turn, "manage");
+            // The routine is set for the person who asked: the one who wrote the message, else the chat's starter.
+            return this.routine(p.id, args, turn.writer ?? turn.starter);
+          },
         ),
         tool(
           "today_remove",
           "Remove one of your Today panels and its routine when requested.",
-          { key: string, revision: { type: "integer" } },
+          { key: string, space: string, revision: { type: "integer" } },
           ["key", "revision"],
           (args) => {
-            const p = owned(args.key);
+            const p = owned(args.key, args.space);
             if (p.revision !== args.revision)
               throw new Error("Panel changed. List your panels again.");
+            this.mayChange(spaces.of(p), turn, "delete");
             this.change(p.id, "delete");
             return { removed: args.key };
           },

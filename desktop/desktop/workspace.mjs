@@ -74,7 +74,8 @@ import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Templates } from "./templates.mjs";
 import { Access, migrateCustomers } from "./access.mjs";
-import { memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
+import { memberCanSpaces, memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
+import { Spaces } from "./spaces.mjs";
 
 function textFieldOptional(text) {
   if (typeof text !== "string" || text.length > 4000)
@@ -126,6 +127,9 @@ export class Workspace {
     this.peopleOf = options?.people ?? null;
     // (chatId) => whether the computer's owner is one of a chat's people, when the link answers that itself.
     this.ownerIn = options?.notifiesOwner ?? null;
+    // (space, person) => "own" | "edit" | "view" | null: what a person may do with a space, from
+    // the link, which keeps who a space is shared with (desktop/spaces.mjs).
+    this.spaceCanOf = options?.spaceCan ?? null;
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
     this.file = join(dir, "workspace.json");
@@ -239,6 +243,8 @@ export class Workspace {
     this.phone = new PhoneTools(this, options?.phoneTools);
     this.agents = new Agents(this);
     this.board = new Board(this);
+    // Pages of panels and cards, each a person's (desktop/spaces.mjs). Every panel and card is in one.
+    this.spaces = new Spaces(this);
     this.projects = new Projects(this);
     this.artifacts = new Artifacts(this);
     this.artifactEvents = new ArtifactEvents(this);
@@ -311,6 +317,9 @@ export class Workspace {
   snapshot() {
     return {
       ...this.state,
+      // What an app is sent of spaces is made for each person (docs/spaces.md, "What each device
+      // is sent"): the records as they are kept are not a part of the snapshot.
+      spaces: undefined,
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
       // Resolved provider inputs are private restart data and can contain large attachments.
@@ -990,6 +999,33 @@ export class Workspace {
             ...this.teamwork.tools(bot, chat, run, task),
           ]),
     ];
+  }
+  /**
+   * The people a bot's turn works for, as far as spaces go: the chat's starter, and whoever wrote
+   * the message when that is a member. `people` are their ids ("owner" or a member's id). A bot
+   * sees a space only when all of them can open it and changes it only when all of them can
+   * (desktop/spaces.mjs); `sees` and `needs` add what a member's role allows.
+   */
+  turnPeople(chat, task) {
+    const starter = chat?.createdBy ?? "owner";
+    const writer = (task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author)?.memberId;
+    const people = [...new Set([starter, ...(writer ? [writer] : [])])];
+    const members = people.filter((person) => person !== "owner");
+    const allows = (action) => members.every((person) => memberCanSpaces(person, this.teamOf(), action));
+    return {
+      starter,
+      writer,
+      people,
+      sees: () => allows("view"),
+      needs: (action) => {
+        if (!allows(action)) throw new Error("The role of the person this is for doesn't allow that. The owner can change it in Team settings.");
+      },
+    };
+  }
+  /** A member as the author of a message: { memberId, name }, with the name the team has for them. */
+  memberAuthor(memberId) {
+    const name = this.teamOf()?.members?.find((item) => item.id === memberId)?.name;
+    return { memberId, name: typeof name === "string" && name ? name : "A member" };
   }
   /**
    * A chat's people: who made it ("owner" when a member did not) and whom they invited. A person
@@ -1823,6 +1859,7 @@ export class Workspace {
                 : run.status,
             detail: run.detail,
           };
+        if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
       if (run.status !== "Stopped" && !run.panelId && !chat.temporary) chat.unread = true;
