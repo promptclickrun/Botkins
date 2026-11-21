@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { VoiceSettings } from "../src/link/types";
-import { effectiveLive, effectiveTts, tidyVoice, withProvider } from "../src/features/voice/botVoice";
+import { effectiveLive, effectiveTts, tidyVoice, unpinIfBare, withProvider } from "../src/features/voice/botVoice";
 import { effectiveLive as computersLive, effectiveTts as computersTts } from "../link-host/voice.mjs";
 import { botVoiceSummary, dictationSummary, keysSummary, LIVE_INPUTS, liveInputLine, liveSummary, readingSummary, setupFor, UNBUILT } from "../src/features/voice/settings/summary";
 
@@ -80,6 +80,11 @@ test("a bot's voice on its page: Same as Settings, or only what the bot changes"
   const shared = settings({ tts: { provider: "openai", voice: "cedar", speed: 1.5 }, live: { provider: "openai" } });
   assert.equal(botVoiceSummary(undefined, shared), "Same as Settings");
   assert.equal(botVoiceSummary({}, shared), "Same as Settings");
+  // A voice picked for a bot keeps its provider; cleared again, a bare pin on the shared provider goes too.
+  assert.deepEqual(unpinIfBare({ tts: { provider: "openai", voice: "nova" } }, "tts", "openai"), { tts: { provider: "openai", voice: "nova" } });
+  assert.equal(unpinIfBare({ tts: { provider: "openai" } }, "tts", "openai"), null);
+  assert.deepEqual(unpinIfBare({ tts: { provider: "openai", speed: 1.2 } }, "tts", "openai"), { tts: { speed: 1.2 } });
+  assert.deepEqual(unpinIfBare({ tts: { provider: "azure" } }, "tts", "openai"), { tts: { provider: "azure" } });
   // A system voice this phone keeps for the bot shows while the bot reads with "This phone".
   assert.equal(botVoiceSummary(undefined, { ...shared, tts: { ...shared.tts, provider: "device" } }, { voice: "com.apple.voice.compact.en-GB.Daniel" }), "This phone · Daniel");
   assert.equal(botVoiceSummary({ tts: { voice: "nova" } }, shared), "OpenAI \u00b7 Nova");

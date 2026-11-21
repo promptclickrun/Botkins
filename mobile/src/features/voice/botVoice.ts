@@ -41,6 +41,17 @@ export function withSection<K extends "tts" | "live">(voice: BotVoice | undefine
   return tidyVoice({ ...voice, [section]: { ...voice?.[section], ...patch } });
 }
 
+/**
+ * A model or voice chosen for a bot carries the provider it belongs to. When both are cleared again
+ * ("Same as Settings") and that provider is only the shared one, the bot follows Settings again.
+ */
+export function unpinIfBare(voice: BotVoice | null, section: "tts" | "live", shared: string | null | undefined): BotVoice | null {
+  const part = voice?.[section];
+  if (!part || part.model || part.voice || part.provider !== shared) return voice;
+  const { provider: _provider, ...rest } = part;
+  return tidyVoice({ ...voice, [section]: rest });
+}
+
 /** Another provider for a section: the old model and voice would not fit it, so they go back to the default. The speed stays. */
 export function withProvider(voice: BotVoice | undefined, section: "tts" | "live", provider: string | undefined): BotVoice | null {
   const speed = section === "tts" ? voice?.tts?.speed : undefined;

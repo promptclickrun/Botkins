@@ -5,7 +5,7 @@
 // The phone has the same card (mobile/src/features/bots/BotVoice.tsx), in the same words.
 import { useEffect, useRef, useState } from "react";
 import { Play, Square } from "lucide-react";
-import { botDeviceVoices, botVoiceSummary, effectiveLive, effectiveTts, LIVE_NAMES, providerLack, setBotDeviceVoice, tidyVoice, TTS_NAMES, withProvider, withSection } from "./botVoice";
+import { botDeviceVoices, botVoiceSummary, effectiveLive, effectiveTts, LIVE_NAMES, providerLack, setBotDeviceVoice, tidyVoice, TTS_NAMES, unpinIfBare, withProvider, withSection } from "./botVoice";
 import type { Bot, BotVoice, DeskVoiceSettings, LiveProvider, TtsProvider } from "./types";
 import { errorText } from "./SettingsRows";
 import { useOptions } from "./VoiceSettings";
@@ -118,7 +118,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("tts", tts.provider) && <small className="muted">This provider {lackOf("tts", tts.provider)}. Set it up in Settings › Voice.</small>}
         {!onComputer && ttsOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(withSection(own, "tts", { ...(model ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), model: model || undefined }))} />
+          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(unpinIfBare(withSection(own, "tts", { ...(model ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), model: model || undefined }), "tts", shared.tts.provider))} />
         )}
         {(onComputer ? systems : ttsOptions.options.voices).length > 0 && (
           <Pick
@@ -130,7 +130,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
               if (onComputer) {
                 setBotDeviceVoice(bot.id, { voice: voice || undefined });
                 setLocal(botDeviceVoices()[bot.id]);
-              } else save(withSection(own, "tts", { ...(voice ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), voice: voice || undefined }));
+              } else save(unpinIfBare(withSection(own, "tts", { ...(voice ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), voice: voice || undefined }), "tts", shared.tts.provider));
             }}
           />
         )}
@@ -164,10 +164,10 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("live", live.provider) && <small className="muted">This provider {lackOf("live", live.provider)}. Set it up in Settings › Voice.</small>}
         {!!live.provider && liveOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.live?.model ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.models} change={(model) => save(withSection(own, "live", { ...(model ? { provider: own?.live?.provider ?? live.provider ?? undefined } : {}), model: model || undefined }))} />
+          <Pick label="Model" value={own?.live?.model ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.models} change={(model) => save(unpinIfBare(withSection(own, "live", { ...(model ? { provider: own?.live?.provider ?? live.provider ?? undefined } : {}), model: model || undefined }), "live", shared.live.provider))} />
         )}
         {!!live.provider && liveOptions.options.voices.length > 0 && (
-          <Pick label="Voice" value={own?.live?.voice ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.voices} change={(voice) => save(withSection(own, "live", { ...(voice ? { provider: own?.live?.provider ?? live.provider ?? undefined } : {}), voice: voice || undefined }))} />
+          <Pick label="Voice" value={own?.live?.voice ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.voices} change={(voice) => save(unpinIfBare(withSection(own, "live", { ...(voice ? { provider: own?.live?.provider ?? live.provider ?? undefined } : {}), voice: voice || undefined }), "live", shared.live.provider))} />
         )}
         <small className="muted">Keys and sign-ins are set in Settings › Voice.</small>
       </fieldset>
