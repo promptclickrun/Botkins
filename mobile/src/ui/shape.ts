@@ -35,8 +35,9 @@ const TALL_MIN = 500;
 const RAIL_MIN = 44;
 
 /**
- * `ios` false: there is no vertical bar (Android's own buttons can sit on one side in landscape, and
- * the tab bar stays at the bottom there).
+ * `ios` false (Android, iPad): the inset is not guessed to be a vertical bar. Android's own buttons
+ * can sit on one side in landscape, and an iPad window can have a one-sided inset, with the tab bar
+ * still at the bottom. The system's own word (`native.edge`) counts everywhere.
  */
 export function shapeOf(input: { width: number; height: number; insets: Insets; tabBar: number; native?: NativeFoldState | null; rtl?: boolean; ios?: boolean }): Shape {
   const { width, height, insets, tabBar, native, rtl = false, ios = true } = input;

@@ -100,8 +100,8 @@ function Reading({ bot, voice }: { bot: Bot; voice: VoiceSettings }) {
       <Label>Reading aloud</Label>
       <Group>
         <Choice title="Provider" subtitle={lack ?? undefined} value={own?.provider ?? ""} options={providerChoices} onChange={(next) => saveVoice(bot, withProvider(bot.voice, "tts", next || undefined))} />
-        {!onPhone && !!options?.models.length && <Choice title="Model" value={own?.model ?? ""} options={listed(none, options.models)} onChange={(model) => saveVoice(bot, withSection(bot.voice, "tts", { provider: own?.provider ?? provider, model: model || undefined }))} />}
-        {loadingVoices ? <Row title="Voice" value="Loading…" disabled /> : voiceOptions.length > 1 && <Choice title="Voice" value={onPhone ? (local?.voice ?? "") : (own?.voice ?? "")} options={voiceOptions} onChange={(next) => (onPhone ? setBotDeviceVoice(bot.id, { voice: next || undefined }) : saveVoice(bot, withSection(bot.voice, "tts", { provider: own?.provider ?? provider, voice: next || undefined })))} />}
+        {!onPhone && !!options?.models.length && <Choice title="Model" value={own?.model ?? ""} options={listed(none, options.models)} onChange={(model) => saveVoice(bot, withSection(bot.voice, "tts", { ...(model ? { provider: own?.provider ?? provider } : {}), model: model || undefined }))} />}
+        {loadingVoices ? <Row title="Voice" value="Loading…" disabled /> : voiceOptions.length > 1 && <Choice title="Voice" value={onPhone ? (local?.voice ?? "") : (own?.voice ?? "")} options={voiceOptions} onChange={(next) => (onPhone ? setBotDeviceVoice(bot.id, { voice: next || undefined }) : saveVoice(bot, withSection(bot.voice, "tts", { ...(next ? { provider: own?.provider ?? provider } : {}), voice: next || undefined })))} />}
         {hasSpeed && (
           <View style={{ paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.sm }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -136,8 +136,8 @@ function Live({ bot, voice }: { bot: Bot; voice: VoiceSettings }) {
       <Label>Live voice</Label>
       <Group>
         <Choice title="Provider" subtitle={provider ? (lackOf(provider) ?? undefined) : undefined} value={own?.provider ?? ""} options={providerChoices} onChange={(next) => saveVoice(bot, withProvider(bot.voice, "live", next || undefined))} />
-        {!!provider && !!options?.models.length && <Choice title="Model" value={own?.model ?? ""} options={listed(none, options.models)} onChange={(model) => saveVoice(bot, withSection(bot.voice, "live", { provider: own?.provider ?? provider ?? undefined, model: model || undefined }))} />}
-        {!!provider && !!options?.voices.length && <Choice title="Voice" value={own?.voice ?? ""} options={listed(none, options.voices)} onChange={(next) => saveVoice(bot, withSection(bot.voice, "live", { provider: own?.provider ?? provider ?? undefined, voice: next || undefined }))} />}
+        {!!provider && !!options?.models.length && <Choice title="Model" value={own?.model ?? ""} options={listed(none, options.models)} onChange={(model) => saveVoice(bot, withSection(bot.voice, "live", { ...(model ? { provider: own?.provider ?? provider ?? undefined } : {}), model: model || undefined }))} />}
+        {!!provider && !!options?.voices.length && <Choice title="Voice" value={own?.voice ?? ""} options={listed(none, options.voices)} onChange={(next) => saveVoice(bot, withSection(bot.voice, "live", { ...(next ? { provider: own?.provider ?? provider ?? undefined } : {}), voice: next || undefined }))} />}
       </Group>
       <Note>Keys and sign-ins are set in Settings › Voice.</Note>
     </View>

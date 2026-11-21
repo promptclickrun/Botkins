@@ -118,7 +118,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("tts", tts.provider) && <small className="muted">This provider {lackOf("tts", tts.provider)}. Set it up in Settings › Voice.</small>}
         {!onComputer && ttsOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(withSection(own, "tts", { provider: own?.tts?.provider ?? tts.provider ?? undefined, model: model || undefined }))} />
+          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(withSection(own, "tts", { ...(model ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), model: model || undefined }))} />
         )}
         {(onComputer ? systems : ttsOptions.options.voices).length > 0 && (
           <Pick
@@ -130,7 +130,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
               if (onComputer) {
                 setBotDeviceVoice(bot.id, { voice: voice || undefined });
                 setLocal(botDeviceVoices()[bot.id]);
-              } else save(withSection(own, "tts", { provider: own?.tts?.provider ?? tts.provider ?? undefined, voice: voice || undefined }));
+              } else save(withSection(own, "tts", { ...(voice ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), voice: voice || undefined }));
             }}
           />
         )}
@@ -164,10 +164,10 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("live", live.provider) && <small className="muted">This provider {lackOf("live", live.provider)}. Set it up in Settings › Voice.</small>}
         {!!live.provider && liveOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.live?.model ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.models} change={(model) => save(withSection(own, "live", { provider: own?.live?.provider ?? live.provider ?? undefined, model: model || undefined }))} />
+          <Pick label="Model" value={own?.live?.model ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.models} change={(model) => save(withSection(own, "live", { ...(model ? { provider: own?.live?.provider ?? live.provider ?? undefined } : {}), model: model || undefined }))} />
         )}
         {!!live.provider && liveOptions.options.voices.length > 0 && (
-          <Pick label="Voice" value={own?.live?.voice ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.voices} change={(voice) => save(withSection(own, "live", { provider: own?.live?.provider ?? live.provider ?? undefined, voice: voice || undefined }))} />
+          <Pick label="Voice" value={own?.live?.voice ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.voices} change={(voice) => save(withSection(own, "live", { ...(voice ? { provider: own?.live?.provider ?? live.provider ?? undefined } : {}), voice: voice || undefined }))} />
         )}
         <small className="muted">Keys and sign-ins are set in Settings › Voice.</small>
       </fieldset>

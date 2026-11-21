@@ -8,7 +8,7 @@ import type { Bot, PanelView, SpaceSummary } from "@/link/types";
 import { myself } from "@/features/chat/people";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { ago } from "@/state/time";
-import { Badge, Blocks, BotAvatar, Dot, EmptyState, lift, Loading, Mascot, radius, space, T, Tap, useTheme, TwoUp } from "@/ui";
+import { Badge, Blocks, BotAvatar, Dot, EmptyState, lift, Loading, Mascot, radius, space, T, Tap, TwoUp, useShape, useTheme } from "@/ui";
 import { markSeen, openNewPanel, openPanel, panelState, useSpaceContent } from "./data";
 import { changedLine, changedSince, lastLine, panelRows } from "./logic";
 
@@ -87,6 +87,7 @@ export function SpaceView({ space: summary, visit }: { space: SpaceSummary; visi
   const changed = useMemo(() => changedSince(panels, seenAt, me), [panels, seenAt, me]);
   const line = changedLine(panels, seenAt, Date.now(), me);
   const mayAdd = canCreate && (summary.can === "own" || summary.can === "edit");
+  const { wide } = useShape();
 
   if (loading) return <Loading />;
   if (!content) return <EmptyState title={error ?? "Couldn't open this space."} action="Try again" onAction={retry} />;
@@ -100,15 +101,17 @@ export function SpaceView({ space: summary, visit }: { space: SpaceSummary; visi
           {line}
         </T>
       )}
-      {/* With room, two rows of panels side by side (the even split the Duo's fold wants). */}
+      {/* With room, two panels to a row whatever their size (an even split at the Duo's fold); small ones share a row otherwise. */}
       <TwoUp>
-        {panelRows(panels).map((row) => (
-          <View key={row.map((panel) => panel.id).join("+")} style={{ flexDirection: "row", gap: space.md }}>
-            {row.map((panel) => (
-              <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} half={row.length > 1} space={summary} />
+        {wide
+          ? panels.map((panel) => <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} half={false} space={summary} />)
+          : panelRows(panels).map((row) => (
+              <View key={row.map((panel) => panel.id).join("+")} style={{ flexDirection: "row", gap: space.md }}>
+                {row.map((panel) => (
+                  <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} half={row.length > 1} space={summary} />
+                ))}
+              </View>
             ))}
-          </View>
-        ))}
       </TwoUp>
       <TwoUp>
         {cards.map((card) => (

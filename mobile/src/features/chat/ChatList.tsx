@@ -163,9 +163,10 @@ function ChatListScreen() {
   const projects = usePart("projects");
   // In book pose the list can be asked back; picking a chat in it gives the pages to that chat again.
   const [listShown, setListShown] = useState(false);
+  const taps = useChatSplit((state) => state.taps);
   useEffect(() => {
     setListShown(false);
-  }, [picked, shape.pose]);
+  }, [picked, taps, shape.pose]);
   // A chat just made or forked beside the list stays picked while the list catches up with it.
   const paneId = picked ?? (split ? (shown[0]?.id ?? null) : null);
   const focused = useIsFocused();

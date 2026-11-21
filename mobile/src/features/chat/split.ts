@@ -13,6 +13,8 @@ type Split = {
   id: string | null;
   /** A chat that went on its own page from the list: unfolding brings it back beside the list. */
   pushed?: string | null;
+  /** Goes up with every tap on a row, the chosen one too (book pose hands the pages back on it). */
+  taps?: number;
 };
 
 // Named like a hook so the React Compiler treats it as one (see AGENTS.md).
@@ -20,7 +22,7 @@ export const useChatSplit = create<Split>(() => ({ active: false, id: null }));
 
 /** A chat chosen in the Chats list: beside it when there is room, otherwise on its own page. */
 export function openFromList(id: string) {
-  if (useChatSplit.getState().active) useChatSplit.setState({ id });
+  if (useChatSplit.getState().active) useChatSplit.setState((split) => ({ id, taps: (split.taps ?? 0) + 1 }));
   else {
     useChatSplit.setState({ pushed: id });
     router.push({ pathname: "/chat/[id]", params: { id } });
