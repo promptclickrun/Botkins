@@ -12,7 +12,9 @@
 //   standin-agent.mjs logout          signs out again.
 //
 // Signed in or not is a file, $STANDIN_AGENT_HOME/auth (else ~/.standin-agent/auth).
-// STANDIN_AGENT_PIECE_MS sets the pause between the pieces of a reply (40).
+// STANDIN_AGENT_PIECE_MS sets the pause between the pieces of a reply (120). A reply is about
+// ten pieces, so it lasts over a second: the phone link sends a phone a reply's text at most
+// every 200 ms, and a reply that is over sooner reaches the phone whole, in one piece.
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -46,7 +48,7 @@ if (mode !== "agent") {
 }
 
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
-const pieceMs = Number(process.env.STANDIN_AGENT_PIECE_MS ?? 40);
+const pieceMs = Number(process.env.STANDIN_AGENT_PIECE_MS ?? 120);
 const cancelled = new Set();
 let sessions = 0;
 const opened = () => ({ models: { currentModelId: "standin-1", availableModels: [{ modelId: "standin-1", name: "Stand-in 1", description: "Answers with what it was told." }] } });
