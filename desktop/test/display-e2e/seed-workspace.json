@@ -1,0 +1,13 @@
+{
+  "bots": [
+    { "id": "pip", "name": "Pip", "role": "Everyday helper", "instructions": "Help the user plan, write and think clearly.", "face": "idle" },
+    { "id": "scout", "name": "Scout", "role": "Research partner", "instructions": "Help investigate questions.", "face": "searching" }
+  ],
+  "chats": [],
+  "runs": [],
+  "spaces": [{ "id": "s_e2elaunch2", "name": "Launch", "createdAt": 1, "updatedAt": 1, "rev": 1 }],
+  "panels": [
+    { "id": "e2e-plan", "key": "plan", "botId": "pip", "spaceId": "s_e2elaunch2", "title": "Plan", "blocks": [{ "type": "markdown", "text": "The plan." }], "size": "wide", "hidden": false, "revision": 1, "updatedAt": 1, "routine": null },
+    { "id": "e2e-research", "key": "research", "botId": "scout", "spaceId": "s_e2elaunch2", "title": "Research", "blocks": [{ "type": "markdown", "text": "The research." }], "size": "wide", "hidden": false, "revision": 1, "updatedAt": 1, "routine": null }
+  ]
+}
