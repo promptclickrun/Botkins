@@ -554,7 +554,7 @@ declare global {
       "spaces.remove": (id: string) => Promise<void>;
       "spaces.setProject": (id: string, projectId: string | null) => Promise<void>;
       "spaces.setPanelProject": (panelId: string, projectId: string | null) => Promise<void>;
-      "spaces.newPanel": (input: { spaceId: string; botId: string; prompt: string; start?: SpaceStart; refresh?: { cron: string; timezone: string } }) => Promise<{ chatId: string }>;
+      "spaces.newPanel": (input: { spaceId: string; botId: string; prompt: string; start?: SpaceStart; refresh?: { cron: string; timezone: string }; projectId?: string }) => Promise<{ chatId: string }>;
       "spaces.ask": (input: { spaceId: string; botId: string; text: string; panelId?: string }) => Promise<{ chatId: string }>;
       "spaces.movePanel": (panelId: string, to: { spaceId: string; before: string | null }) => Promise<void>;
       "spaces.patchState": (panelId: string, patch: Record<string, unknown>, label?: string) => Promise<{ rev: number }>;

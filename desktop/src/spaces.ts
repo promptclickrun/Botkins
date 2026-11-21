@@ -164,6 +164,16 @@ export const panelChanged = (panel: Pick<Panel, "updatedAt"> & { last?: Pick<Pan
 export const changedPanels = (panels: readonly (Pick<Panel, "updatedAt" | "hidden"> & { last?: Pick<PanelLast, "by" | "at"> })[], seenAt: number | undefined, me?: string) =>
   panels.filter((panel) => !panel.hidden && panelChanged(panel, seenAt, me)).length;
 
+/**
+ * The new panel's project, for the owner's "Project" row of New panel: what the person picked
+ * (null is "None"), else the chosen space's own project when it has one. A project that is gone
+ * counts as none.
+ */
+export function panelProject(picked: string | null | undefined, space: Pick<SpaceSummary, "projectId"> | undefined, projects: readonly { id: string }[] | undefined): string | undefined {
+  const id = picked === undefined ? space?.projectId : (picked ?? undefined);
+  return id && projects?.some((project) => project.id === id) ? id : undefined;
+}
+
 export const ASKS_MAX = 3;
 export const ASK_LENGTH = 60;
 /**
