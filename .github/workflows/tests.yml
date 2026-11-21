@@ -27,6 +27,11 @@
 # On Linux the release itself is installed and updated (release.yml); on macOS this was a run by
 # hand on one computer.
 #
+# The "window's smokes" job starts the built desktop app with Electron and uses its window, one
+# smoke after the other (desktop/test/*-smoke.mjs, run by desktop/test/run-smokes.mjs). It runs on
+# macOS, in two parts side by side. Before it, the smokes ran only by hand on one computer, and a
+# change could break one with every check green.
+#
 # No job uses a secret, so a pull request from a fork runs the same checks.
 name: Tests
 
@@ -242,3 +247,40 @@ jobs:
             echo "::warning::The macOS update check failed once. It gets one more try, because launchd can start a job late on a busy machine."
             bash test/terminal-e2e/macos-update.sh
           fi
+
+  smokes:
+    name: The window's smokes (part ${{ matrix.part }} of 2)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      # `npm ci` also downloads Electron, which each smoke starts.
+      - run: npm ci
+      # A smoke starts the built window.
+      - run: npm run build
+      # Each smoke runs in a process of its own with a time limit, and the run goes on after a
+      # failure. A smoke gets no sign-in, no keychain and no real model turn: the runner takes
+      # those switches out of its environment. A smoke that this machine cannot do is in the
+      # runner's own list (LEFT_OUT), with the reason, and its line says so.
+      - name: Each smoke in its own process
+        run: node test/run-smokes.mjs --part=${{ matrix.part }}/2 --logs="$RUNNER_TEMP/smokes"
+      - name: Keep each smoke's whole output when one did not pass
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smokes-part-${{ matrix.part }}
+          path: ${{ runner.temp }}/smokes
+          retention-days: 7
+          if-no-files-found: ignore
