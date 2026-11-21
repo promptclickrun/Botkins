@@ -173,6 +173,8 @@ export class LinkStore {
       spaceCopies: Array.isArray(saved.spaceCopies) ? saved.spaceCopies : [],
       linkSharing: saved.linkSharing === true,
       ...(saved.spacesMoved === true && { spacesMoved: true }),
+      // The day of the last once-a-day alert about spaces, and when it went (space-alerts.mjs).
+      ...(typeof saved.spaceDigest?.day === "string" && { spaceDigest: { day: saved.spaceDigest.day.slice(0, 10), at: Number(saved.spaceDigest.at) || 0 } }),
     };
   }
   /** The relay key pair, made the first time it is needed. Only its public half is ever shown or sent. */

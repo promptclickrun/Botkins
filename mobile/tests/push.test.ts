@@ -93,7 +93,7 @@ test("the computer says it can notify and run phone tools, and a phone's choices
     assert.deepEqual(parts.phones[paired.deviceId], { name: "Test phone", kind: "phone", platform: "ios", sources: {} });
     await call("link.push.register", { token: TOKEN.toUpperCase(), env: "production", start: START }, { routines: false });
     await until(() => !!parts.phones[paired.deviceId].push, "the phone's choices");
-    assert.deepEqual(parts.phones[paired.deviceId].push, { replies: true, requests: true, routines: false, previews: true, activities: true, updates: true });
+    assert.deepEqual(parts.phones[paired.deviceId].push, { replies: true, requests: true, routines: false, previews: true, activities: true, updates: true, spaces: true });
     assert.ok(!JSON.stringify(parts).includes(TOKEN), "no token is sent to phones");
     assert.equal(link.status().push.length, 1);
     assert.ok(!JSON.stringify(link.status()).includes(TOKEN), "nor shown on the computer's page");

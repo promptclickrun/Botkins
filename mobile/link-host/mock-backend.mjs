@@ -2463,6 +2463,8 @@ export class MockBackend {
       if (JSON.stringify(state).length > 64 * 1024 || Object.keys(state).length > 200) throw new Error("That change is too large to save.");
       Object.assign(panel, { state, stateRev: (panel.stateRev ?? 0) + 1, updatedAt: now(), last: { by: this.caller.id, name: this.caller.name, ...(label && { label }), at: now() } });
       this.touch(panel.spaceId);
+      // The link tells the others who want to hear of it (`link.spaceEvent`; dev-host.mjs wires it).
+      this.onSpaceEvent?.({ spaceId: panel.spaceId, panelId, by: this.caller.id, kind: "change", ...(label && { label }) });
       return { rev: panel.stateRev };
     },
     "spaces.note"(panelId, words) {
@@ -2471,6 +2473,7 @@ export class MockBackend {
       const note = { id: "n-" + randomUUID().slice(0, 8), by: this.caller.id, name: this.caller.name, text: text(words, 2000, "note"), at: now() };
       Object.assign(panel, { notes: [...(panel.notes ?? []), note], updatedAt: now(), last: { by: this.caller.id, name: this.caller.name, label: "Wrote a note", at: now() } });
       this.touch(panel.spaceId);
+      this.onSpaceEvent?.({ spaceId: panel.spaceId, panelId, by: this.caller.id, kind: "note", text: note.text });
       return note.id;
     },
     // A person removes their own notes; the space's maker and the owner remove any.

@@ -1146,7 +1146,8 @@ export type PluginConfigValue = string | CredentialRef | null;
 
 /** What a phone wants to be told about. `previews` off shows "New message" with no text. */
 /** `updates`: a newer Botkins for the computer is out ("app-update-v1"). A computer from before leaves it out; it counts as on. */
-export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean; updates?: boolean };
+/** `spaces`: notes and changes in the person's spaces ("space-alerts-v1"). A computer from before leaves it out; it counts as on. */
+export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean; updates?: boolean; spaces?: boolean };
 /**
  * The computer's own Botkins and its updates ("app-update-v1"; docs/link-contract.md). `message` is
  * the computer's sentence (why it can't install, what failed), shown as it comes. `auto` is there

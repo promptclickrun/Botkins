@@ -30,6 +30,9 @@ final class NotificationService: UNNotificationServiceExtension {
       if let chat = opened["c"] as? String { info["chatId"] = chat }
       if let kind = opened["k"] as? String { info["kind"] = kind }
       if let asked = opened["r"] as? String { info["requestId"] = asked }
+      // An alert about a space ("space-alerts-v1") names the space, and the panel when it is about one.
+      if let space = opened["s"] as? String { info["spaceId"] = space }
+      if let panel = opened["p"] as? String { info["panelId"] = panel }
       if let host { info["host"] = host }
       // A request's buttons (docs/live-cards.md, section 6). Without `q` (previews off, or an older
       // computer) the notification keeps its category and only opens the app.
