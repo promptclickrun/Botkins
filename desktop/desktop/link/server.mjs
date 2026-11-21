@@ -460,6 +460,8 @@ export class LinkHost extends EventEmitter {
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     const bot = (state.bots ?? []).find((item) => item.id === botId);
     if (!chat || !bot) throw new Failure("That chat is gone.");
+    // The voice speaks for a bot of this chat, with that bot's voice: never another bot's against this chat.
+    if (chat.botId !== bot.id && !(chat.botIds ?? []).includes(bot.id)) throw new Failure("That bot isn't in this chat.");
     // A member's call says so: the app leaves the owner's own notes out of what it hands over.
     const notes = await this.liveNotes(chat.id, bot.id, principal?.kind === "member" ? principal.memberId : undefined);
     const instructions = liveInstructions({ bot, messages: chat.messages ?? [], bots: state.bots ?? [], notes, location });

@@ -21,14 +21,17 @@ public final class BotkinsFoldModule: Module {
     }
 
     AsyncFunction("state") { () -> [String: Any] in
-      if #available(iOS 27.1, *) {
-        return (self.watcher as? FoldWatcher)?.last ?? FoldWatcher.read(FoldWatcher.keyWindow(), hinge: nil)
+      // Runs on the main queue (runOnQueue below); the windows and the watcher are the main actor's.
+      MainActor.assumeIsolated {
+        if #available(iOS 27.1, *) {
+          return (self.watcher as? FoldWatcher)?.last ?? FoldWatcher.read(FoldWatcher.keyWindow(), hinge: nil)
+        }
+        return ["hinge": NSNull(), "edge": NSNull(), "fold": NSNull()]
       }
-      return ["hinge": NSNull(), "edge": NSNull(), "fold": NSNull()]
     }.runOnQueue(.main)
 
     OnStartObserving {
-      DispatchQueue.main.async {
+      Task { @MainActor in
         guard #available(iOS 27.1, *), self.watcher == nil else { return }
         let watcher = FoldWatcher { [weak self] state in self?.sendEvent("changed", state) }
         self.watcher = watcher
@@ -37,7 +40,7 @@ public final class BotkinsFoldModule: Module {
     }
 
     OnStopObserving {
-      DispatchQueue.main.async {
+      Task { @MainActor in
         if #available(iOS 27.1, *) { (self.watcher as? FoldWatcher)?.stop() }
         self.watcher = nil
       }

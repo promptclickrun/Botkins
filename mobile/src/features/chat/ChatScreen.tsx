@@ -1,6 +1,6 @@
 import { MenuView } from "@react-native-menu/menu";
-import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { ChevronRight, Ellipsis, Repeat, X } from "lucide-react-native";
+import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
+import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
@@ -14,7 +14,7 @@ import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Chip, EmptyState, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useShape, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Chip, EmptyState, IconButton, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useShape, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { completions } from "./completion";
@@ -27,7 +27,7 @@ import { myPlace, myself } from "./people";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
-import { drafts, useChatSplit } from "./split";
+import { drafts, keepDraft, useChatSplit } from "./split";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
@@ -442,7 +442,7 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
  * `pane` shows the chat beside the Chats list (two panes, see split.ts) instead of on its own page:
  * it draws its own bar, and `onLeave` takes the place of going back.
  */
-function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string; onLeave?: () => void }) {
+function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?: string; onLeave?: () => void; onList?: () => void }) {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
   // `at` lands on one message (its place in the whole chat, from 0): Open chat on an artifact.
@@ -479,12 +479,14 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
   const canChat = useCan("agents", "chat");
 
   // Unfolding on a chat that came from the Chats list: it goes back beside the list, still chosen.
+  // Only while this page is in front: with a sheet over it, going back would close the sheet.
   const splitActive = useChatSplit((split) => split.active);
+  const focused = useIsFocused();
   useEffect(() => {
-    if (paneId || !splitActive || useChatSplit.getState().pushed !== chatId) return;
+    if (paneId || !splitActive || !focused || useChatSplit.getState().pushed !== chatId) return;
     useChatSplit.setState({ id: chatId, pushed: null });
     if (router.canGoBack()) router.back();
-  }, [paneId, splitActive, chatId]);
+  }, [paneId, splitActive, focused, chatId]);
   useEffect(() => {
     if (paneId) return;
     return () => {
@@ -492,10 +494,9 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
     };
   }, [paneId, chatId]);
   // A draft goes with the chat between the pane and its own page (folding or unfolding the phone).
-  const [text, setText] = useState(draft ?? drafts.get(chatId) ?? "");
+  const [text, setText] = useState(draft ?? drafts.get(chatId)?.text ?? "");
   useEffect(() => {
-    if (text) drafts.set(chatId, text);
-    else drafts.delete(chatId);
+    keepDraft(chatId, { text });
   }, [chatId, text]);
   const [pinnedId, setPinnedId] = useState(board);
   const pinned = usePart("board")?.find((item) => item.id === pinnedId);
@@ -506,7 +507,10 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
   };
   const [leaving, setLeaving] = useState(false);
   // A message being replied to (Reply in its menu): it goes with the next message as a quote.
-  const [quote, setQuote] = useState("");
+  const [quote, setQuote] = useState(() => drafts.get(chatId)?.quote ?? "");
+  useEffect(() => {
+    keepDraft(chatId, { quote });
+  }, [chatId, quote]);
   // The latest side question (/btw, /ask) and its answer, shown beside the chat and never in it.
   const [side, setSide] = useState<Side | null>(null);
   const projects = usePart("projects");
@@ -711,7 +715,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
   if (!chat)
     return (
       <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
-        {chatsLoaded ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : <Loading />}
+        {chatsLoaded && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : <Loading />}
       </View>
     );
 
@@ -725,7 +729,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
   );
   const header = paneId ? (
     // Beside the list there is no navigation bar: the pane draws the same title and menu itself.
-    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }}>
+      {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
       <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
         <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} />
       </View>
@@ -743,7 +748,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
   // Half folded like a book (iPhone Duo), a chat in a project shows what its bot changed on the
   // second page, and the chat keeps to the first, clear of the fold.
   const project = projects?.find((item) => item.id === chat.projectId);
-  const book = !paneId && shape.pose === "book" && shape.fold && project?.folder ? shape.fold : null;
+  const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
   const column = (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       {header}
@@ -838,6 +843,6 @@ export default function ChatScreen() {
 }
 
 /** A chat beside the Chats list, when there is room for two panes (see split.ts). */
-export function ChatPane({ id, onLeave }: { id: string; onLeave: () => void }) {
-  return <ChatScreenScreen key={id} pane={id} onLeave={onLeave} />;
+export function ChatPane({ id, onLeave, onList }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void }) {
+  return <ChatScreenScreen key={id} pane={id} onLeave={onLeave} onList={onList} />;
 }

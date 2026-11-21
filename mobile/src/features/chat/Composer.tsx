@@ -12,6 +12,7 @@ import type { BoardItem, Bot, MentionInput } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useCan, useChat, usePart, useSettings } from "@/state/hooks";
 import { myPlace, myself } from "./people";
+import { drafts, keepDraft } from "./split";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
@@ -204,8 +205,12 @@ export function Composer({
 
   const [focused, setFocused] = useState(false);
   const [caret, setCaret] = useState(value.length);
-  const [mentions, setMentions] = useState<DraftMention[]>([]);
-  const [files, setFiles] = useState<Attachment[]>([]);
+  // Carried over when the chat moves between the pane and its own page (folding the phone).
+  const [mentions, setMentions] = useState<DraftMention[]>(() => drafts.get(chatId)?.mentions ?? []);
+  const [files, setFiles] = useState<Attachment[]>(() => drafts.get(chatId)?.files ?? []);
+  useEffect(() => {
+    keepDraft(chatId, { mentions, files: files.filter((file) => file.status === "done") });
+  }, [chatId, mentions, files]);
   const removed = useRef(new Set<string>());
   const placeCaret = useRef<number | null>(null);
 

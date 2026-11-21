@@ -1,4 +1,4 @@
-import { router } from "expo-router";
+import { router, useIsFocused } from "expo-router";
 import { Archive, FolderPlus, Search, SquarePen, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
@@ -160,24 +160,40 @@ function ChatListScreen() {
   const { width } = useWindowDimensions();
   const split = shape.wide;
   const picked = useChatSplit((state) => state.id);
-  const paneId = picked && chats.some((chat) => chat.id === picked) ? picked : split ? (shown[0]?.id ?? null) : null;
+  const projects = usePart("projects");
+  // In book pose the list can be asked back; picking a chat in it gives the pages to that chat again.
+  const [listShown, setListShown] = useState(false);
+  useEffect(() => {
+    setListShown(false);
+  }, [picked, shape.pose]);
+  // A chat just made or forked beside the list stays picked while the list catches up with it.
+  const paneId = picked ?? (split ? (shown[0]?.id ?? null) : null);
+  const focused = useIsFocused();
   useEffect(() => {
     useChatSplit.setState({ active: split });
   }, [split]);
   // The newest chat is open beside the list until the person picks another (its row is marked).
   useEffect(() => {
-    if (split && paneId && paneId !== picked) useChatSplit.setState({ id: paneId });
+    if (split && paneId && !picked) useChatSplit.setState({ id: paneId });
   }, [split, paneId, picked]);
+  // A picked chat that the list had and lost (deleted elsewhere) is let go.
+  const had = useRef<string | null>(null);
+  useEffect(() => {
+    if (!picked) return;
+    if (chats.some((chat) => chat.id === picked)) had.current = picked;
+    else if (had.current === picked) useChatSplit.setState({ id: null });
+  }, [chats, picked]);
   // Folding with a chat open beside the list: it goes on its own page, so the person stays in it.
+  // Only while the list is the screen in front; under another tab or page nothing moves.
   const before = useRef(split);
   useEffect(() => {
     const was = before.current;
     before.current = split;
-    if (was && !split && picked) {
+    if (was && !split && picked && focused) {
       useChatSplit.setState({ id: null, pushed: picked });
       router.push({ pathname: "/chat/[id]", params: { id: picked } });
     }
-  }, [split, picked]);
+  }, [split, picked, focused]);
 
   const frame = (
     <ChatsFrame scroll={scroll} scrollEnabled={!dragging} inner={split} actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
@@ -211,6 +227,16 @@ function ChatListScreen() {
     </ChatsFrame>
   );
   if (!split) return frame;
+  // Half folded like a book, a chat in a project takes both pages (the chat, then its changes): the
+  // list steps aside, as it does when the phone is closed.
+  const paneChat = paneId ? chats.find((chat) => chat.id === paneId) : undefined;
+  const bookChat = shape.pose === "book" && !listShown && !!paneChat?.projectId && !!projects?.find((project) => project.id === paneChat.projectId)?.folder;
+  if (bookChat && paneId)
+    return (
+      <View style={{ flex: 1, paddingLeft: shape.left, paddingRight: shape.right, backgroundColor: colors.canvas }}>
+        <ChatPane id={paneId} onLeave={() => useChatSplit.setState({ id: null })} onList={() => setListShown(true)} />
+      </View>
+    );
   const gap = foldGap(shape);
   return (
     <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.canvas }}>

@@ -3,6 +3,8 @@
 // folding never drops a person back on the list; and its draft goes with it (`drafts`).
 import { router } from "expo-router";
 import { create } from "zustand";
+import type { DraftMention } from "./compose";
+import type { Attachment } from "./uploads";
 
 type Split = {
   /** Whether the Chats tab is showing two panes now. */
@@ -26,7 +28,17 @@ export function openFromList(id: string) {
 }
 
 /**
- * What a person typed and did not send, kept while a chat moves between the pane and its own page
- * (folding or unfolding the phone remounts it). Only in memory, only until it is sent.
+ * What a person wrote and did not send, kept while a chat moves between the pane and its own page
+ * (folding or unfolding the phone remounts it): the text, a reply's quote, the records mentioned and
+ * the files already uploaded (one still going up is not carried). Only in memory, until it is sent.
  */
-export const drafts = new Map<string, string>();
+export type Draft = { text?: string; quote?: string; mentions?: DraftMention[]; files?: Attachment[] };
+export const drafts = new Map<string, Draft>();
+
+/** Changes one chat's kept draft; an empty one is dropped. */
+export function keepDraft(chatId: string, patch: Draft) {
+  const next = { ...drafts.get(chatId), ...patch };
+  const empty = !next.text && !next.quote && !next.mentions?.length && !next.files?.length;
+  if (empty) drafts.delete(chatId);
+  else drafts.set(chatId, next);
+}
