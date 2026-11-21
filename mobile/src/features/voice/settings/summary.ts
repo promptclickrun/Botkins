@@ -70,10 +70,20 @@ const voiceWord = (id: string | undefined) => (id && !/^[A-Za-z0-9_-]{20,}$/.tes
  * "OpenAI · Nova · Live: Gemini · Puck". Only what the bot sets is named; the provider of a part
  * it sets only a voice for is the shared one.
  */
-export function botVoiceSummary(own: BotVoice | undefined, shared: VoiceSettings | undefined): string {
+/** A system voice's name from its id ("com.apple.voice.compact.en-GB.Daniel", "com.apple.ttsbundle.Moira-compact"). */
+export const phoneVoiceName = (id: string) => id.split(".").pop()?.split("-")[0] || undefined;
+
+/**
+ * One line for a bot's voice. `phone` is the system voice and speed this phone keeps for the bot,
+ * which count only while the bot reads with "This phone".
+ */
+export function botVoiceSummary(own: BotVoice | undefined, shared: VoiceSettings | undefined, phone?: { voice?: string; speed?: number }): string {
   const parts: string[] = [];
   const tts = own?.tts;
-  if (tts && Object.keys(tts).length) {
+  const onPhone = (shared ? effectiveTts(shared.tts, tts).provider : tts?.provider) === "device";
+  if (onPhone && (phone?.voice || phone?.speed !== undefined)) {
+    parts.push(...["This phone", phone.voice && phoneVoiceName(phone.voice), phone.speed !== undefined ? Math.round(phone.speed * 100) / 100 + "×" : undefined].filter((part): part is string => !!part));
+  } else if (tts && Object.keys(tts).length) {
     const provider = shared ? effectiveTts(shared.tts, tts).provider : tts.provider;
     parts.push(...[provider && providerName(provider), voiceWord(tts.voice), tts.speed !== undefined && provider !== "gemini" ? Math.round(tts.speed * 100) / 100 + "×" : undefined].filter((part): part is string => !!part));
   }

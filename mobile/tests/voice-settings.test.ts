@@ -80,6 +80,8 @@ test("a bot's voice on its page: Same as Settings, or only what the bot changes"
   const shared = settings({ tts: { provider: "openai", voice: "cedar", speed: 1.5 }, live: { provider: "openai" } });
   assert.equal(botVoiceSummary(undefined, shared), "Same as Settings");
   assert.equal(botVoiceSummary({}, shared), "Same as Settings");
+  // A system voice this phone keeps for the bot shows while the bot reads with "This phone".
+  assert.equal(botVoiceSummary(undefined, { ...shared, tts: { ...shared.tts, provider: "device" } }, { voice: "com.apple.voice.compact.en-GB.Daniel" }), "This phone · Daniel");
   assert.equal(botVoiceSummary({ tts: { voice: "nova" } }, shared), "OpenAI \u00b7 Nova");
   assert.equal(botVoiceSummary({ tts: { provider: "openai", voice: "nova" }, live: { provider: "gemini", voice: "Puck" } }, shared), "OpenAI \u00b7 Nova \u00b7 Live: Gemini \u00b7 Puck");
   assert.equal(botVoiceSummary({ tts: { provider: "device" }, live: { model: "gpt-realtime-2" } }, shared), "This phone \u00b7 Live: OpenAI");

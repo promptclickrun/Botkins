@@ -75,7 +75,8 @@ export default function RootLayout() {
     headerStyle: { backgroundColor: colors.canvas },
     contentStyle: { backgroundColor: colors.canvas, ...sides },
   } as const;
-  const sheet = { presentation: "formSheet", headerShown: false, sheetGrabberVisible: true, sheetCornerRadius: 28, contentStyle: { backgroundColor: colors.canvas } } as const;
+  // A sheet fills the width on a narrow screen, rail and all; with room for two panes it is a card away from it.
+  const sheet = { presentation: "formSheet", headerShown: false, sheetGrabberVisible: true, sheetCornerRadius: 28, contentStyle: { backgroundColor: colors.canvas, ...(shape.wide ? {} : sides) } } as const;
   const tall = { ...sheet, sheetAllowedDetents: [1] };
   const half = { ...sheet, sheetAllowedDetents: [0.6, 1] };
 
