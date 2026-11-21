@@ -252,6 +252,8 @@ async function team() {
     return { client, parts, until, call: <T,>(method: string, ...args: unknown[]) => client.call<T>(method, ...args) };
   };
   const owner = follow(await pair(real, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "Owner phone", platform: "ios" }));
+  // This owner looks at everything (Admin mode on); tests/admin-mode.test.ts has the owner without it.
+  await owner.call("link.team.setAdminMode", true);
   const guest = structuredClone(link.store.data.team.roles.find((item: any) => item.id === "r_guest"));
   guest.bots = "all";
   await owner.call("link.team.saveRole", guest);

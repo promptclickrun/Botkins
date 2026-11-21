@@ -195,6 +195,29 @@ A **person** is the owner (id `"owner"`) or a member (their member id). The owne
 
 Not built: projects, tasks and artifacts for members. They are the owner's.
 
+## Admin mode: what an owner device is shown
+
+Decided by the owner on 2026-11-20: "the owner should be able to [open a member's private space], but the owner should not automatically be forced to see everyone else's spaces, agents, chats, etc. Only when toggling maybe an Admin Mode on from within settings."
+
+**Admin mode changes what the owner is shown, never what the owner may do.** It is a way of looking, not a lock: `authorize` and `spaceCan` are unchanged, and a call from the owner that names a member's chat or space passes with it off. It is each owner device's own (a flag on the device record), off at first, so turning it on at the desk does not fill the phone. The app's own window keeps its own.
+
+**With Admin mode off, an owner device is sent what the person `"owner"` is part of** (`ownerParts` in `team.mjs`, pure, tested):
+
+- `chats`, and `live`, `runs`, `chat:<id>` and `run:<id>` with them: chats the owner started or was invited to (`inChat(team, chat, "owner")`).
+- **A request only the owner can answer** (`permission`, `secure`) still reaches the owner from any chat. While it waits, its chat is listed for the owner, so it is answered where it is; when it is answered the chat leaves the list again. Join requests are the owner's as before.
+- `spaces`: the spaces the owner made, and those shared with the owner (a grant for `"owner"`, all members, by link). `panels` and `board`, for older apps, by the same rule.
+- `bots`: without a bot a member made (`createdBy` on the bot, stamped by the app for `addBot` and `duplicateBot` from a member), unless a listed chat or a listed space uses it. A bot from before the mark has none and counts as the owner's.
+- Everything that is the owner's alone stays as it is: settings, credentials, the team and its management, projects, tasks, devices.
+
+**With Admin mode on:** everything, as before, each member's thing marked with its maker, and "From members" in All spaces.
+
+- `meta.you` for an owner device is `{ kind: "owner", admin: boolean }`. A host from before this says no `admin`, and shows everything.
+- `link.team.setAdminMode(on)` → `boolean`: owner only, for the calling device. A member's device has none ("Only the owner's own devices have Admin mode.").
+- For the app on the host, whose window has no device: `link.ownerParts(parts)` cuts its own snapshot's lists the same way (`chats`, `live`, `runs`, `bots`, `panels`, `board`, whichever are given), and `link.spacesFor("owner", { admin: false })` answers the owner's spaces without the members'.
+- An app from before Admin mode on a new host is an owner device with it off, and cannot turn it on: it lists what the owner is part of until it is updated.
+- **Notifications do not change**: they already go only to a chat's or a space's people.
+- **Words, both apps:** the switch **Admin mode** in Settings › Team, with the line "See every member's spaces, bots and chats." While it is on, the tag **Admin mode** beside the computer's name.
+
 ## A project's artifacts (`project-artifacts-v1`)
 
 A project keeps a list of artifacts: `Project.artifacts?: string[]`, artifact ids, newest attached first, at most 200, left out while empty. The computer's app names the capability. Attaching changes nothing about the artifact and gives a bot nothing new.

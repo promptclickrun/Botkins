@@ -239,6 +239,15 @@ export class LinkStore {
     this.save();
   }
   /** Gives a paired device another name. False when there is no such device. */
+  /** Admin mode for one of the owner's devices: whether it is shown every member's spaces, bots and chats. Never a member's device. */
+  setAdmin(id, on) {
+    const device = this.device(id);
+    if (!device || device.memberId) return false;
+    if (on === true) device.admin = true;
+    else delete device.admin;
+    this.save();
+    return true;
+  }
   renameDevice(id, name) {
     const device = this.device(id);
     if (!device) return false;
