@@ -31,6 +31,12 @@ export const MAX_PLUGIN_BYTES = 50 * 1024 * 1024;
 
 const BUILT_INS = [
   {
+    id: "botkins",
+    name: "Botkins",
+    source: "promptclickrun/botkins-marketplace",
+    builtIn: true,
+  },
+  {
     id: "awesome-copilot",
     name: "GitHub",
     source: "github/awesome-copilot",
