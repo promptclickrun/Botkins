@@ -13,6 +13,8 @@
 // A person is "owner" or a member's id, as everywhere a team is involved (TEAMS.md).
 import { randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { assertProject } from "./access.mjs";
+import { PLAIN_UNSHOWN } from "./shown-text.mjs";
 import { nextTime, textField } from "./panels.mjs";
 import { memberSeesBot } from "./team-turn.mjs";
 
@@ -20,7 +22,7 @@ export const SPACES = "spaces-v1";
 export const OWNER = "owner";
 /** The four spaces every person has, with the kind of card each holds. */
 export const BUILTIN = { today: { name: "Today" }, feed: { name: "Feed", kind: "feed" }, ideas: { name: "Ideas", kind: "idea" }, goals: { name: "Goals", kind: "goal" } };
-export const LIMITS = { spaces: 60, panels: 40, notes: 50, note: 2000, state: 64 * 1024, keys: 200, label: 80 };
+export const LIMITS = { spaces: 60, panels: 40, notes: 50, note: 2000, state: 64 * 1024, keys: 200, label: 80, asks: 3, ask: 60 };
 /** How a new panel may start: one more line for the bot beside the person's sentence. */
 export const STARTS = { checklist: "Make it a checklist.", tracker: "Make it a tracker.", chart: "Make it a chart.", table: "Make it a table.", notes: "Make it a place for notes.", app: "Make it an app people use together." };
 /** The most a link's copy may be once it is packed: 4 MiB, less what sealing adds. */
@@ -295,14 +297,22 @@ export class Spaces {
    * Starts a chat with a bot, in a space, with the person's sentence for a new panel, as typing
    * /today-panel does. `start` adds one line. `refresh` ({ cron, timezone }) becomes the panel's
    * routine, with the person's sentence as its prompt, when the bot first publishes from that chat.
+   * `projectId` is the new panel's project, kept with the chat in the same way. Projects are the
+   * owner's, and the bot has to be allowed to use the project: both are checked now, so that a
+   * person is told here and not after the bot has done its work.
    * Answers { chatId }; the reply goes on in that chat.
    */
-  newPanel({ spaceId, botId, prompt, start, refresh } = {}, person = OWNER) {
+  newPanel({ spaceId, botId, prompt, start, refresh, projectId } = {}, person = OWNER) {
     const space = this.get(spaceId);
     this.need(space, person, "change");
     const sentence = textField(prompt, 4000, "prompt");
     if (start != null && !Object.hasOwn(STARTS, start)) throw new Error("Unknown way to start a panel.");
     if (this.panels(space.id).length >= LIMITS.panels) throw new Error(space.name + " has " + LIMITS.panels + " panels, which is the most a space holds.");
+    if (projectId != null) {
+      if (person !== OWNER) throw new Error("Only the owner attaches a panel to a project.");
+      // (A project that is gone, and a bot that may not use it, are each refused in that check's own words.)
+      assertProject(this.ws.state, this.ws.bot(botId), projectId);
+    }
     let routine;
     if (refresh != null) {
       const zone = refresh.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -311,6 +321,7 @@ export class Spaces {
     }
     const chat = this.chatAbout(space, botId, person);
     if (routine) chat.panelRoutine = routine;
+    if (projectId != null) chat.panelProject = projectId;
     this.ws.save();
     const sent = this.ws.send(chat.id, "/today-panel " + sentence + (start ? " " + STARTS[start] : ""), person === OWNER ? {} : { author: this.ws.memberAuthor(person) });
     // The turn's own failures are said in the chat; this call has done its part once the chat is there.
@@ -361,12 +372,16 @@ export class Spaces {
 
   // ── For the link: what an app is sent, the copy a link opens, and a member who left ─────────
 
-  /** The spaces as the link needs them to make each person's list: each record with what it holds ({ id, botId, updatedAt } for every panel and open card). */
+  /** The spaces as the link needs them to make each person's list: each record with what it holds ({ id, botId, updatedAt, by? } for every panel and open card; `by` is the person whose change is the newest, for a panel). */
   part() {
     return this.all.map((space) => ({
       ...space,
       items: [
-        ...this.panels(space.id).filter((panel) => !panel.hidden).map((panel) => ({ id: panel.id, botId: panel.botId, updatedAt: panel.updatedAt ?? 0 })),
+        ...this.panels(space.id).filter((panel) => !panel.hidden).map((panel) => {
+          const updatedAt = panel.updatedAt ?? 0;
+          // `by`: the person who made the newest change, as long as a bot has not published since (a publish moves `updatedAt` past `last.at`).
+          return { id: panel.id, botId: panel.botId, updatedAt, ...(panel.last?.by && panel.last.at >= updatedAt && { by: panel.last.by }) };
+        }),
         ...this.cards(space.id).filter((card) => card.status === "open").map((card) => ({ id: card.id, botId: card.botId, updatedAt: card.updatedAt ?? card.createdAt ?? 0 })),
       ],
     }));
@@ -516,7 +531,11 @@ export class Spaces {
     const now = Date.now();
     panel.state = checkedState(state);
     panel.stateRev = (panel.stateRev ?? 0) + 1;
-    if (by) panel.last = { by: by.id, name: by.name, ...(label != null && String(label).trim() && { label: plain(label, LIMITS.label) }), at: now };
+    // A person's change and the panel's own time move together: that is how the link tells it from a bot's publish.
+    if (by) {
+      panel.last = { by: by.id, name: by.name, ...(label != null && String(label).trim() && { label: plain(label, LIMITS.label) }), at: now };
+      panel.updatedAt = now;
+    }
     this.touch(panel.spaceId, now);
     this.ws.save();
     if (by) this.happened({ spaceId: panel.spaceId, panelId: panel.id, by: by.id, kind: "change", ...(panel.last.label && { label: panel.last.label }) });
@@ -547,6 +566,7 @@ export class Spaces {
     const note = { id: newId().replace("s_", "n_"), by: by.id, name: by.name, text: written, at: now };
     notes.push(note);
     panel.last = { by: by.id, name: by.name, label: "wrote a note", at: now };
+    panel.updatedAt = now;
     this.touch(panel.spaceId, now);
     this.ws.save();
     this.happened({ spaceId: panel.spaceId, panelId: panel.id, by: by.id, kind: "note", text: note.text });
@@ -576,5 +596,17 @@ export function checkedState(state) {
 
 /** A page's own words, as one line of plain text. */
 function plain(value, max) {
-  return String(value).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, max);
+  return String(value).replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").trim().slice(0, max);
+}
+
+/**
+ * The asks a bot gives a panel (`today_publish`): things worth asking its bot next. A list of
+ * strings, each made one line of plain text, trimmed, cut to 60 characters. Empty ones go, and
+ * the first three stay. Anything else is refused.
+ */
+export function cleanAsks(value) {
+  if (!Array.isArray(value) || value.some((ask) => typeof ask !== "string")) throw new Error("asks is a list of short texts.");
+  // (Marks that turn text around are taken out too: a person reads these words before they send them to the bot.)
+  const lines = value.map((ask) => plain(ask, 10_000).replace(PLAIN_UNSHOWN, " ").replace(/\s+/g, " ").slice(0, LIMITS.ask).trim());
+  return lines.filter(Boolean).slice(0, LIMITS.asks);
 }

@@ -33,7 +33,9 @@ const team = () => {
   const told = typeof host.teamForApp === "function" ? host.teamForApp() : { ...host.store.data.team, owner: host.ownerName() };
   return teamCut(told, teamPeople(told, told.owner));
 };
-const { backend, refresh, screenInput } = headlessBackend((method, args) => workspaceRequest(socket, method, args), version, { team });
+// A person's note or change in a space, said by the workspace's container, is the link's to turn into alerts. (A link from before alerts has no such call.)
+const spaceEvent = (event) => host?.spaceEvent?.(event);
+const { backend, refresh, screenInput } = headlessBackend((method, args) => workspaceRequest(socket, method, args), version, { team, spaceEvent });
 host = new LinkHost({ dir, backend, screenInput, port, relay: relayUrl ? { url: relayUrl, own: relayOwn } : false, log: (s) => console.error(s) });
 const hostName = process.env.BOTKINS_HOST_NAME?.trim();
 if (hostName || !host.store.data.name) host.setName(hostName || "Botkins server");

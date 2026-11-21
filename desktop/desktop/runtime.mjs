@@ -48,6 +48,7 @@ import { LOOKS_CAPABILITY } from "./looks.mjs";
 import { ROUTINE_DELIVERY, ROUTINE_OWNER } from "./routines.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
+import { spaceEventQueue } from "./headless/space-events.mjs";
 import { BOARD_MENTIONS } from "./mentions.mjs";
 import { computerName, nearby } from "./nearby.mjs";
 // Voice in the app's window (Settings › Voice, dictation, reading aloud, Live Voice): desktop/voicedesk.mjs.
@@ -259,6 +260,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // of it through the socket (desktop/headless/team-cut.mjs). It is kept in memory only, and what
   // the workspace asks about the team is answered from it. Everywhere else the link is here.
   const heldTeam = splitHost ? new HeldCut() : null;
+  const spaceEvents = splitHost ? spaceEventQueue() : null;
   const told = heldTeam && teamFromCut(heldTeam, (chatId) => workspace.state.chats.find((chat) => chat.id === chatId));
   workspace = new Workspace(dataDir, providers, notify, {
     updates,
@@ -270,7 +272,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // before spaces answers nothing, and the app's own rules hold (desktop/spaces.mjs).
     spaceCan: told ? told.spaceCan : (space, person) => link?.spaceCan?.(space, person),
     // A person wrote a note or changed an app panel: the link picks who is told, and how often.
-    spaceEvent: (event) => link?.spaceEvent?.(event),
+    // On the two-container host the link is in the other container: the event waits for its next look (headless/space-events.mjs).
+    spaceEvent: spaceEvents ? spaceEvents.add : (event) => link?.spaceEvent?.(event),
     notifiesOwner: told ? told.notifiesOwner : (chatId) => link?.notifiesOwner?.(chatId),
     secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => host.window.fillSecurePage(plan, values, signal) }),
     ...(keys && {
@@ -1002,6 +1005,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // copy of a space that a link opens, and (`release`) what stays to do when a member leaves the team.
     // The cut of the team that the link's container tells this one (the two-container host only).
     ...(heldTeam && { teamCut: heldTeam }),
+    // What people did in a space since the link's last look (the two-container host only).
+    ...(spaceEvents && { takeSpaceEvents: spaceEvents.take }),
     spaces: {
       ensure: (person) => Object.fromEntries(Object.entries(workspace.spaces.ensure(person)).map(([builtin, space]) => [builtin, space.id])),
       // A space that is gone has no copy: null, and the link takes its copy back.

@@ -4,7 +4,7 @@ import { defineTool } from "./providers/provider.mjs";
 import { Routines } from "./routines.mjs";
 import { assertProject } from "./access.mjs";
 import { frameFields } from "./frames.mjs";
-import { checkedState, LIMITS } from "./spaces.mjs";
+import { checkedState, cleanAsks, LIMITS } from "./spaces.mjs";
 
 const string = { type: "string" };
 const strings = { type: "array", items: string };
@@ -283,15 +283,21 @@ export class Panels {
     if (!panel && this.ws.spaces.panels(space.id).length >= LIMITS.panels) throw new Error(space.name + " has " + LIMITS.panels + " panels, which is the most a space holds. Remove one, or use another space.");
     // An app panel's saved state is kept unless the bot sends a new one.
     const state = args.state === undefined ? undefined : checkedState(args.state);
+    // Asks under the panel: left out, the panel keeps its own; an empty list clears them.
+    const asks = args.asks === undefined ? undefined : cleanAsks(args.asks);
     if ((args.revision ?? 0) !== (panel?.revision ?? 0))
       throw new Error(
         "Panel changed. List your panels and use the current revision.",
       );
     const title = textField(args.title, 120, "panel title");
     const checked = richBlocks(args.blocks);
-    // A panel published from a chat in a project belongs to that project; a refresh keeps the panel's.
+    // A panel keeps its own project. A new panel gets the one the person chose at New panel
+    // (`spaces.newPanel`, kept with the chat) while that project is there, else the chat's own
+    // project. A refresh run is never a new panel.
     const chat = this.ws.state.chats.find((c) => c.id === chatId);
-    const projectId = panel?.projectId ?? chat?.projectId;
+    const first = !panel && !run?.panelId;
+    const chosen = first && this.ws.state.projects?.some((p) => p.id === chat?.panelProject) ? chat.panelProject : undefined;
+    const projectId = panel?.projectId ?? chosen ?? chat?.projectId;
     if (projectId && this.ws.state.projects?.some((p) => p.id === projectId))
       assertProject(this.ws.state, this.ws.bot(botId), projectId);
     const now = Date.now();
@@ -324,7 +330,13 @@ export class Panels {
       result.state = state;
       result.stateRev = (result.stateRev ?? 0) + 1;
     }
+    if (asks !== undefined) {
+      if (asks.length) result.asks = asks;
+      else delete result.asks;
+    }
     if (!panel) this.all.push(result);
+    // The project that was asked for is used up by the first panel, also when it is gone by now.
+    if (first) delete chat?.panelProject;
     // A panel asked for with a refresh (`spaces.newPanel`): the first panel published from that
     // chat gets the routine, with the person's sentence as its prompt, set by that person.
     if (!panel && chat?.panelRoutine && !run?.panelId) {
@@ -595,7 +607,7 @@ export class Panels {
       ),
       tool(
         "today_publish",
-"Create or update a rich Today panel owned by this bot. Reuse a stable key. Supply its current revision when updating; omit revision for creation. For a custom view (a chart, a dashboard, a timeline, anything interactive) use an html block: one self-contained HTML page or fragment with inline CSS and JavaScript. It has no network, so use inline SVG or data: URLs. It is drawn inside the panel and should use the app's colors through the CSS variables --ink, --muted, --line, --paper and --accent, which follow light and dark. Put changing values in the block's `data` and read them with `await botkins.getData()`; on a later update send the html block with only `data` to keep the page. `botkins.sendAnswer(text)` puts text in the person's message box and `botkins.openLink(url)` asks to open a web page. A page people use together (a checklist, a tracker, a vote) keeps what they change with `botkins.state`: `await botkins.state.get()` answers the saved object, `botkins.state.set({ key: value }, \"Ticked Press kit\")` merges top-level keys for everyone (null removes one; the second argument is a few words that say what the person did), and `botkins.state.onChange(fn)` hears what someone else changed. Updating the panel keeps that state; pass `state` only to replace it. The panel goes to the space this chat is about, the person's Today unless they started the chat from another space; name another with `space` (see space_list). A key is yours within one space.",
+"Create or update a rich Today panel owned by this bot. Reuse a stable key. Supply its current revision when updating; omit revision for creation. For a custom view (a chart, a dashboard, a timeline, anything interactive) use an html block: one self-contained HTML page or fragment with inline CSS and JavaScript. It has no network, so use inline SVG or data: URLs. It is drawn inside the panel and should use the app's colors through the CSS variables --ink, --muted, --line, --paper and --accent, which follow light and dark. Put changing values in the block's `data` and read them with `await botkins.getData()`; on a later update send the html block with only `data` to keep the page. `botkins.sendAnswer(text)` puts text in the person's message box and `botkins.openLink(url)` asks to open a web page. A page people use together (a checklist, a tracker, a vote) keeps what they change with `botkins.state`: `await botkins.state.get()` answers the saved object, `botkins.state.set({ key: value }, \"Ticked Press kit\")` merges top-level keys for everyone (null removes one; the second argument is a few words that say what the person did), and `botkins.state.onChange(fn)` hears what someone else changed. Updating the panel keeps that state; pass `state` only to replace it. `asks` is an optional list of up to three short things (60 characters at most, plain words) that a person may want to ask you next about this panel; the app shows them under the panel. Leave `asks` out to keep the ones the panel has, or send an empty list to clear them. The panel goes to the space this chat is about, the person's Today unless they started the chat from another space; name another with `space` (see space_list). A key is yours within one space.",
         {
           key: string,
           space: string,
@@ -603,6 +615,7 @@ export class Panels {
           title: string,
           blocks: { type: "array", items: blockSchema },
           state: { type: "object" },
+          asks: strings,
         },
         ["key", "title", "blocks"],
         (args) => this.write(bot.id, chat.id, args, run, turn),

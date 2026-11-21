@@ -857,3 +857,124 @@ test("a workspace file with an entry that is no space starts, and a chat of some
   assert.match(said, /The role of the person this is for doesn't allow that/);
   assert.deepEqual([live.state.spaces.length, live.state.panels.length], [before, 0]);
 });
+
+test("a new panel's project is the owner's choice: checked at New panel, kept with the chat, and set when the bot first publishes a new panel", async (t) => {
+  const { ws, during, chat } = setup(t);
+  ws.state.projects = [{ id: "project-1", name: "Launch" }, { id: "project-2", name: "Money" }];
+  const today = ws.spaces.ensure("owner").today.id;
+  const make = (key, id, revision) => ws.panels.write("pip", id, { key, title: key, blocks, ...(revision !== undefined && { revision }) }, undefined);
+  const panelOf = (key) => ws.state.panels.find((panel) => panel.key === key);
+  // Asked for, then made by the bot's own publish in that chat: the panel is in the project and the chat forgets it.
+  const made = await during(
+    async (tool) => void (await tool("today_publish", { key: "plan", title: "Plan", blocks })),
+    () => ws.spaces.newPanel({ spaceId: today, botId: "pip", prompt: "Track the plan", projectId: "project-1" }, "owner"),
+  );
+  assert.equal(panelOf("plan").projectId, "project-1");
+  assert.equal("panelProject" in ws.chat(made.chatId), false, "asked for once, set once");
+  // Used up by the first new panel: a second one from that chat has none.
+  make("second", made.chatId);
+  assert.equal("projectId" in panelOf("second"), false);
+  // A panel that exists keeps its own project, a refresh run is not a new panel, and the chat's choice waits for one.
+  const keeps = chat("pip");
+  ws.chat(keeps).panelProject = "project-2";
+  make("plan", keeps, panelOf("plan").revision);
+  assert.deepEqual([panelOf("plan").projectId, ws.chat(keeps).panelProject], ["project-1", "project-2"]);
+  ws.panels.write("pip", keeps, { key: "plan", title: "Plan", blocks, revision: panelOf("plan").revision }, { panelId: panelOf("plan").id, id: "run" });
+  assert.deepEqual([panelOf("plan").projectId, ws.chat(keeps).panelProject], ["project-1", "project-2"]);
+  make("third", keeps);
+  assert.deepEqual([panelOf("third").projectId, "panelProject" in ws.chat(keeps)], ["project-2", false]);
+  // The person's choice wins over the project the chat is in; a chat in a project, with no choice, still gives its own.
+  const inProject = chat("pip");
+  Object.assign(ws.chat(inProject), { projectId: "project-2", panelProject: "project-1" });
+  make("fourth", inProject);
+  make("fifth", chat("pip"));
+  ws.chat(inProject).projectId = "project-2";
+  make("sixth", inProject);
+  assert.deepEqual([panelOf("fourth").projectId, panelOf("fifth").projectId, panelOf("sixth").projectId], ["project-1", undefined, "project-2"]);
+  // A project that is gone by the time the bot publishes: the panel is made with none, and the choice is dropped.
+  const gone = chat("pip");
+  ws.chat(gone).panelProject = "project-gone";
+  make("seventh", gone);
+  assert.deepEqual([panelOf("seventh").projectId, "panelProject" in ws.chat(gone)], [undefined, false]);
+  // Refused at New panel, before any chat is made: a project that is gone, a member, and a bot that may not use it.
+  const chats = ws.state.chats.length;
+  assert.throws(() => ws.spaces.newPanel({ spaceId: today, botId: "pip", prompt: "x", projectId: "project-gone" }, "owner"), /^Error: This project no longer exists\.$/);
+  const launch = ws.spaces.create({ name: "Launch" }, "m_casey");
+  assert.throws(() => ws.spaces.newPanel({ spaceId: launch, botId: "pip", prompt: "x", projectId: "project-1" }, "m_casey"), /^Error: Only the owner attaches a panel to a project\.$/);
+  ws.state.settings = { ...ws.state.settings, access: { allBots: false } };
+  assert.throws(() => ws.spaces.newPanel({ spaceId: today, botId: "pip", prompt: "x", projectId: "project-1" }, "owner"), /Pip doesn't have access to the project “Launch”/);
+  assert.equal(ws.state.chats.length, chats, "a refused call makes no chat");
+  ws.bot("pip").access = { all: false, projects: ["project-1"] };
+  const allowed = await during(async () => {}, () => ws.spaces.newPanel({ spaceId: today, botId: "pip", prompt: "x", projectId: "project-1" }, "owner"));
+  assert.equal(ws.chat(allowed.chatId).panelProject, "project-1");
+  // A call without one is as it was.
+  const plain = await during(async () => {}, () => ws.spaces.newPanel({ spaceId: today, botId: "pip", prompt: "x" }, "owner"));
+  assert.equal("panelProject" in ws.chat(plain.chatId), false);
+});
+
+test("a panel's asks are the bot's own words, cleaned, kept through its updates, cleared by an empty list, and sent to people but not in a link's copy", async (t) => {
+  const { ws, turn, chat, shared } = setup(t);
+  const space = ws.spaces.create({ name: "Launch" }, "owner");
+  shared[space] = { m_blake: "view", m_avery: "edit" };
+  const mine = chat("pip");
+  ws.chat(mine).spaceId = space;
+  const publish = (args) => turn(mine, async (tool) => void (await tool("today_publish", { key: "plan", title: "Plan", blocks, ...args })));
+  const panel = () => ws.spaces.panels(space)[0];
+  // One line, plain, trimmed, 60 characters at most; empty ones go; three stay.
+  await publish({ asks: ["  Add a team discount  ", "", " \n\t ", "Compare\nwith\u0007\tlast quarter " + "x".repeat(80), "Third", "Fourth"] });
+  assert.deepEqual(panel().asks, ["Add a team discount", ("Compare with last quarter " + "x".repeat(80)).slice(0, 60), "Third"]);
+  assert.equal(panel().asks[1].length, 60);
+  // Left out, the panel keeps them; a bot that is refused changes nothing.
+  await publish({ revision: 1, title: "Plan v2" });
+  assert.deepEqual([panel().title, panel().asks.length], ["Plan v2", 3]);
+  for (const bad of ["Add a discount", { 0: "x" }, null, ["fine", 7], [["nested"]]]) {
+    const error = await publish({ revision: 2, title: "Changed", asks: bad }).then(() => null, (failed) => failed.message);
+    assert.match(error, /asks is a list of short texts\./);
+  }
+  assert.deepEqual([panel().title, panel().revision, panel().asks.length], ["Plan v2", 2, 3], "nothing changed");
+  // The people the space is shared with are sent them, a member who only looks too.
+  assert.deepEqual(ws.spaces.read(space, "m_blake").panels[0].asks, panel().asks);
+  assert.deepEqual(ws.spaces.read(space, "m_avery").panels[0].asks, panel().asks);
+  assert.deepEqual(ws.spaces.read(space, "owner").panels[0].asks, panel().asks);
+  // Not in a link's copy, whatever else of the panel is.
+  const copy = ws.spaces.snapshot(space);
+  assert.equal(JSON.stringify(copy).includes("team discount"), false);
+  assert.equal("asks" in copy.panels[0], false);
+  // An empty list clears them: the field is gone, not empty.
+  await publish({ revision: 2, asks: [] });
+  assert.equal("asks" in panel(), false);
+  assert.equal("asks" in ws.spaces.read(space, "m_blake").panels[0], false);
+  await publish({ revision: 3, asks: ["", "  "] });
+  assert.equal("asks" in panel(), false, "a list of empty ones is empty");
+});
+
+test("the snapshot names who made an item's newest change, while no bot has published since", async (t) => {
+  const { ws, turn, chat, shared } = setup(t);
+  ws.spaces.clock = (() => { let time = 0; return () => (time += 60_000); })();
+  const space = ws.spaces.create({ name: "Launch" }, "owner");
+  shared[space] = { m_avery: "edit" };
+  const mine = chat("pip");
+  ws.chat(mine).spaceId = space;
+  await turn(mine, async (tool) => void (await tool("today_publish", { key: "plan", title: "Plan", blocks, state: {} })));
+  const panel = ws.spaces.panels(space)[0];
+  const items = () => ws.snapshot().spaces.find((item) => item.id === space).items;
+  assert.deepEqual(items(), [{ id: panel.id, botId: "pip", updatedAt: panel.updatedAt }], "a bot's publish has no person");
+  // A person's tick or note moves the panel's time and the last line's together.
+  await new Promise((done) => setTimeout(done, 5));
+  ws.spaces.patchState(panel.id, { milk: true }, "Ticked Milk", "m_avery");
+  assert.equal(panel.updatedAt, panel.last.at);
+  assert.deepEqual(items(), [{ id: panel.id, botId: "pip", updatedAt: panel.last.at, by: "m_avery" }]);
+  await new Promise((done) => setTimeout(done, 5));
+  ws.spaces.note(panel.id, "Looks right", "owner");
+  assert.equal(panel.updatedAt, panel.last.at);
+  assert.deepEqual(items(), [{ id: panel.id, botId: "pip", updatedAt: panel.last.at, by: "owner" }], "the newest change is the owner's note");
+  // A bot's later publish moves the time past the last line: no person.
+  await new Promise((done) => setTimeout(done, 5));
+  await turn(mine, async (tool) => void (await tool("today_publish", { key: "plan", revision: 1, title: "Plan", blocks })));
+  assert.ok(panel.updatedAt > panel.last.at);
+  assert.deepEqual(items(), [{ id: panel.id, botId: "pip", updatedAt: panel.updatedAt }]);
+  // A card has no person that made a change, and is not given one.
+  ws.board.post("pip", { kind: "feed", title: "News" }, ws.spaces.ensure("owner").feed.id);
+  const feed = ws.snapshot().spaces.find((item) => item.builtin === "feed" && !item.createdBy);
+  assert.deepEqual(Object.keys(feed.items[0]), ["id", "botId", "updatedAt"]);
+});

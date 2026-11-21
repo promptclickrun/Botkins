@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { REMOTE_METHODS } from "../link/methods.mjs";
+import { handSpaceEvents } from "./space-events.mjs";
 
 /**
  * The capabilities that are a promise about the workspace's own code, not only a list of calls it
@@ -60,11 +61,12 @@ export function callContext(context) {
 }
 
 /**
- * `team` answers the cut of the team that the workspace is told, with its revision ({ cut, rev },
+ * `spaceEvent` is called with each event that a person's note or change made in the workspace (host.mjs hands it to the
+ * link). `team` answers the cut of the team that the workspace is told, with its revision ({ cut, rev },
  * desktop/headless/team-cut.mjs), or null when there is none to tell. The revision goes with every
  * call and every look, and the whole cut is sent whenever the workspace does not hold that one.
  */
-export function headlessBackend(rawRequest, version, { team = () => null, log = (line) => console.error(line), clock = () => performance.now() } = {}) {
+export function headlessBackend(rawRequest, version, { team = () => null, log = (line) => console.error(line), clock = () => performance.now(), spaceEvent } = {}) {
   const changes = new EventEmitter();
   // The revision the workspace last said it holds.
   let held = null;
@@ -254,6 +256,9 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
         }
         revision = next.version;
         available = next.display === true;
+        // What people did in a space since the last look (a workspace from before this sends none). The snapshot above is already
+        // the one that holds it. Handed over before the change is told, so that nothing that listens there can lose it.
+        handSpaceEvents(next.spaceEvents, spaceEvent);
         if (changed) changes.emit("change");
       } catch {
         // The workspace may come back from an older image. A name that is a promise about the
