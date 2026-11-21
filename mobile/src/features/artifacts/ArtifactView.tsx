@@ -4,13 +4,15 @@
 import { Directory, File, Paths } from "expo-file-system";
 import { Image } from "expo-image";
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import { CircleAlert, Download, ImageDown, MessageCircle, Package, Share } from "lucide-react-native";
+import { MenuView } from "@react-native-menu/menu";
+import { CircleAlert, Download, FolderPlus, ImageDown, MessageCircle, Package, Share } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import type { Artifact } from "@/link/types";
 import { shareLocalFile } from "@/state/files";
-import { useCapability, useOnline } from "@/state/hooks";
+import { useCapability, useOnline, usePart } from "@/state/hooks";
+import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Button, EmptyState, IconButton, Loading, Markdown, Page, radius, space, T, useTheme } from "@/ui";
 import { ArtifactThumb } from "./ArtifactBits";
@@ -54,6 +56,31 @@ function openChat(artifact: Artifact) {
   if (!artifact.chatId) return;
   // `at` lands on the message that made it, when the computer knows which.
   router.push({ pathname: "/chat/[id]", params: { id: artifact.chatId, ...(artifact.messageIndex !== undefined && { at: String(artifact.messageIndex) }) } });
+}
+
+/** "Add to a project…" in the bar ("project-artifacts-v1"): a menu of the projects; one that has it is checked. */
+function AddToProject({ artifact }: { artifact: Artifact }) {
+  const capable = useCapability("project-artifacts-v1");
+  const projects = usePart("projects");
+  const { colors } = useTheme();
+  if (!capable || !projects?.length) return null;
+  const sorted = [...projects].sort((a, b) => b.lastUsed - a.lastUsed).slice(0, 30);
+  return (
+    <MenuView
+      title="Add to a project…"
+      actions={sorted.map((project) => ({ id: project.id, title: project.name, state: project.artifacts?.includes(artifact.id) ? ("on" as const) : ("off" as const) }))}
+      onPressAction={({ nativeEvent }) => {
+        const project = sorted.find((item) => item.id === nativeEvent.event);
+        if (!project) return;
+        if (project.artifacts?.includes(artifact.id)) void attempt(api.removeProjectArtifact(project.id, artifact.id), "Removed from " + project.name);
+        else void attempt(api.addProjectArtifact(project.id, artifact.id), "Added to " + project.name);
+      }}
+    >
+      <View accessible accessibilityRole="button" accessibilityLabel="Add to a project…" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+        <FolderPlus size={22} color={colors.ink} strokeWidth={2.1} />
+      </View>
+    </MenuView>
+  );
 }
 
 export default function ArtifactView() {
@@ -109,6 +136,7 @@ export default function ArtifactView() {
         headerRight: () => (
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             {!!artifact.chatId && <IconButton icon={MessageCircle} label="Open chat" size={44} onPress={() => openChat(artifact)} />}
+            <AddToProject artifact={artifact} />
             {canSaveToPhotos(kind) && <IconButton icon={ImageDown} label="Save to Photos" size={44} onPress={() => void saveArtifact(artifact)} />}
             <IconButton icon={Share} label="Share" size={44} onPress={() => void shareArtifact(artifact)} />
           </View>

@@ -173,6 +173,18 @@ A host with its own window says neither `headless` nor the capability, and refus
 
 **No bot can reach it.** These calls are answered only inside a paired device's sealed session. They are not among the app's calls a client may make (`REMOTE_METHODS`), no tool a bot has on the host or on a phone touches them, and the host's app registers no remote method, command-line tool, bot tool or MCP tool for grants. On the headless host the link and its pairing store run in a container of their own, apart from the one that runs the bots, their tools and the display; the bots' container holds no grant method and can't read the host's identity or the owner's pairing file. On the phone only the Screen section of the computer's page makes the calls, from a tap by the person, after a question that says what the level grants; nothing a bot sends (a message, a custom view, a notification, a phone tool) can start it. `tests/screen-grant.test.ts` checks the host's rules, the phone's states and that these are the only callers.
 
+## A project's artifacts (`project-artifacts-v1`)
+
+A project keeps a list of artifacts: `Project.artifacts?: string[]`, artifact ids, newest attached first, at most 200, left out while empty. The computer's app names the capability. Attaching changes nothing about the artifact and gives a bot nothing new.
+
+| Call | Answer |
+| --- | --- |
+| `addProjectArtifact(projectId, artifactId)` | the list of ids afterwards; one that is there moves to the front |
+| `removeProjectArtifact(projectId, artifactId)` | the list afterwards; not attached is no error |
+| `projectArtifacts(projectId)` | `{ items: Artifact[] }`, described as `artifacts.list` describes them |
+
+The link cuts each call to a project id (200 characters) and an artifact id or path (4,096). All three are the owner's, like every project call. The computer's sentences: "This artifact no longer exists.", "A project holds up to 200 artifacts. Remove one first.", "Unknown project". An artifact that is gone drops out of the list by itself.
+
 ## The computer's own updates (`app-update-v1`)
 
 A phone can see which Botkins its computer runs, check for a newer release, and start the update. On a server (the terminal host) the phone is the only screen, so this is how it is kept up to date. The computer's app names `app-update-v1` in `meta.capabilities` when it can report on updates.

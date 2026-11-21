@@ -56,13 +56,39 @@ function NewProject({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** The projects, newest used first, with the form for a new one above them while `adding`. Work's Projects tab draws it. */
+export function ProjectList({ adding, setAdding }: { adding: boolean; setAdding: (adding: boolean) => void }) {
+  const theme = useTheme();
+  const projects = usePart("projects");
+  const sorted = useMemo(() => [...(projects ?? [])].sort((a, b) => b.lastUsed - a.lastUsed), [projects]);
+  return (
+    <View style={{ gap: space.lg }}>
+      {adding && <NewProject onClose={() => setAdding(false)} />}
+      {sorted.length === 0 ? (
+        !adding && <EmptyState art={<Mascot size={104} state="planning" />} title="No projects yet" action="New project" onAction={() => setAdding(true)} />
+      ) : (
+        <Group>
+          {sorted.map((project) => (
+            <Row
+              key={project.id}
+              leading={<IconTile icon={FolderClosed} color={projectColor(project.color, theme)} />}
+              title={project.name}
+              subtitle={subtitleOf(project)}
+              chevron
+              onPress={() => router.push({ pathname: "/projects/[id]", params: { id: project.id } })}
+            />
+          ))}
+        </Group>
+      )}
+    </View>
+  );
+}
+
+/** The projects on a page of their own (the route `/projects`); they live in Work's Projects tab. */
 export default function Projects() {
   const theme = useTheme();
   const synced = useApp((state) => state.synced);
-  const projects = usePart("projects");
   const [adding, setAdding] = useState(false);
-  const sorted = useMemo(() => [...(projects ?? [])].sort((a, b) => b.lastUsed - a.lastUsed), [projects]);
-
   return (
     <Page title="Projects" keyboard>
       <Stack.Screen
@@ -70,25 +96,11 @@ export default function Projects() {
           headerRight: () => <IconButton icon={adding ? X : Plus} label={adding ? "Cancel new project" : "New project"} size={44} color={theme.colors.accentText} onPress={() => setAdding(!adding)} />,
         }}
       />
-      {adding && <NewProject onClose={() => setAdding(false)} />}
       {!synced ? (
         <Loading />
-      ) : sorted.length === 0 ? (
-        !adding && <EmptyState art={<Mascot size={104} state="planning" />} title="No projects yet" action="New project" onAction={() => setAdding(true)} />
       ) : (
         <Animated.View entering={FadeIn.duration(200)}>
-          <Group>
-            {sorted.map((project) => (
-              <Row
-                key={project.id}
-                leading={<IconTile icon={FolderClosed} color={projectColor(project.color, theme)} />}
-                title={project.name}
-                subtitle={subtitleOf(project)}
-                chevron
-                onPress={() => router.push({ pathname: "/projects/[id]", params: { id: project.id } })}
-              />
-            ))}
-          </Group>
+          <ProjectList adding={adding} setAdding={setAdding} />
         </Animated.View>
       )}
     </Page>

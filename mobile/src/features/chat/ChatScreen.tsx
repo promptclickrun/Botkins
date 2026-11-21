@@ -22,6 +22,7 @@ import { HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
 import { arrived, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
+import { archivesWhenLeft } from "./habits";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ContextMeter } from "./ContextMeter";
 import { latestTurn } from "./helpers";
@@ -481,6 +482,28 @@ export default function ChatScreen() {
   useEffect(() => {
     if (chatId) api.warmChat(chatId).catch(() => {});
   }, [chatId]);
+  // Leaving a chat nobody wrote in archives it (archivesWhenLeft in habits.ts), so chats that were
+  // only opened don't pile up. Read when the screen goes away, from the store as it is then.
+  const onLeave = useRef({ draft: text, wrote: false });
+  useEffect(() => {
+    onLeave.current.draft = text;
+  });
+  useEffect(() => {
+    if (!chatId) return;
+    const held = onLeave.current;
+    return () => {
+      if (held.wrote) return;
+      const now = useApp.getState();
+      const live = now.parts.live;
+      const left = {
+        messages: now.chats[chatId]?.messages.length ?? 0,
+        working: !!underWay(now.running[chatId]) || (!!live && chatId in live.streams),
+        waiting: live?.queued[chatId]?.length ?? 0,
+        draft: held.draft,
+      };
+      if (archivesWhenLeft(now.parts.chats?.find((item) => item.id === chatId), left)) api.setChatFlags(chatId, { archived: true }).catch(() => {});
+    };
+  }, [chatId]);
   const unread = !!chat?.unread;
   useEffect(() => {
     if (chatId && unread) api.setChatFlags(chatId, { unread: false }).catch(() => {});
@@ -542,6 +565,7 @@ export default function ChatScreen() {
       setQuote("");
     }
     setText("");
+    onLeave.current.wrote = true;
     setParked(false);
     list.current?.scrollToOffset({ offset: 0, animated: true });
     const before = { length: view ? view.from + view.messages.length : 0, waiting: waitingCopies(message, queued) };

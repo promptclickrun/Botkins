@@ -1,17 +1,18 @@
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { Check, ChevronDown, ChevronUp, FolderMinus, FolderOpen, Plus, Trash2 } from "lucide-react-native";
-import { useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronUp, FolderMinus, FolderOpen, MessagesSquare, Paperclip, Plus, Trash2 } from "lucide-react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, TextInput, type TextInputInstance, View } from "react-native";
 import { PanelCard } from "@/features/today/Today";
-import type { ChatMode, Project, ProjectColor, ProjectTodo } from "@/link/types";
-import { useBots, useCapability, useChats, usePart } from "@/state/hooks";
+import { ArtifactRow } from "@/features/artifacts/ArtifactBits";
+import type { Artifact, ChatMode, Project, ProjectColor, ProjectTodo } from "@/link/types";
+import { useBots, useCapability, useChats, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, IconButton, IconTile, Label, Loading, Page, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { PROJECT_COLORS, projectColor } from "./colors";
 import { canUseProject, globalAccess, grantOf, toggleProject } from "@/features/bots/projectAccess";
-import { ACCESS_REASON, accessVia, MODES, moveSteps, orderedTodos } from "./logic";
+import { ACCESS_REASON, accessVia, artifactCount, MODES, moveSteps, orderedTodos } from "./logic";
 
 export default function ProjectPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -51,6 +52,7 @@ function ProjectDetail({ project }: { project: Project }) {
       )}
       <Todos project={project} />
       <Chats project={project} />
+      <Artifacts project={project} />
       <Panels project={project} />
       <Access project={project} />
       <Folder project={project} />
@@ -290,20 +292,29 @@ function Chats({ project }: { project: Project }) {
             {mine.map((chat) => {
               const bot = bots.get(chat.botId);
               return (
-                <Row
+                <HoldMenu
                   key={chat.id}
-                  leading={<BotAvatar bot={bot ?? { id: chat.botId }} size={36} badge={false} />}
-                  title={chat.title || bot?.name || "Chat"}
-                  subtitle={bot?.name}
-                  value={ago(chat.time)}
-                  chevron
-                  onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })}
-                />
+                  actions={[{ id: "remove", title: "Remove from project", image: "folder.badge.minus" }]}
+                  onPressAction={({ nativeEvent }) => {
+                    // The computer says why when a chat can't leave (it started in the project's folder).
+                    if (nativeEvent.event === "remove") void attempt(api.setChatProject(chat.id, null), "Removed from " + project.name);
+                  }}
+                >
+                  <Row
+                    leading={<BotAvatar bot={bot ?? { id: chat.botId }} size={36} badge={false} />}
+                    title={chat.title || bot?.name || "Chat"}
+                    subtitle={bot?.name}
+                    value={ago(chat.time)}
+                    chevron
+                    onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })}
+                  />
+                </HoldMenu>
               );
             })}
           </Group>
         )}
       </View>
+      <Button title="Add a chat…" icon={MessagesSquare} variant="secondary" wide onPress={() => router.push({ pathname: "/projects/add-chats", params: { id: project.id } })} />
       {!!project.folder && shown.length > 0 && (
         <View style={{ gap: space.sm }}>
           <Segmented options={MODES} value={mode} onChange={setMode} />
@@ -329,6 +340,62 @@ function Chats({ project }: { project: Project }) {
           </ScrollView>
         </View>
       )}
+    </View>
+  );
+}
+
+// Artifacts
+
+/**
+ * The artifacts attached to the project ("project-artifacts-v1"): files its bots made or were
+ * given, kept in one place. The list is read again when the project's ids change.
+ */
+function Artifacts({ project }: { project: Project }) {
+  const capable = useCapability("project-artifacts-v1");
+  const online = useOnline();
+  const ids = (project.artifacts ?? []).join(" ");
+  const [items, setItems] = useState<Artifact[]>();
+  useEffect(() => {
+    if (!capable || !online) return;
+    let live = true;
+    api.projectArtifacts(project.id).then(
+      (answer) => live && setItems(answer.items),
+      () => live && setItems((held) => held ?? []),
+    );
+    return () => {
+      live = false;
+    };
+  }, [capable, online, project.id, ids]);
+  if (!capable) return null;
+  const count = project.artifacts?.length ?? 0;
+  return (
+    <View style={{ gap: space.md }}>
+      <View>
+        <Label>Artifacts</Label>
+        <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, marginBottom: space.sm }}>
+          {artifactCount(count)}
+        </T>
+        {!!items?.length && (
+          <Group>
+            {items.map((artifact) => (
+              <HoldMenu
+                key={artifact.id}
+                actions={[
+                  ...(artifact.chatId ? [{ id: "chat", title: "Go to chat", image: "bubble.left" }] : []),
+                  { id: "remove", title: "Remove from project", image: "minus.circle", attributes: { destructive: true } },
+                ]}
+                onPressAction={({ nativeEvent }) => {
+                  if (nativeEvent.event === "chat" && artifact.chatId) router.push({ pathname: "/chat/[id]", params: { id: artifact.chatId, ...(artifact.messageIndex !== undefined && { at: String(artifact.messageIndex) }) } });
+                  else if (nativeEvent.event === "remove") void attempt(api.removeProjectArtifact(project.id, artifact.id), "Removed from " + project.name);
+                }}
+              >
+                <ArtifactRow artifact={artifact} />
+              </HoldMenu>
+            ))}
+          </Group>
+        )}
+      </View>
+      <Button title="Attach an artifact…" icon={Paperclip} variant="secondary" wide onPress={() => router.push({ pathname: "/projects/attach", params: { id: project.id } })} />
     </View>
   );
 }

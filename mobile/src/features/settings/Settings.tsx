@@ -1,5 +1,5 @@
 import { type Href, router } from "expo-router";
-import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FolderKanban, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, ScreenShare, ShieldCheck, SunMoon, Users, Wrench } from "lucide-react-native";
+import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, ScreenShare, ShieldCheck, SunMoon, Users, Wrench } from "lucide-react-native";
 import { Alert, View } from "react-native";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Preferences } from "@/link/types";
@@ -26,7 +26,6 @@ export default function Settings() {
   const servers = usePart("mcp");
   const skills = useSkills();
   const skillsOff = usePart("skills")?.disabled;
-  const projects = usePart("projects");
   const meta = usePart("meta");
   const team = usePart("team");
   const mode = usePrefs((prefs) => prefs.mode);
@@ -86,7 +85,6 @@ export default function Settings() {
             {permission("mcp", "view") && <Row leading={<IconTile icon={Wrench} color={brand.clay} />} title="Tools" value={count(toolsOn, "on")} chevron onPress={() => router.push("/tools")} />}
             {permission("skills", "read") && <Row leading={<IconTile icon={BookOpen} color={brand.clay} />} title="Skills" value={count(skillsOn, "on")} chevron onPress={() => router.push("/skills")} />}
             {owner && <Row leading={<IconTile icon={KeyRound} color={brand.clay} />} title="Credentials" chevron onPress={() => router.push("/credentials")} />}
-            {owner && <Row leading={<IconTile icon={FolderKanban} color={brand.clay} />} title="Projects" value={projects ? String(projects.length) : undefined} chevron onPress={() => router.push("/projects")} />}
             {owner && <Row leading={<IconTile icon={LibraryBig} color={brand.clay} />} title="Wiki" chevron onPress={() => router.push("/wiki")} />}
           </Group>
         </View>

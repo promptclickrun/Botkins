@@ -8,7 +8,7 @@ import { formatCode } from "@/link/pairing";
 import { useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
-import { Badge, Button, Dot, EmptyState, Group, haptic, IconButton, IconTile, Label, Loading, Page, Row, Segmented, space, T, useTheme } from "@/ui";
+import { Badge, Button, Dot, EmptyState, Group, haptic, IconButton, IconTile, Label, Loading, Page, QrCode, Row, Segmented, space, T, useTheme } from "@/ui";
 
 function pickGroup(groups: TeamGroup[], title: string, current: string, done: (id: string) => void) {
   Alert.alert(title, undefined, [
@@ -133,6 +133,9 @@ function Invites({ teamName, groups, invites, online }: { teamName: string; grou
             <T variant="label" color="muted">INVITE CODE</T>
             <T variant="mono" selectable style={{ fontSize: 30, lineHeight: 38, letterSpacing: 2 }}>{formatCode(created.code)}</T>
             {created.published === false && <T variant="footnote" color="muted" center>Codes work when Relay is on in the computer's Phone settings.</T>}
+            {/* The same invite as a QR code: the other person scans it from "Join a team". */}
+            {!!created.link && <QrCode text={created.link} label="Invite QR code" />}
+            {!!created.link && <T variant="footnote" color="muted" center>Scan to join</T>}
             <View style={{ flexDirection: "row", gap: space.sm }}>
               <Button title="Copy" icon={Copy} variant="secondary" onPress={() => void copy(created)} />
               <Button title="Share" icon={Share2} onPress={() => void share(created)} />
@@ -150,6 +153,8 @@ function Invites({ teamName, groups, invites, online }: { teamName: string; grou
                 leading={<IconTile icon={Link} />}
                 title={formatCode(invite.code)}
                 subtitle={[groups.find((item) => item.id === invite.groupId)?.name, invite.maxUses - invite.uses + " uses left"].filter(Boolean).join(" · ")}
+                // A tap shows this invite's code and QR again, above.
+                onPress={() => setCreated(invite)}
                 trailing={<IconButton icon={Trash2} label={"Revoke " + formatCode(invite.code)} color={colors.danger} disabled={!online} onPress={() => void attempt(api["link.team.revokeInvite"](invite.id), "Invite revoked")} />}
               />
             ))}

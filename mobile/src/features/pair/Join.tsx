@@ -1,5 +1,5 @@
 import { type Href, router, useLocalSearchParams } from "expo-router";
-import { Check, Users } from "lucide-react-native";
+import { Check, ScanLine, Users } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, BackHandler, View } from "react-native";
 import type { JoinAttempt, JoinTarget, Pairing } from "@/link/client";
@@ -264,7 +264,7 @@ export default function Join() {
   return (
     <Sheet title="Join a team" onClose={leave}>
       <View style={{ gap: space.md }}>
-        <T variant="callout" color="muted">Enter the code the team owner shared, or paste the whole invite link.</T>
+        <T variant="callout" color="muted">Enter the code the team owner shared, paste the whole invite link, or scan the owner's QR code.</T>
       </View>
       <View style={{ gap: space.sm }}>
         <Field
@@ -287,6 +287,8 @@ export default function Join() {
       ) : (
         <Button title="Find team" size="lg" wide disabled={clean.length !== 10} onPress={() => void find()} />
       )}
+      {/* The owner's phone or computer can show the invite as a QR code (Settings › Team). */}
+      {!pairing && <Button title="Scan a code" icon={ScanLine} variant="secondary" wide onPress={() => router.push("/pair/scan")} />}
       {!pairing && pairInstead}
     </Sheet>
   );

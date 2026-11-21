@@ -1,23 +1,27 @@
 import { router } from "expo-router";
-import { ChevronDown, ChevronUp, CircleDashed, Plus, Trash2 } from "lucide-react-native";
+import { Activity as ActivityIcon, ChevronDown, ChevronUp, CircleDashed, Plus, Trash2, X } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Alert, Switch, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
-import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel, RunSummary } from "@/link/types";
+import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel } from "@/link/types";
 import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
 import { BotAvatar, Button, Dot, EmptyState, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Mascot, Page, Row, Segmented, space, switchColors, T, useTheme } from "@/ui";
 import { isFinished, routineName, routineSubtitle, RunIcon, SplitRow, taskSubtitle } from "./bits";
+import { ProjectList } from "@/features/projects/Projects";
+import { ActivityList } from "./Activity";
 import { cronLabel, scheduleLabel } from "./cron";
 
-type Segment = "routines" | "tasks" | "activity";
+type Segment = "routines" | "projects" | "tasks";
 const SEGMENTS: { value: Segment; label: string }[] = [
   { value: "routines", label: "Routines" },
+  { value: "projects", label: "Projects" },
   { value: "tasks", label: "Tasks" },
-  { value: "activity", label: "Activity" },
 ];
+// Work opens on the tab last looked at, while the app runs.
+let lastSegment: Segment = "routines";
 
 const openChat = (id: string) => router.push({ pathname: "/chat/[id]", params: { id } });
 const openTask = (id: string) => router.push({ pathname: "/task/[id]", params: { id } });
@@ -284,44 +288,25 @@ function ToggleIcon({ open }: { open: boolean }) {
   return <Icon size={18} color={colors.faint} strokeWidth={2.2} />;
 }
 
-// Activity
-
-function Activity({ runs, chats, bots }: { runs: RunSummary[]; chats: ChatSummary[]; bots: Map<string, Bot> }) {
-  const chatBot = useMemo(() => new Map(chats.map((chat) => [chat.id, chat.botId])), [chats]);
-  if (runs.length === 0)
-    return (
-      <T variant="callout" color="muted" center style={{ paddingVertical: space.huge }}>
-        Nothing has run yet
-      </T>
-    );
-  return (
-    <Group>
-      {runs.slice(0, 40).map((run) => {
-        const botId = chatBot.get(run.chatId);
-        const name = botId ? bots.get(botId)?.name : undefined;
-        // The icon says how it went; the words say it too when it didn't simply finish.
-        const status = run.status === "Completed" ? undefined : run.status === "Needs you" ? "Failed" : run.status;
-        const subtitle = [status, name, ago(run.time), run.trigger === "scheduled" ? "Scheduled" : undefined].filter(Boolean).join(" · ");
-        const summary = run.status !== "Working" && run.summary && run.summary.length <= 24 ? run.summary : undefined;
-        return <Row key={run.id} leading={<RunIcon status={run.status} />} title={run.title || "Run"} subtitle={subtitle} value={summary} onPress={() => openChat(run.chatId)} />;
-      })}
-    </Group>
-  );
-}
-
 export default function Work() {
   const synced = useApp((state) => state.synced);
-  const [segment, setSegment] = useState<Segment>("routines");
+  const [segment, pickSegment] = useState<Segment>(lastSegment);
+  const setSegment = (next: Segment) => {
+    lastSegment = next;
+    setAddingProject(false);
+    pickSegment(next);
+  };
+  const [addingProject, setAddingProject] = useState(false);
   const allBots = useBots();
   const chats = useChats();
   const routines = useRoutines();
   const allTasks = usePart("tasks");
-  const runs = usePart("runs") ?? [];
   const requests = useApp((state) => state.parts.live?.requests);
   const canToday = useCan("today", "view");
   const canCreateToday = useCan("today", "create");
   const member = useMember();
-  const options = SEGMENTS.filter((option) => option.value === "tasks" ? !member : option.value === "routines" ? canToday : true);
+  // Projects and tasks are the owner's; a member's role decides about routines.
+  const options = SEGMENTS.filter((option) => (option.value === "routines" ? canToday : !member));
 
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const tasks = useMemo(() => (allTasks ?? []).filter((task) => task.status !== "archived"), [allTasks]);
@@ -339,18 +324,43 @@ export default function Work() {
     return out;
   }, [requests, tasks, bots]);
 
-  const shownSegment = options.some((option) => option.value === segment) ? segment : options[0]?.value ?? "activity";
-  const add = shownSegment === "routines" && canCreateToday ? () => openRoutine("new") : shownSegment === "tasks" ? () => openTask("new") : undefined;
+  const shownSegment = options.some((option) => option.value === segment) ? segment : options[0]?.value;
+  const add =
+    shownSegment === "routines" && canCreateToday
+      ? { label: "New routine", run: () => openRoutine("new") }
+      : shownSegment === "projects"
+        ? { label: addingProject ? "Cancel new project" : "New project", run: () => setAddingProject(!addingProject) }
+        : shownSegment === "tasks"
+          ? { label: "New task", run: () => openTask("new") }
+          : undefined;
 
   return (
-    <Page tab title="Work" actions={add && <IconButton icon={Plus} label={segment === "routines" ? "New routine" : "New task"} variant="accent" size={44} onPress={add} />}>
+    <Page
+      tab
+      title="Work"
+      keyboard
+      actions={
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          <IconButton icon={ActivityIcon} label="Activity" variant="soft" size={44} onPress={() => router.push("/work/activity")} />
+          {add && <IconButton icon={shownSegment === "projects" && addingProject ? X : Plus} label={add.label} variant="accent" size={44} onPress={add.run} />}
+        </View>
+      }
+    >
       {synced && <NeedsYou needs={needs} />}
-      <Segmented options={options} value={shownSegment} onChange={setSegment} />
+      {options.length > 1 && <Segmented options={options} value={shownSegment ?? options[0].value} onChange={setSegment} />}
       {!synced ? (
         <Loading />
       ) : (
-        <Animated.View key={shownSegment} entering={FadeIn.duration(180)}>
-          {shownSegment === "routines" ? <Routines routines={routines} chats={chats} bots={bots} /> : shownSegment === "tasks" ? <Tasks tasks={tasks} bots={bots} /> : <Activity runs={runs} chats={chats} bots={bots} />}
+        <Animated.View key={shownSegment ?? "none"} entering={FadeIn.duration(180)}>
+          {shownSegment === "routines" ? (
+            <Routines routines={routines} chats={chats} bots={bots} />
+          ) : shownSegment === "projects" ? (
+            <ProjectList adding={addingProject} setAdding={setAddingProject} />
+          ) : shownSegment === "tasks" ? (
+            <Tasks tasks={tasks} bots={bots} />
+          ) : (
+            <ActivityList />
+          )}
         </Animated.View>
       )}
     </Page>

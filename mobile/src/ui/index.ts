@@ -13,6 +13,7 @@ export { Group, type GroupProps, IconTile, Label, Row, switchColors } from "./Li
 export { Markdown, type PathLinks } from "./Markdown";
 export { Mascot, MascotPair } from "./Mascot";
 export { ProviderIcon } from "./ProviderIcon";
+export { QrCode } from "./QrCode";
 export { LinkBanner, Loading, Page, Sheet, TAB_BAR_ROOM } from "./Screen";
 export { SelectableText } from "./SelectableText";
 export { Slider } from "./Slider";

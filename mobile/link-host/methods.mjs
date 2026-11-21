@@ -64,6 +64,8 @@ export const REMOTE_METHODS = new Set([
   // Projects
   "createProject", "updateProject", "renameProject", "removeProject", "projectChanges", "projectDiff", "projectCommit",
   "addTodo", "updateTodo", "deleteTodo", "moveTodo",
+  // What a project keeps of the artifacts ("project-artifacts-v1"): a list of ids on the project.
+  "addProjectArtifact", "removeProjectArtifact", "projectArtifacts",
   // Wiki
   "wikiTree", "wikiPage", "saveWikiPage", "createWikiPage", "createWikiPageFor", "createWikiFolder", "moveWiki",
   "deleteWiki", "searchWiki", "wikiHistory", "wikiVersion", "restoreWikiVersion", "wikiExportPlan", "exportWikiFile",
@@ -304,7 +306,21 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? args;
+}
+
+/**
+ * A project's artifacts ("project-artifacts-v1"), cut to their shape: the project's id, and for the
+ * two that change the list an artifact's id (or a path the artifact index knows). Null for any other call.
+ */
+function projectArtifactArgs(method, args) {
+  if (method !== "addProjectArtifact" && method !== "removeProjectArtifact" && method !== "projectArtifacts") return null;
+  const project = args[0];
+  if (typeof project !== "string" || !project || project.length > 200) throw new Error("Unknown project");
+  if (method === "projectArtifacts") return [project];
+  const artifact = args[1];
+  if (typeof artifact !== "string" || !artifact || artifact.length > 4096 || artifact.includes("\0")) throw new Error("This artifact no longer exists.");
+  return [project, artifact];
 }
 
 /** The longest of each thing a phone sends to sign a provider in or install one. */

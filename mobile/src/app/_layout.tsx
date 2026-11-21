@@ -116,7 +116,10 @@ export default function RootLayout() {
               <Stack.Screen name="models/[id]" />
               <Stack.Screen name="models/signin" options={{ ...sheet, sheetAllowedDetents: [0.75, 1] }} />
               <Stack.Screen name="projects/index" />
+              <Stack.Screen name="work/activity" />
               <Stack.Screen name="projects/[id]" />
+              <Stack.Screen name="projects/add-chats" options={tall} />
+              <Stack.Screen name="projects/attach" options={tall} />
               <Stack.Screen name="market/app/[slug]" options={half} />
               <Stack.Screen name="market/category/[id]" />
               <Stack.Screen name="market/plugin" />

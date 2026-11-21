@@ -2,7 +2,7 @@
 // src/access.ts; the rules themselves are in src/features/bots/projectAccess.ts) and how a to-do
 // moves among the open ones (its src/Projects.tsx). No React Native imports, so
 // tests/schedules.test.ts runs it.
-import type { Bot, ChatMode, Preferences, Project, ProjectTodo } from "@/link/types";
+import type { Bot, ChatMode, ChatSummary, Preferences, Project, ProjectTodo } from "@/link/types";
 import { globalAccess, grantOf } from "../bots/projectAccess";
 
 /** How a bot may use a project: "everyone" (all bots may), "all" (this bot has every project), "project" (granted here), or "" (it may not). */
@@ -50,3 +50,31 @@ export function moveSteps(todos: ProjectTodo[], todoId: string, delta: -1 | 1): 
   } while (index >= 0 && index < todos.length && todos[index]!.done);
   return index < 0 || index >= todos.length ? 0 : steps;
 }
+
+/**
+ * The chats "Add a chat…" offers for a project: ordinary chats and groups that are not in it
+ * yet, newest first, narrowed by what was typed. Not an archived chat, a routine's or a panel's; and
+ * no group chat for a project with a folder (a group takes text only). `inProject` names the project
+ * a chat would move out of.
+ */
+export function addableChats(
+  chats: ChatSummary[],
+  project: Pick<Project, "id" | "folder">,
+  projects: Pick<Project, "id" | "name">[],
+  query = "",
+  botName: (botId: string) => string | undefined = () => undefined,
+): { chat: ChatSummary; inProject?: string }[] {
+  const words = query.trim().toLowerCase();
+  return chats
+    .filter((chat) => chat.projectId !== project.id && !chat.archived && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine))
+    .filter((chat) => !(project.folder && chat.botIds && chat.botIds.length > 1))
+    .filter((chat) => !words || (chat.title || "").toLowerCase().includes(words) || (botName(chat.botId) ?? "").toLowerCase().includes(words))
+    .sort((a, b) => b.time - a.time)
+    .map((chat) => {
+      const from = chat.projectId ? projects.find((item) => item.id === chat.projectId)?.name : undefined;
+      return from ? { chat, inProject: from } : { chat };
+    });
+}
+
+/** "3 artifacts", "1 artifact", or the empty line. */
+export const artifactCount = (count: number) => (count === 0 ? "Nothing attached yet." : count === 1 ? "1 artifact" : count + " artifacts");
