@@ -47,6 +47,10 @@ The phone and host message shapes are documented in the [link contract](link/CON
 
 Electron, model tools and their shell processes run in the `workspace` service. That service owns the X11 display and answers capture and input requests on a Unix socket. Only the public host can read the owner pairing file and write the link volume. Docker operators control both services. Keep the Docker socket, host home directory and link volume outside the workspace container.
 
+### Check the setup end to end
+
+`sh test/display-e2e/run.sh`, from the `desktop` folder, builds both services and starts them under a project and a port of their own. An owner's stand-in phone pairs. A team member's joins by invite. The member gets their own spaces, opens a space only while it is shared with them, cannot change one that is shared to look at, and is refused after the owner removes them. The script uses no model. It removes its containers and volumes when it ends. Its last line is `DISPLAY E2E: PASSED` or `DISPLAY E2E: FAILED`.
+
 ### Linux tarball updates
 
 A systemd host can install signed updates through Settings → About or the agent update tool. Configure its fixed updater unit once using the [Linux setup instructions](linux-service/README.md). The same files ship in the Linux tarball under `resources/app/desktop/linux-service`.
