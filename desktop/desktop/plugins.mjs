@@ -395,7 +395,10 @@ export class Plugins {
             : [],
         ),
       );
-      const row = { ...before, folder: material.folder, revision: material.revision, preview: material.preview, refs, reading: READING };
+      // (A plugin that was off because its files could not be read has files that can be read now: that reason, and the
+      // mark that an update is the way back, are done with. It stays off until the person switches it on.)
+      const { heldBack, ...kept } = before;
+      const row = { ...kept, ...(heldBack && heldBack !== "unread" && { heldBack }), folder: material.folder, revision: material.revision, preview: material.preview, refs, reading: READING };
       const previousServers = this.knownOAuthServers(before);
       // The folder is the same one when the source did not change. The files were written again,
       // so what was cached about the old files is dropped and the copy is checked again.

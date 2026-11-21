@@ -2,6 +2,14 @@ import { EventEmitter } from "node:events";
 import { REMOTE_METHODS } from "../link/methods.mjs";
 
 /**
+ * The capabilities that are a promise about the workspace's own code, not only a list of calls it
+ * answers. "plugin-starts-v1" (desktop/plugins.mjs): what the workspace says a plugin starts is
+ * what it starts. The link tells such a name only while the workspace that made the promise
+ * answers.
+ */
+export const PROMISES = ["plugin-starts-v1"];
+
+/**
  * What a call that names no person, or one that cannot be read, is answered with. The link always
  * names who called, so such a call means the two containers do not fit each other, most likely
  * because they are from two versions. It is refused: taken as the owner's it would have the
@@ -184,12 +192,15 @@ export function headlessBackend(request, version, { team = () => null, log = (li
         available = next.display === true;
         if (changed) changes.emit("change");
       } catch {
-        // The workspace may come back from an older image, so what it promised before is not told
-        // while it cannot be reached. Phones are told through the same change as the display.
-        const hadList = backend.capabilities.length > 0;
-        backend.capabilities = [];
+        // The workspace may come back from an older image. A name that is a promise about the
+        // workspace's own code is therefore not told while it cannot be reached. The other names
+        // stay: without them a phone would say "update the app" for a computer that only cannot
+        // be reached. The next look asks for a whole answer, and that answer replaces the list.
+        const kept = backend.capabilities.filter((name) => !PROMISES.includes(name));
+        const hadPromise = kept.length !== backend.capabilities.length;
+        backend.capabilities = kept;
         needList = true;
-        if (available || hadList) {
+        if (available || hadPromise) {
           available = false;
           changes.emit("change");
         }

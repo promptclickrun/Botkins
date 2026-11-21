@@ -272,6 +272,8 @@ test("a plugin installed by an earlier version that starts anything its descript
   assert.equal(marked("gone"), undefined);
   // An update writes its files again. The copy can then be read, and switching on clears the reason.
   await third.plugins.update(named("gone").id, { revision: stored().find((row) => row.preview.name === "gone-fixture").revision });
+  // After the update it is off with no reason and no mark: the next thing is the person's "Turn on".
+  assert.deepEqual([named("gone").enabled, named("gone").repair, named("gone").detail], [false, undefined, undefined]);
   await third.plugins.setEnabled(named("gone").id, true);
   assert.deepEqual([named("gone").enabled, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").heldBack], [true, undefined, 2, undefined]);
 });
