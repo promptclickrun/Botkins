@@ -14,6 +14,7 @@
     "start": "npm run build && node scripts/start.cjs",
     "build": "tsc --noEmit && vite build",
     "test": "node --test test/*.test.mjs",
+    "smokes": "node test/run-smokes.mjs",
     "package": "npm run build && electron-builder --publish never",
     "release": "node scripts/release-draft.mjs",
     "package:windows": "npm run build && node scripts/package-windows.mjs",

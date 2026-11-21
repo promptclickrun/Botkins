@@ -19,10 +19,13 @@ import { agree, b64u, box, cleanCode, hkdf, INFO, newKeyPair, open, random, seal
 import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
 import { pair } from "../desktop/remote/link-client.mjs";
 import { seedApp } from "./starter.mjs";
+import { freePort } from "./free-port.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-phone-"));
 seedApp(dir);
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", BOTKINS_NEARBY: "1" };
+// The phone link gets a port of this smoke's own. Without one it would take the usual port, which
+// is the installed app's.
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", BOTKINS_NEARBY: "1", BOTKINS_LINK_PORT: String(await freePort()) };
 delete env.ELECTRON_RUN_AS_NODE;
 const binary = process.env.BOTKINS_BINARY;
 const errors = [];
@@ -55,6 +58,7 @@ try {
   await settings.getByRole("button", { name: "Pair a phone", exact: true }).click();
   const status = await page.evaluate(() => window.botkins.phoneLink());
   assert.ok(status.listening && status.pairing, "phone access is on and a code is open");
+  assert.equal(String(status.port), env.BOTKINS_LINK_PORT, "the link listens on this smoke's own port, not the installed app's");
   assert.equal(status.relay.enabled, false, "away from home stays off until the person turns it on");
   const ways = await settings.getByRole("list", { name: "Ways to pair" }).getByRole("listitem").allTextContents();
   assert.equal(ways.length, 3);
