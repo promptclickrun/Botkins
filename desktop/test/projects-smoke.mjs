@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
+import { openToday } from "./spaces-helper.mjs";
 import { seedApp } from "./starter.mjs";
 import { fileDetails } from "../desktop/artifact-files.mjs";
 
@@ -129,7 +130,8 @@ try {
   await menu.getByRole("button", { name: /Chats/ }).click();
   await expect(page.getByRole("region", { name: "Chats", exact: true })).toContainText("No chats in this project yet");
   // The sections are the phone app's, in its order, between the computer's own Overview and Changes.
-  await expect(menu.getByRole("button")).toHaveText([/Overview/, /To-do/, /Chats/, /Artifacts/, /Panels/, /Access/]);
+  // (Panels is "Spaces and panels" on a computer with Spaces.)
+  await expect(menu.getByRole("button")).toHaveText([/Overview/, /To-do/, /Chats/, /Artifacts/, /[Pp]anels/, /Access/]);
   await button("Add a chat…").click();
   const adding = page.getByRole("dialog", { name: "Add chats" });
   await adding.getByLabel("Search chats").fill("nothing like this");
@@ -293,12 +295,12 @@ try {
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1240, 860));
-  await sidebar("Today").click();
+  await openToday(page);
   await expect(page.locator(".live-panel .panel-project")).toHaveText("Mail migration");
   await shot("today-panel");
   await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
-  await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: /Panels/ }).click();
+  await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: /[Pp]anels/ }).click();
   await expect(page.getByRole("region", { name: "Cutover status" })).toContainText("412 / 1,200");
   await shot("project-panels");
   console.log("A project panel shows on Today with its project tag and on the project's Panels.");

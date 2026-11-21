@@ -6,11 +6,20 @@
 /* ---- The side menu. The spaces are places: `aside > nav` in style.css draws them, open and collapsed. */
 /* Pinned spaces stay in view, as the places do, and the bots list gets the rest. Very many pins
    scroll; the rows keep their height (a row's overflow is hidden, so a grid row could shrink to nothing). */
+/* The spaces take the room they need, up to two fifths of the window, and the bots get the rest.
+   In a short window the bots give way first, down to one row; only then do the spaces give way
+   and scroll, so Settings stays on screen. */
 .spacenav {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 40px;
   max-height: 40vh;
   overflow: auto;
   grid-auto-rows: max-content;
+}
+/* The far larger share of what must be given up is the bots', until they are down to one row. */
+.spacenav ~ .botnav {
+  flex-shrink: 1000;
+  min-height: 40px;
 }
 .spacenav > button > i {
   background: var(--ink);
