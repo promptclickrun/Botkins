@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from "react-native";
 import Svg, { Polyline } from "react-native-svg";
 import type { PanelBlock } from "@/link/types";
 import { Badge, type Tone } from "./Bits";
-import { HtmlFrame } from "./HtmlFrame";
+import { type FrameState, HtmlFrame } from "./HtmlFrame";
 import { Markdown } from "./Markdown";
 import { T } from "./Text";
 import { brand, radius, space, useTheme } from "./theme";
@@ -11,7 +11,7 @@ import { brand, radius, space, useTheme } from "./theme";
 const TONES: Record<string, Tone> = { neutral: "neutral", positive: "success", warning: "warning", negative: "danger", accent: "accent" };
 const SERIES = [brand.clay, brand.tide, brand.honey, brand.fern, brand.rose];
 
-function Block({ block, title, onAnswer }: { block: PanelBlock; title?: string; onAnswer?: (text: string) => void }) {
+function Block({ block, title, onAnswer, state }: { block: PanelBlock; title?: string; onAnswer?: (text: string) => void; state?: FrameState }) {
   const { colors } = useTheme();
   switch (block.type) {
     case "markdown":
@@ -154,7 +154,7 @@ function Block({ block, title, onAnswer }: { block: PanelBlock; title?: string; 
     }
     case "html":
       // A page the bot wrote, drawn in a web view that can't reach the network or the app.
-      return <HtmlFrame frame={block.frame} height={block.height} title={title} onAnswer={onAnswer} />;
+      return <HtmlFrame frame={block.frame} height={block.height} title={title} onAnswer={onAnswer} state={state} />;
     default:
       return null;
   }
@@ -164,11 +164,11 @@ function Block({ block, title, onAnswer }: { block: PanelBlock; title?: string; 
  * Draws a panel's or card's blocks, top to bottom. `title` names a custom view for VoiceOver, and
  * `onAnswer` takes the text such a view hands over (a chat puts it in its message box).
  */
-export function Blocks({ blocks, title, onAnswer }: { blocks: PanelBlock[]; title?: string; onAnswer?: (text: string) => void }) {
+export function Blocks({ blocks, title, onAnswer, state }: { blocks: PanelBlock[]; title?: string; onAnswer?: (text: string) => void; /** A panel's saved state, for its app. */ state?: FrameState }) {
   return (
     <View style={{ gap: space.lg }}>
       {blocks.map((block, index) => (
-        <Block key={block.type === "html" ? block.frame : index} block={block} title={title} onAnswer={onAnswer} />
+        <Block key={block.type === "html" ? block.frame : index} block={block} title={title} onAnswer={onAnswer} state={state} />
       ))}
     </View>
   );

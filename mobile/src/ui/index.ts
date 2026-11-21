@@ -8,7 +8,7 @@ export { Field } from "./Field";
 export { Glass } from "./Glass";
 export { haptic } from "./haptics";
 export { HoldMenu } from "./HoldMenu";
-export { HtmlFrame } from "./HtmlFrame";
+export { type FrameState, HtmlFrame } from "./HtmlFrame";
 export { Group, type GroupProps, IconTile, Label, Row, switchColors } from "./List";
 export { Markdown, type PathLinks } from "./Markdown";
 export { Mascot, MascotPair } from "./Mascot";

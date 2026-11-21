@@ -9,7 +9,7 @@ import { T } from "./Text";
 import { type Colors, radius, slopFor, space, useTheme } from "./theme";
 
 /** A pill a person picks: a filter, a choice. */
-export function Chip({ label, selected, onPress, icon: Icon, leading }: { label: string; selected?: boolean; onPress?: () => void; icon?: LucideIcon; leading?: ReactNode }) {
+export function Chip({ label, selected, onPress, icon: Icon, leading, accessibilityLabel }: { label: string; selected?: boolean; onPress?: () => void; icon?: LucideIcon; leading?: ReactNode; /** What VoiceOver reads in place of the label, when the chip says more than its words (a dot). */ accessibilityLabel?: string }) {
   const { colors, control } = useTheme();
   const fg = selected ? colors.onPrimary : colors.ink;
   return (
@@ -17,6 +17,7 @@ export function Chip({ label, selected, onPress, icon: Icon, leading }: { label:
       onPress={onPress}
       feel="select"
       accessibilityState={{ selected: !!selected }}
+      {...(accessibilityLabel && { accessibilityLabel })}
       hitSlop={slopFor(control.chip)}
       style={{ minHeight: control.chip, paddingHorizontal: 14, borderRadius: radius.pill, backgroundColor: selected ? colors.primary : colors.surface, borderWidth: 1, borderColor: selected ? colors.primary : colors.line, flexDirection: "row", alignItems: "center", gap: 6 }}
     >

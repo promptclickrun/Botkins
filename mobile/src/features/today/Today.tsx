@@ -165,7 +165,7 @@ function noteOf(item: BoardItem) {
   return parts.join(" · ") || undefined;
 }
 
-function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
+export function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
   const { colors } = useTheme();
   const canUse = useCan("today", "use");
   const canCreate = useCan("today", "create");

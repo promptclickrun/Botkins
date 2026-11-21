@@ -9,6 +9,8 @@ import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedVa
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { openBotChat } from "@/features/chat/open";
+import { useSpacesOn } from "@/features/spaces/data";
+import { HomeSpaces } from "@/features/spaces/HomeSpaces";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
@@ -256,6 +258,7 @@ export default function Home() {
   const today = (board?.filter((item) => item.status === "open").length ?? 0) + (panels?.filter((panel) => !panel.hidden).length ?? 0);
   // Today sits open under the bots until the person folds it; the choice is kept.
   const todayOpen = usePrefs((prefs) => prefs.todayOpen);
+  const spacesOn = useSpacesOn();
   const [seen] = useState(makeSeenSignal);
   const Fold = todayOpen ? ChevronUp : ChevronDown;
   const waiting = requests ?? [];
@@ -336,8 +339,10 @@ export default function Home() {
               manageable={canArrange}
             />
           )}
+          {/* A computer with spaces shows the pinned ones here, where Today sat; one without keeps Today. */}
+          {canSeeToday && spacesOn && <HomeSpaces />}
           {/* Today is always under the bots, even with nothing open: it has its own empty states. */}
-          {canSeeToday && (
+          {canSeeToday && !spacesOn && (
             <View style={{ gap: space.lg }}>
               <Group flat>
                 <Row

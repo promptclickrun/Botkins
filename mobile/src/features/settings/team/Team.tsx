@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Alert, Share, View } from "react-native";
 import type { Group as TeamGroup, Invite, JoinRequest, Member, Role } from "@/link/types";
 import { formatCode } from "@/link/pairing";
-import { useOnline, usePart } from "@/state/hooks";
+import { useOnline, usePart, useCapability } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
 import { Badge, Button, Dot, EmptyState, Group, haptic, IconButton, IconTile, Label, Loading, Page, QrCode, Row, Segmented, space, T, useTheme } from "@/ui";
@@ -26,6 +26,7 @@ export default function Team() {
   const team = part && "roles" in part ? part : undefined;
   const you = usePart("meta")?.you;
   const online = useOnline();
+  const spacesOn = useCapability("spaces-v1");
   const { colors } = useTheme();
   if (part && !team) return <Page title="Team"><EmptyState title="Only the owner can manage the team" /></Page>;
   if (!team) return <Page title="Team"><Loading label="Loading team" /></Page>;
@@ -58,6 +59,18 @@ export default function Team() {
             toggled={admin}
             disabled={!online}
             onToggle={(on) => void attempt(api["link.team.setAdminMode"](on))}
+          />
+        )}
+        {/* A link shows a space to anyone who has it, so members share by link only when the owner says so. */}
+        {spacesOn && (
+          <Row
+            leading={<IconTile icon={Link} />}
+            title="Members may share by link"
+            subtitle="Anyone with a link can look at that space."
+            subtitleLines={2}
+            toggled={team.linkSharing === true}
+            disabled={!online}
+            onToggle={(on) => void attempt(api["link.team.setLinkSharing"](on))}
           />
         )}
       </Group>
