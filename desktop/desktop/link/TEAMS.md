@@ -135,6 +135,28 @@ Answer =  { status: "pending", requestId, team }                           // fi
 
 The `team` part for owner devices: `{ name, roles, groups, members (with devices: name, kind, platform, connected), invites (with link), requests (pending, with name, platform, kind, at, inviteId) }`.
 
+## People in a chat, and each person's own view (`team-people-v1`)
+
+A **person** is the owner (id `"owner"`) or a member (their member id). The owner is named by the name on one of the owner's devices ("Your name"), else by the computer's name.
+
+**A chat's people** are its starter (`createdBy`, or the owner when there is none) and those invited. Invites are kept in the link's store (`team.chats`, by chat id), never in the workspace.
+
+- `ChatSummary.invited?: string[]` goes to the owner and to the chat's people. The `team` part has `people: { id, name }[]` for everyone.
+- `link.team.inviteToChat(chatId, personId)` and `link.team.removeFromChat(chatId, personId)` answer the invited list afterwards. The chat's starter or the owner invites and removes; someone invited may take themselves out. A chat holds up to 20 people.
+- Someone invited sees the chat and may read it, send, stop, answer its questions, fork it and set their own flags on it, also when their role doesn't list its bot. They may not rename, compact or delete it, change its model, project or schedule, or invite. Their messages carry their name, and a turn they start runs under the narrower of the starter's limits and their own (the app's `team-turn.mjs`).
+- Removing a member drops their invitations and their view. Deleting a chat through the link drops its people.
+- For the app on the host: `link.chatPeople(chatId)` → `{ createdBy, invited }` (never throws), `link.inChat(chatId, personId)`, `link.notifiesOwner(chatId)`, `link.inviteToChat`, `link.removeFromChat`, `link.removeChatPeople(chatId)`.
+
+**Who is notified.** A chat's alerts (reply finished, routine result, Live Activity, a bot's question) go to its people only. An owner device does not hear of a member's chat unless the owner was invited. One exception: a request only the owner can answer (`permission`, `secure`) goes to the owner's devices whoever's chat it is.
+
+**Each member's own view.** A member's `setBotFlags` (`hidden`, `pinned`), `reorderBots` and `setChatFlags` (`pinned`, `archived`, `unread`) are kept in the link's store (`team.views`, by member id) and never reach the app. So the owner's hidden bot is not hidden for a member, and a member's read mark is their own. Arranging one's view needs only `agents.view`. Other flags of `setBotFlags` (`teamwork`) still reach the app and need `agents.manage`; a `sectionId` from a member is dropped. A member's unread: since they last marked the chat read; before that, as the workspace says for a chat they started, and unread for one they were invited to.
+
+**What a member is sent** beyond the cut above: bots without `origin`, and without `instructions` unless the role manages bots; no `sections`; `panels` and `board` only for bots the role may see; `link.frame.*` and `link.push.activity` only for chats they are in.
+
+**Routines.** When the app names `routine-owner-v1` (it stamps `createdBy` on a member's routine and its chat), a member may change, run, enable, duplicate or delete only a routine they made.
+
+Not built: projects, tasks and artifacts for members. They are the owner's.
+
 ## Limits
 
 - Owner devices: 20, as before. Member devices: 60 more.

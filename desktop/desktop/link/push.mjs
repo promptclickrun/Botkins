@@ -98,8 +98,8 @@ export class Push {
    * @param snapshot   () => the app's state
    * @param attention  optional () => { focused, chatId? }: the person is looking at the computer's own window
    */
-  constructor({ store, deviceKey, relayUrl, snapshot, attention, changed = () => {}, fetch = globalThis.fetch, log = () => {}, now = Date.now }) {
-    Object.assign(this, { store, deviceKey, relayUrl, snapshot, attention, changed, fetch, log, now });
+  constructor({ store, deviceKey, relayUrl, snapshot, attention, people, changed = () => {}, fetch = globalThis.fetch, log = () => {}, now = Date.now }) {
+    Object.assign(this, { store, deviceKey, relayUrl, snapshot, attention, people, changed, fetch, log, now });
     this.seen = new Map(); // device id → when it last made a call
     this.front = new Map(); // device id → { active, chatId }
     this.lingering = new Map(); // "device:chat" → the timer that ends a finished turn's card
@@ -284,8 +284,16 @@ export class Push {
     // A choice a phone never made (one added since it registered) is the default.
     return (record.prefs[kind] ?? DEFAULT_PREFS[kind]) === true;
   }
+  /**
+   * Whether a chat's alerts go to a device: only to the chat's people ("team-people-v1"), the one
+   * who started it and those invited. An owner device no longer hears of a member's chat unless the
+   * owner was invited. `people` is the link's own answer (server.mjs, inChat).
+   */
   maySeeChat(device, chat) {
-    return !device.memberId || chat?.createdBy === device.memberId;
+    if (!chat) return !device.memberId;
+    const person = device.memberId ?? "owner";
+    // Without the link's list of who was invited, a chat is its starter's alone.
+    return this.people ? this.people(chat, person) : (chat.createdBy || "owner") === person;
   }
 
   onRequest(sends, targets, request, chats, bots) {
@@ -296,7 +304,10 @@ export class Push {
     // its own, never into the chat.
     const title = request.kind === "permission" ? name + " needs your approval" : request.kind === "secure" ? name + " needs a secure input" : name + " has a question";
     for (const device of targets) {
-      if (device.memberId && (!this.maySeeChat(device, chat) || request.kind === "permission" || request.kind === "secure")) continue;
+      // A request only the owner can answer (an approval, a secure input) goes to the owner's devices
+      // whoever's chat it is: nobody else can unblock the bot. Any other goes to the chat's people.
+      const ownerOnly = request.kind === "permission" || request.kind === "secure";
+      if (ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
       const record = this.store.push(device.id);
       const text = record.prefs.previews ? firstLine(request.title) || "Open Botkins to answer." : "Open Botkins to answer.";

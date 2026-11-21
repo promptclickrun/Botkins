@@ -23,6 +23,7 @@ import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
 import { arrived, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
+import { myPlace, myself } from "./people";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ContextMeter } from "./ContextMeter";
 import { latestTurn } from "./helpers";
@@ -79,6 +80,12 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   const { colors } = useTheme();
   const canManage = useCan("agents", "manage");
   const project = projects?.find((p) => p.id === chat.projectId);
+  // The people in a chat ("team-people-v1"). Someone invited takes part; renaming, compacting,
+  // deleting and the chat's model, project and people are its starter's (and the owner's).
+  const canShare = useCapability("team-people-v1");
+  const teamSize = usePart("team")?.people?.length ?? 0;
+  const place = myPlace(chat, myself(usePart("meta")));
+  const mine = place === "manages";
   const rename = () =>
     Alert.prompt(
       "Rename chat",
@@ -92,15 +99,15 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     );
   const actions = [
     ...(bot && !chat.botIds ? [{ id: "new", title: "New chat with " + bot.name, image: "square.and.pencil" }] : []),
-    ...(canManage ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
+    ...(canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
+    ...(canManage && mine ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
     // Before the first message the chat can still change its project and mode.
-    ...(started ? [] : projectActions({ chat, projects, settings, bots })),
+    ...(started || !mine ? [] : projectActions({ chat, projects, settings, bots })),
     ...(project?.folder ? [{ id: "changes", title: "Changes", image: "plus.forwardslash.minus" }] : []),
     ...(panes > 0 ? [{ id: "pane", title: "Side pane", image: "sidebar.right" }] : []),
     { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
-    ...(Platform.OS === "ios" ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
-    { id: "compact", title: "Compact", image: "arrow.down.right.and.arrow.up.left" },
-    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+    ...(Platform.OS === "ios" && mine ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
+    ...(mine ? [{ id: "compact", title: "Compact", image: "arrow.down.right.and.arrow.up.left" }, { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
   ];
   return (
     <MenuView
@@ -109,6 +116,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
         const action = nativeEvent.event;
         if (runProjectChoice(chat, action)) return;
         if (action === "pane") return void onPane?.();
+        if (action === "people") return void router.push({ pathname: "/chat/people", params: { id: chat.id } });
         if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id)) as Href);
         else if (action === "new" && bot)
           void attempt(api.createChat(bot.id)).then((id) => id && router.replace({ pathname: "/chat/[id]", params: { id } }));

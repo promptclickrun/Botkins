@@ -1,0 +1,54 @@
+// The people in a chat ("team-people-v1"): who started it and who was invited. Plain logic for the
+// chat's "Invite" and the sheet "People in this chat" (no React Native imports; tested by
+// tests/team-people.test.ts). The rules themselves are the computer's (link-host/team.mjs).
+import type { ChatSummary, Parts, Person } from "@/link/types";
+
+export const OWNER = "owner";
+
+/** The person this phone belongs to: "owner", or the member's id. */
+export const myself = (meta: Parts["meta"] | undefined): string => (meta?.you?.kind === "member" ? meta.you.memberId : OWNER);
+
+/** Who started a chat: the member named on it, else the owner. */
+export const starterOf = (chat: Pick<ChatSummary, "createdBy">): string => chat.createdBy || OWNER;
+
+export type PersonRow = {
+  id: string;
+  name: string;
+  /** "starter" started the chat, "invited" was invited, "out" is on the team and not in the chat. */
+  place: "starter" | "invited" | "out";
+  /** This phone's own person. */
+  self: boolean;
+  /** The line under the name. */
+  note?: string;
+};
+
+/**
+ * Who may change a chat's people from this phone: its starter and the owner invite and remove
+ * anyone; someone invited may only leave; anyone else sees no list at all.
+ */
+export function myPlace(chat: Pick<ChatSummary, "createdBy" | "invited">, me: string): "manages" | "invited" | "out" {
+  if (me === OWNER || starterOf(chat) === me) return "manages";
+  return chat.invited?.includes(me) ? "invited" : "out";
+}
+
+/** The rows of "People in this chat": the starter first, then those invited, then everyone else on the team. */
+export function peopleRows(people: Person[], chat: Pick<ChatSummary, "createdBy" | "invited">, me: string): PersonRow[] {
+  const starter = starterOf(chat);
+  const invited = new Set(chat.invited ?? []);
+  const order = { starter: 0, invited: 1, out: 2 };
+  return people
+    .map((person): PersonRow => {
+      const place = person.id === starter ? "starter" : invited.has(person.id) ? "invited" : "out";
+      const self = person.id === me;
+      const note = [place === "starter" ? "Started this chat" : undefined, self ? "You" : undefined].filter(Boolean).join(" · ") || undefined;
+      return { id: person.id, name: person.name, place, self, ...(note && { note }) };
+    })
+    .sort((a, b) => order[a.place] - order[b.place]);
+}
+
+/** "Shared with Ana and Ben", for a chat's menu and lists; empty when nobody was invited. */
+export function sharedLine(people: Person[], chat: Pick<ChatSummary, "invited">): string {
+  const names = (chat.invited ?? []).map((id) => people.find((person) => person.id === id)?.name).filter((name): name is string => !!name);
+  if (!names.length) return "";
+  return "Shared with " + (names.length === 1 ? names[0] : names.length === 2 ? names.join(" and ") : names[0] + " and " + (names.length - 1) + " others");
+}

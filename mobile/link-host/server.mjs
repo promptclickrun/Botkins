@@ -25,7 +25,7 @@ import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
-import { authorize, cleanGroup, cleanRole, filterParts, inviteLink, inviteLookup, newInviteCode, normalizeCode } from "./team.mjs";
+import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, inChat, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -57,7 +57,7 @@ const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following p
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1", "team-people-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 const MAX_FRAME_HTML = 300_000;
 const MAX_FRAME_DATA = 200_000;
@@ -235,6 +235,8 @@ export class LinkHost extends EventEmitter {
       relayUrl: () => this.relayUrl(),
       snapshot: () => this.backend.snapshot(),
       attention: () => this.attention(),
+      // A chat's alerts go to its people only: who started it, and who was invited.
+      people: (chat, person) => inChat(this.store.data.team, chat, person),
       changed: () => this.changed(),
       log: (line) => this.log(line),
       ...(fetch && { fetch }),
@@ -274,7 +276,7 @@ export class LinkHost extends EventEmitter {
         const spoken = await this.voice.speak({ text: a[0]?.text, voice: a[0]?.voice, speed: a[0]?.speed });
         return { audio: spoken.audio.toString("base64"), format: spoken.format };
       },
-      "link.voice.live": (_session, a) => this.liveVoice(a[0]),
+      "link.voice.live": (session, a) => this.liveVoice(a[0], session.principal),
       "link.voice.endLive": async (_session, a) => this.voice.endLive(a[0]),
       "link.device.sources": async (session, a) => this.device.setSources(session.deviceId, a[0]),
       "link.device.answer": async (session, a) => this.device.answer(session.deviceId, a[0], a[1]),
@@ -319,6 +321,8 @@ export class LinkHost extends EventEmitter {
       "link.team.moveMember": async (_session, a) => this.moveMember(a[0], a[1]),
       "link.team.removeMember": async (_session, a) => this.removeMember(a[0]),
       "link.team.rename": async (_session, a) => this.renameTeam(a[0]),
+      "link.team.inviteToChat": async (_session, a) => this.inviteToChat(a[0], a[1]),
+      "link.team.removeFromChat": async (_session, a) => this.removeFromChat(a[0], a[1]),
     };
     this.grants = new ScreenGrants({
       serverId: this.store.data.serverId,
@@ -359,13 +363,14 @@ export class LinkHost extends EventEmitter {
    * where the person is when the phone sent it (`context.location`, never logged). It is given one
    * tool, `ask_bot`; the phone runs that tool by sending the message to the chat.
    */
-  async liveVoice({ chatId, botId, provider, sdp, context } = {}) {
+  async liveVoice({ chatId, botId, provider, sdp, context } = {}, principal) {
     const { location } = liveContextOf(context);
     const state = this.backend.snapshot();
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     const bot = (state.bots ?? []).find((item) => item.id === botId);
     if (!chat || !bot) throw new Failure("That chat is gone.");
-    const notes = await this.liveNotes(chat.id, bot.id);
+    // A member's call says so: the app leaves the owner's own notes out of what it hands over.
+    const notes = await this.liveNotes(chat.id, bot.id, principal?.kind === "member" ? principal.memberId : undefined);
     const instructions = liveInstructions({ bot, messages: chat.messages ?? [], bots: state.bots ?? [], notes, location });
     const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name } });
     return { ...session, tools: [ASK_BOT] };
@@ -376,11 +381,11 @@ export class LinkHost extends EventEmitter {
    * returns (or resolves to) `{ userName?, identity?, user? }` as strings. Optional: without it, or
    * when it fails or takes over two seconds, the voice goes without.
    */
-  async liveNotes(chatId, botId) {
+  async liveNotes(chatId, botId, memberId) {
     if (typeof this.backend.liveContext !== "function") return {};
     let timer;
     try {
-      const notes = await Promise.race([Promise.resolve(this.backend.liveContext({ chatId, botId })), new Promise((resolve) => (timer = setTimeout(() => resolve(null), LIVE_NOTES_MS)))]);
+      const notes = await Promise.race([Promise.resolve(this.backend.liveContext({ chatId, botId, ...(memberId && { memberId }) })), new Promise((resolve) => (timer = setTimeout(() => resolve(null), LIVE_NOTES_MS)))]);
       if (!isPlainObject(notes)) return {};
       return Object.fromEntries(["userName", "identity", "user"].filter((key) => typeof notes[key] === "string").map((key) => [key, notes[key]]));
     } catch {
@@ -774,6 +779,7 @@ export class LinkHost extends EventEmitter {
     const team = this.store.data.team;
     const serverKey = b64u(this.store.data.keys.publicKey);
     return {
+      people: teamPeople(team, this.ownerName()),
       name: team.name,
       roles: structuredClone(team.roles),
       groups: structuredClone(team.groups),
@@ -1095,8 +1101,71 @@ export class LinkHost extends EventEmitter {
     const member = team.members.find((item) => item.id === memberId);
     if (!member) throw new Failure("That member is no longer on the team.");
     for (const device of this.store.data.devices.filter((item) => item.memberId === memberId)) this.removeDevice(device.id);
-    this.setTeam({ ...team, members: team.members.filter((item) => item.id !== memberId) });
+    // Their invitations and their own view go with them.
+    const chats = Object.fromEntries(Object.entries(team.chats ?? {}).map(([id, invited]) => [id, invited.filter((person) => person !== memberId)]).filter(([, invited]) => invited.length));
+    const { [memberId]: _gone, ...views } = team.views ?? {};
+    this.setTeam({ ...team, members: team.members.filter((item) => item.id !== memberId), chats, views });
     return this.team();
+  }
+
+  // ── People in a chat, and each member's own view ("team-people-v1") ─────────────────
+
+  /** What the owner is called as a person: the name on one of the owner's devices ("Your name"), else the computer's. */
+  ownerName() {
+    return this.store.data.devices.find((device) => !device.memberId && device.person)?.person || this.store.name || "";
+  }
+  chatOf(chatId) {
+    return (this.backend.snapshot().chats ?? []).find((chat) => chat.id === chatId);
+  }
+  /** Who started a chat and who was invited. An unknown chat is the owner's, with nobody invited. */
+  chatPeople(chatId) {
+    return chatPeople(this.store.data.team, this.chatOf(chatId) ?? { id: chatId });
+  }
+  /** Whether a person ("owner" or a member's id) is in a chat. */
+  inChat(chatId, person) {
+    const chat = this.chatOf(chatId);
+    return chat ? inChat(this.store.data.team, chat, person) : person === OWNER;
+  }
+  /** Whether a chat's replies and questions are the owner's to hear of: the owner started it or was invited. */
+  notifiesOwner(chatId) {
+    return this.inChat(chatId, OWNER);
+  }
+  inviteToChat(chatId, person) {
+    const team = this.store.data.team;
+    const state = this.backend.snapshot();
+    const chat = (state.chats ?? []).find((item) => item.id === chatId);
+    if (!chat) throw new Failure("That chat is no longer available.");
+    if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That person is no longer on the team.");
+    const people = chatPeople(team, chat);
+    if (people.createdBy === person || people.invited.includes(person)) return people.invited;
+    if (people.invited.length + 1 >= MAX_CHAT_PEOPLE) throw new Failure("A chat holds up to " + MAX_CHAT_PEOPLE + " people.");
+    // Chats that are gone leave the list when it is next changed.
+    const known = new Set((state.chats ?? []).map((item) => item.id));
+    const chats = Object.fromEntries(Object.entries(team.chats ?? {}).filter(([id]) => known.has(id)));
+    chats[chatId] = [...people.invited, person];
+    this.setTeam({ ...team, chats });
+    return chats[chatId];
+  }
+  removeFromChat(chatId, person) {
+    const team = this.store.data.team;
+    const invited = (team.chats?.[chatId] ?? []).filter((held) => held !== person);
+    const { [chatId]: _was, ...rest } = team.chats ?? {};
+    this.setTeam({ ...team, chats: invited.length ? { ...rest, [chatId]: invited } : rest });
+    return invited;
+  }
+  removeChatPeople(chatId) {
+    const { [chatId]: _was, ...chats } = this.store.data.team.chats ?? {};
+    this.store.set({ team: { ...this.store.data.team, chats } });
+  }
+  /** A member's own view is kept by the link and never reaches the app: their bots' marks and order, their chats' flags. */
+  memberView(principal, method, args, state) {
+    const team = this.store.data.team;
+    let view = viewOf(team, principal.memberId);
+    if (method === "setBotFlags") view = withBotFlags(view, String(args[0]), args[1]);
+    else if (method === "reorderBots") view = { ...view, order: (Array.isArray(args[0]) ? args[0] : []).filter((id) => typeof id === "string").slice(0, 500) };
+    else if (method === "setChatFlags") view = withChatFlags(view, String(args[0]), args[1], (state.chats ?? []).find((chat) => chat.id === args[0])?.time);
+    this.setTeam({ ...team, views: { ...(team.views ?? {}), [principal.memberId]: view } });
+    return null;
   }
   renameTeam(name) {
     const clean = typeof name === "string" ? name.trim() : "";
@@ -1407,8 +1476,27 @@ export class LinkHost extends EventEmitter {
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
       request: (id) => (state.requests ?? []).find((request) => request.id === id),
       run: (id) => (state.runs ?? []).find((run) => run.id === id),
+      // The app says who made each routine once it names "routine-owner-v1".
+      routineOwners: Array.isArray(this.backend.capabilities) && this.backend.capabilities.includes("routine-owner-v1"),
     });
     if (refusal) throw new Failure(refusal);
+    let forApp = args;
+    if (principal.kind === "member") {
+      // A member's own view: kept here, not in the workspace, so it is nobody else's.
+      if (method === "setChatFlags" || method === "reorderBots") return this.memberView(principal, method, args, state);
+      if (method === "setBotFlags") {
+        this.memberView(principal, method, args, state);
+        const shared = sharedBotFlags(args[1]);
+        if (!Object.keys(shared).length) return null;
+        forApp = [args[0], shared];
+      }
+      // A custom view in a chat is that chat's people's.
+      if (method === "link.frame.page" || method === "link.frame.chat") {
+        const from = await this.frameChat(args[0]).catch(() => ({ chatId: null }));
+        const chat = from.chatId ? (state.chats ?? []).find((item) => item.id === from.chatId) : null;
+        if (from.chatId && !(chat && inChat(this.store.data.team, chat, principal.memberId))) throw new Failure("This view no longer exists.");
+      }
+    }
     if (method === "link.sync") return this.sync(session, args[0] ?? {}, gone);
     if (method === "link.messages") {
       const limit = Math.max(1, Math.min(Number(args[2]) || CHAT_PAGE, 200));
@@ -1459,7 +1547,9 @@ export class LinkHost extends EventEmitter {
     }
     if (!REMOTE_METHODS.has(method)) throw new Error("That can't be done from a phone.");
     // A credential reference is filled in at a few fixed places of three calls, and refused everywhere else.
-    const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, args, { deviceId: session.deviceId, uploads: this.uploads }));
+    const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
+    // A chat that is deleted takes its invitations with it.
+    if (method === "deleteChat" && this.store.data.team.chats?.[args[0]]) this.removeChatPeople(String(args[0]));
     if (!secrets.length) return this.backend.call(method, callArgs, { principal });
     // The desktop may echo what it was given. Nothing of a value goes back to a phone.
     try {
@@ -1560,6 +1650,9 @@ export class LinkHost extends EventEmitter {
     next.quietLive = quietLive(next.live);
     next.meta.you = { kind: "owner" };
     next.team = this.team();
+    // Who was invited to each chat, for the owner's lists; a member's are added with their own cut (filterParts).
+    const invites = this.store.data.team.chats ?? {};
+    next.chats = (next.chats ?? []).map((chat) => (invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
     // What each phone set up (never a token), and what bots are asking phones for right now.
     next.phones = Object.fromEntries(this.store.data.devices.map((device) => [device.id, { name: device.name, kind: device.kind, platform: device.platform, ...(device.presenceKey && { presence: true }), ...(this.push.view(device.id) && { push: this.push.view(device.id) }), sources: this.store.sources(device.id) }]));
     next.asks = this.device.asks();
