@@ -228,6 +228,9 @@ botkins plugins bots memory --bot Nova
 - **For a caller that reads `--json`:** what must be seen is on standard error. Show it to your person before you give `--yes`. Use the form that works for every id: `botkins plugins install --yes --revision=<revision> -- <id>`.
 - A change that the computer refuses is in the log too, as "Tried from the command line: … (it failed)".
 - A plugin's own words (its name, a command, an address) are printed with each character that hides or turns text written as its number, as `\u{202e}`.
+- **A value that goes into a header.** `plugins configure --settings` and `plugins install --settings` ask before a value goes into a header to an address, whatever the plugin calls the setting. `--yes` then needs `--revision`, as for a plugin that runs commands.
+- **A command that Botkins prints for you to run** has each word quoted for a shell when it needs it. An id that has a character that cannot be shown is not printed as a command: take it from `botkins plugins list --json`.
+- Only the text of a plugin gets this care. A name that you gave (a bot's name in an error, or in the log) is printed as it is, with its emoji and its joiners. Only a control character and a mark that turns text around are written as a number.
 
 ## Pair a phone
 
@@ -465,6 +468,8 @@ The command line has two readers: a person, and an agent that changes Botkins be
 **Use each command with no terminal.** Add `--json`: the answer is one JSON document on standard output, and a failure is `{"error": {"message": "…", "code": "…"}}` with a non-zero exit code. A long value comes from a file (`--instructions-file <path>`). Name a thing by its id when you have one; a name works when only one thing has it.
 
 **A plugin's settings.** A caller on the socket or the command line gives values that it has (`--settings` or the hidden question). It cannot use a saved credential by reference: that is chosen in the app's window or on a paired phone, and the service refuses a `$credential` value for `plugins.install` and `plugins.configure`.
+
+**A form field named `$credential`.** On `botkins chat respond`, a form field that is itself named `$credential` cannot be answered from the command line. That name is the mark of a reference to a saved credential, and the command line does not take one. Answer that question in the app's window or on a paired phone.
 
 **An id or a value that starts with a dash.** Some ids are random text, and about one in 64 starts with `-` (a device's id, for example). The command line reads a word that starts with a dash as an option. One rule covers each command:
 

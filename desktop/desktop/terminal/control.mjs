@@ -25,11 +25,13 @@ export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // The owner's choice 
  * owner has not chosen, these calls refuse a reference anywhere in what they are given.
  */
 const WITHOUT_REFERENCES = ["plugins.install", "plugins.configure", "chat.respond", "respond"];
-const NO_REFERENCES = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself (`--settings`, `--secrets` or the hidden question).";
+// The sentence names what the call at hand has: only a plugin's install and configure take --settings.
+const CHOSEN_IN_THE_APP = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself";
+const NO_REFERENCES = (name) => CHOSEN_IN_THE_APP + (name.startsWith("plugins.") ? " (`--settings`, or the hidden question)." : ".");
 const holdsReference = (value, depth = 0) => depth <= 8 && value !== null && typeof value === "object" && (Object.hasOwn(value, "$credential") || Object.values(value).some((inner) => holdsReference(inner, depth + 1)));
 /** Refuses the arguments of a call that may not hold a reference to a saved credential (see above). */
 const refuseReferences = (name, args) => {
-  if (!CREDENTIAL_REFERENCES_ON_THE_SOCKET && WITHOUT_REFERENCES.includes(name) && holdsReference(args)) throw new ControlError(NO_REFERENCES, "BAD_ARGUMENT");
+  if (!CREDENTIAL_REFERENCES_ON_THE_SOCKET && WITHOUT_REFERENCES.includes(name) && holdsReference(args)) throw new ControlError(NO_REFERENCES(name), "BAD_ARGUMENT");
 };
 const text = (value, max, what) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new ControlError("Give " + what + ".", "BAD_ARGUMENT");

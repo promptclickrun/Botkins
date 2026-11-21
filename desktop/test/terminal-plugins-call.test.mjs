@@ -23,7 +23,9 @@ const freePort = () =>
       server.close(() => resolve(port));
     });
   });
-const NO_REFERENCES = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself (`--settings`, `--secrets` or the hidden question).";
+// The sentence names what the call has: a plugin's install and configure take --settings, a bot's request is answered with the value itself.
+const NO_REFERENCES = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself (`--settings`, or the hidden question).";
+const NO_REFERENCES_IN_ANSWER = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself.";
 const STALE = "0".repeat(64);
 
 /** A real service, and a plugin folder with a hook that is added through `call plugins.addFolder`. */
@@ -102,7 +104,7 @@ test("no reference to a saved credential is taken from the socket, by the named 
   const reference = { $credential: "a-credential" };
   const plugins = running.runtime.workspace.plugins;
   const keySet = () => plugins.list()[0].config.find((field) => field.key === "KEY").set;
-  const refused = (promise) => assert.rejects(promise, (error) => error.message === NO_REFERENCES);
+  const refused = (promise, sentence = NO_REFERENCES) => assert.rejects(promise, (error) => error.message === sentence);
   // Install: in its settings, and in a place where it is no setting either (deeper).
   await refused(client.call("plugins.install", "memory@test-market", { revision, config: { KEY: reference } }));
   await refused(client.call("call", "plugins.install", ["memory@test-market", { revision, config: { KEY: reference } }]));
@@ -113,8 +115,8 @@ test("no reference to a saved credential is taken from the socket, by the named 
   await refused(client.call("call", "plugins.configure", [id, { KEY: reference }]));
   assert.equal(keySet(), false, "nothing was saved");
   // Answering a bot's request: the check comes before the app looks for the request.
-  await refused(client.call("chat.respond", "no-such-request", { action: "accept", content: { KEY: reference } }));
-  await refused(client.call("call", "respond", ["no-such-request", { action: "accept", content: { KEY: reference } }]));
+  await refused(client.call("chat.respond", "no-such-request", { action: "accept", content: { KEY: reference } }), NO_REFERENCES_IN_ANSWER);
+  await refused(client.call("call", "respond", ["no-such-request", { action: "accept", content: { KEY: reference } }]), NO_REFERENCES_IN_ANSWER);
   const lines = await logged();
   assert.ok(lines.includes("Tried from the command line: plugins.configure " + id + " (it failed)"));
   assert.ok(lines.includes("Tried from the command line: call plugins.configure (it failed)"));
@@ -127,7 +129,7 @@ test("no reference to a saved credential is taken from the socket, by the named 
   await client.call("call", "plugins.configure", [id, { KEY: "another value" }]);
   assert.equal(keySet(), true);
   // The app's own path, as the window takes it, still resolves a reference: this one fails because there is no such credential, not by the socket's rule.
-  await assert.rejects(running.runtime.handlers["plugins.configure"](id, { KEY: { $credential: "a-credential-that-does-not-exist" } }), (error) => error.message !== NO_REFERENCES && !/saved credential is chosen in the app's window/.test(error.message));
+  await assert.rejects(running.runtime.handlers["plugins.configure"](id, { KEY: { $credential: "a-credential-that-does-not-exist" } }), (error) => error.message !== NO_REFERENCES && error.message !== NO_REFERENCES_IN_ANSWER && !/saved credential is chosen in the app's window/.test(error.message));
 });
 
 test("what the socket says of a plugin is the copy as it is now, and names its bots", { skip }, async (t) => {

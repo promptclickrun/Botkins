@@ -14,7 +14,8 @@
 import { readFileSync } from "node:fs";
 import { CliError, EXIT, usage } from "../output.mjs";
 import { ask, confirm, readAll } from "./input.mjs";
-import { safe, shown } from "./tools.mjs";
+import { hasUnshown } from "../../desktop/shown-text.mjs";
+import { safe, shellWord, shown } from "./tools.mjs";
 
 const YES = { yes: { type: "boolean", about: "Don't ask first. For a plugin that runs commands on this computer it needs --revision too" } };
 const REVISION = { revision: { type: "string", value: "revision", about: "The revision that you looked at (`botkins plugins show` prints it). The plugin is refused when it is another one now" } };
@@ -24,6 +25,36 @@ const one = (context, what) => {
 };
 const count = (list, word) => (list?.length ? list.length + " " + word + (list.length === 1 ? "" : "s") : null);
 const called = (plugin) => safe(plugin.name ?? plugin.id);
+// Each word of a command that is printed for someone to run goes through `shellWord` (cli/commands/tools.mjs):
+// the id is `name@marketplace` and the name is the plugin's own text, so it can hold `;`, `$(` or a backtick.
+// A word that cannot be written safely is a placeholder, and the sentence says where to take it from.
+const idWord = (id) => shellWord(id, "<its id>");
+const idNote = (id) => (hasUnshown(id) ? " Take the id from `botkins plugins list --json`: it has a character that cannot be written in a command." : "");
+const lookAgain = (id) => "Look at it again: `botkins plugins show -- " + idWord(id) + "`." + idNote(id);
+const changedSince = (id) => "This plugin is not the one that you looked at: its revision is another one now. " + lookAgain(id);
+/**
+ * The rest of the command line that was given (--all, --bot, --settings, --unset), each word written
+ * for a shell, and a sentence for each word that has no runnable form. Without it the printed
+ * command would do another thing.
+ */
+const restOf = ({ all = false, bots = [], settings, unset = [] } = {}) => {
+  const words = [];
+  const notes = new Set();
+  if (all) words.push("--all");
+  for (const bot of bots) {
+    words.push(shellWord("--bot=" + bot, "--bot=<the bot>"));
+    if (hasUnshown(bot)) notes.add("Write the bot's id for --bot= (`botkins bots list --json` has it): its name has a character that cannot be written in a command.");
+  }
+  if (settings !== undefined) {
+    words.push("--settings " + shellWord(settings, "<the path>"));
+    if (hasUnshown(settings)) notes.add("Write the path of the settings file yourself: it has a character that cannot be written in a command.");
+  }
+  for (const key of unset) {
+    words.push(shellWord("--unset=" + key, "--unset=<the key>"));
+    if (hasUnshown(key)) notes.add("Write the setting's name for --unset= yourself: it has a character that cannot be written in a command.");
+  }
+  return { text: words.join(" "), notes: [...notes] };
+};
 /**
  * One thing that a plugin runs here, whole: a hook's command, or a tool's line with every word,
  * then its folder, each environment value as the plugin wrote it (a value can be a command), and
@@ -89,6 +120,7 @@ function described(plugin) {
     plugin.description ? safe(plugin.description) : null,
     "Holds: " + (holds.length ? holds.join(", ") : "nothing that Botkins uses") + ".",
     ...(plugin.installed ? ["Bots: " + botsText(plugin)] : []),
+    ...(plugin.afterUpdate ? ["Bots: " + botsText(plugin.afterUpdate) + " (as now)" + (plugin.afterUpdate.enabled === false ? ". It stays off." : "")] : []),
     ...(plugin.runs?.length ? ["Runs on this computer, as the user that runs Botkins:", ...plugin.runs.flatMap(runLines)] : ["Runs nothing on this computer."]),
     ...(plugin.reaches?.length ? ["Reaches on the web:", ...plugin.reaches.flatMap(reachLines)] : []),
     ...(plugin.config?.length ? ["Settings:", ...plugin.config.map(settingLine)] : []),
@@ -108,21 +140,24 @@ function described(plugin) {
 /** What must be seen is written to standard error whatever --json is, as for a tool that is a program. */
 const show = (context, text) => void context.stderr.write(text + "\n");
 /** The sentence for a caller that cannot be asked, in the form that works for every id (an id can start with a dash). `rest` is the rest of the command line that was given (--all, --bot): without it the printed command would do another thing. */
-const look = (plugin, command, rest = "") => "This plugin runs commands on this computer or reaches a new place. Look at it first: `botkins plugins show -- " + safe(plugin.id) + "`. Then give the revision that you looked at: `botkins plugins " + command + (rest ? " " + rest : "") + " --yes --revision=<revision> -- " + safe(plugin.id) + "`.";
+const look = (plugin, command, rest = restOf()) =>
+  "This plugin runs commands on this computer or reaches a new place. Look at it first: `botkins plugins show -- " + idWord(plugin.id) + "`. Then give the revision that you looked at: `botkins plugins " + command + (rest.text ? " " + rest.text : "") + " --yes --revision=<revision> -- " + idWord(plugin.id) + "`." + idNote(plugin.id) + rest.notes.map((note) => " " + note).join("");
 /**
  * The yes for a plugin that runs commands here (or, for an update, reaches a new place).
  * `text` is what the person is shown. `revision` is the one that the yes is for.
  * A person with no --yes is asked. --yes needs --revision, and it must be that revision.
+ * `refusal` is the sentence for a caller that cannot be asked, when it is not the one for a plugin that runs commands.
  */
-async function agreed(context, plugin, { text, question, command, revision, rest }) {
+async function agreed(context, plugin, { text, question, command, revision, rest, refusal }) {
   show(context, text);
   const o = context.options;
+  const sentence = () => refusal ?? look(plugin, command, rest);
   if (o.yes) {
-    if (o.revision === undefined) throw usage("--yes needs --revision for this plugin. " + look(plugin, command, rest));
-    if (o.revision !== revision) throw new CliError("This plugin is not the one that you looked at: its revision is another one now. Look at it again: `botkins plugins show -- " + safe(plugin.id) + "`.");
+    if (o.revision === undefined) throw usage("--yes needs --revision for this plugin. " + sentence());
+    if (o.revision !== revision) throw new CliError(changedSince(plugin.id));
     return true;
   }
-  if (!context.stdin.isTTY || context.json) throw usage(look(plugin, command, rest));
+  if (!context.stdin.isTTY || context.json) throw usage(sentence());
   return confirm(context, question);
 }
 /** A plugin's settings from --settings (a JSON file of { KEY: value }, or "-" for standard input). A value is never a word on the command line. */
@@ -145,6 +180,10 @@ async function settingsFile(context) {
   return values;
 }
 const SETTINGS = { settings: { type: "string", value: "path", about: "A JSON file with the plugin's settings: { \"KEY\": \"value\" }. \"-\" reads standard input. A value is never a word on the command line" } };
+/** A setting whose value goes into a header to an address on the web, whatever the plugin calls it. */
+const toHeader = (field) => field.sentTo?.some((place) => place.header) === true;
+/** `--settings -` reads standard input to its end, so it cannot also answer a question: that is said before anything is read. */
+const STDIN_ASKS = "--settings - reads standard input, which cannot also answer the question that this plugin needs. Give --yes with --revision after you looked at it, or give --settings a file path instead of -. ";
 const needs = (plugin) => (plugin.config ?? []).filter((field) => field.required && field.set !== true).map((field) => field.key);
 
 /** One value as text that does not depend on the order of its keys, so that two descriptions are compared by what they say. */
@@ -161,12 +200,32 @@ function changes(before, next) {
   const same = (items, item) => listOf(items).some((other) => whole(other) === whole(item));
   const fresh = (now, then) => listOf(now).filter((item) => !same(then, item));
   const runs = fresh(next.runs, before.runs);
+  const runsGone = fresh(before.runs, next.runs);
   const reaches = fresh(next.reaches, before.reaches);
   // A hook that is new or changed and that the runs do not say (its time limit, when the runs have none).
   const hooksNow = listOf(next.contents?.hooks);
   const hooksThen = listOf(before.contents?.hooks);
   const said = (hook) => runs.some((run) => run.what === "hook" && run.when === hook.event && run.command === hook.command && whole(run.env ?? []) === whole(hook.env ?? []));
-  const common = (items, others) => items.filter((item) => same(others, item));
+  // A hook is there as many times as it is listed: a hook that is added, taken away, or there more or fewer times is a change, and the order changed only when the same hooks are there in another order.
+  const tally = (hooks) => {
+    const rows = new Map();
+    for (const hook of hooks) {
+      const key = whole(hook);
+      rows.set(key, { hook, times: (rows.get(key)?.times ?? 0) + 1 });
+    }
+    return rows;
+  };
+  const [rowsNow, rowsThen] = [tally(hooksNow), tally(hooksThen)];
+  const hooksMore = [...rowsNow].filter(([key, row]) => row.times > (rowsThen.get(key)?.times ?? 0)).map(([key, row]) => ({ ...row.hook, times: row.times, before: rowsThen.get(key)?.times ?? 0 })).filter((hook) => !(hook.before === 0 && said(hook)));
+  const sameHook = (hook, other) => hook.event === other.event && hook.command === other.command;
+  const hooksFewer = [...rowsThen]
+    .filter(([key, row]) => row.times > (rowsNow.get(key)?.times ?? 0))
+    .map(([key, row]) => ({ ...row.hook, times: rowsNow.get(key)?.times ?? 0, before: row.times }))
+    // A hook that has a changed twin above is said there. One that is gone whole and that "No longer runs" names is said there.
+    .filter((hook) => !hooksMore.some((other) => sameHook(hook, other)) && !(hook.times === 0 && runsGone.some((run) => run.what === "hook" && run.when === hook.event && run.command === hook.command)));
+  const keysNow = hooksNow.map(whole);
+  const keysThen = hooksThen.map(whole);
+  const hooksReordered = keysNow.length === keysThen.length && [...rowsNow].every(([key, row]) => rowsThen.get(key)?.times === row.times) && keysNow.some((key, at) => key !== keysThen[at]);
   // A tool that is new or changed, and that neither the runs nor the reaches name.
   const toolsNow = listOf(next.contents?.mcpServers);
   const toolsThen = listOf(before.contents?.mcpServers);
@@ -186,11 +245,12 @@ function changes(before, next) {
   const otherFiles = compared && (files[0].count !== files[1].count || files[0].bytes !== files[1].bytes || filesNow.some((path) => !filesThen.includes(path)) || filesThen.some((path) => !filesNow.includes(path))) ? { was: { count: files[0].count, bytes: files[0].bytes }, now: { count: files[1].count, bytes: files[1].bytes }, newConfigFiles: filesNow.filter((path) => !filesThen.includes(path)), goneConfigFiles: filesThen.filter((path) => !filesNow.includes(path)) } : null;
   return {
     runs,
-    noLongerRuns: fresh(before.runs, next.runs),
+    noLongerRuns: runsGone,
     reaches,
     noLongerReaches: fresh(before.reaches, next.reaches),
-    hooks: fresh(hooksNow, hooksThen).filter((hook) => !said(hook)),
-    hooksReordered: whole(common(hooksThen, hooksNow)) !== whole(common(hooksNow, hooksThen)),
+    hooks: hooksMore,
+    hooksFewer,
+    hooksReordered,
     tools: fresh(toolsNow, toolsThen).filter((tool) => !named(tool)),
     // A tool on the web that is new, or whose type, address, headers or sign-in changed: an update takes it with the saved settings.
     webTools: remote(toolsNow).filter((tool) => !remote(toolsThen).some((other) => web(other) === web(tool))).map((tool) => tool.name),
@@ -206,17 +266,22 @@ function changes(before, next) {
     // A default is put into the values that go to a place: a changed one changes what is sent there.
     defaultsChanged: both.filter((key) => is[key].sentTo?.length && whole(was[key].default) !== whole(is[key].default)),
     otherFiles,
+    // An installed copy from before the files were counted has nothing to compare with: said, not left out.
+    otherFilesUnknown: !files[0],
   };
 }
 function changeLines(change, next) {
   const settings = (keys) => (next.config ?? []).filter((field) => keys.includes(field.key)).map(settingLine);
   const files = change.otherFiles;
+  const times = (hook) => (hook.times > 1 || hook.before > 0 ? ["      " + (hook.times === 1 ? "1 time" : hook.times + " times") + " now, " + (hook.before === 0 ? "none" : hook.before === 1 ? "1 time" : hook.before + " times") + " before"] : []);
+  const hookLines = (hook) => ["  at " + safe(hook.event) + ": " + safe(hook.command), ...(hook.timeoutSec != null ? ["      for at most " + safe(hook.timeoutSec) + " second" + (Number(hook.timeoutSec) === 1 ? "" : "s")] : []), ...times(hook)];
   const sections = [
     ...(change.runs.length ? ["New or changed, runs on this computer:", ...change.runs.flatMap(runLines)] : []),
     ...(change.noLongerRuns.length ? ["No longer runs:", ...change.noLongerRuns.flatMap(runLines)] : []),
     ...(change.reaches.length ? ["New or changed, reaches on the web:", ...change.reaches.flatMap(reachLines)] : []),
     ...(change.noLongerReaches.length ? ["No longer reaches:", ...change.noLongerReaches.flatMap(reachLines)] : []),
-    ...(change.hooks.length ? ["New or changed hooks:", ...change.hooks.flatMap((hook) => ["  at " + safe(hook.event) + ": " + safe(hook.command), ...(hook.timeoutSec != null ? ["      for at most " + safe(hook.timeoutSec) + " second" + (Number(hook.timeoutSec) === 1 ? "" : "s")] : [])])] : []),
+    ...(change.hooks.length ? ["New or changed hooks:", ...change.hooks.flatMap(hookLines)] : []),
+    ...(change.hooksFewer.length ? ["Hooks that are gone or are there fewer times:", ...change.hooksFewer.flatMap(hookLines)] : []),
     ...(change.hooksReordered ? ["The order of the hooks changed."] : []),
     ...(change.tools.length ? ["New or changed tools:", ...change.tools.flatMap((tool) => (tool.kind === "remote" ? reachLines(reachOf(tool)) : ["  the tool " + safe(tool.name)]))] : []),
     ...(change.notRun.length ? ["New or changed, not run by Botkins:", ...change.notRun.map(notRunLine)] : []),
@@ -232,9 +297,16 @@ function changeLines(change, next) {
   const unchanged = !(change.runs.length || change.noLongerRuns.length || change.reaches.length || change.noLongerReaches.length);
   const nothing = !next.runs?.length && !next.reaches?.length;
   const same = nothing ? "It runs and reaches the same as before: nothing." : "It runs the same and reaches the same addresses as before.";
-  if (!sections.length) return [same + (next.runs?.length ? " Its files changed, and its commands run those files." : "")];
-  return unchanged ? [same, ...sections] : sections;
+  const unknown = change.otherFilesUnknown ? ["The other files of the installed version are not known, so they are not compared."] : [];
+  if (!sections.length) return [same + (next.runs?.length ? " Its files changed, and its commands run those files." : ""), ...unknown];
+  return [...(unchanged ? [same] : []), ...sections, ...unknown];
 }
+
+/**
+ * The plugin as it will be after an update, for the block: the new source's description, with what stays the installed
+ * plugin's own (who has it, on or off). A look at the source alone says "installed" with no bots, which reads as false.
+ */
+const afterUpdate = (before, preview) => ({ ...preview, installed: false, afterUpdate: { bots: before.bots, botNames: before.botNames, enabled: before.enabled } });
 
 /** These replace `install`, `update` and `enable` of the plugin commands and add the rest (cli/commands/workspace.mjs has list, browse and the marketplaces). */
 export const pluginCommands = {
@@ -260,7 +332,7 @@ export const pluginCommands = {
         (preview) => ({ revision: preview.revision, changed: preview.revision !== installed.revision, runs: preview.runs, reaches: preview.reaches }),
         (error) => ({ error: error.message }),
       );
-      context.print({ ...installed, source }, (plugin) => described(plugin) + (source.changed ? "\n`botkins plugins update -- " + safe(plugin.id) + "` shows what is new." : ""));
+      context.print({ ...installed, source }, (plugin) => described(plugin) + (source.changed ? "\n`botkins plugins update -- " + idWord(plugin.id) + "` shows what is new." + idNote(plugin.id) : ""));
     },
   },
   install: {
@@ -275,23 +347,30 @@ export const pluginCommands = {
       const o = context.options;
       // Before anything is asked: a plugin that is installed is not installed again.
       const have = await context.client.call("plugins.get", id).catch(() => null);
-      if (have?.id === id) throw new CliError(called(have) + " is installed. `botkins plugins update -- " + safe(id) + "` brings its source as it is now.");
+      if (have?.id === id) throw new CliError(called(have) + " is installed. `botkins plugins update -- " + idWord(id) + "` brings its source as it is now." + idNote(id));
       const preview = await context.client.call("plugins.preview", id);
-      if (o.revision !== undefined && o.revision !== preview.revision) throw new CliError("This plugin is not the one that you looked at: its revision is another one now. Look at it again: `botkins plugins show -- " + safe(id) + "`.");
+      if (o.revision !== undefined && o.revision !== preview.revision) throw new CliError(changedSince(id));
+      const rest = restOf({ bots: o.bot, settings: o.settings });
+      // Who gets it is said before the question: with no --bot it is every bot.
+      const forLine = "For: " + (o.bot?.length ? o.bot.map(safe).join(", ") : "every bot");
+      // Standard input cannot be both the settings and the answer. Whether a value goes to an address is known only after it is read, so a plugin that could ask is refused first.
+      const mayAsk = preview.runs.length > 0 || (preview.config ?? []).some(toHeader);
+      if (o.settings === "-" && mayAsk && !(o.yes && o.revision !== undefined)) {
+        show(context, [described(preview), forLine].join("\n"));
+        throw usage(STDIN_ASKS + look(preview, "install", rest));
+      }
       const config = await settingsFile(context);
-      // A secret that is given goes to an address on the web, so a plugin that runs nothing needs the yes for it too.
+      // A value that goes into a header goes to an address on the web, whatever the plugin calls the setting: a plugin that runs nothing needs the yes for it too.
       const given = (preview.config ?? []).filter((field) => config?.[field.key] !== undefined && config[field.key] !== null);
       const values = given.length ? ["These values go to:", ...given.map(settingLine)] : [];
-      const toAddress = given.some((field) => field.secret && field.sentTo?.some((place) => place.header));
+      const toAddress = given.some(toHeader);
       if (preview.runs.length || toAddress) {
-        const rest = [...(o.bot ?? []).map((bot) => "--bot=" + shown([bot])), ...(o.settings !== undefined ? ["--settings " + shown([o.settings])] : [])].join(" ");
-        // Who gets it is said before the question: with no --bot it is every bot.
-        const text = [described(preview), "For: " + (o.bot?.length ? o.bot.map(safe).join(", ") : "every bot"), ...values].join("\n");
-        const question = preview.runs.length ? "Install it and let it run these on this computer?" : "Install it and send these values to the addresses above?";
+        const text = [described(preview), forLine, ...values].join("\n");
+        const question = preview.runs.length ? "Install it and let it run these on this computer" + (toAddress ? " and send the values to the addresses above?" : "?") : "Install it and send these values to the addresses above?";
         if (!(await agreed(context, preview, { text, question, command: "install", revision: preview.revision, rest }))) return EXIT.failed;
       } else if (values.length) show(context, values.join("\n"));
       const plugin = await context.client.call("plugins.install", id, { revision: preview.revision, ...(o.bot?.length && { bots: o.bot }), ...(config && { config }) });
-      context.print(plugin, (now) => "Installed " + called(now) + "." + (needs(now).length ? " It needs settings before it works: " + needs(now).map(safe).join(", ") + ". Give them with `botkins plugins configure -- " + safe(now.id) + "`." : ""));
+      context.print(plugin, (now) => "Installed " + called(now) + "." + (needs(now).length ? " It needs settings before it works: " + needs(now).map(safe).join(", ") + ". Give them with `botkins plugins configure -- " + idWord(now.id) + "`." + idNote(now.id) : ""));
     },
   },
   update: {
@@ -305,7 +384,7 @@ export const pluginCommands = {
       const preview = await context.client.call("plugins.preview", before.id);
       const o = context.options;
       if (o.revision !== undefined && o.revision !== preview.revision)
-        throw new CliError(o.revision === before.revision ? "That is the revision of the installed copy. An update takes the revision of the source as it is now: `botkins plugins show -- " + safe(before.id) + "` prints both." : "This plugin is not the one that you looked at: its revision is another one now. Look at it again: `botkins plugins show -- " + safe(before.id) + "`.");
+        throw new CliError(o.revision === before.revision ? "That is the revision of the installed copy. An update takes the revision of the source as it is now: `botkins plugins show -- " + idWord(before.id) + "` prints both." + idNote(before.id) : changedSince(before.id));
       // A copy that is not the reviewed files is written again by an update, to the same revision too, and the settings stay.
       const repair = preview.revision === before.revision && before.repair === "update";
       if (preview.revision === before.revision && !repair) return void context.print(before, () => called(before) + " is up to date.");
@@ -315,7 +394,7 @@ export const pluginCommands = {
         return void context.print(await context.client.call("plugins.update", before.id, { revision: preview.revision }), (now) => "The files of " + called(now) + " are written again. Your settings stay.");
       }
       const change = changes(before, preview);
-      const text = [called(before) + ": what this update changes", ...changeLines(change, preview), "", "After the update:", described(preview)].join("\n");
+      const text = [called(before) + ": what this update changes", ...changeLines(change, preview), "", "After the update:", described(afterUpdate(before, preview))].join("\n");
       // Saved settings are carried over. So a new place on the web, a tool that speaks or signs in another way, or a setting that goes to another place or has another default, asks too, also when nothing runs here.
       const asks = preview.runs.length > 0 || change.reaches.length > 0 || change.webTools.length > 0 || change.movedSettings.length > 0 || change.defaultsChanged.length > 0;
       if (asks) {
@@ -339,30 +418,44 @@ export const pluginCommands = {
   },
   configure: {
     summary: "Give a plugin its settings",
-    usage: "botkins plugins configure <id> [--settings <path>] [--unset <KEY>]…",
-    options: { ...SETTINGS, unset: { type: "string", multiple: true, value: "KEY", about: "Take a setting's value away" } },
-    // With no option it asks for each setting at a terminal. With none there, this flag gives them.
-    asks: "--settings",
-    details: "At a terminal, with no option, each setting is asked for, with the place its value goes to. A secret one is not shown as you type, and an empty answer keeps what is stored. A saved credential is chosen in the app's window or on a paired phone: from the command line, give the value itself. No command prints a setting's value: `botkins plugins show` says which ones have one, and where each one goes.",
+    usage: "botkins plugins configure <id> [--settings <path>] [--unset <KEY>]… [--revision <revision>] [--yes]",
+    options: { ...SETTINGS, unset: { type: "string", multiple: true, value: "KEY", about: "Take a setting's value away" }, ...REVISION, ...YES },
+    // With no option it asks for each setting at a terminal. With none there, --settings gives them, and a value that goes to an address needs the yes with the installed revision.
+    asks: "--settings --yes --revision",
+    details: "At a terminal, with no option, each setting is asked for, with the place its value goes to. A secret one is not shown as you type, and an empty answer keeps what is stored. From a file (--settings), a value that goes into a header to an address on the web is shown first, with the place, and needs your yes, whatever the plugin calls the setting: a caller that cannot be asked gives `--yes --revision=<the installed revision>` (`botkins plugins show` prints it). A value for an environment value of the plugin's own hook or program, and --unset, need no yes. A saved credential is chosen in the app's window or on a paired phone: from the command line, give the value itself. No command prints a setting's value: `botkins plugins show` says which ones have one, and where each one goes.",
     async run(context) {
       const plugin = await context.client.call("plugins.get", one(context, "Name the plugin (its id or name)."));
       const o = context.options;
+      const rest = restOf({ settings: o.settings, unset: o.unset });
+      const refusal = "These values go to an address on the web, as shown above. Look at where they go, then give the installed revision of the plugin (`botkins plugins show -- " + idWord(plugin.id) + "` prints it): `botkins plugins configure " + (rest.text ? rest.text + " " : "") + "--yes --revision=<revision> -- " + idWord(plugin.id) + "`." + idNote(plugin.id) + rest.notes.map((note) => " " + note).join("");
+      // Standard input cannot be both the settings and the answer: a plugin with a setting that goes to a header could ask, so that is said before anything is read.
+      if (o.settings === "-" && (plugin.config ?? []).some(toHeader) && !(o.yes && o.revision !== undefined)) {
+        show(context, described(plugin));
+        throw usage(STDIN_ASKS + refusal);
+      }
       let values = (await settingsFile(context)) ?? {};
+      // What is typed at a terminal is the person in the conversation: where each value goes is said before it is asked, and no more yes is needed.
+      let typed = false;
       if (o.settings === undefined && !o.unset?.length) {
         if (!plugin.config?.length) return void context.print(plugin, () => called(plugin) + " has no settings.");
         if (!context.stdin.isTTY || context.json) throw usage("Give the settings in a JSON file with --settings <path>, or --settings - to read it from standard input. It can set: " + plugin.config.map((field) => safe(field.key)).join(", ") + ".");
         values = {};
+        typed = true;
         for (const field of plugin.config) {
           show(context, safe(field.label ?? field.key) + " goes to " + goesTo(field) + ".");
-          const typed = await ask(context, safe(field.label ?? field.key) + (field.secret ? " (not shown)" : "") + (field.set ? " [Enter keeps it]" : field.required ? " (needed)" : "") + ": ", { hidden: field.secret });
-          if (typed) values[field.key] = typed;
+          const answer = await ask(context, safe(field.label ?? field.key) + (field.secret ? " (not shown)" : "") + (field.set ? " [Enter keeps it]" : field.required ? " (needed)" : "") + ": ", { hidden: field.secret });
+          if (answer) values[field.key] = answer;
         }
       }
       for (const key of o.unset ?? []) values[key] = null;
       if (!Object.keys(values).length) return void context.print(plugin, () => "Nothing changed.");
       // Where each given value goes is said, so that a caller that reads no question sees it too.
       const given = (plugin.config ?? []).filter((field) => values[field.key] !== undefined && values[field.key] !== null);
-      if (given.length) show(context, ["These values go to:", ...given.map(settingLine)].join("\n"));
+      const block = ["These values go to:", ...given.map(settingLine)].join("\n");
+      // A value for a header goes to an address on the web, whatever the plugin calls it, and needs the yes. Taking a value away sends nothing.
+      if (!typed && given.some(toHeader)) {
+        if (!(await agreed(context, plugin, { text: block, question: "Send these values there?", command: "configure", revision: plugin.revision, refusal }))) return EXIT.failed;
+      } else if (given.length) show(context, block);
       await context.client.call("plugins.configure", plugin.id, values);
       context.print(await context.client.call("plugins.get", plugin.id), (now) => "Saved." + (needs(now).length ? " Still needed: " + needs(now).map(safe).join(", ") + "." : ""));
     },
@@ -384,7 +477,7 @@ export const pluginCommands = {
       const asks = wider && plugin.enabled !== false && plugin.runs.length > 0;
       const set = "Now: " + botsText(plugin) + ". After: " + (chosen === "all" ? "every bot" : chosen.map((bot) => safe(bot.name ?? bot.id)).join(", ")) + ".";
       // The sentence for a caller that cannot be asked has the same --all or --bot, or it would be another command.
-      const rest = o.all ? "--all" : o.bot.map((bot) => "--bot=" + shown([bot])).join(" ");
+      const rest = restOf({ all: o.all, bots: o.all ? [] : o.bot });
       if (asks && !(await agreed(context, plugin, { text: described(plugin) + "\n" + set, question: set + " Let it run these for more bots?", command: "bots", revision: plugin.revision, rest }))) return EXIT.failed;
       context.print(await context.client.call("plugins.setBots", plugin.id, bots, asks ? plugin.revision : undefined), (now) => called(now) + " is for " + (now.bots === "all" ? "every bot" : now.bots.length + " bot" + (now.bots.length === 1 ? "" : "s")) + "." + (now.enabled === false ? " It is off." : ""));
     },
@@ -396,7 +489,7 @@ export const pluginCommands = {
     async run(context) {
       const added = await context.client.call("plugins.addFolder", one(context, "Give the folder's full path."));
       const plugin = await context.client.call("plugins.get", added.id);
-      context.print(plugin, (now) => described(now) + "\nAdded, and switched off. Switch it on with `botkins plugins enable -- " + safe(now.id) + "`.");
+      context.print(plugin, (now) => described(now) + "\nAdded, and switched off. Switch it on with `botkins plugins enable -- " + idWord(now.id) + "`." + idNote(now.id));
     },
   },
   "sign-out": {

