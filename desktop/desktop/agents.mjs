@@ -180,6 +180,8 @@ export class Agents {
       pinned: false,
       hidden: false,
     });
+    // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
+    delete copy.createdBy;
     this.state.bots.splice(this.state.bots.indexOf(source) + 1, 0, copy);
     this.ws.save();
     return copy.id;

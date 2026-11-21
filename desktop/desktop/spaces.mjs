@@ -12,13 +12,19 @@
 //
 // A person is "owner" or a member's id, as everywhere a team is involved (TEAMS.md).
 import { randomBytes } from "node:crypto";
-import { textField } from "./panels.mjs";
+import { gzipSync } from "node:zlib";
+import { nextTime, textField } from "./panels.mjs";
+import { memberSeesBot } from "./team-turn.mjs";
 
 export const SPACES = "spaces-v1";
 export const OWNER = "owner";
 /** The four spaces every person has, with the kind of card each holds. */
 export const BUILTIN = { today: { name: "Today" }, feed: { name: "Feed", kind: "feed" }, ideas: { name: "Ideas", kind: "idea" }, goals: { name: "Goals", kind: "goal" } };
 export const LIMITS = { spaces: 60, panels: 40, notes: 50, note: 2000, state: 64 * 1024, keys: 200, label: 80 };
+/** How a new panel may start: one more line for the bot beside the person's sentence. */
+export const STARTS = { checklist: "Make it a checklist.", tracker: "Make it a tracker.", chart: "Make it a chart.", table: "Make it a table.", notes: "Make it a place for notes.", app: "Make it an app people use together." };
+/** The most a link's copy may be once it is packed: 4 MiB, less what sealing adds. */
+export const COPY_BYTES = 4 * 1024 * 1024 - 28;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const newId = () => "s_" + [...randomBytes(10)].map((byte) => BASE32[byte % 32]).join("");
@@ -148,6 +154,281 @@ export class Spaces {
     return space;
   }
 
+  // ── What a person does with a space (the contract's calls). `person` is "owner" or a member's id. ──
+  //
+  // The link checks a device's call against who may open the space and the member's role before
+  // it gets here. The space's own rule is asked again here: this is where the content is, and
+  // the owner's own window calls these too.
+
+  /** Refuses unless the person may: "open" a space, "change" it, or "own" it. A space they can't open is, for them, one that doesn't exist. */
+  need(space, person, level = "open") {
+    const can = this.can(space, person);
+    if (!can) throw new Error("This space no longer exists.");
+    if (level === "change" && can === "view") throw new Error("You can look at " + space.name + ", not change it.");
+    if (level === "own" && can !== "own") throw new Error("Only the person who made " + space.name + " can do that.");
+    return can;
+  }
+  /** The name the team has for a person, for a panel's last line and for notes. */
+  named(person) {
+    const name = this.ws.teamOf()?.people?.find((item) => item.id === person)?.name ?? this.ws.teamOf()?.members?.find((item) => item.id === person)?.name;
+    return { id: person, name: typeof name === "string" && name ? name : person === OWNER ? "Owner" : "A member" };
+  }
+  /** Whether a member's role shows them a bot. The owner sees every bot. */
+  seesBot(person, botId) {
+    return person === OWNER || memberSeesBot(person, this.ws.teamOf(), botId);
+  }
+
+  /**
+   * A space's content for one person: { id, rev, panels, cards }. A member is sent a panel or a
+   * card only when their role shows them its bot, a hidden panel only when they may change the
+   * space, and no project, no chat they are not in, and no routine's prompt unless they may
+   * change the space.
+   */
+  read(id, person = OWNER) {
+    const space = this.get(id);
+    const can = this.need(space, person);
+    const change = can !== "view";
+    const view = (panel) => {
+      const { lastWriter: _lastWriter, ...rest } = panel;
+      if (person === OWNER) return rest;
+      const { projectId: _projectId, chatId, refreshChatId, routine, ...out } = rest;
+      return {
+        ...out,
+        ...(chatId && this.ws.inChat(chatId, person) && { chatId }),
+        ...(refreshChatId && this.ws.inChat(refreshChatId, person) && { refreshChatId }),
+        routine: routine && !change ? (({ prompt: _prompt, ...kept }) => kept)(routine) : routine,
+      };
+    };
+    return {
+      id: space.id,
+      rev: space.rev,
+      panels: this.panels(id).filter((panel) => this.seesBot(person, panel.botId) && (change || !panel.hidden)).map(view),
+      cards: this.cards(id).filter((card) => this.seesBot(person, card.botId)),
+    };
+  }
+  rename(id, name, person = OWNER) {
+    const space = this.get(id);
+    this.need(space, person, "own");
+    if (space.builtin) throw new Error(space.name + " can't be renamed.");
+    space.name = textField(name, 40, "name");
+    this.touch(id);
+    this.ws.save();
+  }
+  /** Deletes a space with its panels, their routines, their refresh chats and their views. */
+  async remove(id, person = OWNER) {
+    const space = this.get(id);
+    this.need(space, person, "own");
+    if (space.builtin) throw new Error(space.name + " can't be deleted.");
+    const panels = this.panels(id);
+    for (const panel of panels) this.ws.frames.removeOwner("panel:" + panel.id);
+    this.ws.state.panels = this.ws.state.panels.filter((panel) => panel.spaceId !== id);
+    this.ws.state.board = this.ws.state.board.filter((card) => card.spaceId !== id);
+    this.ws.state.spaces = this.all.filter((item) => item !== space);
+    for (const chat of this.ws.state.chats) if (chat.spaceId === id) delete chat.spaceId;
+    this.ws.save();
+    // A refresh chat is of no use without its panel. A chat that is gone already is no reason to stop.
+    for (const panel of panels) if (panel.refreshChatId) await this.ws.agents.deleteChat(panel.refreshChatId).catch(() => {});
+  }
+  /** Attaches a space to a project, or with null takes it off. Projects are the owner's. */
+  setProject(id, projectId, person = OWNER) {
+    const space = this.get(id);
+    if (person !== OWNER || makerOf(space) !== OWNER) throw new Error("Only the owner's spaces go with a project.");
+    if (projectId == null) delete space.projectId;
+    else {
+      if (!this.ws.state.projects?.some((project) => project.id === projectId)) throw new Error("This project no longer exists.");
+      space.projectId = projectId;
+    }
+    this.touch(id);
+    this.ws.save();
+  }
+  setPanelProject(panelId, projectId, person = OWNER) {
+    const panel = this.ws.panels.get(panelId);
+    if (person !== OWNER) throw new Error("Only the owner attaches a panel to a project.");
+    if (projectId == null) delete panel.projectId;
+    else {
+      if (!this.ws.state.projects?.some((project) => project.id === projectId)) throw new Error("This project no longer exists.");
+      panel.projectId = projectId;
+    }
+    this.touch(panel.spaceId);
+    this.ws.save();
+  }
+  /** A chat with a bot that is about a space: the person's own, with the space (and a panel) it was started from. */
+  chatAbout(space, botId, person, panelId) {
+    if (!this.seesBot(person, botId)) throw new Error("Unknown bot");
+    const chatId = this.ws.createChat(botId);
+    const chat = this.ws.chat(chatId);
+    chat.spaceId = space.id;
+    if (panelId) chat.aboutPanelId = panelId;
+    if (person !== OWNER) chat.createdBy = person;
+    return chat;
+  }
+  /**
+   * Starts a chat with a bot, in a space, with the person's sentence for a new panel, as typing
+   * /today-panel does. `start` adds one line. `refresh` ({ cron, timezone }) becomes the panel's
+   * routine, with the person's sentence as its prompt, when the bot first publishes from that chat.
+   * Answers { chatId }; the reply goes on in that chat.
+   */
+  newPanel({ spaceId, botId, prompt, start, refresh } = {}, person = OWNER) {
+    const space = this.get(spaceId);
+    this.need(space, person, "change");
+    const sentence = textField(prompt, 4000, "prompt");
+    if (start != null && !Object.hasOwn(STARTS, start)) throw new Error("Unknown way to start a panel.");
+    if (this.panels(space.id).length >= LIMITS.panels) throw new Error(space.name + " has " + LIMITS.panels + " panels, which is the most a space holds.");
+    let routine;
+    if (refresh != null) {
+      const zone = refresh.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      nextTime(refresh.cron, zone);
+      routine = { cron: String(refresh.cron).trim(), timezone: zone, prompt: sentence };
+    }
+    const chat = this.chatAbout(space, botId, person);
+    if (routine) chat.panelRoutine = routine;
+    this.ws.save();
+    const sent = this.ws.send(chat.id, "/today-panel " + sentence + (start ? " " + STARTS[start] : ""), person === OWNER ? {} : { author: this.ws.memberAuthor(person) });
+    // The turn's own failures are said in the chat; this call has done its part once the chat is there.
+    Promise.resolve(sent).catch(() => {});
+    return { chatId: chat.id };
+  }
+  /** Starts a chat with a bot about a space, or with `panelId` about one of its panels. Answers { chatId }. */
+  ask({ spaceId, botId, text, panelId } = {}, person = OWNER) {
+    const space = this.get(spaceId);
+    this.need(space, person);
+    const said = textField(text, 32000, "message");
+    if (panelId != null && this.ws.panels.get(panelId).spaceId !== space.id) throw new Error("Panel no longer exists");
+    const chat = this.chatAbout(space, botId, person, panelId ?? undefined);
+    this.ws.save();
+    Promise.resolve(this.ws.send(chat.id, said, person === OWNER ? {} : { author: this.ws.memberAuthor(person) })).catch(() => {});
+    return { chatId: chat.id };
+  }
+  /** What a bot is told in a chat that is about a space: its name, and its panels' titles and keys. */
+  context(chat) {
+    const space = chat?.spaceId && this.all.find((item) => item.id === chat.spaceId);
+    if (!space) return "";
+    const people = this.ws.turnPeople(chat).people;
+    if (!this.canAll(space, people)) return "";
+    const panels = this.panels(space.id).filter((panel) => !panel.hidden);
+    const about = chat.aboutPanelId && panels.find((panel) => panel.id === chat.aboutPanelId);
+    const bot = (panel) => this.ws.state.bots.find((item) => item.id === panel.botId)?.name ?? "a bot";
+    return (
+      "\nThis chat was started from the space " + JSON.stringify(space.name) + " (a page of panels). What you publish here goes to that space." +
+      (panels.length ? " Its panels: " + panels.slice(0, 40).map((panel) => JSON.stringify(panel.title) + " (key " + panel.key + ", by " + bot(panel) + ")").join("; ") + ". Read your own with today_list." : " It has no panels yet.") +
+      (about ? " The person is asking about the panel " + JSON.stringify(about.title) + " (key " + about.key + ")." : "")
+    );
+  }
+  /**
+   * Puts a panel in a space, before one of its panels or at its end. Leaving a space needs to
+   * own it or to be the person the panel was made for; entering one needs to be able to change it.
+   */
+  movePanel(panelId, { spaceId, before = null } = {}, person = OWNER) {
+    const panel = this.ws.panels.get(panelId);
+    const from = this.of(panel);
+    const to = this.get(spaceId);
+    this.need(to, person, "change");
+    if (from.id === to.id) this.need(from, person, "change");
+    else if (this.need(from, person) !== "own" && (panel.createdBy ?? OWNER) !== person) throw new Error("Only the person who made " + from.name + ", or the one this panel was made for, can move it out.");
+    this.ws.panels.move(panelId, to.id, before);
+  }
+
+  // ── For the link: what an app is sent, the copy a link opens, and a member who left ─────────
+
+  /** The spaces as the link needs them to make each person's list: each record with what it holds ({ id, botId, updatedAt } for every panel and open card). */
+  part() {
+    return this.all.map((space) => ({
+      ...space,
+      items: [
+        ...this.panels(space.id).filter((panel) => !panel.hidden).map((panel) => ({ id: panel.id, botId: panel.botId, updatedAt: panel.updatedAt ?? 0 })),
+        ...this.cards(space.id).filter((card) => card.status === "open").map((card) => ({ id: card.id, botId: card.botId, updatedAt: card.updatedAt ?? card.createdAt ?? 0 })),
+      ],
+    }));
+  }
+  /**
+   * The copy of a space that a link opens (`SpaceSnapshot`): every panel that is not hidden and
+   * every open card, with the page of each custom view in it. When a member made the space, only
+   * what that member's role shows them. It holds no id of the host, of a chat, a bot, a panel or
+   * a project, no routine's prompt, no note, no last line and no person's name but `from`.
+   * What a panel itself says (its text, its page, its data, its state) is public as it is.
+   * A copy that would be too large leaves out the largest pages first, and says so on those panels.
+   */
+  snapshot(id, { from, limit = COPY_BYTES } = {}) {
+    const space = this.get(id);
+    const maker = makerOf(space);
+    const bot = (botId) => {
+      const found = this.ws.state.bots.find((item) => item.id === botId);
+      return { name: found?.name ?? "", look: found?.look ?? null };
+    };
+    const panels = this.panels(id)
+      .filter((panel) => !panel.hidden && this.seesBot(maker, panel.botId))
+      .map((panel) => ({
+        title: panel.title,
+        size: ["small", "wide", "tall"].includes(panel.size) ? panel.size : "wide",
+        bot: bot(panel.botId),
+        updatedAt: panel.updatedAt ?? 0,
+        blocks: (panel.blocks ?? []).map((block) => (block.type === "html" ? { type: "html", height: block.height, page: this.ws.frames.html(block.frame), ...(this.ws.frames.data(block.frame) !== undefined && { data: this.ws.frames.data(block.frame) }) } : block)),
+        ...(panel.state && { state: panel.state }),
+      }));
+    const cards = this.cards(id)
+      .filter((card) => card.status === "open" && this.seesBot(maker, card.botId))
+      .map((card) => ({ kind: card.kind, title: card.title, body: card.body ?? "", links: card.links ?? [], ...(card.category && { category: card.category }), bot: bot(card.botId), createdAt: card.createdAt ?? 0 }));
+    const copy = {
+      v: 1,
+      name: space.name,
+      from: typeof from === "string" && from ? from : (this.ws.teamOf()?.name || this.named(OWNER).name),
+      kind: space.builtin && space.builtin !== "today" ? space.builtin : "panels",
+      updatedAt: space.updatedAt,
+      panels,
+      cards,
+    };
+    // Packed as it will be sent. Over the limit, the largest page goes, then the next, until it fits.
+    const packed = () => gzipSync(JSON.stringify(copy)).length;
+    while (packed() > limit) {
+      let largest = null;
+      for (const panel of panels) for (const block of panel.blocks) if (block.type === "html" && (!largest || block.page.length > largest.block.page.length)) largest = { panel, block };
+      if (!largest) break;
+      largest.panel.blocks = largest.panel.blocks.filter((block) => block.type !== "html");
+      largest.panel.left = "size";
+    }
+    return copy;
+  }
+  /**
+   * A member left the team: the spaces they made pass to the owner, the panels made for them
+   * are the owner's from here, and the routines they set are paused (a refresh in the name of
+   * someone who is gone would run with nobody's limits). Their notes stay, with their name.
+   * Safe to repeat. The link takes away what it keeps itself: who the spaces were shared with,
+   * their links, and the member's own view.
+   */
+  memberRemoved(memberId) {
+    if (typeof memberId !== "string" || !memberId || memberId === OWNER) return;
+    const now = Date.now();
+    for (const space of this.all) {
+      if (space.createdBy !== memberId) continue;
+      delete space.createdBy;
+      // Two of the owner's built-in spaces of one kind can't be: what the member's held joins the owner's, and theirs goes.
+      if (space.builtin) {
+        const own = this.ensure(OWNER)[space.builtin];
+        for (const panel of this.ws.state.panels) if (panel.spaceId === space.id) panel.spaceId = own.id;
+        for (const card of this.ws.state.board) if (card.spaceId === space.id) card.spaceId = own.id;
+        for (const chat of this.ws.state.chats) if (chat.spaceId === space.id) chat.spaceId = own.id;
+        this.touch(own.id, now);
+        space.gone = true;
+      } else this.touch(space.id, now);
+    }
+    this.ws.state.spaces = this.all.filter((space) => !space.gone);
+    for (const panel of this.ws.state.panels) {
+      let changed = false;
+      if (panel.createdBy === memberId) {
+        delete panel.createdBy;
+        changed = true;
+      }
+      if (panel.routine?.setBy === memberId) {
+        panel.routine.enabled = false;
+        panel.routine.nextAt = null;
+        delete panel.routine.setBy;
+        changed = true;
+      }
+      if (changed) this.touch(panel.spaceId, now);
+    }
+    this.ws.save();
+  }
+
   // ── What people do in an app panel: its saved state, and notes ───────────────────────────────
 
   /**
@@ -157,6 +438,10 @@ export class Spaces {
    */
   patchState(panelId, patch, label, by) {
     const panel = this.ws.panels.get(panelId);
+    if (typeof by === "string") {
+      this.need(this.of(panel), by, "change");
+      by = this.named(by);
+    }
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("A panel's state is changed with an object of the keys to set.");
     const state = { ...(panel.state ?? {}) };
     for (const [key, value] of Object.entries(patch)) {
@@ -174,6 +459,10 @@ export class Spaces {
   /** A short note on a panel. Answers its id. */
   note(panelId, text, by) {
     const panel = this.ws.panels.get(panelId);
+    if (typeof by === "string") {
+      this.need(this.of(panel), by, "change");
+      by = this.named(by);
+    }
     const notes = (panel.notes ??= []);
     if (notes.length >= LIMITS.notes) throw new Error("This panel has " + LIMITS.notes + " notes. Remove one first.");
     const now = Date.now();
@@ -185,8 +474,9 @@ export class Spaces {
     return note.id;
   }
   /** Removes a note. `mayRemoveAny` is for the space's maker and the computer's owner; anyone else removes their own. */
-  removeNote(panelId, noteId, person, mayRemoveAny = false) {
+  removeNote(panelId, noteId, person, mayRemoveAny = this.can(this.of(this.ws.panels.get(panelId)), person) === "own") {
     const panel = this.ws.panels.get(panelId);
+    this.need(this.of(panel), person);
     const note = panel.notes?.find((item) => item.id === noteId);
     if (!note) throw new Error("This note no longer exists.");
     if (!mayRemoveAny && note.by !== person) throw new Error("You can remove your own notes.");

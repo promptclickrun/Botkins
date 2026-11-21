@@ -317,9 +317,9 @@ export class Workspace {
   snapshot() {
     return {
       ...this.state,
-      // What an app is sent of spaces is made for each person (docs/spaces.md, "What each device
-      // is sent"): the records as they are kept are not a part of the snapshot.
-      spaces: undefined,
+      // Each space with what it holds, for the link to make each person's own list from
+      // (docs/spaces.md, "What each device is sent"). No app is sent this part as it is.
+      spaces: this.spaces.part(),
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
       // Resolved provider inputs are private restart data and can contain large attachments.
@@ -955,6 +955,7 @@ export class Workspace {
         : "") +
       forkSystemMessage(chat.forkContext) +
       this.projects.context(chat, bot) +
+      this.spaces.context(chat) +
       (chat.groupInstructions || "") +
       this.teamwork.brief(bot, chat) +
       this.wiki.context() +

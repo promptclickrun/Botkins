@@ -319,6 +319,13 @@ export class Panels {
       result.stateRev = (result.stateRev ?? 0) + 1;
     }
     if (!panel) this.all.push(result);
+    // A panel asked for with a refresh (`spaces.newPanel`): the first panel published from that
+    // chat gets the routine, with the person's sentence as its prompt, set by that person.
+    if (!panel && chat?.panelRoutine && !run?.panelId) {
+      const { cron, timezone, prompt } = chat.panelRoutine;
+      delete chat.panelRoutine;
+      result.routine = { cron, timezone, prompt, enabled: true, nextAt: nextTime(cron, timezone, now), ...(turn.starter !== "owner" && { setBy: turn.starter }) };
+    }
     this.ws.spaces.touch(space.id, now);
     this.ws.save();
     return { key, revision: result.revision, title, space: space.name };

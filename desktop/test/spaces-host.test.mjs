@@ -9,6 +9,9 @@ import test from "node:test";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
 import { starterBots, Workspace } from "./starter.mjs";
 import { framePage } from "../desktop/frames.mjs";
+import { randomBytes } from "node:crypto";
+import { gzipSync } from "node:zlib";
+import { linkCapabilities, SPACE_CALLS } from "../desktop/runtime.mjs";
 import { LIMITS, migrateSpaces } from "../desktop/spaces.mjs";
 
 // A team of two members: Avery may do everything with spaces, Blake may only look.
@@ -18,13 +21,17 @@ const team = {
   roles: [
     { id: "r_maker", name: "Maker", perms: perms(["view", "use", "create", "manage", "delete"]), bots: "all" },
     { id: "r_guest", name: "Guest", perms: perms(["view"]), bots: "all" },
+    // Dana may do everything with spaces, with one bot only.
+    { id: "r_pip", name: "Pip only", perms: perms(["view", "use", "create", "manage", "delete"]), bots: ["pip"] },
   ],
-  groups: [{ id: "g_makers", name: "Makers", roleId: "r_maker" }, { id: "g_guests", name: "Guests", roleId: "r_guest" }],
+  groups: [{ id: "g_makers", name: "Makers", roleId: "r_maker" }, { id: "g_guests", name: "Guests", roleId: "r_guest" }, { id: "g_pip", name: "Pip only", roleId: "r_pip" }],
   members: [
     { id: "m_avery", name: "Avery", groupId: "g_makers", joinedAt: 1, deviceIds: [] },
     { id: "m_blake", name: "Blake", groupId: "g_guests", joinedAt: 2, deviceIds: [] },
     { id: "m_casey", name: "Casey", groupId: "g_makers", joinedAt: 3, deviceIds: [] },
+    { id: "m_dana", name: "Dana", groupId: "g_pip", joinedAt: 4, deviceIds: [] },
   ],
+  people: [{ id: "owner", name: "Sam" }, { id: "m_avery", name: "Avery" }, { id: "m_blake", name: "Blake" }, { id: "m_casey", name: "Casey" }, { id: "m_dana", name: "Dana" }],
 };
 const avery = { memberId: "m_avery", name: "Avery" };
 const blake = { memberId: "m_blake", name: "Blake" };
@@ -48,6 +55,14 @@ function setup(t, { shared = {} } = {}) {
     // What goes wrong in a script (a failed check, a tool that refused when it should not) is the test's to hear, not the bot's.
     await script(tool).catch((error) => void (broke = error));
     return { data: { content: "done" } };
+  }, {
+    // The stand-in knows the one command that the app sends by itself, and hands it on to the bot as the skill's prompt.
+    rpc: (id, log) => ({
+      model: { switchTo: async (params) => (log.models.push([id, params.modelId, params.reasoningEffort]), {}) },
+      permissions: { setMode: async ({ mode }) => (log.modes.push([id, mode]), { success: true, mode }) },
+      skills: { ensureLoaded: async () => {}, list: async () => ({ skills: [{ name: "today-panel", enabled: true, userInvocable: true, source: "Botkins", description: "A panel" }] }) },
+      commands: { list: async () => ({ commands: [{ name: "today-panel", kind: "skill" }] }), invoke: async ({ name, input }) => ({ kind: "agent-prompt", prompt: "Use the skill " + name + ": " + input }) },
+    }),
   });
   const dir = tempDir(t);
   const spaceCan = (space, person) => (person === "owner" || (space.createdBy ?? "owner") === person ? "own" : (shared[space.id]?.[person] ?? null));
@@ -60,13 +75,27 @@ function setup(t, { shared = {} } = {}) {
     script = async () => {};
     if (broke) throw broke;
   };
+  /** Does `action`, which starts a turn in a chat by itself (a call from the app), with the bot doing `run` in that turn. Answers what the action answered, once the turn is over. */
+  const during = async (run, action) => {
+    script = run;
+    broke = null;
+    const before = fake.log.sent.length;
+    const answer = action();
+    for (let waited = 0; fake.log.sent.length === before || ws.active.has(answer.chatId); waited++) {
+      if (waited > 5000) throw new Error("The turn did not start, or did not end.");
+      await new Promise((done) => setImmediate(done));
+    }
+    script = async () => {};
+    if (broke) throw broke;
+    return answer;
+  };
   /** A chat with a bot, started by a person. */
   const chat = (botId, person) => {
     const id = ws.createChat(botId);
     if (person && person !== "owner") ws.chat(id).createdBy = person;
     return id;
   };
-  return { dir, ws, open, turn, chat, fake, shared };
+  return { dir, ws, open, turn, during, chat, fake, shared };
 }
 const failure = async (promise) => promise.then(() => null, (error) => error.message);
 
@@ -196,7 +225,9 @@ test("a bot changes a shared space only when every person of the turn may, and a
   // the one Today page was before spaces. A space the owner made is not.
   assert.deepEqual(["owner", "m_avery"].map((person) => alone.spaces.can(alone.spaces.ensure("owner").today, person)), ["own", "edit"]);
   assert.equal(alone.spaces.can(alone.spaces.get(alone.spaces.create({ name: "Private" }, "owner")), "m_avery"), null);
-  assert.equal("spaces" in JSON.parse(JSON.stringify(alone.snapshot())), false, "the records as kept are no part of what an app is sent");
+  // What the link is given to make each person's list from: each space with what it holds.
+  const part = alone.snapshot().spaces;
+  assert.deepEqual(part.map((entry) => [entry.name, entry.createdBy, entry.items.length]), [["Today", undefined, 0], ["Feed", undefined, 0], ["Ideas", undefined, 0], ["Goals", undefined, 0], ["Mine", "m_avery", 0], ["Private", undefined, 0]]);
 });
 
 test("a refresh runs for the panel's maker and for whoever asked, under the narrower of their limits", async (t) => {
@@ -267,11 +298,13 @@ test("panels keep their order inside one space, and can be moved to another", as
 });
 
 test("an app panel keeps what people change in it, and people leave notes", async (t) => {
-  const { ws, turn, chat } = setup(t);
+  const { ws, turn, chat, shared } = setup(t);
   const mine = chat("pip");
   await turn(mine, async (tool) => void (await tool("today_publish", { key: "list", title: "Checklist", blocks: [{ type: "html", html: "<p>list</p>" }], state: { milk: false } })));
   const panel = ws.state.panels[0];
   const space = ws.spaces.of(panel);
+  // The owner's Today, shared so that Avery and Casey may change it and Blake may look.
+  shared[space.id] = { m_avery: "edit", m_casey: "edit", m_blake: "view" };
   assert.deepEqual([panel.state, panel.stateRev], [{ milk: false }, 1]);
   // Two people change different things: neither undoes the other. null takes a key away.
   const maya = { id: "m_avery", name: "Avery" };
@@ -307,10 +340,19 @@ test("an app panel keeps what people change in it, and people leave notes", asyn
   assert.match(first, /^n_[a-z2-7]{10}$/);
   assert.throws(() => ws.spaces.note(panel.id, "x".repeat(LIMITS.note + 1), maya), /Invalid note/);
   assert.throws(() => ws.spaces.removeNote(panel.id, second, "m_avery"), /your own notes/);
+  assert.throws(() => ws.spaces.removeNote(panel.id, second, "m_casey"), /your own notes/, "another person who may change the space is not its maker");
   ws.spaces.removeNote(panel.id, first, "m_avery");
-  ws.spaces.removeNote(panel.id, second, "m_casey", true);
-  assert.deepEqual(panel.notes, []);
-  assert.throws(() => ws.spaces.removeNote(panel.id, second, "owner", true), /no longer exists/);
+  ws.spaces.removeNote(panel.id, second, "owner");
+  assert.deepEqual(panel.notes, [], "the owner removes any");
+  assert.throws(() => ws.spaces.removeNote(panel.id, second, "owner"), /no longer exists/);
+  // By a person's id, the space's own rule is asked: one who may only look changes nothing, and one who can't open it finds nothing there.
+  assert.throws(() => ws.spaces.patchState(panel.id, { x: 1 }, "", "m_blake"), /can look at Today, not change it/);
+  assert.throws(() => ws.spaces.note(panel.id, "hello", "m_blake"), /not change it/);
+  shared[space.id] = {};
+  assert.throws(() => ws.spaces.patchState(panel.id, { x: 1 }, "", "m_avery"), /no longer exists/);
+  assert.deepEqual(ws.spaces.patchState(panel.id, { x: 1 }, "Set x", "owner"), { rev: 6 });
+  assert.deepEqual([panel.last.by, panel.last.name, panel.last.label], ["owner", "Sam", "Set x"]);
+  shared[space.id] = { m_avery: "edit" };
   for (let n = 0; n < LIMITS.notes; n++) ws.spaces.note(panel.id, "note " + n, maya);
   assert.throws(() => ws.spaces.note(panel.id, "one more", maya), /has 50 notes/);
 });
@@ -348,4 +390,197 @@ test("a bot's cards go to the Feed, Ideas and Goals of the person the chat is fo
   await ws.agents.deleteBot("pip");
   assert.deepEqual([ws.state.panels.length, ws.state.board.length], [0, 0]);
   for (const id of [owners.today.id, owners.feed.id, owners.ideas.id, averys.feed.id, averys.goals.id]) assert.ok(ws.spaces.get(id).rev > before[id], ws.spaces.get(id).name);
+});
+
+test("a person makes, names, reads and deletes a space, and is sent only what is theirs to see", async (t) => {
+  const { ws, turn, during, chat, shared, fake } = setup(t);
+  // Made: private, its maker's. Named again. The four built-in ones keep their names and stay.
+  const launch = ws.spaces.create({ name: " Launch " }, "m_avery");
+  assert.deepEqual([ws.spaces.get(launch).name, ws.spaces.get(launch).createdBy], ["Launch", "m_avery"]);
+  assert.throws(() => ws.spaces.create({ name: "" }, "owner"), /Invalid name/);
+  assert.throws(() => ws.spaces.create({ name: "x".repeat(41) }, "owner"), /Invalid name/);
+  ws.spaces.rename(launch, "Launch week", "m_avery");
+  assert.throws(() => ws.spaces.rename(launch, "Mine now", "m_casey"), /no longer exists/, "a space a person can't open is not there for them");
+  const today = ws.spaces.ensure("m_avery").today.id;
+  assert.throws(() => ws.spaces.rename(today, "Tomorrow", "m_avery"), /can't be renamed/);
+  await assert.rejects(ws.spaces.remove(today, "m_avery"), /can't be deleted/);
+  for (let n = ws.spaces.all.filter((space) => space.createdBy === "m_avery").length; n < LIMITS.spaces; n++) ws.spaces.create({ name: "S" + n }, "m_avery");
+  assert.throws(() => ws.spaces.create({ name: "One more" }, "m_avery"), /You have 60 spaces/);
+  assert.match(ws.spaces.create({ name: "The owner's" }, "owner"), /^s_/, "the limit is each person's own");
+  // Shared with Casey to change, with Blake to look, with Dana (whose role shows one bot only) to change.
+  shared[launch] = { m_casey: "edit", m_blake: "view", m_dana: "edit" };
+  const averys = chat("pip", "m_avery");
+  ws.chat(averys).spaceId = launch;
+  await turn(averys, async (tool) => {
+    await tool("today_publish", { key: "plan", title: "Plan", blocks });
+    await tool("today_routine", { key: "plan", action: "set", cron: "0 8 * * *", prompt: "Read Avery's notes." });
+  }, avery);
+  const scouts = chat("scout", "m_avery");
+  ws.chat(scouts).spaceId = launch;
+  await turn(scouts, async (tool) => void (await tool("today_publish", { key: "research", title: "Research", blocks })), avery);
+  const [plan, research] = ws.spaces.panels(launch);
+  ws.panels.change(research.id, "hide");
+  plan.projectId = "project-1";
+  // The maker is sent everything but what only the run that wrote a panel needs.
+  const mine = ws.spaces.read(launch, "m_avery");
+  assert.deepEqual([mine.id, mine.rev, mine.panels.map((panel) => panel.title)], [launch, ws.spaces.get(launch).rev, ["Plan", "Research"]]);
+  assert.deepEqual([mine.panels[0].chatId, mine.panels[0].routine.prompt, "lastWriter" in mine.panels[0], "projectId" in mine.panels[0]], [averys, "Read Avery's notes.", false, false], "a project is the owner's, and is not sent to a member");
+  // The owner is sent the project too.
+  assert.equal(ws.spaces.read(launch, "owner").panels[0].projectId, "project-1");
+  // Someone who may change it: the hidden panel too, the routine with its prompt, and no chat they are not in.
+  const caseys = ws.spaces.read(launch, "m_casey");
+  assert.deepEqual([caseys.panels.map((panel) => panel.title), caseys.panels[0].routine.prompt, "chatId" in caseys.panels[0]], [["Plan", "Research"], "Read Avery's notes.", false]);
+  // Someone who may only look: no hidden panel, and a routine without its prompt.
+  const blakes = ws.spaces.read(launch, "m_blake");
+  assert.deepEqual([blakes.panels.map((panel) => panel.title), "prompt" in blakes.panels[0].routine, blakes.panels[0].routine.cron], [["Plan"], false, "0 8 * * *"]);
+  // A member whose role shows them one bot is sent that bot's panels only.
+  assert.deepEqual(ws.spaces.read(launch, "m_dana").panels.map((panel) => panel.title), ["Plan"]);
+  assert.throws(() => ws.spaces.read(launch, "m_nobody"), /no longer exists/);
+  // What the link is given to count with: what is there to see, by its bot and when it last changed.
+  assert.deepEqual(ws.snapshot().spaces.find((space) => space.id === launch).items, [{ id: plan.id, botId: "pip", updatedAt: plan.updatedAt }]);
+  // Projects are the owner's: only the owner attaches one, and only to the owner's own space.
+  ws.state.projects = [{ id: "project-1", name: "Launch" }];
+  const owners = ws.spaces.create({ name: "Owner's" }, "owner");
+  ws.spaces.setProject(owners, "project-1", "owner");
+  assert.equal(ws.spaces.get(owners).projectId, "project-1");
+  ws.spaces.setProject(owners, null, "owner");
+  assert.equal("projectId" in ws.spaces.get(owners), false);
+  assert.throws(() => ws.spaces.setProject(launch, "project-1", "m_avery"), /Only the owner's spaces/);
+  assert.throws(() => ws.spaces.setProject(owners, "project-gone", "owner"), /project no longer exists/);
+  assert.throws(() => ws.spaces.setPanelProject(plan.id, "project-1", "m_avery"), /Only the owner/);
+  // A new panel, asked for from the space: the person's own chat, in that space, with their sentence as /today-panel takes it, and one line for how to start.
+  shared[launch].m_casey = "edit";
+  // The first panel the bot publishes from that chat gets the refresh that was asked for, set by that person, with their sentence as its prompt.
+  const made = await during(
+    async (tool) => void (await tool("today_publish", { key: "press-kit", title: "Press kit", blocks })),
+    () => ws.spaces.newPanel({ spaceId: launch, botId: "pip", prompt: "Track the press kit", start: "checklist", refresh: { cron: "30 7 * * 1", timezone: "Europe/Lisbon" } }, "m_casey"),
+  );
+  const newChat = ws.chat(made.chatId);
+  assert.deepEqual([newChat.botId, newChat.spaceId, newChat.createdBy, newChat.messages[0].text, newChat.messages[0].author], ["pip", launch, "m_casey", "/today-panel Track the press kit Make it a checklist.", { memberId: "m_casey", name: "Casey" }]);
+  const pressKit = ws.spaces.panels(launch).at(-1);
+  assert.deepEqual([pressKit.title, pressKit.createdBy, pressKit.routine.cron, pressKit.routine.timezone, pressKit.routine.prompt, pressKit.routine.setBy, pressKit.routine.enabled], ["Press kit", "m_casey", "30 7 * * 1", "Europe/Lisbon", "Track the press kit", "m_casey", true]);
+  assert.equal("panelRoutine" in newChat, false, "asked for once, set once");
+  assert.throws(() => ws.spaces.newPanel({ spaceId: launch, botId: "pip", prompt: "x" }, "m_blake"), /not change it/);
+  assert.throws(() => ws.spaces.newPanel({ spaceId: launch, botId: "scout", prompt: "x" }, "m_dana"), /Unknown bot/, "a bot the person's role doesn't show them");
+  assert.throws(() => ws.spaces.newPanel({ spaceId: launch, botId: "pip", prompt: "x", start: "spreadsheet" }, "m_casey"), /Unknown way to start/);
+  assert.throws(() => ws.spaces.newPanel({ spaceId: launch, botId: "pip", prompt: "x", refresh: { cron: "every day" } }, "m_casey"), /five cron fields/);
+  // Asking about a space, or about one of its panels: the person's own chat, and the bot is told where it is.
+  const asked = await during(async () => {}, () => ws.spaces.ask({ spaceId: launch, botId: "pip", text: "What changed?", panelId: plan.id }, "m_blake"));
+  const askChat = ws.chat(asked.chatId);
+  assert.deepEqual([askChat.spaceId, askChat.aboutPanelId, askChat.createdBy, askChat.messages[0].text], [launch, plan.id, "m_blake", "What changed?"]);
+  const told = ws.instructionsFor(askChat, ws.bot("pip"));
+  assert.match(told, /This chat was started from the space "Launch week" \(a page of panels\)/);
+  assert.match(told, /"Plan" \(key plan, by Pip\); "Press kit" \(key press-kit, by Pip\)/);
+  assert.match(told, /The person is asking about the panel "Plan" \(key plan\)\./);
+  assert.doesNotMatch(told, /"Research"/, "a hidden panel is not named");
+  assert.equal(ws.instructionsFor(ws.chat(chat("pip")), ws.bot("pip")).includes("started from the space"), false);
+  assert.throws(() => ws.spaces.ask({ spaceId: launch, botId: "pip", text: "x", panelId: "nope" }, "m_blake"), /Panel no longer exists/);
+  // Moving a panel: into a space the person may change; out of one only by its maker or by the person it was made for.
+  const caseysOwn = ws.spaces.create({ name: "Casey's" }, "m_casey");
+  assert.throws(() => ws.spaces.movePanel(plan.id, { spaceId: caseysOwn }, "m_casey"), /can move it out/, "Avery's panel in Avery's space is not Casey's to take");
+  ws.spaces.movePanel(pressKit.id, { spaceId: caseysOwn }, "m_casey");
+  assert.equal(pressKit.spaceId, caseysOwn, "the one made for Casey is");
+  ws.spaces.movePanel(plan.id, { spaceId: launch, before: null }, "m_casey");
+  assert.throws(() => ws.spaces.movePanel(plan.id, { spaceId: launch }, "m_blake"), /not change it/);
+  // Deleted: the space, its panels, their views and their refresh chats. A chat started from it stays, about no space.
+  await ws.panels.refresh(plan.id, "manual", Date.now(), "m_avery");
+  const refreshChat = plan.refreshChatId;
+  await assert.rejects(ws.spaces.remove(launch, "m_casey"), /Only the person who made/);
+  await ws.spaces.remove(launch, "m_avery");
+  assert.equal(ws.spaces.all.some((space) => space.id === launch), false);
+  assert.deepEqual([ws.state.panels.some((panel) => panel.spaceId === launch), ws.state.chats.some((item) => item.id === refreshChat), "spaceId" in ws.chat(asked.chatId)], [false, false, false]);
+  assert.ok(fake.log.sent.length > 0);
+});
+
+test("the copy of a space that a link opens holds what the space says, and nothing that names the host or its people", async (t) => {
+  const { ws, turn, chat } = setup(t);
+  const launch = ws.spaces.create({ name: "Launch" }, "owner");
+  const mine = chat("pip");
+  ws.chat(mine).spaceId = launch;
+  await turn(mine, async (tool) => {
+    await tool("today_publish", { key: "list", title: "Checklist", blocks: [{ type: "markdown", text: "Ship it" }, { type: "html", html: "<p id=x>list</p>", data: { items: ["a"] }, height: 200 }], state: { a: true } });
+    await tool("today_publish", { key: "secret", title: "Hidden", blocks });
+    await tool("today_routine", { key: "list", action: "set", cron: "0 8 * * *", prompt: "Read my mail." });
+  });
+  const [list, hidden] = ws.spaces.panels(launch);
+  ws.panels.change(hidden.id, "hide");
+  list.size = "tall";
+  list.projectId = "project-1";
+  ws.spaces.note(list.id, "A private note", "owner");
+  const copy = ws.spaces.snapshot(launch);
+  assert.deepEqual(Object.keys(copy), ["v", "name", "from", "kind", "updatedAt", "panels", "cards"]);
+  assert.deepEqual([copy.v, copy.name, copy.from, copy.kind], [1, "Launch", "Northstar", "panels"]);
+  assert.deepEqual(copy.panels.map((panel) => Object.keys(panel)), [["title", "size", "bot", "updatedAt", "blocks", "state"]], "the hidden panel is not in it");
+  assert.deepEqual([copy.panels[0].title, copy.panels[0].size, copy.panels[0].bot.name, copy.panels[0].state], ["Checklist", "tall", "Pip", { a: true }]);
+  assert.deepEqual(copy.panels[0].blocks, [{ type: "markdown", text: "Ship it" }, { type: "html", height: 200, page: "<p id=x>list</p>", data: { items: ["a"] } }], "a custom view is its page, not an id of one");
+  // No id of the host, of a chat, a bot, a panel, a project or a space; no routine, no note, no last line.
+  const text = JSON.stringify(copy);
+  for (const secret of [launch, list.id, list.chatId, "project-1", "Read my mail", "A private note", "routine", "notes", '"last"', "createdBy", "botId", ws.state.frames[0].id]) assert.equal(text.includes(secret), false, secret);
+  // A Feed's copy: its open cards, as cards.
+  const feed = ws.spaces.ensure("owner").feed;
+  ws.board.post("pip", { kind: "feed", title: "News", body: "Read this", links: [{ url: "https://example.com" }] });
+  const done = ws.board.post("pip", { kind: "feed", title: "Old news" });
+  ws.board.act(done.id, "clear");
+  const cards = ws.spaces.snapshot(feed.id, { from: "Sam" });
+  assert.deepEqual([cards.kind, cards.from, cards.cards.map((card) => [card.kind, card.title, card.body, card.bot.name])], ["feed", "Sam", [["feed", "News", "Read this", "Pip"]]]);
+  assert.deepEqual(Object.keys(cards.cards[0]), ["kind", "title", "body", "links", "bot", "createdAt"]);
+  // A member's space: only what that member's role shows them goes out, whoever else put something there.
+  const danas = ws.spaces.create({ name: "Dana's" }, "m_dana");
+  ws.state.panels.push({ id: "d1", key: "d1", botId: "pip", spaceId: danas, title: "By Pip", blocks, revision: 1 }, { id: "d2", key: "d2", botId: "scout", spaceId: danas, title: "By Scout", blocks, revision: 1 });
+  assert.deepEqual(ws.spaces.snapshot(danas).panels.map((panel) => panel.title), ["By Pip"]);
+  // Too large once packed: the largest page is left out first, and its panel says so; what fits stays.
+  const big = ws.spaces.create({ name: "Big" }, "owner");
+  const bigChat = chat("pip");
+  ws.chat(bigChat).spaceId = big;
+  // Pages that do not pack small.
+  const noise = (length) => randomBytes(length * 0.75).toString("base64");
+  await turn(bigChat, async (tool) => {
+    await tool("today_publish", { key: "small", title: "Small", blocks: [{ type: "html", html: "<p>" + noise(20000) + "</p>" }] });
+    await tool("today_publish", { key: "large", title: "Large", blocks: [{ type: "markdown", text: "Kept" }, { type: "html", html: "<p>" + noise(90000) + "</p>" }] });
+  });
+  const whole = gzipSync(JSON.stringify(ws.spaces.snapshot(big))).length;
+  const cut = ws.spaces.snapshot(big, { limit: whole - 1000 });
+  assert.deepEqual(cut.panels.map((panel) => [panel.title, panel.left, panel.blocks.map((block) => block.type)]), [["Small", undefined, ["html"]], ["Large", "size", ["markdown"]]]);
+  assert.ok(gzipSync(JSON.stringify(cut)).length <= whole - 1000);
+});
+
+test("when a member leaves, their spaces pass to the owner and what they set stops running in their name", async (t) => {
+  const { ws, turn, chat } = setup(t);
+  const owners = ws.spaces.ensure("owner");
+  const theirs = ws.spaces.ensure("m_avery");
+  const launch = ws.spaces.create({ name: "Avery's launch" }, "m_avery");
+  const averys = chat("pip", "m_avery");
+  await turn(averys, async (tool) => {
+    await tool("today_publish", { key: "numbers", title: "Numbers", blocks });
+    await tool("today_publish", { key: "plan", space: "Avery's launch", title: "Plan", blocks });
+    await tool("board_post", { kind: "idea", title: "Avery's idea" });
+  }, avery);
+  // A routine Avery set on the owner's panel.
+  const mine = chat("pip");
+  await turn(mine, async (tool) => void (await tool("today_publish", { key: "revenue", title: "Revenue", blocks })));
+  const revenue = ws.state.panels.find((panel) => panel.key === "revenue");
+  ws.panels.routine(revenue.id, { action: "set", cron: "0 8 * * *", prompt: "Count." }, "m_avery");
+  ws.spaces.note(revenue.id, "Looks right", { id: "m_avery", name: "Avery" });
+  ws.spaces.memberRemoved("m_avery");
+  // The space they made is the owner's now. Their four built-in ones are gone, and what was in them is in the owner's.
+  assert.equal(ws.spaces.get(launch).createdBy, undefined);
+  assert.equal(ws.spaces.all.some((space) => Object.values(theirs).some((gone) => gone.id === space.id)), false);
+  assert.equal(ws.spaces.all.filter((space) => space.builtin).length, 4);
+  const numbers = ws.state.panels.find((panel) => panel.key === "numbers");
+  assert.deepEqual([numbers.spaceId, numbers.createdBy, ws.state.panels.find((panel) => panel.key === "plan").spaceId], [owners.today.id, undefined, launch]);
+  assert.equal(ws.state.board[0].spaceId, owners.ideas.id);
+  // The routine they set is paused and is nobody's; their note stays, with their name.
+  assert.deepEqual([revenue.routine.enabled, revenue.routine.nextAt, "setBy" in revenue.routine], [false, null, false]);
+  assert.deepEqual(revenue.notes.map((note) => [note.name, note.text]), [["Avery", "Looks right"]]);
+  // Said twice, nothing more happens.
+  const before = JSON.stringify(ws.state.spaces);
+  ws.spaces.memberRemoved("m_avery");
+  assert.equal(JSON.stringify(ws.state.spaces), before);
+});
+
+test("a device is told of spaces only when the link carries every one of their calls", () => {
+  assert.equal(SPACE_CALLS.length, 12);
+  assert.equal(linkCapabilities(new Set()).includes("spaces-v1"), false);
+  assert.equal(linkCapabilities(new Set(SPACE_CALLS.slice(1))).includes("spaces-v1"), false);
+  assert.equal(linkCapabilities(new Set(SPACE_CALLS)).includes("spaces-v1"), true);
 });

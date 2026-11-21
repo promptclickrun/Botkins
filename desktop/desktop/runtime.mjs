@@ -46,6 +46,7 @@ import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { LOOKS_CAPABILITY } from "./looks.mjs";
 import { ROUTINE_DELIVERY, ROUTINE_OWNER } from "./routines.mjs";
+import { SPACES } from "./spaces.mjs";
 import { BOARD_MENTIONS } from "./mentions.mjs";
 import { computerName, nearby } from "./nearby.mjs";
 // Voice in the app's window (Settings › Voice, dictation, reading aloud, Live Voice): desktop/voicedesk.mjs.
@@ -91,13 +92,15 @@ const REPLY_MS = 1500;
 export const APP_UPDATE = "app-update-v1";
 /** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
 export const PROVIDER_SIGNIN = "provider-signin-v1";
-export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN];
+export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN, SPACES];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call)));
+  CAPABILITIES.filter((name) => (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))));
+/** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
+export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
 /**
  * Builds the workspace, its calls and the phone link on `host`.
@@ -246,6 +249,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // A chat's people and whether its alerts are the owner's: the link keeps invites (capability
     // "team-people-v1"). A link without them answers nothing, and a chat has its creator only.
     people: (chatId) => link?.chatPeople?.(chatId),
+    // What a person may do with a space: the link keeps who each one is shared with. A link from
+    // before spaces answers nothing, and the app's own rules hold (desktop/spaces.mjs).
+    spaceCan: (space, person) => link?.spaceCan?.(space, person),
     notifiesOwner: (chatId) => link?.notifiesOwner?.(chatId),
     secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => host.window.fillSecurePage(plan, values, signal) }),
     ...(keys && {
@@ -386,10 +392,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       const now = Date.now();
       const recent = [...frameAnswers.values()].filter((time) => now - time < 60000).length;
       if (now - (frameAnswers.get(id) ?? 0) < 5000 || recent >= 6) throw new Error("Wait a moment before sending another answer.");
-      const chatId = workspace.frames.chatFor(id);
-      if (!chatId) throw new Error("This view's chat no longer exists.");
+      // A view in a panel: the text goes to the box of an ask about that panel, which is the
+      // asker's own chat. It never goes to the chat the panel was made in, which may be another person's.
+      const panel = workspace.frames.panelOf(id);
+      const chatId = panel ? null : workspace.frames.chatFor(id);
+      if (!panel && !chatId) throw new Error("This view's chat no longer exists.");
       frameAnswers.set(id, now);
-      host.window.send("prefill", { chatId, text: text.slice(0, 32000) });
+      host.window.send("prefill", panel ? { panelId: panel.id, spaceId: panel.spaceId, text: text.slice(0, 32000) } : { chatId, text: text.slice(0, 32000) });
     },
     // A frame asks to open a web page: the person decides, one question at a time.
     frameOpenLink: async (id, url) => {
@@ -527,7 +536,34 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       forgetChatPeople(() => link, id);
       return result;
     },
-    boardAct: (id, action, value) => workspace.board.act(id, action, value),
+    boardAct: (id, action, value, person = "owner") => {
+      workspace.spaces.need(workspace.spaces.of(workspace.board.item(id)), person, "change");
+      return workspace.board.act(id, action, value);
+    },
+    // Spaces (desktop/spaces.mjs; the contract is docs/spaces.md). The last argument is the person.
+    "spaces.read": (id, person) => workspace.spaces.read(id, person),
+    "spaces.create": (data, person) => workspace.spaces.create(data, person),
+    "spaces.rename": (id, name, person) => workspace.spaces.rename(id, name, person),
+    "spaces.remove": (id, person) => workspace.spaces.remove(id, person),
+    "spaces.setProject": (id, projectId, person) => workspace.spaces.setProject(id, projectId, person),
+    "spaces.setPanelProject": (panelId, projectId, person) => workspace.spaces.setPanelProject(panelId, projectId, person),
+    "spaces.newPanel": (data, person) => workspace.spaces.newPanel(data, person),
+    "spaces.ask": (data, person) => workspace.spaces.ask(data, person),
+    "spaces.movePanel": (panelId, where, person) => workspace.spaces.movePanel(panelId, where, person),
+    "spaces.patchState": (panelId, patch, label, person = "owner") => workspace.spaces.patchState(panelId, patch, label, person),
+    "spaces.note": (panelId, text, person = "owner") => workspace.spaces.note(panelId, text, person),
+    "spaces.removeNote": (panelId, noteId, person = "owner") => workspace.spaces.removeNote(panelId, noteId, person),
+    // What the link keeps about a space (who it is shared with, each person's order and pins,
+    // who is looking): the owner's own window asks the link, as the owner, by the names a phone uses.
+    ...Object.fromEntries(
+      ["link.spaces.share", "link.spaces.newLink", "link.spaces.arrange", "link.spaces.seen", "link.spaces.notify", "link.spaces.here", "link.team.setLinkSharing"].map((name) => [
+        name,
+        (...args) => {
+          if (typeof link?.ownerCall !== "function") throw new Error("Sharing a space needs a newer phone link than this copy of Botkins has.");
+          return link.ownerCall(name, args);
+        },
+      ]),
+    ),
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)
     saveTask: (data) => workspace.tasks.save(data),
@@ -577,11 +613,20 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     setBotAccess: (botId, access) => workspace.access.setBotAccess(botId, access),
     catalog: (botId, chatId, refresh) =>
       workspace.catalog(botId, chatId, refresh),
-    changePanel: (id, action) => workspace.panels.change(id, action),
-    routine: (id, data) => workspace.panels.routine(id, data),
-    refreshPanel: (id) => {
+    // A panel's calls are for a person ("owner" for this window; a paired device's is handed in
+    // by desktop/device-call.mjs), who has to be able to change the panel's space.
+    changePanel: (id, action, person = "owner") => {
+      workspace.spaces.need(workspace.spaces.of(workspace.panels.get(id)), person, "change");
+      workspace.panels.change(id, action);
+    },
+    routine: (id, data, person = "owner") => {
+      workspace.spaces.need(workspace.spaces.of(workspace.panels.get(id)), person, "change");
+      return workspace.panels.routine(id, data, person);
+    },
+    refreshPanel: (id, person = "owner") => {
+      workspace.spaces.need(workspace.spaces.of(workspace.panels.get(id)), person, "change");
       workspace.panels
-        .refresh(id)
+        .refresh(id, "manual", Date.now(), person)
         .catch((err) => host.dialogs.error("Panel refresh", err.message));
     },
     cacheInfo: async () => ({
@@ -891,6 +936,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       page: (id) => ({ html: workspace.frames.html(id), data: workspace.frames.data(id) }),
       chatFor: (id) => workspace.frames.chatFor(id),
     },
+    // Spaces, for the link itself and never for a device: a person's four built-in spaces, the
+    // copy of a space that a link opens, and what stays to do when a member leaves the team.
+    spaces: {
+      ensure: (person) => Object.fromEntries(Object.entries(workspace.spaces.ensure(person)).map(([builtin, space]) => [builtin, space.id])),
+      snapshot: (id, options) => workspace.spaces.snapshot(id, options),
+      memberRemoved: (memberId) => workspace.spaces.memberRemoved(memberId),
+    },
     // A phone that signed in to an MCP server hands the computer its sign-in (reached as "link.adoptMcpSignIn").
     extras: { adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant) },
     screen: screens,
@@ -984,7 +1036,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     closeWorkspaceSocket = await serveWorkspace(workspaceSocket, linkBackend);
   } else listening = link.start().then(announce, (error) => console.error("Phone link:", error.message));
   /** What the app's own view shows of this computer: the workspace, the team, and a number that goes up when a phone changes. */
-  const snapshot = () => ({ ...workspace.snapshot(), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
+  // `spaces` is the owner's own list, as the link makes one for every person. A link from before
+  // spaces makes none, and the window then has no `spaces`, which is how it knows.
+  const snapshot = () => ({ ...workspace.snapshot(), spaces: link?.spacesFor?.({ kind: "owner" }), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
   const tick = () => {
     tickChatSchedules(workspace);
     try {
