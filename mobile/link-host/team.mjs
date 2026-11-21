@@ -129,6 +129,12 @@ const POLICY = {
   "link.team.setLinkSharing": "owner",
   // Admin mode: whether this owner device is shown every member's spaces, bots and chats.
   "link.team.setAdminMode": "owner",
+  // Sections on the Chats screen are each person's own view of their chats.
+  "link.chats.addSection": ["agents", "view"],
+  "link.chats.renameSection": ["agents", "view"],
+  "link.chats.deleteSection": ["agents", "view"],
+  "link.chats.orderSections": ["agents", "view"],
+  "link.chats.setSection": ["agents", "view"],
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
   saveSkill: ["skills", "create"],
@@ -361,7 +367,7 @@ const SELF_METHODS = new Set([
   "link.unpair",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat"]);
+const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
 const CREATOR_METHODS = new Set(["renameChat", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */
@@ -392,7 +398,29 @@ export const MAX_CHAT_PEOPLE = 20;
  */
 export function viewOf(team, memberId) {
   const view = team?.views?.[memberId];
-  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }) };
+  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }), ...(view?.chatSections && { chatSections: view.chatSections }) };
+}
+
+// ── Sections on the Chats screen ("chat-sections-v1") ───────────────────────────────────────
+export const CHAT_SECTION_LIMITS = { sections: 30, name: 40 };
+/**
+ * A person's own sections for their chats, with nothing missing: `list` in their order, and `of`,
+ * chat id → section id, without anything that names a section they no longer have. `person` is
+ * "owner" or a member's id.
+ */
+export function chatSectionsOf(team, person) {
+  const held = team?.views?.[person]?.chatSections;
+  const list = (Array.isArray(held?.list) ? held.list : []).filter((section) => typeof section?.id === "string" && typeof section?.name === "string").map((section) => ({ id: section.id, name: section.name }));
+  const known = new Set(list.map((section) => section.id));
+  const of = Object.fromEntries(Object.entries(held?.of && typeof held.of === "object" ? held.of : {}).filter(([, id]) => known.has(id)));
+  return { list, of };
+}
+/** A person's chats with the section each is in: theirs, never another person's. */
+export function withChatSections(chats, held) {
+  return (chats ?? []).map((chat) => {
+    const { sectionId: _other, ...rest } = chat;
+    return Object.hasOwn(held.of, chat.id) ? { ...rest, sectionId: held.of[chat.id] } : rest;
+  });
 }
 
 // ── Spaces ("spaces-v1"; docs/spaces.md) ────────────────────────────────────────────────────
@@ -913,6 +941,10 @@ export function filterParts(parts, principal, team, extra = {}) {
     const people = chatPeople(team, chat);
     return { ...rest, ...(own?.pinned && { pinned: true }), ...(own?.archived && { archived: true }), ...(fresh && { unread: true }), ...(people.invited.length && { invited: people.invited }) };
   });
+  // The member's own sections, and which of their chats is in which: never the owner's.
+  const sections = chatSectionsOf(team, me);
+  out.chats = withChatSections(out.chats, sections);
+  if ("chatSections" in parts) out.chatSections = sections.list;
   const live = parts.live ?? {};
   const byChat = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([id]) => ownChats.has(id)));
   out.live = {

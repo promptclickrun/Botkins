@@ -218,6 +218,45 @@ Decided by the owner on 2026-11-20: "the owner should be able to [open a member'
 - **Notifications do not change**: they already go only to a chat's or a space's people.
 - **Words, both apps:** the switch **Admin mode** in Settings › Team, with the line "See every member's spaces, bots and chats." While it is on, the tag **Admin mode** beside the computer's name.
 
+## Sections on the Chats screen (`chat-sections-v1`)
+
+Asked for by the owner on 2026-11-20: a person makes sections on the Chats screen, and puts a chat in one by a hold and a move, or from the chat's menu.
+
+**A section is a person's own way to group their chats.** Nobody else sees it, and it changes nothing about a chat. So it is kept where a person's other marks on chats are for a member: by the link, in the team (`team.views[person].chatSections`, with `person` `"owner"` or a member's id), for the owner as for a member. The app's workspace knows nothing of it, and the link names the capability.
+
+**What a device is sent**
+
+- `chatSections`: `{ id: string; name: string }[]`, the caller's sections in their order. A part of its own, beside `sections` (which stays the owner's sections for bots on Home).
+- `ChatSummary.sectionId?: string`: the section the caller put that chat in. It is the caller's: two people in one chat each see their own, or none. With Admin mode on, a member's chats come to the owner with no section.
+
+**Calls** (the link's; the caller is the person)
+
+| Call | Answer |
+| --- | --- |
+| `link.chats.addSection(name)` | the new section's id (`cs_` and 11 characters); it goes to the end |
+| `link.chats.renameSection(id, name)` | `null` |
+| `link.chats.deleteSection(id)` | `null`; its chats stay in the list, in no section. A section that is gone is no error |
+| `link.chats.orderSections(ids)` | `null`; the caller's order. Ids they do not have are dropped; a section not named keeps its place after the named ones |
+| `link.chats.setSection(chatId, sectionId \| null)` | `null`; one of the caller's chats goes in a section, or in none |
+
+- A name is 1 to 40 characters after trimming, with no control character, and no two of a person's sections share one (compared without case). At most 30 sections a person.
+- A chat is in one section or in none. Only a chat the caller is in (started, or was invited to), and only a section of their own.
+- A member needs `agents.view`, as for the list itself.
+- A chat that is deleted leaves every person's sections. A member who is removed takes theirs along.
+- The computer's sentences: "Give the section a name of up to 40 characters.", "You already have a section with that name.", "You have 30 sections. Delete one first.", "This section no longer exists.", "This chat no longer exists."
+
+**For the app on the host**, whose window has no device, the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `chatSectionsFor(person)` → `{ list, of }` (`of` is chat id → section id), `addChatSection(person, name)`, `renameChatSection(person, id, name)`, `deleteChatSection(person, id)`, `orderChatSections(person, ids)`, `setChatSection(person, chatId, sectionId | null)`. `LinkHost` emits `"status"` when they change. The desktop app used as a member of another host gets the part and the calls like a phone.
+
+**On the Chats screen, both apps**
+
+- The order: **Pinned**; then each section, in the person's order, with its chats newest first; then the chats in no section by day (**Today**, **Yesterday**, **Earlier**), as now. A pinned chat shows under Pinned, as a pinned bot does on Home. A section shows also when it is empty. While searching, only groups with a match show.
+- A hold and a move on a chat drags it: onto a section to put it there, onto a day's group to take it out of its section.
+- A chat's menu gains **Move to section**: each section (the chat's own checked), **None**, then **New section…**.
+- A section's menu: **Rename…**, **Move up**, **Move down**, **Delete section…**.
+- A section folds with a tap on its heading, while the app is open.
+
+**Words. These are final for both apps; they are the words bot sections on Home already use.** "Move to section", "None", "New section…". The prompt: title "New section", line "<chat's title> moves into it.", button "Create section". "Rename section" with "Rename". "Delete “<name>”?" with the line "Its chats stay. They move out of the section." and the button "Delete section". An empty section's line: "No chats here yet." Without the capability the menu has no "Move to section" and the list is as before.
+
 ## A project's artifacts (`project-artifacts-v1`)
 
 A project keeps a list of artifacts: `Project.artifacts?: string[]`, artifact ids, newest attached first, at most 200, left out while empty. The computer's app names the capability. Attaching changes nothing about the artifact and gives a bot nothing new.

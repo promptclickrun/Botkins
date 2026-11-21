@@ -24,10 +24,11 @@ import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
+import { ChatSections } from "./chat-sections.mjs";
 import { SpaceLinks } from "./space-links.mjs";
 import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
-import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
+import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -59,7 +60,7 @@ const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following p
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1", "team-people-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1", "team-people-v1", "chat-sections-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -336,7 +337,15 @@ export class LinkHost extends EventEmitter {
       "link.spaces.here": async (session, a) => this.spaces.lookingAt(personOf(session.principal), a[0], a[1]),
       "link.team.setLinkSharing": async (_session, a) => this.spaces.setLinkSharing(a[0]),
       "link.team.setAdminMode": async (session, a) => this.setAdminMode(session.deviceId, a[0]),
+      // Sections on the Chats screen: the caller's own.
+      "link.chats.addSection": async (session, a) => this.chatSections.add(personOf(session.principal), a[0]),
+      "link.chats.renameSection": async (session, a) => this.chatSections.rename(personOf(session.principal), a[0], a[1]),
+      "link.chats.deleteSection": async (session, a) => this.chatSections.remove(personOf(session.principal), a[0]),
+      "link.chats.orderSections": async (session, a) => this.chatSections.order(personOf(session.principal), a[0]),
+      "link.chats.setSection": async (session, a) => this.chatSections.set(personOf(session.principal), a[0], a[1]),
     };
+    // Each person's sections for their chats ("chat-sections-v1", chat-sections.mjs).
+    this.chatSections = new ChatSections({ team: () => this.store.data.team, setTeam: (team) => this.setTeam(team), chats: () => this.backend.snapshot().chats });
     // Spaces ("spaces-v1"): how each is shared and each person's view of the list (spaces.mjs).
     this.spaces = new Spaces({
       records: () => {
@@ -1213,6 +1222,26 @@ export class LinkHost extends EventEmitter {
   setLinkSharing(on) {
     return this.spaces.setLinkSharing(on);
   }
+  // ── Sections on the Chats screen, for the app on the host (the person first: "owner" for its own window) ──
+  /** `{ list, of }`: the person's sections in their order, and chat id → section id for their chats. */
+  chatSectionsFor(person) {
+    return this.chatSections.for(person);
+  }
+  addChatSection(person, name) {
+    return this.chatSections.add(person, name);
+  }
+  renameChatSection(person, id, name) {
+    return this.chatSections.rename(person, id, name);
+  }
+  deleteChatSection(person, id) {
+    return this.chatSections.remove(person, id);
+  }
+  orderChatSections(person, ids) {
+    return this.chatSections.order(person, ids);
+  }
+  setChatSection(person, chatId, sectionId) {
+    return this.chatSections.set(person, chatId, sectionId);
+  }
   /**
    * The team as the app may know it, for an app that runs apart from the link (the server host's
    * workspace container): enough for `spaceCan`, `chatPeople`, `inChat` and a role check, and
@@ -1314,7 +1343,13 @@ export class LinkHost extends EventEmitter {
   removeChatPeople(chatId) {
     const team = this.store.data.team;
     const { [chatId]: _was, ...chats } = team.chats ?? {};
-    const views = Object.fromEntries(Object.entries(team.views ?? {}).map(([memberId, view]) => {
+    const views = Object.fromEntries(Object.entries(team.views ?? {}).map(([memberId, held]) => {
+      let view = held;
+      // The section a person put it in goes with it.
+      if (view?.chatSections?.of && Object.hasOwn(view.chatSections.of, chatId)) {
+        const { [chatId]: _section, ...of } = view.chatSections.of;
+        view = { ...view, chatSections: { ...view.chatSections, of } };
+      }
       if (!view?.chats || !Object.hasOwn(view.chats, chatId)) return [memberId, view];
       const { [chatId]: _mark, ...rest } = view.chats;
       return [memberId, { ...view, chats: rest }];
@@ -1874,6 +1909,10 @@ export class LinkHost extends EventEmitter {
     // Who was invited to each chat, for the owner's lists; a member's are added with their own cut (filterParts).
     const invites = this.store.data.team.chats ?? {};
     next.chats = (next.chats ?? []).map((chat) => (invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
+    // The owner's own sections for their chats; a member's are added with their own cut (filterParts).
+    const sections = chatSectionsOf(this.store.data.team, OWNER);
+    next.chatSections = sections.list;
+    next.chats = withChatSections(next.chats, sections);
     // What each phone set up (never a token), and what bots are asking phones for right now.
     next.phones = Object.fromEntries(this.store.data.devices.map((device) => [device.id, { name: device.name, kind: device.kind, platform: device.platform, ...(device.presenceKey && { presence: true }), ...(this.push.view(device.id) && { push: this.push.view(device.id) }), sources: this.store.sources(device.id) }]));
     next.asks = this.device.asks();

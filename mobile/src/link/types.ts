@@ -378,6 +378,8 @@ export type ChatSummary = {
   pinned?: boolean;
   archived?: boolean;
   unread?: boolean;
+  /** The section the person put it in on their Chats screen ("chat-sections-v1"). Their own: nobody else sees it. */
+  sectionId?: string;
   projectId?: string;
   mode?: ChatMode;
   panelId?: string;
@@ -932,6 +934,8 @@ export type Parts = {
   settings: Preferences;
   bots: Bot[];
   sections: Section[];
+  /** The person's own sections for their chats, in their order ("chat-sections-v1"). */
+  chatSections?: Section[];
   chats: ChatSummary[];
   live: Live;
   runs: RunSummary[];
@@ -1405,6 +1409,18 @@ export type Calls = {
   "spaces.note"(panelId: string, text: string): string;
   "spaces.removeNote"(panelId: string, noteId: string): void;
   /** Who can open a space. "link" makes a link when there is none. */
+  /**
+   * Sections on the Chats screen ("chat-sections-v1"): the caller's own way to group their chats.
+   * A name is 1 to 40 characters and no two of a person's sections share one; 30 sections at most.
+   */
+  "link.chats.addSection"(name: string): string;
+  "link.chats.renameSection"(id: string, name: string): null;
+  /** Its chats stay in the list, in no section. */
+  "link.chats.deleteSection"(id: string): null;
+  /** The caller's order of their sections. */
+  "link.chats.orderSections"(ids: string[]): null;
+  /** Puts one of the caller's chats in a section, or in none (`null`). */
+  "link.chats.setSection"(chatId: string, sectionId: string | null): null;
   "link.spaces.share"(id: string, input: SpaceShareInput): { link?: string };
   /** A fresh link; the old one stops working. */
   "link.spaces.newLink"(id: string): { link: string };
