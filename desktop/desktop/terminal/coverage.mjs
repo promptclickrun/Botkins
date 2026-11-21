@@ -23,7 +23,6 @@ export const REASONS = {
 
 /** The parts of the work that still owe commands, in the order they are built. When all are done, `owed` is no longer accepted. */
 export const PARTS = {
-  b: "tools (MCP servers), skills, and a bot's tools, skills and access",
   c: "plugins: the reviewed revision, settings, chosen bots, a folder plugin, sign-in",
   d: "projects, routines, tasks, the wiki, chats, preferences, credentials, usage, and the rest of a bot",
   e: "Spaces, panels and the team",
@@ -42,7 +41,11 @@ export const WORKSPACE = {
   deleteBot: cmd("bots remove"),
   ...each("duplicateBot reorderBots makePrimary setBotFlags botMemory setBotMemory addSection renameSection deleteSection importableAgents importAgents", owed("d")),
   ...each("saveTemplate renameTemplate deleteTemplate exportTemplateText importTemplateText", owed("d")),
-  ...each("setBotIntegrations setBotAccess clearApprovals catalog listFolders", owed("b")),
+  setBotIntegrations: cmd("bots tools"),
+  setBotAccess: cmd("bots access"),
+  catalog: cmd("bots menu"),
+  clearApprovals: cmd("tools forget-approvals"),
+  listFolders: cmd("folders"),
   // ── Model providers and models ──
   providers: cmd("providers list"),
   setProviderEnabled: cmd("providers enable"),
@@ -71,8 +74,23 @@ export const WORKSPACE = {
   "plugins.uninstall": cmd("plugins uninstall"),
   ...each("plugins.preview plugins.configure plugins.setBots plugins.addFolder", owed("c")),
   // ── Tools (MCP servers) and skills ──
-  ...each("saveMcpServer setMcpServerEnabled removeMcpServer testMcpServer signInMcpServer signOutMcpServer cancelMcpSignIn importMcpServers importMcpServerFile", owed("b")),
-  ...each("skills readSkill saveSkill setSkillEnabled removeSkill addSkillFolderAt removeSkillFolder", owed("b")),
+  saveMcpServer: cmd("tools add"),
+  setMcpServerEnabled: cmd("tools enable"),
+  removeMcpServer: cmd("tools remove"),
+  testMcpServer: cmd("tools test"),
+  importMcpServers: cmd("tools import"),
+  signOutMcpServer: cmd("tools sign-out"),
+  // A tool's sign-in opens a browser on this computer and waits for it to come back. A host with
+  // no screen has none: there a paired phone signs the tool in and hands the sign-in over.
+  ...each("signInMcpServer cancelMcpSignIn", no("window")),
+  importMcpServerFile: no("window"), // a file dialog; `tools import <file>` reads the file itself
+  skills: cmd("skills list"),
+  readSkill: cmd("skills show"),
+  saveSkill: cmd("skills add"),
+  setSkillEnabled: cmd("skills enable"),
+  removeSkill: cmd("skills remove"),
+  addSkillFolderAt: cmd("skills add-folder"),
+  removeSkillFolder: cmd("skills remove-folder"),
   // ── Projects ──
   ...each("createProject addProject renameProject updateProject removeProject addProjectFolder addProjectArtifact removeProjectArtifact projectArtifacts projectChanges projectDiff projectCommit startProjectChat", owed("d")),
   ...each("addTodo updateTodo moveTodo deleteTodo", owed("d")),
@@ -139,7 +157,8 @@ export const LINK = {
 
 /**
  * The service's own calls that change something, with the place of the argument that names the
- * thing (a bot, a device, a setting), or null when there is none to name. A change made through
+ * thing (a bot, a device, a setting), a function that finds its name in what was given, or null
+ * when there is none to name. A change made through
  * the socket leaves one line in the log: which call, which thing, never a value. When a bot
  * changed its own tools, a person can see it afterwards (`botkins logs`).
  */
@@ -150,7 +169,7 @@ export const CHANGES = {
   "devices.rename": 0,
   "devices.setPerson": 0,
   "devices.remove": 0,
-  "bots.add": null,
+  "bots.add": (args) => args?.[0]?.name,
   "bots.edit": 0,
   "bots.remove": 0,
   "providers.enable": 0,
@@ -174,9 +193,24 @@ export const CHANGES = {
   "relay.set": null,
   "relay.reset": null,
   "update.install": null,
+  "tools.add": (args) => args?.[0]?.name,
+  "tools.edit": 0,
+  "tools.remove": 0,
+  "tools.enable": 0,
+  "tools.test": 0,
+  "tools.import": null,
+  "tools.signOut": 0,
+  "tools.forgetApprovals": null,
+  "skills.save": (args) => args?.[0]?.name,
+  "skills.remove": 0,
+  "skills.enable": 0,
+  "skills.addFolder": null,
+  "skills.removeFolder": null,
+  "bots.tools.set": 0,
+  "bots.access.set": 0,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
-export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods"];
+export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 
 /** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. */
 export const thingForLog = (value) => (typeof value === "string" && /^[^\u0000-\u001f\u007f]{1,80}$/.test(value) ? value : null);

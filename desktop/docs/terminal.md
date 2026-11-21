@@ -171,7 +171,31 @@ Other commands for bots:
 - `botkins routines list`, `run`, `pause` and `resume` operate the routines of your bots.
 - `botkins plugins list`, `browse`, `install` and `uninstall` operate plugins.
 
-A paired phone does everything else: tasks, the wiki, tools (MCP servers), skills, projects and credentials.
+A paired phone does everything else for now: tasks, the wiki, projects and credentials.
+
+## Tools and skills
+
+A **tool** is something a bot can call. One that you add is an MCP server: a program that this computer starts, or a web address. A **skill** is a set of instructions that a bot reads when a task needs them. Each bot has every tool and skill that is on, unless you take one from that bot.
+
+```sh
+botkins tools add files --command npx --env API_KEY -- -y @example/files-mcp
+botkins tools add search --url https://mcp.example.com/v1 --header Authorization
+botkins tools list
+botkins tools test files
+botkins skills add weekly-report --description "Use for the Friday report." --instructions-file report.md
+botkins bots tools Nova --off search
+botkins bots skills Nova --off weekly-report
+```
+
+- **A program's own arguments come last, after `--`.** Thus an argument can start with a dash.
+- **A value is never a word on the command line.** Name each environment value or header (`--env API_KEY`, `--header Authorization`). The command then asks for each value and does not show what you type. From a script, give the values in a JSON file: `--secrets values.json`, or `--secrets -` to read the file from standard input. The file is `{ "env": { "API_KEY": "…" }, "headers": { "Authorization": "…" }, "clientSecret": "…" }`. No command prints a value: `botkins tools show` gives the names that have one.
+- **A tool that is a program is shown before it starts.** `tools add`, `tools enable`, `tools import`, and a `tools edit` that changes the program or its arguments print the exact line that will run, and ask. With no terminal they fail and name `--yes`. The line is printed with `--yes` too.
+- When you change the program, its arguments or the web address, give the stored values again. A value goes only where you sent it.
+- `botkins tools import <file>` adds the tools of a JSON file, such as another app's MCP settings (`{ "mcpServers": { … } }`). A tool whose name is taken is left out.
+- A tool on the web that signs in does it through a browser, which this command line does not have. Sign it in from a paired phone (Settings, Tools). `botkins tools sign-out <tool>` forgets a sign-in.
+- `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills; `botkins folders` lists the folders that you can choose.
+- `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers.
+- `botkins tools forget-approvals` forgets the approvals that were given to tools "for this chat".
 
 ## Pair a phone
 
