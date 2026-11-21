@@ -32,14 +32,18 @@ export const WIDE_MIN = 640;
 /** A side inset this big on one side only is the rail; the notch's inset in landscape is on both. */
 const RAIL_MIN = 44;
 
-export function shapeOf(input: { width: number; height: number; insets: Insets; tabBar: number; native?: NativeFoldState | null; rtl?: boolean }): Shape {
-  const { width, insets, tabBar, native, rtl = false } = input;
+/**
+ * `ios` false: there is no vertical bar (Android's own buttons can sit on one side in landscape, and
+ * the tab bar stays at the bottom there).
+ */
+export function shapeOf(input: { width: number; height: number; insets: Insets; tabBar: number; native?: NativeFoldState | null; rtl?: boolean; ios?: boolean }): Shape {
+  const { width, insets, tabBar, native, rtl = false, ios = true } = input;
   const left = Math.max(0, insets.left);
   const right = Math.max(0, insets.right);
   let rail: Shape["rail"] = null;
   if (native?.edge) rail = (native.edge === "leading") !== rtl ? "left" : "right";
-  else if (right >= RAIL_MIN && left < RAIL_MIN / 2) rail = "right";
-  else if (left >= RAIL_MIN && right < RAIL_MIN / 2) rail = "left";
+  else if (ios && right >= RAIL_MIN && left < RAIL_MIN / 2) rail = "right";
+  else if (ios && left >= RAIL_MIN && right < RAIL_MIN / 2) rail = "left";
   const fold = native?.hinge === "partial" && native.fold && native.fold.width >= 0 && native.fold.height >= 0 ? native.fold : null;
   const pose = !fold ? "flat" : fold.height >= fold.width ? "book" : "laptop";
   return { rail, left, right, tabRoom: rail ? 0 : tabBar, wide: width - left - right >= WIDE_MIN, pose, fold };

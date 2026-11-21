@@ -32,7 +32,7 @@ export function useShape() {
   const { width, height } = useWindowDimensions();
   const native = useFoldState((state) => state.native);
   return useMemo(
-    () => shapeOf({ width, height, insets, tabBar: TAB_BAR_ROOM, native, rtl: I18nManager.isRTL }),
+    () => shapeOf({ width, height, insets, tabBar: TAB_BAR_ROOM, native, rtl: I18nManager.isRTL, ios: Platform.OS === "ios" }),
     [width, height, insets, native],
   );
 }

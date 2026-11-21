@@ -25,6 +25,7 @@ import { arrived, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose"
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
+import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
 import { drafts, useChatSplit } from "./split";
 import { latestTurn } from "./helpers";
@@ -739,7 +740,11 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
     />
   );
 
-  return (
+  // Half folded like a book (iPhone Duo), a chat in a project shows what its bot changed on the
+  // second page, and the chat keeps to the first, clear of the fold.
+  const project = projects?.find((item) => item.id === chat.projectId);
+  const book = !paneId && shape.pose === "book" && shape.fold && project?.folder ? shape.fold : null;
+  const column = (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       {header}
       <RoutineBanner chat={chat} />
@@ -805,6 +810,16 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane }: { pane?: string;
         )}
       </View>
       <Animated.View style={spacer} />
+    </View>
+  );
+  if (!book || !project) return column;
+  return (
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.canvas }}>
+      <View style={{ width: Math.max(0, book.x - shape.left) }}>{column}</View>
+      <View style={{ width: book.width }} />
+      <View style={{ flex: 1, paddingTop: insets.top }}>
+        <ChangesView id={project.id} inline />
+      </View>
     </View>
   );
 }

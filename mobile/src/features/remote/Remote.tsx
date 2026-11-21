@@ -7,7 +7,7 @@ import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
 import { Monitor, MonitorOff, RefreshCw, X } from "lucide-react-native";
 import { type ComponentRef, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Platform, StyleSheet, type TextInput, View } from "react-native";
+import { ActivityIndicator, AppState, Platform, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,7 +16,7 @@ import type { Meta, ScreenInfo, ScreenInput } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api } from "@/state/link";
 import { useApp } from "@/state/store";
-import { Button, EmptyState, haptic, IconButton, space, T, useTheme } from "@/ui";
+import { Button, EmptyState, haptic, IconButton, space, T, useShape, useTheme } from "@/ui";
 import { BAR_HIDE_MS, chrome, QUALITY, type QualityId } from "./chrome";
 import { ControlBar, ProblemLine, StatusLine } from "./Controls";
 import { type GestureOutput, type PointerMode, ScreenGestures } from "./gestures";
@@ -111,6 +111,12 @@ function CloseCorner({ themed }: { themed?: boolean }) {
 
 function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
   const insets = useSafeAreaInsets();
+  // Half open and flat on a table (iPhone Duo's laptop pose): the picture keeps to the upright half,
+  // above the fold, and the controls stay on the half that lies on the table.
+  const shape = useShape();
+  const { height: windowHeight } = useWindowDimensions();
+  const laptop = shape.pose === "laptop" && shape.fold ? shape.fold : null;
+  const below = laptop ? Math.max(0, windowHeight - laptop.y) : 0;
   const link = useApp((state) => state.link);
   const keyboardShown = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
@@ -299,7 +305,7 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
   return (
     <View style={[styles.fill, { backgroundColor: chrome.stage }]}>
       <StatusBar style="light" />
-      <View style={[styles.fill, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: keyboardUp ? keyboardHeight + KEY_BAR_HEIGHT : insets.bottom }]}>
+      <View style={[styles.fill, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: laptop ? below : keyboardUp ? keyboardHeight + KEY_BAR_HEIGHT : insets.bottom }]}>
         {!!info?.problem && canView && <ProblemLine text={info.problem} />}
         {blocked ? (
           <Blocked {...blocked} />
@@ -344,8 +350,8 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
         />
       )}
       <ControlBar
-        visible={(barVisible || !!blocked) && !keyboardUp}
-        bottom={insets.bottom + space.md}
+        visible={(barVisible || !!laptop || !!blocked) && !keyboardUp}
+        bottom={laptop ? Math.max(insets.bottom + space.md, (below - laptop.height) / 2) : insets.bottom + space.md}
         control={control && !blocked}
         mode={pointerMode}
         displays={displays}
