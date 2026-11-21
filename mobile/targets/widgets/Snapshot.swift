@@ -197,15 +197,15 @@ enum LimitWords {
     return ""
   }
 
-  /// "570 of 1,500 requests used".
-  static func counts(_ limit: Snapshot.Usage.Limit) -> String? {
+  /// "570 of 1,500 requests used" ("570 of 1,500 used" without the unit, where room is short).
+  static func counts(_ limit: Snapshot.Usage.Limit, unit: Bool = true) -> String? {
     guard let used = limit.used, let most = limit.limit else { return nil }
     let format = NumberFormatter()
     format.numberStyle = .decimal
     format.maximumFractionDigits = 0
     let a = format.string(from: NSNumber(value: used)) ?? "\(Int(used))"
     let b = format.string(from: NSNumber(value: most)) ?? "\(Int(most))"
-    return a + " of " + b + (limit.unit.map { " " + $0 } ?? "") + " used"
+    return a + " of " + b + (unit ? limit.unit.map { " " + $0 } ?? "" : "") + " used"
   }
 
   /// A tenth or less is low, nothing is out.

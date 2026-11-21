@@ -141,6 +141,16 @@ struct CardModel {
   let models: [String: String]
   let stale: Bool
 
+  /// From what a card would hold, for previews.
+  init(about: BotkinActivityAttributes, state: BotkinActivityAttributes.ContentState, detail: CardDetail?, host: String? = nil, models: [String: String] = [:], stale: Bool = false) {
+    self.about = about
+    self.state = state
+    self.detail = detail
+    self.host = host
+    self.models = models
+    self.stale = stale
+  }
+
   init(_ context: ActivityViewContext<BotkinActivityAttributes>) {
     about = context.attributes
     state = context.state
@@ -160,10 +170,11 @@ struct CardModel {
   var others: Int { max(0, chats.count - 1) + (state.more ?? 0) }
 
   func words(_ chat: BotkinActivityAttributes.ContentState.Chat) -> CardDetail.Chat? { detail?.chat(chat.id) }
-  /// "Fable 5.2 · Fix login refresh", from what the phone can see.
+  /// "Fable 5.2 · Fix login refresh", from what the phone can see. A card led by a request names how many other chats it has.
   func subtitle(_ chat: BotkinActivityAttributes.ContentState.Chat) -> String {
     let model = words(chat)?.m.flatMap { models[$0] }
-    return [model, words(chat)?.t].compactMap { $0 }.joined(separator: " · ")
+    let more = chat.phase == "needs-you" && others > 0 ? "+\(others) more" : nil
+    return [chat.phase == "needs-you" ? nil : model, words(chat)?.t, more].compactMap { $0 }.joined(separator: " · ")
   }
   func steps(_ chat: BotkinActivityAttributes.ContentState.Chat) -> String { chat.steps == 1 ? "1 step" : "\(chat.steps) steps" }
   /// What a chat is doing, in a few words: its own when the phone can read them, else the phase's.
@@ -193,7 +204,7 @@ struct BotCardLock: View {
       }
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 14)
+    .padding(.vertical, 12)
     .environment(\.colorScheme, .dark)
   }
 }
@@ -233,7 +244,11 @@ struct CardTime: View {
     VStack(alignment: .trailing, spacing: 1) {
       switch chat.phase {
       case "needs-you":
-        Text("Needs you").font(.system(size: 13, weight: .semibold)).foregroundStyle(Tone.amber)
+        if chat.ask == "risky" {
+          Label("Can't be undone", systemImage: "exclamationmark.triangle").font(.system(size: 12, weight: .semibold)).foregroundStyle(Tone.bad)
+        } else {
+          Text("Needs you").font(.system(size: 13, weight: .semibold)).foregroundStyle(Tone.amber)
+        }
       case "done", "failed":
         HStack(spacing: 4) {
           if chat.phase == "done" { Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Tone.ok) }
@@ -263,9 +278,6 @@ struct SingleChat: View {
       switch chat.phase {
       case "needs-you":
         AskBlock(model: model, chat: chat).padding(.top, island ? 4 : 9)
-        if model.others > 0 {
-          Text("+\(model.others) more").font(.system(size: 11)).foregroundStyle(Tone.faint).padding(.top, 6)
-        }
       case "done":
         if let reply = words?.r {
           Text(reply).font(.system(size: 13)).foregroundStyle(Color.white.opacity(0.9)).lineLimit(2).padding(.top, 9)
@@ -295,7 +307,7 @@ struct Stream: View {
   var body: some View {
     let words = model.words(chat)
     let steps = Array((words?.s ?? []).suffix(island ? 1 : 3))
-    VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: 2) {
       if steps.isEmpty {
         if words == nil || chat.phase != "thinking" {
           // Without the words: what Apple may see.
@@ -341,12 +353,9 @@ struct AskBlock: View {
   var body: some View {
     let ask = model.words(chat)?.q
     VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .firstTextBaseline) {
+      // A command says what is asked by itself ("Run a command" would only take a line).
+      if ask?.p == nil {
         Text(ask?.t ?? "Open Botkins to answer").font(.system(size: 14, weight: .semibold)).lineLimit(2)
-        Spacer(minLength: 4)
-        if chat.ask == "risky" {
-          Label("Can't be undone", systemImage: "exclamationmark.triangle").font(.system(size: 11, weight: .semibold)).foregroundStyle(Tone.bad)
-        }
       }
       if let preview = ask?.p {
         Text(preview)
@@ -393,18 +402,19 @@ struct AskButtons: View {
       }
     } else if let ask, chat.ask == "question" {
       let choices = ask.ch ?? []
-      let reply = CardButton(words: "Reply…", symbol: "arrowshape.turn.up.left", fit: true, link: open)
-      if choices.count + (ask.free == true ? 1 : 0) <= 3 {
-        HStack(spacing: 8) {
-          ForEach(choices, id: \.self) { choice in CardButton(words: choice, intent: answer("answer", choice, value: choice), link: open) }
-          if ask.free == true { reply }
-        }
-      } else {
-        VStack(spacing: 6) {
-          HStack(spacing: 8) {
-            ForEach(choices, id: \.self) { choice in CardButton(words: choice, intent: answer("answer", choice, value: choice), link: open) }
+      // One row always: with three choices, Reply… is its symbol alone.
+      HStack(spacing: 8) {
+        ForEach(choices, id: \.self) { choice in CardButton(words: choice, intent: answer("answer", choice, value: choice), link: open) }
+        if ask.free == true {
+          if choices.count >= 3 {
+            Link(destination: open) {
+              Image(systemName: "arrowshape.turn.up.left").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 40, height: 34).background(Capsule().fill(Tone.pill))
+            }
+            .accessibilityLabel("Reply")
+          } else {
+            CardButton(words: "Reply…", symbol: "arrowshape.turn.up.left", fit: true, link: open)
           }
-          if ask.free == true { HStack { reply; Spacer(minLength: 0) } }
         }
       }
     } else {
@@ -436,9 +446,6 @@ struct ManyChats: View {
       VStack(spacing: 2) {
         ForEach(model.chats, id: \.id) { chat in
           Link(destination: Links.chat(chat.id, host: model.host)) { ChatRow(model: model, chat: chat) }
-        }
-        if (model.state.more ?? 0) > 0 {
-          Text("+\(model.state.more ?? 0) more").font(.system(size: 11)).foregroundStyle(Tone.faint).frame(maxWidth: .infinity, alignment: .leading)
         }
       }
       .padding(.top, island ? 4 : 9)
@@ -474,7 +481,7 @@ struct ChatRow: View {
         Running(since: chat.startedAt).font(.system(size: 12.5)).foregroundStyle(Tone.muted).frame(maxWidth: 44, alignment: .trailing)
       }
     }
-    .frame(height: 24)
+    .frame(height: 22)
   }
 }
 

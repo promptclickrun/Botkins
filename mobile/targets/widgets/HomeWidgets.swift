@@ -136,7 +136,10 @@ struct BotkinWidget: Widget {
 @available(iOS 17.0, *)
 struct BotkinWidgetView: View {
   let entry: BotkinEntry
-  @Environment(\.widgetFamily) private var family
+  @Environment(\.widgetFamily) private var shownAs
+  /// The size to draw at in a preview; a widget on a screen takes its own.
+  var previewFamily: WidgetFamily? = nil
+  private var family: WidgetFamily { previewFamily ?? shownAs }
 
   private var found: (host: String, computer: Snapshot.Computer, bot: Snapshot.Bot)? {
     guard let snapshot = entry.snapshot else { return nil }
@@ -204,7 +207,7 @@ struct BotkinWidgetView: View {
 }
 
 @available(iOS 17.0, *)
-private struct SmallBotkin: View {
+struct SmallBotkin: View {
   let computer: Snapshot.Computer
   let bot: Snapshot.Bot
   let opens: BotkinOpens
@@ -249,7 +252,7 @@ private struct SmallBotkin: View {
 }
 
 @available(iOS 17.0, *)
-private struct MediumBotkin: View {
+struct MediumBotkin: View {
   let host: String
   let computer: Snapshot.Computer
   let bot: Snapshot.Bot
@@ -262,11 +265,15 @@ private struct MediumBotkin: View {
         Text(bot.name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
         Spacer(minLength: 0)
         Link(destination: Links.bot(bot.id, host: host, opens: "new")) {
-          Label("New chat", systemImage: "plus").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color(.systemBackground))
-            .padding(.horizontal, 10).frame(height: 28).background(Capsule().fill(ink))
+          HStack(spacing: 4) {
+            Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+            Text("New chat").lineLimit(1)
+          }
+          .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color(.systemBackground))
+          .padding(.horizontal, 10).frame(height: 28).background(Capsule().fill(ink)).fixedSize()
         }
       }
-      .frame(width: 96, alignment: .leading)
+      .frame(width: 104, alignment: .leading)
       VStack(spacing: 0) {
         let chats = computer.chats[bot.id] ?? []
         if chats.isEmpty {
@@ -276,11 +283,11 @@ private struct MediumBotkin: View {
           Link(destination: Links.chat(chat.id, host: host)) {
             HStack(spacing: 9) {
               VStack(alignment: .leading, spacing: 1) {
-                Text(chat.title).font(.system(size: 13.5, weight: .semibold)).lineLimit(1).privacySensitive()
+                Text(chat.title).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(ink).lineLimit(1).privacySensitive()
                 HStack(spacing: 4) {
                   if chat.state == "working" { Circle().fill(okInk).frame(width: 6, height: 6) }
                   Text(chatLine(chat)).lineLimit(1)
-                  if chat.state == "working", let since = chat.startedAt { Running(since: since).frame(maxWidth: 40, alignment: .leading).foregroundStyle(.tertiary) }
+                  if chat.state == "working", let since = chat.startedAt { Running(since: since).frame(maxWidth: 40, alignment: .leading).foregroundStyle(mutedInk) }
                 }
                 .font(.system(size: 11)).foregroundStyle(chat.state == "working" ? okInk : chat.state == "needs-you" ? amberInk : mutedInk)
               }
@@ -333,9 +340,12 @@ struct CrewWidget: Widget {
 }
 
 @available(iOS 17.0, *)
-private struct CrewView: View {
+struct CrewView: View {
   let entry: CrewEntry
-  @Environment(\.widgetFamily) private var family
+  @Environment(\.widgetFamily) private var shownAs
+  /// The size to draw at in a preview; a widget on a screen takes its own.
+  var previewFamily: WidgetFamily? = nil
+  private var family: WidgetFamily { previewFamily ?? shownAs }
 
   var body: some View {
     Group {
@@ -360,18 +370,18 @@ private struct CrewView: View {
 }
 
 @available(iOS 17.0, *)
-private struct CrewMember: View {
+struct CrewMember: View {
   let bot: Snapshot.Bot
   let size: CGFloat
 
   var body: some View {
     VStack(spacing: 2) {
       face(bot, size)
-      Text(bot.name).font(.system(size: 13.5, weight: .semibold)).lineLimit(1).padding(.top, 4)
+      Text(bot.name).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(ink).lineLimit(1).padding(.top, 4)
       Text(bot.needsYou ? "Needs you" : bot.label).font(.system(size: 11, weight: bot.needsYou ? .semibold : .regular))
-        .foregroundStyle(bot.needsYou ? amberInk : bot.working ? okInk : mutedInk).lineLimit(1)
+        .foregroundStyle(bot.needsYou ? amberInk : bot.working ? okInk : mutedInk).lineLimit(1).minimumScaleFactor(0.85)
       if bot.working, let since = bot.chat?.startedAt {
-        Running(since: since).font(.system(size: 11)).foregroundStyle(.tertiary).multilineTextAlignment(.center).frame(maxWidth: 60)
+        Running(since: since).font(.system(size: 11)).foregroundStyle(mutedInk).multilineTextAlignment(.center).frame(maxWidth: 60)
       }
     }
     .multilineTextAlignment(.center)
@@ -379,7 +389,7 @@ private struct CrewMember: View {
 }
 
 @available(iOS 17.0, *)
-private struct LargeCrew: View {
+struct LargeCrew: View {
   let host: String
   let computer: Snapshot.Computer
   let named: Bool
@@ -397,7 +407,7 @@ private struct LargeCrew: View {
           HStack(spacing: 10) {
             face(bot, 34)
             VStack(alignment: .leading, spacing: 1) {
-              Text(bot.name).font(.system(size: 13.5, weight: .semibold))
+              Text(bot.name).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(ink)
               Text(bot.ask ?? "Needs you").font(.system(size: 12.5)).foregroundStyle(mutedInk).lineLimit(1).privacySensitive()
             }
             Spacer(minLength: 0)
@@ -464,9 +474,12 @@ private struct UsageBar: View {
 }
 
 @available(iOS 17.0, *)
-private struct UsageView: View {
+struct UsageView: View {
   let entry: UsageEntry
-  @Environment(\.widgetFamily) private var family
+  @Environment(\.widgetFamily) private var shownAs
+  /// The size to draw at in a preview; a widget on a screen takes its own.
+  var previewFamily: WidgetFamily? = nil
+  private var family: WidgetFamily { previewFamily ?? shownAs }
 
   var body: some View {
     let current = entry.snapshot?.current
@@ -514,10 +527,10 @@ private struct UsageView: View {
       Spacer(minLength: 0)
       if let limit = LimitWords.primary(usage), let left = limit.percentRemaining {
         Text(LimitWords.percent(left)).font(.system(size: 38, weight: .bold)).tracking(-1).foregroundStyle(LimitWords.low(left) ? badInk : ink).minimumScaleFactor(0.7)
-        Text("of " + LimitWords.noun(limit) + " left").font(.system(size: 12.5)).foregroundStyle(mutedInk).lineLimit(1).padding(.bottom, 8)
+        Text("of " + LimitWords.noun(limit) + " left").font(.system(size: 12.5)).foregroundStyle(mutedInk).lineLimit(1).minimumScaleFactor(0.75).padding(.bottom, 8)
         UsageBar(left: left)
         let tail = LimitWords.tail(usage, limit, now: entry.date)
-        Text(LimitWords.counts(limit) ?? (tail.isEmpty ? " " : tail.prefix(1).uppercased() + tail.dropFirst()))
+        Text(LimitWords.counts(limit, unit: false) ?? (tail.isEmpty ? " " : tail.prefix(1).uppercased() + tail.dropFirst()))
           .font(.system(size: 11)).foregroundStyle(LimitWords.stale(usage, now: entry.date) ? amberInk : Color.secondary).lineLimit(1).padding(.top, 7)
       } else if usage.account == "api-key" {
         Text("API key").font(.system(size: 15, weight: .semibold))

@@ -111,7 +111,7 @@ struct BotkinFace: View {
       if let picture = UIImage(named: "\(about.head)-\(palette).png") {
         if #available(iOS 18.0, *) {
           // On a tinted or clear Home Screen a Botkin draws desaturated, so its face still reads.
-          Image(uiImage: picture).widgetAccentedRenderingMode(.desaturated).resizable().interpolation(.high).scaledToFit()
+          Image(uiImage: picture).resizable().interpolation(.high).widgetAccentedRenderingMode(.desaturated).scaledToFit()
         } else {
           Image(uiImage: picture).resizable().interpolation(.high).scaledToFit()
         }
