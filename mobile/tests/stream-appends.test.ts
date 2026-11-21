@@ -263,7 +263,7 @@ for (const optIn of [false, true]) {
   });
 }
 
-test("with live text off a phone gets indicators only, is not woken by text, and the reply whole", async (t) => {
+test("with text streaming off a phone gets indicators only, is not woken by text, and the reply whole", async (t) => {
   const { backend, link, phone } = await setup(t);
   const received: Record<string, any>[] = [];
   let text = true;
@@ -271,7 +271,7 @@ test("with live text off a phone gets indicators only, is not woken by text, and
   const client = await phone(true, (news) => {
     received.push(news);
     applyParts(news);
-  }, { liveText: () => text });
+  }, { textStreaming: () => text });
   const sync = link.sync.bind(link);
   link.sync = (session, args, gone) => {
     syncs.push(args);
@@ -286,13 +286,13 @@ test("with live text off a phone gets indicators only, is not woken by text, and
   client.watch([id]);
   client.start();
   await until(() => held()?.stream === "first");
-  assert.ok(!("text" in syncs.at(-1)!), "live text on: the field is left out");
+  assert.ok(!("text" in syncs.at(-1)!), "text streaming on: the field is left out");
 
   text = false;
-  client.liveTextChanged();
+  client.textStreamingChanged();
   await until(() => !held());
   assert.equal(syncs.at(-1)!.text, false);
-  assert.ok(useApp.getState().parts.meta!.capabilities.includes("live-text-off-v1"));
+  assert.ok(useApp.getState().parts.meta!.capabilities.includes("text-streaming-off-v1"));
   await until(() => link.waiters.size === 1);
   const [waiter] = link.waiters;
   const count = received.length;
@@ -318,7 +318,7 @@ test("with live text off a phone gets indicators only, is not woken by text, and
   backend.changed();
   await until(() => useApp.getState().parts.live?.streams[id] === true);
   text = true;
-  client.liveTextChanged();
+  client.textStreamingChanged();
   await until(() => held()?.stream === "next");
 });
 

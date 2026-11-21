@@ -381,10 +381,10 @@ export type LinkOptions = {
   onSync?(): void;
   /**
    * Whether a reply's text comes as it is written, on this route (default yes). No sends `text: false`
-   * ("live-text-off-v1"): the indicators stay and the reply comes whole when it ends. Read on each sync;
-   * call `liveTextChanged` when the answer may have changed.
+   * ("text-streaming-off-v1"): the indicators stay and the reply comes whole when it ends. Read on each sync;
+   * call `textStreamingChanged` when the answer may have changed.
    */
-  liveText?(route: LinkRoute): boolean;
+  textStreaming?(route: LinkRoute): boolean;
 };
 
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
@@ -401,7 +401,7 @@ export class LinkClient {
   private texts = new Map<string, HeldText>();
   private supportsAppends: boolean | undefined;
   private receivedFullLive = false;
-  /** What the last sync said about live text. */
+  /** What the last sync said about text streaming. */
   private sentText = true;
   private have: Record<string, number> = {};
   private watching: string[] = [];
@@ -517,12 +517,12 @@ export class LinkClient {
     // The waiting request is for the old set: ask again.
     this.poll?.abort();
   }
-  /** The choice behind `liveText` changed: a waiting sync that asked otherwise asks again. */
-  liveTextChanged() {
+  /** The choice behind `textStreaming` changed: a waiting sync that asked otherwise asks again. */
+  textStreamingChanged() {
     if (this.session && this.textFor(this.session) !== this.sentText) this.poll?.abort();
   }
   private textFor(session: Session) {
-    return this.options.liveText?.(routeOf(session)!) ?? true;
+    return this.options.textStreaming?.(routeOf(session)!) ?? true;
   }
 
   /** Sets the session and reports how it connects. */

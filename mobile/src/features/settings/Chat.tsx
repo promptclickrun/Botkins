@@ -20,11 +20,6 @@ const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string 
   { value: "folded", label: "Folded", subtitle: "The last few lines; tap for more" },
   { value: "hide", label: "Hidden", subtitle: "Not in the chat; the activity has it" },
 ];
-const LIVE_TEXT: { value: ChatPrefs["liveText"]; label: string; subtitle: string }[] = [
-  { value: "always", label: "Always", subtitle: "Word by word, on any connection" },
-  { value: "direct", label: "Not through the relay", subtitle: "Away from home, replies land whole" },
-  { value: "off", label: "Off", subtitle: "Replies land whole" },
-];
 
 /** A row whose value opens a short list of choices. `stacked` puts a long choice under the title instead of beside it. */
 function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
@@ -56,7 +51,7 @@ export default function Chat() {
         <Group>
           <ChoiceMenu title="Steps" subtitle="A bot's work in a turn" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
           <ChoiceMenu title="Thinking and updates" subtitle="Its reasoning and notes while it works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
-          <ChoiceMenu title="Live text" subtitle="A reply as the bot writes it" value={prefs.liveText} options={LIVE_TEXT} onChange={(liveText) => setChatPrefs({ liveText })} />
+          <Row title="Text streaming" subtitle="A reply as the bot writes it. Through the relay, replies land whole" toggled={prefs.textStreaming} onToggle={(textStreaming) => setChatPrefs({ textStreaming })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />
         </Group>

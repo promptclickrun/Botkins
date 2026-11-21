@@ -1,4 +1,4 @@
-// A reply that lands whole (Settings › Chat › Live text) is shown word by word, as if written here.
+// A reply that lands whole (Settings › Chat › Text streaming) is shown word by word, as if written here.
 // Only a reply that came while its chat was open and its turn was under way: the chat list arms the
 // chat (`arm`) while the bot works, and the reply's row claims it when it is first drawn (`claim`).
 // A touch in the chat or a message sent shows the whole text at once (`snapReveals`). A snapped
@@ -28,7 +28,7 @@ export function revealedText(text: string, elapsed: number): string {
  */
 const armed = new Map<string, { end: number; until: number; started: Map<number, number> }>();
 
-/** The chat's turn is under way with no live text: its next replies are revealed. `end` is the chat's length now. */
+/** The chat's turn is under way with no text streaming: its next replies are revealed. `end` is the chat's length now. */
 export function arm(chatId: string, end: number) {
   const held = armed.get(chatId);
   if (held) held.until = Infinity;
