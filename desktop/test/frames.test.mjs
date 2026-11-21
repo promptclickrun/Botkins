@@ -193,3 +193,14 @@ test("a bot's page is served with the guard first, whatever its markup begins wi
   assert.ok(page.includes("<p>Mine</p>") && page.includes("data-no-shadowrootmode") && !/<template shadowrootmode/i.test(page));
   assert.equal(ws.frames.html(id).includes("<template shadowrootmode"), true, "the page as the bot wrote it is kept as it is");
 });
+
+test("the app's own script in a view's frame takes WebRTC away too, as a second layer", () => {
+  const preload = readFileSync(new URL("../desktop/preload.cjs", import.meta.url), "utf8");
+  const inFrame = preload.slice(preload.indexOf("if (process.isMainFrame === false) {"), preload.indexOf("const api = {};"));
+  assert.ok(inFrame.includes("contextBridge.executeInMainWorld("), "it runs in the page's own world, from a world the page cannot reach");
+  // The same names the page's guard removes (desktop/view-guard.mjs).
+  const names = /for \(const name of (\[[^\]]+\])\)/.exec(VIEW_GUARD)[1];
+  for (const name of JSON.parse(names)) assert.ok(inFrame.includes('"' + name + '"'), name);
+  // The app's bridge is given to the app's own page only, never to a frame.
+  assert.ok(preload.includes("if (process.isMainFrame === true) {"));
+});
