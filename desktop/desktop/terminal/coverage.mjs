@@ -15,6 +15,8 @@
 // or an agent can do from a terminal, unless it needs the window itself.
 
 /** Why a call has no command. The list is fixed: a new reason is a decision, not an entry. */
+import { hasUnshown } from "../shown-text.mjs";
+
 export const REASONS = {
   window: "needs a window", // a file dialog, the clipboard, a folder opened in the file manager, a notification, a microphone
   "window's own": "the window's own", // what only the window uses to draw itself: a pane, a preview, a thumbnail
@@ -224,4 +226,4 @@ export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.stat
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);
 
 /** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. */
-export const thingForLog = (value) => (typeof value === "string" && /^[^\u0000-\u001f\u007f]{1,80}$/.test(value) ? value : null);
+export const thingForLog = (value) => (typeof value === "string" && value.length >= 1 && value.length <= 80 && !hasUnshown(value) ? value : null);

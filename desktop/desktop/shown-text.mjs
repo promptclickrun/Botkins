@@ -8,6 +8,11 @@
 //
 // One rule, for the command line (desktop/cli) and for the window (src), so that the two show the
 // same. The pattern is written with escapes only: this file itself holds none of the characters.
+//
+// It is for text that is shown for a decision: a command, an argument, a folder, an address, a
+// header's name, a name beside a question, a word for the log. It is not for every name that is
+// drawn. U+200C and U+200D are correct writing in some languages and a part of many emoji, and a
+// chat's or a bot's name that went through this rule would be spoiled.
 
 /**
  * The characters that are not shown as they are:

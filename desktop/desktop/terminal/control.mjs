@@ -445,7 +445,7 @@ export function dispatcher(api, { log } = {}) {
     } catch (error) {
       // A change that fails can still have done a part of its work (a plugin's files written, then
       // an error). So it leaves a line too, with other first words: no value, and no error text.
-      const tried = log && method !== "call" && said(method, args, undefined);
+      const tried = log && said(method, args, undefined);
       if (tried) log("Tried from the command line: " + tried.trim() + " (it failed)");
       throw error;
     }

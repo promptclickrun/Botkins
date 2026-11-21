@@ -208,19 +208,25 @@ A plugin adds skills, agents, commands, tools and hooks to bots. A hook, and a t
 botkins plugins browse memory
 botkins plugins show memory@some-market
 botkins plugins install memory@some-market --settings settings.json
+botkins plugins install --yes --revision=<revision> -- memory@some-market
 botkins plugins configure memory
 botkins plugins bots memory --bot Nova
 ```
 
-- **`botkins plugins show <id>` is the look.** It prints what the plugin holds, each command that it runs on this computer, the web addresses that it reaches, the settings that it needs, and its revision. The revision names the plugin's source exactly as it is at that moment.
-- **A plugin that runs commands needs your yes.** At a terminal, `plugins install` and `plugins update` show it and ask. With no terminal they fail, and say to look first and then to give `--yes --revision <its revision>`. The computer refuses the plugin when its source changed after that revision, so what you looked at is what is installed.
-- A plugin that runs nothing installs with no question. Its revision still goes with the install.
-- `botkins plugins enable <id>` asks too, for a plugin that runs commands. `botkins plugins disable <id>` does not.
-- **Settings**: `botkins plugins configure <id>` asks for each setting at a terminal and does not show a secret one. From a script, give `--settings <file>`, a JSON file of `{ "KEY": "value" }`, or `--settings -` for standard input. No command prints a setting's value; `plugins show` marks the settings that have one.
-- `botkins plugins bots <id> --all`, or `--bot <bot>` for each bot, says which bots have the plugin.
-- `botkins plugins add-folder <path>` adds a plugin from a folder of this computer. It is added switched off, so nothing of it runs, and what it would run is shown. Switch it on with `plugins enable`.
+- **`botkins plugins show <id>` is the look.** It prints what the plugin holds and all that it runs on this computer: each hook's whole command, and each program with every word of its line, its folder and the names of its environment values. It prints the web addresses that the plugin reaches, with the names of the headers. It prints each setting with the place that its value goes to. It prints the revision, which names the plugin's source exactly as it is at that moment.
+- **A plugin that runs commands needs your yes.** At a terminal, with no `--yes`, the command shows the plugin and asks. `--yes` is the word of a caller that looked, so it must name what was looked at: `--yes --revision=<revision>`. `--yes` alone is refused for such a plugin, also at a terminal. The computer refuses the plugin when it is another one than that revision, so what you looked at is what is installed.
+- The same rule holds for `plugins install`, `plugins update`, `plugins enable`, and for `plugins bots` when more bots get a plugin that is on. A plugin that runs nothing needs no yes. Its revision still goes with the install.
+- **The service keeps the rule too.** It takes no install and no update that names no revision, from any caller.
+- **An installed plugin has two revisions.** `plugins show` prints the one of the installed copy and the one of the source as it is now. `plugins enable --revision` takes the first. `plugins update --revision` takes the second.
+- **`botkins plugins update <id>` says what changes** before it asks: the commands and the web addresses that are new, changed or gone, and the settings. It asks also when nothing runs on this computer, if the plugin reaches a new address or sends a setting that you gave to another place. Your saved settings stay with the plugin.
+- `botkins plugins disable <id>` asks nothing.
+- **Settings**: `botkins plugins configure <id>` asks for each setting at a terminal, says where its value goes, and does not show a secret one. From a script, give `--settings <file>`, a JSON file of `{ "KEY": "value" }`, or `--settings -` for standard input. A value can be a saved credential by its reference: `{ "KEY": { "$credential": "<id>" } }`. No command prints a setting's value. `plugins show` marks the settings that have one.
+- `botkins plugins bots <id> --all`, or `--bot <bot>` for each bot, says which bots have the plugin. It does not switch a plugin on.
+- `botkins plugins add-folder <path>` adds a plugin from a folder of this computer. Botkins copies the folder and adds the plugin switched off, so nothing of it runs, and what it would run is shown. Switch it on with `plugins enable`. It is the only way to add a plugin folder.
 - `botkins plugins sign-out <id>` forgets the sign-ins of a plugin's tools.
-- A change that the computer refuses part of the way is in the log too, as "Tried from the command line: … (it failed)".
+- **For a caller that reads `--json`:** what must be seen is on standard error. Show it to your person before you give `--yes`. Use the form that works for every id: `botkins plugins install --yes --revision=<revision> -- <id>`.
+- A change that the computer refuses is in the log too, as "Tried from the command line: … (it failed)".
+- A plugin's own words (its name, a command, an address) are printed with each character that hides or turns text written as its number, as `\u{202e}`.
 
 ## Pair a phone
 

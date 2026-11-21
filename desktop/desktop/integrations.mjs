@@ -17,6 +17,7 @@
 // MCP servers are stored in the workspace file (mode 0600). Their environment values and headers
 // often hold keys, so the app's page never receives them: it sees the names only.
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
+import { hasUnshown } from "./shown-text.mjs";
 import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
 import { randomUUID } from "node:crypto";
@@ -37,8 +38,6 @@ const text = (value, max, name) => {
 /** An environment variable's name, and a header's name (an HTTP token). */
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-/** Characters that change what a person sees when a word is printed: control characters, and the marks that turn text around. */
-export const UNSHOWN = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
 /**
  * A map of names to strings. `null` keeps the value already stored under that name, which is
@@ -138,7 +137,7 @@ export function serverField(data, existing, seal) {
   const cwd = data.cwd ?? data.workingDirectory;
   if (cwd != null && cwd !== "" && (typeof cwd !== "string" || !isAbsolute(cwd))) throw new Error("The working folder needs a full path.");
   // (A path is shown to a person before the program starts: it must be one that can be shown as it is.)
-  if (typeof cwd === "string" && UNSHOWN.test(cwd)) throw new Error("The working folder's path has characters that can't be shown. Choose another folder.");
+  if (typeof cwd === "string" && hasUnshown(cwd)) throw new Error("The working folder's path has characters that can't be shown. Choose another folder.");
   const moved = !!existing && (existing.command !== command || JSON.stringify(existing.args ?? []) !== JSON.stringify(args));
   return { ...base, command, args: [...args], env: pairs(data.env, existing?.env, "environment", { seal, moved }), ...(cwd && { cwd }) };
 }

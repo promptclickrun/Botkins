@@ -20,7 +20,7 @@ import { ask, confirm, readAll } from "./input.mjs";
 const YES = { yes: { type: "boolean", about: "Don't ask first" } };
 // A word as it can be shown: a character that would move or hide the text around it is written as its number (desktop/shown-text.mjs).
 export const safe = shownText;
-const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(safe(word)))).join(" ");
+export const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(safe(word)))).join(" ");
 const one = (context, what) => {
   if (context.args.length !== 1) throw usage(what);
   return context.args[0];
