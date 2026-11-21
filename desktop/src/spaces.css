@@ -1,0 +1,537 @@
+/*
+ * Spaces (src/SpacePage.tsx, src/SpaceShare.tsx): the side menu's Spaces, a space's page, its Share
+ * popover and All spaces. Panels keep the Today page's look (board.css). Colors are the theme's tokens.
+ */
+
+/* ---- The side menu. The spaces are places: `aside > nav` in style.css draws them, open and collapsed. */
+/* Pinned spaces stay in view, as the places do, and the bots list gets the rest. Very many pins
+   scroll; the rows keep their height (a row's overflow is hidden, so a grid row could shrink to nothing). */
+.spacenav {
+  flex: none;
+  max-height: 40vh;
+  overflow: auto;
+  grid-auto-rows: max-content;
+}
+.spacenav > button > i {
+  background: var(--ink);
+}
+.spacenav .spacenav-all {
+  color: var(--faint);
+  font-size: calc(13px * var(--text-scale));
+}
+.spacenav .spacenav-all:hover {
+  color: var(--ink-2);
+}
+/* All spaces is a quiet line of text; collapsed to icons, it needs one. */
+.shell:not(.collapsed) .spacenav-all-icon {
+  display: none;
+}
+.shell.collapsed .spacenav .spacenav-all {
+  color: var(--muted);
+}
+/* Collapsed, a space is a shorter icon button than a place, and the list scrolls without a bar. */
+.shell.collapsed > aside > nav.spacenav {
+  scrollbar-width: none;
+}
+.shell.collapsed > aside > nav.spacenav button {
+  height: 40px;
+  min-height: 40px;
+}
+
+/* ---- A space's page. The ask bar floats over the bottom of the page. */
+.space-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.content.space-page {
+  padding-bottom: 104px;
+}
+/* The name and its tags on the left, the actions on the right. The tags wrap under the name
+   before the actions leave the first line; in a narrow window the actions go under it all. */
+.space-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.space-title {
+  flex: 1 1 260px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+  min-height: 36px;
+}
+.space-title h1 {
+  overflow-wrap: anywhere;
+}
+.space-title .space-menu {
+  width: 30px;
+  height: 30px;
+  margin-left: -6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+.space-tag {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+button.space-tag:hover {
+  background: var(--sunken);
+  color: var(--ink);
+}
+.space-project-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.space-project-dot:not([class*=" coral"], [class*=" amber"], [class*=" green"], [class*=" teal"], [class*=" blue"], [class*=" violet"], [class*=" pink"], [class*=" gray"]) {
+  color: var(--info);
+}
+.space-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-height: 36px;
+}
+.space-button,
+.primary.space-add {
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 10px;
+  gap: 7px;
+  font-weight: 600;
+  font-size: calc(13.5px * var(--text-scale));
+  white-space: nowrap;
+  flex: none;
+}
+.space-button {
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--ink);
+}
+.space-button:hover {
+  background: var(--hover);
+}
+.space-button[aria-expanded="true"] {
+  background: var(--accent-soft);
+}
+.space-button.space-pin {
+  width: 34px;
+  padding: 0;
+}
+.space-button.space-pin[aria-pressed="false"] {
+  color: var(--muted);
+}
+.space-changed {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.space-page .panel-grid {
+  margin-top: 20px;
+}
+.space-page .board-panel {
+  margin-top: 20px;
+}
+
+/* People here now: initials, overlapping, with a live dot. */
+.space-here {
+  display: flex;
+  margin-right: 4px;
+}
+.space-person {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--sunken);
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.space-here .space-person {
+  box-shadow: 0 0 0 2px var(--canvas);
+}
+.space-here .space-person + .space-person {
+  margin-left: -6px;
+}
+.space-here .space-person::after,
+.space-person.live::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--success);
+  border: 2px solid var(--canvas);
+  box-sizing: border-box;
+}
+
+/* A panel in a space: the App badge, the changed dot, the last line and the notes. */
+.space-app {
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.space-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink);
+  flex: none;
+}
+.today-panel footer .space-last {
+  color: var(--muted);
+}
+.space-notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.today-panel footer .space-notes + button {
+  margin-left: 4px;
+}
+
+/* The ask bar: one glass pill at the bottom of the page. */
+.space-ask {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  width: min(500px, calc(100% - 48px));
+  height: 46px;
+  border-radius: 23px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 7px 0 10px;
+  background: var(--glass-fill-solid);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--glass-shadow);
+}
+.space-ask input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: calc(14px * var(--text-scale));
+}
+.space-ask input:focus-visible {
+  outline: none;
+}
+.space-ask:focus-within {
+  border-color: var(--ink);
+}
+.space-ask input::placeholder {
+  color: var(--faint);
+}
+.space-send {
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  background: var(--accent);
+  color: var(--on-accent);
+  flex: none;
+}
+.space-send:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+.space-send:disabled {
+  opacity: 0.45;
+}
+
+/* ---- New panel. */
+.space-sheet {
+  width: min(460px, 92vw);
+}
+.space-starts {
+  display: grid;
+  gap: 8px;
+  margin: 15px 0;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.space-starts > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.space-starts button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.space-starts button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ---- Share: a popover under its button. */
+.space-share-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.space-share {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(336px, calc(100vw - 32px));
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--raised);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow), var(--shadow);
+  font-size: calc(13.5px * var(--text-scale));
+  text-align: left;
+}
+.space-share h2 {
+  font-family: var(--font-body);
+  font-size: calc(14.5px * var(--text-scale));
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.space-share hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0 -14px;
+}
+.space-choices {
+  display: grid;
+  gap: 2px;
+}
+.space-choice,
+.space-members li,
+.space-share-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+.space-choice {
+  cursor: pointer;
+}
+.space-choice.on .grow {
+  font-weight: 600;
+}
+.space-choice small {
+  color: var(--faint);
+  font-size: calc(12.5px * var(--text-scale));
+  white-space: nowrap;
+}
+.space-share .grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-choice input[type="radio"] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  background: transparent;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.space-choice input[type="radio"]:checked {
+  border-color: var(--ink);
+}
+.space-choice input[type="radio"]:checked::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.space-members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.space-members input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--ink);
+  flex: none;
+}
+.space-members .space-person {
+  width: 24px;
+  height: 24px;
+  font-size: calc(10.5px * var(--text-scale));
+}
+.space-share select {
+  border: 0;
+  background-color: transparent;
+  color: var(--muted);
+  padding: 4px 2px;
+  font-size: calc(13px * var(--text-scale));
+  cursor: pointer;
+}
+.space-share select:hover {
+  color: var(--ink);
+}
+.space-share-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: calc(12.5px * var(--text-scale));
+}
+.space-share-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: calc(12.5px * var(--text-scale));
+}
+.space-share-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.space-link {
+  height: 32px;
+  padding: 0 8px;
+  margin-left: -8px;
+  border-radius: var(--radius-sm);
+  gap: 8px;
+  font-weight: 600;
+}
+.space-link + .space-link {
+  margin-left: 0;
+  color: var(--muted);
+}
+.primary.space-done {
+  margin-left: auto;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 10px;
+}
+
+/* ---- All spaces. */
+.all-spaces h1 {
+  margin-bottom: 6px;
+}
+.space-group {
+  margin-top: 22px;
+}
+.space-group h2 {
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+  margin: 0 0 8px 4px;
+}
+.space-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.space-group li {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+.space-group li + li {
+  border-top: 1px solid var(--line);
+}
+.space-row {
+  flex: 1;
+  min-width: 0;
+  justify-content: start;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 56px;
+  text-align: left;
+  border-radius: 0;
+}
+.space-tile {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--sunken);
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.space-row-text {
+  flex: 1;
+  min-width: 0;
+}
+.space-row-text strong {
+  font-weight: 600;
+}
+.space-row-text small {
+  font-size: calc(12.5px * var(--text-scale));
+}
+.space-group .menu-button {
+  width: 36px;
+  height: 36px;
+  margin-right: 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  flex: none;
+}

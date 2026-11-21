@@ -1,3 +1,4 @@
+import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
 export type Bot = {
   id: string;
   name: string;
@@ -308,7 +309,7 @@ export type TeamInvite = {
 export type TeamRequest = { id: string; name: string; person?: string; platform: string; kind: string; at: number; inviteId: string };
 /** Someone who can be in a chat: the computer's owner (id "owner") or a team member. */
 export type TeamPerson = { id: string; name: string };
-export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[]; /** With "team-people-v1": the owner first, then each member. */ people?: TeamPerson[] };
+export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[]; /** With "team-people-v1": the owner first, then each member. */ people?: TeamPerson[]; /** With "spaces-v1": members may share spaces by link. */ linkSharing?: boolean };
 export type MemberTeam = {
   me: {
     memberId: string;
@@ -342,6 +343,8 @@ export type State = {
   templates?: BotTemplate[];
   /** Feed posts, ideas and goals that bots publish to Today. */
   board?: BoardItem[];
+  /** With "spaces-v1": the spaces this person can open, in their order (src/spaces.ts). Its content is asked for with spaces.read. */
+  spaces?: SpaceSummary[];
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
   /** Project workspaces. One with a folder is also a coding project. */
@@ -535,6 +538,26 @@ declare global {
       openLink(url: string): Promise<void>;
       "artifacts.list": (input: { botId: string; chatId?: string; kind?: "files" | "media"; folder?: string; cursor?: string }) => Promise<{ items: Artifact[]; nextCursor: string | null }>;
       "artifacts.read": (idOrPath: string, options?: { offset?: number; length?: number }) => Promise<{ artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null }>;
+      // Spaces ("spaces-v1", src/spaces.ts). The app's calls, then the link's.
+      "spaces.read": (id: string) => Promise<SpaceContent>;
+      "spaces.create": (input: { name: string }) => Promise<string>;
+      "spaces.rename": (id: string, name: string) => Promise<void>;
+      "spaces.remove": (id: string) => Promise<void>;
+      "spaces.setProject": (id: string, projectId: string | null) => Promise<void>;
+      "spaces.setPanelProject": (panelId: string, projectId: string | null) => Promise<void>;
+      "spaces.newPanel": (input: { spaceId: string; botId: string; prompt: string; start?: SpaceStart; refresh?: { cron: string; timezone: string } }) => Promise<{ chatId: string }>;
+      "spaces.ask": (input: { spaceId: string; botId: string; text: string; panelId?: string }) => Promise<{ chatId: string }>;
+      "spaces.movePanel": (panelId: string, to: { spaceId: string; before: string | null }) => Promise<void>;
+      "spaces.patchState": (panelId: string, patch: Record<string, unknown>, label?: string) => Promise<{ rev: number }>;
+      "spaces.note": (panelId: string, text: string) => Promise<string>;
+      "spaces.removeNote": (panelId: string, noteId: string) => Promise<void>;
+      "link.spaces.share": (id: string, input: SpaceShareInput) => Promise<{ link?: string }>;
+      "link.spaces.newLink": (id: string) => Promise<{ link: string }>;
+      "link.spaces.arrange": (input: { order: string[]; pinned: string[] }) => Promise<void>;
+      "link.spaces.seen": (id: string) => Promise<void>;
+      "link.spaces.notify": (id: string, mode: SpaceNotify) => Promise<void>;
+      "link.spaces.here": (id: string | null, panelId?: string) => Promise<void>;
+      "link.team.setLinkSharing": (on: boolean) => Promise<void>;
       "artifacts.thumbnail": (id: string, options?: { size?: number }) => Promise<{ data: string; mime: string } | null>;
       "artifacts.resolve": (input: { chatId: string; paths: string[] }) => Promise<{ items: (Artifact | null)[] }>;
       inspectChatPaths(paths: string[]): Promise<({ path: string; kind: ArtifactKind; name: string; mime: string; size: number | null } | null)[]>;
@@ -1273,6 +1296,15 @@ export type PanelBlock =
    * the page reports its real height. See desktop/frames.mjs for the messages it exchanges.
    */
   | { type: "html"; frame: string; height: number };
+/**
+ * A panel as the shared card and its dialog draw it. In a space a team member is sent a panel
+ * without its chat unless they are in it, and without its routine's prompt unless they may change
+ * the space ("spaces-v1"), so both are optional here. A whole `Panel` fits.
+ */
+export type ShownPanel = Omit<Panel, "chatId" | "routine"> & {
+  chatId?: string;
+  routine: (Omit<NonNullable<Panel["routine"]>, "prompt"> & { prompt?: string }) | null;
+};
 export type Panel = {
   id: string;
   key: string;
