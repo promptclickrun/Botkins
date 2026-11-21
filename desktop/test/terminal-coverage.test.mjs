@@ -79,7 +79,7 @@ test("every call of the phone link has a command, a reason from the list, or a p
   assert.deepEqual(missing(names, LINK), [], "These calls of the phone link have no entry. " + ADD);
   assert.deepEqual(gone(names, LINK), [], "These entries name calls that the phone link no longer has. Take them out.");
   for (const [name, entry] of Object.entries(LINK)) checkEntry(name, entry);
-  // The fourth, "person", was decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until the owner says otherwise (the owner has the choice in front of him): a call that reaches a secret which a caller of the socket cannot read, or sends one somewhere, stays where a person is known to be there.
+  // The fourth, "person", was decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, and the owner agreed to it on 2026-11-21: a call that reaches a secret which a caller of the socket cannot read, or sends one somewhere, stays where a person is known to be there.
   assert.deepEqual(Object.keys(REASONS), ["window", "window's own", "phone's own", "person"], "the reasons are a fixed list: a new one is a decision");
 });
 

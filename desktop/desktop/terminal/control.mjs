@@ -26,7 +26,7 @@ import { credentialsApi } from "./control-credentials.mjs";
 import { voiceApi } from "./control-voice.mjs";
 
 const WAIT_MS = 25_000;
-export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // The owner's choice (asked 2026-11-21, not answered yet): false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them.
+export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them. The owner agreed to false on 2026-11-21: nothing that reaches a saved secret runs from the command line.
 /**
  * A reference to a saved credential, { "$credential": id }, is resolved by the app to the saved
  * secret. A caller on the socket cannot read a saved credential, but it could send one to an
@@ -52,8 +52,8 @@ const refuseReferences = (name, args) => {
  * sends such a secret somewhere, is not for the socket. It stays where a person is known to be
  * there: the window, or a phone with its owner check. Everything else the window can do, the
  * socket does, with what it starts shown and a line in the log.
- * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, until
- * the owner says otherwise. The owner has the choice in front of him.)
+ * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The
+ * owner agreed to it on 2026-11-21.)
  */
 export const REFUSED_BY_REASON = {
   window: (name) => "`" + name + "` needs the app's window (a dialog, the clipboard, a notification, a microphone or a permission on the screen). It is done there, not from a terminal.",

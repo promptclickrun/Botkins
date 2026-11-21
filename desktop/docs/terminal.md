@@ -381,7 +381,7 @@ botkins wiki export --format zip --output ~/Documents
 - Every command works with `--json` and with no terminal. A change leaves a line in the log with the page's path and never its words: `wiki.add`, `wiki.addFolder`, `wiki.save`, `wiki.move`, `wiki.remove`, `wiki.restore` and `wiki.export`.
 - The wiki's own log (`log.md`) and the list of versions say "You" for a change made from here, as they do for the window. They do not tell a person from a bot. `botkins logs` shows which commands ran, and on which page.
 
-### Preferences, usage, the cache, voice and the Mac tools
+### Preferences, usage, the cache and the Mac tools
 
 The commands for this part come in a later change.
 
