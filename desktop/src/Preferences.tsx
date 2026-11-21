@@ -47,8 +47,9 @@ export function HarnessSettings({ settings, change, fail, setup = true, windows 
           <Choices label="Harness" value={harness} options={options} onChange={(id) => void change({ harness: id }).catch(fail)} />
         </div>
       </div>
-      {pi?.installed && harness === "pi" && <ValueRow label="Pi" value={pi.version ? "Version " + pi.version : "Installed"} />}
-      {pi && !pi.installed && <ProviderInstall provider={{ ...pi, message: pi.message || "Pi isn't on this computer. Install it to use it as the harness." }} available={setup} windows={windows} onInstalled={load} />}
+      {pi?.installed && <ValueRow label="Pi" value={pi.version ? "Version " + pi.version : "Installed"} />}
+      {/* Kept mounted after an install, so its result stays; it shows nothing while Pi is installed and idle. */}
+      {pi && <ProviderInstall provider={{ ...pi, message: pi.message || "Pi isn't on this computer. Install it to use it as the harness." }} available={setup} windows={windows} onInstalled={load} />}
     </Group>
   );
 }
