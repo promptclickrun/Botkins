@@ -296,17 +296,23 @@ test("doctor checks the computer with the service stopped, and more with it runn
   const root = join(tempDir(t), "root");
   const paths = { root, config: join(root, "config.json"), socket: join(root, "run", "botkins.sock") };
   const reachable = async () => ({ status: 200 });
-  const stopped = await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, node: "24.1.0" });
+  const stopped = await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, freePort: async () => true, node: "24.1.0" });
   const names = (report) => Object.fromEntries(report.checks.map((entry) => [entry.name, entry.ok]));
   assert.deepEqual(names(stopped), { "Node.js": true, "Data folder": null, Config: true, Service: null, "Phone link port": true, Relay: null });
   assert.equal(stopped.ok, true);
-  assert.equal((await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, node: "20.11.0" })).ok, false, "a Node.js too old is a failure");
-  assert.equal(names(await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, node: "22.14.0" }))["Node.js"], null);
+  // A port another program holds is worth knowing, with the way round it, and is no failure of this computer.
+  const asked = [];
+  const taken = await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, freePort: async (port) => (asked.push(port), false), node: "24.1.0" });
+  assert.deepEqual([asked, names(taken)["Phone link port"], taken.ok], [[47610], null, true]);
+  assert.match(taken.checks.find((entry) => entry.name === "Phone link port").detail, /^Port 47610 is in use by another program\.$/);
+  assert.match(taken.checks.find((entry) => entry.name === "Phone link port").fix, /botkins config set link\.port/);
+  assert.equal((await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, freePort: async () => true, node: "20.11.0" })).ok, false, "a Node.js too old is a failure");
+  assert.equal(names(await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, freePort: async () => true, node: "22.14.0" }))["Node.js"], null);
   mkdirSync(join(root, "data"), { recursive: true, mode: 0o755 });
   writeFileSync(join(root, "data", "vault.json"), "{}", { mode: 0o644 });
   writeFileSync(paths.config, '{ "relay": { "enabled": true }, "nope": 1 }', { mode: 0o600 });
   chmodSync(root, 0o755);
-  const loose = await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, node: "24.1.0" });
+  const loose = await examine({ paths, client: fakeService({ running: false }).client, env: {}, fetcher: reachable, freePort: async () => true, node: "24.1.0" });
   assert.deepEqual([names(loose)["Data folder"], names(loose)["Private files"], names(loose).Config, loose.ok], [false, false, false, false]);
   assert.match(loose.checks.find((entry) => entry.name === "Private files").detail, /data\/vault\.json \(644\)/);
   assert.match(loose.checks.find((entry) => entry.name === "Data folder").fix, /chmod 700/);
@@ -315,7 +321,7 @@ test("doctor checks the computer with the service stopped, and more with it runn
   writeFileSync(paths.config, '{ "relay": { "enabled": true } }', { mode: 0o600 });
   const seen = { version: "9.9.9", node: "24.1.0", link: { enabled: true, listening: true, port: 47610, locked: false }, relay: { enabled: true, connected: false, url: "https://relay.botkins.app" }, vault: { locked: false }, secrets: { source: "systemd", where: "systemd credential" }, providers: [{ id: "claude", name: "Claude", enabled: true, installed: true, connected: true, account: "sam@example.com" }, { id: "codex", name: "Codex", enabled: true, installed: false, connected: false, message: "Install the Codex CLI." }, { id: "grok", name: "Grok", enabled: false, installed: true, connected: false }], desktopOnly: ["Viewing and controlling the screen"] };
   const down = async () => { throw Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND" } }); };
-  const running = await examine({ paths, client: fakeService({ doctor: seen }).client, env: {}, fetcher: down, node: "24.1.0" });
+  const running = await examine({ paths, client: fakeService({ doctor: seen }).client, env: {}, fetcher: down, freePort: async () => true, node: "24.1.0" });
   assert.deepEqual(names(running), { "Node.js": true, "Data folder": true, "Private files": true, Config: true, Service: true, "Control socket": true, "Secrets at rest": true, "Phone link": true, "Provider: Claude": true, "Provider: Codex": null, Relay: false });
   assert.match(running.checks.find((entry) => entry.name === "Relay").detail, /can't be reached from this computer \(ENOTFOUND\)/);
   assert.deepEqual(running.desktopOnly, ["Viewing and controlling the screen"]);

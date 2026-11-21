@@ -820,7 +820,7 @@ test("`botkins doctor` says when the whole computer's install folder is one no u
   const root = tempDir(t);
   const paths = { root: join(root, "data"), config: join(root, "data", "config.json"), socket: join(root, "data", "run", "botkins.sock") };
   const client = { call: async () => { throw Object.assign(new Error("not running"), { code: "NOT_RUNNING" }); } };
-  const look = async (installFolder) => (await examine({ paths, client, env: {}, fetcher: async () => new Response(""), node: "24.1.0", installFolder })).checks.find((entry) => entry.name === "Install folder");
+  const look = async (installFolder) => (await examine({ paths, client, env: {}, fetcher: async () => new Response(""), freePort: async () => true, node: "24.1.0", installFolder })).checks.find((entry) => entry.name === "Install folder");
   assert.deepEqual(await look(() => ({ root: "/opt/botkins", problem: null })), { name: "Install folder", ok: true, detail: "/opt/botkins and every folder above it are root's own, so updates can be installed." });
   assert.deepEqual(await look(() => ({ root: "/opt/botkins", problem: { path: "/opt", uid: 0, mode: 0o777 } })), { name: "Install folder", ok: false, detail: "The folder /opt can be changed by users other than root (its mode is 777), so Botkins can't be updated in /opt/botkins. No update is installed until it is put right.", fix: "sudo chown root /opt && sudo chmod go-w /opt" });
   // One person's own service, or a checkout: there is no such folder to ask about.

@@ -268,7 +268,7 @@ test("a file with a setting of the person's own that can't be carried is left as
   // Doctor says which file, why, and where such a setting is kept by every update.
   const paths = { root: join(root, "data"), config: join(root, "data", "config.json"), socket: join(root, "data", "run", "botkins.sock") };
   const client = { call: async () => { throw Object.assign(new Error("not running"), { code: "NOT_RUNNING" }); } };
-  const report = await examine({ paths, client, env: {}, fetcher: async () => new Response(""), node: "24.1.0", units: () => manager.refresh({ write: false }) });
+  const report = await examine({ paths, client, env: {}, fetcher: async () => new Response(""), freePort: async () => true, node: "24.1.0", units: () => manager.refresh({ write: false }) });
   const said = report.checks.filter((entry) => entry.name.startsWith("Service file"));
   assert.deepEqual(said.map((entry) => [entry.name, entry.ok]), [["Service file " + UNIT, null], ["Service file " + JOB, null], ["Service file " + WATCH, null]]);
   assert.match(said[0].detail, /settings that Botkins did not write \(MemoryMax=1G\), so no update replaces it/);
@@ -679,7 +679,7 @@ test("`botkins doctor` says when the service runs under files an earlier version
   const root = tempDir(t);
   const paths = { root: join(root, "data"), config: join(root, "data", "config.json"), socket: join(root, "data", "run", "botkins.sock") };
   const client = { call: async () => { throw Object.assign(new Error("not running"), { code: "NOT_RUNNING" }); } };
-  const look = async (units) => (await examine({ paths, client, env: {}, fetcher: async () => new Response(""), node: "24.1.0", units })).checks.find((entry) => entry.name === "Service files");
+  const look = async (units) => (await examine({ paths, client, env: {}, fetcher: async () => new Response(""), freePort: async () => true, node: "24.1.0", units })).checks.find((entry) => entry.name === "Service files");
   assert.deepEqual(await look(async () => ({ scope: "system", file: UNIT, changed: [] })), { name: "Service files", ok: true, detail: UNIT + " is as this version of Botkins writes it." });
   const stale = await look(async () => ({ scope: "system", file: UNIT, changed: [UNIT, WATCH] }));
   assert.equal(stale.ok, false);
