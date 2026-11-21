@@ -233,11 +233,12 @@ export async function verify({ dir, name, keyFile, verifier = verifyRelease }) {
 const refreshWith = (exec) => async (folder) => {
   const { stdout } = await exec(join(folder, "bin", "botkins"), ["service", "refresh", "--no-restart", "--json"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
   // The files it wrote, so that undoing the update takes away the ones it added and no others.
+  // null when it didn't say: then nothing tells its files from anyone else's.
   try {
     const { changed } = JSON.parse(stdout);
-    return Array.isArray(changed) ? changed.filter((path) => typeof path === "string") : [];
+    return Array.isArray(changed) ? changed.filter((path) => typeof path === "string") : null;
   } catch {
-    return [];
+    return null;
   }
 };
 
@@ -276,7 +277,9 @@ export async function switchTo({ archive, installRoot, version, platform = proce
   let switched = false;
   // What the service's files held before the new version wrote its own, and why it couldn't, if it couldn't.
   let saved = null;
-  let written = [];
+  // The files the new version said it wrote. null until it has said: a refresh that ended badly
+  // may have added files all the same, and those go too when the files are put back.
+  let written = null;
   let problem;
   try {
     await exec("tar", ["--no-same-owner", "--no-same-permissions", "-xzf", archive, "-C", temp]);
@@ -294,7 +297,7 @@ export async function switchTo({ archive, installRoot, version, platform = proce
       if (manager.snapshot && manager.restore) {
         try {
           saved = manager.snapshot();
-          written = (await refresh(target)) ?? [];
+          written = (await refresh(target)) ?? null;
         } catch (error) {
           const failed = "The service's files could not be brought up to date with Botkins " + version + " (" + String(error.stderr || error.message || error).trim().split("\n").at(-1).replace(/^botkins: /, "").slice(0, 160) + ").";
           // Half-written is worse than old: whatever was changed goes back, and the update goes

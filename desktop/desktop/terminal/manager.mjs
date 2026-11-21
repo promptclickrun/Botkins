@@ -22,7 +22,7 @@ import { homedir, userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CREDENTIAL } from "../host/keystore.mjs";
 import { INSTALL_RECORD, SERVICE_USER, systemRoot, userRoot } from "./paths.mjs";
-import { LABEL, launchdJob, readLaunchdJob, readSystemUnit, readUserUnit, strange, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit } from "./units.mjs";
+import { LABEL, launchdJob, odd, readLaunchdJob, readSystemUnit, readUserUnit, strange, systemUnit, UNIT, UPDATE_PATH_UNIT, UPDATE_UNIT, updateUnits, userUnit, withoutOdd } from "./units.mjs";
 import { asOwnerOf } from "./update-install.mjs";
 
 /** What is at a path, without following a link there; null when nothing is. */
@@ -284,16 +284,22 @@ export function serviceManager({ command, platform = process.platform, uid = pro
   function wanted(found) {
     const text = read(found.file);
     if (text === null) throw Object.assign(new Error("The installed service file " + found.file + " can't be read."), { code: "UNREADABLE_UNIT" });
+    const kept = [];
+    // A line that can't be carried into a new text for sure (a variable written in a way of the
+    // person's own, a line that is no setting) decides it before any text is made: the file stays.
+    const own = odd(found.kind, text);
+    if (own.length) kept.push({ file: found.file, lines: own });
+    const main = (make) => (own.length ? {} : { [found.file]: make() });
     let texts;
     if (found.kind === "launchd") {
       const chosen = readLaunchdJob(text);
-      texts = { [found.file]: launchdJob(chosen), ...(found.scope === "system" && chosen.user && { [INSTALL_RECORD]: installRecordText(chosen) }) };
-    } else if (found.scope === "user") texts = { [found.file]: userUnit(readUserUnit(text)) };
+      texts = { ...main(() => launchdJob(chosen)), ...(found.scope === "system" && chosen.user && { [INSTALL_RECORD]: installRecordText(chosen) }) };
+    } else if (found.scope === "user") texts = main(() => userUnit(readUserUnit(text)));
     else {
-      const chosen = readSystemUnit(text);
-      texts = { [found.file]: systemUnit(chosen), ...Object.fromEntries(Object.entries(updateUnits(chosen)).map(([name, unit]) => ["/etc/systemd/system/" + name, unit])), [INSTALL_RECORD]: installRecordText(chosen) };
+      // The other files are made from what this one says was chosen, read without the lines that are the person's own.
+      const chosen = readSystemUnit(own.length ? withoutOdd(text) : text);
+      texts = { ...main(() => systemUnit(chosen)), ...Object.fromEntries(Object.entries(updateUnits(chosen)).map(([name, unit]) => ["/etc/systemd/system/" + name, unit])), [INSTALL_RECORD]: installRecordText(chosen) };
     }
-    const kept = [];
     for (const path of Object.keys(texts)) {
       const now = path === INSTALL_RECORD ? null : read(path);
       if (now === null || now === texts[path]) continue;
@@ -375,53 +381,65 @@ export function serviceManager({ command, platform = process.platform, uid = pro
   }
 
   /**
-   * Puts the service's files back as a snapshot has them: what changed since is written as it
-   * was. A file that was not there is removed only when it is one the refresh said it wrote
-   * (`written`) and has a name of the service's own: a unit somebody else added meanwhile is
-   * not this update's to take away.
-   * @returns true when something was put back.
+   * Puts the service's files back as a snapshot has them, and has the service manager read them
+   * again: what changed since is written as it was.
+   *
+   * A file that was not there is removed when it has a name of the service's own and is one the
+   * refresh said it wrote (`written`): a unit somebody else added meanwhile is not this update's
+   * to take away. When the refresh never said what it wrote (it ended badly), nothing tells its
+   * files from anyone else's, so every file with a name of the service's own that the snapshot
+   * doesn't hold is taken for one it added (`written` null).
+   *
+   * The service manager is told every time, also when the files already are as the snapshot has
+   * them. This may be the second try, after a first one that wrote the files and then failed to
+   * have them read: the files on disk say nothing of what systemd or launchd has loaded.
+   *
+   * @returns true when a file was put back or removed.
    */
-  async function restore(saved, written = []) {
+  async function restore(saved, written = null) {
     if (!saved) return false;
     const now = snapshot() ?? { files: {} };
-    const added = Object.keys(now.files).filter((path) => !(path in saved.files) && written.includes(path));
+    const added = Object.keys(now.files).filter((path) => !(path in saved.files) && (written === null || written.includes(path)));
     const back = Object.keys(saved.files).filter((path) => now.files[path] !== saved.files[path]);
-    if (!added.length && !back.length) return false;
     const put = () => {
       for (const path of added) rmSync(at(path), { force: true });
       // Whatever is under the name now goes: a link there is replaced, never written through.
       for (const path of back) replace(path, saved.files[path]);
     };
     if (saved.kind === "launchd") {
-      if ([...added, ...back].some((path) => path !== INSTALL_RECORD)) await loadAgain(saved.scope, saved.file, put);
-      else put();
-      return true;
+      await loadAgain(saved.scope, saved.file, put);
+      return added.length + back.length > 0;
     }
     const ctl = systemctl(saved.scope);
     // A unit the newer version added is stopped and unlinked before its file goes.
     for (const path of added) if (path !== INSTALL_RECORD) await run(...ctl(["disable", "--now", basename(path)]));
     put();
     await must(...ctl(["daemon-reload"]), "Reloading systemd");
-    // The newer version may have linked a unit to start somewhere else: the links are made again from the file that is back.
-    for (const path of back) if (path !== INSTALL_RECORD && (await run(...ctl(["is-enabled", basename(path)]))).stdout.trim() === "enabled") await run(...ctl(["reenable", basename(path)]));
-    if (back.some((path) => basename(path) === UPDATE_PATH_UNIT)) await run(...ctl(["try-restart", UPDATE_PATH_UNIT]));
-    return true;
+    // The newer version may have linked a unit to start somewhere else: the links are made again from the files that are back.
+    const units = Object.keys(saved.files).filter((path) => path !== INSTALL_RECORD).map((path) => basename(path));
+    for (const name of units) if ((await run(...ctl(["is-enabled", name]))).stdout.trim() === "enabled") await run(...ctl(["reenable", name]));
+    if (units.includes(UPDATE_PATH_UNIT)) await run(...ctl(["try-restart", UPDATE_PATH_UNIT]));
+    return added.length + back.length > 0;
   }
 
   /** Removes the service's files. The data folder, the key and the user stay: they are the person's to remove. */
   async function uninstall() {
     const found = need();
+    // Each file goes with the copy a refresh may have kept beside it (<name>.bak).
+    const gone = (path) => {
+      for (const file of [path, path + ".bak"]) rmSync(at(file), { force: true });
+    };
     if (found.kind === "launchd") {
       await run("launchctl", ["bootout", domain(found.scope) + "/" + LABEL]);
-      rmSync(at(found.file), { force: true });
+      gone(found.file);
     } else {
       const ctl = systemctl(found.scope);
       await run(...ctl(["disable", "--now", UNIT, ...(found.scope === "system" ? [UPDATE_PATH_UNIT] : [])]));
-      rmSync(at(found.file), { force: true });
-      if (found.scope === "system") for (const name of [UPDATE_UNIT, UPDATE_PATH_UNIT]) rmSync(at("/etc/systemd/system/" + name), { force: true });
+      gone(found.file);
+      if (found.scope === "system") for (const name of [UPDATE_UNIT, UPDATE_PATH_UNIT]) gone("/etc/systemd/system/" + name);
       await run(...ctl(["daemon-reload"]));
     }
-    if (found.scope === "system") rmSync(at(INSTALL_RECORD), { force: true });
+    if (found.scope === "system") gone(INSTALL_RECORD);
     return found;
   }
 

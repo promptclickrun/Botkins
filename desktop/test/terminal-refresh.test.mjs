@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { examine } from "../cli/commands/service.mjs";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
-import { launchdJob, ONCE_WRITTEN, readLaunchdJob, readSystemUnit, readUserUnit, strange, systemUnit, unitWords, updateUnits, userUnit } from "../desktop/terminal/units.mjs";
+import { launchdJob, odd, ONCE_WRITTEN, readLaunchdJob, readSystemUnit, readUserUnit, sameForm, strange, systemUnit, unitWords, updateUnits, userUnit } from "../desktop/terminal/units.mjs";
 import { applyUpdate, folderName, switchTo } from "../desktop/terminal/update-install.mjs";
 
 const skip = process.platform === "win32" && "The terminal host runs on Linux and macOS.";
@@ -94,7 +94,9 @@ test("what was chosen at install time is read back from the installed file, whol
   const daemon = { command, dataDir: "/Library/Application Support/Botkins Terminal", logFile: "/Library/Application Support/Botkins Terminal/logs/launchd.log", user: "sam", env: { BOTKINS_KEY_FILE: "/etc/botkins/host.key", HOME: "/Users/sam" } };
   assert.deepEqual(readLaunchdJob(launchdJob(daemon)), daemon);
   assert.equal(launchdJob(readLaunchdJob(launchdJob(daemon))), launchdJob(daemon));
-  assert.deepEqual(unitWords('plain "two words" "a \\"quote\\" and a \\\\" $$HOME 100%%'), ["plain", "two words", 'a "quote" and a \\', "$HOME", "100%"]);
+  // A value is read back as systemd reads it: "%%" is a "%" everywhere; "$$" is a "$" only in a command line.
+  assert.deepEqual(unitWords('plain "two words" "a \\"quote\\" and a \\\\" $$HOME 100%%'), ["plain", "two words", 'a "quote" and a \\', "$$HOME", "100%"]);
+  assert.deepEqual(unitWords('plain "two words" $$HOME 100%%', { exec: true }), ["plain", "two words", "$HOME", "100%"]);
   // A file that doesn't say one of the choices is not read at all: nothing is filled in for it.
   const unit = systemUnit({ command, dataDir: "/var/lib/botkins", key: { file: "/etc/botkins/host.key" }, allowPaths: ["/srv/projects"] });
   const without = (pattern) => unit.split("\n").filter((line) => !pattern.test(line)).join("\n");
@@ -261,7 +263,7 @@ test("a file with a setting of the person's own that can't be carried is left as
   writeFileSync(root + JOB, readFileSync(root + JOB, "utf8").replace("UMask=0022", "UMask=0077"));
   writeFileSync(root + WATCH, "not a unit\n[Path\nPathExists=/somewhere/else\n");
   result = await manager.refresh({ write: false });
-  assert.deepEqual(result.kept.map((entry) => [entry.file, entry.lines]), [[UNIT, ["MemoryMax=1G"]], [JOB, ["UMask=0077"]], [WATCH, ["PathExists=/somewhere/else"]]]);
+  assert.deepEqual(result.kept.map((entry) => [entry.file, entry.lines]), [[UNIT, ["MemoryMax=1G"]], [JOB, ["UMask=0077"]], [WATCH, ["not a unit", "[Path", "PathExists=/somewhere/else"]]]);
   assert.deepEqual(result.changed, []);
   // Doctor says which file, why, and where such a setting is kept by every update.
   const paths = { root: join(root, "data"), config: join(root, "data", "config.json"), socket: join(root, "data", "run", "botkins.sock") };
@@ -292,11 +294,111 @@ test("a file with a setting of the person's own that can't be carried is left as
   assert.equal(readFileSync(mac + file, "utf8"), nice);
 });
 
+test("a line is carried only when it is written in a form that is read as systemd reads it; any other form leaves the file alone", { skip }, async (t) => {
+  // The forms of an Environment= line, and how systemd 252 itself reads each (asked of it with a
+  // unit of these lines, `systemctl show -p Environment` and the environment the process got;
+  // test/terminal-e2e/units.sh asks it again at each run). `true`: read here exactly as systemd
+  // reads it, so it can be written anew. `false`: the person's own way of writing it.
+  for (const [value, carried, why] of [
+    ["A=plain", true],
+    ['"B=two words"', true],
+    ['"A=plain"', true, "quotes that are not needed change nothing"],
+    ["D=a$b", true, 'a "$" is only a "$" in a variable'],
+    ["E=a$$b", true, "and two are two"],
+    ["F=100%%", true, 'a doubled "%" is a "%"'],
+    ['"G=q\\"uote"', true],
+    ['"H=back\\\\slash"', true],
+    ["J=one K=two", true, "two variables on a line"],
+    ["'C=single quoted'", false, "systemd reads single quotes as quotes"],
+    ['"I=line\\nbreak"', false, "systemd reads \\n in quotes as a line break"],
+    ["L=%n", false, "a specifier: systemd puts the unit's name there"],
+    ['"M=a"b', false, "two parts run together"],
+    ['"N=open', false],
+    ["O=a\\b", false],
+    ["", false, "an empty value takes away what was set before"],
+  ]) assert.equal(sameForm(value), carried, value + (why ? ": " + why : ""));
+  assert.equal(sameForm("/opt/a$$b/botkins serve", true), true);
+  assert.equal(sameForm("/opt/a$b/botkins serve", true), false, 'in a command line a single "$" starts a variable');
+  // What is carried comes back with the same meaning, in the form written here.
+  const plain = systemUnit({ command, dataDir: "/var/lib/botkins", key: { file: "/etc/botkins/host.key" }, allowPaths: ["/srv/projects"] });
+  const add = (lines) => plain.replace("\nExecStart=", "\n" + lines.join("\n") + "\nExecStart=");
+  const kept = add(['Environment="HTTPS_PROXY=http://proxy.example:3128"', "  Environment = PRICE=a$b RATE=100%%", 'Environment="NOTE=two words" OTHER=x']);
+  assert.deepEqual(odd("systemd", kept), []);
+  assert.deepEqual(readSystemUnit(kept).env, { HTTPS_PROXY: "http://proxy.example:3128", PRICE: "a$b", RATE: "100%", NOTE: "two words", OTHER: "x" });
+  const made = systemUnit(readSystemUnit(kept));
+  for (const line of ["Environment=HTTPS_PROXY=http://proxy.example:3128", "Environment=PRICE=a$b", "Environment=RATE=100%%", 'Environment="NOTE=two words"', "Environment=OTHER=x"]) assert.ok(made.includes("\n" + line + "\n"), line);
+  assert.deepEqual(strange("systemd", kept, made), []);
+  // A folder of theirs on a line that stands before the one written here is one more folder, not an unreadable file.
+  assert.deepEqual(readSystemUnit(add(["ReadWritePaths=/srv/more /srv/projects"])).allowPaths, ["/srv/more", "/srv/projects"]);
+  // What is not: each of these is found, by its own line, before any new text is made.
+  for (const line of ["Environment='HTTPS_PROXY=http://proxy.example:3128'", 'Environment="GREETING=hello\\nworld"', "Environment=HOME_OF=%h", "Environment=", "Environment=NOT_A_SETTING", "Environment=1ST=x", "ReadWritePaths=-/srv/maybe", "ReadWritePaths=+/srv/x", "ReadWritePaths=", "ReadWritePaths=relative/path", "this is no setting", "ExecStartPre=/bin/true \\"]) {
+    assert.deepEqual(odd("systemd", add([line])), [line.trim()], line);
+  }
+  // Settings systemd takes that a narrow look would pass over: a space before the name or around
+  // the "=", a name with a "-" in it. Each is a setting, and a changed or added one is the person's.
+  assert.deepEqual(strange("systemd", plain.replace("RestartSec=3", "  RestartSec=30"), plain), ["RestartSec=30"]);
+  assert.deepEqual(strange("systemd", plain.replace("Restart=on-failure", "Restart = always"), plain), ["Restart=always"]);
+  assert.deepEqual(strange("systemd", plain.replace("\n[Install]", "X-Note=mine\n\n[Install]"), plain), ["X-Note=mine"]);
+  assert.deepEqual(strange("systemd", plain.replace("\n[Install]", "\n[X-Mine]\nKey=1\n\n[Install]"), plain), ["[X-Mine]", "Key=1"]);
+  assert.deepEqual(strange("systemd", plain.replace("RestartSec=3", "  RestartSec = 3").replace("[Service]", "  [Service]  ") + "; a note\n", plain), [], "the same settings, spaced another way, are the same settings");
+  // A command with one of systemd's marks before it, or two commands, is not read as how Botkins is started.
+  assert.throws(() => readSystemUnit(plain.replace("ExecStart=/opt", "ExecStart=-/opt")), { code: "UNREADABLE_UNIT" });
+  assert.throws(() => readSystemUnit(plain.replace("\nExecStart=", "\nExecStart=/bin/true serve\nExecStart=")), { code: "UNREADABLE_UNIT" });
+
+  // With the whole computer's service installed: a file with such a line is not written and not
+  // thrown at; it is left, named, and the other files are still brought up to date.
+  const root = tempDir(t);
+  const { manager, calls } = await systemInstall(root, { allowPaths: ["/srv/projects"] });
+  const fresh = readFileSync(root + UNIT, "utf8");
+  for (const line of ["Environment='HTTPS_PROXY=http://proxy.example:3128'", "ReadWritePaths=-/srv/maybe", "Environment=PRICE=%h/x"]) {
+    const theirs = older(fresh).replace("\nExecStart=", "\n" + line + "\nExecStart=");
+    writeFileSync(root + UNIT, theirs);
+    writeFileSync(root + JOB, readFileSync(root + JOB, "utf8").replace("UMask=0022\n", ""));
+    calls.length = 0;
+    const result = await manager.refresh();
+    assert.deepEqual([result.changed, result.kept], [[JOB], [{ file: UNIT, lines: [line] }]], line);
+    assert.equal(readFileSync(root + UNIT, "utf8"), theirs);
+    assert.equal(existsSync(root + UNIT + ".bak"), false);
+  }
+  // A variable they quoted without need is carried: the new file has it, and the copy of the old one is beside it.
+  const quoted = older(fresh).replace("\nExecStart=", '\nEnvironment="HTTPS_PROXY=http://proxy.example:3128"\nExecStart=');
+  writeFileSync(root + UNIT, quoted);
+  assert.deepEqual((await manager.refresh()).changed, [UNIT]);
+  assert.ok(readFileSync(root + UNIT, "utf8").includes("\nEnvironment=HTTPS_PROXY=http://proxy.example:3128\n"));
+  assert.equal(readFileSync(root + UNIT + ".bak", "utf8"), quoted);
+  // Uninstalling takes the kept copies away with the files.
+  await manager.uninstall();
+  assert.deepEqual(readdirSync(root + "/etc/systemd/system"), []);
+});
+
+test("a job file on macOS is read whole or not at all", { skip }, () => {
+  const job = launchdJob(agent0());
+  // Every way XML has of writing a character is read back, and written the one way it is written here.
+  const entities = job.replace("    <key>NODE_ENV</key>", "    <key>GREETING</key>\n    <string>&quot;hi&quot; &apos;there&apos; &#65;&#x42; a&amp;b &lt;c&gt;</string>\n    <key>NODE_ENV</key>");
+  assert.deepEqual(readLaunchdJob(entities).env, { GREETING: '"hi" \'there\' AB a&b <c>' });
+  assert.match(launchdJob(readLaunchdJob(entities)), /<string>"hi" 'there' AB a&amp;b &lt;c&gt;<\/string>/);
+  assert.deepEqual(strange("launchd", entities, launchdJob(readLaunchdJob(entities))), []);
+  // A comment changes nothing launchd does.
+  assert.deepEqual(readLaunchdJob(job.replace("<dict>", "<dict>\n  <!-- mine -->")), readLaunchdJob(job));
+  // Kinds of value that are not written here, a part kept as it is, or anything after the end: the file is not read.
+  for (const bad of [
+    job.replace("  <key>RunAtLoad</key>", "  <key>Nice</key>\n  <real>1.5</real>\n  <key>RunAtLoad</key>"),
+    job.replace("  <key>RunAtLoad</key>", "  <key>StartCalendarInterval</key>\n  <date>2026-01-01T00:00:00Z</date>\n  <key>RunAtLoad</key>"),
+    job.replace("<string>production</string>", "<string><![CDATA[production]]></string>"),
+    job.replace("</plist>", "</plist>\n<dict/>"),
+    job.replace("</plist>", "<string>more</string>\n</plist>"),
+  ]) assert.throws(() => readLaunchdJob(bad), { code: "UNREADABLE_UNIT" });
+});
+
 test("the files every release wrote are still read as Botkins' own, so an update brings them up to date", { skip }, () => {
   // test/fixtures/service-files/<version> holds what that release's own code wrote. When a
   // function in units.mjs stops writing a line, or writes it differently, the earlier line has
   // to go into ONCE_WRITTEN there: without it, every computer that installed that release has a
   // file that looks changed by hand, and no update would ever replace it.
+  //
+  // This pins nothing today. The functions write what 0.16.5 wrote, so ONCE_WRITTEN is rightly
+  // empty and these files pass by being the same. It is a guard for the next change to those
+  // functions, and its passing now is no proof of anything about a change not yet made.
   const folder = new URL("./fixtures/service-files/", import.meta.url);
   const versions = readdirSync(folder).filter((name) => /^\d+\.\d+\.\d+$/.test(name));
   assert.ok(versions.includes("0.16.5"));
@@ -326,8 +428,11 @@ test("the files go back as they were, and what a newer version added is taken ou
   writeFileSync(root + UNIT, before.unit);
   const saved = manager.snapshot();
   assert.deepEqual([saved.kind, saved.scope, saved.file], ["systemd", "system", UNIT]);
-  assert.equal(await manager.restore(saved), false, "nothing changed, nothing to do");
-  assert.deepEqual(calls, []);
+  // Nothing changed: no file is written. systemd is told to read the files all the same, and the
+  // units that start with the computer are linked again: this may be a second try after one that
+  // wrote the files and then could not have them read, and the files say nothing of what systemd has loaded.
+  assert.equal(await manager.restore(saved), false);
+  assert.deepEqual(calls, ["systemctl daemon-reload", "systemctl is-enabled botkins-update.path", "systemctl reenable botkins-update.path", "systemctl is-enabled botkins-update.service", "systemctl is-enabled botkins.service", "systemctl reenable botkins.service", "systemctl try-restart botkins-update.path"]);
   // What a newer version did: its own text in the files, a changed watch and record, and one more unit.
   await manager.refresh();
   writeFileSync(root + WATCH, before.watch.replace("update-requested", "another-name"));
@@ -348,13 +453,22 @@ test("the files go back as they were, and what a newer version added is taken ou
   assert.equal(existsSync(root + "/etc/systemd/system/botkins-backup.timer"), true);
   // systemd reads the files again, and a unit that starts with the computer is linked again from
   // the file that is back: the newer version may have linked it somewhere else.
-  assert.deepEqual(calls, ["systemctl disable --now botkins-tidy.timer", "systemctl daemon-reload", "systemctl is-enabled botkins-update.path", "systemctl reenable botkins-update.path", "systemctl is-enabled botkins.service", "systemctl reenable botkins.service", "systemctl try-restart botkins-update.path"]);
-  // Told of no file it wrote, nothing is removed.
+  assert.deepEqual(calls, ["systemctl disable --now botkins-tidy.timer", "systemctl daemon-reload", "systemctl is-enabled botkins-update.path", "systemctl reenable botkins-update.path", "systemctl is-enabled botkins-update.service", "systemctl is-enabled botkins.service", "systemctl reenable botkins.service", "systemctl try-restart botkins-update.path"]);
+  // Told that it wrote no file, nothing is removed.
   writeFileSync(root + "/etc/systemd/system/botkins-tidy.timer", "[Timer]\nOnCalendar=daily\n");
   writeFileSync(root + UNIT, before.unit + "# changed again\n");
-  await manager.restore(saved);
+  await manager.restore(saved, []);
   assert.equal(existsSync(root + "/etc/systemd/system/botkins-tidy.timer"), true);
   assert.equal(readFileSync(root + UNIT, "utf8"), before.unit);
+  // Never told what it wrote (the new version's program ended badly, or said something that is no
+  // answer): it may have added files all the same. Nothing tells them from anyone else's, so every
+  // file with a name of the service's own that was not there before goes. Other names stay.
+  calls.length = 0;
+  assert.equal(await manager.restore(saved), true);
+  assert.equal(existsSync(root + "/etc/systemd/system/botkins-tidy.timer"), false);
+  assert.equal(existsSync(root + "/etc/systemd/system/botkins-backup.timer"), false);
+  assert.equal(existsSync(root + "/etc/systemd/system/other.service"), true);
+  assert.deepEqual(calls.slice(0, 3), ["systemctl disable --now botkins-backup.timer", "systemctl disable --now botkins-tidy.timer", "systemctl daemon-reload"]);
   assert.equal(await manager.restore(null), false);
 });
 
@@ -422,7 +536,7 @@ test("an update has the new version write the service's files before the restart
   const steps = [];
   const service = (status) => ({
     snapshot: () => (steps.push("snapshot"), { ...files }),
-    restore: async (saved, written) => void (steps.push("restore" + (written.length ? " (it wrote " + written.join(", ") + ")" : "")), Object.assign(files, saved)),
+    restore: async (saved, written) => void (steps.push("restore" + (written ? " (it wrote " + written.join(", ") + ")" : " (it never said what it wrote)")), Object.assign(files, saved)),
     restart: async () => void steps.push("restart on " + current() + " under: " + files.unit),
     status,
   });
@@ -454,11 +568,12 @@ test("an update has the new version write the service's files before the restart
   };
   const noted = await switchTo({ ...options, archive: release(dir, "1.5.0").archive, version: "1.5.0", manager: service(steady), refresh: half });
   assert.equal(noted.note, "The service's files could not be brought up to date with Botkins 1.5.0 (The installed service file doesn't say which user the service runs as.). On the computer, `botkins doctor` says what to do.");
-  assert.deepEqual(steps, ["snapshot", "restore", "restart on 1.5.0 under: as 1.3.1 wrote it"]);
+  // It never said which files it wrote, so the updater knows of none it may leave: every one it may have added goes.
+  assert.deepEqual(steps, ["snapshot", "restore (it never said what it wrote)", "restart on 1.5.0 under: as 1.3.1 wrote it"]);
   // When that version then doesn't stay up either, the reason is said with it, and nothing is restored twice.
   steps.length = 0;
   await assert.rejects(switchTo({ ...options, archive: release(dir, "1.6.0").archive, version: "1.6.0", manager: service(async () => ({ active: false })), refresh: half }), /didn't stay running\. The service's files could not be brought up to date with Botkins 1\.6\.0 \(.*\)\. Botkins 1\.5\.0 was put back\.$/);
-  assert.deepEqual(steps, ["snapshot", "restore", "restart on 1.6.0 under: as 1.3.1 wrote it", "restart on 1.5.0 under: as 1.3.1 wrote it"]);
+  assert.deepEqual(steps, ["snapshot", "restore (it never said what it wrote)", "restart on 1.6.0 under: as 1.3.1 wrote it", "restart on 1.5.0 under: as 1.3.1 wrote it"]);
   // A new version that can't write its files, and files that then can't be put back either:
   // nobody knows what the service would start under, so this update does not go on. The old
   // version is put back, the files are tried once more, and the update is one that failed.
@@ -488,6 +603,51 @@ test("an update has the new version write the service's files before the restart
   // With no service installed there are no files to keep up to date.
   await switchTo({ ...options, archive: release(dir, "1.8.0").archive, version: "1.8.0", refresh: writes });
   assert.deepEqual(steps, ["restart"]);
+});
+
+test("with the real service manager: what a failed refresh added is taken away, and a second put-back has systemd read the files again", { skip }, async (t) => {
+  const dir = tempDir(t);
+  const root = join(dir, "root");
+  mkdirSync(root);
+  // systemd as the manager asks it: the service is up, and at one point reloading fails once.
+  let reloadFails = 0;
+  const answers = { "systemctl show": { stdout: "ActiveState=active\nSubState=running\nMainPID=7\n" }, "systemctl daemon-reload": () => (reloadFails-- > 0 ? { code: 1, stderr: "Failed to reload daemon: Connection timed out" } : {}) };
+  const { manager, calls } = await systemInstall(root, { answers });
+  const { installRoot } = installed(dir, "1.2.3");
+  const before = readFileSync(root + UNIT, "utf8");
+  const tidy = root + "/etc/systemd/system/botkins-tidy.timer";
+  const options = { installRoot, platform: "linux", arch: "arm64", healthMs: 30, pollMs: 5, checkOwner: false, manager };
+  // The new version's program changes a file, adds a unit of its own, and then ends badly without
+  // saying what it wrote. (Nothing adds a unit today; a later version may.)
+  const half = async () => {
+    writeFileSync(root + UNIT, before + "# half written\n");
+    writeFileSync(tidy, "[Timer]\nOnCalendar=daily\n");
+    throw Object.assign(new Error("Command failed"), { stderr: "botkins: it broke\n" });
+  };
+  const done = await switchTo({ ...options, archive: release(dir, "1.3.0").archive, version: "1.3.0", refresh: half });
+  assert.match(done.note, /could not be brought up to date with Botkins 1\.3\.0 \(it broke\)/);
+  assert.equal(readFileSync(root + UNIT, "utf8"), before);
+  assert.equal(existsSync(tidy), false, "the unit it added is not left behind");
+  assert.deepEqual(calls.slice(0, 3), ["systemctl disable --now botkins-tidy.timer", "systemctl daemon-reload", "systemctl is-enabled botkins-update.path"]);
+  assert.ok(calls.indexOf("systemctl restart botkins.service") > calls.indexOf("systemctl daemon-reload"), "the service starts under files systemd has read again");
+  // Now the put-back writes the files and systemd then can't be made to read them. The update
+  // does not go on. The old version comes back, and the second put-back, which finds the files
+  // already as they were, still has systemd read them and links the units again: without that
+  // the old files would be on disk and the new units loaded, with nothing said.
+  calls.length = 0;
+  reloadFails = 1;
+  await assert.rejects(switchTo({ ...options, archive: release(dir, "1.4.0").archive, version: "1.4.0", refresh: half }), /^Error: The service's files could not be brought up to date with Botkins 1\.4\.0 \(it broke\)\. Botkins 1\.3\.0 was put back\.$/);
+  assert.equal(readFileSync(root + UNIT, "utf8"), before);
+  assert.equal(existsSync(tidy), false);
+  const reloads = calls.flatMap((call, at) => (call === "systemctl daemon-reload" ? [at] : []));
+  assert.equal(reloads.length, 2, "tried again after the one that failed");
+  assert.deepEqual(calls.slice(reloads[1], reloads[1] + 3), ["systemctl daemon-reload", "systemctl is-enabled botkins-update.path", "systemctl reenable botkins-update.path"]);
+  assert.ok(calls.slice(reloads[1]).includes("systemctl reenable botkins.service"));
+  assert.ok(calls.lastIndexOf("systemctl restart botkins.service") > reloads[1], "and only then is the old version started");
+  assert.equal(realpathSync(join(installRoot, "current")), join(installRoot, folderName("1.3.0", "linux", "arm64")));
+  // When systemd can't be made to read them the second time either, that is said: the old version runs under whatever is loaded.
+  reloadFails = 2;
+  await assert.rejects(switchTo({ ...options, archive: release(dir, "1.5.0").archive, version: "1.5.0", refresh: half }), /could not be brought up to date with Botkins 1\.5\.0 \(it broke\)\. The service's files could not be put back as Botkins 1\.3\.0 had them \(Reloading systemd failed .*Connection timed out\)\. On the computer, `botkins doctor` says what to do\. Botkins 1\.3\.0 was put back\.$/);
 });
 
 test("an install that went well, with files that could not be written, says so in its record", { skip }, async (t) => {

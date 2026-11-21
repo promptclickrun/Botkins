@@ -289,6 +289,7 @@ The update keeps these things from the installed file:
 - What you chose at installation: the user, the data folder, the `--allow-path` folders and the source of the host key.
 - Each environment variable that you added to the file, for example a proxy. On macOS, the job file is the only place for such a variable.
 - Each folder that you added for the bots to write to, also on a line of its own.
+- On Linux, the update keeps such a line only if it has one of these forms: `Environment=NAME=value` or `Environment="NAME=a value with spaces"`, and `ReadWritePaths=/a/folder`. A line in a different form is a setting that the update cannot keep (see below). Examples are a value in single quotes, `\n` in a value, a specifier such as `%h`, and a folder with `-` before it.
 - A copy of each file that it replaces, as `<name>.bak` in the same folder. There is one copy. The next update replaces it.
 
 The update does not change these things:
@@ -297,7 +298,7 @@ The update does not change these things:
 - A unit that you masked, and a service that you disabled.
 - A service file with a setting that Botkins did not write and that the update cannot keep. Examples are a changed `RestartSec=` and an added `MemoryMax=`. The update does not replace that file, because a new file would lose your setting. `botkins doctor` names the file and the setting. That file then stays as an earlier version wrote it.
 
-The update cannot see a line that you removed from the file. The new file has that line again. To switch a setting off, use `systemctl edit`.
+The update cannot see a line that you removed from the file. The new file has that line again. To switch a setting off, put the change in a drop-in file with `systemctl edit botkins.service`. systemd reads the drop-in after the service file, and each update keeps it.
 
 When the files are not up to date:
 

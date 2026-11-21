@@ -193,6 +193,62 @@ choices > "$work/choices-c.txt"
 diff "$work/choices-a.txt" "$work/choices-c.txt" || fail "What was chosen at install time changed."
 box 'botkins doctor | grep "Service file"; botkins service refresh'
 
+step "Lines of a person's own in the forms that are carried: systemd reads the same from the new file as from theirs"
+# The unit as B wrote it, without one of B's own lines (as an earlier version would have left it),
+# with the lines of a file put in before the line that starts Botkins.
+splice() {
+  docker cp "$1" "$name:/root/own-lines.txt" >/dev/null
+  docker exec "$name" awk -v f=/root/own-lines.txt -v out="$unit" '$0 == "LimitCORE=0" { next } /^ExecStart=/ { while ((getline line < f) > 0) print line > out; close(f) } { print > out }' /root/unit-b
+  in_box systemctl daemon-reload
+}
+# What the service's own process was given, for the variables in question.
+given() { in_box sh -c 'tr "\0" "\n" < /proc/$(systemctl show botkins -p MainPID --value)/environ | grep -E "^(HTTPS_PROXY|NOTE|QUOTED|PRICE|RATE|SAYS|TWO|SPACED|BOTKINS_DATA_DIR|BOTKINS_KEY_SOURCE|BOTKINS_KEY_FILE|HOME|NODE_ENV)=" | sort'; }
+cat > "$work/carried.txt" <<'LINES'
+Environment=HTTPS_PROXY=http://proxy.example:3128
+Environment="NOTE=two words"
+Environment="QUOTED=plain"
+Environment=PRICE=a$b
+Environment=RATE=100%%
+Environment="SAYS=q\"uote" TWO=on-one-line
+  Environment = SPACED=yes
+ReadWritePaths=/srv/more
+LINES
+in_box mkdir -p /srv/more
+splice "$work/carried.txt"
+box 'cat /root/own-lines.txt'
+in_box systemctl restart botkins
+running_on "$b"
+env_before=$(in_box systemctl show botkins -p Environment --value)
+# The folders as a set: their order in the file changes nothing.
+paths_before=$(in_box systemctl show botkins -p ReadWritePaths --value | tr ' ' '\n' | sort | tr '\n' ' ')
+given > "$work/given-before.txt"
+echo "systemctl show -p Environment, theirs:  $env_before"
+box 'botkins service refresh'
+running_on "$b"
+env_after=$(in_box systemctl show botkins -p Environment --value)
+paths_after=$(in_box systemctl show botkins -p ReadWritePaths --value | tr ' ' '\n' | sort | tr '\n' ' ')
+given > "$work/given-after.txt"
+echo "systemctl show -p Environment, written: $env_after"
+echo "systemctl show -p ReadWritePaths: $paths_before | $paths_after"
+[ "$env_before" = "$env_after" ] || fail "systemd reads other variables from the new file than from the person's."
+[ "$paths_before" = "$paths_after" ] || fail "systemd reads other write folders from the new file than from the person's."
+diff "$work/given-before.txt" "$work/given-after.txt" || fail "The service's process was given other values after the refresh."
+echo "what the process was given, before and after (the same):"; sed 's/^/  /' "$work/given-after.txt"
+[ "$(in_box systemctl show botkins -p LimitCORE --value)" = 0 ] || fail "The file was not written anew."
+box "grep -c '^Environment=' $unit; grep '^ReadWritePaths=' $unit"
+
+step "Lines of a person's own in any other form: the file is left as it is, and the line is named"
+for line in "Environment='SINGLE=quoted value'" 'Environment="BREAK=line\nbreak"' 'Environment=HOME_OF=%h' 'ReadWritePaths=-/srv/maybe'; do
+  printf '%s\n' "$line" > "$work/own.txt"
+  splice "$work/own.txt"
+  in_box cp "$unit" /root/unit-own
+  said=$(in_box sh -c 'botkins service refresh' 2>&1) || fail "refresh failed on a line it can't carry: $said"
+  printf '%s  →  %s\n' "$line" "$(printf '%s\n' "$said" | tail -n 1)"
+  in_box cmp "$unit" /root/unit-own || fail "A file with a line that can't be carried was replaced: $line"
+  printf '%s\n' "$said" | grep -qF -- "$line" || fail "Nothing named the line: $line"
+done
+in_box sh -c "cp /root/unit-b $unit && systemctl daemon-reload"
+
 step "A setting of the person's own that can't be carried: the file is left as it is, and doctor says where such a setting is kept"
 box "sed -i -e '/^LimitCORE=0\$/d' -e 's|^RestartSec=3\$|RestartSec=30|' $unit && systemctl daemon-reload && cp $unit /root/unit-own"
 box 'botkins service refresh; echo "exit=$?"; botkins doctor | grep -A1 "Service file"' | tee "$work/own.txt"
