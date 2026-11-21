@@ -439,7 +439,12 @@ test("the demo: an owner and two members make, share, open and change spaces, ea
     await ben.until(() => ben.space("Trip")?.can === "view", "Ben is sent Trip");
     assert.equal(ben.space("Trip")!.notify, "off");
     await assert.rejects(ana.call("link.spaces.share", tripId, { access: "link" }), /hasn't turned on sharing by link/);
+    // The switch starts off, and the owner's team part and `link.team.get` say where it stands.
+    assert.equal(owner.parts.team.linkSharing, false);
     assert.equal(await owner.call("link.team.setLinkSharing", true), true);
+    await owner.until(() => owner.parts.team.linkSharing === true, "the owner's Team settings show the switch on");
+    assert.equal((await owner.call<{ linkSharing?: boolean }>("link.team.get")).linkSharing, true);
+    await ana.until(() => ana.parts.team.linkSharing === true, "a member is told too");
     const linked = await ana.call<{ link: string }>("link.spaces.share", tripId, { access: "link" });
     assert.match(linked.link, /^https:\/\/relay\.botkins\.app\/s\/[A-Za-z0-9_-]{22}#k=[A-Za-z0-9_-]{43}$/);
     await ana.until(() => ana.space("Trip")!.link === linked.link, "the link is hers to copy");
