@@ -5,19 +5,27 @@ import assert from "node:assert/strict";
 import {
   accessTag,
   ago,
+  arrangeMove,
   arrangePin,
+  arrangeStep,
   askBot,
+  attachable,
+  canRemoveNote,
   changedLine,
   deleteQuestion,
   hasSpaces,
   lastLine,
+  moveTargets,
   panelChanged,
+  panelDrop,
   seenWords,
   spaceIcon,
   spaceLine,
   spaceName,
   spaceSections,
   spaceWhen,
+  snapSize,
+  stepSize,
 } from "../src/spaces.ts";
 
 const maya = { id: "m1", name: "Maya Chen" };
@@ -147,4 +155,118 @@ test("an ask goes to the first panel's bot when it is visible, else the primary 
   assert.equal(askBot(bots, [{ botId: "pip" }]).id, "pip");
   assert.equal(askBot(bots, [{ botId: "gone" }]).id, "luna");
   assert.equal(askBot(bots, []).id, "luna");
+});
+
+test("dragging a pinned space, and Move up and Move down, keep the rest as they were", () => {
+  const list = [
+    { id: "today", pinned: true },
+    { id: "feed", pinned: true },
+    { id: "launch", pinned: true },
+    { id: "money", pinned: false },
+    { id: "trip", pinned: false },
+  ];
+  assert.deepEqual(arrangeMove(list, "launch", "today", false), {
+    order: ["launch", "today", "feed", "money", "trip"],
+    pinned: ["launch", "today", "feed"],
+  });
+  assert.deepEqual(arrangeMove(list, "today", "launch", true).pinned, ["feed", "launch", "today"]);
+  assert.deepEqual(arrangeMove(list, "today", "feed", false), null, "dropped where it was");
+  assert.deepEqual(arrangeMove(list, "feed", "today", true), null, "dropped where it was");
+  assert.deepEqual(arrangeMove(list, "money", "today", false), null, "only pinned spaces are dragged");
+  assert.deepEqual(arrangeStep(list, "feed", -1).pinned, ["feed", "today", "launch"]);
+  assert.deepEqual(arrangeStep(list, "feed", 1).pinned, ["today", "launch", "feed"]);
+  assert.equal(arrangeStep(list, "today", -1), null);
+  assert.equal(arrangeStep(list, "launch", 1), null);
+  assert.equal(arrangeStep(list, "money", -1), null);
+});
+
+test("where a dragged panel lands, and the panel it lands in front of", () => {
+  const ids = ["a", "b", "c", "d"];
+  assert.deepEqual(panelDrop(ids, "d", "b", false), { order: ["a", "d", "b", "c"], before: "b" });
+  assert.deepEqual(panelDrop(ids, "a", "c", true), { order: ["b", "c", "a", "d"], before: "d" });
+  assert.deepEqual(panelDrop(ids, "a", "d", true), { order: ["b", "c", "d", "a"], before: null }, "the end");
+  assert.equal(panelDrop(ids, "b", "c", false), null, "in front of the one after it: no move");
+  assert.equal(panelDrop(ids, "b", "a", true), null);
+  assert.equal(panelDrop(ids, "b", "b", true), null);
+  assert.equal(panelDrop(ids, "x", "b", true), null);
+});
+
+test("a pulled corner snaps to Small, Wide or Tall, and arrow keys step through them", () => {
+  // Two columns of 392 px with a 16 px gap: Small is nearer one column than both.
+  const grid = { width: 800, gap: 16, tallAt: 500 };
+  assert.equal(snapSize(390, 200, grid), "small");
+  assert.equal(snapSize(590, 200, grid), "small");
+  assert.equal(snapSize(600, 200, grid), "wide");
+  assert.equal(snapSize(800, 499, grid), "wide");
+  assert.equal(snapSize(800, 500, grid), "tall");
+  assert.equal(snapSize(300, 900, grid), "small", "a narrow pull stays Small however long");
+  assert.equal(stepSize("small", "ArrowRight"), "wide");
+  assert.equal(stepSize("wide", "ArrowDown"), "tall");
+  assert.equal(stepSize("tall", "ArrowDown"), "tall");
+  assert.equal(stepSize("tall", "ArrowLeft"), "wide");
+  assert.equal(stepSize("small", "ArrowUp"), "small");
+  assert.equal(stepSize("wide", "Enter"), "wide");
+});
+
+test("notes: a person removes their own; the maker and the owner remove any", () => {
+  const note = { by: "m1" };
+  assert.equal(canRemoveNote(note, "m1", { mine: false }), true);
+  assert.equal(canRemoveNote(note, "m2", { mine: false }), false);
+  assert.equal(canRemoveNote(note, "m2", { mine: true }), true, "the maker");
+  assert.equal(canRemoveNote(note, "owner", { mine: false }), true, "the owner");
+});
+
+test("a panel moves to the other spaces the person can change", () => {
+  const list = [
+    { id: "launch", can: "own" },
+    { id: "money", can: "edit" },
+    { id: "maya", can: "view" },
+  ];
+  assert.deepEqual(moveTargets(list, list[0], {}, "owner").map((s) => s.id), ["money"]);
+  assert.deepEqual(moveTargets(list, list[1], {}, "m1"), [], "an editor moves only the panels they asked for");
+  assert.deepEqual(moveTargets(list, list[1], { createdBy: "m1" }, "m1").map((s) => s.id), ["launch"]);
+});
+
+test("Attach offers the person's own spaces and those already attached", () => {
+  const list = [
+    space({ id: "today", builtin: "today" }),
+    space({ id: "launch", projectId: "p1" }),
+    space({ id: "money" }),
+    space({ id: "maya", mine: false, by: maya, projectId: "p1" }),
+    space({ id: "maya2", mine: false, by: maya }),
+  ];
+  assert.deepEqual(attachable(list, "p1").map((s) => s.id), ["launch", "money", "maya"]);
+});
+
+test("a view's save goes out only soon after a real click or key press, and not too often", async () => {
+  const { GESTURE_MS, SET_GAP_MS, cleanLabel, cleanPatch, saveGate } = await import("../src/frameState.ts");
+  let now = 1_000_000;
+  const gate = saveGate(() => now);
+  assert.equal(gate.allow(), false, "a page that was only opened cannot save");
+  gate.gesture();
+  assert.equal(gate.allow(), true);
+  assert.equal(gate.allow(), false, "at most one a second");
+  now += SET_GAP_MS - 1;
+  assert.equal(gate.allow(), false);
+  now += 1;
+  assert.equal(gate.allow(), true, "a second later, still within 3 seconds of the click");
+  now += SET_GAP_MS;
+  assert.equal(gate.allow(), true);
+  now += SET_GAP_MS + 1;
+  assert.equal(gate.allow(), false, "more than 3 seconds after the click, the page is on its own again");
+  gate.gesture();
+  now += GESTURE_MS;
+  assert.equal(gate.allow(), true, "exactly 3 seconds still counts");
+  gate.gesture();
+  now += GESTURE_MS + 1;
+  assert.equal(gate.allow(), false);
+  // A refused save does not count as one: the next allowed one is not pushed back.
+  gate.gesture();
+  assert.equal(gate.allow(), true);
+  // What a page hands over is cut to what the computer takes.
+  assert.deepEqual(cleanPatch({ a: 1, b: null }), { a: 1, b: null });
+  for (const bad of [null, undefined, "x", 3, ["a"]]) assert.equal(cleanPatch(bad), null, String(bad));
+  assert.equal(cleanLabel("  Ticked Press kit\n"), "Ticked Press kit");
+  assert.equal(cleanLabel("x".repeat(200)).length, 80);
+  for (const none of ["", "   ", 5, null, undefined, {}]) assert.equal(cleanLabel(none), undefined);
 });

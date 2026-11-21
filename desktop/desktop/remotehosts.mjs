@@ -110,6 +110,9 @@ export function snapshotOf(parts, own = {}) {
     requests: live.requests ?? [],
     panels: parts.panels ?? [],
     board: parts.board ?? [],
+    // The spaces the paired person can open, in their order ("spaces-v1"). A host without Spaces
+    // sends none, and the window then shows the Today page from `panels` and `board`.
+    ...(Array.isArray(parts.spaces) && { spaces: parts.spaces }),
     tasks: parts.tasks ?? [],
     projects: parts.projects ?? [],
     mcpServers: parts.mcp ?? [],

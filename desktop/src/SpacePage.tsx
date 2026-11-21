@@ -2,6 +2,7 @@
 // pure parts (names, tags, lines, lists) are in spaces.ts; the Share popover is in SpaceShare.tsx.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  ArrowDown,
   ArrowUp,
   Ellipsis,
   LayoutGrid,
@@ -26,15 +27,20 @@ import BoardPanel from "./Board";
 import { useAsk, useMenu, type MenuItem } from "./Pages";
 import { PanelCard, usePanelManager } from "./Today";
 import SharePopover, { isOwner } from "./SpaceShare";
-import { teamCan } from "./teamAccess";
+import NotesSheet from "./SpaceNotes";
+import { usePanelDrag, usePanelResize, useSpaceDrag } from "./SpaceArrange";
+import { CadencePicker, ZoneInput, cronFromCadence } from "./Routines";
+import { memberTeam, teamCan } from "./teamAccess";
 import {
   accessTag,
   arrangePin,
+  arrangeStep,
   askBot,
   changedLine,
   deleteQuestion,
   initial,
   lastLine,
+  moveTargets,
   panelChanged,
   spaceIcon,
   spaceLine,
@@ -45,7 +51,7 @@ import {
   type SpaceStart,
   type SpaceSummary,
 } from "./spaces";
-import type { BoardItem, State } from "./types";
+import type { BoardItem, Cadence, State } from "./types";
 import "./spaces.css";
 import "./workspaces.css";
 
@@ -61,6 +67,19 @@ export function SpaceIcon({ space, size = 20 }: { space: SpaceSummary; size?: nu
 
 /** Sets the person's pins: the order and pinned list with one space pinned or unpinned. */
 export const setPinned = (spaces: SpaceSummary[], id: string, pin: boolean) => api["link.spaces.arrange"](arrangePin(spaces, id, pin));
+
+/** The person: "owner", or their member id. */
+export const personOf = (state: State) => memberTeam(state)?.me.memberId ?? "owner";
+
+/** Move up and Move down for a pinned space, in its menu. `send` sends the new order. */
+function moveItems(spaces: SpaceSummary[], id: string, send: (next: ReturnType<typeof arrangeStep>) => void): MenuItem[] {
+  const up = arrangeStep(spaces, id, -1);
+  const down = arrangeStep(spaces, id, 1);
+  return [
+    { label: "Move up", icon: ArrowUp, disabled: !up, run: () => send(up) },
+    { label: "Move down", icon: ArrowDown, disabled: !down, run: () => send(down) },
+  ];
+}
 
 /**
  * The side menu's Spaces: the heading and its +, the person's pinned spaces in their order, and
@@ -83,7 +102,10 @@ export function SidebarSpaces({
   fail: (e: unknown) => void;
 }) {
   const dialogs = useAsk();
-  const pinned = (state.spaces ?? []).filter((s) => s.pinned);
+  const menu = useMenu();
+  const spaces = state.spaces ?? [];
+  // Pinned spaces are dragged up and down; a line shows where one lands.
+  const drag = useSpaceDrag(spaces, fail);
   async function create() {
     const name = await dialogs.ask({ title: "New space", confirm: "Create", field: { label: "Name", value: "", max: 40 } });
     if (!name) return;
@@ -100,8 +122,9 @@ export function SidebarSpaces({
         )}
       </div>
       <nav aria-label="Spaces" className="spacenav">
-        {pinned.map((s) => {
+        {drag.shown.map((s) => {
           const on = selected === s.id;
+          const name = spaceName(s);
           return (
             <button
               key={s.id}
@@ -109,9 +132,17 @@ export function SidebarSpaces({
               aria-current={on ? "page" : undefined}
               aria-description={s.changed > 0 ? "Changed" : undefined}
               onClick={() => openSpace(s.id)}
+              onContextMenu={(e) =>
+                menu.show(e, name, [
+                  ...moveItems(spaces, s.id, drag.send),
+                  "separator",
+                  { label: "Unpin", icon: PinOff, run: () => void setPinned(spaces, s.id, false).catch(fail) },
+                ])
+              }
+              {...drag.row(s.id)}
             >
               <SpaceIcon space={s} size={collapsed ? 24 : 20} />
-              <span className="nav-label">{spaceName(s)}</span>
+              <span className="nav-label">{name}</span>
               {s.changed > 0 && <i />}
             </button>
           );
@@ -121,6 +152,7 @@ export function SidebarSpaces({
           <span className="nav-label">All spaces</span>
         </button>
       </nav>
+      {menu.node}
       {dialogs.node}
     </>
   );
@@ -139,6 +171,9 @@ export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace:
           {items.map((s) => {
             const name = spaceName(s);
             const items = (): MenuItem[] => [
+              ...(s.pinned
+                ? [...moveItems(spaces, s.id, (next) => next && void api["link.spaces.arrange"](next).catch(fail)), "separator" as const]
+                : []),
               { label: s.pinned ? "Unpin" : "Pin", icon: s.pinned ? PinOff : Pin, run: () => void setPinned(spaces, s.id, !s.pinned).catch(fail) },
             ];
             return (
@@ -182,12 +217,24 @@ const STARTS: { id: SpaceStart; label: string }[] = [
   { id: "app", label: "App" },
 ];
 
-/** The sheet "New panel": a sentence, a bot, and what to start from. */
-function NewPanel({ state, space, botId, close, opened }: { state: State; space: SpaceSummary; botId: string; close: () => void; opened: (chatId: string) => void }) {
+/**
+ * The sheet "New panel": a sentence, a bot, what to start from, the space it goes to and whether a
+ * routine refreshes it. The contract's row Project is left out: a panel is attached to a project
+ * once it exists, and it does not exist until the bot first publishes it.
+ */
+export function NewPanel({ state, space, botId, close, opened }: { state: State; space: SpaceSummary; botId: string; close: () => void; opened: (chatId: string) => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
   const [bot, setBot] = useState(botId);
   const [start, setStart] = useState<SpaceStart>();
+  const [spaceId, setSpaceId] = useState(space.id);
+  const [refresh, setRefresh] = useState(false);
+  const [cadence, setCadence] = useState<Cadence>({ kind: "weekdays", time: "09:00" });
+  const [zone, setZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  // The spaces a panel may be made in: the open one first, then every other the person can change.
+  const choices = [space, ...(state.spaces ?? []).filter((s) => s.id !== space.id && s.can !== "view")];
+  // A routine is a change to the space: a member needs Can manage for it.
+  const canRefresh = teamCan(state, "today", "manage");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -208,7 +255,13 @@ function NewPanel({ state, space, botId, close, opened }: { state: State; space:
           setBusy(true);
           setError("");
           try {
-            const { chatId } = await api["spaces.newPanel"]({ spaceId: space.id, botId: bot, prompt: prompt.trim(), ...(start && { start }) });
+            const { chatId } = await api["spaces.newPanel"]({
+              spaceId,
+              botId: bot,
+              prompt: prompt.trim(),
+              ...(start && { start }),
+              ...(refresh && canRefresh && { refresh: { cron: cronFromCadence(cadence), timezone: zone } }),
+            });
             opened(chatId);
           } catch (e) {
             setError(clean(e));
@@ -240,6 +293,35 @@ function NewPanel({ state, space, botId, close, opened }: { state: State; space:
             ))}
           </div>
         </div>
+        {choices.length > 1 && (
+          <label>
+            Space
+            <select value={spaceId} onChange={(e) => setSpaceId(e.target.value)}>
+              {choices.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {spaceName(s)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {canRefresh && (
+          <>
+            <label>
+              Refresh
+              <select value={refresh ? "on" : "off"} onChange={(e) => setRefresh(e.target.value === "on")}>
+                <option value="off">Off</option>
+                <option value="on">On a schedule</option>
+              </select>
+            </label>
+            {refresh && (
+              <div className="space-refresh">
+                <CadencePicker value={cadence} onChange={setCadence} allowOnce={false} />
+                <ZoneInput value={zone} onChange={setZone} />
+              </div>
+            )}
+          </>
+        )}
         {error && (
           <p className="field-error" role="alert">
             {error}
@@ -264,10 +346,13 @@ export function SpacePage({
   openProject,
   boardChat,
   removed,
+  about,
   fail,
 }: {
   state: State;
   space: SpaceSummary;
+  /** A view in one of this space's panels handed over text: it waits in the ask bar, about that panel, not sent. */
+  about?: { panelId: string; text: string; n: number };
   open: (chatId: string) => void;
   /** Opens a chat the computer just made. */
   openNew: (chatId: string) => void;
@@ -287,15 +372,61 @@ export function SpacePage({
   const [hidden, showHidden] = useState(false);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
+  /** The panel the ask is about ("Ask Pip to change it"), or "" for the whole space. */
+  const [aboutPanel, setAboutPanel] = useState("");
+  useEffect(() => {
+    if (!about) return;
+    setAboutPanel(about.panelId);
+    // The answer joins whatever is already typed, so nothing the person wrote is lost.
+    setText((typed) => (typed.trim() ? typed + "\n\n" + about.text : about.text));
+  }, [about?.n]);
   const menu = useMenu();
   const dialogs = useAsk();
   const name = spaceName(space);
   const panels = content?.panels ?? [];
-  const manager = usePanelManager(panels, open, name);
+  const me = personOf(state);
+  const [notesOf, setNotesOf] = useState("");
   const view = space.can === "view";
+  // Resizing, moving and putting panels in order are changes to the space: Can manage, on a space the person can change.
+  const arrange = !view && teamCan(state, "today", "manage");
+  const canNote = !view && teamCan(state, "today", "use");
+  const grid = useRef<HTMLDivElement>(null);
+  const manager = usePanelManager(panels, open, name, (shown, close) => {
+    const panel = panels.find((p) => p.id === shown.id);
+    if (!panel) return null;
+    const targets = arrange ? moveTargets(state.spaces ?? [], space, panel, me) : [];
+    return (
+      <>
+        {targets.length > 0 && (
+          <label>
+            Space
+            <select value={space.id} onChange={(e) => void moveTo(panel.id, e.target.value, close).catch(fail)}>
+              <option value={space.id}>{name}</option>
+              {targets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {spaceName(s)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <button
+          onClick={() => {
+            close();
+            setNotesOf(panel.id);
+          }}
+        >
+          <MessageSquare size={16} />
+          Notes
+        </button>
+      </>
+    );
+  });
   const addAllowed = !view && teamCan(state, "today", "create") && teamCan(state, "agents", "chat");
   const askAllowed = !view && teamCan(state, "today", "use") && teamCan(state, "agents", "chat") && state.bots.length > 0;
-  const bot = askBot(state.bots, panels);
+  const asked = panels.find((p) => p.id === aboutPanel);
+  // An ask about a panel goes to that panel's bot.
+  const bot = (asked && state.bots.find((b) => b.id === asked.botId)) || askBot(state.bots, panels);
 
   // The content is asked for, and asked again when the space's rev passes the one held.
   useEffect(() => {
@@ -334,6 +465,14 @@ export function SpacePage({
   const project = space.projectId ? state.projects?.find((p) => p.id === space.projectId) : undefined;
   const line = changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
   const shown = panels.filter((p) => p.hidden === hidden);
+  const drag = usePanelDrag(
+    shown.map((p) => p.id),
+    space.id,
+    grid,
+    fail,
+  );
+  const resize = usePanelResize(grid, fail);
+  const noted = panels.find((p) => p.id === notesOf);
   const hiddenCount = view ? 0 : panels.filter((p) => p.hidden).length;
   const board = space.builtin && space.builtin !== "today" ? ({ feed: "feed", ideas: "idea", goals: "goal" } as const)[space.builtin] : undefined;
 
@@ -368,13 +507,26 @@ export function SpacePage({
     ];
   }
 
+  /** Moves a panel to the end of another space; into a space shared by link, after asking. */
+  async function moveTo(panelId: string, spaceId: string, close: () => void) {
+    const target = state.spaces?.find((s) => s.id === spaceId);
+    if (!target || target.id === space.id) return;
+    if (target.access === "link") {
+      const ok = await dialogs.ask({ title: "Move to " + spaceName(target) + "?", body: "Anyone with the link will see this panel.", confirm: "Move" });
+      if (!ok) return;
+    }
+    await api["spaces.movePanel"](panelId, { spaceId: target.id, before: null });
+    close();
+  }
+
   async function ask() {
     const said = text.trim();
     if (!said || asking || !bot) return;
     setAsking(true);
     try {
-      const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: bot.id, text: said });
+      const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: bot.id, text: said, ...(asked && { panelId: asked.id }) });
       setText("");
+      setAboutPanel("");
       openNew(chatId);
     } catch (e) {
       fail(e);
@@ -396,16 +548,22 @@ export function SpacePage({
     ) : null;
   else if (shown.length)
     body = (
-      <div className="panel-grid">
+      <div ref={grid} className={"panel-grid" + (drag.dragging ? " arranging" : "")} {...(arrange ? drag.grid : {})}>
         {shown.map((p) => {
           const notes = p.notes?.length ?? 0;
+          const place = arrange ? drag.panel(p.id) : undefined;
           return (
             <PanelCard
               key={p.id}
               state={state}
-              panel={p}
+              panel={{ ...p, size: resize.sizeOf(p.id, p.size) }}
+              outer={place && { ...place, className: [place.className, resize.pulling === p.id && "pulling"].filter(Boolean).join(" ") || undefined }}
+              top={arrange ? drag.handle(p.id) : undefined}
+              after={arrange && resize.corner(p)}
               fail={fail}
               readOnly={view}
+              // An app panel keeps what people change in it. A person who may only look reads it.
+              store={{ state: p.state ?? {}, rev: p.stateRev ?? 0, ...(canNote && { set: (patch, label) => api["spaces.patchState"](p.id, patch, label).then((answer) => answer.rev) }) }}
               manage={view ? undefined : () => manager.manage(p.id)}
               when={(t) => spaceWhen(t)}
               badges={
@@ -417,10 +575,10 @@ export function SpacePage({
               foot={p.last && <small className="space-last">{lastLine(p.last)}</small>}
               side={
                 notes > 0 && (
-                  <span className="space-notes" aria-label={notes === 1 ? "1 note" : notes + " notes"}>
+                  <button className="space-notes" aria-label={notes === 1 ? "1 note" : notes + " notes"} onClick={() => setNotesOf(p.id)}>
                     <MessageSquare size={14} aria-hidden="true" />
                     {notes}
-                  </span>
+                  </button>
                 )
               }
             />
@@ -512,9 +670,17 @@ export function SpacePage({
           }}
         >
           <BotAvatar bot={bot} size={26} />
+          {asked && (
+            <span className="space-ask-about">
+              {asked.title}
+              <button type="button" aria-label={"Ask about the whole space instead of " + asked.title} onClick={() => setAboutPanel("")}>
+                <X size={13} />
+              </button>
+            </span>
+          )}
           <input
-            aria-label="Ask about this space, or describe a new panel"
-            placeholder="Ask about this space, or describe a new panel"
+            aria-label={asked ? "Ask " + bot.name + " to change it" : "Ask about this space, or describe a new panel"}
+            placeholder={asked ? "Ask " + bot.name + " to change it" : "Ask about this space, or describe a new panel"}
             value={text}
             maxLength={8000}
             onChange={(e) => setText(e.target.value)}
@@ -536,6 +702,7 @@ export function SpacePage({
           }}
         />
       )}
+      {noted && <NotesSheet space={space} panel={noted} me={me} canWrite={canNote} close={() => setNotesOf("")} />}
       {manager.node}
       {menu.node}
       {dialogs.node}

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
+import { showsSpaces } from "./spaces-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-sidebar-"));
@@ -21,7 +22,12 @@ const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, COMMANDER_DATA_DIR: dat
 delete env.ELECTRON_RUN_AS_NODE;
 const shots = process.env.SIDEBAR_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
+// The places every workspace saves, in the usual order. On a computer with Spaces, Today is a
+// space, not a place: it is in what is saved, and not in the menu or in Settings › Side menu.
 const USUAL = ["Home", "Today", "Chats", "Work", "Wiki"];
+let spaces = false;
+/** An order of places as the side menu shows it. */
+const shown = (order) => (spaces ? order.filter((place) => place !== "Today") : order);
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 const errors = [];
 let app, page;
@@ -31,6 +37,8 @@ const size = (w, h) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow
 const theme = (mode) => page.evaluate((mode) => window.botkins.setPreferences({ appearance: { theme: mode } }), mode);
 const nav = () => page.getByRole("navigation", { name: "Workspace" });
 const navOrder = () => nav().getByRole("button").evaluateAll((els) => els.map((el) => el.querySelector(".nav-label")?.textContent?.trim()));
+/** The saved order, as the side menu shows it. */
+const savedOrder = async () => shown((await snap()).settings.sidebar.order);
 const collapsed = () => page.locator(".shell").evaluate((el) => el.classList.contains("collapsed"));
 const railWidth = () => page.locator(".shell > aside").evaluate((el) => Math.round(el.getBoundingClientRect().width));
 async function shot(name) {
@@ -127,12 +135,13 @@ async function rail(places, height) {
 
 try {
   await launch();
-  assert.deepEqual(await navOrder(), USUAL);
+  spaces = await showsSpaces(page);
+  assert.deepEqual(await navOrder(), shown(USUAL));
   // ---- A new workspace shows the menu as icons only, and nobody has chosen that yet.
   assert.equal(await collapsed(), true);
   assert.equal(await railWidth(), 72);
   assert.deepEqual((await snap()).settings.sidebar, { order: USUAL, collapsed: true });
-  await rail(USUAL, 48);
+  await rail(shown(USUAL), 48);
   await fits("icons only 1190×830");
   await shot("sidebar-collapsed");
   await nav().getByRole("button").first().hover();
@@ -148,43 +157,43 @@ try {
   await settings.getByRole("heading", { name: "Side menu", level: 2 }).waitFor();
   await expect(settings.getByRole("switch", { name: "Show icons only" })).toBeChecked();
   const places = settings.getByRole("list", { name: "Places in the side menu" });
-  await expect(places.getByRole("listitem")).toHaveCount(5);
+  await expect(places.getByRole("listitem")).toHaveCount(shown(USUAL).length);
   await expect(settings.getByRole("button", { name: "Reset to the usual order" })).toBeDisabled();
   await expect(settings.getByRole("button", { name: "Move Home up" })).toBeDisabled();
   await settings.getByRole("button", { name: "Move Wiki up" }).focus();
   await page.keyboard.press("Enter");
   await expect(settings.getByRole("button", { name: "Move Wiki up" })).toBeFocused();
-  // Five places (Projects are a tab of Work): two moves (Enter, then Space) take Wiki from 5 to 3.
+  // Two moves (Enter, then Space) take Wiki from last to third of five, or to second of four with Spaces.
   await page.keyboard.press("Space");
   const moved = ["Home", "Today", "Wiki", "Chats", "Work"];
-  await expect.poll(navOrder).toEqual(moved);
-  await expect.poll(async () => (await snap()).settings.sidebar.order).toEqual(moved);
-  await expect(settings.getByRole("status").filter({ hasText: "Wiki moved to position 3 of 5." })).toBeVisible();
+  await expect.poll(navOrder).toEqual(shown(moved));
+  await expect.poll(savedOrder).toEqual(shown(moved));
+  await expect(settings.getByRole("status").filter({ hasText: "Wiki moved to position " + (shown(moved).indexOf("Wiki") + 1) + " of " + shown(moved).length + "." })).toBeVisible();
   // Tab reaches Move down on the same place; it moves back one.
   await page.keyboard.press("Tab");
   await expect(settings.getByRole("button", { name: "Move Wiki down" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect.poll(navOrder).toEqual(["Home", "Today", "Chats", "Wiki", "Work"]);
+  await expect.poll(navOrder).toEqual(shown(["Home", "Today", "Chats", "Wiki", "Work"]));
   console.log("Move up and Move down by keyboard reorder the side menu at once; focus stays on the place that moved.");
 
   // ---- Dragging a place moves it too.
   const row = (name) => places.locator('[data-place="' + name + '"]');
   await row("Work").dragTo(row("Home"), { targetPosition: { x: 40, y: 4 } });
-  await expect.poll(navOrder).toEqual(["Work", "Home", "Today", "Chats", "Wiki"]);
+  await expect.poll(navOrder).toEqual(shown(["Work", "Home", "Today", "Chats", "Wiki"]));
   console.log("Dragging Work above Home moves it to the top.");
   await shot("sidebar-settings");
 
   // ---- Reset.
   await settings.getByRole("button", { name: "Reset to the usual order" }).click();
-  await expect.poll(navOrder).toEqual(USUAL);
-  await expect.poll(async () => (await snap()).settings.sidebar.order).toEqual(USUAL);
+  await expect.poll(navOrder).toEqual(shown(USUAL));
+  await expect.poll(savedOrder).toEqual(shown(USUAL));
   await expect(settings.getByRole("button", { name: "Reset to the usual order" })).toBeDisabled();
   console.log("Reset to the usual order puts the places back.");
 
   // An order to keep across the relaunch: Home down two places.
   await settings.getByRole("button", { name: "Move Home down" }).click();
   await settings.getByRole("button", { name: "Move Home down" }).click();
-  const kept = ["Today", "Chats", "Home", "Work", "Wiki"];
+  const kept = spaces ? ["Chats", "Work", "Home", "Wiki"] : ["Today", "Chats", "Home", "Work", "Wiki"];
   await expect.poll(navOrder).toEqual(kept);
   await settings.getByRole("button", { name: "Close dialog" }).click();
   await expect(settings).toHaveCount(0);
@@ -193,7 +202,7 @@ try {
   await page.getByRole("button", { name: "Expand side menu" }).click();
   await expect.poll(collapsed).toBe(false);
   await expect.poll(railWidth).toBe(264);
-  await expect.poll(async () => (await snap()).settings.sidebar).toEqual({ order: kept, collapsed: false, picked: true });
+  await expect.poll(async () => ({ ...(await snap()).settings.sidebar, order: await savedOrder() })).toEqual({ order: kept, collapsed: false, picked: true });
   for (const name of kept) {
     await expect(nav().getByRole("button", { name, exact: true })).not.toHaveAttribute("title", /./);
     await expect(nav().getByRole("button", { name, exact: true }).locator(".nav-label")).toHaveCSS("opacity", "1");
@@ -272,7 +281,7 @@ try {
 
   // ---- The order and the menu the person opened survive a relaunch.
   await page.getByRole("button", { name: "Expand side menu" }).click();
-  await expect.poll(async () => (await snap()).settings.sidebar).toEqual({ order: kept, collapsed: false, picked: true });
+  await expect.poll(async () => ({ ...(await snap()).settings.sidebar, order: await savedOrder() })).toEqual({ order: kept, collapsed: false, picked: true });
   await app.close();
   await launch();
   assert.deepEqual(await navOrder(), kept);

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
+import { openBoard } from "./spaces-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-board-"));
@@ -55,7 +56,8 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 880));
   const snapshot = () => page.evaluate(() => window.botkins.snapshot());
-  const board = page.getByRole("region", { name: "Feed, Ideas and Goals" });
+  // The board: one region with three tabs on the Today page, or the cards of a Feed, Ideas or Goals space.
+  const board = page.locator(".board-panel");
   const nav = (name) => page.getByRole("navigation").getByRole("button", { name, exact: true }).click();
   async function shoot(name) {
     if (!shots) return;
@@ -69,8 +71,7 @@ try {
   }
 
   // Feed: open marks read, thumbs down with a reason clears it.
-  await nav("Today");
-  await board.getByRole("tab", { name: /Feed/ }).waitFor();
+  await openBoard(page, "Feed");
   await board.getByRole("button", { name: /Rates fell this morning/ }).click();
   await board.getByText("0.2%").waitFor();
   await expect.poll(async () => (await snapshot()).board.find((i) => i.kind === "feed").read).toBe(true);
@@ -81,7 +82,7 @@ try {
   await board.getByText("Nothing yet. Ask a bot for posts.").waitFor();
 
   // Ideas: turning one into a goal answers it and adds the goal.
-  await board.getByRole("tab", { name: /Ideas/ }).click();
+  await openBoard(page, "Ideas");
   await board.getByRole("button", { name: /Take a walk after lunch/ }).click();
   await board.getByRole("combobox", { name: "Turn into a goal" }).selectOption("health");
   await expect.poll(async () => (await snapshot()).board.filter((i) => i.kind === "goal").length).toBe(2);
@@ -89,7 +90,7 @@ try {
   assert.equal(goal.category, "health");
 
   // Goals: Not today hides a goal until tomorrow; Mark done finishes another.
-  await board.getByRole("tab", { name: /Goals/ }).click();
+  await openBoard(page, "Goals");
   await board.getByRole("button", { name: /Read 12 books/ }).click();
   await board.getByRole("button", { name: "Not today" }).click();
   await expect(board.getByRole("button", { name: /Read 12 books/ })).toHaveCount(0);

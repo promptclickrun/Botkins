@@ -635,14 +635,16 @@ declare global {
       moveTodo(projectId: string, todoId: string, delta: -1 | 1): Promise<void>;
       setBotAccess(botId: string, access: BotAccessGrant): Promise<void>;
       openApp(id: string): Promise<void>;
-      takePrefill(): Promise<{ chatId: string; text: string } | null>;
+      takePrefill(): Promise<{ chatId?: string; text: string; panelId?: string; spaceId?: string } | null>;
       linkPreview(url: string): Promise<LinkPreview | null>;
       // Tasks board
       saveTask(data: TaskInput): Promise<string>;
       moveTask(id: string, status: TaskStatus | "archived"): Promise<void>;
       startTask(id: string): Promise<void>;
       deleteTask(id: string): Promise<void>;
-      onPrefill(fn: (data: { chatId: string; text: string }) => void): () => void;
+      onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
+      /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
+      onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
       boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): Promise<string | undefined>;
       // Chat canvas
       chooseFiles(): Promise<Attachment[]>;
