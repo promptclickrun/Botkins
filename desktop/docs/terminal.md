@@ -286,6 +286,8 @@ The owner can check for an update and start it from a paired phone. A bot can do
 
 The service has no permission to replace its own program, so it only makes a request. A root job (`botkins-update.service`) sees the request and does the same signed update. The link to the phone drops while the service restarts. When the link is back, the phone shows the result: the new version, or the reason that the update failed and the old version came back. `botkins status --json` shows the same result as `update.last`. The result stays there while it describes the version that runs.
 
+If the update job stops because of an error in the program itself, it writes that as the result before it stops. The phone then shows the reason immediately, and you can ask for the update again.
+
 The root job writes this result next to the versions in `/opt/botkins`, which only root can change. It writes nothing into the data folder. The only thing it does there is remove the request, and it does that as the `botkins` user.
 
 ### Install updates automatically

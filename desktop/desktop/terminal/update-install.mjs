@@ -288,16 +288,39 @@ export async function switchTo({ archive, installRoot, version, platform = proce
 
 /**
  * The whole update: the latest release, downloaded, verified, installed and watched.
+ *
+ * An update can also end without any of this code hearing of it: an error thrown outside every
+ * promise ends the process. Node's own HTTP client has done that, with an assertion of its own,
+ * when a server closed the connection in the middle of a download. The job would then be gone
+ * with nothing written, and a phone that asked would wait for the service to give up on it
+ * (25 minutes). So such an end is listened for while the update runs, and is recorded as what it
+ * is: an install that did not end well. The record names no version it tried to install: a
+ * death like this says nothing against the release, so a host that installs by itself tries it again.
+ *
  * @param options.entry    This copy's own cli/botkins.mjs.
  * @param options.manager  The installed service (desktop/terminal/manager.mjs), or nothing.
  * @param options.say      (line) → what is happening.
  * @param options.report   ({ at, from, to, ok, message? }) → how an install ended, a failed or
  *   undone one included. Not called when there was nothing newer to install.
+ * @param options.watched  What tells of an error nobody caught (the process). Tests pass their own.
+ * @param options.die      (code) → ends the process once such an error is recorded.
  * @returns { status: "current" | "installed", current, latest?, previous? }
  */
-export async function applyUpdate({ report = () => {}, now = () => new Date(), ...options }) {
+export async function applyUpdate({ report = () => {}, now = () => new Date(), watched = process, die = (code) => process.exit(code), ...options }) {
   const layout = installLayout(options.entry);
   let to;
+  const died = (error) => {
+    const why = (error?.code ? error.code + ": " : "") + String(error?.message ?? error).trim().split("\n")[0];
+    const message = "The update" + (to ? " to Botkins " + to : "") + " stopped before it was done (" + why.slice(0, 140) + "). Ask for it again.";
+    try {
+      if (layout) report({ at: now().toISOString(), from: layout.version, to: layout.version, ok: false, message });
+    } catch {
+      // Nothing more can be done about a record that can't be written.
+    }
+    console.error("botkins: " + message);
+    die(1);
+  };
+  watched.on("uncaughtException", died);
   try {
     const result = await install({ ...options, layout, found: (version) => (to = version) });
     if (result.status === "installed") report({ at: now().toISOString(), from: result.previous, to: result.current, ok: true });
@@ -306,6 +329,8 @@ export async function applyUpdate({ report = () => {}, now = () => new Date(), .
     // A copy that doesn't update itself has no install to report. Anything else is an install that didn't end well.
     if (layout) report({ at: now().toISOString(), from: layout.version, to: to ?? layout.version, ok: false, message: error.message });
     throw error;
+  } finally {
+    watched.off("uncaughtException", died);
   }
 }
 /** Why a copy that wasn't installed from a release doesn't update itself, and what to do instead. */
