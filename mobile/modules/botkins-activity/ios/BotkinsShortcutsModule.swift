@@ -5,7 +5,7 @@ import Foundation
 /// awaiting it. A cold launch can claim a request after registering its listener.
 @MainActor
 public enum ShortcutRequests {
-  fileprivate static let changed = Notification.Name("app.botkins.shortcuts.changed")
+  nonisolated fileprivate static let changed = Notification.Name("app.botkins.shortcuts.changed")
   private struct Request {
     let fields: [String: String]
     let completion: CheckedContinuation<String, Error>
@@ -62,8 +62,8 @@ public final class BotkinsShortcutsModule: Module {
   public func definition() -> ModuleDefinition {
     Name("BotkinsShortcuts")
     Events("changed")
-    OnCreate {
-      self.observer = NotificationCenter.default.addObserver(forName: Notification.Name("app.botkins.shortcuts.changed"), object: nil, queue: .main) { [weak self] note in
+    OnCreate { [weak self] in
+      self?.observer = NotificationCenter.default.addObserver(forName: ShortcutRequests.changed, object: nil, queue: .main) { [weak self] note in
         self?.sendEvent("changed", ["finished": note.userInfo?["finished"] as? String ?? ""])
       }
     }

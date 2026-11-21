@@ -1,6 +1,6 @@
 import AppIntents
-import BotkinsActivity
-import Expo
+internal import BotkinsActivity
+internal import Expo
 import UIKit
 
 enum ShortcutError: LocalizedError {
@@ -17,9 +17,7 @@ func runShortcut(_ fields: [String: String]) async throws -> String {
   guard let factory = (UIApplication.shared.delegate as? ExpoReactNativeFactoryProvider)?.reactNativeFactory else {
     throw ShortcutError.message("Open Botkins and try the shortcut again.")
   }
-  if factory.rootViewFactory.reactHost == nil {
-    factory.rootViewFactory.initializeReactHost(withLaunchOptions: nil, bundleConfiguration: factory.bundleConfiguration, devMenuConfiguration: factory.devMenuConfiguration ?? .default())
-  }
+  factory.rootViewFactory.initializeReactHost(launchOptions: nil, bundleConfiguration: factory.bundleConfiguration, devMenuConfiguration: factory.devMenuConfiguration ?? .default())
   return try await ShortcutRequests.run(fields)
 }
 

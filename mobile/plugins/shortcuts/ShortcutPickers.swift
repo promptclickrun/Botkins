@@ -24,9 +24,10 @@ private func hosts(in identifiers: [String]) -> Set<String> {
 
 struct ShortcutAgent: AppEntity {
   static let typeDisplayRepresentation: TypeDisplayRepresentation = "Agent"
-  static let defaultQuery = Query()
+  static let defaultQuery = AgentQuery()
   static let primary = Self(id: "primary", name: "Primary bot", computer: nil)
-  let id, name: String
+  let id: String
+  let name: String
   let computer: String?
   var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(title: "\(name)", subtitle: computer.map { "\($0)" }, image: .init(systemName: "person.crop.circle"))
@@ -36,7 +37,7 @@ struct ShortcutAgent: AppEntity {
     return ["host": String(id[..<split]), "bot": String(id[id.index(after: split)...])]
   }
 
-  struct Query: EntityQuery {
+  struct AgentQuery: EntityQuery {
     private func agents(_ catalog: Catalog) -> [ShortcutAgent] {
       catalog.bots.map { ShortcutAgent(id: catalog.host + "|" + $0.id, name: $0.name, computer: catalog.name) }
     }
@@ -60,8 +61,12 @@ struct ShortcutAgent: AppEntity {
 @available(iOS 17.0, *)
 struct ShortcutModel: AppEntity {
   static let typeDisplayRepresentation: TypeDisplayRepresentation = "Model"
-  static let defaultQuery = Query()
-  let host, key, name, provider, label: String
+  static let defaultQuery = ModelQuery()
+  let host: String
+  let key: String
+  let name: String
+  let provider: String
+  let label: String
   let efforts: [String]
   var id: String { host + "|" + key }
   var displayRepresentation: DisplayRepresentation {
@@ -75,7 +80,7 @@ struct ShortcutModel: AppEntity {
     return DisplayRepresentation(title: "\(name)", subtitle: "\(label)", image: image)
   }
 
-  struct Query: EntityQuery {
+  struct ModelQuery: EntityQuery {
     @IntentParameterDependency<SendBotkinsChat>(\.$agent) var intent
     private func models(_ catalog: Catalog) -> [ShortcutModel] {
       catalog.models.map { ShortcutModel(host: catalog.host, key: $0.key, name: $0.name, provider: $0.provider, label: $0.label, efforts: $0.efforts) }
