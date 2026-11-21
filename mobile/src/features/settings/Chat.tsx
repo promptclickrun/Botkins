@@ -5,6 +5,7 @@ import { View } from "react-native";
 import { useCan, useOnline, useSettings } from "@/state/hooks";
 import { COMPLETION_POSITIONS } from "@/features/chat/completion";
 import { api, attempt } from "@/state/link";
+import { BOT_TAPS } from "@/features/chat/habits";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { Group, Label, Page, Row, useTheme } from "@/ui";
 
@@ -52,6 +53,13 @@ export default function Chat() {
           <ChoiceMenu title="Thinking and updates" subtitle="Its reasoning and notes while it works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />
+        </Group>
+      </View>
+
+      <View>
+        <Label>Opening</Label>
+        <Group>
+          <ChoiceMenu title="When you select a bot" value={prefs.botTap} options={BOT_TAPS} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
         </Group>
       </View>
 

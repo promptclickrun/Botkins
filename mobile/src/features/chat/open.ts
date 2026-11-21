@@ -1,15 +1,21 @@
 import { router } from "expo-router";
 import type { BoardItem } from "@/link/types";
 import { api, attempt } from "@/state/link";
-import { isConversation } from "@/state/hooks";
+import { useChatPrefs } from "@/state/chatPrefs";
 import { useApp } from "@/state/store";
 import { boardMessage } from "./compose";
+import { chatForTap } from "./habits";
 
-/** Opens the latest one-to-one chat with a bot, or starts one. */
+/**
+ * Selecting a bot: opens its latest one-to-one chat, or starts a new one each time, as the person
+ * chose in Settings › Chat ("When you select a bot"; chatForTap in habits.ts has the rule).
+ */
 export async function openBotChat(botId: string) {
   const chats = useApp.getState().parts.chats ?? [];
-  const latest = chats.filter((chat) => chat.botId === botId && !chat.botIds && isConversation(chat)).sort((a, b) => b.time - a.time)[0];
-  const id = latest?.id ?? (await attempt(api.createChat(botId)));
+  const held = chatForTap(chats, botId, useChatPrefs.getState().botTap);
+  // An empty chat that was archived when it was left is used again.
+  if (held?.archived) api.setChatFlags(held.id, { archived: false }).catch(() => {});
+  const id = held?.id ?? (await attempt(api.createChat(botId)));
   if (id) router.push({ pathname: "/chat/[id]", params: { id } });
 }
 

@@ -6,7 +6,8 @@ import type { Appearance, Bot, Preferences, Project, UsageReport, UsageTotals } 
 
 // ---- The side menu (desktop src/places.ts) ----
 
-export const PLACES = ["Home", "Today", "Chats", "Work", "Projects", "Wiki"] as const;
+// Projects is a tab of Work now, on the computer and on the phone, so it is not a place of its own.
+export const PLACES = ["Home", "Today", "Chats", "Work", "Wiki"] as const;
 export type Place = (typeof PLACES)[number];
 
 /** The person's order made whole: every place once. Unknown names are dropped; missing places keep their usual position at the end. */

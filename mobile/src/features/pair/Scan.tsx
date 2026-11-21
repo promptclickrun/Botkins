@@ -4,7 +4,7 @@ import { Camera, Keyboard, X } from "lucide-react-native";
 import { useRef } from "react";
 import { ActivityIndicator, Linking, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { parsePairingUrl } from "@/link/pairing";
+import { parseJoinUrl, parsePairingUrl } from "@/link/pairing";
 import { showToast } from "@/state/store";
 import { Button, EmptyState, haptic, IconButton, space, T, useTheme } from "@/ui";
 import { usePairing } from "./usePairing";
@@ -25,10 +25,18 @@ export default function Scan() {
     const now = Date.now();
     if (data === last.current.data && now - last.current.time < 4000) return;
     last.current = { data, time: now };
+    // A team invite's code (Settings › Team shows it): Join a team opens with it filled in.
+    const invite = parseJoinUrl(data);
+    if (invite) {
+      haptic.tap();
+      // Back to the Join sheet the scan was opened from when there is one, else it opens.
+      router.dismissTo({ pathname: "/join", params: { c: invite.code, k: invite.serverKey } });
+      return;
+    }
     const target = parsePairingUrl(data);
     if (!target) {
       haptic.warn();
-      showToast("That isn't a Botkins pairing code.", "error");
+      showToast("That isn't a Botkins code.", "error");
       return;
     }
     haptic.tap();
@@ -44,7 +52,7 @@ export default function Scan() {
         <EmptyState
           icon={Camera}
           title="Allow the camera"
-          text="Botkins uses it only to read the pairing code on your computer."
+          text="Botkins uses it only to read a pairing code or a team invite."
           action={permission.canAskAgain ? "Continue" : "Open Settings"}
           onAction={() => (permission.canAskAgain ? void request() : void Linking.openSettings())}
         />
@@ -62,7 +70,7 @@ export default function Scan() {
         </View>
         <View style={{ marginTop: space.xl, paddingHorizontal: space.lg, paddingVertical: 10, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.55)", maxWidth: 320 }}>
           <T variant="subhead" weight="600" color="#FFFFFF" center>
-            {busy ? "Pairing…" : (error ?? "Point at the code on your computer")}
+            {busy ? "Pairing…" : (error ?? "Point at a pairing code or a team invite")}
           </T>
         </View>
       </View>

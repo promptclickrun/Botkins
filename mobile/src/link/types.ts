@@ -612,7 +612,18 @@ export type BotTask = {
 export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
-export type Project = { id: string; name: string; description?: string; color?: ProjectColor; folder?: string; todos: ProjectTodo[]; lastUsed: number; createdAt: number };
+export type Project = {
+  id: string;
+  name: string;
+  description?: string;
+  color?: ProjectColor;
+  folder?: string;
+  todos: ProjectTodo[];
+  /** The artifacts attached to it, by id, newest attached first ("project-artifacts-v1"). Left out while there are none. */
+  artifacts?: string[];
+  lastUsed: number;
+  createdAt: number;
+};
 
 export type McpAuth =
   | { type: "none" | "header" }
@@ -814,6 +825,7 @@ export type UsageReport = {
  * "provider-signin-v1" (the app's: a model provider signed in from a phone with no browser on the
  * computer, by its own page and code, its own questions, or a pasted token; and a provider's
  * command-line tool installed from a phone).
+ * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
@@ -1204,6 +1216,14 @@ export type Calls = {
   /** A project for a folder chosen in the folder browser (or the one it already has); answers its id. Needs "folders-v1". */
   addProjectFolder(path: string): string;
   removeProject(id: string): void;
+  /**
+   * A project's artifacts ("project-artifacts-v1"). Adding one that is there moves it to the front;
+   * each of the two answers the list of ids afterwards. `artifactId` is an artifact's id.
+   */
+  addProjectArtifact(projectId: string, artifactId: string): string[];
+  removeProjectArtifact(projectId: string, artifactId: string): string[];
+  /** The attached artifacts, described as `artifacts.list` describes them, newest attached first. One that is gone isn't among them. */
+  projectArtifacts(projectId: string): { items: Artifact[] };
   addTodo(projectId: string, text: string): string;
   updateTodo(projectId: string, todoId: string, patch: { text?: string; done?: boolean }): void;
   deleteTodo(projectId: string, todoId: string): void;

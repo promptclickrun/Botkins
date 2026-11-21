@@ -246,7 +246,7 @@ export function seed() {
       notifications: { replies: true, routines: true, requests: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
       access: { allBots: true },
       background: { keepRunning: true, runAtStartup: false },
-      sidebar: { order: ["Home", "Today", "Chats", "Work", "Projects", "Wiki"], collapsed: true },
+      sidebar: { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true },
       teamwork: true,
       harness: "copilot",
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, grok: { enabled: false } },
@@ -954,7 +954,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
@@ -1536,7 +1536,7 @@ export class MockBackend {
       const settings = this.state.settings;
       // The side menu and Background take part of their setting, as the desktop's do (its desktop/preferences.mjs).
       if (rest.sidebar) {
-        const places = ["Home", "Today", "Chats", "Work", "Projects", "Wiki"];
+        const places = ["Home", "Today", "Chats", "Work", "Wiki"];
         const named = [...new Set((rest.sidebar.order ?? settings.sidebar.order).filter((place) => places.includes(place)))];
         rest.sidebar = { order: [...named, ...places.filter((place) => !named.includes(place))], collapsed: rest.sidebar.collapsed ?? settings.sidebar.collapsed };
       }
@@ -1699,14 +1699,21 @@ export class MockBackend {
     // Only before the first message. A project without a folder keeps the default mode.
     setChatProject(chatId, projectId, mode) {
       const chat = this.chat(chatId);
-      if (chat.messages.length) throw new Error("This chat has started, so its project can't change.");
+      // As the app on the computer: a chat that has started may move between projects unless that
+      // would change the folder it works in.
+      if (this.turns.has(chatId)) throw new Error("Wait for the reply to finish before changing the project.");
+      const started = chat.messages.length > 0;
+      const before = this.state.projects.find((p) => p.id === chat.projectId)?.folder ?? null;
       if (projectId == null) {
+        if (chat.projectId && started && before) throw new Error("This conversation already started in its project. Start a new chat instead.");
         delete chat.projectId;
         chat.mode = "default";
         return;
       }
       const project = this.state.projects.find((p) => p.id === projectId);
       if (!project) throw new Error("This project no longer exists.");
+      const after = project.folder ?? null;
+      if (started && projectId !== chat.projectId && (before || after) && before !== after) throw new Error("This conversation already started in another folder. Start a new chat for this project.");
       if (chat.botIds && project.folder) throw new Error("Group chats are text only, so they can't use a project with a folder.");
       if (mode && !["default", "plan", "yolo"].includes(mode)) throw new Error("Choose Default, Plan or YOLO.");
       chat.projectId = projectId;
@@ -2276,6 +2283,34 @@ export class MockBackend {
     },
     removeProject(id) {
       this.state.projects = this.state.projects.filter((p) => p.id !== id);
+    },
+    // "project-artifacts-v1": a project keeps a list of artifact ids, newest attached first.
+    addProjectArtifact(id, artifactId) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("Unknown project");
+      const found = this.artifacts.find((entry) => entry.item.id === artifactId || entry.item.path === artifactId);
+      if (!found) throw new Error("This artifact no longer exists.");
+      const rest = (project.artifacts ?? []).filter((held) => held !== found.item.id);
+      if (rest.length >= 200) throw new Error("A project holds up to 200 artifacts. Remove one first.");
+      project.artifacts = [found.item.id, ...rest];
+      return [...project.artifacts];
+    },
+    removeProjectArtifact(id, artifactId) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("Unknown project");
+      const rest = (project.artifacts ?? []).filter((held) => held !== artifactId);
+      if (rest.length) project.artifacts = rest;
+      else delete project.artifacts;
+      return rest;
+    },
+    projectArtifacts(id) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("Unknown project");
+      const items = (project.artifacts ?? []).flatMap((held) => this.artifacts.find((entry) => entry.item.id === held)?.item ?? []);
+      // One that is gone drops out of the stored list too.
+      if (items.length) project.artifacts = items.map((item) => item.id);
+      else delete project.artifacts;
+      return { items };
     },
     // A project's changes are made up (the folder itself is never read or touched). Committing clears them.
     projectChanges(id) {

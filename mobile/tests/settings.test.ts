@@ -17,9 +17,9 @@ test("every call the new controls make is one a phone may make", () => {
 
 test("the side menu's order is made whole, and a place moves one step at a time", () => {
   assert.deepEqual(placeOrder(undefined), [...PLACES]);
-  assert.deepEqual(placeOrder(["Wiki", "Nope", "Home", "Wiki"]), ["Wiki", "Home", "Today", "Chats", "Work", "Projects"]);
+  assert.deepEqual(placeOrder(["Wiki", "Nope", "Home", "Wiki"]), ["Wiki", "Home", "Today", "Chats", "Work"]);
   const order = placeOrder();
-  assert.deepEqual(movePlace(order, "Today", -1), ["Today", "Home", "Chats", "Work", "Projects", "Wiki"]);
+  assert.deepEqual(movePlace(order, "Today", -1), ["Today", "Home", "Chats", "Work", "Wiki"]);
   assert.deepEqual(movePlace(order, "Wiki", 1), order);
   assert.deepEqual(movePlace(order, "Home", -1), order);
   assert.equal(isUsualOrder(order), true);
@@ -126,7 +126,7 @@ test("skills show where they come from, and the filter finds by name, words or o
 test("the demo computer keeps part of the side menu and Background, and can refuse startup", async () => {
   const backend = new MockBackend();
   await backend.call("setPreferences", [{ sidebar: { order: ["Wiki"] } }]);
-  assert.deepEqual(backend.state.settings.sidebar, { order: ["Wiki", "Home", "Today", "Chats", "Work", "Projects"], collapsed: true });
+  assert.deepEqual(backend.state.settings.sidebar, { order: ["Wiki", "Home", "Today", "Chats", "Work"], collapsed: true });
   await backend.call("setPreferences", [{ sidebar: { collapsed: false } }]);
   assert.equal(backend.state.settings.sidebar.collapsed, false);
   assert.equal(backend.state.settings.sidebar.order[0], "Wiki");
