@@ -174,6 +174,32 @@ export const REFRESH: { value: string; label: string; cron?: string }[] = [
   { value: "weekly", label: "Every Monday", cron: "0 9 * * 1" },
 ];
 
+/**
+ * The new panel's project, for the owner's "Project" row: what the person picked (null is "None"),
+ * else the space's own project when the space has one. A project that is gone counts as none.
+ */
+export function panelProject(picked: string | null | undefined, space: Pick<SpaceSummary, "projectId"> | undefined, projects: { id: string }[] | undefined): string | undefined {
+  const id = picked === undefined ? space?.projectId : (picked ?? undefined);
+  return id && projects?.some((project) => project.id === id) ? id : undefined;
+}
+
+// ── Asks under an opened panel ──────────────────────────────────────────────
+
+export const ASKS_MAX = 3;
+export const ASK_LENGTH = 60;
+
+/**
+ * What a panel's bot says is worth asking next, as chips: its own words, each on one line, at most
+ * three of at most 60 characters. Empty when the bot gave none: the app never makes any up.
+ */
+export function asksOf(panel: { asks?: unknown } | undefined): string[] {
+  if (!Array.isArray(panel?.asks)) return [];
+  return panel.asks
+    .flatMap((ask: unknown) => (typeof ask === "string" ? [ask.replace(/\s+/g, " ").trim().slice(0, ASK_LENGTH).trim()] : []))
+    .filter(Boolean)
+    .slice(0, ASKS_MAX);
+}
+
 /** The last line of a panel: "Maya ticked Press kit · 2m", or "Maya changed this · 2m" without a label. */
 export function lastLine(last: PanelView["last"], ago: (time: number) => string): string | undefined {
   if (!last) return undefined;

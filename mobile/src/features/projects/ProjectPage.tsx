@@ -5,9 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, TextInput, type TextInputInstance, View } from "react-native";
 import { openSpace, useSpaces, useSpacesOn } from "@/features/spaces/data";
 import { rowLine as spaceRowLine, spaceTitle } from "@/features/spaces/logic";
+import { PanelCard as SpacePanelCard } from "@/features/spaces/SpaceView";
 import { PanelCard } from "@/features/today/Today";
 import { ArtifactRow } from "@/features/artifacts/ArtifactBits";
-import type { Artifact, ChatMode, Project, ProjectColor, ProjectTodo } from "@/link/types";
+import type { Artifact, ChatMode, Panel, Project, ProjectColor, ProjectTodo } from "@/link/types";
 import { useBots, useCapability, useChats, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
@@ -405,15 +406,19 @@ function Artifacts({ project }: { project: Project }) {
 
 // Panels
 
-/** The project's Today panels. Each is changed from its menu on Today. */
+/**
+ * The project's panels. Without spaces they are Today's, each changed from its menu there. With
+ * spaces ("spaces-v1") a whole space can belong to a project, beside single panels in any space:
+ * the computer names every panel that has a project (`projectPanels`), and each opens in its space.
+ */
 function Panels({ project }: { project: Project }) {
   const { colors } = useTheme();
-  const panels = usePart("panels");
+  const todays = usePart("panels");
+  const everywhere = usePart("projectPanels");
   const allBots = useBots();
-  const mine = useMemo(() => (panels ?? []).filter((panel) => panel.projectId === project.id), [panels, project.id]);
-  // With spaces ("spaces-v1") a whole space can belong to a project, beside single panels.
   const spacesOn = useSpacesOn();
   const spaces = useSpaces();
+  const mine = useMemo(() => ((spacesOn && everywhere) || todays || []).filter((panel) => panel.projectId === project.id), [spacesOn, everywhere, todays, project.id]);
   const attached = spaces.filter((one) => one.projectId === project.id);
   const free = spaces.filter((one) => one.mine && !one.projectId);
   return (
@@ -437,9 +442,11 @@ function Panels({ project }: { project: Project }) {
       )}
       {mine.length ? (
         <View style={{ gap: space.lg, marginTop: spacesOn ? space.lg : 0 }}>
-          {mine.map((panel) => (
-            <PanelCard key={panel.id} panel={panel} bot={allBots.find((bot) => bot.id === panel.botId)} />
-          ))}
+          {mine.map((panel) => {
+            const bot = allBots.find((one) => one.id === panel.botId);
+            const home = spacesOn ? spaces.find((one) => one.id === panel.spaceId) : undefined;
+            return home ? <SpacePanelCard key={panel.id} panel={panel} bot={bot} changed={false} half={false} space={home} /> : <PanelCard key={panel.id} panel={panel as Panel} bot={bot} />;
+          })}
         </View>
       ) : spacesOn ? null : (
         <T variant="subhead" color="muted" style={{ paddingHorizontal: space.xs }}>

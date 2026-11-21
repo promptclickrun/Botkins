@@ -1,10 +1,12 @@
 // A panel, opened: its app gets the whole width and works by touch. The bar has the panel's menu;
-// below it sit the notes people wrote, and the field that asks its bot to change it.
+// below it sit the notes people wrote, and the field that asks its bot to change it. Over that
+// field float the things its bot said are worth asking next, as chips: a tap opens the field with
+// the chip's words in it, and sends nothing.
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { Ellipsis, Trash2 } from "lucide-react-native";
 import { useState } from "react";
-import { Alert, View } from "react-native";
+import { Alert, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { myself } from "@/features/chat/people";
 import { cronLabel } from "@/features/work/cron";
@@ -12,9 +14,9 @@ import type { PanelView, SpaceSummary } from "@/link/types";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Field, Glass, Group, IconButton, Label, Loading, Page, space as gap, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, EmptyState, Field, Glass, Group, IconButton, Label, Loading, Page, radius, slopFor, space as gap, T, Tap, useTheme } from "@/ui";
 import { panelState, useSpace, useSpaceContent } from "./data";
-import { lastLine } from "./logic";
+import { asksOf, lastLine } from "./logic";
 
 const SIZES: { value: PanelView["size"]; label: string }[] = [
   { value: "small", label: "Small" },
@@ -116,6 +118,29 @@ function Notes({ panel, space, me }: { panel: PanelView; space: SpaceSummary; me
   );
 }
 
+const openAsk = (spaceId: string, panelId: string, ask?: number) => router.push(("/space/ask?spaceId=" + encodeURIComponent(spaceId) + "&panelId=" + encodeURIComponent(panelId) + (ask === undefined ? "" : "&ask=" + ask)) as unknown as Href);
+
+/** The bot's asks as a row of glass chips, in its words. The row scrolls sideways when they do not fit. */
+function AskChips({ asks, onPick }: { asks: string[]; onPick: (index: number) => void }) {
+  const { control } = useTheme();
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ marginHorizontal: -gap.lg, flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: gap.lg, gap: gap.sm, paddingVertical: slopFor(control.chip) }}>
+      {asks.map((ask, index) => (
+        <Tap key={index + ":" + ask} onPress={() => onPick(index)} feel="select" sink={0.97} hitSlop={slopFor(control.chip)} accessibilityLabel={ask} accessibilityHint="Puts these words in the ask field">
+          {/* The glass only draws: the press belongs to the chip around it. */}
+          <View pointerEvents="none">
+            <Glass style={{ minHeight: control.chip, paddingHorizontal: 14, borderRadius: radius.pill, justifyContent: "center", overflow: "hidden" }}>
+              <T variant="subhead" weight="600" numberOfLines={1}>
+                {ask}
+              </T>
+            </Glass>
+          </View>
+        </Tap>
+      ))}
+    </ScrollView>
+  );
+}
+
 export default function PanelPage() {
   const { spaceId, id } = useLocalSearchParams<{ spaceId: string; id: string }>();
   const insets = useSafeAreaInsets();
@@ -134,9 +159,11 @@ export default function PanelPage() {
   const caption = [bot?.name, "Updated " + ago(panel.updatedAt), routine ? (routine.enabled && routine.nextAt ? "Next " + upcoming(routine.nextAt) : "Routine paused") : undefined].filter(Boolean).join(" · ");
   const last = lastLine(panel.last, ago);
   const mayAsk = canChat && (space.can === "own" || space.can === "edit");
+  // Chips only where the field they fill is shown, and only the bot's own.
+  const asks = mayAsk ? asksOf(panel) : [];
   return (
     <View style={{ flex: 1 }}>
-      <Page contentStyle={{ paddingBottom: 120 }} keyboard>
+      <Page contentStyle={{ paddingBottom: asks.length ? 170 : 120 }} keyboard>
         <Stack.Screen options={{ headerRight: () => <PanelMenu panel={panel} space={space} first={index === 0} last={index === panels.length - 1} /> }} />
         <View style={{ flexDirection: "row", alignItems: "center", gap: gap.md }}>
           <BotAvatar bot={bot} size={40} badge={false} />
@@ -163,8 +190,9 @@ export default function PanelPage() {
         <Notes panel={panel} space={space} me={me} />
       </Page>
       {mayAsk && (
-        <View pointerEvents="box-none" style={{ position: "absolute", left: gap.lg, right: gap.lg, bottom: insets.bottom + gap.sm }}>
-          <Tap onPress={() => router.push(("/space/ask?spaceId=" + encodeURIComponent(space.id) + "&panelId=" + encodeURIComponent(panel.id)) as unknown as Href)} feel="select" sink={0.99} accessibilityLabel={"Ask " + (bot?.name ?? "the bot") + " to change it"}>
+        <View pointerEvents="box-none" style={{ position: "absolute", left: gap.lg, right: gap.lg, bottom: insets.bottom + gap.sm, gap: gap.xs }}>
+          {asks.length > 0 && <AskChips asks={asks} onPick={(index) => openAsk(space.id, panel.id, index)} />}
+          <Tap onPress={() => openAsk(space.id, panel.id)} feel="select" sink={0.99} accessibilityLabel={"Ask " + (bot?.name ?? "the bot") + " to change it"}>
             <Glass interactive style={{ height: 50, borderRadius: 25, flexDirection: "row", alignItems: "center", gap: gap.sm, paddingHorizontal: gap.md, overflow: "hidden" }}>
               <BotAvatar bot={bot} size={28} badge={false} />
               <T variant="callout" color="muted" numberOfLines={1} style={{ flex: 1 }}>

@@ -352,6 +352,8 @@ function spaceArgs(method, args) {
         prompt: words(object.prompt, SPACE_SIZES.prompt, "Say what the panel should show."),
         ...(object.start !== undefined && { start: object.start }),
         ...(refresh !== undefined && { refresh: { cron: refresh.cron.trim(), timezone: refresh.timezone } }),
+        // The new panel's project. The owner's to say (team.mjs refuses it from a member).
+        ...(object.projectId != null && { projectId: id(object.projectId, "project") }),
       }];
     }
     case "spaces.ask":

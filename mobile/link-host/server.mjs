@@ -1895,6 +1895,9 @@ export class LinkHost extends EventEmitter {
       const kinds = new Map(state.spaces.map((space) => [space.id, space.builtin]));
       next.spaces = this.spaces.for(OWNER);
       // A panel or card the app has put in no space yet is still the owner's to see, never a member's.
+      // Every panel that has a project, wherever it is: an owner's app draws a project's "Spaces and panels" from it
+      // (`panels` holds only the Todays'). Projects are the owner's, so no member is sent this part.
+      next.projectPanels = (next.panels ?? []).filter((panel) => panel.projectId).map((panel) => panelView(panel));
       next.panels = (next.panels ?? []).filter((panel) => !panel.spaceId || kinds.get(panel.spaceId) === "today").map((panel) => panelView(panel));
       next.board = (next.board ?? []).filter((item) => !item.spaceId || kinds.get(item.spaceId));
       // A space shared by link changed: its copy on the relay follows (not from inside this refresh).

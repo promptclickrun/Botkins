@@ -21,7 +21,7 @@ function Card({ children }: { children: ReactNode }) {
 }
 
 /** A panel in its space. Its heading opens it; an app panel runs right here. `half`: it shares its row with another small panel. */
-function PanelCard({ panel, bot, changed, half, space: summary }: { panel: PanelView; bot?: Bot; changed: boolean; half: boolean; space: SpaceSummary }) {
+export function PanelCard({ panel, bot, changed, half, space: summary }: { panel: PanelView; bot?: Bot; changed: boolean; half: boolean; space: SpaceSummary }) {
   const { colors } = useTheme();
   const canUse = useCan("today", "use");
   const spaceId = summary.id;

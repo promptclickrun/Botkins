@@ -119,6 +119,10 @@ test("the spaces part is each person's own view: what they can open, pinned firs
   assert.equal(owner.find((space) => space.id === "s_launch")!.projectId, "proj");
   assert.equal(owner.find((space) => space.id === "s_ana")!.notify, "off", "a member's space, as the owner sees it");
   assert.equal(owner.find((space) => space.id === "s_today")!.changed, 2, "never opened: everything is new");
+  // A person's own tick or note is not news to them (`by` on the item); it is to everyone else.
+  const ticked = records().map((record) => (record.id === "s_launch" ? { ...record, items: [{ ...item("p3", "mira", 900), by: "m_a" }] } : record));
+  assert.equal((spaceView(team, ticked, "m_a", { role: team.roles[0], names }) as SpaceSummary[]).find((space) => space.id === "s_launch")!.changed, 0);
+  assert.equal((spaceView(team, ticked, OWNER, { names }) as SpaceSummary[]).find((space) => space.id === "s_launch")!.changed, 1);
   // Ben: only what is shared with all members, and his view starts with no pins of others' spaces.
   const bens = spaceView(team, records(), "m_b", { role: team.roles[0], names }) as SpaceSummary[];
   assert.deepEqual(bens.map((space) => [space.id, space.pinned, space.notify]), [["s_today", false, "off"]]);
@@ -161,9 +165,12 @@ test("a member's parts hold their view of spaces and only the panels and cards o
       { id: "p4", spaceId: "s_ana", botId: "mira", chatId: "c-ana", routine: null },
     ],
     board: [{ id: "b1", spaceId: "s_today", botId: "mira" }, { id: "b2", spaceId: "s_launch", botId: "mira" }],
+    projectPanels: [{ id: "p1", spaceId: "s_today", botId: "mira", projectId: "proj" }],
     settings: {},
   };
   const seen = filterParts(parts, ben, team, { spaces: records(), names }) as any;
+  // Projects are the owner's: no member is sent the panels that have one, also not one in a space they can open.
+  assert.ok(!("projectPanels" in seen) && !("projectPanels" in (filterParts(parts, ana, team, { spaces: records(), names }) as any)));
   assert.deepEqual(seen.spaces.map((space: SpaceSummary) => space.id), ["s_today"]);
   // `panels` and `board` stay for an app that doesn't know spaces: every Today he can open, cut for a member.
   assert.deepEqual(seen.panels.map((panel: { id: string }) => panel.id), ["p1"]);
@@ -228,6 +235,7 @@ test("a call needs the space of what it names, on top of the role", () => {
   assert.equal(may(ana, "link.spaces.share", "s_ana_trip", { access: "team", teamCan: "edit" }), "");
   // The owner's own: projects, and the switch.
   assert.match(may(ana, "spaces.setProject", "s_ana_trip", "proj"), /Only the owner/);
+  assert.match(may(ana, "spaces.newPanel", { spaceId: "s_ana_trip", botId: "mira", prompt: "x", projectId: "proj" }), /Only the owner/, "a new panel's project too");
   assert.match(may(ana, "link.team.setLinkSharing", true), /Only the owner/);
   assert.equal(may({ kind: "owner" }, "spaces.remove", "s_ana_trip"), "");
   // An app without spaces: the old rules, no space needed.
@@ -244,6 +252,10 @@ test("the link cuts each space call to its shape", () => {
   assert.deepEqual(remoteArgs("spaces.movePanel", ["p1", { spaceId: "s2", before: null, as: "owner" }]), ["p1", { spaceId: "s2", before: null }]);
   assert.deepEqual(remoteArgs("spaces.ask", [{ spaceId: "s1", botId: "b", text: " why? ", panelId: "p1", createdBy: "owner" }]), [{ spaceId: "s1", botId: "b", text: "why?", panelId: "p1" }]);
   assert.throws(() => remoteArgs("spaces.newPanel", [{ spaceId: "s1", botId: "b", prompt: "x", start: "game" }]), /starts from/);
+  // A new panel's project is passed on as an id; "None" is left out.
+  assert.deepEqual(remoteArgs("spaces.newPanel", [{ spaceId: "s1", botId: "b", prompt: " x ", projectId: "proj", asks: ["made up"] }]), [{ spaceId: "s1", botId: "b", prompt: "x", projectId: "proj" }]);
+  assert.deepEqual(remoteArgs("spaces.newPanel", [{ spaceId: "s1", botId: "b", prompt: "x", projectId: null }]), [{ spaceId: "s1", botId: "b", prompt: "x" }]);
+  assert.throws(() => remoteArgs("spaces.newPanel", [{ spaceId: "s1", botId: "b", prompt: "x", projectId: 7 }]), /project no longer exists/);
   assert.throws(() => remoteArgs("spaces.newPanel", [{ spaceId: "s1", botId: "b", prompt: "x", refresh: { cron: "every day", timezone: "UTC" } }]), /refresh schedule/);
   // An app panel's state: a small plain object, and a short label.
   assert.deepEqual(remoteArgs("spaces.patchState", ["p1", { ticked: { a: true }, gone: null }, "  Ticked   Press kit "]), ["p1", { ticked: { a: true }, gone: null }, "Ticked Press kit"]);
@@ -362,6 +374,15 @@ test("the demo: an owner and two members make, share, open and change spaces, ea
     assert.equal((after.panels[0].state!.ticked as Record<string, boolean>)["Support macros"], true);
     assert.deepEqual(after.panels[0].last && [after.panels[0].last.name, after.panels[0].last.label], ["Ana", "Wrote a note"]);
     assert.equal(after.panels[0].notes!.at(-1)!.text, "Macros are done.");
+    // Her own tick and note are not news to her: once she has seen the rest, nothing is new for her.
+    await ana.call("link.spaces.seen", launch.id);
+    await ana.call("spaces.note", checklist.id, "One more.");
+    await owner.until(() => owner.space("Launch")!.rev > launch.rev + 1, "her note reached the owner");
+    await ana.until(() => ana.space("Launch")!.rev === owner.space("Launch")!.rev, "and her");
+    assert.equal(ana.space("Launch")!.changed, 0, "her own change gives her no count");
+    // What the panel's bot said is worth asking next goes to everyone who is sent the panel, as it came.
+    assert.deepEqual(signups.asks, ["Compare with last month", "Split signups by source"]);
+    assert.deepEqual(bens.panels.find((panel) => panel.title === "Signups")!.asks, signups.asks);
     // The space's `rev` went up, so an app reads it again; for Ben two things changed since he never opened it.
     await ben.until(() => ben.space("Launch")!.rev > launch.rev, "the change reaches Ben");
     assert.ok(ben.space("Launch")!.changed >= 1);
@@ -398,6 +419,21 @@ test("the demo: an owner and two members make, share, open and change spaces, ea
     await ana.until(() => ana.space("Trip")!.count === 1, "the panel is in her space");
     const trip = await ana.call<SpaceContent>("spaces.read", tripId);
     assert.equal(trip.panels[0].chatId, made.chatId, "her own chat is named to her");
+    // A new panel's project is the owner's to say: refused from her, kept for the owner. A project that is gone is refused.
+    await assert.rejects(ana.call("spaces.newPanel", { spaceId: tripId, botId: bot, prompt: "Budget", projectId: backend.state.projects[0].id }), /Only the owner/);
+    await assert.rejects(owner.call("spaces.newPanel", { spaceId: tripId, botId: bot, prompt: "Budget", projectId: "no-such-project" }), /project no longer exists/);
+    const budget = await owner.call<{ chatId: string }>("spaces.newPanel", { spaceId: tripId, botId: bot, prompt: "Budget", projectId: backend.state.projects[0].id });
+    const budgetPanel = backend.state.panels.find((panel: any) => panel.chatId === budget.chatId);
+    assert.equal(budgetPanel.projectId, backend.state.projects[0].id);
+    assert.equal(backend.state.panels.find((panel: any) => panel.chatId === made.chatId).projectId, undefined);
+    // The owner's devices are sent every panel that has a project, wherever it is: a project's page lists it. No member is.
+    await owner.until(() => (owner.parts.projectPanels as any[]).some((panel) => panel.id === budgetPanel.id), "the owner is sent the panel with its project");
+    assert.deepEqual((owner.parts.projectPanels as any[]).find((panel) => panel.id === budgetPanel.id).spaceId, tripId);
+    assert.ok((owner.parts.projectPanels as any[]).every((panel) => panel.projectId && !("lastWriter" in panel)));
+    assert.ok(!("projectPanels" in ana.parts) && !("projectPanels" in ben.parts));
+    // A link's copy never holds a panel's asks (nor its project).
+    assert.ok(budgetPanel.asks.length > 0);
+    assert.ok(backend.snapshotSpace(tripId).panels.every((panel: any) => !("asks" in panel) && !("projectId" in panel)));
     // She shares it with everyone; a link needs the owner's switch, then it is made.
     await ana.call("link.spaces.share", tripId, { access: "team", teamCan: "view" });
     await ben.until(() => ben.space("Trip")?.can === "view", "Ben is sent Trip");

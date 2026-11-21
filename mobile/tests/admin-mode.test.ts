@@ -45,6 +45,7 @@ test("with Admin mode off an owner device is sent what the owner is part of", ()
     runs: [{ id: "r1", chatId: "c-mine" }, { id: "r2", chatId: "c-ana" }, { id: "r3", chatId: "c-asking" }],
     panels: [{ id: "p1", spaceId: "s_today", botId: "mira" }, { id: "p2", spaceId: "s_ana", botId: "anas-bot" }, { id: "legacy", botId: "mira" }],
     board: [{ id: "b1", spaceId: "s_today", botId: "mira" }, { id: "b2", spaceId: "s_ana", botId: "anas-bot" }],
+    projectPanels: [{ id: "p1", spaceId: "s_today", botId: "mira", projectId: "proj" }, { id: "p2", spaceId: "s_ana", botId: "anas-bot", projectId: "proj" }],
     "chat:c-mine": { id: "c-mine" },
     "chat:c-ana": { id: "c-ana" },
     "run:c-ana": { id: "r2" },
@@ -62,6 +63,8 @@ test("with Admin mode off an owner device is sent what the owner is part of", ()
   assert.deepEqual(seen.spaces.map((space: SpaceSummary) => space.id).sort(), ["s_all", "s_today", "s_trip"]);
   assert.deepEqual(seen.panels.map((panel: { id: string }) => panel.id), ["p1", "legacy"]);
   assert.deepEqual(seen.board.map((card: { id: string }) => card.id), ["b1"]);
+  // A panel with a project in a member's private space is not listed on the project either.
+  assert.deepEqual(seen.projectPanels.map((panel: { id: string }) => panel.id), ["p1"]);
   // Bots: a member's bot is left out unless something listed uses it. One with no mark counts as the owner's.
   assert.deepEqual(seen.bots.map((bot: Bot) => bot.id), ["mira", "trip-bot", "shared-bot", "asking-bot", "old-bot"]);
   // What is the owner's alone stays, and the device is told which way it looks.
