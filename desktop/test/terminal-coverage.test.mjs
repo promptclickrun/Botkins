@@ -115,14 +115,14 @@ test("`botkins help --json` names every command with its usage, its arguments an
   // One area or one command, by its words.
   out = "";
   assert.equal(await main(["help", "bots", "--json"], io), 0);
-  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove"]]]);
+  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu"]]]);
   out = "";
   assert.equal(await main(["help", "bots", "edit", "--json"], io), 0);
   const [edit] = JSON.parse(out).areas[0].commands;
   assert.deepEqual(edit.arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(edit.options.find((option) => option.name === "--instructions-file"), { name: "--instructions-file", takes: "path", about: edit.options.find((option) => option.name === "--instructions-file").about });
   // A command that asks a person first says which flag answers it, for a caller with no terminal.
-  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => [entry.command, entry.asks]), [["service uninstall", "--yes"], ["devices remove", "--yes"], ["relay reset", "--yes"], ["bots remove", "--yes"], ["plugins uninstall", "--yes"]]);
+  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => [entry.command, entry.asks]), [["service uninstall", "--yes"], ["devices remove", "--yes"], ["relay reset", "--yes"], ["bots remove", "--yes"], ["plugins uninstall", "--yes"], ["tools add", "--yes"], ["tools edit", "--yes"], ["tools remove", "--yes"], ["tools enable", "--yes"], ["tools test", "--yes"], ["tools import", "--yes"], ["skills remove", "--yes"]]);
   out = "";
   const asked = { ...io, stdin: { isTTY: false }, stderr: { write: (text) => void (out += text) }, client: { call: async () => ({ id: "nova", name: "Nova" }) } };
   assert.equal(await main(["bots", "remove", "Nova"], asked), 2);
@@ -152,8 +152,8 @@ test("a change made through the socket leaves a line in the log: which call, whi
   await client.call("bots.remove", "Nova");
   const said = await lines();
   assert.deepEqual(said.map((text) => text.slice(text.indexOf("Changed"))), [
-    "Changed from the command line: bots.add",
-    "Changed from the command line: bots.add",
+    "Changed from the command line: bots.add Nova",
+    "Changed from the command line: bots.add Orbit",
     "Changed from the command line: bots.edit Nova",
     "Changed from the command line: config.set name",
     "Changed from the command line: call setPreferences",

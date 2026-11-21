@@ -171,7 +171,34 @@ Other commands for bots:
 - `botkins routines list`, `run`, `pause` and `resume` operate the routines of your bots.
 - `botkins plugins list`, `browse`, `install` and `uninstall` operate plugins.
 
-A paired phone does everything else: tasks, the wiki, tools (MCP servers), skills, projects and credentials.
+A paired phone does everything else for now: tasks, the wiki, projects and credentials.
+
+## Tools and skills
+
+A **tool** is something a bot can call. One that you add is an MCP server: a program that this computer starts, or a web address. A **skill** is a set of instructions that a bot reads when a task needs them. Each bot has every tool and skill that is on, unless you take one from that bot.
+
+```sh
+botkins tools add files --command npx --env API_KEY -- -y @example/files-mcp
+botkins tools add search --url https://mcp.example.com/v1 --header Authorization
+botkins tools list
+botkins tools test files
+botkins skills add weekly-report --description "Use for the Friday report." --instructions-file report.md
+botkins bots tools Nova --off search
+botkins bots skills Nova --off weekly-report
+```
+
+- **A program's own arguments come last, after `--`.** Thus an argument can start with a dash, and no word of the program is taken as an option of Botkins. `--yes` has no short form in these commands: `-y` is `npx`'s own.
+- **A value is never a word on the command line.** Name each environment value or header (`--env API_KEY`, `--header Authorization`). The command then asks for each value and does not show what you type. From a script, give the values in a JSON file: `--secrets values.json`, or `--secrets -` to read the file from standard input. The file is `{ "env": { "API_KEY": "…" }, "headers": { "Authorization": "…" }, "clientSecret": "…" }`. No command prints a value: `botkins tools show` gives the names that have one.
+- **A tool that is a program is shown before it starts.** `tools add`, `tools enable`, `tools import`, `tools test` of a tool that is off, and a `tools edit` that changes the program, its arguments, its folder or its environment values print what will start: the exact line, the folder, and the names of the environment values. Then they ask. With no terminal they fail and name `--yes`. The block is printed on standard error with `--yes` and with `--json` too, and the JSON answer has the same (`runs`, `cwd`, `env`, and `starts` for an import).
+- The line is what Botkins starts. The program is found on the `PATH` of the service, which may not be the `PATH` of your terminal, and a folder that does not exist is left out.
+- A name is a name. `--env API_KEY=…` and `--header "Authorization: Bearer …"` are refused, and the word is not repeated.
+- When you change the program, its arguments or the web address, give the stored values again. A value goes only where you sent it.
+- `botkins tools import <file>` adds the tools of a JSON file, such as another app's MCP settings (`{ "mcpServers": { … } }`). It shows each tool of the file first, a web address too, and one yes adds what it showed. A tool whose name is taken is left out.
+- `botkins tools test <tool>` ends with exit code 1 when the tool did not connect.
+- A tool on the web that signs in cannot be signed in from this command line yet. Sign it in from a paired phone (Settings, Tools). `botkins tools sign-out <tool>` forgets a sign-in.
+- `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills. The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk; `botkins folders` lists what you can choose, and on a server you copy the folder there first. A plugin folder is not taken as a folder of skills, because a plugin can run commands.
+- `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers; like each turn of the bot, it starts the bot's tools that are programs and are on.
+- `botkins tools forget-approvals` forgets the approvals that were given to tools "for this chat".
 
 ## Pair a phone
 

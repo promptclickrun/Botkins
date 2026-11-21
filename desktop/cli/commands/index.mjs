@@ -6,8 +6,11 @@ import { workspace } from "./workspace.mjs";
 import { settings } from "./settings.mjs";
 import { install } from "./install.mjs";
 import { tui } from "./tui.mjs";
+import { botTools, tools } from "./tools.mjs";
 
-export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...settings };
+export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings };
+// What one bot has of the tools and skills is said under the bot: `botkins bots tools <bot>`.
+Object.assign(COMMANDS.bots.commands, botTools);
 
 /** The command the leading words name, and those words: { command, path }, or null. */
 export function find(words) {
@@ -61,7 +64,8 @@ export function help(found) {
 export function argumentsOf(usage, path) {
   const after = String(usage ?? "").replace("botkins " + path.join(" "), "");
   // Options are in brackets that start with a dash ("[--role <text>]", "[-m <message>]", "[--system | --user]"); what they take is not a word of its own.
-  const words = after.replace(/\[-[^\]]*\]…?/g, " ");
+  // So is a value that stands straight after its option, in a choice between two ("(--command <program> | --url <address>)").
+  const words = after.replace(/\[-[^\]]*\]…?/g, " ").replace(/-{1,2}[A-Za-z][A-Za-z0-9-]* <[^>]+>…?/g, " ");
   return [...words.matchAll(/(\[)?<([^>]+)>(…)?\]?(…)?/g)].map(([, optional, name, many, more]) => ({ name, required: !optional, ...((many || more) && { many: true }) }));
 }
 

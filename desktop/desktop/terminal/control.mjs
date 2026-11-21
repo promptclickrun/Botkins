@@ -13,6 +13,7 @@ import { changed as changedSettings, read as readSetting, SETTINGS, validate, wi
 import { ControlError } from "./socket.mjs";
 import { DESKTOP_ONLY } from "../host/headless.mjs";
 import { CHANGES, thingForLog } from "./coverage.mjs";
+import { toolsApi } from "./control-tools.mjs";
 
 const WAIT_MS = 25_000;
 const text = (value, max, what) => {
@@ -411,6 +412,8 @@ export function controlApi(service) {
     },
     methods: () => ({ control: Object.keys(api).sort(), workspace: Object.keys(handlers).sort() }),
   };
+  // Tools (MCP servers), skills, and a bot's tools, skills and access (desktop/terminal/control-tools.mjs).
+  Object.assign(api, toolsApi({ workspace, handlers, bot }));
   // The plugin calls go by their own names ("plugins.install", …), as a phone makes them.
   for (const name of Object.keys(handlers)) if (name.startsWith("plugins.") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   return api;
@@ -425,16 +428,17 @@ export function controlApi(service) {
  * own tools from its shell, a person can see it afterwards.
  */
 export function dispatcher(api, { log } = {}) {
-  const said = (method, args) => {
+  const said = (method, args, value) => {
     if (method === "call") return "call " + (thingForLog(args?.[0]) ?? "");
     if (!Object.hasOwn(CHANGES, method)) return null;
-    const thing = CHANGES[method] === null ? null : thingForLog(args?.[CHANGES[method]]);
+    const where = CHANGES[method];
+    const thing = where === null ? null : thingForLog(typeof where === "function" ? where(args, value) : args?.[where]);
     return method + (thing ? " " + thing : "");
   };
   return async (method, args, context) => {
     if (!Object.hasOwn(api, method)) throw new ControlError("The service has no call named " + method + ". Is the command line newer than the service? Run `botkins status`.", "UNKNOWN_METHOD");
     const value = await api[method](args, context);
-    const line = log && said(method, args);
+    const line = log && said(method, args, value);
     if (line) log("Changed from the command line: " + line.trim());
     return value;
   };
