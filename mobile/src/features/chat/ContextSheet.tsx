@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import type { Catalog } from "@/link/types";
 import { useBot, useChat, useModels, usePart, useProviders, useSettings, useWatchedChat } from "@/state/hooks";
+import { myPlace, myself } from "./people";
 import { api, attempt } from "@/state/link";
 import { effectiveModel, findModel, modelName } from "@/state/models";
 import { useApp } from "@/state/store";
@@ -40,6 +41,7 @@ export default function ContextSheet() {
   const { id: chatId = "" } = useLocalSearchParams<{ id: string }>();
   const { colors } = useTheme();
   const chat = useChat(chatId);
+  const meta = usePart("meta");
   const bot = useBot(chat?.botId);
   const view = useWatchedChat(chatId);
   const recent = usePart("runs");
@@ -68,6 +70,7 @@ export default function ContextSheet() {
   const replyModel = usage.latest?.model ? (models?.find((m) => m.id === usage.latest!.model)?.name ?? usage.latest.model) : undefined;
   const colorOf = (tone: Tone) => (tone === "faint" ? colors.lineStrong : colors[tone]);
 
+  const mine = !chat || myPlace(chat, myself(meta)) === "manages";
   const compact = async () => {
     setCompacting(true);
     const done = await attempt(api.compact(chatId).then(() => true), "Compacting");
@@ -184,12 +187,15 @@ export default function ContextSheet() {
         </View>
       )}
 
-      <View style={{ gap: space.sm }}>
-        <T variant="footnote" color="muted">
-          Compact summarizes earlier turns to free room. The chat stays.
-        </T>
-        <Button title={working ? "Compact after this turn" : "Compact"} onPress={() => void compact()} loading={compacting} disabled={working || compacting} wide />
-      </View>
+      {/* Compacting a chat is its starter's (and the owner's), not someone's who was invited to it. */}
+      {mine && (
+        <View style={{ gap: space.sm }}>
+          <T variant="footnote" color="muted">
+            Compact summarizes earlier turns to free room. The chat stays.
+          </T>
+          <Button title={working ? "Compact after this turn" : "Compact"} onPress={() => void compact()} loading={compacting} disabled={working || compacting} wide />
+        </View>
+      )}
     </Sheet>
   );
 }

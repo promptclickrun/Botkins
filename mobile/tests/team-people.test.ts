@@ -123,6 +123,16 @@ test("a member receives their own and shared chats, bots as they arranged them, 
   assert.deepEqual(seen.board.map((item: { id: string }) => item.id), ["b2"]);
   // The people a chat can be shared with: the owner, by the computer's name, and each member.
   assert.deepEqual(seen.team.people, [{ id: OWNER, name: "Studio" }, { id: "m_a", name: "Ana" }, { id: "m_b", name: "Ben" }]);
+  // Both of a bot's prompts are the owner's words.
+  const prompts = parts();
+  (prompts.bots[0] as any).clarificationInstructions = "Ask the owner first";
+  assert.equal((filterParts(prompts, ana, team) as any).bots.find((bot: Bot) => bot.id === "mira").clarificationInstructions, undefined);
+  // An invite to a chat whose bot the role can't use shows nothing: Ana's role has no Patch.
+  const noBot = filterParts(parts(), ana, teamOf({ roles: [role({ bots: ["mira", "tally"] })], chats: { "c-ben": ["m_a"] } })) as any;
+  assert.ok(!noBot.chats.some((chat: ChatSummary) => chat.id === "c-ben"));
+  // Someone who can't start a chat is told only of the owner and the people of their chats, not the whole team.
+  const reader = filterParts(parts(), ana, teamOf({ roles: [role({ perms: { ...role().perms, agents: ["view"] } })], chats: { "c-shared": ["m_a"] } })) as any;
+  assert.deepEqual(reader.team.people.map((person: { id: string }) => person.id), [OWNER, "m_a"]);
   // A role that manages bots still reads their instructions; nobody but the owner reads where one came from.
   const manager = filterParts(parts(), ana, teamOf({ roles: [role({ perms: { ...role().perms, agents: ["view", "chat", "create", "manage"] } })] })) as any;
   assert.equal(manager.bots[0].instructions, "Owner's notes");
@@ -154,10 +164,12 @@ test("someone invited may take part in a chat, and only its starter may change o
   assert.equal(may(ana, "send", "c-owner"), "");
   assert.match(may(ana, "send", "c-ben"), /belongs to the owner or another member/);
   assert.match(may(ana, "link.team.inviteToChat", "c-owner", "m_b"), /started this chat/);
-  // An invite reaches a chat whose bot the role doesn't list; a chat of one's own still needs the bot.
+  // An invite never widens a role: the chat's bot has to be one the role may use, invited or not.
   const narrow = teamOf({ roles: [role({ bots: ["patch"] })], chats: { "c-owner": ["m_a"] } });
-  assert.equal(authorize(ana, narrow, "send", ["c-owner"], lookups), "");
+  assert.match(authorize(ana, narrow, "send", ["c-owner"], lookups), /bot isn't available/);
   assert.match(authorize(ana, narrow, "send", ["c-ana"], lookups), /bot isn't available/);
+  // Taking a card's address back is always a device's own to do.
+  assert.equal(may(ben, "link.push.activity", "c-owner", null), "");
   // A chat's card on a phone is for its people.
   assert.equal(may(ben, "link.push.activity", "c-ana", "token"), "");
   assert.match(may(ben, "link.push.activity", "c-owner", "token"), /belongs to/);
@@ -209,10 +221,9 @@ test("the phone's sheet lists a chat's people, and offers each person what they 
   assert.equal(myPlace(chat, "m_c"), "out");
   // The starter first, then those invited, then the rest of the team.
   const rows = peopleRows(people, chat, "m_b");
-  assert.deepEqual(rows.map((row) => [row.name, row.place]), [["Ana", "starter"], ["Ben", "invited"], ["Studio", "out"], ["Cy", "out"]]);
-  assert.equal(rows[0].note, "Started this chat");
-  assert.equal(rows[1].note, "You");
-  assert.equal(peopleRows(people, chat, "m_a")[0].note, "Started this chat · You");
+  assert.deepEqual(rows.map((row) => [row.name, row.place, row.note]), [["Ana", "starter", "Started this chat"], ["You", "invited", "Invited"], ["Studio", "out", "Not in this chat"], ["Cy", "out", "Not in this chat"]]);
+  // Whoever is looking is "You".
+  assert.deepEqual(peopleRows(people, chat, "m_a")[0], { id: "m_a", name: "You", place: "starter", self: true, note: "Started this chat" });
   assert.equal(sharedLine(people, chat), "Shared with Ben");
   assert.equal(sharedLine(people, { invited: ["m_b", "owner"] }), "Shared with Ben and Studio");
   assert.equal(sharedLine(people, { invited: ["m_b", "owner", "m_c"] }), "Shared with Ben and 2 others");
@@ -285,6 +296,8 @@ test("an owner and two members: an invite shares one chat, and each person's vie
     assert.deepEqual(ben.parts.chats.find((chat: ChatSummary) => chat.id === chatId).invited, [benId]);
     await owner.until(() => owner.parts.chats.find((chat: ChatSummary) => chat.id === chatId)?.invited?.length === 1, "the owner sees who was invited");
     await ben.call("send", chatId, "plan the launch", {});
+    // A chat a member starts is read by them from the start: the workspace's unread mark is the owner's.
+    assert.equal(typeof link.store.data.team.views[anaId].chats[chatId].seen, "number");
     await assert.rejects(ben.call("deleteChat", chatId), /started this chat/);
     await assert.rejects(ben.call("link.team.inviteToChat", chatId, OWNER), /started this chat/);
     await assert.rejects(ana.call("link.team.inviteToChat", chatId, "m_nobody"), /no longer on the team/);
@@ -317,9 +330,18 @@ test("an owner and two members: an invite shares one chat, and each person's vie
     await owner.call("link.team.removeMember", benId);
     assert.deepEqual(link.chatPeople(chatId).invited, [OWNER]);
     assert.equal(link.store.data.team.views[benId], undefined);
-    // Deleting the chat drops its people.
+    // An invite never widens a role: with a role that has no bots, the person can't be invited.
+    const none = structuredClone(link.store.data.team.roles.find((item: any) => item.id === "r_guest"));
+    none.bots = [];
+    await owner.call("link.team.saveRole", none);
+    const ownersChat = backend.state.chats.find((chat: any) => !chat.createdBy && !chat.botIds).id;
+    await assert.rejects(owner.call("link.team.inviteToChat", ownersChat, anaId), /role can't use this chat's bot/);
+    none.bots = "all";
+    await owner.call("link.team.saveRole", none);
+    // Deleting the chat drops its people and everyone's marks on it.
     await ana.call("deleteChat", chatId);
     assert.equal(link.store.data.team.chats[chatId], undefined);
+    assert.equal(link.store.data.team.views[anaId].chats[chatId], undefined);
   } finally {
     await stop();
   }

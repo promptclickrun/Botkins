@@ -4,10 +4,9 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { LogOut, User, UserCheck } from "lucide-react-native";
 import { useState } from "react";
-import { Alert, View } from "react-native";
 import { useCapability, useChat, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Button, EmptyState, Group, IconTile, Label, Row, Sheet, space, T, useTheme } from "@/ui";
+import { Button, EmptyState, Group, IconTile, Row, Sheet, space, T, useTheme } from "@/ui";
 import { myPlace, myself, peopleRows } from "./people";
 
 export default function People() {
@@ -36,55 +35,39 @@ export default function People() {
     await attempt(invite ? api["link.team.inviteToChat"](chat.id, personId) : api["link.team.removeFromChat"](chat.id, personId));
     setBusy(null);
   };
-  const leave = () =>
-    Alert.alert("Leave this chat?", "It leaves your chats, and you stop hearing of its replies.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Leave chat",
-        style: "destructive",
-        onPress: async () => {
-          const left = await attempt(api["link.team.removeFromChat"](chat.id, me).then(() => true));
-          if (left) router.dismissTo("/chats");
-        },
-      },
-    ]);
-  const inChat = rows.filter((row) => row.place !== "out");
-  const others = rows.filter((row) => row.place === "out");
+  // Leaving asks nothing first, as on the desktop: the chat's starter can invite the person again.
+  const leave = async () => {
+    const left = await attempt(api["link.team.removeFromChat"](chat.id, me).then(() => true));
+    if (left) router.dismissTo("/chats");
+  };
   return (
     <Sheet title="People in this chat">
       <T variant="callout" color="muted">
-        Only the people in a chat see it and hear of its replies.
+        Replies and questions in this chat go to these people only.
       </T>
-      <View>
-        <Label>In this chat</Label>
-        <Group>
-          {inChat.map((row) => (
+      <Group>
+        {rows.map((row) => {
+          // The starter is always in. The chat's starter and the owner switch the others; anyone else only reads the list.
+          const fixed = row.place === "starter" || place !== "manages";
+          return (
             <Row
               key={row.id}
-              leading={<IconTile icon={UserCheck} color={colors.ink2} />}
+              leading={<IconTile icon={row.place === "out" ? User : UserCheck} color={colors.ink2} />}
               title={row.name}
               subtitle={row.note}
-              {...(place === "manages" && row.place === "invited" && { toggled: true, disabled: !online || busy === row.id, onToggle: () => void change(row.id, false) })}
+              toggled={row.place !== "out"}
+              disabled={fixed || !online || busy === row.id}
+              onToggle={(on) => void change(row.id, on)}
             />
-          ))}
-        </Group>
-      </View>
-      {place === "manages" && others.length > 0 && (
-        <View>
-          <Label>Invite</Label>
-          <Group>
-            {others.map((row) => (
-              <Row key={row.id} leading={<IconTile icon={User} color={colors.ink2} />} title={row.name} subtitle={row.note} toggled={false} disabled={!online || busy === row.id} onToggle={() => void change(row.id, true)} />
-            ))}
-          </Group>
-        </View>
-      )}
-      {place === "manages" && others.length === 0 && inChat.length <= 1 && (
+          );
+        })}
+      </Group>
+      {place === "manages" && rows.length <= 1 && (
         <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
           There is nobody else on the team yet. Invite people in Settings › Team.
         </T>
       )}
-      {place === "invited" && <Button title="Leave chat" icon={LogOut} variant="secondary" wide disabled={!online} onPress={leave} />}
+      {place === "invited" && <Button title="Leave chat" icon={LogOut} variant="secondary" wide disabled={!online} onPress={() => void leave()} />}
     </Sheet>
   );
 }

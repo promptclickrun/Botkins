@@ -363,6 +363,8 @@ export class Push {
         sends.push({ token: record.token, env: record.env, type: "background", priority: 5, expiration: 600, payload: { aps: { "content-available": 1 }, w: 1 } });
       }
       if (!kind || !this.wants(device, kind) || this.present(device.id, run.delivery?.chatId ?? run.chatId)) continue;
+      // An alert opens the chat a result was delivered to: it goes only to someone who is in that chat.
+      if (run.delivery?.chatId && run.delivery.chatId !== run.chatId && !this.maySeeChat(device, chats.get(run.delivery.chatId))) continue;
       // The person is reading this chat on the computer itself: a reply there needs no second ping.
       if (kind === "replies" && watching?.focused && (watching.chatId === undefined || watching.chatId === run.chatId)) continue;
       const title = kind === "routines" ? run.title || name : chat?.title && !/^new chat$/i.test(chat.title) ? name + " · " + chat.title : name;

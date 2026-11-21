@@ -455,6 +455,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (!role) return "That team membership is no longer available.";
   // A chat's card on a phone (its Live Activity) is for that chat's people.
   if (method === "link.push.activity") {
+    // Taking a card's address back (no token) is always a device's own to do, also after it left the chat.
+    if (args[1] == null) return "";
     const chat = lookup("chat", args[0], lookups);
     return chat && inChat(team, chat, principal.memberId) ? "" : "That chat belongs to the owner or another member.";
   }
@@ -500,7 +502,9 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
       // Someone invited may leave, never remove another; and may not do what only the chat's starter does.
       if (method === "link.team.removeFromChat") return args[1] === principal.memberId ? "" : "Only the person who started this chat can do that.";
       if (CREATOR_METHODS.has(method)) return "Only the person who started this chat can do that.";
-    } else if (!visible(role, chat.botId)) return "That chat's bot isn't available to your team role.";
+    }
+    // An invite never widens a role: the chat's bot has to be one the role may use.
+    if (!visible(role, chat.botId)) return "That chat's bot isn't available to your team role.";
   } else if (method === "respond" || method === "retry") {
     return "That request is no longer available.";
   } else if (CHAT_METHODS.has(method) && args[0] !== undefined) {
@@ -561,7 +565,7 @@ export function filterParts(parts, principal, team) {
   const me = principal.memberId;
   const view = viewOf(team, me);
   // A member's chats: the ones they started, and the ones they were invited to.
-  const shared = (parts.chats ?? []).filter((chat) => inChat(team, chat, me));
+  const shared = (parts.chats ?? []).filter((chat) => inChat(team, chat, me) && (chat.createdBy === me || visible(role, chat.botId)));
   const ownChats = new Set(shared.map((chat) => chat.id));
   const can = (scope, action = SCOPE_ACTIONS[scope][0]) => hasAction(role?.perms, scope, action);
   const out = { ...parts };
@@ -571,9 +575,16 @@ export function filterParts(parts, principal, team) {
   // the member's own hidden and pinned marks and order. The owner's marks are the owner's.
   const mayManage = can("agents", "manage");
   const seen = (bot) => {
-    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, instructions, ...rest } = bot;
+    // What the owner wrote for the bot (both of its prompts) is for a role that manages bots; where it came from is the owner's alone.
+    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, instructions, clarificationInstructions, ...rest } = bot;
     const own = view.bots[bot.id] ?? {};
-    return { ...rest, ...(mayManage && instructions !== undefined && { instructions }), ...(own.hidden && { hidden: true }), ...(own.pinned && { pinned: true }) };
+    return {
+      ...rest,
+      ...(mayManage && instructions !== undefined && { instructions }),
+      ...(mayManage && clarificationInstructions !== undefined && { clarificationInstructions }),
+      ...(own.hidden && { hidden: true }),
+      ...(own.pinned && { pinned: true }),
+    };
   };
   const place = new Map(view.order.map((id, index) => [id, index]));
   const visibleBots = can("agents") ? (parts.bots ?? []).filter((bot) => visible(role, bot.id)) : [];
@@ -619,6 +630,12 @@ export function filterParts(parts, principal, team) {
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.
   out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name);
+  // Who is on the team is for someone who can start a chat and invite to it. Anyone else gets the
+  // owner and the people of the chats they are in.
+  if (!can("agents", "chat")) {
+    const known = new Set([OWNER, me, ...shared.flatMap((chat) => [chat.createdBy || OWNER, ...(team?.chats?.[chat.id] ?? [])])]);
+    out.team.people = out.team.people.filter((person) => known.has(person.id));
+  }
   out.meta = { ...(parts.meta ?? {}), you: { kind: "member", memberId: principal.memberId, name: principal.name } };
   return out;
 }

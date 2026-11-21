@@ -59,6 +59,8 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1", "team-people-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
+/** Calls that make a chat and answer its id. */
+const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
 const MAX_FRAME_HTML = 300_000;
 const MAX_FRAME_DATA = 200_000;
 const FRAME_ID = /^[0-9a-f-]{36}$/;
@@ -1114,6 +1116,11 @@ export class LinkHost extends EventEmitter {
   ownerName() {
     return this.store.data.devices.find((device) => !device.memberId && device.person)?.person || this.store.name || "";
   }
+  /** A member as the link's rules see them, by id. */
+  principalOfMember(memberId) {
+    const member = this.store.data.team.members.find((item) => item.id === memberId);
+    return { kind: "member", memberId, name: member?.name ?? "", groupId: member?.groupId };
+  }
   chatOf(chatId) {
     return (this.backend.snapshot().chats ?? []).find((chat) => chat.id === chatId);
   }
@@ -1138,6 +1145,8 @@ export class LinkHost extends EventEmitter {
     if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That person is no longer on the team.");
     const people = chatPeople(team, chat);
     if (people.createdBy === person || people.invited.includes(person)) return people.invited;
+    // An invite never widens a role: the person's role has to allow the chat's bot.
+    if (person !== OWNER && authorize(this.principalOfMember(person), team, "link.messages", [chatId, 0], { chat: () => ({ ...chat, createdBy: person }), bot: (id) => (state.bots ?? []).find((bot) => bot.id === id) })) throw new Failure("That person's role can't use this chat's bot. Change their role in Team settings first.");
     if (people.invited.length + 1 >= MAX_CHAT_PEOPLE) throw new Failure("A chat holds up to " + MAX_CHAT_PEOPLE + " people.");
     // Chats that are gone leave the list when it is next changed.
     const known = new Set((state.chats ?? []).map((item) => item.id));
@@ -1151,11 +1160,21 @@ export class LinkHost extends EventEmitter {
     const invited = (team.chats?.[chatId] ?? []).filter((held) => held !== person);
     const { [chatId]: _was, ...rest } = team.chats ?? {};
     this.setTeam({ ...team, chats: invited.length ? { ...rest, [chatId]: invited } : rest });
+    // The chat's card on their phones ends with their place in it.
+    for (const device of this.store.data.devices) {
+      if ((device.memberId ?? OWNER) === person && this.store.push(device.id)?.activities?.[chatId]) this.push.endActivity(device.id, chatId);
+    }
     return invited;
   }
   removeChatPeople(chatId) {
-    const { [chatId]: _was, ...chats } = this.store.data.team.chats ?? {};
-    this.store.set({ team: { ...this.store.data.team, chats } });
+    const team = this.store.data.team;
+    const { [chatId]: _was, ...chats } = team.chats ?? {};
+    const views = Object.fromEntries(Object.entries(team.views ?? {}).map(([memberId, view]) => {
+      if (!view?.chats || !Object.hasOwn(view.chats, chatId)) return [memberId, view];
+      const { [chatId]: _mark, ...rest } = view.chats;
+      return [memberId, { ...view, chats: rest }];
+    }));
+    this.store.set({ team: { ...team, chats, views } });
   }
   /** A member's own view is kept by the link and never reaches the app: their bots' marks and order, their chats' flags. */
   memberView(principal, method, args, state) {
@@ -1492,9 +1511,14 @@ export class LinkHost extends EventEmitter {
       }
       // A custom view in a chat is that chat's people's.
       if (method === "link.frame.page" || method === "link.frame.chat") {
-        const from = await this.frameChat(args[0]).catch(() => ({ chatId: null }));
-        const chat = from.chatId ? (state.chats ?? []).find((item) => item.id === from.chatId) : null;
-        if (from.chatId && !(chat && inChat(this.store.data.team, chat, principal.memberId))) throw new Failure("This view no longer exists.");
+        // A view on a Today panel the member is sent follows Today's own rule; any other is a chat's, and its people's.
+        const id = typeof args[0] === "string" ? args[0] : "";
+        const panels = filterParts({ panels: state.panels ?? [], bots: state.bots ?? [] }, principal, this.store.data.team).panels;
+        if (!(id && JSON.stringify(panels).includes(JSON.stringify(id)))) {
+          const from = await this.frameChat(args[0]).catch(() => ({ chatId: null }));
+          const chat = from.chatId ? (state.chats ?? []).find((item) => item.id === from.chatId) : null;
+          if (from.chatId && !(chat && inChat(this.store.data.team, chat, principal.memberId))) throw new Failure("This view no longer exists.");
+        }
       }
     }
     if (method === "link.sync") return this.sync(session, args[0] ?? {}, gone);
@@ -1548,9 +1572,14 @@ export class LinkHost extends EventEmitter {
     if (!REMOTE_METHODS.has(method)) throw new Error("That can't be done from a phone.");
     // A credential reference is filled in at a few fixed places of three calls, and refused everywhere else.
     const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
-    // A chat that is deleted takes its invitations with it.
-    if (method === "deleteChat" && this.store.data.team.chats?.[args[0]]) this.removeChatPeople(String(args[0]));
-    if (!secrets.length) return this.backend.call(method, callArgs, { principal });
+    if (!secrets.length) {
+      const answer = await this.backend.call(method, callArgs, { principal });
+      // A chat that was deleted takes its invitations and everyone's marks on it along.
+      if (method === "deleteChat") this.removeChatPeople(String(args[0]));
+      // A chat a member starts is read by them from the start: their unread is theirs, not the workspace's.
+      else if (principal.kind === "member" && MAKES_CHAT.has(method) && typeof answer === "string" && answer) this.memberView(principal, "setChatFlags", [answer, { unread: false }], { chats: [{ id: answer, time: Date.now() }] });
+      return answer;
+    }
     // The desktop may echo what it was given. Nothing of a value goes back to a phone.
     try {
       return scrub(await this.backend.call(method, callArgs, { principal }), secrets);

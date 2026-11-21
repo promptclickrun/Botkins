@@ -13,14 +13,16 @@ export const starterOf = (chat: Pick<ChatSummary, "createdBy">): string => chat.
 
 export type PersonRow = {
   id: string;
+  /** The person's name, or "You" for this phone's own person. */
   name: string;
   /** "starter" started the chat, "invited" was invited, "out" is on the team and not in the chat. */
   place: "starter" | "invited" | "out";
   /** This phone's own person. */
   self: boolean;
-  /** The line under the name. */
-  note?: string;
+  /** The line under the name, in the desktop app's words. */
+  note: string;
 };
+const NOTES = { starter: "Started this chat", invited: "Invited", out: "Not in this chat" } as const;
 
 /**
  * Who may change a chat's people from this phone: its starter and the owner invite and remove
@@ -40,8 +42,7 @@ export function peopleRows(people: Person[], chat: Pick<ChatSummary, "createdBy"
     .map((person): PersonRow => {
       const place = person.id === starter ? "starter" : invited.has(person.id) ? "invited" : "out";
       const self = person.id === me;
-      const note = [place === "starter" ? "Started this chat" : undefined, self ? "You" : undefined].filter(Boolean).join(" · ") || undefined;
-      return { id: person.id, name: person.name, place, self, ...(note && { note }) };
+      return { id: person.id, name: self ? "You" : person.name, place, self, note: NOTES[place] };
     })
     .sort((a, b) => order[a.place] - order[b.place]);
 }
