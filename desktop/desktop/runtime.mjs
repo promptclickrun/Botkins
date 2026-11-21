@@ -31,7 +31,7 @@ import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
 import { FOLDERS, Folders } from "./folders.mjs";
 import { deviceCall } from "./device-call.mjs";
 import { PLUGINS, PLUGIN_STARTS, pluginHandlers } from "./plugins.mjs";
-import { AGENT_TEMPLATES } from "./plugin-catalog.mjs";
+import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
 import { COMPOSIO_APPS, composioHandlers } from "./composio.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { releasePage } from "./updates.mjs";
@@ -100,13 +100,13 @@ export const APP_UPDATE = "app-update-v1";
 export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
-export const CAPABILITIES = ["voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS];
+export const CAPABILITIES = ["voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "voice-history-v1" || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (name !== "voice-history-v1" || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 

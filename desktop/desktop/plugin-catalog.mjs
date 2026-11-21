@@ -33,6 +33,12 @@ import { parseTemplateFile } from "./templates.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
+/**
+ * A person can ask for the catalogs again before the hour is up ("market-refresh-v1": the
+ * Marketplace's refresh button, a phone's pull down). A marketplace read this recently is not read again.
+ */
+export const MARKET_REFRESH = "market-refresh-v1";
+export const MARKETPLACE_REFRESH_FLOOR = 15 * 1000;
 export const MAX_PLUGIN_FILES = 1000;
 export const MAX_PLUGIN_BYTES = 50 * 1024 * 1024;
 
@@ -967,6 +973,20 @@ export class PluginCatalog {
     })();
     this.loadingMarketplaces.set(record.id, loading);
     return loading;
+  }
+
+  /**
+   * Reads every marketplace again now, without waiting for the hour (MARKET_REFRESH). One read in
+   * the last few seconds is not repeated. A marketplace that can't be read keeps what it listed
+   * before, with its error, as after an hourly read; its agent templates are read again at the
+   * next browse. Resolves to the marketplaces, as `marketplaces()` lists them.
+   */
+  async refresh() {
+    await this._init();
+    const now = Date.now();
+    const recent = (record) => record._entries && record.updatedAt && !record.error && now - record.updatedAt < MARKETPLACE_REFRESH_FLOOR;
+    await Promise.all([...this.marketplacesById.values()].map((record) => this._ensureMarketplace(record, !recent(record))));
+    return this.marketplaces();
   }
 
   async marketplaces() {

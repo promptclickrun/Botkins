@@ -4,10 +4,11 @@
 import type { Href } from "expo-router";
 import { create } from "zustand";
 import type { PluginConfigValue, PluginMarketplace, PluginPreview } from "@/link/types";
-import { useCapability, usePart } from "@/state/hooks";
+import { refresh, useCapability, usePart } from "@/state/hooks";
 import { api } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { onComputerChange, useApp } from "@/state/store";
+import { refreshFailure } from "./logic";
 
 export const PLUGINS_CAPABILITY = "plugins-v1";
 export const usePluginsReady = () => useCapability(PLUGINS_CAPABILITY);
@@ -18,6 +19,12 @@ export const usePluginsReady = () => useCapability(PLUGINS_CAPABILITY);
  */
 export const STARTS_CAPABILITY = "plugin-starts-v1";
 export const useOlderComputer = () => !useCapability(STARTS_CAPABILITY);
+/**
+ * "market-refresh-v1": the computer reads its catalogs again when asked (`plugins.refresh`). An
+ * older one reads them at most once an hour, and a refresh only reads again what it holds.
+ */
+export const REFRESH_CAPABILITY = "market-refresh-v1";
+export const useCanRefresh = () => useCapability(REFRESH_CAPABILITY);
 
 /** The computer in use, as the key of what the phone told the person once. */
 export const useComputerKey = () => useApp((state) => state.pairing?.serverId ?? "");
@@ -45,6 +52,7 @@ export const pluginCalls = {
   setEnabled: (id: string, on: boolean, revision?: string) => (revision === undefined ? api["plugins.setEnabled"](id, on) : api["plugins.setEnabled"](id, on, { revision })),
   update: (id: string, revision?: string) => api["plugins.update"](id, revision === undefined ? {} : { revision }),
   uninstall: (id: string) => api["plugins.uninstall"](id),
+  refresh: () => api["plugins.refresh"](),
 };
 
 // Routes. An id is opaque and may hold any character, so it travels as a query parameter.
@@ -86,4 +94,19 @@ export async function loadMarketplaces() {
   } catch (error) {
     usePluginMarketplaces.setState({ error: error instanceof Error ? error.message : "The marketplaces didn't load." });
   }
+}
+
+/**
+ * A pull down on Marketplace: the computer reads every marketplace again (with `fresh`, from
+ * "market-refresh-v1"; otherwise the marketplaces are only read again), then the skills, which a
+ * new plugin can bring. What is on screen stays until the new lists come. Throws the sentence to
+ * show when something couldn't be refreshed.
+ */
+export async function refreshCatalogs(fresh: boolean) {
+  const before = usePluginMarketplaces.getState().list;
+  const list = fresh ? await pluginCalls.refresh() : await pluginCalls.marketplaces();
+  usePluginMarketplaces.setState({ list, error: undefined });
+  void refresh("skills");
+  const failed = refreshFailure(before, list);
+  if (failed) throw new Error(failed);
 }

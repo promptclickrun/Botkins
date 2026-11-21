@@ -752,11 +752,14 @@ declare global {
       "plugins.setEnabled"(id: string, on: boolean, options?: { revision?: string }): Promise<void>;
       "plugins.update"(id: string, options?: { revision?: string }): Promise<InstalledPlugin>;
       "plugins.uninstall"(id: string): Promise<void>;
+      /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
+      "plugins.refresh"?(): Promise<PluginMarketplace[]>;
       // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
       "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
       "agents.template"(id: string): Promise<MarketAgentTemplate>;
       // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in
-      "composio.catalog"(): Promise<ComposioCatalog>;
+      /** `fresh`: asks the catalog's server now (a person asked for the list again); a failure is thrown. */
+      "composio.catalog"(options?: { fresh?: boolean }): Promise<ComposioCatalog>;
       /** The apps the person connected, as Composio's own tool names them; null when it doesn't say. */
       "composio.connected"(): Promise<string[] | null>;
       /** Each app's accounts, by slug (at most 50 apps). An app with none maps to []. */

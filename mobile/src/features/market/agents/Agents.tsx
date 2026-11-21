@@ -6,9 +6,10 @@ import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
 import { ScrollView, View } from "react-native";
 import type { MarketAgent, MarketAgentCategory } from "@/link/types";
 import { useCan, useCapability, useOnline } from "@/state/hooks";
-import { api } from "@/state/link";
+import { api, attempt } from "@/state/link";
 import { BotAvatar, Chip, EmptyState, Group, Page, space, T, Tap, useTheme } from "@/ui";
 import { SearchField } from "../parts";
+import { refreshCatalogs, useCanRefresh } from "../plugins/calls";
 import { AGENTS_CAPABILITY, agentChips, agentHref, listLine } from "./logic";
 
 const AVATAR = 48;
@@ -77,6 +78,9 @@ function Skeleton() {
 
 function Agents({ switcher }: { switcher: ReactNode }) {
   const online = useOnline();
+  // The templates are in the plugin catalogs, so a refresh reads those again (with the plugins' permission).
+  const canCatalogs = useCan("plugins", "view");
+  const canRefresh = useCanRefresh();
   const [chosen, setChosen] = useState<{ id: string; name: string }>();
   const category = chosen?.id;
   const [query, setQuery] = useState("");
@@ -98,11 +102,9 @@ function Agents({ switcher }: { switcher: ReactNode }) {
     api["agents.browse"]({ ...(asked && { query: asked }), ...(category && { category }) }).then(
       (page) => {
         if (live) setListing({ key, agents: page.agents, categories: page.categories });
-        if (live) setRefreshing(false);
       },
       (error: unknown) => {
         if (live) setListing((was) => ({ key, agents: [], categories: was?.categories ?? [], error: error instanceof Error ? error.message : "The agents didn't load." }));
-        if (live) setRefreshing(false);
       },
     );
     return () => {
@@ -111,6 +113,24 @@ function Agents({ switcher }: { switcher: ReactNode }) {
   }, [online, asked, category, key]);
 
   const shown = listing?.key === key ? listing : undefined;
+
+  // A pull down: the computer reads the catalogs again, then this list. The old list stays until
+  // the new one comes, and stays when it fails.
+  const reload = async () => {
+    if (!online) return;
+    setRefreshing(true);
+    const at = key;
+    await attempt(
+      (async () => {
+        let failed: unknown;
+        if (canCatalogs) await refreshCatalogs(canRefresh).catch((error: unknown) => (failed = error));
+        const page = await api["agents.browse"]({ ...(asked && { query: asked }), ...(category && { category }) });
+        setListing((now) => (now?.key === at ? { key: at, agents: page.agents, categories: page.categories } : now));
+        if (failed) throw failed;
+      })(),
+    );
+    setRefreshing(false);
+  };
   // The chips keep the last categories while the next list loads, so they don't jump.
   const chips = useMemo(() => agentChips(listing?.categories ?? [], chosen), [listing?.categories, chosen]);
 
@@ -137,11 +157,7 @@ function Agents({ switcher }: { switcher: ReactNode }) {
       tab
       title="Marketplace"
       refreshing={refreshing}
-      onRefresh={() => {
-        if (!online) return;
-        setRefreshing(true);
-        setTries((n) => n + 1);
-      }}
+      onRefresh={reload}
     >
       {switcher}
       <SearchField value={query} onChange={setQuery} label="Search agents" />

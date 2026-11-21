@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { PLUGIN_METHODS, REMOTE_METHODS, remoteArgs } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { botsLine, byLine, configValues, consent, fieldState, groupHooks, hookFacts, hookWords, hostOf, isMarketplaceSource, matchInstalled, missingFields, needsReview, noticeKey, notRunRows, otherFilesRows, pluginChips, reviewNotice, runLine, runsOnComputer, safeLink, sentToLines, showsAll, shownWord, skillsNotices, statusLine, timeLimit, toolFacts, toolLine } from "../src/features/market/plugins/logic";
+import { botsLine, byLine, readPages, refreshFailure, configValues, consent, fieldState, groupHooks, hookFacts, hookWords, hostOf, isMarketplaceSource, matchInstalled, missingFields, needsReview, noticeKey, notRunRows, otherFilesRows, pluginChips, reviewNotice, runLine, runsOnComputer, safeLink, sentToLines, showsAll, shownWord, skillsNotices, statusLine, timeLimit, toolFacts, toolLine } from "../src/features/market/plugins/logic";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { InstalledPlugin, PluginContents, PluginField, PluginListing, PluginMarketplace, PluginPreview } from "../src/link/types";
 import { addedSkillsNote } from "../src/state/fileText";
@@ -217,10 +217,36 @@ test("a marketplace source, a link and a search", () => {
   assert.deepEqual(matchInstalled(mine, "memory").map((plugin) => plugin.name), ["alpha", "zeta"]);
 });
 
+test("a refresh says only what newly failed, and reads as many pages as were on screen", async () => {
+  const market = (id: string, name: string, error?: string): PluginMarketplace => ({ id, name, source: id, builtIn: true, ...(error && { error }) });
+  const before = [market("gh", "GitHub"), market("cp", "Copilot plugins", "Not found")];
+  assert.equal(refreshFailure(before, [market("gh", "GitHub"), market("cp", "Copilot plugins", "Not found")]), undefined, "an old error is shown by its marketplace already");
+  assert.equal(refreshFailure(before, [market("gh", "GitHub", "HTTP 500"), market("cp", "Copilot plugins", "Not found")]), "Couldn't refresh GitHub");
+  assert.equal(refreshFailure(undefined, [market("gh", "GitHub", "x"), market("me", "Mine", "y")]), "Couldn't refresh 2 marketplaces");
+  assert.equal(refreshFailure(before, [market("gh", "GitHub")]), undefined, "a marketplace that reads again says nothing");
+
+  const all = ["a", "b", "c", "d", "e"].map((name) => ({ id: name + "@gh", name, marketplace: "gh" }) as PluginListing);
+  const asked: (string | undefined)[] = [];
+  const read = async (cursor?: string) => {
+    asked.push(cursor);
+    const from = Number(cursor ?? 0);
+    return { plugins: all.slice(from, from + 2), ...(from + 2 < all.length && { cursor: String(from + 2) }) };
+  };
+  const three = await readPages(read, 3);
+  assert.deepEqual([three.plugins.map((item) => item.name), three.cursor, asked], [["a", "b", "c", "d"], "4", [undefined, "2"]], "pages until the screen's count, keeping the cursor");
+  asked.length = 0;
+  assert.deepEqual((await readPages(read, 0)).plugins.length, 2, "one page when nothing was on screen");
+  const twice = await readPages(async () => ({ plugins: [all[0], all[0]], cursor: "x" }), 5);
+  assert.deepEqual(twice.plugins.map((item) => item.name), ["a"], "each plugin once, and it stops after 20 pages");
+});
+
 // ── What the link lets through ──────────────────────────────────────────────────────────────────
 
-test("a phone may make the twelve plugin calls, each cut to its shape", () => {
-  assert.equal(PLUGIN_METHODS.length, 12);
+test("a phone may make the thirteen plugin calls, each cut to its shape", () => {
+  assert.equal(PLUGIN_METHODS.length, 13);
+  assert.deepEqual(remoteArgs("plugins.refresh", ["x", { all: true }]), [], "a refresh takes nothing");
+  assert.deepEqual(remoteArgs("composio.catalog", [{ fresh: true, url: "https://elsewhere" }]), [{ fresh: true }], "the app list may be asked for fresh, and nothing else");
+  assert.deepEqual(remoteArgs("composio.catalog", [{ fresh: "yes" }]), []);
   for (const name of PLUGIN_METHODS) assert.ok(REMOTE_METHODS.has(name), name);
   assert.deepEqual(remoteArgs("plugins.marketplaces", ["x"]), []);
   assert.deepEqual(remoteArgs("plugins.addMarketplace", ["  me/plugins  "]), ["me/plugins"]);
@@ -551,6 +577,25 @@ test("a marketplace is added and removed; GitHub's can't be, and installed plugi
     client.stop();
     await link.stop();
   }
+});
+
+test("a refresh reads the catalogs again, and a new plugin is listed (market-refresh-v1)", async () => {
+  const setup = await paired();
+  const { link, client } = setup;
+  try {
+    assert.ok(setup.backend.capabilities.includes("market-refresh-v1"));
+    const names = async () => (await client.call<{ plugins: PluginListing[] }>("plugins.browse", { marketplace: "awesome-copilot" })).plugins.map((item) => item.name);
+    assert.equal((await names()).includes("daily-digest"), false);
+    const markets = await client.call<PluginMarketplace[]>("plugins.refresh");
+    assert.ok(markets.some((item) => item.id === "awesome-copilot"), "the marketplaces come back");
+    assert.ok((await names()).includes("daily-digest"), "the new plugin is in the list");
+    await client.call("plugins.refresh");
+    assert.equal((await names()).filter((name) => name === "daily-digest").length, 1, "once");
+  } finally {
+    client.stop();
+    await link.stop();
+  }
+  await inMode("old", async () => assert.equal(new MockBackend({ speed: 0.05 }).capabilities.includes("market-refresh-v1"), false, "an older computer doesn't name it"));
 });
 
 // ── What a plugin starts, shown whole ("plugin-starts-v1") ──────────────────────────────────────

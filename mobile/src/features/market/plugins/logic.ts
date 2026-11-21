@@ -317,3 +317,39 @@ export function skillsNotices(plugins: InstalledPlugin[] | undefined, computer: 
 
 /** Whether a plugin adds nothing this app can name. */
 export const addsNothing = (contents: PluginContents) => !contents.skills.length && !contents.agents.length && !contents.commands.length && !contents.mcpServers.length && !contents.hooks.length && !contents.lspServers?.length;
+
+// ── A refresh of the catalogs ("market-refresh-v1") ──
+
+/**
+ * What a refresh says when a marketplace that read well before can't be read now: "Couldn't
+ * refresh GitHub", or "Couldn't refresh 2 marketplaces". Undefined when nothing new failed. A
+ * marketplace that failed already shows its own error, so it is not said again.
+ */
+export function refreshFailure(before: PluginMarketplace[] | undefined, after: PluginMarketplace[]): string | undefined {
+  const failed = after.filter((market) => market.error && !before?.find((had) => had.id === market.id)?.error);
+  if (!failed.length) return undefined;
+  return "Couldn't refresh " + (failed.length === 1 ? failed[0].name : failed.length + " marketplaces");
+}
+
+type Page = { plugins: PluginListing[]; cursor?: string };
+/**
+ * Reads a list again from its first page until it holds at least `want` plugins (as many as were
+ * on screen, so "Show more" pages stay) or ends. New plugins come in at their place by name; each
+ * plugin is listed once. At most 20 pages.
+ */
+export async function readPages(read: (cursor?: string) => Promise<Page>, want: number): Promise<Page> {
+  const plugins: PluginListing[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 20; page++) {
+    const next = await read(cursor);
+    for (const item of next.plugins) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      plugins.push(item);
+    }
+    cursor = next.cursor;
+    if (!cursor || plugins.length >= want) break;
+  }
+  return { plugins, ...(cursor && { cursor }) };
+}

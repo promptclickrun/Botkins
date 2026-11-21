@@ -504,6 +504,14 @@ export const workspace = {
           context.print(await context.client.call("plugins.marketplaces"), (list) => (list.length ? table(["NAME", "SOURCE", "ID"], list.map((entry) => [shownText(entry.name ?? entry.id), shownText(entry.source ?? entry.url ?? ""), shownText(entry.id)])) : "There are no marketplaces. Add one with `botkins plugins add-marketplace <owner/repo>`."));
         },
       },
+      refresh: {
+        summary: "Read every marketplace again now, for new plugins and agent templates",
+        usage: "botkins plugins refresh",
+        async run(context) {
+          if (context.args.length) throw usage("`botkins plugins refresh` takes no words.");
+          context.print(await context.client.call("plugins.refresh"), (list) => (list.length ? table(["NAME", "PLUGINS", "STATE"], list.map((entry) => [shownText(entry.name ?? entry.id), entry.count ?? "", entry.error ? shownText(entry.error) : "read"])) : "There are no marketplaces. Add one with `botkins plugins add-marketplace <owner/repo>`."));
+        },
+      },
       "add-marketplace": {
         summary: "Add a marketplace (owner/repo, a git address or a folder)",
         usage: "botkins plugins add-marketplace <source>",

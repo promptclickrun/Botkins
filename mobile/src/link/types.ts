@@ -937,6 +937,8 @@ export type UsageReport = {
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
+ * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
+ * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  */
 export type Meta = {
   app: string;
@@ -1518,6 +1520,8 @@ export type Calls = {
   /** `revision` is the preview's the person reviewed; the computer refuses another. */
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;
+  /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
+  "plugins.refresh"(): PluginMarketplace[];
   // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
   /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };

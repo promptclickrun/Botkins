@@ -41,7 +41,8 @@ export type ComposioState = {
   botsBusy: boolean;
 
   boot(): void;
-  loadCatalog(force?: boolean): Promise<void>;
+  /** Resolves false when the server couldn't be asked; the list held stays. */
+  loadCatalog(force?: boolean): Promise<boolean>;
   signIn(): Promise<boolean>;
   signOut(): Promise<void>;
   refreshConnected(): Promise<void>;
@@ -61,7 +62,7 @@ let scraped = new Set<string>();
 const loadedAt = new Map<string, number>();
 const loading = new Set<string>();
 let sessionBoot: Promise<void> | null = null;
-let catalogLoad: Promise<void> | null = null;
+let catalogLoad: Promise<boolean> | null = null;
 type Attempt = { cancelled: boolean; wake: () => void; woken: Promise<void> };
 const attempts = new Map<string, Attempt>();
 
@@ -156,8 +157,10 @@ export const useComposio = create<ComposioState>((set, get) => ({
       try {
         const fresh = await revalidateCatalog(force);
         if (fresh) set({ catalog: fresh, catalogStatus: "ready" });
+        return true;
       } catch {
         if (!get().catalog) set({ catalogStatus: "error" });
+        return false;
       }
     })().finally(() => {
       catalogLoad = null;

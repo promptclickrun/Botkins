@@ -342,10 +342,14 @@ export function createComposio(workspace, { now = Date.now, catalogUrl = CATALOG
   };
 
   return {
-    /** The saved copy at once when there is one (checked again in the background once it is an hour old); otherwise the server's. */
-    async catalog() {
+    /**
+     * The saved copy at once when there is one (checked again in the background once it is an hour
+     * old); otherwise the server's. With `fresh` (a person asked for the list again), the server is
+     * asked now, with the saved copy's ETag, and a failure is said: the caller keeps what it shows.
+     */
+    async catalog(options) {
       fromDisk();
-      if (!held) return check();
+      if (!held || options?.fresh === true) return check();
       if (now() - held.checkedAt >= CATALOG_MAX_AGE) check().catch(() => {});
       return held.catalog;
     },
@@ -410,7 +414,7 @@ export function createComposio(workspace, { now = Date.now, catalogUrl = CATALOG
 export function composioHandlers(workspace, options) {
   const apps = createComposio(workspace, options);
   const handlers = {
-    "composio.catalog": () => apps.catalog(),
+    "composio.catalog": (options) => apps.catalog(options),
     "composio.connected": () => apps.connected(),
     "composio.accounts": (slugs) => apps.accounts(slugs),
     "composio.connect": (slug) => apps.connect(slug),

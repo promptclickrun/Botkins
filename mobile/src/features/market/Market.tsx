@@ -6,6 +6,7 @@ import { searchToolkits } from "@/composio/catalog";
 import { type BotsAccess, type Toolkit, useBotsAccess, useComposio } from "@/composio/store";
 import { useCan, useOnline } from "@/state/hooks";
 import { setPrefs, usePrefs } from "@/state/prefs";
+import { showToast } from "@/state/store";
 import { AppLogo, Button, EmptyState, Group, IconTile, Label, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { AppRow, AppTile, RowSkeleton, SearchField, TileSkeleton } from "./parts";
 import { AgentsPage } from "./agents/Agents";
@@ -215,11 +216,13 @@ function Apps({ switcher }: { switcher: ReactNode }) {
     return () => clearTimeout(timer);
   }, [onScreen, signedIn]);
 
+  // A pull down: the app list is asked for again (only what changed comes back), and the person's apps.
   const reload = async () => {
     setRefreshing(true);
     const store = useComposio.getState();
-    await Promise.all([store.loadCatalog(true), store.refreshConnected()]);
+    const [read] = await Promise.all([store.loadCatalog(true), store.refreshConnected()]);
     setRefreshing(false);
+    if (!read && useComposio.getState().catalog) showToast("Couldn't refresh the app list", "error");
   };
 
   const failed = !catalog && catalogStatus === "error";
