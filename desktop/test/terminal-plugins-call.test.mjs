@@ -116,7 +116,8 @@ test("no reference to a saved credential is taken from the socket, by the named 
   assert.equal(keySet(), false, "nothing was saved");
   // Answering a bot's request: the check comes before the app looks for the request.
   await refused(client.call("chat.respond", "no-such-request", { action: "accept", content: { KEY: reference } }), NO_REFERENCES_IN_ANSWER);
-  await refused(client.call("call", "respond", ["no-such-request", { action: "accept", content: { KEY: reference } }]), NO_REFERENCES_IN_ANSWER);
+  // `respond` is covered by `chat respond`, so `call` refuses it before the app looks at the answer. (The named call above is the one that keeps the rule.)
+  await refused(client.call("call", "respond", ["no-such-request", { action: "accept", content: { KEY: reference } }]), "`respond` is done by `botkins chat`. Run that command: it shows what it changes and leaves a line in the log.");
   const lines = await logged();
   assert.ok(lines.includes("Tried from the command line: plugins.configure " + id + " (it failed)"));
   assert.ok(lines.includes("Tried from the command line: call plugins.configure (it failed)"));

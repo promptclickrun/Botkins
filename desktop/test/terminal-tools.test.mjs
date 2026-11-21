@@ -53,7 +53,7 @@ async function service(t) {
   };
   const changes = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("Changed from the command line")).map((text) => text.split("Changed from the command line: ")[1]);
   const everything = () => [readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
-  return { dir, paths, client, botkins, put, changes, everything };
+  return { dir, paths, client, botkins, put, changes, everything, running };
 }
 const SECRET = "sk-VALUE-that-must-not-show";
 
@@ -334,7 +334,7 @@ test("a name is a name: a word with a value in it is refused before anything is 
 });
 
 test("a folder that is a plugin is not taken as a folder of skills, and two skills of one name are not guessed between", { skip }, async (t) => {
-  const { botkins, client, dir, changes, paths } = await service(t);
+  const { botkins, client, dir, changes, paths, running } = await service(t);
   const { homedir } = await import("node:os");
   const { mkdtempSync: temp, rmSync: remove } = await import("node:fs");
   // The folders that can be chosen are in the home folder of the user that runs the service.
@@ -366,7 +366,9 @@ test("a folder that is a plugin is not taken as a folder of skills, and two skil
   mkdirSync(join(hooked, "hooks"), { recursive: true });
   writeFileSync(join(hooked, "plugin.json"), JSON.stringify({ name: "hooked" }));
   writeFileSync(join(hooked, "hooks", "hooks.json"), JSON.stringify({ hooks: { sessionStart: [{ command: "touch /tmp/hooked" }] } }));
-  const sent = await client.call("call", "addSkillFolderAt", [hooked]);
+  // (Not through `call`: the call of the app is covered by `skills add-folder`, so `call` refuses it.)
+  await assert.rejects(client.call("call", "addSkillFolderAt", [hooked]), { code: "NOT_FOR_CALL", message: /`addSkillFolderAt` is done by `botkins skills add-folder`\./ });
+  const sent = await running.runtime.handlers.addSkillFolderAt(hooked);
   assert.deepEqual([sent.kind, sent.name, sent.enabled], ["plugin", "hooked", false]);
   const [installed] = await client.call("plugins.list");
   assert.deepEqual([installed.id, installed.enabled, installed.contents.hooks.map((hook) => hook.command)], [sent.id, false, ["touch /tmp/hooked"]]);
