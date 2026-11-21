@@ -55,6 +55,12 @@ test("what changed since the person last looked", () => {
   assert.deepEqual([...changedSince(ticked, at(20, 9), "m1")], ["a"]);
   // A bot's refresh after the person's own tick is news again.
   assert.deepEqual([...changedSince([{ ...ticked[0]!, updatedAt: at(20, 12) }], at(20, 9), "owner")], ["a"]);
+  // A panel opened on its own loses its dot and leaves the line, until it changes again.
+  const opened = { a: at(20, 10) };
+  assert.deepEqual([...changedSince(panels, at(20, 9), undefined, opened)], ["b", "d"]);
+  assert.equal(changedLine(panels, at(20, 9), now, undefined, opened), "1 panel changed since this morning");
+  assert.equal(changedLine(panels, at(20, 9), now, undefined, { a: at(20, 10), b: at(20, 11) }), undefined, "every changed panel opened: no line");
+  assert.deepEqual([...changedSince([{ ...panels[0]!, updatedAt: at(20, 13) }], at(20, 9), undefined, opened)], ["a"], "a newer change brings the dot back");
 });
 
 test("all spaces: pinned, more, and for the owner with Admin mode on what members made", () => {

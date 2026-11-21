@@ -29,7 +29,7 @@ import { SpaceLinks } from "./space-links.mjs";
 import { SpaceAlerts } from "./space-alerts.mjs";
 import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
-import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
+import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -336,7 +336,7 @@ export class LinkHost extends EventEmitter {
       "link.spaces.share": async (session, a) => this.spaces.share(personOf(session.principal), a[0], a[1]),
       "link.spaces.newLink": async (session, a) => this.spaces.newLink(personOf(session.principal), a[0]),
       "link.spaces.arrange": async (session, a) => this.spaces.arrange(personOf(session.principal), a[0]),
-      "link.spaces.seen": async (session, a) => this.spaces.seen(personOf(session.principal), a[0]),
+      "link.spaces.seen": async (session, a) => this.spaces.seen(personOf(session.principal), a[0], a[1]),
       "link.spaces.notify": async (session, a) => this.spaces.notify(personOf(session.principal), a[0], a[1]),
       "link.spaces.here": async (session, a) => this.spaces.lookingAt(personOf(session.principal), a[0], a[1]),
       "link.team.setLinkSharing": async (_session, a) => this.spaces.setLinkSharing(a[0]),
@@ -1260,8 +1260,8 @@ export class LinkHost extends EventEmitter {
   arrangeSpaces(person, input) {
     return this.spaces.arrange(person, input);
   }
-  seenSpace(person, id) {
-    return this.spaces.seen(person, id);
+  seenSpace(person, id, itemId) {
+    return this.spaces.seen(person, id, itemId);
   }
   notifySpace(person, id, mode) {
     return this.spaces.notify(person, id, mode);
@@ -1332,6 +1332,7 @@ export class LinkHost extends EventEmitter {
     return {
       ...answer,
       seenAt: Number(spacesViewOf(team, person).seen[answer.id]) || 0,
+      seenItems: seenItemsOf(spacesViewOf(team, person), answer),
       panels: (answer.panels ?? []).filter((panel) => sees(panel.botId)).map(cut),
       cards: (answer.cards ?? []).filter((card) => sees(card.botId)),
     };

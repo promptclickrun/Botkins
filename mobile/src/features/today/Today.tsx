@@ -165,7 +165,8 @@ function noteOf(item: BoardItem) {
   return parts.join(" · ") || undefined;
 }
 
-export function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
+/** `onSeen`: called each time the card is on screen (a space then marks it seen for this person). */
+export function ItemCard({ item, bot, onSeen }: { item: BoardItem; bot?: Bot; onSeen?: () => void }) {
   const { colors } = useTheme();
   const canUse = useCan("today", "use");
   const canCreate = useCan("today", "create");
@@ -174,8 +175,11 @@ export function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
   const seen = useContext(Seen);
   const card = useRef<ComponentRef<typeof View>>(null);
   useEffect(() => {
-    if (!canUse || item.read || markedRead.has(item.id)) return;
+    const unread = () => canUse && !item.read && !markedRead.has(item.id);
+    if (!unread() && !onSeen) return;
     const mark = () => {
+      onSeen?.();
+      if (!unread()) return;
       markedRead.add(item.id);
       // Quietly: a failed read mark isn't worth a toast.
       api.boardAct(item.id, "read").catch(() => markedRead.delete(item.id));
@@ -184,7 +188,7 @@ export function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
     // Seen once its title is on screen, above the tab bar.
     const check = () =>
       card.current?.measureInWindow((_x, y, _width, height) => {
-        if (markedRead.has(item.id) || !height) return;
+        if ((!unread() && !onSeen) || !height) return;
         if (y >= 0 && y + Math.min(height, 110) <= Dimensions.get("window").height - UNDER_TAB_BAR) mark();
       });
     const stop = seen.subscribe(check);
@@ -193,7 +197,7 @@ export function ItemCard({ item, bot }: { item: BoardItem; bot?: Bot }) {
       stop();
       clearTimeout(first);
     };
-  }, [item.id, item.read, seen, canUse]);
+  }, [item.id, item.read, seen, canUse, onSeen]);
   const act = (action: "clear" | "goal" | "notToday" | "done" | "reopen" | "delete", done?: string, value?: string) => void attempt(api.boardAct(item.id, action, value), done);
   const remove = () =>
     Alert.alert("Delete " + item.title + "?", undefined, [

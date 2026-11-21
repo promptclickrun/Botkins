@@ -5,7 +5,7 @@
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { Ellipsis, Trash2 } from "lucide-react-native";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { myself } from "@/features/chat/people";
@@ -15,7 +15,7 @@ import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago, upcoming } from "@/state/time";
 import { Blocks, BotAvatar, Button, EmptyState, Field, Glass, Group, IconButton, Label, Loading, Page, radius, slopFor, space as gap, T, Tap, useTheme } from "@/ui";
-import { panelState, useSpace, useSpaceContent } from "./data";
+import { markItemSeen, panelState, useSpace, useSpaceContent } from "./data";
 import { asksOf, lastLine } from "./logic";
 
 const SIZES: { value: PanelView["size"]; label: string }[] = [
@@ -152,6 +152,12 @@ export default function PanelPage() {
   const me = myself(usePart("meta"));
   const panels = content?.panels ?? [];
   const panel = panels.find((one) => one.id === id);
+  // Opened, so seen: its dot clears in its space, here and on the person's other devices; again when it changes while open.
+  const updatedAt = panel?.updatedAt;
+  const seenBefore = Math.max(content?.seenAt ?? 0, (id && content?.seenItems?.[id]) || 0);
+  useEffect(() => {
+    if (spaceId && id && updatedAt !== undefined && updatedAt > seenBefore) markItemSeen(spaceId, id, updatedAt);
+  }, [spaceId, id, updatedAt, seenBefore]);
   if (!space || !panel) return <Page title="Panel">{loading && space ? <Loading /> : <EmptyState title="This panel no longer exists." />}</Page>;
   const bot = bots.find((one) => one.id === panel.botId);
   const index = panels.indexOf(panel);

@@ -565,7 +565,8 @@ declare global {
       "link.spaces.share": (id: string, input: SpaceShareInput) => Promise<{ link?: string }>;
       "link.spaces.newLink": (id: string) => Promise<{ link: string }>;
       "link.spaces.arrange": (input: { order: string[]; pinned: string[] }) => Promise<void>;
-      "link.spaces.seen": (id: string) => Promise<void>;
+      /** With `itemId`, only that panel or card was seen (opened). */
+      "link.spaces.seen": (id: string, itemId?: string) => Promise<void>;
       "link.spaces.notify": (id: string, mode: SpaceNotify) => Promise<void>;
       "link.spaces.here": (id: string | null, panelId?: string) => Promise<void>;
       "link.team.setLinkSharing": (on: boolean) => Promise<void>;

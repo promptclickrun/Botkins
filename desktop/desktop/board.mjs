@@ -111,12 +111,18 @@ export class Board {
       item.status = patch.status;
     }
     item.updatedAt = Date.now();
+    // The bot's change is the newest: news to everyone.
+    delete item.by;
     this.ws.spaces.touch(item.spaceId, item.updatedAt);
     this.ws.save();
     return { id: item.id, title: item.title, status: item.status };
   }
-  /** The person's answers from Today. Returns the new item's id for "goal". */
-  act(id, action, value) {
+  /**
+   * The person's answers from Today. Returns the new item's id for "goal". `person` made the
+   * change ("owner" or a member's id): it is not news to them. Marking an item read or unread is
+   * no change to it at all, so it never makes the space look changed to anyone.
+   */
+  act(id, action, value, person) {
     const item = this.item(id);
     const now = Date.now();
     let created;
@@ -169,7 +175,11 @@ export class Board {
       default:
         throw new Error("Unknown board action");
     }
-    item.updatedAt = now;
+    if (action !== "read" && action !== "unread") {
+      item.updatedAt = now;
+      if (typeof person === "string" && person) item.by = person;
+      else delete item.by;
+    }
     this.ws.spaces.touch(item.spaceId, now);
     this.ws.save();
     return created?.id;

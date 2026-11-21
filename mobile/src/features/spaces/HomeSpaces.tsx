@@ -2,7 +2,8 @@
 // space in place, a dot says something changed, and a tap on the chosen one opens its page. "All"
 // lists every space. Hold a chip, then move, to put the row in order (sortable.tsx); All spaces has
 // the same moves in each space's menu and for VoiceOver.
-import { useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import type { BoardScroll } from "@/features/home/BotBoard";
@@ -38,6 +39,16 @@ export function HomeSpaces({ onDragging }: { onDragging?: (on: boolean) => void 
   });
   const [lifted, setLifted] = useState(false);
   const [chosen, setChosen] = useState<string | undefined>(last);
+  // The space whose chip the person tapped in this look: it counts as seen. Each time Home comes
+  // back into view is a new look, where what was marked seen shows no more dots.
+  const [picked, setPicked] = useState<string>();
+  const [look, setLook] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setLook((n) => n + 1);
+      setPicked(undefined);
+    }, []),
+  );
   const shown = pinned.find((space) => space.id === chosen) ?? pinned[0];
   const { sorter, items } = useSorter({
     across: true,
@@ -55,6 +66,7 @@ export function HomeSpaces({ onDragging }: { onDragging?: (on: boolean) => void 
     if (shown?.id === id) return openSpace(id);
     last = id;
     setChosen(id);
+    setPicked(id);
   };
   return (
     <View style={{ gap: gap.md }}>
@@ -110,7 +122,7 @@ export function HomeSpaces({ onDragging }: { onDragging?: (on: boolean) => void 
         </SortArea>
       )}
       {shown ? (
-        <SpaceView space={shown} />
+        <SpaceView key={shown.id} space={shown} picked={picked === shown.id} look={look} />
       ) : (
         <Tap onPress={openSpaces} feel="select" accessibilityLabel="All spaces" style={{ minHeight: 44, justifyContent: "center" }}>
           <T variant="subhead" color="muted">

@@ -486,8 +486,21 @@ export function spacesViewOf(team, person) {
   const held = team?.views?.[person]?.spaces;
   const strings = (value) => (Array.isArray(value) ? value.filter((id) => typeof id === "string") : null);
   const map = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
-  return { order: strings(held?.order) ?? [], pinned: strings(held?.pinned), seen: map(held?.seen), notify: map(held?.notify) };
+  return { order: strings(held?.order) ?? [], pinned: strings(held?.pinned), seen: map(held?.seen), seenItems: map(held?.seenItems), notify: map(held?.notify) };
 }
+
+/**
+ * For `spaces.read`: when the person opened each of the space's panels and cards on its own, since
+ * they last opened the whole space (item id → time). Only the items of that answer are named.
+ */
+export function seenItemsOf(view, answer) {
+  const since = Number(view.seen[answer?.id]) || 0;
+  const ids = [...(answer?.panels ?? []), ...(answer?.cards ?? [])].map((item) => item?.id).filter((id) => typeof id === "string");
+  return Object.fromEntries(ids.flatMap((id) => (Number(view.seenItems?.[id]) > since ? [[id, Number(view.seenItems[id])]] : [])));
+}
+
+/** When a person last saw one item of a space (a panel or card they opened), or when they last opened the space, whichever is later. */
+export const itemSeenAt = (view, spaceId, itemId) => Math.max(Number(view.seen[spaceId]) || 0, Number(view.seenItems?.[itemId]) || 0);
 
 /**
  * What a space's maker and the owner are told of its link: its address while it is out; "leaving"
@@ -525,7 +538,6 @@ export function spaceView(team, records, person, context = {}) {
     const maker = makerOf(space);
     const mine = maker === person;
     const items = (Array.isArray(space.items) ? space.items : []).filter((item) => sees(item.botId));
-    const seen = Number(view.seen[space.id]) || 0;
     const picked = share.access === "members" && share.grants.some((grant) => grant.id === person);
     // "Once a day" for a space the person made or was picked for; off for one shared with everyone, and for a member's as the owner sees it.
     const notify = ["off", "daily", "all"].includes(view.notify[space.id]) ? view.notify[space.id] : mine || picked ? "daily" : "off";
@@ -543,7 +555,8 @@ export function spaceView(team, records, person, context = {}) {
       ...(person === OWNER && space.projectId && { projectId: space.projectId }),
       count: items.length,
       // A person's own tick or note is not news to them (`by`: who made the item's newest change, when a person did).
-      changed: Math.min(99, items.filter((item) => (Number(item.updatedAt) || 0) > seen && item.by !== person).length),
+      // An item the person opened since its change is not news either (`seenItems`).
+      changed: Math.min(99, items.filter((item) => (Number(item.updatedAt) || 0) > itemSeenAt(view, space.id, item.id) && item.by !== person).length),
       pinned: pinned.includes(space.id),
       notify,
       here: (context.here?.get?.(space.id) ?? []).filter((one) => one.id !== person).map((one) => ({ id: one.id, name: nameOf(one.id), ...(one.panelId && { panelId: one.panelId }) })),
@@ -568,8 +581,8 @@ export function spaceNews(team, records, person, context = {}, since = 0) {
   const byId = new Map((Array.isArray(records) ? records : []).map((record) => [record?.id, record]));
   return spaceView(team, records, person, context).flatMap((space) => {
     if (space.notify === "off") return [];
-    const from = Math.max(Number(view.seen[space.id]) || 0, Number(since) || 0);
-    const items = (byId.get(space.id)?.items ?? []).filter((item) => sees(item.botId) && (Number(item.updatedAt) || 0) > from && item.by !== person).map((item) => item.id);
+    const from = (item) => Math.max(itemSeenAt(view, space.id, item.id), Number(since) || 0);
+    const items = (byId.get(space.id)?.items ?? []).filter((item) => sees(item.botId) && (Number(item.updatedAt) || 0) > from(item) && item.by !== person).map((item) => item.id);
     return items.length ? [{ space, items }] : [];
   });
 }

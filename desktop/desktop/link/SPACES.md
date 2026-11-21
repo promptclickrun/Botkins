@@ -84,6 +84,7 @@ team.linkSharing: boolean;                           // "Members may share by li
 team.views[person].spaces = {                        // for every person, the owner too
   order: string[]; pinned: string[];
   seen: Record<string, number>;                      // space id → when the person last opened it
+  seenItems: Record<string, number>;                 // panel or card id → when the person opened that one on its own (the newest 400; opening its space drops them)
   notify: Record<string, "off" | "daily" | "all">;
 };
 ```
@@ -206,7 +207,7 @@ type SpaceSummary = {
   linkState?: "leaving" | "off";                 // to the maker and the owner: an earlier link's copy is still being taken back; or shared by link while the relay is off
   projectId?: string;                            // owner devices only
   count: number;                                 // panels and open cards the person is sent
-  changed: number;                               // of those, changed since the person last opened it (99 at most)
+  changed: number;                               // of those, changed since the person last opened it or that item (99 at most)
   pinned: boolean;
   notify: "off" | "daily" | "all";
   here: { id: string; name: string; panelId?: string }[];   // other people looking at it now
@@ -216,7 +217,8 @@ type SpaceSummary = {
 
 - The app's snapshot names each space with what the link needs to count: `SpaceRecord & { items: { id: string; botId: string; updatedAt: number; by?: string }[] }`. `by` is the person who made the item's newest change, when a person made it: for a panel, `last.by` while `last.at` is not older than `updatedAt`.
 - **A person's own change is not news to them** (agreed 2026-11-20). A panel whose newest change is the person's own tick or note gets no dot for them, is not counted in their "2 panels changed since yesterday", and is not counted in their `changed` (the link host leaves out an item whose `by` is that person). It is news to everyone else. The app stamps `last.at` and `updatedAt` together when a person changes a panel. The link host turns that into `SpaceSummary[]` for each person (`spaceView` in `team.mjs`, pure). `filterParts` starts from a copy of every part, so the raw `spaces` part must be replaced there by name. The owner's parts are not filtered today (`viewParts` returns them as they are), so the owner's `spaces` is built there too. A test fails when anyone is sent a space `spaceCan` refuses them, or the raw part.
-- **A space's content** is asked for, not pushed: `spaces.read(id)` answers `{ id, rev, seenAt, panels: PanelView[], cards: BoardItem[] }`. An app reads again when the `rev` in the `spaces` part passes the one it holds. `seenAt` is when the person last opened it before this read.
+- **A space's content** is asked for, not pushed: `spaces.read(id)` answers `{ id, rev, seenAt, seenItems, panels: PanelView[], cards: BoardItem[] }`. An app reads again when the `rev` in the `spaces` part passes the one it holds. `seenAt` is when the person last opened it before this read. `seenItems` names the panels and cards of this space the person opened on their own since then (id → time); an older link host leaves it out.
+- **When something stops being news** (decided 2026-11-21). A panel or card has no dot, is not in the line and not in `changed` once the person has seen it after its change: by opening its space (the space's own page, or picking its chip on the phone's Home), or by opening that panel (the phone's panel page; a click in it on the desktop) or seeing that card. An app sends `link.spaces.seen(id)` once a visit's content is read and again whenever a new `rev` is read while the person is still there, so a space is never left marked changed after a visit. The line and dots of the visit stay as they were when it began, so a person sees what changed; the next visit has none. A panel opened on its own loses its dot at once. Marking a card read or unread is no change to it (its `updatedAt` stays), and a person's own answer on a card (a rating, Not today…) is not news to them: the app keeps `by` on the card, as `last.by` on a panel.
 - **`PanelView`** is a `Panel` without `lastWriter`. For a member it is also without `projectId`; without `chatId` and `refreshChatId` unless they are in that chat; and without `routine.prompt` unless they may change the space. The same cut applies to `panels` below.
 - **Custom views.** `link.frame.page` and `link.frame.chat` look up the view's panel, then its space, then `spaceCan` for the caller. The check must not search a part's JSON for the id: with state and notes in a panel, a person could write an id there.
 - **`projectPanels`** (owner devices only): every panel that has a `projectId`, in whichever space it is, as `PanelView`. The link host builds it from the app's panels; an owner device with Admin mode off gets those in the spaces it is sent. A project's "Spaces and panels" is drawn from it, since `panels` below holds only the Todays'. No member is sent it.
@@ -246,7 +248,7 @@ Host-side only, never remote, on `backend.spaces`: `ensure(person)` (the four bu
 
 **The person of a call.** The link host hands every app call its principal, as it does for `send`: `backend.call(method, args, { principal })`, with `principal.kind` `"owner"` or `"member"` (then `memberId`, `name`). The app stamps `createdBy`, a note's `by` and `name`, and `last` from it. The link has already checked who may make the call.
 
-**What the link adds to an answer.** `spaces.read` answers `{ id, rev, panels, cards }` from the app; the link host cuts the panels and cards for the person (`PanelView`, bots the role sees) and adds `seenAt`. After `spaces.create` the link host pins the new space for its maker. After `spaces.remove` it drops the space's sharing.
+**What the link adds to an answer.** `spaces.read` answers `{ id, rev, panels, cards }` from the app; the link host cuts the panels and cards for the person (`PanelView`, bots the role sees) and adds `seenAt` and `seenItems`. After `spaces.create` the link host pins the new space for its maker. After `spaces.remove` it drops the space's sharing.
 
 **The link's** (handled by the link host, as `link.team.*` is; the window calls the same functions host-side):
 
@@ -255,12 +257,12 @@ Host-side only, never remote, on `backend.spaces`: `ensure(person)` (the four bu
 | `link.spaces.share(id, { access, grants?, teamCan? })` → `{ link? }` | `"link"` makes a link if there is none, and keeps what members could do (`teamCan`) unless one is given. Going back to a narrower level deletes the copy from the relay. A grant for the maker, or one named twice, is dropped. |
 | `link.spaces.newLink(id)` → `{ link }` | A fresh link. The old copy is deleted. |
 | `link.spaces.arrange({ order, pinned })` | The caller's own order and pins. Ids the caller cannot open are dropped. |
-| `link.spaces.seen(id)` | The caller has seen it now. |
+| `link.spaces.seen(id, itemId?)` | The caller has seen it now. With `itemId`, only that panel or card of it (they opened it); an id that is not in the space is ignored. An older link host ignores `itemId` and marks the whole space. |
 | `link.spaces.notify(id, mode)` | The caller's "Notify me" for that space. |
 | `link.spaces.here(id \| null, panelId?)` | The caller is looking at this space (and this panel) now. Sent when it comes into view, every 30 seconds while it stays, and with `null` on leaving. Forgotten after 75 seconds of silence. Kept in memory only. |
 | `link.team.setLinkSharing(on)` | Owner only. Whether members may share by link. |
 
-**For the app on the host** (its own window has no device): the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `spacesFor(person)` → `SpaceSummary[]`, `spaceCan(space, person)` (`space` is an id or the app's own `SpaceRecord`), `shareSpace(person, id, input)`, `newSpaceLink(person, id)`, `arrangeSpaces(person, input)`, `seenSpace(person, id)`, `notifySpace(person, id, mode)`, `hereInSpace(person, id | null, panelId?)`, `setLinkSharing(on)`. `LinkHost` emits `"status"` when a list changes.
+**For the app on the host** (its own window has no device): the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `spacesFor(person)` → `SpaceSummary[]`, `spaceCan(space, person)` (`space` is an id or the app's own `SpaceRecord`), `shareSpace(person, id, input)`, `newSpaceLink(person, id)`, `arrangeSpaces(person, input)`, `seenSpace(person, id, itemId?)`, `notifySpace(person, id, mode)`, `hereInSpace(person, id | null, panelId?)`, `setLinkSharing(on)`. `LinkHost` emits `"status"` when a list changes.
 
 What a device's call gets from the link by itself, the window's own call has to ask for:
 
