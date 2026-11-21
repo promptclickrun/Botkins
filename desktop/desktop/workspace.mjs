@@ -130,6 +130,7 @@ export class Workspace {
     // (space, person) => "own" | "edit" | "view" | null: what a person may do with a space, from
     // the link, which keeps who a space is shared with (desktop/spaces.mjs).
     this.spaceCanOf = options?.spaceCan ?? null;
+    this.spaceEventOf = options?.spaceEvent ?? null;
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
     this.file = join(dir, "workspace.json");

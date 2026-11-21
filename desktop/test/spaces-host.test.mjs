@@ -66,7 +66,8 @@ function setup(t, { shared = {} } = {}) {
   });
   const dir = tempDir(t);
   const spaceCan = (space, person) => (person === "owner" || (space.createdBy ?? "owner") === person ? "own" : (shared[space.id]?.[person] ?? null));
-  const open = () => new Workspace(dir, fake.client, () => {}, { team: () => team, spaceCan });
+  const events = [];
+  const open = () => new Workspace(dir, fake.client, () => {}, { team: () => team, spaceCan, spaceEvent: (event) => void events.push(event) });
   const ws = open();
   const turn = async (chatId, run, author) => {
     script = run;
@@ -95,7 +96,7 @@ function setup(t, { shared = {} } = {}) {
     if (person && person !== "owner") ws.chat(id).createdBy = person;
     return id;
   };
-  return { dir, ws, open, turn, during, chat, fake, shared };
+  return { dir, ws, open, turn, during, chat, fake, shared, events };
 }
 const failure = async (promise) => promise.then(() => null, (error) => error.message);
 
@@ -298,9 +299,10 @@ test("panels keep their order inside one space, and can be moved to another", as
 });
 
 test("an app panel keeps what people change in it, and people leave notes", async (t) => {
-  const { ws, turn, chat, shared } = setup(t);
+  const { ws, turn, chat, shared, events } = setup(t);
   const mine = chat("pip");
   await turn(mine, async (tool) => void (await tool("today_publish", { key: "list", title: "Checklist", blocks: [{ type: "html", html: "<p>list</p>" }], state: { milk: false } })));
+  assert.deepEqual(events, [], "what a bot publishes is not a person's change");
   const panel = ws.state.panels[0];
   const space = ws.spaces.of(panel);
   // The owner's Today, shared so that Avery and Casey may change it and Blake may look.
@@ -313,6 +315,12 @@ test("an app panel keeps what people change in it, and people leave notes", asyn
   assert.deepEqual(ws.spaces.patchState(panel.id, { eggs: true, gone: 1 }, undefined, { id: "owner", name: "Sam" }), { rev: 3 });
   ws.spaces.patchState(panel.id, { gone: null }, "  Removed\n\tGone  ", { id: "owner", name: "Sam" });
   assert.deepEqual(panel.state, { milk: true, eggs: true });
+  // The link is told of each, to pick who gets an alert: who did it, where, and the page's own words for it.
+  assert.deepEqual(events.splice(0), [
+    { spaceId: space.id, panelId: panel.id, by: "m_avery", kind: "change", label: "Ticked Milk" },
+    { spaceId: space.id, panelId: panel.id, by: "owner", kind: "change" },
+    { spaceId: space.id, panelId: panel.id, by: "owner", kind: "change", label: "Removed Gone" },
+  ]);
   assert.deepEqual([panel.last.by, panel.last.name, panel.last.label], ["owner", "Sam", "Removed Gone"], "the last line is the page's own words, as one line of plain text");
   assert.ok(space.rev > rev, "the space's count went up, so apps read it again");
   // What a page may keep is limited, and a refused change changes nothing.
@@ -338,6 +346,10 @@ test("an app panel keeps what people change in it, and people leave notes", asyn
   const second = ws.spaces.note(panel.id, "Thanks", { id: "owner", name: "Sam" });
   assert.deepEqual(panel.notes.map((note) => [note.by, note.name, note.text]), [["m_avery", "Avery", "Looks right."], ["owner", "Sam", "Thanks"]]);
   assert.match(first, /^n_[a-z2-7]{10}$/);
+  assert.deepEqual(events.splice(0), [
+    { spaceId: space.id, panelId: panel.id, by: "m_avery", kind: "note", text: "Looks right." },
+    { spaceId: space.id, panelId: panel.id, by: "owner", kind: "note", text: "Thanks" },
+  ]);
   assert.throws(() => ws.spaces.note(panel.id, "x".repeat(LIMITS.note + 1), maya), /Invalid note/);
   assert.throws(() => ws.spaces.removeNote(panel.id, second, "m_avery"), /your own notes/);
   assert.throws(() => ws.spaces.removeNote(panel.id, second, "m_casey"), /your own notes/, "another person who may change the space is not its maker");

@@ -454,7 +454,18 @@ export class Spaces {
     if (by) panel.last = { by: by.id, name: by.name, ...(label != null && String(label).trim() && { label: plain(label, LIMITS.label) }), at: now };
     this.touch(panel.spaceId, now);
     this.ws.save();
+    if (by) this.happened({ spaceId: panel.spaceId, panelId: panel.id, by: by.id, kind: "change", ...(panel.last.label && { label: panel.last.label }) });
     return { rev: panel.stateRev };
+  }
+  /**
+   * Says what a person did, for the alerts: the link picks who is told (who can open the space,
+   * what each asked for, never the person themselves or someone looking at it). What goes wrong
+   * with an alert never undoes what the person did.
+   */
+  happened(event) {
+    try {
+      Promise.resolve(this.ws.spaceEventOf?.(event)).catch(() => {});
+    } catch {}
   }
   /** A short note on a panel. Answers its id. */
   note(panelId, text, by) {
@@ -471,6 +482,7 @@ export class Spaces {
     panel.last = { by: by.id, name: by.name, label: "wrote a note", at: now };
     this.touch(panel.spaceId, now);
     this.ws.save();
+    this.happened({ spaceId: panel.spaceId, panelId: panel.id, by: by.id, kind: "note", text: note.text });
     return note.id;
   }
   /** Removes a note. `mayRemoveAny` is for the space's maker and the computer's owner; anyone else removes their own. */

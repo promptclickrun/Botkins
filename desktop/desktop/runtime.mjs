@@ -252,6 +252,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // What a person may do with a space: the link keeps who each one is shared with. A link from
     // before spaces answers nothing, and the app's own rules hold (desktop/spaces.mjs).
     spaceCan: (space, person) => link?.spaceCan?.(space, person),
+    // A person wrote a note or changed an app panel: the link picks who is told, and how often.
+    spaceEvent: (event) => link?.spaceEvent?.(event),
     notifiesOwner: (chatId) => link?.notifiesOwner?.(chatId),
     secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => host.window.fillSecurePage(plan, values, signal) }),
     ...(keys && {
@@ -544,10 +546,27 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return workspace.board.act(id, action, value);
     },
     // Spaces (desktop/spaces.mjs; the contract is docs/spaces.md). The last argument is the person.
-    "spaces.read": (id, person) => workspace.spaces.read(id, person),
-    "spaces.create": (data, person) => workspace.spaces.create(data, person),
+    // A device's call arrives with its person (desktop/device-call.mjs), and the link then does
+    // its own part for that person. The owner's window names no one and has no device, so the
+    // link's part is done here: when the owner last opened the space, a new space pinned for
+    // its maker, and a deleted space's sharing dropped.
+    "spaces.read": (id, person) => {
+      const answer = workspace.spaces.read(id, person);
+      return person === undefined && typeof link?.spaceContent === "function" ? link.spaceContent({ kind: "owner" }, answer, workspace.snapshot()) : answer;
+    },
+    "spaces.create": (data, person) => {
+      const id = workspace.spaces.create(data, person);
+      if (person === undefined && typeof link?.spacesFor === "function") {
+        const mine = link.spacesFor("owner") ?? [];
+        link.arrangeSpaces("owner", { order: mine.map((space) => space.id), pinned: [...mine.filter((space) => space.pinned).map((space) => space.id), id] });
+      }
+      return id;
+    },
     "spaces.rename": (id, name, person) => workspace.spaces.rename(id, name, person),
-    "spaces.remove": (id, person) => workspace.spaces.remove(id, person),
+    "spaces.remove": async (id, person) => {
+      await workspace.spaces.remove(id, person);
+      if (person === undefined) link?.spaces?.removed?.(id);
+    },
     "spaces.setProject": (id, projectId, person) => workspace.spaces.setProject(id, projectId, person),
     "spaces.setPanelProject": (panelId, projectId, person) => workspace.spaces.setPanelProject(panelId, projectId, person),
     "spaces.newPanel": (data, person) => workspace.spaces.newPanel(data, person),
@@ -557,13 +576,22 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "spaces.note": (panelId, text, person = "owner") => workspace.spaces.note(panelId, text, person),
     "spaces.removeNote": (panelId, noteId, person = "owner") => workspace.spaces.removeNote(panelId, noteId, person),
     // What the link keeps about a space (who it is shared with, each person's order and pins,
-    // who is looking): the owner's own window asks the link, as the owner, by the names a phone uses.
+    // who is looking): the owner's own window has no device, so it asks the link as the owner,
+    // by the names a phone uses (desktop/link/SPACES.md, "For the app on the host").
     ...Object.fromEntries(
-      ["link.spaces.share", "link.spaces.newLink", "link.spaces.arrange", "link.spaces.seen", "link.spaces.notify", "link.spaces.here", "link.team.setLinkSharing"].map((name) => [
+      Object.entries({
+        "link.spaces.share": (id, input) => link.shareSpace("owner", id, input),
+        "link.spaces.newLink": (id) => link.newSpaceLink("owner", id),
+        "link.spaces.arrange": (input) => link.arrangeSpaces("owner", input),
+        "link.spaces.seen": (id) => link.seenSpace("owner", id),
+        "link.spaces.notify": (id, mode) => link.notifySpace("owner", id, mode),
+        "link.spaces.here": (id, panelId) => link.hereInSpace("owner", id, panelId),
+        "link.team.setLinkSharing": (on) => link.setLinkSharing(on),
+      }).map(([name, ask]) => [
         name,
         (...args) => {
-          if (typeof link?.ownerCall !== "function") throw new Error("Sharing a space needs a newer phone link than this copy of Botkins has.");
-          return link.ownerCall(name, args);
+          if (typeof link?.spacesFor !== "function") throw new Error("Sharing a space needs a newer phone link than this copy of Botkins has.");
+          return ask(...args);
         },
       ]),
     ),
@@ -940,11 +968,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       chatFor: (id) => workspace.frames.chatFor(id),
     },
     // Spaces, for the link itself and never for a device: a person's four built-in spaces, the
-    // copy of a space that a link opens, and what stays to do when a member leaves the team.
+    // copy of a space that a link opens, and (`release`) what stays to do when a member leaves the team.
     spaces: {
       ensure: (person) => Object.fromEntries(Object.entries(workspace.spaces.ensure(person)).map(([builtin, space]) => [builtin, space.id])),
       snapshot: (id, options) => workspace.spaces.snapshot(id, options),
-      memberRemoved: (memberId) => workspace.spaces.memberRemoved(memberId),
+      release: (memberId) => workspace.spaces.memberRemoved(memberId),
     },
     // A phone that signed in to an MCP server hands the computer its sign-in (reached as "link.adoptMcpSignIn").
     extras: { adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant) },
@@ -1041,7 +1069,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   /** What the app's own view shows of this computer: the workspace, the team, and a number that goes up when a phone changes. */
   // `spaces` is the owner's own list, as the link makes one for every person. A link from before
   // spaces makes none, and the window then has no `spaces`, which is how it knows.
-  const snapshot = () => ({ ...workspace.snapshot(), spaces: link?.spacesFor?.({ kind: "owner" }), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
+  const snapshot = () => ({ ...workspace.snapshot(), spaces: link?.spacesFor?.("owner"), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
   const tick = () => {
     tickChatSchedules(workspace);
     try {
