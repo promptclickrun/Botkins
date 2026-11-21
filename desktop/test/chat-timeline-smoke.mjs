@@ -38,6 +38,9 @@ workspace.runs.unshift({
   detail: "",
   reasoning: [{ id: randomUUID(), text: "Read the workspace before writing.", started: now + 5 }],
   steps: [{ id: randomUUID(), name: "read_file", label: "Read file", status: "Done", started: now + 15, finished: now + 25 }],
+  // The turn's to-do list and its helper, written here in the order the window must not keep.
+  todos: [{ id: "t1", title: "Check both files", status: "done" }, { id: "t2", title: "Write the summary", status: "pending" }],
+  agents: [{ id: "h1", name: "File reader", description: "Reads the second file", status: "Done", started: now + 12, finished: now + 22 }],
 });
 writeFileSync(workspaceFile, JSON.stringify(workspace));
 
@@ -65,6 +68,18 @@ try {
   await page.getByRole("region", { name: "Turn activity" }).getByRole("button", { name: "Details", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Work activity" })).toContainText("I checked the first file.");
   await expect(page.getByRole("dialog", { name: "Work activity" })).toContainText("Read the workspace before writing.");
+  // The owner's order (2026-11-20): the helpers, then the to-do list, then the steps and everything else.
+  // In the opened work list, in its details, and in the chips over the message box.
+  const inOrder = (text, words) => words.map((word) => text.indexOf(word)).every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1]));
+  const ORDER = ["Helpers", "File reader", "To do", "Check both files", "Write the summary", "Read file"];
+  const listText = await page.locator(".timeline-fold-body").innerText();
+  assert.ok(inOrder(listText, ORDER), "the work list starts with the helpers, then the to-do list: " + listText);
+  const detailsText = await page.getByRole("dialog", { name: "Work activity" }).innerText();
+  assert.ok(inOrder(detailsText, [...ORDER.slice(0, 5), "I checked the first file."]), "the details start with the helpers, then the to-do list: " + detailsText);
+  const chips = await page.locator(".canvas-chips .canvas-chip").allInnerTexts();
+  assert.equal(chips.length, 2, "one chip for the helpers and one for the to-do list");
+  assert.match(chips[0], /In the background/, "the helpers' chip comes first");
+  assert.match(chips[1], /Tasks 1\/2/, "the to-do list's chip comes after it");
   // A group turn has one run but several speakers. Each final reply must stay in the message
   // order around the shared activity, and the run's current speaker owns the live/status avatar.
   const groupChatId = randomUUID();

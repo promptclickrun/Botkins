@@ -31,6 +31,7 @@ import type { FilePreview } from "./ChatFileLink";
 import {
   HelperChip,
   HelperDrawer,
+  RunLead,
   InterimUpdate,
   Reasoning,
   ReasoningUpdate,
@@ -620,8 +621,10 @@ export default function ChatView({
       }
     }
     const activityEvents = events.filter((event) => event.kind !== "reply");
-    const eventBody = activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>);
-    const detailsBody = activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>);
+    // A turn's work list starts with its helpers, then its to-do list; the steps and the rest follow.
+    const lead = <RunLead agents={run.agents} todos={run.todos} />;
+    const eventBody = <>{lead}{activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}</>;
+    const detailsBody = <>{lead}{activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>)}</>;
     // Person messages remain in the transcript even when the bot's work is folded. They are
     // part of the conversation, not activity hidden behind the work summary.
     const personBody = events
@@ -1159,9 +1162,7 @@ export default function ChatView({
         {(todos.length > 0 || agents.length > 0) && (
           <>
             <div className="canvas-chips">
-              {todos.length > 0 && (
-                <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />
-              )}
+              {/* Helpers first, then the to-do list: the owner's order (2026-11-20), as in a turn's work list. */}
               {agents.length > 0 && (
                 <HelperChip
                   agents={agents}
@@ -1169,9 +1170,12 @@ export default function ChatView({
                   toggle={() => setDrawer(drawer === "helpers" ? "" : "helpers")}
                 />
               )}
+              {todos.length > 0 && (
+                <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />
+              )}
             </div>
-            {drawer === "tasks" && <TaskDrawer todos={todos} />}
             {drawer === "helpers" && <HelperDrawer agents={agents} />}
+            {drawer === "tasks" && <TaskDrawer todos={todos} />}
           </>
         )}
         {blocked.length > 0 && project && (
