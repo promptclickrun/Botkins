@@ -443,7 +443,7 @@ test("a plugin's tool that signs in is signed in with the same two steps", { ski
   assert.equal(done.out, unnamed(remote, "signs / docs"));
   assert.equal(plugins.oauth.status(server).signedIn, true);
   assert.equal(remote.state.log.filter((entry) => entry.path === "/token").length, 1);
-  assert.deepEqual((await botkins(["plugins", "sign-out", "signs", "--json"])).json().signedOut, 1);
+  assert.deepEqual((await botkins(["plugins", "sign-out", "signs", "--yes", "--json"])).json().signedOut, 1);
   assert.equal(plugins.oauth.status(server).signedIn, false);
   // Again, ended with --cancel, with no tool named since it has one.
   await botkins(["plugins", "sign-in", "signs", "--start"]);
@@ -990,4 +990,27 @@ test("two callers at once for one tool: the one that waits for the other's end d
   assert.deepEqual(results.map((result) => result.status).sort(), ["fulfilled", "rejected"], "one gets a session, and the other is told");
   assert.equal([...signIns.sessions.values()].filter((session) => session.key === "tool:slow" && !session.done).length, 1);
   await signIns.cancelTool("slow");
+});
+
+test("a new token that the provider turns down leaves the old good token where it was; one it takes replaces it", async () => {
+  const entries = new Map([["terminal-provider-claude", "sk-ant-oat01-old-good-token-0000000000"]]);
+  const vault = { get: (id) => entries.get(id) ?? null, has: (id) => entries.has(id), put: (secret, _meta, id) => void entries.set(id, secret), remove: (id) => entries.delete(id) };
+  const env = {};
+  let accepts = false;
+  const providers = { require: () => ({ id: "claude", name: "Claude Code" }), status: async () => ({ connected: accepts, message: accepts ? undefined : "Invalid token." }) };
+  const signIns = new SignIns({ providers: () => providers, vault: () => vault, env });
+  signIns.restore();
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-old-good-token-0000000000");
+  await assert.rejects(signIns.useToken("claude", "sk-ant-oat01-new-bad-token-00000000000"), /didn't accept that token/);
+  assert.equal(vault.get("terminal-provider-claude"), "sk-ant-oat01-old-good-token-0000000000", "the old token is in the vault as before");
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-old-good-token-0000000000", "and in the environment as before");
+  accepts = true;
+  await signIns.useToken("claude", "sk-ant-oat01-new-good-token-0000000000");
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-new-good-token-0000000000");
+  // With no old token, a refused one is not kept.
+  entries.clear();
+  accepts = false;
+  await assert.rejects(signIns.useToken("claude", "sk-ant-oat01-first-bad-token-0000000000"), /didn't accept/);
+  assert.equal(vault.has("terminal-provider-claude"), false);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 });

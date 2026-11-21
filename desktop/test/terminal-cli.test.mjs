@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { COMMANDS, main, version } from "../cli/main.mjs";
 import { find, help } from "../cli/commands/index.mjs";
 import { examine } from "../cli/commands/service.mjs";
@@ -44,7 +44,8 @@ async function botkins(argv, { service = fakeService(), input = "", env = {}, tt
   stdin.isTTY = tty;
   const exit = await main(argv, {
     stdout: { write: (text) => void (out += text), isTTY: false },
-    stderr: { write: (text) => void (err += text), isTTY: false },
+    // A question at a terminal reads from stdin and writes to stderr through readline, which needs a stream.
+    stderr: tty ? new Writable({ write: (chunk, _encoding, done) => (err += String(chunk), done()) }) : { write: (text) => void (err += text), isTTY: false },
     stdin,
     env: { BOTKINS_DATA_DIR: "/nowhere/botkins", ...env },
     client: service.client,
@@ -196,7 +197,7 @@ test("a failure is one sentence on standard error, an error document with --json
 });
 
 test("a token is typed or piped, never an argument", async () => {
-  const service = fakeService({ "providers.login": () => ({ connected: true, account: "sam@example.com", plan: "Claude Max" }) });
+  const service = fakeService({ "providers.list": [{ id: "claude", name: "Claude Code" }], "providers.login": () => ({ connected: true, account: "sam@example.com", plan: "Claude Max" }) });
   const piped = await botkins(["providers", "login", "claude", "--token", "--json"], { service, input: "sk-ant-oat01-fixture\n" });
   assert.equal(piped.exit, EXIT.ok);
   assert.deepEqual(service.calls.at(-1), ["providers.login", "claude", { token: "sk-ant-oat01-fixture", service: undefined }]);
@@ -208,6 +209,30 @@ test("a token is typed or piped, never an argument", async () => {
   assert.deepEqual([wrong.exit, service.calls.length], [EXIT.usage, before]);
   const empty = await botkins(["providers", "login", "claude", "--token"], { service, input: "\n" });
   assert.deepEqual([empty.exit, /Nothing was entered/.test(empty.err)], [EXIT.usage, true]);
+});
+
+test("a command that destroys a saved secret shows what is lost, needs a yes, and gives the mark", async () => {
+  const service = fakeService({
+    "providers.list": [{ id: "claude", name: "Claude Code", token: "kept by Botkins" }],
+    "providers.login": { connected: true, account: null, plan: null },
+    "providers.logout": { connected: false },
+    "tools.get": (ref) => ({ id: ref, name: ref, kind: "web", enabled: true, env: [], headers: ["Authorization"], auth: { type: "oauth", signedIn: true } }),
+    "tools.remove": (ref) => ({ removed: ref, name: ref }),
+    "tools.signOut": (ref) => ({ id: ref, name: ref }),
+    "plugins.get": (ref) => ({ id: ref, name: ref }),
+    "plugins.uninstall": undefined,
+  });
+  const worth = [["providers", "login", "claude", "--token"], ["providers", "logout", "claude"], ["tools", "remove", "docs"], ["tools", "sign-out", "docs"], ["plugins", "uninstall", "docs"]];
+  for (const argv of worth) {
+    const before = service.calls.length;
+    const unasked = await botkins(argv, { service, input: "tok-1\n" });
+    assert.deepEqual([unasked.exit, /--yes/.test(unasked.err)], [EXIT.usage, true], argv.join(" "));
+    assert.deepEqual(service.calls.slice(before).map(([name]) => name).filter((name) => /login$|logout$|remove$|signOut$|uninstall$/.test(name)), [], argv.join(" ") + " sent nothing that destroys");
+    assert.match(unasked.err, /be got back/, argv.join(" ") + " says what is lost");
+    const given = await botkins([...argv, "--yes"], { service, input: "tok-1\n" });
+    assert.equal(given.exit, EXIT.ok, argv.join(" ") + ": " + given.err);
+    assert.deepEqual(service.calls.at(-1).at(-1), { agreed: true }, argv.join(" ") + " gives the mark");
+  }
 });
 
 test("a sign-in the service runs is followed line by line, and a piped line answers its question", async () => {
@@ -255,6 +280,22 @@ test("one message is sent and its reply printed, and a script gets the reply as 
   const asked = fakeService({ ...answers, "chat.respond": null });
   await botkins(["chat", "Nova", "-m", "Clean up", "--json"], { service: asked });
   assert.deepEqual(asked.calls.find(([name]) => name === "chat.respond"), ["chat.respond", "r1", { action: "deny" }]);
+  // The refusal says what the bot asked, and where a person approves it. No flag approves.
+  const waiting = () => reads.push({ working: true, stream: "", messages: [], count: 1, seen: "a", run: null, request: { id: "r1", kind: "permission", title: "Run rm -rf build" } }, { working: false, stream: "", messages: [{ index: 1, role: "assistant", text: "Done." }], count: 2, seen: "b", run: { status: "Completed" } });
+  waiting();
+  const refused = await botkins(["chat", "Nova", "-m", "Clean up"], { service: fakeService({ ...answers, "chat.respond": null }) });
+  assert.match(refused.err, /Run rm -rf build/);
+  assert.match(refused.err, /asks for your approval to:\n {2}Run rm -rf build\n/);
+  assert.match(refused.err, /Refused: there is no terminal to ask at\. Approve a request at a terminal, in the app's window or on a phone\./);
+  // (An unknown flag fails before anything is sent.)
+  assert.notEqual((await botkins(["chat", "Nova", "-m", "Clean up", "--yes"], { service: fakeService({ ...answers, "chat.respond": null }) })).exit, 0);
+  // At a terminal, the person's y gives it, and an n does not approve.
+  for (const [typed, expected] of [["y\n", ["chat.respond", "r1", { action: "approve" }, { agreed: true }]], ["n\n", ["chat.respond", "r1", { action: "deny" }]]]) {
+    waiting();
+    const person = fakeService({ ...answers, "chat.respond": null });
+    await botkins(["chat", "Nova", "-m", "Clean up"], { service: person, input: typed, tty: true });
+    assert.deepEqual(person.calls.find(([name]) => name === "chat.respond"), expected);
+  }
   // A turn that failed ends the command with a failure.
   reads.push({ working: false, stream: "", messages: [], count: 1, seen: "a", run: { status: "Failed", detail: "The model is unavailable." } });
   const failed = await botkins(["chat", "Nova", "-m", "Hi", "--json"], { service: fakeService(answers) });
@@ -370,6 +411,7 @@ test("an id or a value that starts with a dash is given after -- or with =, and 
     "routines.run": (ref) => ({ id: ref, name: ref }),
     "routines.pause": (ref) => ({ id: ref, name: ref, enabled: false }),
     "plugins.setEnabled": () => undefined,
+    "plugins.get": (ref) => ({ id: ref, name: ref }),
     "plugins.uninstall": () => undefined,
     "tools.get": (ref) => ({ id: ref, name: ref, kind: "web", url: "https://x.example", enabled: true, env: [], headers: [] }),
     "tools.remove": (ref) => ({ removed: ref, name: ref }),
@@ -390,9 +432,9 @@ test("an id or a value that starts with a dash is given after -- or with =, and 
     [["routines", "run", "--", id], ["routines.run", id]],
     [["routines", "pause", "--", id], ["routines.pause", id]],
     [["plugins", "disable", "--", id], ["plugins.setEnabled", id, false]],
-    [["plugins", "uninstall", "--yes", "--", id], ["plugins.uninstall", id]],
+    [["plugins", "uninstall", "--yes", "--", id], ["plugins.uninstall", id, { agreed: true }]],
     [["tools", "show", "--", id], ["tools.get", id]],
-    [["tools", "remove", "--yes", "--", id], ["tools.remove", id]],
+    [["tools", "remove", "--yes", "--", id], ["tools.remove", id, { agreed: true }]],
     [["skills", "enable", "--", id], ["skills.enable", id, true]],
   ]) {
     const run = await botkins(argv, { service });

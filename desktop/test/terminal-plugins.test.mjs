@@ -120,6 +120,10 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   const again = await botkins(["plugins", "install", id], { input: "y\n", tty: true });
   assert.equal(again.exit, 1);
   assert.match(again.err, /memory is installed\. `botkins plugins update -- memory@test-market` brings its source as it is now\.\n$/);
+  // Removing a plugin loses its settings and sign-ins: the socket's own call refuses with no mark, and the plugin stays; the command needs a yes.
+  await assert.rejects(client.call("plugins.uninstall", id), { code: "NEEDS_YES" });
+  assert.equal((await botkins(["plugins", "uninstall", id])).exit, 2);
+  assert.equal((await botkins(["plugins", "list", "--json"])).json().length, 1);
   // With --json the block is on standard error all the same, and the answer says what runs.
   await botkins(["plugins", "uninstall", id, "--yes"]);
   const jsonned = await botkins(["plugins", "install", id, "--json", "--yes", "--revision", now]);
@@ -217,7 +221,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   assert.match((await botkins(["plugins", "bots", "memory", "--all"])).out, /memory is for every bot\./);
   assert.equal((await botkins(["plugins", "bots", "memory"])).exit, 2);
   assert.match((await botkins(["plugins", "bots", "memory", "--bot", "Nobody"])).err, /There is no bot called Nobody/);
-  assert.match((await botkins(["plugins", "sign-out", "memory"])).out, /memory has no tool that signs in\./);
+  assert.match((await botkins(["plugins", "sign-out", "--yes", "memory"])).out, /memory has no tool that signs in\./);
 
   // The log has each change, and each one that failed, by its call and its plugin. The secret is nowhere.
   const lines = await logged();
@@ -319,7 +323,7 @@ test("text from a plugin is shown as text: a character that hides or turns it is
   const added = await botkins(["plugins", "add-folder", odd]);
   assert.equal(added.exit, 0, added.err);
   const { id, revision } = (await client.call("plugins.list"))[0];
-  const outputs = [added, await botkins(["plugins", "show", "--", id]), await botkins(["plugins", "enable", "--", id]), await botkins(["plugins", "enable", "--yes", "--revision=" + revision, "--", id]), await botkins(["plugins", "configure", "--", id], { input: ["v"], tty: true }), await botkins(["plugins", "bots", "--all", "--", id]), await botkins(["plugins", "sign-out", "--", id]), await botkins(["plugins", "list"])];
+  const outputs = [added, await botkins(["plugins", "show", "--", id]), await botkins(["plugins", "enable", "--", id]), await botkins(["plugins", "enable", "--yes", "--revision=" + revision, "--", id]), await botkins(["plugins", "configure", "--", id], { input: ["v"], tty: true }), await botkins(["plugins", "bots", "--all", "--", id]), await botkins(["plugins", "sign-out", "--yes", "--", id]), await botkins(["plugins", "list"])];
   // (A question at a terminal has the terminal's own cursor moves: those are not the plugin's.)
   for (const { out, err } of outputs) assert.equal(/[\u001b\u200b\u202e]/.test((out + err).replace(/\u001b\[\d+[GJ]/g, "")), false, out + err);
   assert.match(outputs[1].out, /at sessionStart: echo \\u\{202e\}dlrow/);
@@ -340,14 +344,19 @@ test("sign-out forgets a plugin's sign-ins in whatever state the plugin is, and 
   const plugins = running.runtime.workspace.plugins;
   const [server] = plugins.knownOAuthServers(plugins.records[0]);
   assert.equal(plugins.list()[0].status, "needs-config");
-  assert.match((await botkins(["plugins", "sign-out", "signs"])).out, /signs was not signed in\./);
+  assert.match((await botkins(["plugins", "sign-out", "--yes", "signs"])).out, /signs was not signed in\./);
   // A sign-in that it holds (as a phone or the window made it) is forgotten, though the plugin is not ready.
   plugins.oauth.write(server, { accessToken: "token-that-must-go", url: server.url });
   assert.equal(plugins.oauth.status(server).signedIn, true);
-  const out = await botkins(["plugins", "sign-out", "signs"]);
+  // With no terminal and no --yes the command refuses and names the flag, and the sign-in is still there.
+  const refused = await botkins(["plugins", "sign-out", "signs"]);
+  assert.notEqual(refused.exit, 0);
+  assert.match(refused.err, /--yes/);
+  assert.equal(plugins.oauth.status(server).signedIn, true);
+  const out = await botkins(["plugins", "sign-out", "--yes", "signs"]);
   assert.match(out.out, /signs is signed out \(1 of its 1 tool that sign in was signed in\)\./);
   assert.equal(plugins.oauth.status(server).signedIn, false);
-  assert.deepEqual((await botkins(["plugins", "sign-out", "signs", "--json"])).json(), { id: plugins.records[0].preview.id, name: "signs", tools: 1, signedOut: 0 });
+  assert.deepEqual((await botkins(["plugins", "sign-out", "--yes", "signs", "--json"])).json(), { id: plugins.records[0].preview.id, name: "signs", tools: 1, signedOut: 0 });
 });
 
 test("the bots are shown: who has a plugin, who will get it, and the new set before more bots get one that runs", { skip }, async (t) => {

@@ -2,7 +2,7 @@
 // plugin by its name, bots by their names, and a plugin's sign-outs. The other plugin calls go by
 // the app's own names ("plugins.install", "plugins.preview", …), as a phone makes them
 // (desktop/terminal/control.mjs).
-import { startToolSignIn } from "./control-tools.mjs";
+import { needsYesToLose, startToolSignIn } from "./control-tools.mjs";
 import { ControlError } from "./socket.mjs";
 import { pluginRuns } from "../plugin-reading.mjs";
 
@@ -105,7 +105,12 @@ export function pluginsApi({ workspace, handlers, bot, signIns, log }) {
       return view(plugin(found.id));
     },
     "plugins.configure": ([ref, values]) => handlers["plugins.configure"](plugin(ref).id, values),
-    "plugins.uninstall": ([ref]) => handlers["plugins.uninstall"](plugin(ref).id),
+    /** Removing a plugin deletes its saved settings and sign-ins: that needs `options.agreed: true`. */
+    "plugins.uninstall": ([ref, options]) => {
+      const found = plugin(ref);
+      needsYesToLose(options, "Removing the plugin " + (found.name ?? found.id) + ", which deletes its saved settings and sign-ins,", "botkins plugins uninstall");
+      return handlers["plugins.uninstall"](found.id);
+    },
     /**
      * Which bots have a plugin. A plugin that is on and runs commands here is shown first before
      * more bots get it, and the caller names the revision that was looked at. The app compares
@@ -139,9 +144,10 @@ export function pluginsApi({ workspace, handlers, bot, signIns, log }) {
       const chosen = signingTool(ref, toolName);
       return { id: chosen.server.id, name: called(chosen), ...(await signIns.cancelTool(chosen.server.id)) };
     },
-    /** Forgets the sign-ins of a plugin's tools. */
-    async "plugins.signOut"([ref]) {
+    /** Forgets the sign-ins of a plugin's tools. A sign-in that is forgotten cannot be got back: that needs `options.agreed: true`. */
+    async "plugins.signOut"([ref, options]) {
       const found = plugin(ref);
+      needsYesToLose(options, "Signing out of the plugin " + (found.name ?? found.id) + ", which forgets the sign-ins of its tools,", "botkins plugins sign-out");
       // The plugin's own list of the tools that sign in, whatever state the plugin is in: one that
       // needs a setting, or has an error, can still hold a sign-in.
       const row = workspace.plugins.get(found.id);

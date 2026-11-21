@@ -224,6 +224,27 @@ test("preferences: access for all bots and teamwork give bots more room when the
   assert.deepEqual(await tried(), ["preferences.set teamwork (it failed)", "preferences.set teamwork (it failed)"]);
 });
 
+test("preferences: run at startup makes a login item, so switching it on is shown first and needs a yes", { skip }, async (t) => {
+  const { botkins, client, changes, tried } = await service(t);
+  const value = async () => (await client.call("preferences.get", "background.runAtStartup"))["background.runAtStartup"];
+  assert.equal(await value(), false);
+  // No terminal and no --yes: the block is shown, the flag is named, and nothing changes.
+  const ask = await botkins(["preferences", "set", "background.runAtStartup", "on"]);
+  assert.equal(ask.exit, 2);
+  assert.match(ask.err, /^This changes this computer\. Botkins then starts when you log in to this computer\./);
+  assert.match(ask.err, /This needs a yes\. Run it again with --yes\./);
+  assert.equal(await value(), false, "nothing changed");
+  // The service's own call needs the mark.
+  for (const extra of [[], [{ agreed: false }], [{ agreed: "yes" }]])
+    await assert.rejects(client.call("preferences.set", "background.runAtStartup", true, ...extra), (error) => error.code === "NEEDS_YES" && /makes Botkins start when the person logs in to this computer.*"agreed": true/.test(error.message), JSON.stringify(extra));
+  assert.equal(await value(), false);
+  // With the mark it is set. Switching it off takes nothing and needs none.
+  assert.deepEqual(await client.call("preferences.set", "background.runAtStartup", true, { agreed: true }), { key: "background.runAtStartup", value: true });
+  assert.deepEqual(await client.call("preferences.set", "background.runAtStartup", false), { key: "background.runAtStartup", value: false });
+  assert.deepEqual(await changes(), ["preferences.set background.runAtStartup to on", "preferences.set background.runAtStartup to off"]);
+  assert.equal((await tried()).length, 3);
+});
+
 test("preferences: the service's own call refuses a looser approval level without the mark that the caller agreed", { skip }, async (t) => {
   const { client, changes, tried } = await service(t);
   const now = async () => (await client.call("preferences.get", "approval")).approval;

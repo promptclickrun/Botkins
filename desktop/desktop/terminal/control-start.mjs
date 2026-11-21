@@ -7,12 +7,23 @@
 // The app's own socket leaves out what only makes sense for a service (see NOT_IN_THE_APP). A
 // socket that fails to start never stops the app: it is one line in the log (the command is then
 // not reachable, `reachable()` in reach.mjs says false).
+import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { controlApi, dispatcher } from "./control.mjs";
 import { createLog } from "./logs.mjs";
 import { prepareReach } from "./reach.mjs";
 import { MAX_SOCKET_PATH, SOCKET_NAME } from "./paths.mjs";
 import { ControlError, listenControl } from "./socket.mjs";
+
+/** Makes a folder the host's own: there, and closed to everyone else. */
+export function ownFolder(dir) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700);
+  } catch {
+    // Somebody else's folder (a mount): its permissions are theirs to set, and `botkins doctor` says so.
+  }
+}
 
 /** The number of changes, and a wait for the next one (the dashboard, a chat that is read as it streams). */
 export function changeCounter() {
@@ -86,8 +97,20 @@ export async function startAppControl({ runtime, root, version, keys = () => nul
   // A path that is too long for the system cannot be a socket. One clear line, and the app goes on with no command in a bot's shell.
   if (Buffer.byteLength(socket) > MAX_SOCKET_PATH) return say("Control socket: not started. The path " + socket + " is longer than " + MAX_SOCKET_PATH + " bytes, which is too long for this system. A bot's shell has no `botkins` command until the app's data folder has a shorter path."), null;
   const counter = changeCounter();
-  // In memory only: the app has no log file. What changed from the command line is said on the app's own error output too.
-  const log = createLog({ lines: 1000, out: (text) => say(text.replace(/\n$/, "")) });
+  // The folder of the socket is the app's own, whether or not it was there before.
+  try {
+    ownFolder(join(root, "run"));
+  } catch (error) {
+    return say("Control socket: not started (" + (error?.message ?? error) + "). A bot's shell has no `botkins` command meanwhile."), null;
+  }
+  // The same file as the terminal host's log (<root>/logs/botkins.log, this user only), so a person sees what a bot changed after the app quits and starts again. `botkins logs` reads it when the app is not running. The lines go on the app's own error output too.
+  let log;
+  try {
+    log = createLog({ file: join(root, "logs", "botkins.log"), lines: 1000, out: (text) => say(text.replace(/\n$/, "")) });
+  } catch (error) {
+    say("Control socket: the log file is not available (" + (error?.message ?? error) + "). What a bot changes is kept in memory only until the app quits.");
+    log = createLog({ lines: 1000, out: (text) => say(text.replace(/\n$/, "")) });
+  }
   const service = {
     paths: { root, dataDir: join(root, "data"), runDir: join(root, "run"), socket },
     inApp: true, // the app, not the terminal host: its socket has no `config set` (a message that names one says where the app has it)
@@ -120,7 +143,7 @@ export async function startAppControl({ runtime, root, version, keys = () => nul
       unsubscribe?.();
       await closed();
     };
-    prepareReach({ dataDir: root, socket, env });
+    prepareReach({ dataDir: root, socket, env, app: true });
   } catch (error) {
     await control?.close().catch(() => {});
     say("Control socket: not started (" + (error?.message ?? error) + "). A bot's shell has no `botkins` command meanwhile.");

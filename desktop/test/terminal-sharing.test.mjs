@@ -1,7 +1,8 @@
 // Sharing a space from the command line (cli/commands/sharing.mjs), against a real service. What these hold to:
 // a space is named by its name or id; who can open it is set, ordered and read back; a link, a space shared with all
-// members and the team's switch for links each show what they open and need a yes (with no terminal, `--yes`), and the
-// service's own call refuses them with no mark; the link is printed by `sharing link` and nowhere else, and never in the log.
+// members, picked people that add someone or give a person more to do, and the team's switch for links each show what they open
+// and need a yes (with no terminal, `--yes`), and the service's own call refuses them with no mark; the link is printed by
+// `sharing link` when it makes the link, and nowhere else, and never in the log.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -54,18 +55,18 @@ async function service(t) {
   };
   const changes = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("Changed from the command line")).map((text) => text.split("Changed from the command line: ")[1]);
   const everything = () => readFileSync(paths.logFile, "utf8");
-  return { botkins, client, changes, everything, launch, link };
+  return { botkins, client, changes, everything, launch, link, running };
 }
 
 test("sharing: people are picked and read back, the order, pins and Notify me are the owner's, and the switch for links is set", { skip }, async (t) => {
-  const { botkins, launch, link, changes } = await service(t);
+  const { botkins, launch, link, changes, running } = await service(t);
   // The list is the owner's: four built-in spaces and Launch, private, with no link in it.
   const listed = (await botkins(["sharing", "list", "--json"])).json();
   assert.deepEqual(listed.map((s) => s.name).sort(), ["Feed", "Goals", "Ideas", "Launch", "Today"]);
   assert.equal(listed.find((s) => s.name === "Launch").access, "private");
   assert.match((await botkins(["sharing", "list"])).out, /^NAME\s+WHO CAN OPEN\s+NOTIFY\s+PINNED\s+ID\n/);
   // Members are picked by name; the list replaces the one before it; a name that nobody has, a twin and a mix are refused.
-  const picked = await botkins(["sharing", "set", "launch", "--view", "avery", "--edit", "Blake", "--json"]);
+  const picked = await botkins(["sharing", "set", "launch", "--view", "avery", "--edit", "Blake", "--yes", "--json"]);
   assert.equal(picked.exit, 0, picked.err);
   assert.deepEqual([picked.json().access, picked.json().people.map((one) => [one.name, one.can])], ["members", [["Avery", "view"], ["Blake", "edit"]]]);
   assert.match((await botkins(["sharing", "show", "Launch"])).out, /Who can open it: Members picked: Avery and Blake\.\n {2}Avery: can only look at it\n {2}Blake: can change it\n/);
@@ -89,12 +90,23 @@ test("sharing: people are picked and read back, the order, pins and Notify me ar
   // The switch for links: off asks nothing; the state is the link's own.
   assert.match((await botkins(["sharing", "links", "off"])).out, /^Members may not make new links now\. The links that exist stay as they are\.\n?$/);
   assert.equal(link.store.data.team.linkSharing, false);
-  // The command cannot read the switch: with no word, or another word, it says that it can only set it.
-  for (const words of [[], ["maybe"]]) {
-    const read = await botkins(["sharing", "links", ...words]);
-    assert.equal(read.exit, 2);
-    assert.match(read.err, /This command can only set the switch, with `on` or `off`\. It cannot say what the switch is now\./);
-  }
+  // The real link says what the switch is (`linkSharing` in its answer for the team).
+  assert.deepEqual((await botkins(["sharing", "links", "--json"])).json(), { on: false });
+  // With no word the command reads the switch when the link's answer for the team has `linkSharing` as true or false, and says that it is not known when it has not. Another word is a usage error.
+  const snapshot = running.runtime.handlers.snapshot;
+  const withSwitch = (field) => (running.runtime.handlers.snapshot = () => { const now = snapshot(); const { linkSharing, ...team } = now.team; return { ...now, team: field === undefined ? team : { ...team, linkSharing: field } }; });
+  withSwitch(undefined);
+  assert.match((await botkins(["sharing", "links"])).err + (await botkins(["sharing", "links"])).out, /cannot say what the switch is now/);
+  assert.equal((await botkins(["sharing", "links", "--json"])).json().on, null);
+  withSwitch(true);
+  assert.match((await botkins(["sharing", "links"])).out, /^Members may share by link\.\n?$/);
+  withSwitch(false);
+  assert.deepEqual((await botkins(["sharing", "links", "--json"])).json(), { on: false });
+  assert.match((await botkins(["sharing", "links"])).out, /^Members may not share by link\.\n?$/);
+  withSwitch("yes");
+  assert.equal((await botkins(["sharing", "links", "--json"])).json().on, null, "a field that is not true or false is not known");
+  running.runtime.handlers.snapshot = snapshot;
+  assert.equal((await botkins(["sharing", "links", "maybe"])).exit, 2);
   // The commands are in `help --json`, and the ones that ask say so.
   const area = describe("9.9.9").areas.find((one) => one.name === "sharing");
   const asks = Object.fromEntries(area.commands.filter((one) => one.asks).map((one) => [one.command, one.asks]));
@@ -138,9 +150,15 @@ test("sharing: a link, all members and the switch for links show what they open 
   assert.match(made.out, /^https:\/\/[^\s/]+\/s\/[A-Za-z0-9_-]{22}#k=[A-Za-z0-9_-]{43}\n$/);
   const first = made.out.trim();
   const key = first.split("#k=")[1];
+  // A link is shown once, when it is made: a second look gives none, asks nothing and changes nothing, by the command and by the call.
   const asJson = await botkins(["sharing", "link", "Launch", "--json"]);
-  assert.equal(asJson.exit, 0, "a space that has a link prints it with no question: nothing is made");
-  assert.deepEqual([asJson.json().link, asJson.json().made, asJson.json().new, asJson.err], [first, false, false, ""]);
+  assert.equal(asJson.exit, 0, "a space that has a link gives none with no question: nothing is made");
+  assert.deepEqual([asJson.json().link, asJson.json().made, asJson.json().new, asJson.err], [null, false, false, ""]);
+  const again = await botkins(["sharing", "link", "Launch"]);
+  assert.equal(again.out, "", "standard output is for a link alone");
+  assert.match(again.err, /The space Launch has a link already\. A link is shown only when it is made\. Make a new link with --new \(the old one then stops working\), or copy the link in the app's window\./);
+  assert.deepEqual(await client.call("sharing.link", launch), { id: launch, name: "Launch", link: null, made: false, new: false });
+  assert.equal(JSON.stringify([asJson.out, again.err]).includes(key), false);
   // Nothing that lists or shows has the link, and the app's own answer to the window does have it.
   for (const argv of [["sharing", "list", "--json"], ["sharing", "show", "Launch", "--json"], ["sharing", "show", "Launch"], ["sharing", "list"]]) {
     const shown = await botkins(argv);
@@ -183,4 +201,48 @@ test("sharing: a link, all members and the switch for links show what they open 
   assert.equal(lines.some((line) => line.includes("#k=") || line.includes(key) || line.includes("/s/")), false);
   assert.equal(everything().includes(key), false);
   await assert.rejects(client.call("link.spaces.here", launch), { code: "UNKNOWN_METHOD" });
+});
+
+test("sharing: picked people need a yes when more people can open the space or a person can do more, and need none when people are only taken away; a link that fails leaves the space as it was", { skip }, async (t) => {
+  const { botkins, client, launch, link } = await service(t);
+  const people = async () => (await botkins(["sharing", "show", launch, "--json"])).json();
+  const names = async () => (await people()).people?.map((one) => one.name + ":" + one.can).sort();
+  // From private, each named person is new: the block says who is added, and with no yes the space stays private.
+  const added = await botkins(["sharing", "set", "Launch", "--view", "Avery", "--edit", "Blake"]);
+  assert.equal(added.exit, 2);
+  assert.match(added.err, /This shares the space Launch with more people\.\nNow: Only you\.\nAdded: Avery \(can only look at it\), Blake \(can look at it and change it\)\./);
+  assert.match(added.err, /This needs a yes\. Run it again with --yes\./);
+  assert.equal((await people()).access, "private");
+  // The service's own call refuses it with no mark, and a mark that is not true.
+  const members = { access: "members", people: [{ person: "Avery", can: "view" }] };
+  await assert.rejects(client.call("sharing.set", launch, members), { code: "NEEDS_YES" });
+  await assert.rejects(client.call("sharing.set", launch, { ...members, agreed: false }), { code: "NEEDS_YES" });
+  assert.equal((await people()).access, "private");
+  assert.equal((await botkins(["sharing", "set", "Launch", "--view", "Avery", "--edit", "Blake", "--yes"])).exit, 0);
+  assert.deepEqual(await names(), ["Avery:view", "Blake:edit"]);
+  // A person who gets more (view to edit) needs a yes; the block says who. The same people with the same rights need none.
+  const more = await botkins(["sharing", "set", "Launch", "--edit", "Avery", "--edit", "Blake"]);
+  assert.equal(more.exit, 2);
+  assert.match(more.err, /Gets more: Avery \(can change it, and could only look at it\)\./);
+  assert.equal((await botkins(["sharing", "set", "Launch", "--view", "Avery", "--edit", "Blake"])).exit, 0, "the same list asks nothing");
+  // Only taking people away, or giving less, needs no mark at all: not from the command and not from the call.
+  assert.equal((await botkins(["sharing", "set", "Launch", "--view", "Blake"])).exit, 0, "Avery goes and Blake gets less");
+  assert.deepEqual(await names(), ["Blake:view"]);
+  await client.call("sharing.set", launch, { access: "members", people: [{ person: "Blake", can: "view" }] });
+  // A space shared with all members is open to every member already, with the team's `can`: a name there is not new, and gets more only from view to edit.
+  await client.call("sharing.set", launch, { access: "team", can: "view", agreed: true });
+  assert.equal((await botkins(["sharing", "set", "Launch", "--view", "Avery", "--view", "Blake"])).exit, 0, "people are taken away from the team: no mark");
+  await client.call("sharing.set", launch, { access: "team", can: "view", agreed: true });
+  await assert.rejects(client.call("sharing.set", launch, { access: "members", people: [{ person: "Avery", can: "edit" }] }), { code: "NEEDS_YES" });
+  assert.equal((await people()).access, "team", "a refused change leaves the space as it was");
+  // A space that is shared by link: each named person is new.
+  await client.call("sharing.set", launch, { access: "private" });
+  await client.call("sharing.link", launch, { agreed: true });
+  await assert.rejects(client.call("sharing.set", launch, members), { code: "NEEDS_YES" });
+  assert.equal((await people()).access, "link");
+  // A link that cannot be made (the relay is off) leaves the space as it was: the app's call refuses before it changes anything.
+  await client.call("sharing.set", launch, { access: "private" });
+  link.spaces.demoLinks = false;
+  await assert.rejects(client.call("sharing.link", launch, { agreed: true }), /relay/);
+  assert.equal((await people()).access, "private", "no link access is left behind");
 });

@@ -374,8 +374,14 @@ export const tools = {
         options: YES,
         async run(context) {
           const ref = one(context, "Name the tool (its name or id).");
-          if (!(await confirm(context, "Remove " + ref + " with its stored values?"))) return EXIT.failed;
-          context.print(await context.client.call("tools.remove", ref), (gone) => "Removed " + gone.name + ".");
+          const tool = await context.client.call("tools.get", ref);
+          // What goes is shown even with --yes and with --json. Never a value.
+          show(context, "This removes the tool " + safe(tool.name) + ".\n" + [tool.env.length ? "  Its stored environment values go: " + tool.env.map(safe).join(", ") : null, tool.headers.length ? "  Its stored headers go: " + tool.headers.map(safe).join(", ") : null, tool.auth?.type === "oauth" ? "  Its sign-in goes." : null, "  Every bot that has it loses it."].filter(Boolean).join("\n") + "\nThese cannot be got back.");
+          if (!(await confirm(context, "Remove " + safe(tool.name) + " with its stored values?"))) {
+            context.note("Not removed.");
+            return EXIT.failed;
+          }
+          context.print(await context.client.call("tools.remove", tool.id, { agreed: true }), (gone) => "Removed " + safe(gone.name) + ".");
         },
       },
       enable: {
@@ -461,9 +467,17 @@ export const tools = {
       },
       "sign-out": {
         summary: "Forget a tool's sign-in",
-        usage: "botkins tools sign-out <tool>",
+        usage: "botkins tools sign-out <tool> [--yes]",
+        options: YES,
+        details: "The sign-in is forgotten and cannot be got back: you sign in again with `botkins tools sign-in`. That asks first, and with no terminal it needs --yes.",
         async run(context) {
-          context.print(await context.client.call("tools.signOut", one(context, "Name the tool (its name or id).")), (tool) => tool.name + " is signed out.");
+          const tool = await context.client.call("tools.get", one(context, "Name the tool (its name or id)."));
+          show(context, "This forgets the sign-in of the tool " + safe(tool.name) + ". It cannot be got back: sign in again with `botkins tools sign-in`.");
+          if (!(await confirm(context, "Sign out of " + safe(tool.name) + "?"))) {
+            context.note("Not signed out.");
+            return EXIT.failed;
+          }
+          context.print(await context.client.call("tools.signOut", tool.id, { agreed: true }), (done) => safe(done.name) + " is signed out.");
         },
       },
       "forget-approvals": {

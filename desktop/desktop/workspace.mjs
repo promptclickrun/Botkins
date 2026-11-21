@@ -1229,7 +1229,7 @@ export class Workspace {
       context: this.memory.context(bot),
       tools: this.sessionTools(bot, chat, run, task),
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
-      skills: access.skills ? this.integrations.skillsFor(bot) : { directories: [], disabled: [] },
+      skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
       mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),

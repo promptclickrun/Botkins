@@ -2,12 +2,13 @@
 // `sharingCommands` maps a top-level word to a group `{ summary, commands }`: `botkins sharing`.
 //
 // What these hold to (desktop/AGENTS.md):
-//  - A link that opens a space for anyone is a secret that is made to be handed on. `sharing link` prints it, once, on
-//    standard output, and is the only command that does. `sharing list` and `sharing show` say that a space has a link
-//    and never print it. No line of the log has it.
-//  - Three changes make a space visible to more people: a link, a space shared with all members, and the team's switch that
-//    lets members make links. Each shows first what it opens, and to whom (on standard error, with --yes and with --json too),
-//    and asks; with no terminal it needs --yes. The service's own call refuses these unless the caller says that it agreed.
+//  - A link that opens a space for anyone is a secret that is made to be handed on. `sharing link` prints it, once, when it makes
+//    the link, on standard output, and is the only command that does. A space that has a link already gets no link from it: it says
+//    so. `sharing list` and `sharing show` say that a space has a link and never print it. No line of the log has it.
+//  - Four changes make a space visible to more people: a link, a space shared with all members, picked people that add someone or
+//    give a person more to do (view to edit), and the team's switch that lets members make links. Each shows first what it opens,
+//    and to whom (on standard error, with --yes and with --json too), and asks; with no terminal it needs --yes. The service's own
+//    call refuses these unless the caller says that it agreed. A change that only takes people away needs no yes.
 //  - A name that somebody else wrote (a space, a person) is made safe before it is printed to a person. `--json` has it as it is.
 //  - `seen` and `here` of the app are not here: they say that a person opened a space on a device, or looks at it now. A
 //    terminal is no device. Pins and the order are here (`order`, `pin`, `unpin`).
@@ -49,7 +50,7 @@ const spaceText = (s) =>
     ...(s.access === "link"
       ? [
           "They can see everything on it. They can't change it. Members who open the space itself can " + (s.teamCan === "edit" ? "change it." : "only look at it."),
-          s.linkState === "off" ? "Links are off while the relay is off." : s.linkState === "leaving" ? "An earlier link is being taken back." : "The link is not shown here. `botkins sharing link " + s.id + "` prints it.",
+          s.linkState === "off" ? "Links are off while the relay is off." : s.linkState === "leaving" ? "An earlier link is being taken back." : "The link is not shown here. A link is shown once, when it is made. `botkins sharing link " + s.id + " --new` makes a new one.",
         ]
       : []),
     "Notify me: " + (NOTIFY[s.notify] ?? s.notify) + ". Pinned: " + (s.pinned ? "yes" : "no") + ". Panels: " + s.panels + (s.changed ? ", " + s.changed + " changed since you opened it" : "") + ".",
@@ -59,7 +60,7 @@ const spaceText = (s) =>
 export const sharingCommands = {
   sharing: {
     summary: "Who can open a space: people, all members, or anyone with a link. Your order of spaces, and Notify me",
-    details: "A space is private until its maker shares it. It is shared with people that the maker picks, with all members, or with anyone who has a link. A space is its name or its id (`botkins sharing list`). This is the owner's own view: it lists every space of this computer, the spaces of members too.\nA link opens a copy of the space for anyone, with no sign-in. It is a secret that is made to be handed on. `botkins sharing link` prints it, and no other command does. A link, a space shared with all members, and the team's switch for links each make a space visible to more people: each shows what it opens, and to whom, and asks first; with no terminal it needs --yes.",
+    details: "A space is private until its maker shares it. It is shared with people that the maker picks, with all members, or with anyone who has a link. A space is its name or its id (`botkins sharing list`). This is the owner's own view: it lists every space of this computer, the spaces of members too.\nA link opens a copy of the space for anyone, with no sign-in. It is a secret that is made to be handed on. `botkins sharing link` prints it when it makes the link, and no other command does. A link, a space shared with all members, picked people that add someone or give a person more to do, and the team's switch for links each make a space visible to more people: each shows what it opens, and to whom, and asks first; with no terminal it needs --yes.",
     commands: {
       list: {
         summary: "List the spaces, in your order, with who can open each",
@@ -71,7 +72,7 @@ export const sharingCommands = {
       show: {
         summary: "Show one space: who can open it, whether it has a link, and your Notify me",
         usage: "botkins sharing show <space>",
-        details: "It says whether the space has a link, and does not print the link. `botkins sharing link <space>` prints it.",
+        details: "It says whether the space has a link, and does not print the link. A link is shown once, when it is made.",
         async run(context) {
           context.print(await context.client.call("sharing.get", one(context, NAME_THE_SPACE)), spaceText);
         },
@@ -88,7 +89,7 @@ export const sharingCommands = {
           ...YES,
         },
         arguments: [{ name: "space", required: true }],
-        details: "Give one of --private, --view and --edit, or --all-members. With --view and --edit you name every person who can open the space: the list replaces the one it had. A person is a member's name or id, and the owner can be named too. The maker needs no mention. A member whose role cannot open spaces is refused by the app. A space that was shared by link and gets one of these levels loses its link: the link stops working.\n--all-members shows the space and who it opens to first, and asks; with no terminal it needs --yes. The block is printed on standard error with --yes and with --json too. The other levels ask nothing. To make a link, use `botkins sharing link`.",
+        details: "Give one of --private, --view and --edit, or --all-members. With --view and --edit you name every person who can open the space: the list replaces the one it had. A person is a member's name or id, and the owner can be named too. The maker needs no mention. A member whose role cannot open spaces is refused by the app. A space that was shared by link and gets one of these levels loses its link: the link stops working.\n--all-members shows the space and who it opens to first, and asks; with no terminal it needs --yes. --view and --edit ask too when they add a person who cannot open the space now, or give a person more to do (view to edit): the block says who is added and who gets more. A list that only takes people away, or gives them less, asks nothing. The block is printed on standard error with --yes and with --json too. --private asks nothing. To make a link, use `botkins sharing link`.",
         async run(context) {
           const ref = one(context, NAME_THE_SPACE);
           const o = context.options;
@@ -109,6 +110,16 @@ export const sharingCommands = {
             options.access = "members";
             const people = [...(o.view ?? []).map((person) => ({ person, can: "view" })), ...(o.edit ?? []).map((person) => ({ person, can: "edit" }))];
             options.people = people;
+            // The service works out who is new, and who gets more, compared with the space as it is now.
+            const preview = await context.client.call("sharing.preview", found.id, options);
+            if (preview.widens) {
+              const lines = ["This shares the space " + safe(found.name) + " with more people.", "Now: " + who(found) + "."];
+              if (preview.added.length) lines.push("Added: " + preview.added.map((one) => safe(one.name) + " (can " + (one.can === "edit" ? "look at it and change it" : "only look at it") + ")").join(", ") + ".");
+              if (preview.more.length) lines.push("Gets more: " + preview.more.map((one) => safe(one.name) + " (can change it, and could only look at it)").join(", ") + ".");
+              show(context, lines.join("\n"));
+              if (!(await confirm(context, "Share the space with these people?"))) return EXIT.failed;
+              options.agreed = true;
+            }
           }
           const done = await context.client.call("sharing.set", found.id, options);
           context.print(done, (s) => "The space " + safe(s.name) + " is shared like this now. Who can open it: " + who(s) + "." + (found.access === "link" ? " Its link is taken back: it stops working." : ""));
@@ -123,7 +134,7 @@ export const sharingCommands = {
           ...YES,
         },
         arguments: [{ name: "space", required: true }],
-        details: "Anyone with the link can see everything on the space, with no sign-in. They can't change it. The link is a secret that is made to be handed on: it is printed on standard output, and nothing else is, so `botkins sharing link <space> | pbcopy` keeps it out of the screen. A copy of the space is put on the relay and kept up to date. It needs the relay to be on (`botkins relay on`).\nMaking a link, and --new, show what they open first and ask; with no terminal they need --yes. The block is printed on standard error with --yes and with --json too. A space that has a link already prints the one it has and changes nothing. --off makes the space private and the link stops working; it asks nothing. The log names the space, never the link. Run it with --json to get { id, name, link, made, new }.",
+        details: "Anyone with the link can see everything on the space, with no sign-in. They can't change it. The link is a secret that is made to be handed on: it is printed on standard output, and nothing else is, so `botkins sharing link <space> | pbcopy` keeps it out of the screen. A copy of the space is put on the relay and kept up to date. It needs the relay to be on (`botkins relay on`).\nMaking a link, and --new, show what they open first and ask; with no terminal they need --yes. The block is printed on standard error with --yes and with --json too. A link is shown once, when it is made. A space that has a link already prints no link and changes nothing: the command says so on standard error. Make a new link with --new (the old one stops working), or copy the link in the app's window. --off makes the space private and the link stops working; it asks nothing. The log names the space, never the link. Run it with --json to get { id, name, link, made, new }; link is null when nothing was made.",
         async run(context) {
           const ref = one(context, NAME_THE_SPACE);
           const o = context.options;
@@ -153,20 +164,31 @@ export const sharingCommands = {
           }
           if (another) options.new = true;
           const done = await context.client.call("sharing.link", found.id, options);
+          if (done.link === null) {
+            // Nothing was made, so there is no link to print. The words go to standard error: standard output is for the link alone.
+            if (context.json) context.print(done, "");
+            else show(context, "The space " + safe(done.name) + " has a link already. A link is shown only when it is made. Make a new link with --new (the old one then stops working), or copy the link in the app's window.");
+            return;
+          }
           context.print(done, (answer) => answer.link);
         },
       },
       links: {
         summary: "Turn the team's switch \"Members may share by link\" on or off",
-        usage: "botkins sharing links <on|off> [--yes]",
+        usage: "botkins sharing links [<on|off>] [--yes]",
         options: YES,
-        arguments: [{ name: "state", required: true }],
-        details: "On: a member whose role can change spaces can make a link for a space that the member made. Anyone with such a link can see everything on that space, with no sign-in. On shows this first and asks; with no terminal it needs --yes. The block is printed on standard error with --yes and with --json too. Off asks nothing: members cannot make new links, and the links that exist stay as they are. Take one away with `botkins sharing link <space> --off`. The owner can make links with the switch off. This copy of Botkins cannot say what the switch is now: it only sets it.",
+        arguments: [{ name: "state", required: false }],
+        details: "On: a member whose role can change spaces can make a link for a space that the member made. Anyone with such a link can see everything on that space, with no sign-in. On shows this first and asks; with no terminal it needs --yes. The block is printed on standard error with --yes and with --json too. Off asks nothing: members cannot make new links, and the links that exist stay as they are. Take one away with `botkins sharing link <space> --off`. The owner can make links with the switch off. With no word it shows the switch, when the phone link says what it is; an older link does not, and then the command says that it is not known.",
         async run(context) {
-          // (The link's answer for the team has no field for this switch, so the command cannot read it.)
-          const only = "This command can only set the switch, with `on` or `off`. It cannot say what the switch is now.";
-          const state = one(context, only);
-          if (state !== "on" && state !== "off") throw usage(only);
+          if (context.args.length > 1) throw usage("Give on or off, or no word to see the switch.");
+          const state = context.args[0];
+          if (state === undefined) {
+            // The link's answer for the team may have no field for this switch (an older link): then it is not known.
+            const now = await context.client.call("sharing.getLinks");
+            context.print(now, (answer) => (answer.on === true ? "Members may share by link." : answer.on === false ? "Members may not share by link." : "This copy of Botkins cannot say what the switch is now. Its phone link does not tell. Set it with `botkins sharing links on` or `off`."));
+            return;
+          }
+          if (state !== "on" && state !== "off") throw usage("Give on or off, or no word to see the switch.");
           const options = {};
           if (state === "on") {
             show(context, ["This lets members share by link.", "A member whose role can change spaces will be able to make a link for a space that the member made, with no question to you. Anyone with such a link can see everything on that space. They can't change it."].join("\n"));

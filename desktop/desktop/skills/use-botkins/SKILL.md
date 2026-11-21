@@ -33,7 +33,9 @@ A command that has `asks` in `help --json` changes something that is hard to und
 2. Show your person that block as it is. Do not shorten it or put it in other words. Ask them if you may go on.
 3. Only after they agree, run the same command again with `--yes`. Where the command asks for a revision (`asks` is `--yes --revision`), also give `--revision=<revision>`: the one that the block showed.
 
-Never give `--yes` on your own. Your person also sees the command itself on an approval card before it runs.
+Never give `--yes` on your own. Your person must see the exact command and what it changes, and say yes, before you run it. You show it yourself, in the chat, and you wait there for their yes. Do not count on an approval card: with the approval level `all`, your person gets no card.
+
+Never answer a request that waits in a chat: an approval, a question or a secure input. Your own above all. The person answers it, in the window, on their phone or in their own terminal. No flag of `botkins chat` approves a request, and you must not call the socket yourself to do it.
 
 A command with no `asks` changes at once. That is fine when your person asked for it.
 
