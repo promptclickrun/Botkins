@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>Botkins</string>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionAttributes</key>
+    <dict>
+      <!-- A question's notification (the notification extension sets the category from what it opened). -->
+      <key>UNNotificationExtensionCategory</key>
+      <array>
+        <string>botkins_question</string>
+      </array>
+      <!-- The notification's own title and text show; this extension only sets the buttons. -->
+      <key>UNNotificationExtensionDefaultContentHidden</key>
+      <false/>
+      <key>UNNotificationExtensionInitialContentSizeRatio</key>
+      <real>0.01</real>
+    </dict>
+    <key>NSExtensionPointIdentifier</key>
+    <string>com.apple.usernotifications.content-extension</string>
+    <key>NSExtensionPrincipalClass</key>
+    <string>$(PRODUCT_MODULE_NAME).NotificationViewController</string>
+  </dict>
+</dict>
+</plist>

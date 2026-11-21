@@ -1164,7 +1164,8 @@ export type AppUpdate = {
   last?: { at: string; from: string; to: string; ok: boolean; message?: string };
 };
 /** Where Apple delivers for this phone. `start` is the token that can start a Live Activity (iOS 17.2 or later). */
-export type PushTarget = { token: string; env: "production" | "sandbox"; start?: string };
+/** `cards: "bots"`: one Live Activity per Botkin, sent only to a computer that names "activity-bots-v1" (docs/live-cards.md). */
+export type PushTarget = { token: string; env: "production" | "sandbox"; start?: string; cards?: "bots" };
 /** A paired phone as the computer knows it. Tokens stay on the computer and are not in here. */
 /**
  * A device paired with the computer (`devices-v1`, "link.devices.list"): a phone, or another

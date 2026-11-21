@@ -11,7 +11,7 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   ios: {
     bundleIdentifier: "app.botkins.mobile",
-    // The extensions (the Live Activity and the notification extension, in targets/) are signed for the same team.
+    // The extensions (widgets and Live Activities, the notification extension and the notification content extension, in targets/) are signed for the same team.
     appleTeamId: process.env.TEAM_ID,
     // Each upload to TestFlight needs a higher number: scripts/testflight.sh passes it in.
     buildNumber: process.env.BOTKINS_BUILD ?? "1",
@@ -30,6 +30,8 @@ const config: ExpoConfig = {
       NSSupportsLiveActivitiesFrequentUpdates: true,
       // Where the key for sealed notifications is kept, so the notification extension can read it (modules/botkins-activity).
       BotkinsKeychainGroup: "$(AppIdentifierPrefix)app.botkins.mobile.shared",
+      // Where the app saves what the widgets show (src/state/widgetData.ts); the widget extension reads it there.
+      BotkinsAppGroup: "group.app.botkins.mobile",
     },
     entitlements: {
       // To let a bot's request break through a Focus, turn on "Time Sensitive Notifications" for the
@@ -38,6 +40,8 @@ const config: ExpoConfig = {
       // computer already marks requests that way; without the entitlement they arrive as ordinary ones.
       // The app's own group stays first, so what it already saved (the pairing) is still found.
       "keychain-access-groups": ["$(AppIdentifierPrefix)app.botkins.mobile", "$(AppIdentifierPrefix)app.botkins.mobile.shared"],
+      // Shared with the widget extension: the widgets' snapshot (docs/live-cards.md, section 8).
+      "com.apple.security.application-groups": ["group.app.botkins.mobile"],
     },
   },
   android: {
@@ -131,7 +135,7 @@ const config: ExpoConfig = {
     ["expo-audio", { microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot.", enableBackgroundRecording: false, enableBackgroundPlayback: true }],
     ["expo-speech-recognition", { microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot.", speechRecognitionPermission: "Botkins turns what you say into the text of a message." }],
     ["@config-plugins/react-native-webrtc", { cameraPermission: "Botkins uses the camera to scan the pairing code and to take a photo for a message.", microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot." }],
-    // The Live Activity and the notification extension (targets/).
+    // The Live Activities and widgets, the notification extension, and the notification content extension (targets/).
     "@bacons/apple-targets",
     // Android release signing with the Play upload key (plugins/withAndroidRelease.js).
     "./plugins/withAndroidRelease.js",

@@ -64,5 +64,10 @@ export function useProviderUsage(): ProviderUsageView {
   return { ...state, supported, refresh: () => loadProviderUsage(true), of: (provider) => state.items?.find((item) => item.provider === provider) };
 }
 
+/** The last answer as it stands, outside a screen (the widgets' snapshot, src/state/widgets.ts). */
+export const providerUsageNow = () => useUsageStore.getState();
+/** Calls `listener` whenever the answer changes. Returns a function that stops it. */
+export const watchProviderUsage = (listener: () => void) => useUsageStore.subscribe(listener);
+
 /** Forgets what was loaded (another computer was paired). */
 export const resetProviderUsage = () => useUsageStore.setState({ items: undefined, fetchedAt: undefined, loading: false, error: undefined }, true);

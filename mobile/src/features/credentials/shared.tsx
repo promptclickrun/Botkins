@@ -40,7 +40,8 @@ function localAuth(): typeof LocalAuth | null {
   }
 }
 
-async function verifyOwner(reason: string): Promise<boolean> {
+/** Asks for Face ID, Touch ID or the passcode now, whatever was confirmed before (a risky approval from a notification or a card asks every time). */
+export async function verifyOwner(reason: string): Promise<boolean> {
   const auth = localAuth();
   if (!auth) return true;
   try {

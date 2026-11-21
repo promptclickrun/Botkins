@@ -61,3 +61,6 @@ example
 /store/contact-sheet.png
 /store/*.zip
 __pycache__/
+
+# Made by @bacons/apple-targets at prebuild from targets/widgets/symbols (scripts/botkin-symbols.py)
+/targets/widgets/Assets.xcassets/

@@ -312,6 +312,107 @@ test("a Live Activity is started for a turn begun elsewhere, follows it, and is 
   }
 });
 
+/** Opens a Botkin's card's sealed part the way the widget extension does (its own AAD). */
+function unsealCard(paired: Pairing, b: string) {
+  const deviceKey = hkdf(agree(unb64u(paired.secretKey), unb64u(paired.serverKey)), utf8(paired.deviceId), "botkins/device/v1");
+  const key = hkdf(deviceKey, utf8(paired.deviceId), "botkins/push/v1");
+  const bytes = new Uint8Array(Buffer.from(b, "base64"));
+  return JSON.parse(fromUtf8(open(key, bytes.subarray(0, 12), bytes.subarray(12), "botkins-card-v1")));
+}
+
+test("a phone with one card per Botkin gets it started from afar, sealed, marked done, and ended once nothing is left on it", async () => {
+  const { link, call, until, done, sent, paired, parts, backend } = await setup(0.6);
+  try {
+    assert.ok(parts.meta.capabilities.includes("activity-bots-v1"));
+    await call("link.push.register", { token: TOKEN, env: "production", start: START, cards: "bots" });
+    const deviceId = link.status().devices[0].id;
+    assert.equal(link.push.store.push(deviceId).cards, "bots");
+    await call("link.push.presence", false);
+    await call("send", "chat-blog", "A long one, please.");
+    await until(() => sent.some((item) => item.payload.aps?.event === "start"), "the start");
+    const start = sent.find((item) => item.payload.aps?.event === "start")!;
+    assert.equal(start.token, START);
+    assert.deepEqual(start.payload.aps.attributes, { chatId: "", botId: "bot-quill", botName: "Quill", head: start.payload.aps.attributes.head, palette: start.payload.aps.attributes.palette, eyes: start.payload.aps.attributes.eyes, colors: start.payload.aps.attributes.colors, card: "bot" });
+    const first = start.payload.aps["content-state"];
+    assert.equal(first.v, 1);
+    assert.equal(first.chats[0].id, "chat-blog");
+    assert.ok(start.payload.aps["relevance-score"] >= 50);
+    // The chat's title travels only sealed, and only the card's key and AAD open it.
+    assert.ok(!JSON.stringify(start.payload).includes("Blog"), "no title in the clear");
+    const opened = unsealCard(paired, first.sealed);
+    assert.equal(opened.c[0].id, "chat-blog");
+    assert.ok(opened.c[0].t.length > 0);
+    assert.throws(() => unseal(paired, first.sealed), "an alert's AAD does not open a card");
+    // A second turn of the same Botkin doesn't start a second card while the first waits for its address.
+    assert.equal(sent.filter((item) => item.payload.aps?.event === "start").length, 1);
+
+    // The card's own address: updates go there, and the card says done when the turn ends.
+    await call("link.push.activity", "bot:bot-quill", ACTIVITY);
+    const mine = () => sent.filter((item) => item.token === ACTIVITY);
+    await until(() => mine().some((item) => item.payload.aps["content-state"].phase === "done"), "the card marked done", 15_000);
+    const finished = mine().find((item) => item.payload.aps["content-state"].phase === "done")!;
+    assert.equal(finished.priority, 10, "a chat that ends is sent at once");
+    assert.equal(finished.payload.aps["relevance-score"], 10);
+    assert.ok(finished.payload.aps["stale-date"] > Date.now() / 1000 + 25 * 60);
+    const last = unsealCard(paired, finished.payload.aps["content-state"].sealed);
+    assert.equal(last.c[0].l, "Done");
+    assert.ok(last.c[0].r, "the reply's first line");
+    assert.equal(link.push.store.push(deviceId).activities["bot:bot-quill"], ACTIVITY);
+    assert.ok(!mine().some((item) => item.payload.aps.event === "end"));
+    assert.ok(link.push.cardTimer, "a look is planned for when the chat drops off the card");
+    const stamps = mine().map((item) => item.payload.aps.timestamp);
+    assert.equal(new Set(stamps).size, stamps.length, "no two pushes to a card share a timestamp");
+
+    // Thirty minutes on, nothing is left on the card: it is ended and its address forgotten.
+    for (const run of backend.state.runs.filter((item: any) => item.chatId === "chat-blog")) {
+      run.time -= 40 * 60_000;
+      run.finished = Date.now() - 31 * 60_000;
+    }
+    link.push.soon();
+    await until(() => mine().some((item) => item.payload.aps.event === "end"), "the end");
+    assert.equal(link.push.store.push(deviceId).activities?.["bot:bot-quill"], undefined);
+  } finally {
+    await done();
+  }
+});
+
+test("a request reaches the phone with its buttons, on the card and in the notification, and not with previews off", async () => {
+  const { link, call, until, done, sent, paired } = await setup(0.3);
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production", start: START, cards: "bots" });
+    await call("link.push.presence", false);
+    await call("link.push.activity", "bot:bot-quill", ACTIVITY);
+    await call("send", "chat-blog", "Please approve the deploy.");
+    await until(() => sent.some((item) => item.type === "alert"), "the request's notification");
+    const alert = unseal(paired, sent.find((item) => item.type === "alert")!.payload.b);
+    assert.equal(alert.k, "request");
+    assert.deepEqual(alert.q, { id: alert.r, k: "permission", t: "Run a command", p: "npm run deploy -- --env production", rm: true });
+    await until(() => sent.some((item) => item.token === ACTIVITY && item.payload.aps["content-state"].phase === "needs-you"), "the card asking");
+    const card = sent.find((item) => item.token === ACTIVITY && item.payload.aps["content-state"].phase === "needs-you")!;
+    assert.equal(card.priority, 10);
+    assert.equal(card.payload.aps["relevance-score"], 100);
+    assert.equal(card.payload.aps["content-state"].chats[0].ask, "approve");
+    assert.equal(unsealCard(paired, card.payload.aps["content-state"].sealed).c[0].q.id, alert.r);
+    // The person answers (as a card's button would): the card goes back to work.
+    await call("respond", alert.r, { action: "approve" });
+    await until(() => sent.some((item) => item.token === ACTIVITY && item.payload.aps.timestamp > card.payload.aps.timestamp && item.payload.aps["content-state"].phase !== "needs-you"), "the card after the answer", 15_000);
+
+    // Previews off: the notification only opens the app, and the card carries nothing sealed.
+    await call("link.push.prefs", { previews: false });
+    sent.length = 0;
+    await call("send", "chat-blog", "Approve one more, please.");
+    await until(() => sent.some((item) => item.type === "alert"), "the second request");
+    assert.equal(unseal(paired, sent.find((item) => item.type === "alert")!.payload.b).q, undefined);
+    await until(() => sent.some((item) => item.token === ACTIVITY && item.payload.aps["content-state"].phase === "needs-you"), "the card asking again");
+    const quiet = sent.find((item) => item.token === ACTIVITY && item.payload.aps["content-state"].phase === "needs-you")!;
+    assert.equal(quiet.payload.aps["content-state"].sealed, undefined);
+    assert.equal(quiet.payload.aps["content-state"].chats[0].ask, "approve");
+    void link;
+  } finally {
+    await done();
+  }
+});
+
 test("a card whose address the computer never got is still brought up to date: the app is woken, and a late address catches up", async () => {
   const { link, call, until, done, sent } = await setup(0.3);
   try {

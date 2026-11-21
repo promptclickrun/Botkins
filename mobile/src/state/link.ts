@@ -145,6 +145,8 @@ export async function boot() {
   // Notifications, and the tools bots can run on this phone. Loaded here, not at the top, because
   // both use this file.
   void import("./push").then((push) => push.startPush()).catch(() => {});
+  // The Home Screen and Lock Screen widgets read what the app last saw (src/state/widgets.ts).
+  void import("./widgets").then((widgets) => widgets.startWidgets()).catch(() => {});
   void import("./device").then((device) => device.startDeviceAnswers()).catch(() => {});
   AppState.addEventListener("change", (state) => {
     if (state === "active") {

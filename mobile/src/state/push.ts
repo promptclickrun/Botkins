@@ -4,8 +4,10 @@
 // phone's half: it asks iOS for permission and for the address Apple delivers to, tells the
 // computer, keeps the key the notification extension opens sealed alerts with, says when the app
 // is in front (so the computer stays quiet about the chat on screen), opens the right chat when a
-// notification is tapped, and runs a chat's Live Activity while the app is open. When a push wakes
-// the app in the background, it answers what bots asked the phone (src/state/device.ts).
+// notification is tapped, and runs the Live Activities while the app is open: one per Botkin on a
+// computer that names "activity-bots-v1" (src/state/cards.ts, docs/live-cards.md), else one per
+// chat. When a push wakes the app in the background, it answers what bots asked the phone
+// (src/state/device.ts) and sends answers given on a card or a notification (src/state/answers.ts).
 import * as Application from "expo-application";
 import { router } from "expo-router";
 import { keep, readKept } from "@/state/keep";
@@ -16,6 +18,8 @@ import { lookOf } from "@/data/botLook";
 import { type Pairing, pushKeyOf } from "@/link/client";
 import type { ActivityState, PushPrefs, RunSummary } from "@/link/types";
 import { activityView, LINGER_MS } from "./activity";
+import { sendAnswers, startAnswers } from "./answers";
+import { botsWithWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
 import { api, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
 import { useApp } from "./store";
@@ -53,6 +57,8 @@ export function usePushPrefs(): PushPrefs | null {
 }
 
 const canPush = () => !!useApp.getState().parts.meta?.capabilities.includes("push-v1");
+/** One Live Activity per Botkin: the computer can ("activity-bots-v1") and this build can draw them. */
+const cardsOn = () => !!useApp.getState().parts.meta?.capabilities.includes("activity-bots-v1") && typeof Activities?.startCard === "function";
 const base64 = (bytes: Uint8Array) => {
   let text = "";
   for (const byte of bytes) text += String.fromCharCode(byte);
@@ -105,9 +111,10 @@ async function register(force = false) {
     // "development". A build from TestFlight or the App Store carries no profile to read (the answer
     // is null) and is always on production.
     const env = (await Application.getIosPushNotificationServiceEnvironmentAsync()) === "development" ? "sandbox" : "production";
-    const said = [pairing.serverId, pairing.deviceId, token.data, env, startToken ?? ""].join();
+    const cards = cardsOn();
+    const said = [pairing.serverId, pairing.deviceId, token.data, env, startToken ?? "", cards].join();
     if (said === registered && !force) return;
-    await api["link.push.register"]({ token: token.data, env, ...(startToken && { start: startToken }) });
+    await api["link.push.register"]({ token: token.data, env, ...(startToken && { start: startToken }), ...(cards && { cards: "bots" as const }) });
     registered = said;
     usePush.setState({ status: "on", problem: null });
     tellPresence();
@@ -186,12 +193,21 @@ function kindOf(response: import("expo-notifications").NotificationResponse): st
   if (typeof kind === "string" && kind) return kind;
   return request.content.categoryIdentifier === "botkins_team" ? "team" : undefined;
 }
+/** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
+const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
   if (!response || !native) return;
   const chatId = chatOf(response);
   const host = hostOf(response);
   const kind = kindOf(response);
   native.Notifications.clearLastNotificationResponse();
+  if (ANSWERED_THERE.test(response.actionIdentifier)) return;
+  // "Allow once" on a risky approval opens the app: it asks for Face ID before it answers.
+  if (response.actionIdentifier === "approve.risky") {
+    const request = (response.notification.request.content.data as Record<string, unknown> | undefined)?.requestId;
+    if (typeof request === "string" && chatId) router.push({ pathname: "/open/answer", params: { request, chat: chatId, ...(host && { host }) } });
+    return;
+  }
   if (!chatId && kind !== "team" && kind !== "update") return;
   // The app may still be starting: the chat opens once the pairing is read. An alert from another
   // paired computer makes the phone use that computer first.
@@ -275,6 +291,7 @@ async function syncActivities() {
 
 function forgetActivity(chatId: string) {
   shown.delete(chatId);
+  drawn.delete(chatId);
   over.delete(chatId);
   addresses.delete(chatId);
   told.delete(chatId);
@@ -289,6 +306,7 @@ async function followActivities() {
   const prefs = pairing ? parts.phones?.[pairing.deviceId]?.push : undefined;
   // Before the computer has said what is going on, nothing is known: a card is left as it is.
   if (!prefs?.activities || !parts.live || !useApp.getState().synced) return;
+  if (cardsOn()) return followCards(prefs.previews);
   const active = new Set(parts.live.active ?? []);
   const front = AppState.currentState === "active";
   // A turn in the chat on screen gets a card; it goes on when the person leaves the app.
@@ -327,6 +345,96 @@ async function followActivities() {
   }
 }
 
+// ── One card per Botkin ("activity-bots-v1") ────────────────────────────────────────────────────
+
+const drawn = new Map<string, string>(); // card key → what it last showed, as JSON
+
+/**
+ * While the app runs, the phone draws each Botkin's card itself (the computer holds back then): it
+ * starts one for each Botkin at work while the app is in front, brings each up to date, and ends a
+ * card with nothing left on it. A card per chat from an older computer is ended once its turn is over.
+ */
+async function followCards(previews: boolean) {
+  if (!Activities?.startCard || !Activities.updateCard || !Activities.endCard) return;
+  const state = useApp.getState();
+  const known = { parts: state.parts, running: state.running, texts: state.texts };
+  const host = state.pairing?.serverId ?? null;
+  const active = new Set(state.parts.live?.active ?? []);
+  if (AppState.currentState === "active" && Activities.enabled()) {
+    for (const botId of botsWithWork(known)) {
+      const key = "bot:" + botId;
+      if (shown.has(key) || [...shown.keys()].filter((item) => item.startsWith("bot:")).length >= MAX_CARDS) continue;
+      const bot = state.parts.bots?.find((item) => item.id === botId);
+      const card = bot && phoneCard(known, botId, previews);
+      if (!bot || !card) continue;
+      const look = lookOf(bot);
+      shown.set(key, null);
+      drawn.set(key, JSON.stringify([card.state, card.detail]));
+      try {
+        await Activities.startCard({ botId, botName: bot.name, head: look.head, palette: look.palette, eyes: look.eyes ?? "oval", colors: look.colors ?? [] }, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance);
+      } catch {
+        shown.delete(key);
+        drawn.delete(key);
+      }
+    }
+  }
+  for (const key of [...shown.keys()]) {
+    if (!key.startsWith("bot:")) {
+      if (!active.has(key)) {
+        void Activities.end(key, null, 0).catch(() => {});
+        forgetActivity(key);
+      }
+      continue;
+    }
+    const card = phoneCard(known, key.slice(4), previews);
+    if (!card) {
+      void Activities.endCard(key, 0).catch(() => {});
+      forgetActivity(key);
+      continue;
+    }
+    const text = JSON.stringify([card.state, card.detail]);
+    if (drawn.get(key) === text) continue;
+    drawn.set(key, text);
+    void Activities.updateCard(key, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance).catch(() => {});
+  }
+}
+
+// ── Answering on a notification ─────────────────────────────────────────────────────────────────
+
+/**
+ * The buttons a request's notification can have (docs/live-cards.md, section 6). The notification
+ * extension picks the category from what it opened; the content extension (targets/notify-ui) adds
+ * a question's choices. Each answer needs the phone unlocked; a risky approval opens the app.
+ */
+async function setCategories() {
+  if (!native) return;
+  const { Notifications } = native;
+  const answer = { opensAppToForeground: false, isAuthenticationRequired: true };
+  const open = { opensAppToForeground: true };
+  const reply = { identifier: "reply", buttonTitle: "Reply…", textInput: { submitButtonTitle: "Send", placeholder: "Your answer" }, options: answer };
+  try {
+    await Promise.all([
+      Notifications.setNotificationCategoryAsync("botkins_approve", [
+        { identifier: "approve", buttonTitle: "Allow once", options: answer },
+        { identifier: "remember", buttonTitle: "Allow for this chat", options: answer },
+        { identifier: "deny", buttonTitle: "Deny", options: { ...answer, isDestructive: true } },
+      ]),
+      Notifications.setNotificationCategoryAsync("botkins_approve_once", [
+        { identifier: "approve", buttonTitle: "Allow once", options: answer },
+        { identifier: "deny", buttonTitle: "Deny", options: { ...answer, isDestructive: true } },
+      ]),
+      Notifications.setNotificationCategoryAsync("botkins_approve_risky", [
+        { identifier: "approve.risky", buttonTitle: "Allow once", options: { ...open, isAuthenticationRequired: true } },
+        { identifier: "deny", buttonTitle: "Deny", options: { ...answer, isDestructive: true } },
+      ]),
+      Notifications.setNotificationCategoryAsync("botkins_question", [reply, { identifier: "open", buttonTitle: "Open chat", options: open }]),
+      Notifications.setNotificationCategoryAsync("botkins_open", [{ identifier: "open", buttonTitle: "Open to answer", options: open }]),
+    ]);
+  } catch {
+    // Notifications still arrive; they only open the app.
+  }
+}
+
 // ── Starting up ─────────────────────────────────────────────────────────────────────────────────
 
 if (native) {
@@ -341,6 +449,7 @@ if (native) {
         // The same wake brings a chat's card up to date (a turn ended while the app was closed) and
         // tells the computer the card's address, so it can change the card itself from then on.
         await syncActivities().catch(() => {});
+        await sendAnswers();
         const answered = await answerPendingAsks().catch(() => 0);
         return answered > 0 ? native.Notifications.BackgroundNotificationTaskResult.NewData : native.Notifications.BackgroundNotificationTaskResult.NoData;
       } finally {
@@ -379,6 +488,8 @@ export async function startPush() {
   });
   Notifications.addNotificationResponseReceivedListener(openFrom);
   openFrom(Notifications.getLastNotificationResponse());
+  void setCategories();
+  startAnswers();
   Notifications.addPushTokenListener(() => void register(true));
   void Notifications.registerTaskAsync(TASK).catch(() => {});
 
@@ -415,6 +526,7 @@ export async function startPush() {
           // The computer may have restarted, or never got an address: every card's is passed on again.
           told.clear();
           void syncActivities();
+          void sendAnswers();
         }
         void register();
         tellPresence();
@@ -424,8 +536,10 @@ export async function startPush() {
   });
   AppState.addEventListener("change", (next) => {
     tellPresence();
-    if (next === "active") void syncActivities();
-    else void followActivities();
+    if (next === "active") {
+      void syncActivities();
+      void sendAnswers();
+    } else void followActivities();
   });
   onChatOnScreen(() => {
     tellPresence();

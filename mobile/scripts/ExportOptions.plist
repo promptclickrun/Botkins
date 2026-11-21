@@ -11,6 +11,7 @@
     <key>app.botkins.mobile</key><string>Botkins App Store</string>
     <key>app.botkins.mobile.widgets</key><string>Botkins Widgets App Store</string>
     <key>app.botkins.mobile.notify</key><string>Botkins Notify App Store</string>
+    <key>app.botkins.mobile.notifyui</key><string>Botkins Notify UI App Store</string>
   </dict>
   <key>uploadSymbols</key><true/>
   <key>manageAppVersionAndBuildNumber</key><false/>
