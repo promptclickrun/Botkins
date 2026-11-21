@@ -50,7 +50,8 @@ export function cleanLastUpdate(record) {
   const { at, from, to, ok, message } = record;
   if (typeof at !== "string" || at.length > 40 || !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(at) || Number.isNaN(Date.parse(at))) return null;
   if (typeof from !== "string" || from.length > 32 || !VERSION.test(from) || typeof to !== "string" || to.length > 32 || !VERSION.test(to) || typeof ok !== "boolean") return null;
-  return { at, from, to, ok, ...(typeof message === "string" && message.trim() && { message: message.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300) }) };
+  // `back` is for this computer alone: the new version was running, didn't stay up, and the old one was put back.
+  return { at, from, to, ok, ...(typeof message === "string" && message.trim() && { message: message.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300) }), ...(record.back === true && !ok && { back: true }) };
 }
 /** { at, from, to, ok, message? }, or null when there is none or it can't be read. */
 export function readLastUpdate(installRoot) {
@@ -334,7 +335,9 @@ export async function switchTo({ archive, installRoot, version, platform = proce
       await manager?.restart().catch(() => {});
     }
     if (placed) rmSync(target, { recursive: true, force: true });
-    throw switched ? new Error(error.message + (problem ? " " + problem : "") + " Botkins " + priorVersion + " was put back.") : error;
+    // `putBack` says that the new version ran here and the old one had to come back: that, and not
+    // a download that failed, is what speaks against the release itself.
+    throw switched ? Object.assign(new Error(error.message + (problem ? " " + problem : "") + " Botkins " + priorVersion + " was put back."), { putBack: true }) : error;
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -381,7 +384,7 @@ export async function applyUpdate({ report = () => {}, now = () => new Date(), w
     return result;
   } catch (error) {
     // A copy that doesn't update itself has no install to report. Anything else is an install that didn't end well.
-    if (layout) report({ at: now().toISOString(), from: layout.version, to: to ?? layout.version, ok: false, message: error.message });
+    if (layout) report({ at: now().toISOString(), from: layout.version, to: to ?? layout.version, ok: false, message: error.message, ...(error.putBack && { back: true }) });
     throw error;
   } finally {
     watched.off("uncaughtException", died);

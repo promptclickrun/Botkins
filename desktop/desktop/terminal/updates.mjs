@@ -46,6 +46,8 @@ const NO_SERVICE = "This computer runs Botkins from a terminal, not as a service
 export function terminalUpdates(service, { entry = ENTRY, platform = process.platform, arch = process.arch, latest = () => latestRelease({ token: "" }), manager = serviceManager({ command: [process.execPath, entry] }), launch = spawn, env = process.env, pollMs = 2000, startedMs = STARTED_MS, heardMs = HEARD_MS, autoPollMs, folder = notRootOwned } = {}) {
   const layout = installLayout(entry);
   const found = () => manager.installed();
+  // The last failure that was said: { version, message }.
+  let told = null;
   const last = () => (layout ? readLastUpdate(layout.installRoot) : null);
   // A container is replaced, not updated from inside: its image is named, so the person knows what to pull.
   const image = env.BOTKINS_IMAGE;
@@ -89,7 +91,7 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
     // The log has it for whoever reads the log; the owner's phones are told by the link (desktop/runtime.mjs).
     notify: (version) => service.log.info("Botkins " + version + " is available (this is " + service.version + "). Install it with `botkins update`, or from a paired phone."),
     stage: async () => {},
-    restart: () => {
+    restart: ({ unasked = false } = {}) => {
       const scope = found()?.scope;
       const before = last()?.at;
       const request = join(service.paths.runDir, REQUEST);
@@ -107,8 +109,19 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
       const started = Date.now();
       const giveUp = (message) => {
         clearInterval(watch);
-        updates.state = { ...updates.state, status: "error", canInstall: false, message };
-        service.log.error("Update: " + message);
+        // One notice for one cause. With installing by itself switched on, an install that fails
+        // before the new version ever runs is tried again at each check, and a fault that doesn't
+        // go away (a tool that is missing) would be said again every few hours. So the same
+        // reason for the same release is said once. After that an install nobody asked for ends
+        // quietly: there is still a newer release, and the record still holds the reason for
+        // whoever looks. One a person asked for is always answered.
+        const again = unasked && told?.version === updates.state.latest && told.message === message;
+        told = { version: updates.state.latest, message };
+        if (again) updates.state = { ...updates.state, status: "available", canInstall: true };
+        else {
+          updates.state = { ...updates.state, status: "error", canInstall: false, message };
+          service.log.error("Update: " + message);
+        }
         service.changed?.();
       };
       const watch = setInterval(() => {

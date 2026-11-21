@@ -74,21 +74,32 @@ test("the status carries the choice to install by itself and how the last instal
   assert.deepEqual(shown({ ...last, from: "1.0.0", to: "1.1.0", ok: false, message: "It was put back." }).ok, false);
   assert.equal(shown({ ...last, from: "0.8.0", to: "0.9.0", ok: true }), undefined, "an install from before a later upgrade");
   assert.equal(shown({ ...last, from: "0.9.0", to: "1.0.0", ok: false }), undefined, "a failure the person has since got past by hand");
-  // A release that failed here is not tried again by itself; the one after it is.
+  // A release that ran here and had to be put back is not tried again by itself; the one after it is.
+  // The install job says that it put the old version back (`back`), and that is kept on this computer: a window or a phone is not shown it.
   let tried = "1.1.0";
   const stuck = [];
-  const wary = new AppUpdates({ ...base, latest: async () => ({ version: tried, assets: ["botkins-desktop-" + tried + ".tar.gz"] }), stage: async version => stuck.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false }), autoPollMs: 5 });
+  assert.deepEqual(shown({ ...last, from: "1.0.0", to: "1.1.0", ok: false, message: "It was put back.", back: true }), { ...last, from: "1.0.0", to: "1.1.0", ok: false, message: "It was put back." });
+  const wary = new AppUpdates({ ...base, latest: async () => ({ version: tried, assets: ["botkins-desktop-" + tried + ".tar.gz"] }), stage: async version => stuck.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false, back: true }), autoPollMs: 5 });
   await wary.check();
   await wary.check();
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.deepEqual(stuck, []);
   assert.equal((await wary.install()).status, "restarting", "on purpose, it is installed");
   assert.deepEqual(stuck, ["1.1.0"]);
-  const next = new AppUpdates({ ...base, latest: async () => ({ version: "1.2.0", assets: ["botkins-desktop-1.2.0.tar.gz"] }), stage: async version => stuck.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false }), autoPollMs: 5 });
+  const next = new AppUpdates({ ...base, latest: async () => ({ version: "1.2.0", assets: ["botkins-desktop-1.2.0.tar.gz"] }), stage: async version => stuck.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false, back: true }), autoPollMs: 5 });
   await next.check();
   for (let tries = 0; tries < 100 && stuck.length < 2; tries++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.deepEqual(stuck, ["1.1.0", "1.2.0"]);
   next.stopAuto();
+  // An install that failed before the new version ever ran (a download that broke off) says nothing
+  // against the release: it is tried again by itself. What decides is the job's own mark, not
+  // the words of its message, which may say anything.
+  const again = [];
+  const unlucky = new AppUpdates({ ...base, latest: async () => ({ version: "1.1.0", assets: ["botkins-desktop-1.1.0.tar.gz"] }), stage: async version => again.push(version), auto: { get: () => true, set() {} }, idle: () => true, last: () => ({ ...last, from: "1.0.0", to: "1.1.0", ok: false, message: "The release file SHA256SUMS couldn't be downloaded (HTTP 503). It was put back." }), autoPollMs: 5 });
+  await unlucky.check();
+  for (let tries = 0; tries < 100 && !again.length; tries++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(again, ["1.1.0"]);
+  unlucky.stopAuto();
   wary.stopAuto();
 });
 

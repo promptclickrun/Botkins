@@ -146,7 +146,9 @@ export class AppUpdates {
    */
   status() {
     const last = this.lastInstall();
-    return { ...this.state, ...(this.auto && { auto: this.auto.get() === true }), ...(last && { last }) };
+    // What a window or a phone is shown of the record is what the contract names; `back` is this computer's own.
+    const { back, ...shown } = last ?? {};
+    return { ...this.state, ...(this.auto && { auto: this.auto.get() === true }), ...(last && { last: shown }) };
   }
   /**
    * How the last install ended, while it still says something about the copy that runs: an
@@ -186,8 +188,12 @@ export class AppUpdates {
     // A release that was tried and didn't stay up is not tried again by itself: without this, a
     // bad release would be installed, put back and installed again for as long as it is the latest.
     // The person can still install it on purpose, and the next release is a new one.
+    // Only that speaks against a release. An install that failed before the new version ever ran
+    // (a download that broke off, a signature that couldn't be checked for want of a tool) says
+    // nothing about it, and is tried again at the next check. The install job says which it was
+    // (`back` in its record); the words of its message are for people and decide nothing.
     const last = this.lastInstall();
-    if (last && !last.ok && last.to === this.state.latest) {
+    if (last && !last.ok && last.back === true && last.to === this.state.latest) {
       if (this.skipped !== last.to) this.log("Botkins " + last.to + " was tried and put back, so it is not installed by itself again. Install it with `botkins update` when you choose to.");
       this.skipped = last.to;
       return;
@@ -273,7 +279,7 @@ export class AppUpdates {
             this.state = { ...info };
             return void this.autoInstall();
           }
-          Promise.resolve().then(() => this.restart()).catch(() => this.failedInstall());
+          Promise.resolve().then(() => this.restart({ unasked })).catch(() => this.failedInstall());
         }));
         return this.state;
       } catch {
