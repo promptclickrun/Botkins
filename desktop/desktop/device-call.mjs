@@ -7,7 +7,9 @@ import { deviceArgs } from "./folders.mjs";
  *
  * A project's folder sent by a paired device must be one the folder browser could have shown, as
  * for the calls that pick a folder. What a team member does is marked as theirs: a chat they
- * start, a message they send, and their answer to a bot's request. Nobody else's message is.
+ * start, a message they send, a routine they make or copy, and their answer to a bot's request.
+ * Nobody else's message is. A member is offered only what is theirs to mention, and a live voice
+ * they start is told nothing from the owner's notes.
  */
 export function deviceCall({ workspace, handlers, folders }) {
   return async (name, args, context = {}) => {
@@ -20,6 +22,12 @@ export function deviceCall({ workspace, handlers, folders }) {
     // A member's message carries their name with it, wherever `send` puts it: in the chat now, in
     // the queue, or into the turn under way.
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : checked;
+    if (member) {
+      // These three take the member's id beside what the device sent; a handler never reads it from the device.
+      if (name === "mentionables") return workspace.mentions.candidates(checked[0], checked[1], member.memberId);
+      if (name === "createRoutine") return workspace.panels.routines.create(checked[0] ?? {}, undefined, member.memberId);
+      if (name === "duplicateRoutine") return workspace.panels.routines.duplicate(checked[0], checked[1], undefined, member.memberId);
+    }
     const result = await handlers[name](...callArgs);
     if (member) {
       if (["createChat", "createGroupChat", "forkChat"].includes(name) && typeof result === "string") {

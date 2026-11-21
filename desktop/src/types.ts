@@ -387,6 +387,8 @@ export type ChatSchedule = {
   deliver?: RoutineDelivery;
   /** false when the routine runs quietly: no notification when a run finishes. Left out when it notifies. */
   notify?: boolean;
+  /** On a routine a team member made: that member's id. Its turns run under their limits. Left out for the owner's. */
+  createdBy?: string;
   name?: string;
   cadence?: Cadence;
   createdAt?: number;

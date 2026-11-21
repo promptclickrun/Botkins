@@ -6,6 +6,7 @@
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import { canUseProject } from "./access.mjs";
+import { memberSeesBot } from "./team-turn.mjs";
 import { isGroup } from "./groups.mjs";
 
 export const MAX_MENTIONS = 12;
@@ -65,12 +66,44 @@ export class Mentions {
     if (folder) roots.push({ path: folder, where: "Project folder" });
     return roots;
   }
-  /** What the composer's "@" and "#" menus offer in this chat, or for a bot before its chat exists. */
-  candidates(chatId, botId) {
+  /**
+   * A test for the files a team member may mention: (path) => boolean. The bot's folder holds
+   * every chat's files, so a member gets only those that are artifacts of a chat they are in
+   * (a file a bot made or was given there, or one inside a folder shared there).
+   */
+  memberFiles(memberId) {
+    const artifacts = this.ws.artifacts;
+    const rows = artifacts.rows.filter((row) => row.chatId && this.ws.inChat(row.chatId, memberId));
+    // The index keeps real paths, so a path that reaches the file through a link is made real first.
+    return (path) => {
+      if (!rows.length) return false;
+      try {
+        return !!artifacts.entry(realpathSync(path), rows);
+      } catch {
+        return false;
+      }
+    };
+  }
+  /**
+   * What the composer's "@" and "#" menus offer in this chat, or for a bot before its chat exists.
+   * `memberId` is set when a team member asks: projects and the wiki are the owner's, so a member
+   * is offered neither, and only the files of chats they are in.
+   */
+  candidates(chatId, botId, memberId) {
     const chat = chatId ? this.ws.chat(chatId) : { botId: this.ws.bot(botId).id };
     const bots = this.bots(chat);
     const state = this.ws.state;
     const usable = (check) => bots.every(check);
+    if (memberId) {
+      const mine = this.memberFiles(memberId);
+      const files = this.roots(chat).flatMap((root) => listFiles(root.path, root.where)).filter((file) => mine(file.path));
+      return {
+        projects: [],
+        wiki: [],
+        files: files.sort((a, b) => b.modified - a.modified).slice(0, MAX_FILES),
+        bots: isGroup(chat) ? bots.map((b) => ({ id: b.id, name: b.name, hint: b.role })) : [],
+      };
+    }
     const projects = (state.projects ?? [])
       .filter((p) => usable((b) => canUseProject(state, b, p)))
       .map((p) => ({
@@ -95,11 +128,24 @@ export class Mentions {
   /**
    * Checks the mentions sent with a message. Returns what the message keeps (`list`), the text
    * the model reads after the message (`context`) and the files to attach (`files`).
+   *
+   * `author` is who wrote the message. A team member's message keeps only what a member may
+   * mention: a file of a chat they are in, and a Today item of a bot their role may see. Anything
+   * else is left out before it can reach the prompt, whatever the device sent.
    */
-  resolve(chat, mentions) {
+  resolve(chat, mentions, author) {
     if (mentions == null) return { list: [], context: "", files: [] };
     if (!Array.isArray(mentions) || mentions.length > MAX_MENTIONS) throw new Error("Mention up to " + MAX_MENTIONS + " records in one message.");
     const state = this.ws.state;
+    if (author?.memberId) {
+      const mine = this.memberFiles(author.memberId);
+      const team = this.ws.teamOf();
+      mentions = mentions.filter((m) => {
+        if (m?.kind === "file") return mine(String(m.path));
+        if (m?.kind === "board") return memberSeesBot(author.memberId, team, (state.board ?? []).find((item) => item.id === m.id)?.botId);
+        return false;
+      });
+    }
     const bots = this.bots(chat);
     const refuse = (kind, name) => {
       throw new Error(bots.length > 1 ? "Not every bot in this chat has access to the " + kind + " “" + name + "”." : bots[0].name + " doesn't have access to the " + kind + " “" + name + "”.");
