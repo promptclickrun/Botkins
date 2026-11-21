@@ -1012,6 +1012,7 @@ export class MockBackend {
       this.spaces = {
         ensure: (person) => void this.ensureSpaces(person),
         release: (person) => this.releaseSpaces(person),
+        snapshot: (id) => this.snapshotSpace(id),
       };
     }
     // "app-update-v1": made-up updates of this computer's own Botkins (mock-update.mjs, BOTKINS_DEV_UPDATE).
@@ -1230,6 +1231,36 @@ export class MockBackend {
     if (made) this.changed();
   }
   /** A member was removed: what they made passes to the owner, and the routines they set are paused. */
+  /**
+   * The copy of a space for a link (docs/spaces.md, `SpaceSnapshot`): its panels that are not hidden and
+   * its open cards, with no id of anything, no chat, no note and no person's name but `from`.
+   */
+  snapshotSpace(id) {
+    const space = this.spaceRecords.find((item) => item.id === id);
+    if (!space) return null;
+    const botOf = (botId) => {
+      const bot = this.state.bots.find((item) => item.id === botId);
+      return { name: bot?.name ?? "Bot", look: bot?.look ?? { head: "beacon", palette: "original" } };
+    };
+    const blockOf = (block) => {
+      if (block.type !== "html") return block;
+      const page = this.pages.get(block.frame);
+      return { type: "html", height: block.height, page: page?.html ?? "", ...(page?.data !== undefined && { data: page.data }) };
+    };
+    return {
+      v: 1,
+      name: space.name,
+      from: OWNER_NAME,
+      kind: space.builtin && space.builtin !== "today" ? space.builtin : "panels",
+      updatedAt: space.updatedAt,
+      panels: this.state.panels
+        .filter((panel) => panel.spaceId === id && !panel.hidden)
+        .map((panel) => ({ title: panel.title, size: panel.size, bot: botOf(panel.botId), updatedAt: panel.updatedAt, blocks: panel.blocks.map(blockOf), ...(panel.state && { state: panel.state }) })),
+      cards: this.state.board
+        .filter((item) => item.spaceId === id && item.status === "open")
+        .map((item) => ({ kind: item.kind, title: item.title, body: item.body ?? "", links: (item.links ?? []).map((link) => link.url), ...(item.category && { category: item.category }), bot: botOf(item.botId), createdAt: item.createdAt })),
+    };
+  }
   releaseSpaces(person) {
     for (const space of this.spaceRecords) if (space.createdBy === person) delete space.createdBy;
     // The owner already has the four built-in ones; a second set would be named the same.

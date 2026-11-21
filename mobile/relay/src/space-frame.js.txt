@@ -1,0 +1,119 @@
+// Runs in /s/frame, the empty document an app panel is drawn in on a shared link's page. The
+// document has no origin (the `sandbox` header) and no network (the policy header). It takes one
+// message from the page that holds it: the panel's HTML, its data and its saved state. Then it sets
+// up `window.botkins`, the bridge a panel's page is written for, and writes the HTML.
+// Nothing here can save: `state.set` and `sendAnswer` answer false.
+(() => {
+  // The policy has no word for peer-to-peer connections, so the ways to open one are removed
+  // (FRAME_GUARD in mobile/src/ui/frame.ts).
+  for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "RTCSessionDescription", "RTCIceCandidate", "WebSocket", "EventSource", "WebTransport", "Worker", "SharedWorker"]) {
+    try { Object.defineProperty(window, name, { value: undefined, configurable: false, writable: false }); } catch (e) {}
+  }
+  const holder = window.parent;
+  const BASE_STYLE =
+    'font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:var(--ink);-webkit-text-size-adjust:100%}' +
+    "html,body{margin:0;background:transparent;overflow-wrap:break-word}" +
+    "img,svg,canvas,video{max-width:100%}html{overflow:hidden}";
+  const safeColors = (colors) =>
+    Object.entries(colors && typeof colors === "object" ? colors : {}).filter(([name, value]) => /^--[a-z-]+$/.test(name) && typeof value === "string" && /^[#(),.%\sa-zA-Z0-9-]*$/.test(value));
+
+  const start = (first) => {
+    const data = first.data === undefined ? null : first.data;
+    const state = first.state && typeof first.state === "object" ? first.state : {};
+    let mode = first.mode === "dark" ? "dark" : "light";
+    const pending = new Map();
+    const themed = new Set();
+    let seq = 0;
+    const post = (type, more) => {
+      try { holder.postMessage(Object.assign({ botkins: 1, type }, more), "*"); } catch (e) {}
+    };
+    const ask = (type, more) =>
+      new Promise((resolve) => {
+        const id = ++seq;
+        pending.set(id, resolve);
+        post(type, Object.assign({ id }, more));
+      });
+    const copy = (value) => {
+      try { return JSON.parse(JSON.stringify(value)); } catch (e) { return {}; }
+    };
+    const api = {
+      getData: () => Promise.resolve(data),
+      onData: (fn) => (fn(data), () => {}),
+      sendAnswer: () => Promise.resolve(false),
+      openLink: (url) => ask("open", { url: String(url) }),
+      theme: () => mode,
+      onTheme: (fn) => (themed.add(fn), () => themed.delete(fn)),
+      close: () => {},
+      state: Object.freeze({
+        get: () => Promise.resolve(copy(state)),
+        set: () => Promise.resolve(false),
+        onChange: () => () => {},
+      }),
+    };
+    api.sendMessage = api.sendAnswer;
+    Object.defineProperty(window, "botkins", { value: Object.freeze(api) });
+    Object.defineProperty(window, "commander", { value: window.botkins });
+    Object.defineProperty(window, "bighelp", { value: window.botkins });
+
+    // Opening the document drops every listener on the window, so they are added after it.
+    document.open();
+    addEventListener("message", (event) => {
+      const m = event.data;
+      if (event.source !== holder || !m || typeof m !== "object" || m.botkins !== 1) return;
+      if (m.type === "theme") {
+        mode = m.mode === "dark" ? "dark" : "light";
+        const root = document.documentElement;
+        root.dataset.theme = mode;
+        root.style.colorScheme = mode;
+        for (const [name, value] of safeColors(m.colors)) root.style.setProperty(name, value);
+        for (const fn of themed) { try { fn(mode); } catch (e) {} }
+      } else if (m.type === "result") {
+        const resolve = pending.get(m.id);
+        pending.delete(m.id);
+        if (resolve) resolve(m.value === true);
+      }
+    });
+    // The page's own height, so the panel is as tall as its page.
+    let last = 0;
+    const size = () => {
+      const root = document.documentElement;
+      const body = document.body;
+      const height = Math.ceil(Math.max(body ? body.scrollHeight : 0, body ? body.offsetHeight : 0, root ? root.offsetHeight : 0, 1));
+      if (height !== last) post("size", { height: (last = height) });
+    };
+    addEventListener("DOMContentLoaded", () => {
+      if (typeof ResizeObserver === "function") {
+        new ResizeObserver(size).observe(document.documentElement);
+        if (document.body) new ResizeObserver(size).observe(document.body);
+      }
+      size();
+    });
+    addEventListener("load", size);
+    // A link asks the page that holds this view; nothing here can leave by itself.
+    addEventListener(
+      "click",
+      (event) => {
+        const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+        if (!link) return;
+        event.preventDefault();
+        if (/^https?:/i.test(link.href)) api.openLink(link.href);
+      },
+      true,
+    );
+    const vars = safeColors(first.colors).map(([name, value]) => name + ":" + value).join(";");
+    document.write(
+      '<!doctype html><html data-theme="' + mode + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+        "<style>:root{color-scheme:" + mode + ";" + vars + ";" + BASE_STYLE + "</style></head><body>" +
+        (typeof first.html === "string" ? first.html : "") +
+        "</body></html>",
+    );
+    document.close();
+  };
+
+  addEventListener("message", function first(event) {
+    const m = event.data;
+    if (event.source !== holder || holder === window || !m || typeof m !== "object" || m.botkins !== 1 || m.type !== "init") return;
+    removeEventListener("message", first);
+    start(m);
+  });
+})();

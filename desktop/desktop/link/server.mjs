@@ -24,6 +24,7 @@ import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
+import { SpaceLinks } from "./space-links.mjs";
 import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
@@ -204,7 +205,7 @@ export class LinkHost extends EventEmitter {
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, demoSpaceLinks = false, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, demoSpaceLinks = false, spaceLinkTiming, log = () => {} }) {
     super();
     Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
@@ -350,6 +351,24 @@ export class LinkHost extends EventEmitter {
       app: () => this.backend.spaces,
       demoLinks: demoSpaceLinks === true,
     });
+    // A space shared by link: its sealed copy on the relay, kept fresh and taken back (space-links.mjs).
+    this.spaceLinks = new SpaceLinks({
+      team: () => this.store.data.team,
+      setTeam: (team) => this.setTeam(team),
+      records: () => {
+        const spaces = this.backend.snapshot().spaces;
+        return Array.isArray(spaces) ? spaces : null;
+      },
+      relay: () => ({ on: !!this.relaySettings(), base: this.relayUrl(), key: this.relaySettings() ? this.store.relayKey() : this.store.data.relay.key }),
+      snapshot: (id) => this.backend.spaces?.snapshot?.(id),
+      newShare: () => this.spaces.newShare(),
+      fetch: (...args) => this.fetch(...args),
+      log: (line) => this.log(line),
+      timing: spaceLinkTiming,
+    });
+    this.spaces.onShare = () => this.spaceLinks.sync();
+    this.spaces.leaving = () => this.spaceLinks.leaving();
+    this.spaceLinkMark = "";
     this.grants = new ScreenGrants({
       serverId: this.store.data.serverId,
       device: (id) => this.store.device(id),
@@ -502,6 +521,7 @@ export class LinkHost extends EventEmitter {
     this.log("link listening on " + this.port);
     this.applyRelay();
     void this.syncInvites();
+    this.spaceLinks.sync();
   }
   async close() {
     this.relayLink?.stop();
@@ -522,6 +542,7 @@ export class LinkHost extends EventEmitter {
     clearTimeout(this.pumping);
     this.push.dispose();
     this.spaces.dispose();
+    this.spaceLinks.stop();
     for (const timer of this.inviteTimers.values()) clearTimeout(timer);
     this.inviteTimers.clear();
     this.device.dispose();
@@ -614,6 +635,8 @@ export class LinkHost extends EventEmitter {
     this.store.set({ relay: next });
     this.applyRelay();
     void this.syncInvites();
+    // Switched off: the copies of spaces shared by link leave the relay. Back on: they are put out again.
+    this.spaceLinks.sync();
     if (this.relayEntry() !== before) this.endSessions();
     this.dirty = true;
     this.changed();
@@ -621,9 +644,12 @@ export class LinkHost extends EventEmitter {
   }
   /** A new relay key, and so a new room. The old socket closes, the new entry is in hosts() at once, and the key is saved. */
   resetRelay() {
+    const old = this.store.data.relay.key;
     this.store.resetRelayKey();
     this.applyRelay();
     void this.syncInvites();
+    // A link's id belongs to the key: every link is a new one, and the old copies are taken back with the old key.
+    this.spaceLinks.rekey(old);
     this.endSessions();
     this.dirty = true;
     this.changed();
@@ -1137,6 +1163,7 @@ export class LinkHost extends EventEmitter {
     const { [memberId]: _gone, ...views } = team.views ?? {};
     // Their grants on spaces go; the spaces they made pass to the owner and become private.
     this.setTeam({ ...this.spaces.withoutMember(team, memberId), members: team.members.filter((item) => item.id !== memberId), chats, views });
+    this.spaceLinks.sync();
     return this.team();
   }
 
@@ -1185,6 +1212,23 @@ export class LinkHost extends EventEmitter {
   }
   setLinkSharing(on) {
     return this.spaces.setLinkSharing(on);
+  }
+  /**
+   * The team as the app may know it, for an app that runs apart from the link (the server host's
+   * workspace container): enough for `spaceCan`, `chatPeople`, `inChat` and a role check, and
+   * nothing more. Never a link's key, an invite's code, a device or a person's own view.
+   */
+  teamForApp() {
+    const team = this.store.data.team;
+    return {
+      name: team.name,
+      owner: this.ownerName(),
+      roles: team.roles ?? [],
+      groups: team.groups ?? [],
+      members: (team.members ?? []).map((member) => ({ id: member.id, name: member.name, groupId: member.groupId })),
+      chats: team.chats ?? {},
+      spaces: Object.fromEntries(Object.entries(team.spaces ?? {}).map(([id, entry]) => [id, { access: entry?.access, grants: entry?.grants ?? [], teamCan: entry?.teamCan }])),
+    };
   }
   /** The app deleted a space from its own window: its sharing goes, and its link's copy leaves the relay. */
   spaceRemoved(id) {
@@ -1818,6 +1862,14 @@ export class LinkHost extends EventEmitter {
       // A panel or card the app has put in no space yet is still the owner's to see, never a member's.
       next.panels = (next.panels ?? []).filter((panel) => !panel.spaceId || kinds.get(panel.spaceId) === "today").map((panel) => panelView(panel));
       next.board = (next.board ?? []).filter((item) => !item.spaceId || kinds.get(item.spaceId));
+      // A space shared by link changed: its copy on the relay follows (not from inside this refresh).
+      const shared = Object.entries(this.store.data.team.spaces ?? {}).filter(([, entry]) => entry?.access === "link");
+      const mark = shared.length ? shared.map(([id]) => id + ":" + (state.spaces.find((space) => space.id === id)?.rev ?? "")).join(",") : "";
+      if (mark !== this.spaceLinkMark) {
+        this.spaceLinkMark = mark;
+        const timer = setTimeout(() => this.spaceLinks.sync(), 0);
+        timer.unref?.();
+      }
     } else delete next.spaces;
     // Who was invited to each chat, for the owner's lists; a member's are added with their own cut (filterParts).
     const invites = this.store.data.team.chats ?? {};

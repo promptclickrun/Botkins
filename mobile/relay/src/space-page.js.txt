@@ -1,0 +1,471 @@
+// Runs on /s/<shareId>, the page a shared link opens. It reads the sealed copy of the space from
+// this relay, opens it with the key in the link's fragment (which the browser never sends), and
+// draws it. The relay cannot read a copy, and this page cannot change a space.
+//
+// A copy is not trusted to be well formed: every string is written as text, never as HTML, a link
+// is http or https only, and what a panel's own page does happens in a frame with no origin.
+(() => {
+  "use strict";
+  const GONE = "This space is no longer shared.";
+  const BROKEN = "This link isn't complete. Ask for it again.";
+  const LATER = "This space couldn't be loaded. Try again in a minute.";
+  const LARGE = "This space is too large to show here.";
+  const PANEL_LEFT_OUT = "This panel is too large to share by link.";
+  const MAX_UNPACKED = 32 * 1024 * 1024;
+  const PALETTES = ["original", "terracotta", "honey", "fern", "tidepool", "bluebell", "fig"];
+  const SIZES = ["small", "wide", "tall"];
+  const TONES = ["neutral", "positive", "warning", "negative", "accent"];
+  // What a view's page may be told of the theme: Ink, by the names the apps give a page.
+  const COLORS = {
+    light: { ink: "#000000", muted: "#595959", faint: "#9A9A98", line: "#E7E7E4", lineStrong: "#C8C8C4", surface: "#F5F5F3", sunken: "#EDEDEA", raised: "#FFFFFF", canvas: "#FFFFFF", accent: "#000000", onAccent: "#FFFFFF", accentSoft: "#E6E6E3", success: "#225C36", warning: "#7A5200", danger: "#9B231C", info: "#27536F", bubble: "#EDEDEA" },
+    dark: { ink: "#FFFFFF", muted: "#A8A8A8", faint: "#6E6E6E", line: "#242424", lineStrong: "#3D3D3D", surface: "#131313", sunken: "#1A1A1A", raised: "#1E1E1E", canvas: "#000000", accent: "#FFFFFF", onAccent: "#000000", accentSoft: "#2B2B2B", success: "#93D6A8", warning: "#E9C46A", danger: "#FF9E94", info: "#9FCBE6", bubble: "#262626" },
+  };
+
+  class Shown extends Error {}
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const str = (value, max = 4000) => (typeof value === "string" ? value.slice(0, max) : "");
+  const num = (value) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  const list = (value, max = 500) => (Array.isArray(value) ? value.slice(0, max) : []);
+  const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+  const isWeb = (url) => typeof url === "string" && url.length <= 2000 && /^https?:\/\/[^\s/?#]+/i.test(url);
+
+  // ── Opening the copy ────────────────────────────────────────────────────────
+
+  const bytesOf = (text) => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (char) => char.charCodeAt(0));
+
+  async function unpack(bytes) {
+    const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_UNPACKED) {
+        reader.cancel().catch(() => {});
+        throw new Shown(LARGE);
+      }
+      chunks.push(value);
+    }
+    return new TextDecoder().decode(await new Blob(chunks).arrayBuffer());
+  }
+
+  async function open(id, keyText) {
+    let response;
+    try {
+      response = await fetch("/v1/spaces/" + id, { cache: "no-store" });
+    } catch (e) {
+      throw new Shown(LATER);
+    }
+    if (response.status === 404) throw new Shown(GONE);
+    if (!response.ok) throw new Shown(LATER);
+    const body = new Uint8Array(await response.arrayBuffer());
+    let packed;
+    try {
+      const key = await crypto.subtle.importKey("raw", bytesOf(keyText), "AES-GCM", false, ["decrypt"]);
+      const sealed = { name: "AES-GCM", iv: body.subarray(0, 12), additionalData: new TextEncoder().encode("botkins-space-v1:" + id) };
+      packed = new Uint8Array(await crypto.subtle.decrypt(sealed, key, body.subarray(12)));
+    } catch (e) {
+      throw new Shown(BROKEN);
+    }
+    const copy = JSON.parse(await unpack(packed));
+    if (!copy || typeof copy !== "object" || copy.v !== 1) throw new Shown(LATER);
+    return copy;
+  }
+
+  // ── Words ───────────────────────────────────────────────────────────────────
+
+  function ago(at) {
+    const seconds = Math.max(0, (Date.now() - num(at)) / 1000);
+    if (seconds < 60) return "just now";
+    if (seconds < 3600) return Math.floor(seconds / 60) + "m";
+    if (seconds < 86400) return Math.floor(seconds / 3600) + "h";
+    if (seconds < 7 * 86400) return Math.floor(seconds / 86400) + "d";
+    return new Date(num(at)).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  // ── Markdown: a small renderer that only ever makes text and a few elements ──
+
+  function link(parent, label, href) {
+    if (!isWeb(href)) {
+      parent.append(label);
+      return;
+    }
+    const a = el("a", "", label);
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    parent.append(a);
+  }
+
+  function inline(parent, text) {
+    // Every run has a longest length, so a line of nothing but marks costs no more than its length.
+    const pattern = /(`[^`\n]{1,2000}`)|(\*\*[^*\n]{1,2000}\*\*)|(\*[^*\s][^*\n]{0,2000}\*)|(\[[^\]\n]{1,300}\]\([^)\s]{1,2000}\))|(https?:\/\/[^\s<>()]{1,2000})/g;
+    let at = 0;
+    for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+      if (match.index > at) parent.append(text.slice(at, match.index));
+      const found = match[0];
+      if (match[1]) parent.append(el("code", "", found.slice(1, -1)));
+      else if (match[2]) parent.append(el("strong", "", found.slice(2, -2)));
+      else if (match[3]) parent.append(el("em", "", found.slice(1, -1)));
+      else if (match[4]) {
+        const cut = found.lastIndexOf("](");
+        link(parent, found.slice(1, cut), found.slice(cut + 2, -1));
+      } else link(parent, found, found);
+      at = match.index + found.length;
+    }
+    if (at < text.length) parent.append(text.slice(at));
+  }
+
+  const ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
+  const cells = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  const isRule = (line) => line.length <= 2000 && /^\|?(?::?-{2,}:?\|)*:?-{2,}:?\|?$/.test(line.replace(/\s+/g, ""));
+
+  function markdown(parent, source) {
+    const lines = str(source, 200000).replace(/\r\n?/g, "\n").split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) {
+        i++;
+      } else if (/^\s*```/.test(line)) {
+        const code = [];
+        for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) code.push(lines[i]);
+        i++;
+        const pre = el("pre");
+        pre.append(el("code", "", code.join("\n")));
+        parent.append(pre);
+      } else if (/^#{1,4}\s+/.test(line)) {
+        const level = /^#+/.exec(line)[0].length;
+        // The page's own headings are the space (h1) and the panel (h2).
+        const heading = el("h" + Math.min(6, level + 2));
+        inline(heading, line.replace(/^#+\s+/, ""));
+        parent.append(heading);
+        i++;
+      } else if (/^\s*(?:-{3,}|\*{3,})\s*$/.test(line)) {
+        parent.append(el("hr"));
+        i++;
+      } else if (ITEM.test(line)) {
+        const items = el(/^\s*\d/.test(line) ? "ol" : "ul");
+        for (; i < lines.length && ITEM.test(lines[i]); i++) {
+          const item = el("li");
+          let text = lines[i].replace(ITEM, "");
+          const box = /^\[( |x|X)\]\s+/.exec(text);
+          if (box) {
+            text = text.slice(box[0].length);
+            item.className = box[1] === " " ? "todo" : "done";
+          }
+          inline(item, text);
+          items.append(item);
+        }
+        parent.append(items);
+      } else if (/^\s*>/.test(line)) {
+        const quoted = [];
+        for (; i < lines.length && /^\s*>/.test(lines[i]); i++) quoted.push(lines[i].replace(/^\s*>\s?/, ""));
+        const quote = el("blockquote");
+        inline(quote, quoted.join("\n"));
+        parent.append(quote);
+      } else if (line.includes("|") && i + 1 < lines.length && isRule(lines[i + 1])) {
+        const head = cells(line);
+        const rows = [];
+        for (i += 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) rows.push(cells(lines[i]));
+        table(parent, head, rows, true);
+      } else {
+        const text = [lines[i++]];
+        for (; i < lines.length && lines[i].trim() && !/^\s*(?:```|#{1,4}\s|>)/.test(lines[i]) && !ITEM.test(lines[i]); i++) text.push(lines[i]);
+        const paragraph = el("p");
+        inline(paragraph, text.join("\n"));
+        parent.append(paragraph);
+      }
+    }
+  }
+
+  // ── Blocks ──────────────────────────────────────────────────────────────────
+
+  function table(parent, columns, rows, rich) {
+    const box = el("div", "scroll");
+    const grid = el("table");
+    const write = (cell, text) => (rich ? inline(cell, text) : (cell.textContent = text));
+    const head = el("tr");
+    for (const column of list(columns, 40)) {
+      const cell = el("th");
+      cell.scope = "col";
+      write(cell, str(column));
+      head.append(cell);
+    }
+    const thead = el("thead");
+    thead.append(head);
+    const tbody = el("tbody");
+    for (const row of list(rows, 500)) {
+      const line = el("tr");
+      for (const value of list(row, 40)) {
+        const cell = el("td");
+        write(cell, str(value));
+        line.append(cell);
+      }
+      tbody.append(line);
+    }
+    grid.append(thead, tbody);
+    box.append(grid);
+    parent.append(box);
+  }
+
+  function track(share) {
+    const outer = el("div", "track");
+    const fill = el("div", "fill");
+    fill.style.width = clamp(share, 0, 1) * 100 + "%";
+    outer.append(fill);
+    return outer;
+  }
+
+  const SVG = "http://www.w3.org/2000/svg";
+  function chart(parent, block) {
+    const series = list(block.series, 4).map((one) => ({ name: str(one && one.name, 80), values: list(one && one.values, 400).map(num) })).filter((one) => one.values.length);
+    const all = series.flatMap((one) => one.values);
+    if (!all.length) return;
+    const low = Math.min(...all);
+    const high = Math.max(...all);
+    const span = high - low || 1;
+    const W = 300;
+    const H = 100;
+    const svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + (H + 8));
+    svg.setAttribute("class", "chart");
+    // As wide as its panel and no taller than a chart should be.
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", str(block.label, 200) + ": " + series.map((one) => one.name + " " + one.values.at(-1)).join(", "));
+    const base = document.createElementNS(SVG, "line");
+    for (const [name, value] of [["x1", 0], ["x2", W], ["y1", H + 4], ["y2", H + 4]]) base.setAttribute(name, String(value));
+    svg.append(base);
+    series.forEach((one, at) => {
+      const step = one.values.length > 1 ? W / (one.values.length - 1) : 0;
+      const points = one.values.map((value, index) => (index * step).toFixed(1) + "," + (4 + (1 - (value - low) / span) * (H - 4)).toFixed(1));
+      if (points.length === 1) points.push(W + "," + points[0].split(",")[1]);
+      const path = document.createElementNS(SVG, "polyline");
+      path.setAttribute("points", points.join(" "));
+      path.setAttribute("class", "s" + at);
+      svg.append(path);
+    });
+    parent.append(svg);
+    const labels = list(block.labels, 400).map((label) => str(label, 40));
+    if (labels.length) {
+      const axis = el("div", "axis");
+      axis.append(el("span", "", labels[0]), el("span", "", labels.length > 1 ? labels.at(-1) : ""));
+      parent.append(axis);
+    }
+    if (series.length > 1) {
+      const legend = el("div", "legend");
+      series.forEach((one, at) => legend.append(el("span", "key s" + at, one.name)));
+      parent.append(legend);
+    }
+  }
+
+  function block(parent, item, panel) {
+    if (!item || typeof item !== "object") return;
+    if (item.type === "markdown") {
+      const box = el("div", "md");
+      markdown(box, item.text);
+      parent.append(box);
+      return;
+    }
+    if (item.type === "html") {
+      view(parent, item, panel);
+      return;
+    }
+    const box = el("div", "block " + (typeof item.type === "string" && /^[a-z]+$/.test(item.type) ? item.type : ""));
+    if (item.type === "metric") {
+      box.append(el("div", "label", str(item.label, 200)), el("div", "value", str(item.value, 200)));
+      if (item.note) box.append(el("div", "note", str(item.note, 400)));
+    } else if (item.type === "list") {
+      const items = el("ul");
+      for (const text of list(item.items)) {
+        const line = el("li");
+        inline(line, str(text));
+        items.append(line);
+      }
+      box.append(items);
+    } else if (item.type === "table") {
+      table(box, item.columns, item.rows, false);
+    } else if (item.type === "bars") {
+      const rows = list(item.items, 100).map((row) => ({ label: str(row && row.label, 200), value: num(row && row.value) }));
+      const most = Math.max(1e-9, ...rows.map((row) => row.value));
+      if (item.label) box.append(el("div", "label", str(item.label, 200)));
+      for (const row of rows) {
+        const line = el("div", "bar-row");
+        line.append(el("span", "", row.label), track(row.value / most), el("span", "note", String(row.value)));
+        box.append(line);
+      }
+    } else if (item.type === "progress") {
+      const max = num(item.max);
+      box.append(el("div", "label", str(item.label, 200)), track(max > 0 ? num(item.value) / max : 0));
+      box.append(el("div", "note", item.note ? str(item.note, 400) : num(item.value) + " of " + max));
+    } else if (item.type === "badges") {
+      box.className = "block badges";
+      for (const badge of list(item.items, 100)) box.append(el("span", "badge " + (TONES.includes(badge && badge.tone) ? badge.tone : "neutral"), str(badge && badge.label, 80)));
+    } else if (item.type === "line") {
+      if (item.label) box.append(el("div", "label", str(item.label, 200)));
+      chart(box, item);
+    } else return;
+    parent.append(box);
+  }
+
+  // ── A panel's own page, in a frame with no origin ───────────────────────────
+
+  const dark = matchMedia("(prefers-color-scheme: dark)");
+  const mode = () => (dark.matches ? "dark" : "light");
+  function colors() {
+    const c = COLORS[mode()];
+    return {
+      "--ink": c.ink, "--muted": c.muted, "--faint": c.faint, "--line": c.line, "--line-strong": c.lineStrong, "--paper": c.surface,
+      "--surface": c.surface, "--sunken": c.sunken, "--raised": c.raised, "--canvas": c.canvas, "--rail": c.sunken, "--accent": c.accent,
+      "--on-accent": c.onAccent, "--accent-soft": c.accentSoft, "--active": c.sunken, "--success": c.success, "--warning": c.warning,
+      "--danger": c.danger, "--info": c.info, "--bubble": c.bubble,
+    };
+  }
+
+  /** This page's own frames, by their window: the only senders it listens to. */
+  const views = new Map();
+
+  function view(parent, item, panel) {
+    const box = el("div", "view");
+    const frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-scripts");
+    frame.title = str(panel.title, 200) || "App";
+    frame.style.height = clamp(num(item.height) || 240, 48, 4000) + "px";
+    frame.addEventListener(
+      "load",
+      () => {
+        views.set(frame.contentWindow, { frame, box, ask: null });
+        const state = panel.state && typeof panel.state === "object" ? panel.state : {};
+        frame.contentWindow.postMessage({ botkins: 1, type: "init", html: str(item.page, 8 * 1024 * 1024), data: item.data === undefined ? null : item.data, state, mode: mode(), colors: colors() }, "*");
+      },
+      { once: true },
+    );
+    frame.src = "/s/frame";
+    box.append(frame);
+    parent.append(box);
+  }
+
+  /** A view asked to open a web page. The person decides, with a real press on a real link. */
+  function askOpen(entry, source, id, url) {
+    const answer = (value) => {
+      try { source.postMessage({ botkins: 1, type: "result", id, value }, "*"); } catch (e) {}
+    };
+    if (entry.ask) entry.ask(false);
+    if (!isWeb(url)) return answer(false);
+    const bar = el("div", "ask");
+    const go = el("a", "", "Open link");
+    go.href = url;
+    go.target = "_blank";
+    go.rel = "noopener noreferrer";
+    const no = el("button", "", "Dismiss");
+    no.type = "button";
+    bar.append(el("span", "url", url), go, no);
+    entry.ask = (value) => {
+      entry.ask = null;
+      bar.remove();
+      answer(value);
+    };
+    go.addEventListener("click", () => setTimeout(() => entry.ask && entry.ask(true), 0));
+    no.addEventListener("click", () => entry.ask && entry.ask(false));
+    entry.box.append(bar);
+  }
+
+  addEventListener("message", (event) => {
+    const entry = views.get(event.source);
+    const m = event.data;
+    if (!entry || !m || typeof m !== "object" || m.botkins !== 1) return;
+    if (m.type === "size" && typeof m.height === "number" && Number.isFinite(m.height)) entry.frame.style.height = clamp(Math.round(m.height), 48, 4000) + "px";
+    else if (m.type === "open" && typeof m.id === "number" && Number.isFinite(m.id)) askOpen(entry, event.source, m.id, m.url);
+  });
+  dark.addEventListener("change", () => {
+    for (const source of views.keys()) {
+      try { source.postMessage({ botkins: 1, type: "theme", mode: mode(), colors: colors() }, "*"); } catch (e) {}
+    }
+  });
+
+  // ── The page ────────────────────────────────────────────────────────────────
+
+  function who(bot, at, tag) {
+    const row = el("div", "who");
+    const look = bot && bot.look && typeof bot.look === "object" ? bot.look : {};
+    if (typeof look.head === "string" && /^[a-z0-9]{1,24}$/.test(look.head)) {
+      // A bot with its own colors is drawn in its character's original ones.
+      const img = el("img");
+      img.alt = "";
+      img.width = 24;
+      img.height = 24;
+      img.addEventListener("error", () => img.remove());
+      img.src = "/s/botkin/" + look.head + "-" + (PALETTES.includes(look.palette) ? look.palette : "original") + ".webp";
+      row.append(img);
+    }
+    row.append(el("span", "", str(bot && bot.name, 80)));
+    if (tag) row.append(el("span", "tag", tag));
+    if (num(at)) row.append(el("span", "time", ago(at)));
+    return row;
+  }
+
+  function draw(copy) {
+    const name = str(copy.name, 80) || "Space";
+    document.title = name + " · Botkins";
+    $("name").textContent = name;
+    const from = str(copy.from, 80);
+    $("from").textContent = [from ? "Shared from " + from : "", "Updated " + ago(copy.updatedAt)].filter(Boolean).join(" · ");
+    $("head").hidden = false;
+    for (const panel of list(copy.panels, 200)) {
+      if (!panel || typeof panel !== "object") continue;
+      const card = el("section", "panel " + (SIZES.includes(panel.size) ? panel.size : "small"));
+      const blocks = list(panel.blocks, 100);
+      card.append(who(panel.bot, panel.updatedAt, blocks.some((item) => item && item.type === "html") ? "App" : ""));
+      card.append(el("h2", "", str(panel.title, 200)));
+      for (const item of blocks) block(card, item, panel);
+      if (panel.left === "size") card.append(el("p", "note", PANEL_LEFT_OUT));
+      $("grid").append(card);
+    }
+    for (const item of list(copy.cards, 500)) {
+      if (!item || typeof item !== "object") continue;
+      const card = el("article", "panel");
+      card.append(who(item.bot, item.createdAt, str(item.category, 40)));
+      card.append(el("h2", "", str(item.title, 200)));
+      const body = el("div", "md");
+      markdown(body, item.body);
+      card.append(body);
+      const links = list(item.links, 20).filter(isWeb);
+      if (links.length) {
+        const rows = el("ul", "links");
+        for (const url of links) {
+          const row = el("li");
+          link(row, url.replace(/^https?:\/\//i, "").replace(/\/$/, "").slice(0, 80), url);
+          rows.append(row);
+        }
+        card.append(rows);
+      }
+      $("cards").append(card);
+    }
+  }
+
+  async function main() {
+    const id = location.pathname.split("/").pop() || "";
+    const key = new URLSearchParams(location.hash.slice(1)).get("k") || "";
+    try {
+      if (!/^[A-Za-z0-9_-]{22}$/.test(id) || !/^[A-Za-z0-9_-]{43}$/.test(key)) throw new Shown(BROKEN);
+      draw(await open(id, key));
+    } catch (error) {
+      $("head").hidden = true;
+      $("grid").replaceChildren();
+      $("cards").replaceChildren();
+      $("state").textContent = error instanceof Shown ? error.message : LATER;
+    }
+  }
+
+  // For the tests, which run this file with a document of their own.
+  if (typeof globalThis.__botkinsSpaceTest === "object") Object.assign(globalThis.__botkinsSpaceTest, { open, markdown, block, draw, ago, askOpen, views });
+  else main();
+})();

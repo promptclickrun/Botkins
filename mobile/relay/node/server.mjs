@@ -3,7 +3,8 @@
 // Worker's own code (../src/pure.ts, ../src/shared.ts), so both relays refuse the same things.
 //
 // It runs behind a TLS proxy (Caddy in deploy/azure). Rooms live in memory: a restart drops sockets, and
-// computers and phones reconnect on their own. Invite cards are kept in DATA_DIR/invites.json.
+// computers and phones reconnect on their own. Invite cards are kept in DATA_DIR/invites.json, and the
+// sealed copies of spaces shared by link in DATA_DIR/spaces (one file each, and spaces.json).
 //
 // It speaks both host protocols, as the Worker does. A botkins.host.v3 room has an active and a standby
 // socket from one runtime group, keeps a bounded set of opaque requests so a host socket reset loses
@@ -16,13 +17,15 @@
 // key, lookup, card, `from` tag or message.
 
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "../src/pure.ts";
+import { spaceFrame, spacePage } from "../src/space.ts";
 import {
+  BASE64URL_22,
   BASE64URL_43,
   INVITE_ROUTE,
   MAX_MESSAGE,
@@ -41,26 +44,33 @@ import {
   REQUEST,
   ROOM_NAME,
   ROUTE,
+  SPACE_PAGE_ROUTE,
+  SPACE_ROUTE,
   V3_FAST_HEARTBEAT,
   V3_FAST_SILENCE,
   V3_LEGACY_SILENCE,
   V3_RECONNECT_WINDOW,
   V3_RESEAT_CLOSE,
+  admitSpace,
   checkInviteDelete,
   checkInvitePut,
+  checkSpaceDelete,
+  checkSpacePut,
   joinPage,
   plain,
   prefixed,
   readCappedText,
   readU32,
   securePage,
+  spaceGoneUntil,
+  spacePutAllowed,
   u32Bytes,
 } from "../src/shared.ts";
 
 const MAX_PUSH_BODY = 64 * 1024;
 const DEFAULT_PUSH_UPSTREAM = "https://relay.botkins.app";
 // The Worker's limits (wrangler.jsonc), per network and per minute.
-const LIMITS = { sockets: 30, requests: 120, invites: 20 };
+const LIMITS = { sockets: 30, requests: 120, invites: 20, spaces: 60 };
 const WINDOW_MS = 60_000;
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ event, ...fields }));
@@ -122,6 +132,103 @@ class Invites {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     writeFileSync(this.file + ".tmp", JSON.stringify(Object.fromEntries(this.cards)), { mode: 0o600 });
     renameSync(this.file + ".tmp", this.file);
+  }
+}
+
+/**
+ * The sealed copies of spaces shared by link, by share id: the Worker's Space and SpaceOwner. The bytes
+ * are opaque here. Each copy is one file, and spaces.json holds when each was signed and ends, and the
+ * signed time of each recent DELETE, so a restart keeps them.
+ */
+class Spaces {
+  constructor(dir) {
+    this.dir = dir;
+    /** share id → { owner, time, expiresAt, size, body? } (`body` only without a folder). */
+    this.copies = new Map();
+    /** share id → the signed time (seconds) of its last DELETE. */
+    this.gone = new Map();
+    /** owner key → the minute's count of puts. What it holds is counted from `copies`. */
+    this.puts = new Map();
+    if (!dir) return;
+    try {
+      const saved = JSON.parse(readFileSync(join(dir, "spaces.json"), "utf8"));
+      for (const [id, copy] of Object.entries(saved.copies ?? {})) this.copies.set(id, copy);
+      for (const [id, time] of Object.entries(saved.gone ?? {})) this.gone.set(id, time);
+    } catch {
+      // No file yet, or one that can't be read: start empty.
+    }
+    this.sweep();
+  }
+  file(id) {
+    return join(this.dir, "spaces", id + ".bin");
+  }
+  held(id) {
+    const copy = this.copies.get(id);
+    return copy && copy.expiresAt > Date.now() ? copy : null;
+  }
+  goneAt(id) {
+    const time = this.gone.get(id);
+    return time !== undefined && spaceGoneUntil(time) > Date.now() ? time : null;
+  }
+  read(id) {
+    const copy = this.held(id);
+    if (!copy) return null;
+    if (!this.dir) return copy.body;
+    try {
+      const body = readFileSync(this.file(id));
+      return body.length === copy.size ? body : null;
+    } catch {
+      return null;
+    }
+  }
+  /** 204, 409 when the copy is not newer than what is held or was taken back, 429 when the computer has too many or puts too often. */
+  put(id, { owner, body, expiresAt, time }) {
+    const now = Date.now();
+    const live = Object.fromEntries([...this.copies].filter(([, copy]) => copy.owner === owner && copy.expiresAt > now).map(([key, copy]) => [key, copy.expiresAt]));
+    const admitted = admitSpace({ live, puts: this.puts.get(owner) }, id, expiresAt, now);
+    if (!admitted) return 429;
+    this.puts.set(owner, admitted.puts);
+    if (!spacePutAllowed(this.held(id)?.time ?? null, this.goneAt(id), time)) return 409;
+    if (this.dir) {
+      mkdirSync(join(this.dir, "spaces"), { recursive: true, mode: 0o700 });
+      writeFileSync(this.file(id) + ".tmp", body, { mode: 0o600 });
+      renameSync(this.file(id) + ".tmp", this.file(id));
+    }
+    this.copies.set(id, { owner, time, expiresAt, size: body.length, ...(!this.dir && { body: Buffer.from(body) }) });
+    this.save();
+    return 204;
+  }
+  /** 204, 404 when nothing was held, 409 when the DELETE is not later than the copy. */
+  delete(id, time) {
+    const copy = this.held(id);
+    if (copy && time <= copy.time) return 409;
+    this.gone.set(id, Math.max(this.goneAt(id) ?? 0, time));
+    this.drop(id);
+    this.save();
+    return copy ? 204 : 404;
+  }
+  drop(id) {
+    this.copies.delete(id);
+    if (this.dir) rmSync(this.file(id), { force: true });
+  }
+  sweep() {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, copy] of this.copies) {
+      if (copy.expiresAt > now) continue;
+      this.drop(id);
+      changed = true;
+    }
+    for (const [id, time] of this.gone) if (spaceGoneUntil(time) <= now) changed = this.gone.delete(id) || changed;
+    for (const [owner, puts] of this.puts) if (now - puts.start >= WINDOW_MS) this.puts.delete(owner);
+    if (changed) this.save();
+  }
+  save() {
+    if (!this.dir) return;
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    const file = join(this.dir, "spaces.json");
+    writeFileSync(file + ".tmp", JSON.stringify({ copies: Object.fromEntries(this.copies), gone: Object.fromEntries(this.gone) }), { mode: 0o600 });
+    renameSync(file + ".tmp", file);
   }
 }
 
@@ -201,12 +308,17 @@ function loadQrSource(file) {
  *                  Without one, the socket's own address is used.
  *   limits         false turns the per-network limits off (tests from one address)
  *   qrFile         the vendored QR generator for the pairing page
+ *   botkinsDir     the folder of Botkin pictures a shared space's page shows (the phone app's assets/botkins)
  */
-export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, fetch = globalThis.fetch } = {}) {
+export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, botkinsDir, fetch = globalThis.fetch } = {}) {
   const invites = new Invites(dataDir ? join(dataDir, "invites.json") : null);
-  const sweeper = setInterval(() => invites.sweep(), WINDOW_MS);
+  const spaces = new Spaces(dataDir || null);
+  const sweeper = setInterval(() => (invites.sweep(), spaces.sweep()), WINDOW_MS);
   sweeper.unref();
-  const limiters = { sockets: new Limiter(LIMITS.sockets), requests: new Limiter(LIMITS.requests), invites: new Limiter(LIMITS.invites) };
+  const limiters = { sockets: new Limiter(LIMITS.sockets), requests: new Limiter(LIMITS.requests), invites: new Limiter(LIMITS.invites), spaces: new Limiter(LIMITS.spaces) };
+  const spacePageScript = readFileSync(new URL("../src/space-page.js.txt", import.meta.url), "utf8");
+  const spaceFrameScript = readFileSync(new URL("../src/space-frame.js.txt", import.meta.url), "utf8");
+  const pictures = botkinsDir ?? fileURLToPath(new URL("../../assets/botkins", import.meta.url));
   const allowed = (kind, network) => !limits || limiters[kind].allow(network);
   const qrSource = loadQrSource(qrFile ?? fileURLToPath(new URL("../../link-host/vendor/qrcode.mjs", import.meta.url)));
   /** name → Room. A room is dropped once it has no socket and nothing left to remember. */
@@ -688,6 +800,38 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     return plain("Not found", 404);
   }
 
+  /** A space's sealed copy: put and taken back by its computer, read by anyone with the link. */
+  async function space(request, network, shareId) {
+    if (!allowed("requests", network)) return plain("Too many requests", 429);
+    if (!BASE64URL_22.test(shareId)) return plain("Not found", 404);
+    if (request.method === "GET") {
+      if (!allowed("spaces", network)) return plain("Too many requests", 429);
+      const body = spaces.read(shareId);
+      if (!body) return plain("Not found", 404);
+      return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+    }
+    const status = { 204: () => new Response(null, { status: 204 }), 404: () => plain("Not found", 404), 409: () => plain("Conflict", 409), 429: () => plain("Too many requests", 429) };
+    if (request.method === "PUT") {
+      const checked = await checkSpacePut(request, shareId);
+      return checked instanceof Response ? checked : status[spaces.put(shareId, checked)]();
+    }
+    if (request.method === "DELETE") {
+      const checked = await checkSpaceDelete(request, shareId);
+      return checked instanceof Response ? checked : status[spaces.delete(shareId, checked.time)]();
+    }
+    return plain("Not found", 404);
+  }
+
+  /** A Botkin picture for a shared space's page. Only a plain name: nothing else in the folder is reachable. */
+  function picture(name) {
+    if (!/^[a-z0-9]+-[a-z]+\.webp$/.test(name)) return plain("Not found", 404);
+    try {
+      return new Response(readFileSync(join(pictures, name)), { headers: { "content-type": "image/webp", "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff" } });
+    } catch {
+      return plain("Not found", 404);
+    }
+  }
+
   /** Everything that is not a new socket, as the Worker answers it. */
   async function answer(request, network) {
     const url = new URL(request.url);
@@ -695,6 +839,8 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       if (!allowed("requests", network)) return Response.json({ error: "rate_limited" }, { status: 429 });
       return forwardPush(request);
     }
+    const spaceRoute = SPACE_ROUTE.exec(url.pathname);
+    if (spaceRoute) return space(request, network, spaceRoute[1]);
     const inviteRoute = INVITE_ROUTE.exec(url.pathname);
     if (inviteRoute) return invite(request, network, inviteRoute[1]);
     if (!allowed("requests", network)) return plain("Too many requests", 429);
@@ -703,6 +849,10 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     if (url.pathname === "/v1/health") return Response.json({ ok: true });
     if (url.pathname === "/join") return joinPage();
     if (url.pathname === "/pair") return pairPage(qrSource);
+    if (url.pathname === "/s/frame") return spaceFrame(spaceFrameScript);
+    if (url.pathname.startsWith("/s/botkin/")) return picture(url.pathname.slice("/s/botkin/".length));
+    const page = SPACE_PAGE_ROUTE.exec(url.pathname);
+    if (page) return BASE64URL_22.test(page[1]) ? spacePage(spacePageScript) : plain("Not found", 404);
     const route = ROUTE.exec(url.pathname);
     if (!route || !ROOM_NAME.test(route[2])) return plain("Not found", 404);
     return plain("Expected a WebSocket", 426);
@@ -782,6 +932,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     clientIpHeader: process.env.CLIENT_IP_HEADER || undefined,
     limits: process.env.RATE_LIMITS !== "off",
     qrFile: process.env.QR_FILE || undefined,
+    botkinsDir: process.env.BOTKINS_DIR || undefined,
   });
   server.listen(port, process.env.HOST || "0.0.0.0", () => log("listening", { code: port }));
   for (const signal of ["SIGTERM", "SIGINT"]) process.once(signal, () => server.close(() => process.exit(0)));

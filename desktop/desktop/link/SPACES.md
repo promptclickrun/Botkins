@@ -72,9 +72,12 @@ team.spaces[spaceId] = {
   access: "private" | "members" | "team" | "link";
   grants: { id: string; can: "view" | "edit" }[];   // access "members": person ids, "owner" allowed
   teamCan: "view" | "edit";                          // access "team" or "link": what every person may do
-  share?: { id: string; salt: string; key: string; createdAt: number; putAt?: number };   // the link, see "Share by link"
+  share?: { id: string; salt: string; key: string; createdAt: number;     // the link, see "Share by link"
+            putAt?: number; rev?: number; until?: number; relay?: string };  // its copy: when it was last put, of which `rev`, when it ends, on which relay
 };
-team.spaceCopies: { id: string; relay: string }[];   // copies still to delete from a relay
+team.spaceCopies: { id: string; salt: string; relay: string;              // copies still to take back from a relay
+                    space?: string; after?: number; until?: number;       // the space it was of, when it was last put, when it ends by itself
+                    key?: { publicKey: string; privateKey: string } }[];  // the relay key it was put with, when that key was replaced since
 team.linkSharing: boolean;                           // "Members may share by link". Off at first.
 team.views[person].spaces = {                        // for every person, the owner too
   order: string[]; pinned: string[];
@@ -188,7 +191,8 @@ type SpaceSummary = {
   can: "own" | "edit" | "view";                  // from spaceCan. A member's role narrows what each allows (team.me).
   people?: { id: string; name: string; can: "view" | "edit" }[];   // access "members"
   teamCan?: "view" | "edit";
-  link?: string;                                 // to the maker and the owner
+  link?: string;                                 // to the maker and the owner; absent while links are off
+  linkState?: "leaving" | "off";                 // to the maker and the owner: an earlier link's copy is still being taken back; or shared by link while the relay is off
   projectId?: string;                            // owner devices only
   count: number;                                 // panels and open cards the person is sent
   changed: number;                               // of those, changed since the person last opened it (99 at most)
@@ -249,6 +253,7 @@ What a device's call gets from the link by itself, the window's own call has to 
 
 - `spaceContent(principal, answer, state)`: the app's `spaces.read` answer as that person is sent it, with `seenAt`. For the window, `principal` is `{ kind: "owner" }`.
 - `spaceRemoved(id)`: after the window's own `spaces.remove`. The sharing goes, and a link's copy leaves the relay.
+- `teamForApp()`: the team as an app that runs apart from the link may know it (the server host's workspace container): `{ name, owner, roles, groups, members: { id, name, groupId }[], chats, spaces: { [id]: { access, grants, teamCan } } }`. It is enough for the pure `spaceCan`, `chatPeople`, `inChat` and a role check. It never holds a link's `share` (its key opens the public copy), an invite's code, a device or a person's own view.
 - A space made in the window is pinned for the owner by the app, with `spacesFor("owner")` and `arrangeSpaces("owner", …)`, as the link does for a device.
 
 **Sentences the link answers with**, shown as they come: "This space no longer exists.", "This panel no longer exists.", "This item no longer exists.", "You can look at this space, not change it.", "Only the person who made this space can do that.", "The owner hasn't turned on sharing by link for members.", "Turn on the relay on your computer to share by link.", "That person's role can't open spaces. Change their role in Team settings first.", "That person is no longer on the team.", "This space isn't shared by link.", "Choose who can open this space.", "Choose Off, Once a day or Every change."
@@ -284,22 +289,29 @@ type SpaceSnapshot = {
 - **Sealing**: `body = nonce(12) || ciphertext || tag(16)`, AES-256-GCM over the gzip of the JSON, with `aad = "botkins-space-v1:" + shareId`. AES-GCM, not the link's ChaCha20, because a browser's WebCrypto has it and Node and Electron do too. The page refuses a copy that unpacks to more than 32 MiB.
 - **Size**: `body` is at most 4 MiB. Over that, the app leaves out the largest `html` pages first and marks those panels `left: "size"`; the page says "This panel is too large to share by link."
 - **Relay routes**, signed with the host's relay key as the invite directory is:
-  - `PUT /v1/spaces/<shareId>`, body `body` as bytes, headers `x-botkins-key`, `x-botkins-time`, `x-botkins-sig`, `x-botkins-salt`, `x-botkins-expires`. Signed string: `botkins-relay-space-v1:<room>:<shareId>:<expiresAt>:<base64url(SHA-256(body))>:<time>`. `expiresAt` at most 7 days ahead. Refused when `shareId` does not come from the key and salt, or when `time` is not later than that of the copy it holds. 204.
-  - `DELETE /v1/spaces/<shareId>`, with the key, time, salt and signature over `botkins-relay-space-del-v1:<room>:<shareId>:<time>`. Refused when `time` is not later than the held copy's. 204, or 404.
+  - `PUT /v1/spaces/<shareId>`, body `body` as bytes, headers `x-botkins-key`, `x-botkins-time`, `x-botkins-sig`, `x-botkins-salt`, `x-botkins-expires`. Signed string: `botkins-relay-space-v1:<room>:<shareId>:<expiresAt>:<base64url(SHA-256(body))>:<time>`. `time` is in seconds, `expiresAt` in milliseconds and at most 7 days ahead. 204. Refused: 403 when `shareId` does not come from the key and salt (checked before any of the body is read), 401 for a signature that does not hold, 413 over 4 MiB, 409 when `time` is not later than that of the copy it holds or of the last DELETE, 429 over the key's limits.
+  - `DELETE /v1/spaces/<shareId>`, with the key, time, salt and signature over `botkins-relay-space-del-v1:<room>:<shareId>:<time>`. 204, or 404 when nothing was held. 409 when `time` is not later than the held copy's.
+  - **The relay remembers a DELETE's time for ten minutes**, also when nothing was held. A PUT that was on its way when its DELETE arrived was signed earlier, so it is refused and cannot put the space out again. After ten minutes no PUT that old can still be signed (a signature holds for five).
   - `GET /v1/spaces/<shareId>` → `body`, `cache-control: no-store`, or 404. Public. Its own rate limit, 60 a minute for each network.
   - `GET /s/<shareId>` → the page. The same page for every id; an id that is not 22 base64url characters gets 404.
   - `GET /s/frame` → the empty document an app panel runs in (below).
+  - `GET /s/botkin/<head>-<palette>.webp` → a Botkin's picture, for the page. The phone app's own files; nothing else in that folder is served.
   - A copy is kept in pieces under the store's per-value limit, read and written as bytes. One host key holds at most 100 live copies and puts at most 30 a minute; more is refused with 429.
-- **When the host publishes**: when the space is first shared by link; after a change, at most once every 20 seconds for each space; and once a day, with a new `expiresAt` 7 days ahead. So a host that is gone leaves nothing behind after a week. On start and when the relay comes on it puts every link's copy out again (as `syncInvites` does).
-- **Taking a link back must not fail quietly.** When a space stops being shared by link, gets a new link, is deleted, or its maker is removed, the link host cancels any publish that is waiting, adds the copy to `team.spaceCopies`, and tries the DELETE until the relay answers 204 or 404: at once, then at growing gaps, and at every start. The sheet says "Taking the link back…" until then.
-- **Relay off or host locked**: `link.spaces.share` with `"link"` is refused: "Turn on the relay on your computer to share by link." When the relay is switched off, the host deletes its copies first. A link-shared space then keeps its level, has no `link`, and its sheet says "Links are off while the relay is off."
+- **When the host publishes** (`link-host/space-links.mjs`; everything is worked out again from what is saved, so it is the same after a restart): when the space is first shared by link; after its `rev` changed, 20 seconds after its last copy at the earliest; and once a day, with a new `expiresAt` 7 days ahead. So a host that is gone leaves nothing behind after a week. A copy the relay did not take is tried again after 5 seconds, 15 seconds, a minute, 5 minutes, then every 30 minutes.
+- **Every request for one link is signed later than the one before**, so the relay's order is the host's order.
+- **Taking a link back must not fail quietly.** When a space stops being shared by link, gets a new link, is deleted, or its maker is removed, the copy joins `team.spaceCopies`. The link host waits for a PUT of it that is on its way, then tries the DELETE until the relay answers 204 or 404 (or 403: not this key's to take back): at once, then at the gaps above, and at every start. A copy whose `until` has passed ended by itself and is dropped. While a space has a copy in that list, its summary says `linkState: "leaving"` and the sheet says "Taking the link back…".
+- **Relay off or host locked**: `link.spaces.share` with `"link"` is refused: "Turn on the relay on your computer to share by link." When the relay is switched off, the host takes its copies back (over plain HTTPS, which needs no seat on the relay). A link-shared space then keeps its level and its link's id and key, has no `link`, and says `linkState: "off"`: "Links are off while the relay is off." Switched on again, the same link works again.
+- **A new relay key** (Reset on the computer) makes every link a new one, since a link's id belongs to the key. The old copies are taken back with the old key, which is kept beside each in `team.spaceCopies` only until the relay says it is gone or the copy has ended.
+- **Another relay address**: the copies on the old relay are taken back there, and the links, now at the new address, are put out there.
 - **The page** draws the space as the apps do: the name, "Shared from <from> · Updated 5m", the panels at their sizes, each with its bot's Botkin and name, cards for Feed, Ideas and Goals. Ink theme, light or dark from the browser. A quiet last line: "Made with Botkins", a link to botkins.app.
   - Its policy: `default-src 'none'; script-src 'nonce-…'; style-src 'nonce-…'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, with the `/join` page's other headers.
   - Every string from a copy is written as text. Markdown is drawn by the page's own small renderer, with no raw HTML and only `http` and `https` links.
   - **An app panel** runs in `<iframe sandbox="allow-scripts" src="/s/frame">`. `/s/frame` is served with the custom-view policy as a header (`FRAME_CSP` in `mobile/src/ui/frame.ts`) plus `sandbox allow-scripts; frame-ancestors 'self'`, so it has no origin of its own however it is opened and cannot read the key or the page. It takes one message, only from its parent, holding the panel's HTML, data and state; it removes what `FRAME_GUARD` removes, sets up `window.botkins`, then writes the HTML. The page listens only to its own frames. `getData`, `theme` and `state.get` work. `state.set` and `sendAnswer` answer `false`. `openLink` asks first and opens `http` and `https` only.
   - Known limit: a browser may look up a name a page mentions before the policy applies (DNS prefetch is outside it), so a panel's author could learn that a link was opened. The same holds for a custom view in the apps.
   - A bot with its own colors is drawn in its character's original ones, as the Live Activity does.
-  - A copy that is gone: "This space is no longer shared." A key that does not open it: "This link isn't complete. Ask for it again."
+  - A view's `openLink` shows a line under the panel with the whole address, **Open link** and **Dismiss**. Nothing opens until the person presses the link.
+  - A copy that is gone: "This space is no longer shared." A key that does not open it: "This link isn't complete. Ask for it again." The relay did not answer, or answered too many requests: "This space couldn't be loaded. Try again in a minute." A copy that unpacks to more than 32 MiB: "This space is too large to show here."
+  - `frame-src 'self'` on the page also holds a panel's frame to this relay: a panel's page that sends its own frame elsewhere is stopped by the browser.
 - The self-hosted Node relay (`relay/node`) gets the same routes.
 
 ## Notifications

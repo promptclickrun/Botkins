@@ -15,3 +15,9 @@ interface Env {
   /** Tests only: replaces both Apple hosts, and adds an `x-botkins-apns-env` header. Unset in wrangler.jsonc. */
   APNS_HOST?: string;
 }
+
+// The shared-space page's scripts are plain files, bundled as text (wrangler's own rule for *.txt).
+declare module "*.txt" {
+  const text: string;
+  export default text;
+}
