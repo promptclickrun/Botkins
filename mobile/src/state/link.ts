@@ -268,6 +268,14 @@ export async function switchComputer(serverId: string) {
   await saveIndex().catch(() => {});
 }
 
+/** An App Intent may run before a scene exists. Read its pairing without starting the UI or changing its computer. */
+export async function shortcutLink(host?: string) {
+  const { kept: saved } = await readSaved();
+  const pairing = host ? saved.list.find(item => item.serverId === host) : currentOf(saved);
+  if (!pairing) throw new Error(host ? "This computer is no longer paired." : "Open Botkins and pair with your computer first.");
+  return { host: pairing.serverId, name: pairing.name, link: new LinkClient(pairing, { fetch: fetcher, onState() {}, onParts() {} }) };
+}
+
 /**
  * Makes one call to every paired computer that is not the one in use, each over a link of its own
  * that is closed again. For what all of them have to hear (notifications were turned off). A

@@ -64,7 +64,7 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
   }
   if (event.type !== "turn" || !mine) return null;
   const { chat, run } = event;
-  if (!run || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
+  if (!run || run.notify === false || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
   const failed = run.status !== "Completed";
   const routine = run.scheduleId != null || run.trigger === "scheduled";
   if (routine && run.status === "Completed" && run.noOutput === true) return null;

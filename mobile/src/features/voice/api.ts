@@ -5,6 +5,7 @@ import { useDictationImpl } from "./dictation";
 import { canRecognize, canRecord } from "./native";
 import { useSttProvider, useVoiceSettings, useVoiceSupported, voiceSettings, voiceSupported } from "./state";
 import { speakText, stopSpeech, useSpeakingNow } from "./tts";
+import { startTalk } from "./talk";
 
 export type Dictation = {
   /** Dictation can be used: the phone has speech recognition, or the computer has a provider set. */
@@ -52,6 +53,12 @@ export function useLiveVoiceReady(): boolean {
   const supported = useVoiceSupported();
   const voice = useVoiceSettings();
   return supported && !!voice?.live.provider;
+}
+
+/** The chat's voice button and the voice shortcut use the same mode. */
+export function startChatVoice(chatId: string, botId: string) {
+  if (voiceSettings()?.live.provider) openLiveVoice(chatId, botId);
+  else startTalk(chatId);
 }
 
 /** Opens live voice with a bot, in a chat. When it isn't set up yet, opens Settings › Voice instead. */

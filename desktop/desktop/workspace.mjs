@@ -731,6 +731,7 @@ export class Workspace {
     const item = {
       id: randomUUID(),
       steer: delivery === "steer",
+      ...(options.notify === false && { notify: false }),
       text: textField(text, 32000, "message"),
       attachments: validateAttachments(options.attachments),
       ...(typeof options.quote === "string" &&
@@ -820,6 +821,7 @@ export class Workspace {
         quote: next.quote,
         mentions: next.mentions,
         author: next.author,
+        ...(next.notify === false && { notify: false }),
       }).catch((err) => console.error("Queued turn:", err.message));
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
@@ -830,6 +832,7 @@ export class Workspace {
         if (chat && !this.closing) {
           const time = Date.now();
           const run = { id: randomUUID(), chatId, title: next.text.slice(0, 100), time, status: "Needs you", detail: err.message, finished: time, ending: "failed" };
+          if (next.notify === false) run.notify = false;
           this.state.runs.unshift(run);
           chat.messages.push({
             role: "user",
