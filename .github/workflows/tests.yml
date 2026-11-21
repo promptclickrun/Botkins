@@ -11,6 +11,13 @@
 # the Compose profile "display"), starts them, and uses them as an owner's phone and a team
 # member's phone do (desktop/test/display-e2e). No other check starts those two containers.
 #
+# The "real runtime" job starts the model runtime that the app ships (the Copilot SDK's own
+# program, from `npm ci`) with a scripted model on this machine, and checks what only that program
+# decides: Botkins' permission question still comes when a skill's header or a plugin's hook asks
+# for a tool with no question, a command that a hook changed is the one that is asked about and
+# the one that runs, and a plugin's hook cannot keep a turn going without end. A new version of
+# the SDK that changes one of these fails here. It needs no account, no token and no network.
+#
 # No job uses a secret, so a pull request from a fork runs the same checks.
 name: Tests
 
@@ -166,3 +173,25 @@ jobs:
           cache-to: type=gha,mode=max,scope=display-workspace
       - name: An owner's phone and a member's phone use the two containers
         run: sh desktop/test/display-e2e/run.sh --no-build
+
+  runtime:
+    name: The real runtime still asks
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      # The runtime is one of the packages that `npm ci` installs. The checks need no build.
+      - run: npm ci
+      # Each script ends with 0 only when every case holds, and its last line is PASSED or
+      # FAILED with the cases (desktop/test/hook-changed-args-live.mjs and
+      # desktop/test/skill-allowed-tools-live.mjs). The model is the script itself, on 127.0.0.1.
+      - name: The permission question, a hook's changed command, and the limits
+        run: npm run test:runtime
