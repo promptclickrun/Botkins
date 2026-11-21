@@ -1,8 +1,8 @@
 // What a plugin starts on this computer: read here, once, for the two that need it.
 //
 //  - The description (desktop/plugin-catalog.mjs) reads a plugin's files before it is installed,
-//    and shows the person what it will start: each command, with its words, its folder and the
-//    names of its environment values.
+//    and shows the person what it will start: each command, with its words, its folder and each
+//    environment name with its value as the plugin wrote it.
 //  - The runtime (desktop/plugin-runtime.mjs) reads the installed copy when a session opens, and
 //    starts those things.
 //
@@ -22,6 +22,8 @@ import { join } from "node:path";
 export const MANIFESTS = [".plugin/plugin.json", "plugin.json", ".github/plugin.json", ".github/plugin/plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"];
 /** The tool files that are read when the manifest names none. All that exist are read. */
 export const MCP_FILES = [".mcp.json", "mcp.json", ".claude-plugin/.mcp.json", ".claude-plugin/mcp.json"];
+/** The language-server files. Nothing is started from them: Botkins skips a plugin's language servers, and only their names are shown. The first that exists is read. */
+export const LSP_FILES = ["lsp.json", ".lsp.json", ".claude-plugin/lsp.json"];
 /** The hook files that are tried when the manifest names none. The first that has a `hooks` object is used. */
 export const HOOK_FILES = ["hooks.json", "hooks/hooks.json", ".claude-plugin/hooks.json", ".claude-plugin/hooks/hooks.json"];
 /** The events a hook can be for, and the runtime's name for each. A hook for another event never runs. */
@@ -38,7 +40,7 @@ export const EVENTS = {
   errorOccurred: "onErrorOccurred",
 };
 /** What is shown is shown whole. Longer than this is not started, and a plugin with such a thing is not installed. */
-export const LIMITS = { hookCommand: 4_000, command: 2_000, arg: 4_000, args: 200, cwd: 2_000, name: 200, url: 4_000, value: 8_000, file: 1_000_000 };
+export const LIMITS = { hookCommand: 4_000, command: 2_000, arg: 4_000, args: 200, cwd: 2_000, name: 200, url: 4_000, value: 4_000, file: 1_000_000 };
 /** The values Botkins itself puts in place of ${NAME}. Every other ${NAME} is a setting of the plugin. */
 export const BUILT_IN_VALUES = ["PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA", "BOTKINS_DIR", "BOTKINS_CHAT_ID", "BOTKINS_BOT_ID"];
 export const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
@@ -47,12 +49,13 @@ export const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 export const RESERVED = new Set(["HOME", "PATH", "NODE_PATH", "PWD", "OLDPWD", "PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA", "PATHEXT", "COMSPEC", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "SYSTEMDRIVE", "PROGRAMFILES", "PROGRAMW6432", "PROGRAMDATA", "ELECTRON_RUN_AS_NODE", "PYTHONDONTWRITEBYTECODE"]);
 /**
  * Names that make a program load or run something more than its command says: a shell's start
- * file, a runtime's options and search paths, the loader's libraries. With one of these, a hook
- * shown as `node -v` could run a file of the plugin. A plugin sets none of them, for a hook or
- * for a tool.
+ * file, a runtime's options and search paths, the loader's libraries, a program that git, a
+ * pager or an editor starts. With one of these, a hook shown as `node -v` could run a file of the
+ * plugin. A plugin sets none of them, for a hook or for a tool. They are a second defense: the
+ * description also names each environment name that is not set (`envNotSet`).
  */
-const LOADERS = new Set(["NODE_OPTIONS", "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PROMPT_COMMAND", "PS4", "IFS", "CDPATH", "GLOBIGNORE", "ZDOTDIR", "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "PERL5OPT", "PERL5LIB", "PERLLIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "LUA_INIT", "LUA_PATH", "LUA_CPATH"]);
-const LOADER_STARTS = ["LD_", "DYLD_", "BASH_FUNC_"];
+const LOADERS = new Set(["NODE_OPTIONS", "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PROMPT_COMMAND", "PS4", "IFS", "CDPATH", "GLOBIGNORE", "ZDOTDIR", "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "PERL5OPT", "PERL5LIB", "PERLLIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "LUA_INIT", "LUA_PATH", "LUA_CPATH", "GIT_SSH_COMMAND", "GIT_SSH", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "GIT_EXEC_PATH", "GIT_PAGER", "GIT_EDITOR", "GIT_PROXY_COMMAND", "PAGER", "EDITOR", "VISUAL", "LESSOPEN", "LESSCLOSE", "DOTNET_STARTUP_HOOKS", "CLASSPATH", "BUNDLE_GEMFILE", "XDG_CONFIG_HOME", "NPM_CONFIG_SCRIPT_SHELL"]);
+const LOADER_STARTS = ["LD_", "DYLD_", "BASH_FUNC_", "GIT_CONFIG", "NPM_CONFIG_"];
 /** The names a plugin may not set, for the guide and for the people who write plugins. */
 export const NAMES_NOT_SET = { reserved: [...RESERVED], loaders: [...LOADERS], loaderStarts: LOADER_STARTS };
 /** True for an environment name a plugin may set. */
@@ -158,8 +161,65 @@ function serverEntries(read, manifest) {
   return out;
 }
 
-/** The names of an object's string values that a plugin may set, with each value as written. */
-const named = (value, allowed) => Object.fromEntries(Object.entries(object(value) ?? {}).filter(([key, item]) => allowed(key) && typeof item === "string" && item.length <= LIMITS.value && !item.includes("\0")));
+/**
+ * A header's values as written, name → text. A header that is not text is left out; one too long
+ * to show whole is refused, as for the environment.
+ */
+function headersOf(value) {
+  const entries = [];
+  for (const [key, item] of Object.entries(object(value) ?? {})) {
+    if (key.length > LIMITS.name || key.includes("\0")) return { refused: "a header name is longer than " + LIMITS.name + " characters" };
+    if (typeof item !== "string") continue;
+    if (item.length > LIMITS.value || item.includes("\0")) return { refused: "a header value is longer than " + LIMITS.value + " characters" };
+    entries.push([key, item]);
+  }
+  return { headers: Object.fromEntries(entries) };
+}
+
+/**
+ * What an `env` object sets, as written: `env` is name → value, `envNotSet` is every key that
+ * Botkins does not set (a name it sets itself or that loads code, a bad name, a value that is not
+ * text). A name or a value too long to show whole refuses the thing it is for.
+ */
+function environmentOf(value) {
+  const entries = [];
+  const envNotSet = [];
+  for (const [key, item] of Object.entries(object(value) ?? {})) {
+    if (key.length > LIMITS.name) return { refused: "an environment name is longer than " + LIMITS.name + " characters" };
+    if (!envName(key) || typeof item !== "string") {
+      envNotSet.push(key);
+      continue;
+    }
+    if (item.length > LIMITS.value) return { refused: "an environment value is longer than " + LIMITS.value + " characters" };
+    if (item.includes("\0")) return { refused: "an environment value has a NUL character" };
+    entries.push([key, item]);
+  }
+  return { env: Object.fromEntries(entries), envNotSet };
+}
+
+/** One word of a tool's line as text: text as it is, a finite number or true/false as it is written, or `{ refused }`. */
+function wordOf(arg) {
+  if (typeof arg === "number" && Number.isFinite(arg)) return String(arg);
+  if (typeof arg === "boolean") return String(arg);
+  if (typeof arg !== "string" || arg.includes("\0")) return { refused: "a tool's argument is not text, a number or true/false" };
+  if (arg.length > LIMITS.arg) return { refused: "a tool's argument is longer than " + LIMITS.arg + " characters" };
+  return arg;
+}
+
+/**
+ * The folder a tool starts in: null for the plugin's own folder, an absolute path as written, or a
+ * path below the plugin's own folder in its one form (for example `server/bin`). `{ refused }`
+ * when it is too long, or when a relative path leaves the plugin's folder.
+ */
+function folderOf(value) {
+  if (typeof value !== "string" || value === "") return { cwd: null };
+  if (value.length > LIMITS.cwd) return { refused: "a tool's folder is longer than " + LIMITS.cwd + " characters" };
+  if (value.includes("\0")) return { refused: "a tool's folder has a NUL character" };
+  if (value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)) return { cwd: value };
+  if (value.split("/").every((part) => part === "" || part === ".")) return { cwd: null };
+  const inside = declaredPath(value);
+  return inside ? { cwd: inside } : { refused: "a tool's folder leaves the plugin's own folder" };
+}
 
 /**
  * What one tool of a plugin is: a program to start, an address to reach, or nothing (null).
@@ -172,11 +232,19 @@ function serverPlan(config) {
     const command = text(config.command, LIMITS.command);
     if (!command) return { refused: "a tool's command is longer than " + LIMITS.command + " characters" };
     // Every word of a list is taken or the tool is not started: a line with a word left out is another line.
-    const args = Array.isArray(config.args) ? config.args : [];
-    if (args.length > LIMITS.args || args.some((arg) => text(arg, LIMITS.arg) === null)) return { refused: "a tool's arguments are not at most " + LIMITS.args + " words of at most " + LIMITS.arg + " characters each" };
-    const folder = typeof config.cwd === "string" ? config.cwd : typeof config.workingDirectory === "string" ? config.workingDirectory : null;
-    if (folder !== null && !text(folder, LIMITS.cwd)) return { refused: "a tool's folder is longer than " + LIMITS.cwd + " characters" };
-    return { kind: "local", command, args: [...args], env: named(config.env, envName), cwd: folder || null };
+    const given = Array.isArray(config.args) ? config.args : [];
+    if (given.length > LIMITS.args) return { refused: "a tool has more than " + LIMITS.args + " arguments" };
+    const args = [];
+    for (const arg of given) {
+      const word = wordOf(arg);
+      if (typeof word !== "string") return word;
+      args.push(word);
+    }
+    const { cwd, refused: folderRefused } = folderOf(typeof config.cwd === "string" ? config.cwd : config.workingDirectory);
+    if (folderRefused) return { refused: folderRefused };
+    const { env, envNotSet, refused } = environmentOf(config.env);
+    if (refused) return { refused };
+    return { kind: "local", command, args, env, envNotSet, cwd };
   }
   if (type !== "http" && type !== "sse") return null;
   const url = text(String(config.url ?? config.serverUrl ?? ""), LIMITS.url);
@@ -185,7 +253,9 @@ function serverPlan(config) {
   const declared = config.oauth || config.authentication?.oauth;
   const oauth = declared === true ? {} : object(declared) ? declared : config.oauthClientId ? { clientId: config.oauthClientId } : null;
   const clientId = oauth ? text(oauth.clientId ?? config.oauthClientId, 1_000) : null;
-  return { kind: "remote", type, url, headers: named(config.headers, (key) => key.length <= LIMITS.name && !key.includes("\0")), oauth: oauth ? { ...(clientId && { clientId }) } : null };
+  const { headers, refused } = headersOf(config.headers);
+  if (refused) return { refused };
+  return { kind: "remote", type, url, headers, oauth: oauth ? { ...(clientId && { clientId }) } : null };
 }
 
 /** The object of a plugin's hooks, event → entries, or {}. */
@@ -222,6 +292,8 @@ const COMMAND_KEYS = ["command", "bash", "cmd", "shell", "powershell", "windows"
 const commandFor = (entry, depth = 0) => {
   if (typeof entry === "string") return entry;
   if (!entry || typeof entry !== "object" || depth > 20) return null;
+  // A matcher on any step down is a matcher: the hook never runs, however its commands are wrapped.
+  if (Object.hasOwn(entry, "matcher") || Object.hasOwn(entry, "match")) return null;
   if (entry.hooks) return commandFor(entry.hooks, depth + 1);
   if (entry.commands) return commandFor(entry.commands, depth + 1);
   return COMMAND_KEYS.map((key) => entry[key]).find((value) => typeof value === "string" && value.trim()) ?? null;
@@ -230,10 +302,12 @@ const commandFor = (entry, depth = 0) => {
 /**
  * Everything a plugin starts, from its files:
  *   manifestPath, manifest   the manifest that counts (manifest is null when it cannot be read)
- *   servers   [{ name, kind: "local", command, args, env, cwd } | { name, kind: "remote", type, url, headers, oauth }]
- *             `env` and `headers` are name → the value as written (it can hold ${SETTING}); `cwd` is null for the plugin's own folder
- *   hooks     [{ event, command, env, timeoutMs }], in the order they run
- *   refused   why the plugin cannot be shown whole (a command too long): such a thing is in neither list
+ *   servers   [{ name, kind: "local", command, args, env, envNotSet, cwd } | { name, kind: "remote", type, url, headers, oauth }]
+ *             `env` and `headers` are name → the value as written (it can hold ${SETTING}); `args` are all text;
+ *             `envNotSet` lists each key of the plugin's `env` that Botkins does not set;
+ *             `cwd` is null for the plugin's own folder, an absolute path as written, or a path below the plugin's own folder ("server/bin")
+ *   hooks     [{ event, command, env, envNotSet, timeoutMs }], in the order they run
+ *   refused   why the plugin cannot be shown whole (a command or value too long, a folder that leaves the plugin): such a thing is in neither list
  * The runtime starts what is in `servers` and `hooks` and nothing more of a plugin.
  */
 export function pluginStarts(read) {
@@ -262,8 +336,13 @@ export function pluginStarts(read) {
         refused.push("a hook's command is longer than " + LIMITS.hookCommand + " characters");
         continue;
       }
+      const { env, envNotSet, refused: envRefused } = environmentOf(object(entry)?.env);
+      if (envRefused) {
+        refused.push(envRefused);
+        continue;
+      }
       const seconds = Number(object(entry)?.timeoutSec || 10);
-      entries.push({ event, command, env: named(object(entry)?.env, envName), timeoutMs: Math.max(250, Math.min(30_000, (Number.isFinite(seconds) ? seconds : 10) * 1_000)) });
+      entries.push({ event, command, env, envNotSet, timeoutMs: Math.max(250, Math.min(30_000, (Number.isFinite(seconds) ? seconds : 10) * 1_000)) });
     }
     // The same event under two spellings: the later one is the one that runs.
     if (entries.length) byEvent.set(event, entries);
@@ -271,11 +350,28 @@ export function pluginStarts(read) {
   return { manifestPath, manifest, servers: [...byName.values()], hooks: [...byEvent.values()].flat(), refused };
 }
 
+/** The names of a plugin's language servers, sorted. Nothing is started from them: Botkins skips a plugin's language servers, and the description only lists them. A file that is not JSON gives none. */
+export function lspNames(read) {
+  for (const file of LSP_FILES) {
+    const source = read(file);
+    if (source === null) continue;
+    const data = parse(source);
+    const servers = data && Object.hasOwn(data, "lspServers") ? object(data.lspServers) : data;
+    return Object.keys(servers ?? {}).filter((name) => name.length <= LIMITS.name).sort().slice(0, 100);
+  }
+  return [];
+}
+
 const settingsIn = (value) => [...String(value).matchAll(PLACEHOLDER)].map((match) => match[1]).filter((key) => !BUILT_IN_VALUES.includes(key));
+
+const shownEnv = (env) => Object.entries(env).map(([name, value]) => ({ name, value }));
 
 /**
  * The same, as a person is shown it (`contents.mcpServers` and `contents.hooks` of plugins-v1),
- * with no value: a command's words, its folder, and the names that get a value.
+ * a command's words, its folder, and each environment name with its value as the plugin wrote it
+ * (it can hold ${SETTING}; a secret is never there, it comes only from the settings). A header is
+ * shown by name only.
+ *   envNotSet   (only when not empty) the names the plugin asks for that Botkins does not set
  *   sentTo   setting → where its value goes: [{ tool, env } | { tool, header, url } | { hook, env }]
  */
 export function describeStarts(starts) {
@@ -286,19 +382,19 @@ export function describeStarts(starts) {
   const mcpServers = starts.servers.map((server) => {
     if (server.kind === "local") {
       for (const [name, value] of Object.entries(server.env)) goes(value, { tool: server.name, env: name });
-      return { name: server.name, kind: "local", command: server.command, args: [...server.args], env: Object.keys(server.env), ...(server.cwd && { cwd: server.cwd }) };
+      return { name: server.name, kind: "local", command: server.command, args: [...server.args], env: shownEnv(server.env), ...(server.envNotSet?.length && { envNotSet: [...server.envNotSet] }), ...(server.cwd && { cwd: server.cwd }) };
     }
     for (const [name, value] of Object.entries(server.headers)) goes(value, { tool: server.name, header: name, url: server.url });
     return { name: server.name, kind: "remote", url: server.url, headers: Object.keys(server.headers), ...(server.oauth && { oauth: true }) };
   });
   const hooks = starts.hooks.map((hook) => {
     for (const [name, value] of Object.entries(hook.env)) goes(value, { hook: hook.event, env: name });
-    return { event: hook.event, command: hook.command, env: Object.keys(hook.env), timeoutSec: hook.timeoutMs / 1_000 };
+    return { event: hook.event, command: hook.command, env: shownEnv(hook.env), ...(hook.envNotSet?.length && { envNotSet: [...hook.envNotSet] }), timeoutSec: hook.timeoutMs / 1_000 };
   });
   return { mcpServers, hooks, sentTo };
 }
 
-const START_WARNINGS = { hooks: "Runs a command on your computer through plugin hooks.", local: "Runs a local MCP server on your computer.", remote: "Connects to a remote MCP server." };
+const START_WARNINGS = { hooks: "Runs a command on your computer through plugin hooks.", local: "Runs a local MCP server on your computer.", remote: "Connects to a remote MCP server.", envNotSet: "Botkins does not set some environment names that this plugin asks for. Its tools or hooks may not work." };
 /** A description's warnings, with the sentences about what the plugin starts made again from its lists. */
 export function startWarnings(mcpServers, hooks, others = []) {
   return [
@@ -306,5 +402,25 @@ export function startWarnings(mcpServers, hooks, others = []) {
     ...(hooks.length ? [START_WARNINGS.hooks] : []),
     ...(mcpServers.some((server) => server.kind === "local") ? [START_WARNINGS.local] : []),
     ...(mcpServers.some((server) => server.kind === "remote") ? [START_WARNINGS.remote] : []),
+    ...([...mcpServers, ...hooks].some((item) => item.envNotSet?.length) ? [START_WARNINGS.envNotSet] : []),
   ];
+}
+
+/**
+ * Which of a plugin's files go on to the runtime, in the folder that Botkins writes for a
+ * session (desktop/plugin-runtime.mjs, `project`). The description's lists of skills, agents and
+ * commands are these files and no others, and the folder holds these files and no others.
+ *   - only below `skills/`, `agents/` and `commands/`;
+ *   - no part of the path starts with "." or is `node_modules`;
+ *   - at most ten parts (the top folder, eight folders below it, the file);
+ *   - at most 1,000,000 bytes;
+ *   - below `agents/`, only a Markdown file (`.md`).
+ * `path` is a path of the plugin with "/" between its parts; `bytes` is the file's size.
+ */
+export function handedOn(path, bytes) {
+  const parts = String(path).split("/");
+  if (parts.length < 2 || parts.length > 10 || !["skills", "agents", "commands"].includes(parts[0])) return false;
+  if (parts.some((part) => !part || part.startsWith(".") || part === "node_modules")) return false;
+  if (!(Number(bytes) <= 1_000_000)) return false;
+  return parts[0] !== "agents" || /\.md$/i.test(parts.at(-1));
 }

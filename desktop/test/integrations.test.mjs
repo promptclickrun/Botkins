@@ -1,7 +1,7 @@
 // App-wide skills and MCP servers (desktop/integrations.mjs), and each bot's memory (desktop/memory.mjs).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { parseServers, parseSkill, serverField, slug } from "../desktop/integrations.mjs";
@@ -184,6 +184,22 @@ test("skills are made in Botkins, copied or linked from folders, and switched of
   assert.ok(existsSync(join(team, "standup", "SKILL.md")));
   assert.deepEqual(ws.integrations.skills().filter((s) => s.origin === "folder"), []);
   assert.throws(() => ws.integrations.removeFolder("nope"), /no longer linked/);
+});
+
+test("a linked folder of skills that becomes a plugin is no longer handed to the runtime, and stays linked", (t) => {
+  const { ws, dir } = setup(t);
+  const team = join(dir, "team-skills");
+  skillFolder(team, "standup");
+  ws.integrations.addFromFolder(team);
+  const linked = realpathSync(team);
+  assert.ok(ws.integrations.skillsFor(ws.bot("pip")).directories.includes(linked));
+  // A manifest appears in it later: it is looked at again at each call.
+  writeFileSync(join(team, "plugin.json"), "{}");
+  assert.ok(!ws.integrations.skillsFor(ws.bot("pip")).directories.includes(linked));
+  assert.deepEqual(ws.integrations.folders().folders.map((f) => f.path), [linked]);
+  // The manifest goes: the folder is handed on again.
+  rmSync(join(team, "plugin.json"));
+  assert.ok(ws.integrations.skillsFor(ws.bot("pip")).directories.includes(linked));
 });
 
 test("SKILL.md front matter reads plain, quoted and folded values", () => {

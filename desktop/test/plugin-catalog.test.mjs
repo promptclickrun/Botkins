@@ -141,3 +141,20 @@ test("live awesome-copilot smoke is opt-in", { skip: !process.env.PLUGIN_CATALOG
   assert.ok(materialized.folder.startsWith(join(await realpath(root), "plugins")));
   assert.equal((await readFile(join(materialized.folder, "skills", "breakdown-epic-arch", "SKILL.md"))).length > 0, true);
 });
+
+test("a preview shows each environment value as written, says which names are not set, and lists only the files that go on", async (t) => {
+  const { plugin } = await fixture(t);
+  await writeFile(join(plugin, ".mcp.json"), JSON.stringify({
+    mcpServers: { local: { command: "node", args: ["--port", 3000], env: { MODE: "fast", GIT_SSH_COMMAND: "sh -c x" }, cwd: "server" } },
+  }));
+  await mkdir(join(plugin, "agents"), { recursive: true });
+  await writeFile(join(plugin, "agents", "a.md"), "A");
+  await writeFile(join(plugin, "agents", "notes.txt"), "not Markdown");
+  const parsed = inspectPlugin(plugin);
+  assert.deepEqual(parsed.contents.mcpServers, [{
+    name: "local", kind: "local", command: "node", args: ["--port", "3000"],
+    env: [{ name: "MODE", value: "fast" }], envNotSet: ["GIT_SSH_COMMAND"], cwd: "server",
+  }]);
+  assert.equal(parsed.warnings.filter((line) => /does not set some environment names/.test(line)).length, 1);
+  assert.deepEqual(parsed.contents.agents, ["agents/a.md"]);
+});

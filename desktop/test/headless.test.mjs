@@ -388,3 +388,39 @@ test("on the two-container host a member's chat, message and turn are the member
   await assert.rejects(workspaceRequest(socket, "call", ["createChat", ["pip"]]), NO_PERSON);
   assert.equal(JSON.stringify(ws.state.chats), before);
 });
+
+test("the link tells the workspace's own list of capabilities, and none while the workspace cannot be reached or after another start of it", async () => {
+  const old = workspaceActions({ ...stubWorkspace().backend, capabilities: ["models-v2", "plugin-starts-v1"] }, () => {});
+  // The same workspace put back from an older image: another epoch, and a list without the new name.
+  const older = workspaceActions({ ...stubWorkspace().backend, capabilities: ["models-v2", "plugins-v1"] }, () => {});
+  let answering = old;
+  let reachable = true;
+  const { backend, refresh } = headlessBackend(async (method, args) => {
+    if (!reachable) throw new Error("connect ENOENT");
+    return answering.dispatch(method, args);
+  }, "test");
+  let changes = 0;
+  backend.subscribe(() => changes++);
+  assert.deepEqual(backend.capabilities, []);
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugin-starts-v1"]);
+  // The workspace cannot be reached: nothing it promised is told, and phones are told it changed.
+  reachable = false;
+  const before = changes;
+  await refresh();
+  assert.deepEqual(backend.capabilities, []);
+  assert.equal(changes, before + 1);
+  // Back with the same epoch and nothing changed in it: the list comes again, because the look asks for a whole answer.
+  reachable = true;
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugin-starts-v1"]);
+  // The workspace put back from an older image answers with its own list: the old name is gone.
+  answering = older;
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugins-v1"]);
+  assert.equal(backend.capabilities.includes("plugin-starts-v1"), false);
+  // Another start that answers with no list at all (it should not): the old list is not kept.
+  answering = { dispatch: async (method, args) => (method === "state" ? { version: "third/1", display: true, team: null } : null) };
+  await refresh();
+  assert.deepEqual(backend.capabilities, []);
+});

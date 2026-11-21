@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { declaredPath, describeStarts, filesReader, pluginStarts, startWarnings } from "./plugin-reading.mjs";
+import { declaredPath, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings } from "./plugin-reading.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
@@ -180,13 +180,20 @@ function githubRefFromUrl(url) {
 
 
 
-function readLocalFiles(root) {
+/**
+ * Every regular file below a folder: Map of path → { bytes, mode }. A link is refused. A `.git`
+ * entry is skipped by default (right for a source folder a person works in); with
+ * `{ git: "refuse" }` it is an error, for an installed copy, where nothing may be named `.git`.
+ */
+function readLocalFiles(root, { git = "skip" } = {}) {
   const realRoot = realpathSync(root);
   const files = new Map();
   let total = 0;
   const visit = (current, prefix = "") => {
     const entries = readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
+      // In a copy, a disk that takes ".GIT" for ".git" would give git that entry too.
+      if (git === "refuse" && entry.name.toLowerCase() === ".git") fail(`Plugin copy contains a .git entry: ${join(prefix, entry.name)}`);
       if (entry.name === ".git") continue;
       const path = join(current, entry.name);
       const info = lstatSync(path);
@@ -233,13 +240,6 @@ function assertNoSymlinkPath(path, stopAt = undefined) {
     if (parent === current) break;
     current = parent;
   }
-}
-
-function locateFile(files, candidates) {
-  for (const candidate of candidates) {
-    if (files.has(candidate)) return { name: candidate, bytes: files.get(candidate).bytes };
-  }
-  return null;
 }
 
 function collectFiles(files, directory) {
@@ -345,6 +345,8 @@ function assertPlainNames(files) {
   const seen = new Map();
   for (const name of files.keys()) {
     if (declaredPath(name) !== name) fail(`Plugin has a file with an unsafe name: ${JSON.stringify(name).slice(0, 200)}`);
+    // A copy with a .git entry is never seen as the reviewed one (verifySnapshot), so it is not made.
+    if (name.split("/").some((part) => part.toLowerCase() === ".git")) fail(`Plugin has a .git entry: ${JSON.stringify(name).slice(0, 200)}`);
     for (let at = name.indexOf("/"); ; at = name.indexOf("/", at + 1)) {
       const path = at < 0 ? name : name.slice(0, at);
       const folded = path.normalize("NFC").toLowerCase();
@@ -373,16 +375,14 @@ function parsePluginFiles(files, folder = undefined) {
   }
   // Where each setting's value goes: the environment names and headers that get it.
   for (const [key, places] of sentTo) config.set(key, { ...config.get(key), sentTo: places });
-  const lspFile = locateFile(files, ["lsp.json", ".lsp.json", ".claude-plugin/lsp.json"]);
-  let lspServers = [];
-  if (lspFile) {
-    const lsp = json(lspFile.bytes, lspFile.name);
-    if (lsp && typeof lsp === "object") lspServers = Object.keys(lsp.lspServers ?? lsp).sort();
-  }
+  // Only the names of language servers are listed. Nothing is started from them.
+  const lspServers = lspNames(filesReader(files));
+  // The files that go on to the runtime, and no others (handedOn is the one rule for them).
+  const handed = (directory) => collectFiles(files, directory).filter((name) => handedOn(name, files.get(name).bytes.length));
   const contents = {
-    skills: collectFiles(files, "skills"),
-    agents: collectFiles(files, "agents"),
-    commands: collectFiles(files, "commands"),
+    skills: handed("skills"),
+    agents: handed("agents"),
+    commands: handed("commands"),
     mcpServers: clone(mcpServers),
     hooks: clone(hooks),
     ...(lspServers.length ? { lspServers } : {}),
@@ -601,7 +601,8 @@ function localPathIsWithin(child, parent) {
  */
 export function verifySnapshot(folder, revision) {
   try {
-    return typeof revision === "string" && hashFiles(readLocalFiles(folder).files) === revision;
+    // A `.git` folder or file in the copy is seen, not skipped: a command shown as `git status` would take its config.
+    return typeof revision === "string" && hashFiles(readLocalFiles(folder, { git: "refuse" }).files) === revision;
   } catch {
     return false;
   }

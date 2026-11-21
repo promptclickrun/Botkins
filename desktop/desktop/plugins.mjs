@@ -32,9 +32,10 @@ const READING = 2;
 /** Why Botkins itself switched a plugin off. The person switches it on again after a look. */
 const HELD_BACK = {
   unseen: "Botkins switched this plugin off. An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts, and switch it on again if you agree.",
+  unread: "Botkins switched this plugin off. Its installed files could not be read, so Botkins cannot show what it starts. Update the plugin to write its files again, then switch it on.",
   linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
 };
-const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Remove the plugin and install it again.";
+const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
 const scoped = (r, id) => r.enabled && (r.bots === "all" || r.bots.includes(id));
 
 // The paired-device router and desktop IPC share the same mutations and credential handling.
@@ -71,7 +72,8 @@ export class Plugins {
     // Each copy is checked once at the start, and a plugin folder that an earlier version linked
     // live becomes an installed plugin. Neither holds up the start of the app.
     this.queue = this.queue.then(async () => {
-      if (this.records.some((row) => !this.intact(row))) this.ws.notify?.();
+      // (Every copy is checked, not only up to the first bad one.)
+      if (this.records.map((row) => this.intact(row)).includes(false)) this.ws.notify?.();
       await this.adoptLinked();
     }).catch(() => {});
   }
@@ -104,25 +106,42 @@ export class Plugins {
     return ok;
   }
   /**
-   * The descriptions kept from before the one reading are made again from the copies. A plugin
-   * that starts a command its old description did not have at all is switched off, with the
-   * reason, until the person has looked: nobody was shown that command.
+   * The descriptions kept from before the one reading are made again from the copies. An old
+   * description showed a local tool by its name and command only, a hook by its event and its
+   * command cut at 300 characters, and a remote tool by its name and address. A plugin that is on
+   * and starts anything beyond that is switched off, with the reason, until the person has
+   * looked: nobody was shown the rest. A copy that cannot be read is not marked as read, so it
+   * is looked at again at the next start.
    */
   reviewOld() {
     let changed = false;
+    // (An item with settings of its own for a program or a command was never shown by an old description.)
+    const extras = (item) => Boolean(item.env?.length || item.envNotSet?.length);
+    const unseen = (fresh, before) => {
+      const tools = before.mcpServers ?? [];
+      const hooks = before.hooks ?? [];
+      const toolUnseen = (tool) =>
+        tool.kind === "local"
+          ? !tools.some((old) => old?.name === tool.name && old.kind === "local" && old.command === tool.command) || Boolean(tool.args?.length || tool.cwd) || extras(tool)
+          : !tools.some((old) => old?.name === tool.name && old.url === tool.url);
+      const hookUnseen = (hook) => !hooks.some((old) => typeof old?.command === "string" && old.command === hook.command) || extras(hook);
+      return fresh.mcpServers.some(toolUnseen) || fresh.hooks.some(hookUnseen);
+    };
     for (const row of this.records) {
       if (row.reading === READING) continue;
       const fresh = this.described(row);
-      if (fresh) {
-        const before = row.preview.contents ?? {};
-        // (An old description cut a hook's command at 300 characters.)
-        const shown = (hook) => (before.hooks ?? []).some((old) => typeof old?.command === "string" && (old.command === hook.command || (old.command.length === 300 && hook.command.startsWith(old.command))));
-        const known = (server) => server.kind !== "local" || (before.mcpServers ?? []).some((old) => old?.name === server.name && old.kind === "local" && old.command === server.command);
-        if (row.enabled && !(fresh.hooks.every(shown) && fresh.mcpServers.every(known))) Object.assign(row, { enabled: false, heldBack: "unseen" });
-        const warnings = startWarnings(fresh.mcpServers, fresh.hooks, row.preview.warnings ?? []);
-        const { warnings: _old, ...preview } = row.preview;
-        row.preview = { ...preview, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks }, ...(warnings.length && { warnings }) };
+      if (!fresh) {
+        if (row.enabled) {
+          Object.assign(row, { enabled: false, heldBack: "unread" });
+          changed = true;
+        }
+        continue;
       }
+      const before = row.preview.contents ?? {};
+      if (row.enabled && unseen(fresh, before)) Object.assign(row, { enabled: false, heldBack: "unseen" });
+      const warnings = startWarnings(fresh.mcpServers, fresh.hooks, row.preview.warnings ?? []);
+      const { warnings: _old, ...preview } = row.preview;
+      row.preview = { ...preview, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks }, ...(warnings.length && { warnings }) };
       row.reading = READING;
       changed = true;
     }
@@ -225,7 +244,14 @@ export class Plugins {
     );
   }
   runtimeRecord(row) {
-    return { id: row.preview.id, folder: row.folder, config: row.preview.config, values: this.values(row) };
+    // The runtime asks again before each hook starts. The app is told the first time the copy is found changed.
+    const intact = () => {
+      const was = this.checked.get(row.folder)?.ok;
+      const ok = this.intact(row);
+      if (!ok && was !== false) this.ws.notify?.();
+      return ok;
+    };
+    return { id: row.preview.id, folder: row.folder, config: row.preview.config, values: this.values(row), intact };
   }
   oauthServers(row) {
     // Manifests are immutable per revision. Snapshotting a streaming chat must not
@@ -276,7 +302,7 @@ export class Plugins {
       status,
       ...(row.heldBack && !row.enabled && { detail: HELD_BACK[row.heldBack] }),
       ...(status === "error" && {
-        detail: unavailable ? "This computer could not open a saved plugin setting." : changedCopy && existsSync(row.folder) ? CHANGED_COPY : "The installed plugin files could not be opened.",
+        detail: unavailable ? "This computer could not open a saved plugin setting." : changedCopy && existsSync(row.folder) ? CHANGED_COPY : row.heldBack === "unread" && !row.enabled ? HELD_BACK.unread : "The installed plugin files could not be opened.",
       }),
       ...(status === "needs-sign-in" && { detail: "Sign in to the plugin’s remote tools on this computer." }),
       limits: limitsFor(preview),
@@ -341,6 +367,13 @@ export class Plugins {
       if (typeof enabled !== "boolean") throw new Error("Choose on or off.");
       // (Switching on is the person's yes after a look: a reason Botkins switched it off for is done with.)
       const { heldBack: _reason, ...row } = this.get(id);
+      if (enabled && row.reading !== READING) {
+        // A copy that could not be read at the start is read again now, not from what was kept.
+        this.descriptions.delete(row.folder);
+        if (!this.described(row)) throw new Error(HELD_BACK.unread);
+        // (The person looks at the fresh description before this yes, so the start does not ask again.)
+        row.reading = READING;
+      }
       if (enabled && !this.intact(row)) throw new Error(CHANGED_COPY);
       this.save({ ...row, enabled });
     });
@@ -360,6 +393,10 @@ export class Plugins {
       );
       const row = { ...before, folder: material.folder, revision: material.revision, preview: material.preview, refs, reading: READING };
       const previousServers = this.knownOAuthServers(before);
+      // The folder is the same one when the source did not change. The files were written again,
+      // so what was cached about the old files is dropped and the copy is checked again.
+      for (const cache of [this.checked, this.descriptions, this.oauthSchemas]) cache.delete(row.folder);
+      if (!this.intact(row)) throw new Error(CHANGED_COPY);
       const currentServers = new Set(this.knownOAuthServers(row).map((server) => server.id));
       this.save(row);
       for (const server of previousServers) {

@@ -9,17 +9,14 @@
 // never started from here.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILT_IN_VALUES, EVENTS, folderReader, PLACEHOLDER, pluginStarts, RESERVED } from "./plugin-reading.mjs";
+import { BUILT_IN_VALUES, EVENTS, folderReader, handedOn, PLACEHOLDER, pluginStarts, RESERVED } from "./plugin-reading.mjs";
 
 const MAX_HOOK_OUTPUT = 256_000;
 const MAX_CONTEXT = 12_000;
 const MAX_PROMPT = 100_000;
-const MAX_FILES = 1_000;
-const MAX_FILE_BYTES = 1_000_000;
-const MAX_PLUGIN_BYTES = 8_000_000;
 const SECRET_NAME = /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL)/i;
 const MCP_LAUNCHER = fileURLToPath(new URL("./plugin-mcp-launcher.mjs", import.meta.url));
 
@@ -238,6 +235,8 @@ function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run
         ...(context.botId && !Object.hasOwn(input, "botId") && { botId: context.botId }),
       };
       for (const hook of entries) {
+        // The installed copy is looked at again before each hook: a hook starts minutes after the session opened.
+        if (plugin.intact?.() === false) break;
         // Built-ins are present in the child environment. Leave their shell placeholders intact
         // so a reviewed command can quote them correctly when paths contain spaces or metacharacters.
         const output = await run(hook.command, currentInput, { cwd: plugin.folder, env: hookEnvironment(expand, builtins, hook.env), timeoutMs: hook.timeoutMs });
@@ -253,16 +252,29 @@ function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run
 }
 
 /**
- * An agent file as Botkins hands it on. The runtime reads the header of an agent file (its front
- * matter), and a header can name tools to start (`mcp-servers`) and hooks of its own. Nobody was
- * shown those, so they do not get there: the header is written again, with the agent's name,
- * its description, its model and the names of the tools it may use, and nothing else. The text
- * below the header stays as it is.
+ * The header of an agent, a skill or a command file (its front matter) as Botkins hands it on.
+ * The runtime reads that header by itself, and a header can carry more than anybody was shown:
+ * `mcp-servers` and `hooks` start things, and `allowed-tools` can let a skill use the shell with
+ * no question. So the header is written again from a short list of keys for each kind, and
+ * nothing else gets through. The text below the header stays as it is.
  * The new header is the first thing in the file whatever the old one looked like. A header that
  * this code reads in another way than the runtime does can therefore not get through: the
  * runtime sees the new one.
+ * A key that only holds a thing back is kept when it says `true` or `false`. Dropping it would
+ * let the thing do more, so a value that cannot be read falls to the side that holds back.
  */
-export function plainAgentFile(source) {
+const HEADER_KEYS = {
+  agent: ["name", "description", "model", "tools", "disable-model-invocation", "user-invocable", "infer"],
+  skill: ["name", "description", "disable-model-invocation", "user-invocable"],
+  command: ["name", "description", "argument-hint", "disable-model-invocation"],
+};
+/** The keys that hold a thing back, each with the value that holds it back most. */
+const HOLDING_BACK = { "disable-model-invocation": true, "user-invocable": false, infer: false };
+const HEADER_ORDER = ["name", "description", "model", "tools", "argument-hint", "disable-model-invocation", "user-invocable", "infer"];
+
+export function plainHeaderFile(source, kind) {
+  const allowed = HEADER_KEYS[kind];
+  if (!allowed) throw new Error("Unknown file kind: " + kind);
   const whole = String(source).replace(/^\uFEFF/, "");
   const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(whole);
   const lines = match ? match[1].split(/\r?\n/) : [];
@@ -277,9 +289,10 @@ export function plainAgentFile(source) {
     if (/^'[\s\S]*'$/.test(word)) return word.slice(1, -1).replaceAll("''", "'");
     return word.replace(/[ \t]+#.*$/, "");
   };
+  const keyLine = new RegExp("^(" + allowed.join("|") + ")[ \\t]*:[ \\t]*(.*)$");
   const fields = {};
   for (let index = 0; index < lines.length; index++) {
-    const found = /^(name|description|model|tools)[ \t]*:[ \t]*(.*)$/.exec(lines[index]);
+    const found = keyLine.exec(lines[index]);
     if (!found || Object.hasOwn(fields, found[1])) continue;
     const [, key, rest] = found;
     const more = [];
@@ -288,30 +301,55 @@ export function plainAgentFile(source) {
     if (key === "tools") {
       const items = /^\[[\s\S]*\]$/.test(rest.trim()) ? rest.trim().slice(1, -1).split(",") : rest.trim() ? rest.split(",") : below.filter((line) => line.startsWith("-")).map((line) => line.slice(1));
       fields.tools = items.map(scalar).filter((name) => /^[A-Za-z0-9_.\/*:@ -]{1,200}$/.test(name)).slice(0, 200);
+    } else if (Object.hasOwn(HOLDING_BACK, key)) {
+      const word = scalar(rest).toLowerCase();
+      fields[key] = word === "true" ? true : word === "false" ? false : HOLDING_BACK[key];
     } else {
       const value = /^[>|][+-]?$/.test(rest.trim()) ? below.join(rest.trim().startsWith("|") ? "\n" : " ") : [scalar(rest), ...(rest.trim() ? below : [])].join(" ");
       fields[key] = value.replaceAll("\0", "").slice(0, key === "description" ? 2_000 : 200);
     }
   }
-  const header = ["name", "description", "model", "tools"].filter((key) => (key === "description" ? true : Array.isArray(fields[key]) ? fields[key].length : fields[key])).map((key) => key + ": " + JSON.stringify(fields[key] ?? ""));
+  const header = HEADER_ORDER.filter((key) => allowed.includes(key))
+    // (`tools` holds an agent back too: when the key is there, it is written, also when no name in it could be read. An empty list is no tool.)
+    .filter((key) => (key === "description" ? true : typeof fields[key] === "boolean" || Array.isArray(fields[key]) ? true : fields[key]))
+    .map((key) => key + ": " + (typeof fields[key] === "boolean" ? String(fields[key]) : JSON.stringify(fields[key] ?? "")));
   return "---\n" + header.join("\n") + "\n---\n" + body;
 }
 
+/** An agent file as Botkins hands it on (see `plainHeaderFile`). */
+export const plainAgentFile = (source) => plainHeaderFile(source, "agent");
+
+/** Which kind of header a file below skills/, agents/ or commands/ has, or null when it is copied as it is. */
+function headerKind(parts, text) {
+  const name = parts.at(-1);
+  if (parts[0] === "agents") return "agent";
+  if (parts[0] === "skills") {
+    // (A disk that does not tell "skill.md" from "SKILL.md" would give the runtime this file too.)
+    if (/^skill\.md$/i.test(name)) return "skill";
+    // Another Markdown file of a skill is a paper that the skill reads. It has no header, and is copied as it is.
+    // One that starts with a header all the same gets the skill's rule: nobody knows that the runtime never reads it as a skill.
+    return /\.md$/i.test(name) && /^\uFEFF?\s*---/.test(text) ? "skill" : null;
+  }
+  return /\.md$/i.test(name) ? "command" : null;
+}
+
+/**
+ * Writes the session's folder: the files of the plugin that `handedOn` (desktop/plugin-reading.mjs)
+ * says go on, and no others. A link is never followed or copied. Nothing is counted here: the
+ * rule has its own limits, and the catalog refuses a plugin with too many files or too many bytes.
+ */
 function copyPlainTree(source, destination) {
-  let files = 0;
-  let bytes = 0;
-  const walk = (from, to, depth, agents = false) => {
-    if (depth > 8 || files >= MAX_FILES || bytes >= MAX_PLUGIN_BYTES) return;
+  const walk = (parts) => {
+    const from = join(source, ...parts);
     let entries;
     try {
-      entries = readdirSync(from, { withFileTypes: true });
+      entries = readdirSync(from);
     } catch {
       return;
     }
-    for (const entry of entries) {
-      if (files >= MAX_FILES || bytes >= MAX_PLUGIN_BYTES || entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      const fromPath = join(from, entry.name);
-      const toPath = join(to, entry.name);
+    for (const name of entries) {
+      const next = [...parts, name];
+      const fromPath = join(from, name);
       let info;
       try {
         info = lstatSync(fromPath);
@@ -319,17 +357,18 @@ function copyPlainTree(source, destination) {
         continue;
       }
       if (info.isDirectory()) {
-        mkdirSync(toPath, { recursive: true });
-        walk(fromPath, toPath, depth + 1, agents);
-      } else if (info.isFile() && info.size <= MAX_FILE_BYTES) {
-        // Below `agents`, only agent files in Markdown go on, each with its header written again.
-        if (agents && !/\.md$/i.test(entry.name)) continue;
-        mkdirSync(to, { recursive: true });
+        // A folder is entered only when a file in it could go on (not a dot folder, not too deep).
+        if (handedOn([...next, "x.md"].join("/"), 0)) walk(next);
+      } else if (info.isFile() && handedOn(next.join("/"), info.size)) {
         try {
-          if (agents) writeFileSync(toPath, plainAgentFile(readFileSync(fromPath, "utf8")));
-          else copyFileSync(fromPath, toPath);
-          files++;
-          bytes += info.size;
+          const bytes = readFileSync(fromPath);
+          // The size is checked again on the bytes that were read: a file can grow after the first look.
+          if (!handedOn(next.join("/"), bytes.length)) continue;
+          const kind = headerKind(next, bytes.toString("utf8", 0, 64));
+          const toPath = join(destination, ...next);
+          mkdirSync(dirname(toPath), { recursive: true });
+          // (A skill's script keeps the right to be run, as in the copy.)
+          writeFileSync(toPath, kind ? plainHeaderFile(bytes.toString("utf8"), kind) : bytes, { mode: info.mode & 0o111 ? 0o755 : 0o644 });
         } catch {
           // A file that changed or disappeared during projection is omitted.
         }
@@ -337,11 +376,14 @@ function copyPlainTree(source, destination) {
     }
   };
   for (const name of ["skills", "agents", "commands"]) {
-    const sourcePath = join(source, name);
-    if (existsSync(sourcePath)) {
-      mkdirSync(join(destination, name), { recursive: true });
-      walk(sourcePath, join(destination, name), 0, name === "agents");
+    // The folder itself must be a real folder too: a link there is not followed.
+    let top;
+    try {
+      top = lstatSync(join(source, name));
+    } catch {
+      continue;
     }
+    if (top.isDirectory()) walk([name]);
   }
 }
 
@@ -364,8 +406,18 @@ function project(plugin, context, manifest) {
   return destination;
 }
 
+/**
+ * Where a local tool runs: the plugin's own folder when the plan names none, a path as written
+ * when it is absolute, else a path below the plugin's folder (the reading gives it with no "..").
+ */
+function workingFolder(plugin, cwd) {
+  if (cwd === null || cwd === undefined || cwd === "") return plugin.folder;
+  if (isAbsolute(cwd) || /^[A-Za-z]:[\\/]/.test(cwd)) return cwd;
+  return join(plugin.folder, cwd);
+}
+
 /** One tool of the reading, with its values, as the SDK takes it. Null when a word of its line holds a value the person gave. */
-function serverConfig(plugin, expand, secrets, server) {
+function serverConfig(plugin, { builtins, expand }, secrets, server) {
   if (server.kind === "local") {
     const { command, args } = server;
     // Settings never become command-line arguments, executable paths or working directories.
@@ -373,9 +425,13 @@ function serverConfig(plugin, expand, secrets, server) {
     // reviewed command spec. Literal values that match a supplied credential therefore fail closed.
     if ([command, ...args].some((part) => secrets.some((secret) => secret && part.includes(secret)))) return null;
     const env = Object.fromEntries(Object.entries(server.env).map(([key, value]) => [key, expand(value)]));
+    // Every local tool gets its plugin's data folder, as a hook does. The plugin cannot set these
+    // names (they are reserved), so what is put here after its own values is Botkins' value.
+    env.PLUGIN_DATA = builtins.PLUGIN_DATA;
+    env.CLAUDE_PLUGIN_DATA = builtins.CLAUDE_PLUGIN_DATA;
     const launcherSpec = Buffer.from(JSON.stringify({ command, args, envKeys: Object.keys(env) })).toString("base64url");
     const launcherEnv = process.versions.electron ? { ...env, ELECTRON_RUN_AS_NODE: "1" } : env;
-    return { type: "stdio", command: process.execPath, args: [MCP_LAUNCHER, launcherSpec], env: launcherEnv, workingDirectory: server.cwd ?? plugin.folder, tools: ["*"] };
+    return { type: "stdio", command: process.execPath, args: [MCP_LAUNCHER, launcherSpec], env: launcherEnv, workingDirectory: workingFolder(plugin, server.cwd), tools: ["*"] };
   }
   // A setting in a URL would become an accidental credential-bearing destination. URLs are
   // catalog metadata and stay literal; only headers receive approved values.
@@ -421,7 +477,7 @@ export function pluginSession(plugins, context = {}, { run = runHook } = {}) {
     const { settings, secrets } = approvedSettings(plugin, manifest);
     const values = valuesFor(plugin, manifest, safeContext, projection, settings);
     for (const planned of starts.servers) {
-      const server = serverConfig(plugin, values.expand, secrets, planned);
+      const server = serverConfig(plugin, values, secrets, planned);
       if (server) mcpServers[pluginServerName(plugin.id, planned.name)] = server;
     }
     const handlers = makeHandlers(plugin, safeContext, starts.hooks, values, secrets, run);

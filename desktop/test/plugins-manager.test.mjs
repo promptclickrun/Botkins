@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync,mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
@@ -186,7 +186,7 @@ test("an installed copy that was changed on disk is not used, the app says why, 
   writeFileSync(join(copy, "hooks", "hooks.json"), JSON.stringify({ hooks: { sessionEnd: [{ command: "touch /tmp/planted" }] } }));
   assert.deepEqual(await session(), { directories: [], mcpServers: {}, hooks: undefined });
   const [listed] = ws.plugins.list();
-  assert.deepEqual([listed.status, listed.detail], ["error", "The installed files of this plugin are not the files that were reviewed. Remove the plugin and install it again."]);
+  assert.deepEqual([listed.status, listed.detail], ["error", "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings."]);
   // Off and on again does not get round it.
   await ws.plugins.setEnabled(added.id, false);
   await assert.rejects(ws.plugins.setEnabled(added.id, true), /are not the files that were reviewed/);
@@ -202,35 +202,120 @@ test("an installed copy that was changed on disk is not used, the app says why, 
   assert.deepEqual(Object.keys((await again.plugins.session(again.bot("pip"), { id: "chat-1" })).hooks.handlers), ["onSessionStart"]);
 });
 
-test("a plugin installed by an earlier version that starts a command its description did not have is switched off until the person has looked", async (t) => {
+test("a plugin installed by an earlier version that starts anything its description did not show is switched off until the person has looked", async (t) => {
   const { open, source, file } = managed(t);
-  const hidden = source("hidden", { "plugin.json": { name: "hidden-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ type: "x", darwin: "touch /tmp/unseen" }] } } });
   const long = "echo " + "a".repeat(400);
-  const honest = source("honest", { "plugin.json": { name: "honest-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: long }] } }, ".mcp.json": { mcpServers: { files: { command: "npx", args: ["-y", "pkg"] } } } });
+  const plugin = (name, files) => source(name, { "plugin.json": { name: name + "-fixture", version: "1.0.0" }, ...files });
+  const folders = [
+    // Only a remote tool and a skill: everything it starts was shown.
+    plugin("remote", { ".mcp.json": { mcpServers: { api: { url: "https://example.com/mcp" } } }, "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\nA." }),
+    // The old description had this tool's name and command, and nothing of its arguments.
+    plugin("args", { ".mcp.json": { mcpServers: { files: { command: "sh", args: ["-c", "touch /tmp/unseen"] } } } }),
+    // The old description had the first 300 characters of this command.
+    plugin("long", { "hooks.json": { hooks: { sessionStart: [{ command: long }] } } }),
+    // The old description had this command whole, and the hook has no settings of its own.
+    plugin("short", { "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }),
+    // A short hook is not enough: this plugin also has a tool with arguments.
+    plugin("mixed", { "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } }, ".mcp.json": { mcpServers: { files: { command: "npx", args: ["-y", "pkg"] } } } }),
+    // The copy of this one is gone, so nothing of it can be shown.
+    plugin("gone", { "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }),
+  ];
   const ws = open();
-  for (const folder of [hidden, honest]) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
-  // The file as the earlier version kept it: no mark of the reading, and the description that version made
-  // (no hook for the first plugin; for the second the command cut at 300 characters and the program's name alone).
+  for (const folder of folders) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  const goneCopy = ws.plugins.records.find((row) => row.preview.name === "gone-fixture").folder;
+  rmSync(goneCopy, { recursive: true, force: true });
+  // The file as the earlier version kept it: no mark of the reading, and the description that version made.
   const rows = JSON.parse(readFileSync(file, "utf8")).map(({ reading: _mark, ...row }) => ({
     ...row,
-    preview: { ...row.preview, contents: { ...row.preview.contents, hooks: row.preview.name === "hidden-fixture" ? [] : [{ event: "sessionStart", command: long.slice(0, 300) }], mcpServers: row.preview.contents.mcpServers.map(({ name, kind, command }) => ({ name, kind, command })) } },
+    preview: {
+      ...row.preview,
+      contents: {
+        ...row.preview.contents,
+        hooks: row.preview.contents.hooks.map(({ event, command }) => ({ event, command: command.slice(0, 300) })),
+        mcpServers: row.preview.contents.mcpServers.map(({ name, kind, command, url }) => (kind === "local" ? { name, kind, command } : { name, kind, url })),
+      },
+    },
   }));
   writeFileSync(file, JSON.stringify(rows));
   const after = open();
-  const byName = (name) => after.plugins.list().find((row) => row.name === name);
-  assert.equal(byName("hidden-fixture").enabled, false);
-  assert.match(byName("hidden-fixture").detail, /Botkins switched this plugin off\. An earlier version of Botkins did not show everything that this plugin starts/);
-  assert.deepEqual(byName("hidden-fixture").contents.hooks, [{ event: "sessionStart", command: "touch /tmp/unseen", env: [], timeoutSec: 10 }]);
-  assert.match(byName("hidden-fixture").warnings.join(" "), /Runs a command on your computer through plugin hooks/);
-  // What the old description had, cut or with less said, was shown: that plugin stays on, and now shows the whole.
-  assert.equal(byName("honest-fixture").enabled, true);
-  assert.equal(byName("honest-fixture").detail, undefined);
-  assert.equal(byName("honest-fixture").contents.hooks[0].command, long);
-  assert.deepEqual(byName("honest-fixture").contents.mcpServers, [{ name: "files", kind: "local", command: "npx", args: ["-y", "pkg"], env: [] }]);
-  // It is done once: the file has the mark, and the person's switch is theirs from then on.
-  await after.plugins.setEnabled(byName("hidden-fixture").id, true);
+  const byName = (name) => after.plugins.list().find((row) => row.name === name + "-fixture");
+  const state = (name) => [byName(name).enabled, byName(name).detail === undefined];
+  assert.deepEqual(state("remote"), [true, true]);
+  assert.deepEqual(state("short"), [true, true]);
+  for (const name of ["args", "long", "mixed"]) {
+    assert.equal(byName(name).enabled, false, name);
+    assert.match(byName(name).detail, /Botkins switched this plugin off\. An earlier version of Botkins did not show everything that this plugin starts/);
+  }
+  // What it starts is now shown whole.
+  assert.deepEqual(byName("args").contents.mcpServers.map((tool) => tool.args), [["-c", "touch /tmp/unseen"]]);
+  assert.equal(byName("long").contents.hooks[0].command, long);
+  // A copy that cannot be read is off, with its own reason, and is not marked as read.
+  assert.equal(byName("gone").enabled, false);
+  assert.match(byName("gone").detail, /Its installed files could not be read, so Botkins cannot show what it starts\. Update the plugin to write its files again, then switch it on\./);
+  const stored = () => JSON.parse(readFileSync(file, "utf8"));
+  const marked = (name) => stored().find((row) => row.preview.name === name + "-fixture").reading;
+  assert.deepEqual(["remote", "args", "long", "short", "mixed"].map(marked), [2, 2, 2, 2, 2]);
+  assert.equal(marked("gone"), undefined);
+  assert.equal(stored().find((row) => row.preview.name === "gone-fixture").heldBack, "unread");
+  // It cannot be switched on while it cannot be read.
+  await assert.rejects(after.plugins.setEnabled(byName("gone").id, true), /Its installed files could not be read/);
+  // The reviewing is done once for what was read. The second open changes nothing more, and the one that was not read is tried again.
+  await after.plugins.setEnabled(byName("args").id, true);
+  const before = JSON.stringify(stored());
   const third = open();
-  assert.deepEqual(third.plugins.list().map((row) => [row.name, row.enabled, row.detail]).sort(), [["hidden-fixture", true, undefined], ["honest-fixture", true, undefined]]);
+  assert.equal(JSON.stringify(stored()), before);
+  const named = (name) => third.plugins.list().find((row) => row.name === name + "-fixture");
+  assert.deepEqual(["remote", "args", "long", "short", "mixed", "gone"].map((name) => named(name).enabled), [true, true, false, true, false, false]);
+  assert.equal(named("args").detail, undefined);
+  assert.equal(marked("gone"), undefined);
+  // An update writes its files again. The copy can then be read, and switching on clears the reason.
+  await third.plugins.update(named("gone").id, { revision: stored().find((row) => row.preview.name === "gone-fixture").revision });
+  await third.plugins.setEnabled(named("gone").id, true);
+  assert.deepEqual([named("gone").enabled, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").heldBack], [true, undefined, 2, undefined]);
+});
+
+test("a changed copy is put right by an update, which writes the reviewed files again and keeps the settings", async (t) => {
+  const { open, source } = managed(t);
+  const folder = source("mine", {
+    "plugin.json": { name: "repair-fixture", version: "1.0.0" },
+    "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } },
+    ".mcp.json": { mcpServers: { files: { command: "node", args: ["x.js"], env: { TOKEN: "${user_config.token}" } } } },
+  });
+  writeFileSync(join(folder, "plugin.json"), JSON.stringify({ name: "repair-fixture", version: "1.0.0", userConfig: { token: { title: "Token", description: "A token", type: "string", sensitive: true } } }));
+  const ws = open();
+  const added = await ws.plugins.addFolder(folder);
+  await ws.plugins.configure(added.id, { token: "secret-value" });
+  await ws.plugins.setEnabled(added.id, true);
+  const isSet = () => ws.plugins.list()[0].config.find((field) => field.key === "token").set;
+  assert.equal(isSet(), true);
+  const [row] = ws.plugins.records;
+  const planted = join(row.folder, "hooks", "hooks.json");
+  mkdirSync(join(row.folder, "hooks"));
+  writeFileSync(planted, JSON.stringify({ hooks: { sessionEnd: [{ command: "touch /tmp/planted" }] } }));
+  await ws.plugins.session(ws.bot("pip"), { id: "chat-1" });
+  const [broken] = ws.plugins.list();
+  assert.deepEqual([broken.status, broken.detail], ["error", "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings."]);
+  // The runtime asks before each hook starts.
+  assert.equal(ws.plugins.runtimeRecord(row).intact(), false);
+  const fixed = await ws.plugins.update(added.id, { revision: row.revision });
+  assert.equal(fixed.status, "ready");
+  assert.equal(existsSync(planted), false);
+  assert.equal(isSet(), true);
+  assert.equal(ws.plugins.runtimeRecord(ws.plugins.records[0]).intact(), true);
+  assert.equal(ws.plugins.list()[0].status, "ready");
+});
+
+test("every installed copy is checked at the start, not only up to the first bad one", async (t) => {
+  const { open, source } = managed(t);
+  const ws = open();
+  for (const name of ["one", "two", "three"]) await ws.plugins.addFolder(source(name, { "plugin.json": { name: name + "-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  for (const row of ws.plugins.records.slice(0, 3)) {
+    mkdirSync(join(row.folder, "hooks"));
+    writeFileSync(join(row.folder, "hooks", "hooks.json"), "{}");
+  }
+  const again = open();
+  await again.plugins.queue;
+  assert.deepEqual(again.plugins.list().map((row) => row.status), ["error", "error", "error"]);
 });
 
 test("a plugin folder that was linked live becomes an installed plugin, switched off, and no session gets the folder itself", async (t) => {

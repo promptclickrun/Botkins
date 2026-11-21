@@ -106,6 +106,9 @@ export function headlessBackend(request, version, { team = () => null, log = (li
   let snapshot = { bots: [], chats: [], runs: [], settings: {} };
   let revision = null;
   let available = false;
+  // Set when the list of capabilities was dropped: the next look asks for a whole answer, so a
+  // workspace that comes back with the same epoch still sends its list.
+  let needList = false;
   let reading;
   const backend = {
     headless: true,
@@ -153,9 +156,10 @@ export function headlessBackend(request, version, { team = () => null, log = (li
   function refresh() {
     reading ??= (async () => {
       try {
-        const next = await request("state", [revision, current()?.rev ?? null]);
+        const next = await request("state", [needList ? null : revision, current()?.rev ?? null]);
+        const newEpoch = String(next.version).split("/")[0] !== String(revision).split("/")[0];
         // A workspace that started again holds no cut, and says so here.
-        if (String(next.version).split("/")[0] !== String(revision).split("/")[0]) {
+        if (newEpoch) {
           deaf = false;
           noSpaces = false;
           refused = null;
@@ -168,13 +172,24 @@ export function headlessBackend(request, version, { team = () => null, log = (li
         const changed = revision !== next.version || available !== next.display;
         if (next.snapshot) {
           snapshot = next.snapshot;
-          backend.capabilities = next.capabilities ?? [];
+          backend.capabilities = Array.isArray(next.capabilities) ? next.capabilities : [];
+          needList = false;
+        } else if (newEpoch) {
+          // The list is a promise about the workspace's own code. This is another start of it, so the
+          // old list is not told (it always sends a new one here; this is only for a reply that does not).
+          backend.capabilities = [];
+          needList = true;
         }
         revision = next.version;
         available = next.display === true;
         if (changed) changes.emit("change");
       } catch {
-        if (available) {
+        // The workspace may come back from an older image, so what it promised before is not told
+        // while it cannot be reached. Phones are told through the same change as the display.
+        const hadList = backend.capabilities.length > 0;
+        backend.capabilities = [];
+        needList = true;
+        if (available || hadList) {
           available = false;
           changes.emit("change");
         }

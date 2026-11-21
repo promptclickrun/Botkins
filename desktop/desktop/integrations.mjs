@@ -758,7 +758,8 @@ export class Integrations {
   /** The skill folders and switched-off skills for a bot's sessions. */
   skillsFor(bot) {
     return {
-      directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p))],
+      // A linked folder that has become a plugin since it was linked is not handed on, as a plugin can start commands. It stays linked, and is looked at again at each call.
+      directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
       disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? [])])],
     };
   }
