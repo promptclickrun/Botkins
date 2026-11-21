@@ -367,7 +367,7 @@ export class Spaces {
       }));
     const cards = this.cards(id)
       .filter((card) => card.status === "open" && this.seesBot(maker, card.botId))
-      .map((card) => ({ kind: card.kind, title: card.title, body: card.body ?? "", links: card.links ?? [], ...(card.category && { category: card.category }), bot: bot(card.botId), createdAt: card.createdAt ?? 0 }));
+      .map((card) => ({ kind: card.kind, title: card.title, body: card.body ?? "", links: (card.links ?? []).map((link) => (typeof link === "string" ? link : link?.url)).filter((url) => typeof url === "string"), ...(card.category && { category: card.category }), bot: bot(card.botId), createdAt: card.createdAt ?? 0 }));
     const copy = {
       v: 1,
       name: space.name,

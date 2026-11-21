@@ -573,7 +573,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "spaces.rename": (id, name, person) => workspace.spaces.rename(id, name, person),
     "spaces.remove": async (id, person) => {
       await workspace.spaces.remove(id, person);
-      if (person === undefined) link?.spaces?.removed?.(id);
+      if (person === undefined) link?.spaceRemoved?.(id);
     },
     "spaces.setProject": (id, projectId, person) => workspace.spaces.setProject(id, projectId, person),
     "spaces.setPanelProject": (panelId, projectId, person) => workspace.spaces.setPanelProject(panelId, projectId, person),
@@ -981,7 +981,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...(heldTeam && { teamCut: heldTeam }),
     spaces: {
       ensure: (person) => Object.fromEntries(Object.entries(workspace.spaces.ensure(person)).map(([builtin, space]) => [builtin, space.id])),
-      snapshot: (id, options) => workspace.spaces.snapshot(id, options ?? undefined),
+      // A space that is gone has no copy: null, and the link takes its copy back.
+      snapshot: (id, options) => (workspace.spaces.all.some((space) => space.id === id) ? workspace.spaces.snapshot(id, options ?? undefined) : null),
       release: (memberId) => workspace.spaces.memberRemoved(memberId),
     },
     // A phone that signed in to an MCP server hands the computer its sign-in (reached as "link.adoptMcpSignIn").

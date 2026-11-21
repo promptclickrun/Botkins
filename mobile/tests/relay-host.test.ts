@@ -471,8 +471,8 @@ test("a hostile relay can't grow what the computer keeps: 64 phones, bookkeeping
 test("a waiting link.sync ends when its phone's socket closes, and when the computer's own socket drops", async () => {
   const { relay, link, room } = await start();
   const waits = async (one: Awaited<ReturnType<typeof pairedOverRelay>>) => {
-    link.refresh([]);
-    const have = Object.fromEntries([...link.parts].map(([name, part]: [string, any]) => [name, part.v]));
+    // What this phone holds: the versions of its own view, as one sync gave them.
+    const { v: have } = await one.call("link.sync", { epoch: link.epoch, have: {} });
     const pending = one.call("link.sync", { epoch: link.epoch, have, wait: 25_000 }).catch(() => "ended");
     await until(() => link.waiters.size === 1, "the sync to wait");
     return { pending };

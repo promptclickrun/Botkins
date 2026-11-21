@@ -536,6 +536,7 @@ test("the copy of a space that a link opens holds what the space says, and nothi
   const cards = ws.spaces.snapshot(feed.id, { from: "Sam" });
   assert.deepEqual([cards.kind, cards.from, cards.cards.map((card) => [card.kind, card.title, card.body, card.bot.name])], ["feed", "Sam", [["feed", "News", "Read this", "Pip"]]]);
   assert.deepEqual(Object.keys(cards.cards[0]), ["kind", "title", "body", "links", "bot", "createdAt"]);
+  assert.deepEqual(cards.cards[0].links, ["https://example.com/"], "a copy's links are plain addresses");
   // A member's space: only what that member's role shows them goes out, whoever else put something there.
   const danas = ws.spaces.create({ name: "Dana's" }, "m_dana");
   ws.state.panels.push({ id: "d1", key: "d1", botId: "pip", spaceId: danas, title: "By Pip", blocks, revision: 1 }, { id: "d2", key: "d2", botId: "scout", spaceId: danas, title: "By Scout", blocks, revision: 1 });
