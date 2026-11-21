@@ -52,6 +52,10 @@ test("the snapshot carries the owner's sections, and nothing when the link has n
   assert.deepEqual(next.chatSections, [{ id: "cs_1", name: "Work" }]);
   assert.deepEqual(next.chats, [{ id: "a", title: "A", sectionId: "cs_1" }, { id: "b", title: "B" }, { id: "c", title: "C" }]);
   assert.equal(state.chats[0].sectionId, undefined, "the workspace's own chats are not changed");
+  // A chat in no section is passed on as the same object. (The side pane's smoke changes a chat
+  // through the snapshot, which works only while that holds.)
+  assert.equal(next.chats[2], state.chats[2]);
+  assert.notEqual(next.chats[0], state.chats[0]);
   assert.equal(withOwnerChatSections(state, {}), state);
   assert.equal(withOwnerChatSections(state, null), state);
   assert.equal("chatSections" in withOwnerChatSections(state, { team: () => ({}) }), false);
