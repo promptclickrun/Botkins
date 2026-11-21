@@ -92,6 +92,9 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
   // "Members may share by link": shown as set at once, and put back if the computer refuses.
   const [sharing, setSharing] = useState<boolean>();
   useEffect(() => setSharing(undefined), [team?.linkSharing]);
+  // Admin mode, the same way. It is this window's own, so it comes with the snapshot, not with the team.
+  const [admin, setAdmin] = useState<boolean>();
+  useEffect(() => setAdmin(undefined), [state.adminMode]);
   useEffect(() => {
     if (initialView) setView(initialView);
   }, [initialView]);
@@ -155,6 +158,27 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
           </div>
         </form>
       </Group>
+      {state.adminMode !== undefined && (
+        <Group>
+          <SwitchRow
+            label="Admin mode"
+            help="See every member's spaces, bots and chats."
+            checked={admin ?? state.adminMode}
+            disabled={busy}
+            onChange={(on) => {
+              setAdmin(on);
+              void run(async () => {
+                try {
+                  await api["link.team.setAdminMode"](on);
+                } catch (e) {
+                  setAdmin(undefined);
+                  throw e;
+                }
+              });
+            }}
+          />
+        </Group>
+      )}
       {team.linkSharing !== undefined && (
         <Group title="Spaces">
           <SwitchRow

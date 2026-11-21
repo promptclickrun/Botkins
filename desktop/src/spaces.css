@@ -861,3 +861,22 @@ button.space-tag:hover {
   border-radius: 50%;
   color: var(--muted);
 }
+
+/* "Admin mode", beside the computer's name while it is on: the owner sees every member's spaces, bots and chats. */
+.admin-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.shell.collapsed .sidebar-foot .admin-tag {
+  margin: 0;
+  padding: 6px;
+}
