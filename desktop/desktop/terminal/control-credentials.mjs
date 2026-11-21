@@ -5,6 +5,8 @@
 //
 // The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone." Two things follow from that sentence and are its working-out, not his words: a saved credential gets no new label from the socket, and `voice set` takes no address without its key.
 //
+// A saved credential is not checked from here: the check reads the value through a password manager's tool for a linked field, so it stays with the window and the phone (`checkSavedCredential` is a reason in coverage.mjs).
+//
 // What these calls hold to (desktop/AGENTS.md, and the rule for secrets above):
 //  - A secret's value never leaves the service through a call here. Each answer is cut to what a list may show: an id, a name, a
 //    kind, where it is read from or used, and when it was saved. A new value goes in, as text, and is dropped.
@@ -147,12 +149,6 @@ export function credentialsApi({ workspace, handlers, signIns }) {
       await handlers.saveSavedCredential({ id: found.id, name: found.name, value: patch.value });
       return credentialView((await saved()).find((entry) => entry.id === found.id) ?? found);
     },
-    /** Whether the value can be read now. It is read on this computer and dropped. */
-    async "credentials.check"([ref]) {
-      const found = pick(await saved(), ref, "saved credential", "botkins credentials list");
-      const result = await handlers.checkSavedCredential(found.id);
-      return { id: found.id, name: found.name, ok: result?.ok === true, ...(result?.ok !== true && result?.message && { message: String(result.message).slice(0, 300) }) };
-    },
     async "credentials.remove"([ref, options]) {
       const found = pick(await saved(), ref, "saved credential", "botkins credentials list");
       if (!agreedBy(options)) throw needsYes("Removing the saved credential " + found.name, "botkins credentials remove");
@@ -178,9 +174,12 @@ export function credentialsApi({ workspace, handlers, signIns }) {
       await handlers.removeCredential(found.id);
       return { removed: found.id, name: found.name };
     },
-    /** Sets a vault that this computer cannot open aside, and starts an empty one. Every key and sign-in in it has to be entered again. */
+    /**
+     * Sets a vault that this computer cannot open aside, and starts an empty one. Every key and sign-in in it has to be entered again.
+     * It needs two words, as the command does: `agreed: true` and `eraseAllSavedSecrets: true` (on the command line, `--yes --erase-all-saved-secrets`).
+     */
     async "credentials.vaultReset"([options]) {
-      if (!agreedBy(options)) throw needsYes("Resetting the vault, which loses every key and sign-in in it,", "botkins vault reset");
+      if (!agreedBy(options) || options.eraseAllSavedSecrets !== true) throw new ControlError("Resetting the vault loses every key and sign-in in it, and it cannot be got back. It needs both `agreed: true` and `eraseAllSavedSecrets: true` (on the command line, `botkins vault reset --yes --erase-all-saved-secrets`).", "NEEDS_YES");
       await handlers.resetVault();
       return { reset: true };
     },

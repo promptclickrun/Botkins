@@ -10,24 +10,14 @@
 //   log      the last lines in memory, a file, and standard output (logs.mjs)
 //   keys     the host key store that wraps secrets at rest (desktop/host/keystore.mjs)
 //   socket   the owner-only control socket the `botkins` command line talks to (socket.mjs)
-import { chmodSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, statSync } from "node:fs";
 import { openKeyStore } from "../host/keystore.mjs";
 import { headlessHost } from "../host/headless.mjs";
 import { createRuntime } from "../runtime.mjs";
 import { loadConfig, saveConfig } from "./config.mjs";
-import { changeCounter, startControl } from "./control-start.mjs";
+import { changeCounter, ownFolder, startControl } from "./control-start.mjs";
 import { createLog } from "./logs.mjs";
 import { prepareReach } from "./reach.mjs";
-
-/** Makes a folder the service's own: there, and closed to everyone else. */
-function ownFolder(dir) {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  try {
-    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700);
-  } catch {
-    // Somebody else's folder (a mount): its permissions are theirs to set, and `botkins doctor` says so.
-  }
-}
 
 /**
  * Starts the service.

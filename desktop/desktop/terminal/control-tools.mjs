@@ -35,6 +35,10 @@ function pick(list, ref, what, see) {
 /** What a tool starts on this computer, as one line, or null for a web address. */
 export const runs = (server) => (server.type === "stdio" || (!server.type && !server.url) || server.type === "local" ? [server.command, ...(server.args ?? [])] : null);
 
+/** The mark `{ agreed: true }` as the last argument: a call that loses something refuses without it. */
+export const needsYesToLose = (options, what, command) => {
+  if (options?.agreed !== true) throw new ControlError(what + " needs a yes, because it cannot be got back. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `" + command + " --yes`).", "NEEDS_YES");
+};
 /** Does this input of the app's own form start a program on this computer? */
 const startsProgram = (input) => !!input && typeof input === "object" && typeof input.command === "string" && runs(input) !== null;
 /**
@@ -188,8 +192,9 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       await handlers.saveMcpServer(input);
       return toolView(tool(found.id));
     },
-    async "tools.remove"([ref]) {
+    async "tools.remove"([ref, options]) {
       const found = tool(ref);
+      needsYesToLose(options, "Removing the tool " + found.name + ", which deletes its stored values and its sign-in,", "botkins tools remove");
       await handlers.removeMcpServer(found.id);
       return { removed: found.id, name: found.name };
     },
@@ -215,8 +220,9 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       const result = await handlers.importMcpServers(json);
       return { ...result, starts: listed.filter((entry) => entry.kind === "command" && result.added.includes(entry.name)).map(({ name, runs: line, cwd, env }) => ({ name, runs: line, ...(cwd && { cwd }), env })) };
     },
-    async "tools.signOut"([ref]) {
+    async "tools.signOut"([ref, options]) {
       const found = tool(ref);
+      needsYesToLose(options, "Signing out of the tool " + found.name + ", which forgets its sign-in,", "botkins tools sign-out");
       await handlers.signOutMcpServer(found.id);
       return toolView(tool(found.id));
     },

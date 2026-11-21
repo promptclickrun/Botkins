@@ -282,6 +282,11 @@ test("a provider signs in from the terminal: its own sign-in is followed, and a 
   vault.put("gho_fixturetoken0000000000000000000000", {}, "terminal-provider-copilot");
   assert.deepEqual(signIns.copilotGitHub(), { token: "gho_fixturetoken0000000000000000000000" });
   for (const file of [join(paths.dataDir, "vault.json"), paths.config, paths.logFile, join(paths.dataDir, "workspace.json")]) assert.doesNotMatch(readFileSync(file, "utf8"), /fixture-token|fixture-key|fixturetoken/, file);
+  // A new token for a provider that has one kept, and a sign-out, lose the old token: the socket's own call refuses with no mark, and the token stays. With the mark, the call goes on to the provider (this stand-in has no sign-out).
+  await assert.rejects(client.call("providers.login", "claude", { token: "sk-ant-oat01-another-token-00000000000" }), { code: "NEEDS_YES" });
+  await assert.rejects(client.call("providers.logout", "claude"), { code: "NEEDS_YES" });
+  assert.equal(signIns.token("claude"), "sk-ant-api03-fixture-key-0000000000000000");
+  await assert.rejects(client.call("providers.logout", "grok", { agreed: true }), /doesn't support signing out from Botkins/);
   assert.equal(signIns.forget("claude"), true);
   assert.deepEqual([env.ANTHROPIC_API_KEY, env.CLAUDE_CODE_OAUTH_TOKEN], [undefined, undefined]);
   // What can't be a token is refused before it goes anywhere.

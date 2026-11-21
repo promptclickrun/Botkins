@@ -352,14 +352,21 @@ export function controlApi(service) {
       })),
     "providers.enable": async ([id, on]) => void (await workspace.setProviderEnabled(String(id), on === true)),
     "providers.services": ([id, query]) => providers.require(String(id)).services(typeof query === "string" ? query.slice(0, 100) : ""),
-    "providers.login": async ([id, options = {}]) => {
-      if (typeof options.token === "string") return signIns.useToken(String(id), options.token, { service: options.service });
+    // A token that replaces the one Botkins keeps loses the old one: that needs the mark `{ agreed: true }` as the last argument. A first token loses nothing.
+    "providers.login": async ([id, options = {}, mark]) => {
+      if (typeof options.token === "string") {
+        if (signIns.hasToken(String(id)) && !(mark?.agreed === true)) throw new ControlError("A new token for " + String(id) + " replaces the token that Botkins keeps for it, and the old token is lost. That needs a yes. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins providers login " + String(id) + " --token --yes`).", "NEEDS_YES");
+        return signIns.useToken(String(id), options.token, { service: options.service });
+      }
       return signIns.start(String(id), { service: options.service, method: options.method });
     },
     "providers.login.read": ([session, after], { signal }) => signIns.read(String(session), { after: Number(after) || 0, signal }),
     "providers.login.input": ([session, line]) => void signIns.input(String(session), line),
     "providers.login.cancel": ([session]) => signIns.cancel(String(session)),
-    "providers.logout": ([id]) => signIns.signOut(String(id)),
+    "providers.logout": ([id, mark]) => {
+      if (mark?.agreed !== true) throw new ControlError("Signing " + String(id) + " out removes the token that Botkins keeps for it and the provider's own sign-in, and neither can be got back. That needs a yes. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins providers logout " + String(id) + " --yes`).", "NEEDS_YES");
+      return signIns.signOut(String(id));
+    },
     models: async () => (await workspace.models()).map((model) => ({ ref: model.provider + "/" + model.id, name: model.name, provider: model.provider, providerName: model.providerName, ...(model.group && { group: model.group }), available: model.available !== false, ...(model.recommended && { recommended: true }), efforts: model.efforts ?? [] })),
     "models.default": async ([ref]) => {
       if (ref !== undefined) await workspace.setModel("global", null, await selection(ref));
@@ -406,7 +413,10 @@ export function controlApi(service) {
           return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
         }),
     // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
-    "chat.respond": async ([requestId, answer]) => {
+    // A yes to a request (`approve`, and `remember`, which also says yes to the next ones) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
+    "chat.respond": async ([requestId, answer, mark]) => {
+      if ((answer?.action === "approve" || answer?.action === "remember") && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
+        throw new ControlError("A yes to a request that waits in a chat needs a yes of the person. Show the request to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks the person at a terminal; no flag gives it).", "NEEDS_YES");
       const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
       await handlers.respond(String(requestId), answer);
       return { chatId: asked?.chatId ?? null, kind: asked?.kind ?? null, answered: answer?.action === "deny" || answer?.action === "cancel" ? "no" : "yes" };

@@ -7,10 +7,13 @@
 // (desktop/runtime.mjs); they act as the owner. The list of spaces is read from the window's snapshot (`spaces`, the
 // owner's view of every space).
 //
-// Three of the calls make a space visible to more people, so each takes the caller's word that the person was shown
+// Four of the calls make a space visible to more people, so each takes the caller's word that the person was shown
 // what it opens, and to whom (`agreed: true`; on the command line `--yes`): a link that anyone can open, a space shared with
-// all members, and the team's switch that lets members make such links. A link is a secret that is made to be handed on:
-//  - Only `sharing.link` answers with one. No other call, and no line of the log, has it.
+// all members, picked people that make the set of people who can open it grow or that get more to do (view to edit), and the
+// team's switch that lets members make such links. A change that only takes people away, or gives them less, needs no mark.
+// A link is a secret that is made to be handed on:
+//  - Only `sharing.link` answers with one, and only when it makes the link (a space that has a link already gets none: the link
+//    is shown once). No other call, and no line of the log, has it.
 //  - `sharing.list` and `sharing.get` say that a space has a link, and never give it. The owner's window gets the link
 //    in the app's own answer, but a list of spaces is no place for a secret.
 import { ControlError } from "./socket.mjs";
@@ -39,6 +42,14 @@ const oneOf = (list, value, what) => {
   return value;
 };
 const plain = (value) => (value !== null && typeof value === "object" && !Array.isArray(value) ? value : {});
+
+/** What a person can do with a space as it is now: "edit", "view", or nothing. The owner opens every space. A space shared with the team is open to every member with the team's `can`; one that is private or shared by link has no named person. */
+const canNow = (found, id) => {
+  if (id === "owner") return "edit";
+  if (found.access === "members") return (found.people ?? []).find((one) => one.id === id)?.can;
+  if (found.access === "team") return found.teamCan ?? "view";
+  return undefined;
+};
 
 const NEEDS_YES = (what) => new ControlError(what + " needs a yes: it makes the space visible to more people. Show the person who can open the space, and give `agreed: true` (on the command line, `--yes`).", "NEEDS_YES");
 
@@ -80,6 +91,36 @@ export function sharingApi({ handlers }) {
   const named = (s) => ({ id: s.id, name: s.name });
   const fresh = (id) => view(space(id));
 
+  /** The checks of `sharing.set`, and for the level members who is added and who gets more, compared with the space as it is now. */
+  function plan(found, o) {
+    const access = oneOf(["private", "members", "team"], o.access, "A level (a link is made with `sharing link`)");
+    const input = { access };
+    const added = [];
+    const more = [];
+    if (access === "members") {
+      if (!Array.isArray(o.people) || !o.people.length) throw new ControlError("Name the people who can open the space.", "BAD_ARGUMENT");
+      const grants = new Map();
+      for (const one of o.people) {
+        const who = person(plain(one).person);
+        if (who.id === found.by?.id) throw new ControlError(who.name + " made this space, so they can open it already.", "BAD_ARGUMENT");
+        if (grants.has(who.id)) throw new ControlError(who.name + " is named twice.", "BAD_ARGUMENT");
+        const can = oneOf(["view", "edit"], plain(one).can ?? "view", "What a person can do");
+        grants.set(who.id, { id: who.id, can });
+        const now = canNow(found, who.id);
+        if (!now) added.push({ id: who.id, name: who.name, can });
+        else if (now === "view" && can === "edit") more.push({ id: who.id, name: who.name, from: now, can });
+      }
+      input.grants = [...grants.values()];
+      if (o.can !== undefined) throw new ControlError("For the level members, give `can` with each person, not once for all.", "BAD_ARGUMENT");
+    } else {
+      if (o.people !== undefined) throw new ControlError("People are named for the level members only.", "BAD_ARGUMENT");
+      if (access === "team") {
+        if (o.can !== undefined) input.teamCan = oneOf(["view", "edit"], o.can, "What all members can do");
+      } else if (o.can !== undefined) throw new ControlError("`can` is for the level team only.", "BAD_ARGUMENT");
+    }
+    return { access, input, added, more };
+  }
+
   return {
     // ── Reads ──
     /** The owner's spaces, in the owner's order (pinned first). Every space of the host, the members' too. */
@@ -89,54 +130,58 @@ export function sharingApi({ handlers }) {
     // ── Who can open a space ──
     /**
      * `options`: { access: "private" | "members" | "team", people?: [{ person, can }…], can?, agreed? }.
-     * "members" is the people named (`people`, each with `can: "view" | "edit"`). "team" is every member, and `can` is what they may
-     * do; it needs `agreed: true`. A link is made by `sharing.link`. The answer is the space as it is now.
+     * "members" is the people named (`people`, each with `can: "view" | "edit"`). It needs `agreed: true` when more people can open
+     * the space than now, or a person can do more (view to edit), compared with the space as it is now. "team" is every member, and
+     * `can` is what they may do; it needs `agreed: true`. A link is made by `sharing.link`. The answer is the space as it is now.
      * A space that was shared by link and is shared at a narrower level now has its link taken away.
      */
     async "sharing.set"([ref, options]) {
       const found = space(ref);
       const o = plain(options);
-      const access = oneOf(["private", "members", "team"], o.access, "A level (a link is made with `sharing link`)");
-      const input = { access };
-      if (access === "members") {
-        if (!Array.isArray(o.people) || !o.people.length) throw new ControlError("Name the people who can open the space.", "BAD_ARGUMENT");
-        const grants = new Map();
-        for (const one of o.people) {
-          const who = person(plain(one).person);
-          if (who.id === found.by?.id) throw new ControlError(who.name + " made this space, so they can open it already.", "BAD_ARGUMENT");
-          if (grants.has(who.id)) throw new ControlError(who.name + " is named twice.", "BAD_ARGUMENT");
-          grants.set(who.id, { id: who.id, can: oneOf(["view", "edit"], plain(one).can ?? "view", "What a person can do") });
-        }
-        input.grants = [...grants.values()];
-        if (o.can !== undefined) throw new ControlError("For the level members, give `can` with each person, not once for all.", "BAD_ARGUMENT");
-      } else {
-        if (o.people !== undefined) throw new ControlError("People are named for the level members only.", "BAD_ARGUMENT");
-        if (access === "team") {
-          if (o.can !== undefined) input.teamCan = oneOf(["view", "edit"], o.can, "What all members can do");
-          if (o.agreed !== true) throw NEEDS_YES("Sharing a space with all members");
-        } else if (o.can !== undefined) throw new ControlError("`can` is for the level team only.", "BAD_ARGUMENT");
-      }
+      const { access, input, added, more } = plan(found, o);
+      if (access === "team" && o.agreed !== true) throw NEEDS_YES("Sharing a space with all members");
+      if ((added.length || more.length) && o.agreed !== true) throw NEEDS_YES("Adding people to a space, or letting a person do more with it,");
       await handlers["link.spaces.share"](found.id, input);
       return fresh(found.id);
     },
+    /** What `sharing.set` with the same arguments would add, and changes nothing: `{ id, name, added: [{ id, name, can }…], more: [{ id, name, from, can }…], widens }`. */
+    "sharing.preview"([ref, options]) {
+      const found = space(ref);
+      const { added, more } = plan(found, plain(options));
+      return { ...named(found), added, more, widens: added.length > 0 || more.length > 0 };
+    },
     /**
      * A link that anyone can open, for a space: it makes the space shared by link when it is not, and answers with the link.
-     * `options`: { new?: true, agreed? }. A space that is shared by link already answers with the link it has (`made: false`), and
-     * changes nothing; with `new: true` it gets another link, and the old one stops working. Making a link, and a new one, need
-     * `agreed: true`. The answer is `{ id, name, link, made, new }`: the only call that gives a link.
+     * `options`: { new?: true, agreed? }. Making a link, and a new one (`new: true`, the old one stops working), need `agreed: true`.
+     * The answer is `{ id, name, link, made, new }`: the only call that gives a link, and it gives one only when it makes one.
+     * A space that has a link already, with no `new: true`, changes nothing and answers `{ id, name, link: null, made: false, new: false }`:
+     * a link is shown once, when it is made. A person copies a link that exists in the app's window.
+     * With the relay off the app's call refuses before it changes the space (it checks the relay first), so the space keeps its access.
      */
     async "sharing.link"([ref, options]) {
       const found = space(ref);
       const o = plain(options);
       const make = found.access !== "link";
       const another = !make && o.new === true;
-      if ((make || another) && o.agreed !== true) throw NEEDS_YES(make ? "A link" : "A new link");
-      let link;
-      if (make) link = (await handlers["link.spaces.share"](found.id, { access: "link" }))?.link;
-      else if (another) link = (await handlers["link.spaces.newLink"](found.id))?.link;
-      else link = found.link;
+      if (!make && !another) return { ...named(found), link: null, made: false, new: false };
+      if (o.agreed !== true) throw NEEDS_YES(make ? "A link" : "A new link");
+      const link = (await (make ? handlers["link.spaces.share"](found.id, { access: "link" }) : handlers["link.spaces.newLink"](found.id)))?.link;
       if (typeof link !== "string" || !link) throw new ControlError("This space has no link now: links are off while the relay is off. Turn it on with `botkins relay on`.", "LINK_OFF");
       return { ...named(found), link, made: make, new: another };
+    },
+    /**
+     * The team's switch "Members may share by link", as the link says it: `{ on: true | false }`, or `{ on: null }` when the link's
+     * answer for the team has no `linkSharing` field that is true or false (an older link): then it is not known.
+     */
+    "sharing.getLinks"() {
+      let snapshot;
+      try {
+        snapshot = handlers.snapshot();
+      } catch {
+        snapshot = null;
+      }
+      const on = snapshot?.team?.linkSharing;
+      return { on: typeof on === "boolean" ? on : null };
     },
     /** The team's switch "Members may share by link". Turning it on needs `agreed: true`. Turning it off leaves the links that exist. */
     async "sharing.setLinks"([on, options]) {

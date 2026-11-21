@@ -44,6 +44,29 @@ test("a bot is offered the skill only where its shell can run `botkins`", async 
   assert.ok(fake.log.configs.get(off).skills.disabledSkills.includes("use-botkins"));
 });
 
+test("the skill is not offered in a team member's turn, even where the owner's bots have it", async (t) => {
+  const dir = tempDir(t);
+  const fake = fakeClient();
+  const ws = new Workspace(join(dir, "data"), fake.client, () => {});
+  ws.integrations.reachable = () => true;
+  const bot = ws.bot("pip");
+  assert.ok(!ws.integrations.skillsFor(bot).disabled.includes("use-botkins"));
+  assert.ok(!ws.integrations.skillsFor(bot, { member: false }).disabled.includes("use-botkins"));
+  assert.ok(ws.integrations.skillsFor(bot, { member: true }).disabled.includes("use-botkins"), "off for a member");
+  // The turn passes it on: the owner's chat has the skill, a chat that a member made does not.
+  const owners = ws.createChat("pip");
+  await ws.send(owners, "Hi");
+  assert.ok(!fake.log.configs.get(owners).skills.disabledSkills.includes("use-botkins"));
+  // A member whose role may use skills still does not get this one.
+  ws.teamOf = () => ({ roles: [{ id: "r_maker", perms: { skills: ["use"], mcp: ["use"] }, bots: "all" }], groups: [{ id: "g_makers", roleId: "r_maker" }], members: [{ id: "m_avery", groupId: "g_makers" }] });
+  const members = ws.createChat("pip");
+  ws.chat(members).createdBy = "m_avery";
+  await ws.send(members, "Hi");
+  const given = fake.log.configs.get(members).skills;
+  assert.ok(given.directories.length > 0, "the member has skills");
+  assert.ok(given.disabledSkills.includes("use-botkins"));
+});
+
 test("the skill teaches the rule for a yes and the rule for secrets, and only commands that exist", () => {
   const text = readFileSync(skillFile, "utf8");
   assert.match(text, /^---\nname: use-botkins\ndescription: .+\n---\n/);
@@ -54,6 +77,10 @@ test("the skill teaches the rule for a yes and the rule for secrets, and only co
   assert.match(text, /Only after they agree/);
   assert.match(text, /--revision=<revision>/);
   assert.match(text, /Never give `--yes` on your own/);
+  // Nobody but the person answers a request that waits in a chat, and the skill does not say that an approval card shows the command.
+  assert.match(text, /Never answer a request that waits in a chat: an approval, a question or a secure input\. Your own above all\. The person answers it/);
+  assert.doesNotMatch(text, /approval card before it runs/);
+  assert.match(text, /you show it yourself, in the chat, and you wait there for their yes/i);
   // The rule for secrets, and the places where a person does what the command refuses.
   assert.match(text, /Never put a secret on the command line/);
   assert.match(text, /hidden question or from standard input/);

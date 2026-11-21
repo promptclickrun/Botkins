@@ -99,17 +99,24 @@ async function turn(context, chatId, message, { live }) {
       if (live && printed && !printed.endsWith("\n")) stdout.write("\n");
       printed = "";
       let answer;
-      if (!context.stdin.isTTY || context.json) {
-        // Nobody to ask: an approval is refused, a question is left unanswered.
-        answer = { action: request.kind === "permission" ? "deny" : "cancel" };
-        context.note("The bot asked: " + request.title + " (" + (request.kind === "permission" ? "refused" : "left unanswered") + ": there is no terminal to ask at).");
-      } else if (request.kind === "permission") {
-        answer = { action: /^y(es)?$/i.test((await ask(context, color.yellow("Approve? ") + request.title + " [y/N] ")).trim()) ? "approve" : "deny" };
+      if (request.kind === "permission") {
+        // What the bot wants to do is shown first, on standard error, also with --json.
+        context.stderr.write("The bot asks for your approval to:\n  " + shownText(request.title) + "\n");
+        if (!context.stdin.isTTY || context.json) {
+          // Nobody to ask: the request is refused. No flag approves it: a yes to a bot's request comes from a person, at a terminal, in the window or on a phone.
+          answer = { action: "deny" };
+          context.note("Refused: there is no terminal to ask at. Approve a request at a terminal, in the app's window or on a phone.");
+        } else answer = { action: /^y(es)?$/i.test((await ask(context, color.yellow("Approve? ") + "[y/N] ")).trim()) ? "approve" : "deny" };
+      } else if (!context.stdin.isTTY || context.json) {
+        // Nobody to ask: a question is left unanswered.
+        answer = { action: "cancel" };
+        context.note("The bot asked: " + shownText(request.title) + " (left unanswered: there is no terminal to ask at).");
       } else {
-        const value = (await ask(context, color.yellow(request.title) + "\n> ")).trim();
+        const value = (await ask(context, color.yellow(shownText(request.title)) + "\n> ")).trim();
         answer = value ? { action: "answer", value } : { action: "cancel" };
       }
-      await client.call("chat.respond", request.id, answer).catch((error) => context.note(error.message));
+      // A yes carries the mark `{ agreed: true }`, which the service needs: it is given only after the person said yes at the terminal.
+      await client.call("chat.respond", ...(answer.action === "approve" ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
       continue;
     }
     if (!view.working) {
@@ -320,9 +327,10 @@ export const workspace = {
       },
       login: {
         summary: "Sign a provider in",
-        usage: "botkins providers login <provider> [--token] [--service <id>] [--method <id>]",
+        usage: "botkins providers login <provider> [--token] [--service <id>] [--method <id>] [--yes]",
         options: {
           token: { type: "boolean", about: "Paste a token or key instead: typed without showing, or read from standard input" },
+          yes: { type: "boolean", about: "Replace the token that Botkins keeps, with no question (with --token)" },
           service: { type: "string", value: "id", about: "OpenCode: the model service to connect (see `botkins providers services opencode`)" },
           method: { type: "string", value: "id", about: "OpenCode: which of the service's sign-ins to use" },
         },
@@ -339,14 +347,24 @@ export const workspace = {
           "  claude    the token `claude setup-token` prints on any computer with a browser, or an Anthropic API key",
           "  opencode  the service's API key (with --service)",
           "The token is never taken from the command line, where other users could see it: pipe it in, or type it at the prompt.",
+          "A new token replaces the token that Botkins keeps for the provider, and the old one is lost. That asks first, and with no terminal it needs --yes. A first token asks nothing.",
         ].join("\n"),
         async run(context) {
           if (context.args.length !== 1) throw usage("Name the provider (see `botkins providers list`).");
           const [id] = context.args;
           const { service, method } = context.options;
           if (context.options.token) {
+            // Asked before the token is typed, so that nobody types a token that is then not used.
+            const kept = (await context.client.call("providers.list")).some((entry) => entry.id === id && entry.token);
+            if (kept) {
+              context.stderr.write("A new token replaces the token that Botkins keeps for " + shownText(id) + ". The old token is lost and cannot be got back.\n");
+              if (!(await confirm(context, "Replace the token for " + shownText(id) + "?"))) {
+                context.note("Not changed.");
+                return EXIT.failed;
+              }
+            }
             const token = await secret(context, "Token or key for " + id + " (not shown): ");
-            const result = await context.client.call("providers.login", id, { token, service });
+            const result = await context.client.call("providers.login", id, { token, service }, ...(kept ? [{ agreed: true }] : []));
             return void context.print(result, "Signed in" + (result.account ? " as " + result.account : "") + (result.plan ? " (" + result.plan + ")" : "") + ".");
           }
           const started = await context.client.call("providers.login", id, { service, method });
@@ -356,10 +374,17 @@ export const workspace = {
       },
       logout: {
         summary: "Sign a provider out",
-        usage: "botkins providers logout <provider>",
+        usage: "botkins providers logout <provider> [--yes]",
+        options: { yes: { type: "boolean", about: "Do not ask first" } },
+        details: "This removes the token that Botkins keeps for the provider, and the provider's own sign-in where it can remove one. Neither can be got back. That asks first, and with no terminal it needs --yes.",
         async run(context) {
           if (context.args.length !== 1) throw usage("Name the provider (see `botkins providers list`).");
-          context.print(await context.client.call("providers.logout", context.args[0]), (result) => (result.connected ? "The token Botkins kept is removed, and the provider is still signed in another way (its own sign-in, or this host's environment)." : "Signed out."));
+          context.stderr.write("This signs " + shownText(context.args[0]) + " out. The token that Botkins keeps for it and the provider's own sign-in go, and neither can be got back.\n");
+          if (!(await confirm(context, "Sign " + shownText(context.args[0]) + " out?"))) {
+            context.note("Not signed out.");
+            return EXIT.failed;
+          }
+          context.print(await context.client.call("providers.logout", context.args[0], { agreed: true }), (result) => (result.connected ? "The token Botkins kept is removed, and the provider is still signed in another way (its own sign-in, or this host's environment)." : "Signed out."));
         },
       },
       enable: {
@@ -404,7 +429,7 @@ export const workspace = {
       message: { type: "string", short: "m", value: "text", about: "Send one message, print the reply and return (\"-\" reads it from standard input)" },
       chat: { type: "string", value: "id", about: "Continue this chat instead of starting a new one" },
     },
-    details: "Without -m, a prompt opens: type a message and Enter. Ctrl-C stops a reply; Ctrl-D, or /quit, leaves. The chat is an ordinary one: a paired phone shows it too.",
+    details: "Without -m, a prompt opens: type a message and Enter. Ctrl-C stops a reply; Ctrl-D, or /quit, leaves. The chat is an ordinary one: a paired phone shows it too. When the bot asks for an approval, the request is shown on standard error and you are asked at a terminal. With no terminal the request is refused: no flag approves it.",
     async run(context) {
       if (context.args.length !== 1) throw usage("Name the bot (its name or id).");
       const { client, color } = context;
@@ -576,8 +601,14 @@ export const workspace = {
         options: { yes: { type: "boolean", short: "y", about: "Don't ask first" } },
         async run(context) {
           if (context.args.length !== 1) throw usage("Name the plugin by its id.");
-          if (!(await confirm(context, "Remove the plugin " + context.args[0] + "?"))) return EXIT.failed;
-          context.print(await context.client.call("plugins.uninstall", context.args[0]), "Removed.");
+          const plugin = await context.client.call("plugins.get", context.args[0]);
+          const name = shownText(plugin.name ?? plugin.id);
+          context.stderr.write("This removes the plugin " + name + ". Its saved settings and its sign-ins go, and they cannot be got back.\n");
+          if (!(await confirm(context, "Remove the plugin " + name + "?"))) {
+            context.note("Not removed.");
+            return EXIT.failed;
+          }
+          context.print(await context.client.call("plugins.uninstall", plugin.id, { agreed: true }), "Removed.");
         },
       },
     },

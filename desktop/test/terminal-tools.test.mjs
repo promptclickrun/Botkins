@@ -123,15 +123,17 @@ test("a tool that starts a program is shown first and needs a yes; its values go
   assert.match(offTest.err, /This starts a program on this computer[\s\S]*docs: npx -y @example\/other[\s\S]*This needs a yes/);
   assert.match((await botkins(["tools", "test", "docs", "--yes"])).err, /Create a bot first\./);
   await botkins(["tools", "enable", "docs", "--yes"]);
-  // Removing asks too.
+  // Removing asks too. The socket's own call refuses with no mark, and the tool is still there; with the mark it goes.
   assert.equal((await botkins(["tools", "remove", "docs"])).exit, 2);
+  await assert.rejects(client.call("tools.remove", "docs"), { code: "NEEDS_YES" });
+  assert.ok((await client.call("tools.list")).some((tool) => tool.name === "docs"));
   assert.match((await botkins(["tools", "remove", "docs", "--yes"])).out, /Removed docs\./);
   assert.match((await botkins(["tools", "show", "docs"])).err, /There is no tool called docs\. See `botkins tools list`\./);
   assert.equal(everything().includes(SECRET), false);
 });
 
 test("a tool on the web takes its header by name, and a file of tools is shown before it is added", { skip }, async (t) => {
-  const { botkins, put, changes, everything } = await service(t);
+  const { botkins, put, client, changes, everything } = await service(t);
   // A web address starts nothing here: no question.
   const web = await botkins(["tools", "add", "search", "--url", "https://mcp.example.com/v1", "--header", "Authorization", "--secrets", "-"], { input: JSON.stringify({ headers: { Authorization: "Bearer " + SECRET } }) });
   assert.equal(web.exit, 0, web.err);
@@ -144,7 +146,10 @@ test("a tool on the web takes its header by name, and a file of tools is shown b
   assert.match((await botkins(["tools", "edit", "search", "--url", "https://other.example.com/v1"])).err, /Enter the value for Authorization again/);
   assert.equal((await botkins(["tools", "edit", "search", "--url", "https://other.example.com/v1", "--header", "Authorization", "--secrets", put("h.json", { headers: { Authorization: "Bearer " + SECRET } })])).exit, 0);
   // Signing in needs a browser; signing out does not.
-  assert.equal((await botkins(["tools", "sign-out", "search"])).exit, 0);
+  // Signing out forgets the sign-in: the socket refuses with no mark, the command needs a yes.
+  await assert.rejects(client.call("tools.signOut", "search"), { code: "NEEDS_YES" });
+  assert.equal((await botkins(["tools", "sign-out", "search"])).exit, 2);
+  assert.equal((await botkins(["tools", "sign-out", "search", "--yes"])).exit, 0);
 
   // A file of tools: each program is shown, one yes for all, and a name that is taken is left out.
   const file = put("mcp.json", { mcpServers: { search: { url: "https://dup.example.com" }, notes: { command: "uvx", args: ["notes-mcp", "--dir", "/srv/notes"], env: { NOTES_KEY: SECRET } }, remote: { url: "https://remote.example.com/mcp" } } });

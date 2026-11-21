@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ import { headlessHost } from "../desktop/host/headless.mjs";
 import { createRuntime } from "../desktop/runtime.mjs";
 import { startAppControl } from "../desktop/terminal/control-start.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
-import { reachable } from "../desktop/terminal/reach.mjs";
+import { launcherText, prepareReach, reachable } from "../desktop/terminal/reach.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
 
@@ -124,4 +124,58 @@ test("the window's app has the same socket, refuses what the terminal host's ref
 
   await control.close();
   assert.equal(existsSync(socket), false);
+});
+
+test("the app's change log is a file that stays after a quit, in a folder that is this user's own", { skip }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-applog-"));
+  const root = join(dir, "app");
+  // A folder that is there already, open to others: the start closes it.
+  mkdirSync(join(root, "run"), { recursive: true, mode: 0o755 });
+  chmodSync(join(root, "run"), 0o755);
+  const runtime = await createRuntime({ host: headlessHost({ version: "9.9.9" }), dataDir: join(root, "data"), trial: true, link: { port: await freePort(), announce: false } });
+  t.after(async () => {
+    await runtime.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const said = [];
+  const control = await startAppControl({ runtime, root, version: "9.9.9", env: { PATH: "/usr/bin:/bin" }, say: (line) => said.push(line) });
+  assert.ok(control, said.join("\n"));
+  assert.equal(statSync(join(root, "run")).mode & 0o777, 0o700);
+  // One change through the socket. A value is never in the log.
+  await controlClient(control.socket, { timeout: 40_000 }).call("bots.add", { name: "Nova", instructions: "SECRET-INSTRUCTIONS" });
+  await control.close();
+  // The app quits and starts again: the line is still there, in the file that `botkins logs` reads when no service holds it.
+  const file = join(root, "logs", "botkins.log");
+  const text = readFileSync(file, "utf8");
+  assert.match(text, / info +Changed from the command line: bots\.add Nova\n/);
+  assert.equal(text.includes("SECRET"), false);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(file, terminalPaths({ root, env: {} }).logFile);
+  const again = await startAppControl({ runtime, root, version: "9.9.9", env: { PATH: "/usr/bin:/bin" }, say: (line) => said.push(line) });
+  assert.ok(again, said.join("\n"));
+  await again.close();
+  assert.match(readFileSync(file, "utf8"), /Changed from the command line: bots\.add Nova\n[\s\S]*Control socket: /);
+});
+
+test("the app's own launcher tells the command that it is the app's, so the advice for a missing service is to open the app", { skip }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-launch-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.match(launcherText({ node: "/usr/bin/node", cli: "/x/botkins.mjs", electron: false, app: true }), /\nBOTKINS_LAUNCHED_BY=app exec '\/usr\/bin\/node'/);
+  assert.doesNotMatch(launcherText({ node: "/usr/bin/node", cli: "/x/botkins.mjs", electron: false }), /BOTKINS_LAUNCHED_BY/);
+  // Nothing listens: the command that each host's launcher runs says what to do about it.
+  const status = async (app) => {
+    const root = join(dir, app ? "app" : "host");
+    const env = { PATH: "/usr/bin:/bin" };
+    const { command } = prepareReach({ dataDir: root, socket: join(root, "run", "botkins.sock"), env, app });
+    const launched = await run(command, ["status"], { env: { PATH: env.PATH, BOTKINS_SOCKET: env.BOTKINS_SOCKET, BOTKINS_DATA_DIR: root } }).catch((error) => error);
+    return String(launched.stdout);
+  };
+  assert.match(await status(true), /Botkins is not running \(data folder .*\)\.\nThe Botkins app is not running\. Open it\.\n$/);
+  assert.doesNotMatch(await status(true), /botkins service start/);
+  assert.match(await status(false), /Start it with `botkins service start`, or `botkins serve` in another terminal\.\n$/);
+  // The doctor says it too.
+  const client = { call: async () => Promise.reject(Object.assign(new Error("not running"), { code: "NOT_RUNNING" })) };
+  const doctor = async (env) => (await examine({ paths: terminalPaths({ root: join(dir, "doc"), env: {} }), client, env, fetcher: async () => new Response(""), freePort: async () => true, node: "24.1.0" })).checks.find((entry) => entry.name === "Service").detail;
+  assert.match(await doctor({ BOTKINS_LAUNCHED_BY: "app" }), /can't be asked\. The Botkins app is not running\. Open it\.$/);
+  assert.match(await doctor({}), /Start it with `botkins service start` or `botkins serve`\.$/);
 });

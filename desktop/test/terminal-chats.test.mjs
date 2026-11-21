@@ -433,11 +433,24 @@ test("an answer to a request that waits in a chat leaves a line: the chat, the k
     return { id, pending };
   };
   const permission = ask({ kind: "permission", label: "Run", title: "PRIVATE-TITLE run a command", preview: "PRIVATE-PREVIEW" });
-  assert.deepEqual(await client.call("chat.respond", permission.id, { action: "approve" }), { chatId, kind: "permission", answered: "yes" });
+  // A yes needs the mark: with none, the request still waits. A bot's shell cannot approve its own request by a quiet call.
+  for (const action of ["approve", "remember"]) await assert.rejects(client.call("chat.respond", permission.id, { action }), { code: "NEEDS_YES" });
+  await assert.rejects(client.call("chat.respond", permission.id, { action: "approve" }, { agreed: "yes" }), { code: "NEEDS_YES" });
+  assert.equal(workspace.interactions.snapshot().some((entry) => entry.id === permission.id), true, "the request waits");
+  assert.deepEqual(await client.call("chat.respond", permission.id, { action: "approve" }, { agreed: true }), { chatId, kind: "permission", answered: "yes" });
   assert.deepEqual(await permission.pending, { action: "approve" });
+  // A no, a cancel and an answer to a question need no mark.
+  const refused = ask({ kind: "permission", label: "Run", title: "PRIVATE-TITLE two", preview: "PRIVATE-PREVIEW" });
+  assert.deepEqual(await client.call("chat.respond", refused.id, { action: "deny" }), { chatId, kind: "permission", answered: "no" });
+  assert.deepEqual(await refused.pending, { action: "deny" });
+  const typed = ask({ kind: "question", title: "PRIVATE-QUESTION two", choices: [], freeform: true });
+  assert.deepEqual(await client.call("chat.respond", typed.id, { action: "answer", value: "Partners" }), { chatId, kind: "question", answered: "yes" });
   const question = ask({ kind: "question", title: "PRIVATE-QUESTION", choices: [], freeform: true });
   await client.call("chat.respond", question.id, { action: "cancel" });
-  const lines = (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("chat.respond"));
-  assert.deepEqual(lines.map((text) => text.split("Changed from the command line: ")[1]), ["chat.respond " + chatId + " permission yes", "chat.respond " + chatId + " question no"]);
+  const all = (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("chat.respond"));
+  // The three attempts with no mark are in the log too, as tries that failed.
+  assert.equal(all.filter((text) => text.includes("Tried from the command line: chat.respond") && text.endsWith("(it failed)")).length, 3);
+  const lines = all.filter((text) => text.includes("Changed from the command line"));
+  assert.deepEqual(lines.map((text) => text.split("Changed from the command line: ")[1]), ["chat.respond " + chatId + " permission yes", "chat.respond " + chatId + " permission no", "chat.respond " + chatId + " question yes", "chat.respond " + chatId + " question no"]);
   assert.equal(lines.join("\n").includes("PRIVATE"), false);
 });

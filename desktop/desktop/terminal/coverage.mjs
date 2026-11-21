@@ -197,7 +197,7 @@ export const WORKSPACE = {
   resetVault: cmd("vault reset"),
   savedCredentials: cmd("credentials list"),
   saveSavedCredential: cmd("credentials save"), // `credentials edit` changes one
-  checkSavedCredential: cmd("credentials check"),
+  checkSavedCredential: no("person"), // it reads a linked field through the password manager's tool, so it reaches a saved secret
   removeSavedCredential: cmd("credentials remove"),
   // These five need a person at the app. After an unlock, a password manager's session stays in the
   // service's memory, so every later caller of the socket could list the person's logins. And a
@@ -556,12 +556,12 @@ export const MORE_READS = {
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
-  credentials: ["credentials.list", "credentials.check", "credentials.vault", "credentials.managers", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"], // (`credentials.check` reads a value on this computer and drops it.)
+  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
   voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
   // (Spaces and panels)
   spaces: ["space.list", "space.get", "panel.list", "panel.get", "panel.routine.review", "card.list", "card.get"],
   // (Sharing a space)
-  sharing: ["sharing.list", "sharing.get"],
+  sharing: ["sharing.list", "sharing.get", "sharing.preview", "sharing.getLinks"], // (`sharing.preview` changes nothing: it says who a change would add.)
   // (The team)
   team: ["team.get", "team.roles", "team.role", "team.groups", "team.invites", "team.requests", "team.members", "team.chatPeople", "team.look"],
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
@@ -589,6 +589,8 @@ const FIXED_WORDS = {
   approval: (value) => (["ask", "read", "assisted", "all"].includes(value) ? value : null),
   "access.allBots": onOff,
   teamwork: onOff,
+  // A login item on this computer: the person sees afterwards that a bot made Botkins start at login.
+  "background.runAtStartup": onOff,
 };
 const fixedWord = (key, value) => {
   const word = typeof key === "string" && Object.hasOwn(FIXED_WORDS, key) ? FIXED_WORDS[key](value) : null;

@@ -112,16 +112,6 @@ const credentials = {
         context.print(saved, "Saved " + safe(saved.name) + ".");
       },
     },
-    check: {
-      summary: "Check that a credential can be read now (the value is read on this computer and dropped)",
-      usage: "botkins credentials check <credential>",
-      details: "A credential that is read from a password manager asks that manager's command-line tool for it. The exit code is 1 when it cannot be read.",
-      async run(context) {
-        const answer = await context.client.call("credentials.check", one(context, CREDENTIAL));
-        context.print(answer, answer.ok ? safe(answer.name) + " can be read." : safe(answer.name) + " cannot be read: " + safe(answer.message ?? "no reason was given") + ".");
-        return answer.ok ? EXIT.ok : EXIT.failed;
-      },
-    },
     remove: {
       summary: "Remove a saved credential",
       usage: "botkins credentials remove <credential> [--yes]",
@@ -203,7 +193,7 @@ const vault = {
             return EXIT.failed;
           }
         }
-        context.print(await context.client.call("credentials.vaultReset", { agreed: true }), "The vault is reset. It is empty. Enter each key and sign-in again.");
+        context.print(await context.client.call("credentials.vaultReset", { agreed: true, eraseAllSavedSecrets: true }), "The vault is reset. It is empty. Enter each key and sign-in again.");
       },
     },
   },

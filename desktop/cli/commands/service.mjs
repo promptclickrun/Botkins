@@ -6,11 +6,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../../desktop/terminal/config.mjs";
 import { serviceManager } from "../../desktop/terminal/manager.mjs";
+import { launchedByApp } from "../../desktop/terminal/reach.mjs";
 import { installLayout, notRootOwned, notRootOwnedWords } from "../../desktop/terminal/update-install.mjs";
 import { CliError, duration, EXIT, table } from "../output.mjs";
 
 const MIN_NODE = [22, 12];
 const WANTED_NODE = 24;
+/** What a command says when the app's own launcher ran it and the app is not running: the app is not a service to start. */
+const OPEN_THE_APP = "The Botkins app is not running. Open it.";
 
 /** The last lines of the log file, for a service that isn't running. */
 function tailFile(file, count) {
@@ -78,7 +81,7 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
     seen = await client.call("doctor");
   } catch (error) {
     if (error.code === "DENIED") checks.push(check("Service", false, error.message));
-    else if (error.code === "NOT_RUNNING") checks.push(check("Service", null, "Not running, so the phone link, the relay and the providers can't be asked. Start it with `botkins service start` or `botkins serve`."));
+    else if (error.code === "NOT_RUNNING") checks.push(check("Service", null, "Not running, so the phone link, the relay and the providers can't be asked. " + (launchedByApp(env) ? OPEN_THE_APP : "Start it with `botkins service start` or `botkins serve`.")));
     else checks.push(check("Service", false, error.message));
   }
   if (seen) {
@@ -188,7 +191,7 @@ export const service = {
         status = await context.client.call("status");
       } catch (error) {
         if (error.code !== "NOT_RUNNING") throw error;
-        context.print({ running: false, dataDir: context.paths.root, socket: context.paths.socket }, "Botkins is not running (data folder " + context.paths.root + ").\nStart it with `botkins service start`, or `botkins serve` in another terminal.");
+        context.print({ running: false, dataDir: context.paths.root, socket: context.paths.socket }, "Botkins is not running (data folder " + context.paths.root + ").\n" + (launchedByApp(context.env) ? OPEN_THE_APP : "Start it with `botkins service start`, or `botkins serve` in another terminal."));
         return EXIT.notRunning;
       }
       context.print(status, () => {

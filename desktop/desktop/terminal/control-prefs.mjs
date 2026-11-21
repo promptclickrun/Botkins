@@ -78,6 +78,8 @@ export const WIDENS = {
   approval: (now, next) => (APPROVAL_ORDER.indexOf(next) > APPROVAL_ORDER.indexOf(now) ? "The approval level " + next + " is looser than " + now + ": bots get more room, and some of their requests get a yes with no question to the person." : null),
   "access.allBots": (now, next) => (next === true && now !== true ? "Turning on access for all bots lets every bot use every project: the grant that each bot has no longer limits it, so bots get more room." : null),
   teamwork: (now, next) => (next === true && now !== true ? "Turning teamwork on lets a bot bring other bots into a chat to work for it: bots get more room." : null),
+  // It makes a login item on this computer (desktop/runtime.mjs, setPreferences): a program that starts at each login.
+  "background.runAtStartup": (now, next) => (next === true && now !== true ? "Turning on run at startup makes Botkins start when the person logs in to this computer: it adds a login item to this computer." : null),
 };
 
 /** The settings made whole, as the app shows them. */
@@ -180,7 +182,7 @@ export function prefsApi({ workspace, handlers }) {
     /**
      * Sets one preference. The answer is { key, value }, the value as it is now.
      * `options`: { agreed?: true }. A switch that gives bots more room (`WIDENS`: a looser approval level, access for all bots
-     * switched on, teamwork switched on) needs `agreed: true`: the caller showed the person what it gives and got a yes.
+     * switched on, teamwork switched on, run at startup switched on) needs `agreed: true`: the caller showed the person what it gives and got a yes.
      * The command line does that (`--yes`, or the question at a terminal). A change that gives nothing more needs no mark.
      */
     async "preferences.set"([key, value, options]) {

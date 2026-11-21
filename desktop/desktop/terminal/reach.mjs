@@ -23,6 +23,11 @@ const CLI = fileURLToPath(new URL("../../cli/botkins.mjs", import.meta.url));
 // For a PATH that has none (a launchd job with no environment). The shell's own default is much the same.
 const DEFAULT_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
+/** The launcher of the desktop app sets this to "app" for its one command, so the command knows that there is no service to start. */
+export const LAUNCHED_BY = "BOTKINS_LAUNCHED_BY";
+/** True when `env` comes from the desktop app's own launcher (desktop/terminal/control-start.mjs). */
+export const launchedByApp = (env = process.env) => env?.[LAUNCHED_BY] === "app";
+
 /** A word as a shell reads it with no change: in single quotes, so a space or a quote in a path is safe. */
 const quoted = (text) => "'" + String(text).replaceAll("'", "'\\''") + "'";
 
@@ -31,9 +36,10 @@ const quoted = (text) => "'" + String(text).replaceAll("'", "'\\''") + "'";
  * @param options.node      The program that runs the command line (process.execPath).
  * @param options.cli       The command line's file.
  * @param options.electron  True when `node` is the desktop app's program: it runs as Node for this one command.
+ * @param options.app       True for the desktop app's launcher: it sets BOTKINS_LAUNCHED_BY=app for this one command.
  */
-export function launcherText({ node = process.execPath, cli = CLI, electron = !!process.versions.electron } = {}) {
-  return "#!/bin/sh\n# Made by Botkins each time it starts. It runs this installation's own command line.\n" + (electron ? "ELECTRON_RUN_AS_NODE=1 " : "") + "exec " + quoted(node) + " " + quoted(cli) + ' "$@"\n';
+export function launcherText({ node = process.execPath, cli = CLI, electron = !!process.versions.electron, app = false } = {}) {
+  return "#!/bin/sh\n# Made by Botkins each time it starts. It runs this installation's own command line.\n" + (app ? LAUNCHED_BY + "=app " : "") + (electron ? "ELECTRON_RUN_AS_NODE=1 " : "") + "exec " + quoted(node) + " " + quoted(cli) + ' "$@"\n';
 }
 
 /**
@@ -41,9 +47,10 @@ export function launcherText({ node = process.execPath, cli = CLI, electron = !!
  * @param options.dataDir  The folder that holds `run/` (the host's root: `<root>/run/bin/botkins`), not its `data/` folder.
  * @param options.socket   The control socket, as the command line should find it.
  * @param options.env      What a bot's shell inherits. Changed in place.
+ * @param options.app      True when the desktop app calls it: the launcher then tells the command that it is the app's.
  * @returns { bin, command, socket }: the folder, the launcher's file, and the socket.
  */
-export function prepareReach({ dataDir, socket, env = process.env, node, cli, electron } = {}) {
+export function prepareReach({ dataDir, socket, env = process.env, node, cli, electron, app = false } = {}) {
   if (!dataDir || !socket) throw new Error("prepareReach needs a data folder and a socket.");
   const bin = join(dataDir, "run", "bin");
   mkdirSync(bin, { recursive: true, mode: 0o700 });
@@ -53,7 +60,7 @@ export function prepareReach({ dataDir, socket, env = process.env, node, cli, el
     // Somebody else's folder: its permissions are theirs to set.
   }
   const command = join(bin, LAUNCHER);
-  const text = launcherText({ node, cli, electron });
+  const text = launcherText({ node, cli, electron, app });
   // Written whole and moved into place, so a shell that runs it right now never reads half of it.
   let current = null;
   try {

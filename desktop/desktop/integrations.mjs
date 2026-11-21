@@ -773,13 +773,17 @@ export class Integrations {
     if (mcpOff !== undefined) bot.mcpOff = strings(mcpOff).filter((id) => this.servers.some((s) => s.id === id));
     this.changed();
   }
-  /** The skill folders and switched-off skills for a bot's sessions. */
-  skillsFor(bot) {
+  /**
+   * The skill folders and switched-off skills for a bot's sessions.
+   * @param turn.member  True when a team member wrote the message or the chat is a member's (accessForTurn).
+   */
+  skillsFor(bot, { member = false } = {}) {
     return {
       // A linked folder that has become a plugin since it was linked is not handed on, as a plugin can start commands. It stays linked, and is looked at again at each call.
       directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
       // The command-line skill goes last, and only a host where a bot's shell finds the command offers it.
-      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...(this.reachable() ? [] : [COMMAND_SKILL])])],
+      // Never in a member's turn: the socket knows no member, so a member's bot must not be taught to act as the owner at the socket.
+      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...(this.reachable() && !member ? [] : [COMMAND_SKILL])])],
     };
   }
 }

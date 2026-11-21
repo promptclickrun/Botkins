@@ -512,10 +512,19 @@ export const pluginCommands = {
   },
   "sign-out": {
     summary: "Forget the sign-ins of a plugin's tools",
-    usage: "botkins plugins sign-out <id>",
-    details: "A tool on the web signs in through a browser. Forget its sign-in here, and sign it in again with `botkins plugins sign-in`.",
+    usage: "botkins plugins sign-out <id> [--yes]",
+    options: { yes: { type: "boolean", short: "y", about: "Don't ask first" } },
+    details: "A tool on the web signs in through a browser. Forget its sign-in here, and sign it in again with `botkins plugins sign-in`.\n\nA sign-in that is forgotten cannot be got back, so this asks first. With no terminal it needs --yes.",
     async run(context) {
-      context.print(await context.client.call("plugins.signOut", one(context, "Name the plugin (its id or name).")), (done) =>
+      const ref = one(context, "Name the plugin (its id or name).");
+      const plugin = await context.client.call("plugins.get", ref);
+      const name = safe(plugin.name ?? plugin.id);
+      context.stderr.write("This forgets the sign-ins of the tools of the plugin " + name + ". They cannot be got back: each tool signs in again through a browser.\n");
+      if (!(await confirm(context, "Sign out of the plugin " + name + "?"))) {
+        context.note("Not signed out.");
+        return EXIT.failed;
+      }
+      context.print(await context.client.call("plugins.signOut", ref, { agreed: true }), (done) =>
         !done.tools ? called(done) + " has no tool that signs in." : done.signedOut ? called(done) + " is signed out (" + done.signedOut + " of its " + done.tools + " tool" + (done.tools === 1 ? "" : "s") + " that sign in " + (done.signedOut === 1 ? "was" : "were") + " signed in)." : called(done) + " was not signed in.",
       );
     },

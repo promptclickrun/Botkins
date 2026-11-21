@@ -133,6 +133,7 @@ export class SignIns {
   /** Signs a provider in with a token or key the person pasted. */
   async useToken(id, token, { service } = {}) {
     const provider = this.providers().require(id);
+    let previous = null;
     const secret = String(token ?? "").trim();
     if (!secret || secret.length > 8000 || /\s/.test(secret)) throw new Error("That isn't a token or key: it is one word with no spaces.");
     if (provider.id === "codex") {
@@ -143,8 +144,9 @@ export class SignIns {
       const result = await this.runTool(file, ["login", flag], { input: secret + "\n", env: await cliEnv(), timeoutMs: 60_000 });
       if (result.code !== 0) throw new Error("Codex didn't take that " + (flag === "--with-api-key" ? "API key" : "access token") + ".");
     } else if (provider.id === "claude" || provider.id === "copilot") {
-      this.vault().put(secret, { label: provider.name + " sign-in (terminal host)", kind: "provider-token", owner: "terminal:provider:" + provider.id }, vaultId(provider.id));
-      this.restore();
+      // The old token is kept until the new one is accepted (below).
+      previous = this.token(provider.id);
+      this.keep(provider, secret);
       // The Copilot runtime reads its sign-in when it starts: it starts again with the new one.
       if (provider.id === "copilot") await provider.stop().catch(() => {});
     } else if (provider.id === "opencode") {
@@ -154,11 +156,22 @@ export class SignIns {
     await this.changed(provider.id);
     const status = await this.providers().status(provider.id);
     if (!status?.connected) {
-      // A token the provider turned down is not kept.
-      if (provider.id === "claude" || provider.id === "copilot") this.forget(provider.id);
+      // A token the provider turned down is not kept, and the one it replaced comes back as it was.
+      if (provider.id === "claude" || provider.id === "copilot") {
+        if (previous) {
+          this.keep(provider, previous);
+          if (provider.id === "copilot") await provider.stop().catch(() => {});
+          await this.changed(provider.id);
+        } else this.forget(provider.id);
+      }
       throw new Error(provider.name + " didn't accept that token." + (status?.message ? " " + status.message : ""));
     }
     return { connected: true, account: status.account ?? null, plan: status.plan ?? null };
+  }
+  /** Puts a token in the vault and where the tools read it. */
+  keep(provider, secret) {
+    this.vault().put(secret, { label: provider.name + " sign-in (terminal host)", kind: "provider-token", owner: "terminal:provider:" + provider.id }, vaultId(provider.id));
+    this.restore();
   }
   forget(id) {
     const removed = this.vault().remove(vaultId(id));

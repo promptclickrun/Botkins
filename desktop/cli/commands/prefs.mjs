@@ -72,6 +72,7 @@ const WIDENS = {
   approval: (now, word) => (APPROVAL.indexOf(word) > APPROVAL.indexOf(now) ? { gives: APPROVAL_GIVES[word], question: "Change the approval level from " + now + " to " + word + "?" } : null),
   "access.allBots": (now, word) => (ON.includes(word) && now !== true ? { gives: "Every bot can then use every project. The grant that each bot has in its own Access settings no longer limits it.", question: "Let every bot use every project?" } : null),
   teamwork: (now, word) => (ON.includes(word) && now !== true ? { gives: "A bot can then bring other bots into a chat to work for it. A teammate works with its own tools, memory and model. What it needs approved is asked in the chat.", question: "Let bots ask each other for help from a chat?" } : null),
+  "background.runAtStartup": (now, word) => (ON.includes(word) && now !== true ? { lead: "This changes this computer.", gives: "Botkins then starts when you log in to this computer. This adds a login item to this computer.", question: "Make Botkins start when you log in to this computer?" } : null),
 };
 const asText = (value) => (Array.isArray(value) ? (value.length ? value.join(", ") : "none") : typeof value === "boolean" ? (value ? "on" : "off") : String(value));
 const cell = (value) => {
@@ -145,7 +146,7 @@ const preferences = {
           const word = String(value).trim().toLowerCase();
           const more = WIDENS[key]((await context.client.call("preferences.get", key))[key], word);
           if (more) {
-            show(context, "This gives bots more room. " + more.gives);
+            show(context, (more.lead ?? "This gives bots more room.") + " " + more.gives);
             if (!(await confirm(context, more.question))) return EXIT.failed;
             agreed = true;
           }

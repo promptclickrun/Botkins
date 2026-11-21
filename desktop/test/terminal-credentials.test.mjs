@@ -120,28 +120,13 @@ test("a credential is saved from standard input or a hidden question, and its va
   assert.equal(await store().read(first.id), PIPED);
   assert.equal(readFileSync(store().vault.file, "utf8").includes(PIPED), false, "the store's file is sealed");
 
-  // A check reads the value on this computer and drops it.
-  const checked = await botkins(["credentials", "check", "GitHub token", "--json"]);
-  assert.deepEqual(checked.json(), { id: first.id, name: "GitHub token", ok: true });
-  assert.match((await botkins(["credentials", "check", first.id])).out, /^GitHub token can be read\.\n$/);
-  // One that cannot be read says so, with the exit code 1, and no value.
-  const entry = store().vault.entries.find((one) => one.id === first.id);
-  const sealed = entry.secret;
-  entry.secret = "damaged";
-  const broken = await botkins(["credentials", "check", "GitHub token"]);
-  assert.equal(broken.exit, 1);
-  assert.match(broken.out, /^GitHub token cannot be read: The saved value can't be opened\.\.$/m);
-  assert.equal((await botkins(["credentials", "check", "GitHub token", "--json"])).json().ok, false);
-  entry.secret = sealed;
+  // A check reads a linked field through the password manager's tool, so it is not for the socket: the call and the command are gone.
+  await assert.rejects(client.call("credentials.check", first.id), { code: "UNKNOWN_METHOD" });
+  assert.equal((await botkins(["credentials", "check", "GitHub token"])).exit, 2, "there is no `credentials check`");
 
-  // A name that is not there, and a name that two have (made by the phone link's own save, which does not mind).
-  const missing = await botkins(["credentials", "check", "Nobody"]);
-  assert.equal(missing.exit, 1);
-  assert.match(missing.err, /There is no saved credential called Nobody\. See `botkins credentials list`\./);
+  // A name that two have (made by the phone link's own save, which does not mind) is refused with its ids, before anything changes.
   const twin = await store().save({ name: "Work login", value: "not-one-of-ours-1234" });
-  const ambiguous = await botkins(["credentials", "check", "work login"]);
-  assert.equal(ambiguous.exit, 1);
-  assert.match(ambiguous.err, /More than one saved credential is called work login\. Use its id \(see `botkins credentials list`\)\./);
+  await assert.rejects(client.call("credentials.edit", "work login", { value: "x" }), /More than one saved credential is called work login\. Use its id \(see `botkins credentials list`\)\./);
   store().remove(twin);
 
   // A change from here is a new value and nothing else. Replacing a value cannot be undone, so it asks first; with no terminal it needs --yes,
@@ -192,6 +177,7 @@ test("a credential is saved from standard input or a hidden question, and its va
   assert.deepEqual((await changes()).filter((line) => line.includes("credentials.")), [
     "credentials.save GitHub token",
     "credentials.save Work login",
+    "Tried from the command line: credentials.edit work login (it failed)",
     "credentials.edit GitHub token",
     "credentials.edit Work login",
     "Tried from the command line: credentials.edit nobody (it failed)",
@@ -257,7 +243,9 @@ test("the vault is listed without values, an entry is removed after a question, 
   assert.match(needless.err, /The vault opens on this computer, so it does not need a reset\. Nothing was changed\./);
   // The call needs the mark of a caller that got a yes, and then the app's own refusal is the answer.
   await assert.rejects(client.call("credentials.vaultReset"), { code: "NEEDS_YES" });
-  await assert.rejects(client.call("credentials.vaultReset", { agreed: true }), /The vault doesn't need resetting\./);
+  // It needs both words, as the command does: one of them alone is refused with a sentence that names both.
+  for (const one of [{ agreed: true }, { eraseAllSavedSecrets: true }, { agreed: true, eraseAllSavedSecrets: false }]) await assert.rejects(client.call("credentials.vaultReset", one), { code: "NEEDS_YES", message: /`agreed: true` and `eraseAllSavedSecrets: true`/ });
+  await assert.rejects(client.call("credentials.vaultReset", { agreed: true, eraseAllSavedSecrets: true }), /The vault doesn't need resetting\./);
 
   // A vault that this computer cannot open (the state that a key it lacks leaves).
   await botkins(["tools", "add", "second", "--command", "node", "--env", "TOKEN", "--yes", "--secrets", "-"], { input: JSON.stringify({ env: { TOKEN: KEY } }) });
@@ -295,8 +283,7 @@ test("the vault is listed without values, an entry is removed after a question, 
   const lines = (await changes()).filter((line) => /credentials\.vault/.test(line));
   assert.deepEqual(lines, [
     "credentials.vaultRemove " + entry.name,
-    "Tried from the command line: credentials.vaultReset (it failed)",
-    "Tried from the command line: credentials.vaultReset (it failed)",
+    ...Array(5).fill("Tried from the command line: credentials.vaultReset (it failed)"),
     "credentials.vaultReset the vault was reset",
   ]);
   none("after the vault's changes");
@@ -542,8 +529,8 @@ test("no call of the area takes a reference to a saved credential, in any argume
   const { control } = await client.call("methods");
   const mine = control.filter((name) => name.startsWith("credentials.") || name.startsWith("providers.") && !["providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel"].includes(name) && !/^providers\.(login|logout|enable|set)/.test(name));
   // The calls that this file made: every one of them is in the list that is looked at.
-  for (const name of ["credentials.list", "credentials.save", "credentials.edit", "credentials.check", "credentials.remove", "credentials.vault", "credentials.vaultRemove", "credentials.vaultReset", "credentials.managers", "credentials.managerLock", "providers.usage", "providers.installPlan", "providers.install", "providers.install.read", "providers.install.input", "providers.install.cancel", "providers.disconnectService"]) assert.ok(mine.includes(name), name);
-  for (const name of ["credentials.list", "credentials.save", "credentials.edit", "credentials.check", "credentials.remove", "credentials.vault", "credentials.vaultRemove", "credentials.vaultReset", "credentials.managers", "credentials.managerLock", "providers.usage", "providers.installPlan", "providers.install", "providers.install.read", "providers.install.input", "providers.install.cancel", "providers.disconnectService"]) {
+  for (const name of ["credentials.list", "credentials.save", "credentials.edit", "credentials.remove", "credentials.vault", "credentials.vaultRemove", "credentials.vaultReset", "credentials.managers", "credentials.managerLock", "providers.usage", "providers.installPlan", "providers.install", "providers.install.read", "providers.install.input", "providers.install.cancel", "providers.disconnectService"]) assert.ok(mine.includes(name), name);
+  for (const name of ["credentials.list", "credentials.save", "credentials.edit", "credentials.remove", "credentials.vault", "credentials.vaultRemove", "credentials.vaultReset", "credentials.managers", "credentials.managerLock", "providers.usage", "providers.installPlan", "providers.install", "providers.install.read", "providers.install.input", "providers.install.cancel", "providers.disconnectService"]) {
     await assert.rejects(client.call(name, ref), refused, name + " takes none as its first argument");
     await assert.rejects(client.call(name, "x", ref), refused, name + " takes none as its second argument");
     await assert.rejects(client.call(name, { nested: [{ deeper: ref }] }), refused, name + " takes none inside an object");
@@ -557,7 +544,7 @@ test("`botkins help --json` lists the commands of the area, and the ones that as
   const { botkins, none } = world;
   const all = (await botkins(["help", "--json"])).json();
   const commands = all.areas.flatMap((area) => area.commands);
-  const mine = ["credentials list", "credentials save", "credentials edit", "credentials check", "credentials remove", "vault list", "vault remove", "vault reset", "password-managers list", "password-managers lock", "providers usage", "providers install", "providers disconnect"];
+  const mine = ["credentials list", "credentials save", "credentials edit", "credentials remove", "vault list", "vault remove", "vault reset", "password-managers list", "password-managers lock", "providers usage", "providers install", "providers disconnect"];
   for (const name of mine) assert.ok(commands.some((entry) => entry.command === name), name + " is listed");
   const entry = (name) => commands.find((one) => one.command === name);
   assert.deepEqual(entry("credentials remove").arguments, [{ name: "credential", required: true }]);
