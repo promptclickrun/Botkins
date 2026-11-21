@@ -250,7 +250,7 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS && name !== "spaces-v1");
   assert.deepEqual(linkCapabilities(new Set()), others);
   assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact"])), others);
-  // (Spaces are named the same way, only when the link carries their calls: test/spaces.test.mjs.)
+  // (Spaces are named the same way, only when the link carries their calls: test/spaces-host.test.mjs.)
   assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES.filter((name) => name !== "spaces-v1"));
   const files = join(dir, "files");
   mkdirSync(join(files, "site"), { recursive: true });
