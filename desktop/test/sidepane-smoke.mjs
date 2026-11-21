@@ -15,7 +15,7 @@ import { seedApp } from "./starter.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-sidepane-"));
 const shots = process.env.SIDEPANE_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 seedApp(dir);
 process.on("exit", () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 delete env.ELECTRON_RUN_AS_NODE;
@@ -322,7 +322,7 @@ try {
   await expect(pane()).toBeVisible(long);
   const iframe = page.locator(".side-pane .pane-rich iframe");
   await expect(iframe).toHaveAttribute("sandbox", "allow-scripts", long);
-  await expect(iframe).toHaveAttribute("src", "commander-app://frame-" + frame + "/");
+  await expect(iframe).toHaveAttribute("src", "botkins-app://frame-" + frame + "/");
   await expect(page.locator(".side-pane .html-frame.loading")).toHaveCount(0, long);
   const fill = await page.evaluate(() => ({ frame: document.querySelector(".pane-rich iframe").getBoundingClientRect().height, body: document.querySelector(".pane-bodies").getBoundingClientRect().height }));
   assert.ok(Math.abs(fill.frame - fill.body) < 2, "the page fills the pane: " + JSON.stringify(fill));

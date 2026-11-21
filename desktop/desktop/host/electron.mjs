@@ -112,7 +112,7 @@ export function electronHost({ window, showWindow, viewing, fillSecurePage, star
     // development run keeps them in files in its own data folder, so it never asks for keychain access.
     async keys({ dataDir, trial }) {
       if (!guarded(trial)) return null;
-      // Keys the app wrapped when it was called Commander sit under that name's keychain entry. A
+      // Keys wrapped by an earlier version sit under that name's keychain entry. A
       // helper process opens them once (desktop/keychain.mjs); macOS asks the person to allow it.
       const locked = lockedKeys(dataDir, own.unwrap);
       let earlier = new Map();
@@ -124,8 +124,8 @@ export function electronHost({ window, showWindow, viewing, fillSecurePage, star
           buttons: ["Continue", "Not now"],
           defaultId: 0,
           cancelId: 1,
-          message: "Botkins needs the keys Commander saved",
-          detail: "Your credentials and paired phones are guarded by the keychain entry “Commander Safe Storage”. macOS will ask whether Botkins may use it. Enter your password and choose Allow.\n\nIf you choose Not now, they stay locked and untouched, and Botkins asks again next time.",
+          message: "Allow Botkins to use your saved keys",
+          detail: "Your credentials and paired phones are protected by a keychain entry from an earlier version. macOS will ask whether Botkins may use it. Enter your password and choose Allow.\n\nIf you choose Not now, they stay locked and untouched, and Botkins asks again next time.",
         });
         if (response === 0) earlier = await openWithEarlierKeychain(locked, { args: app.isPackaged ? [] : [app.getAppPath()] });
       }

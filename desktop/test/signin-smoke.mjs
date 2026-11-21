@@ -13,11 +13,11 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-signin-"));
 // Only GitHub Copilot: the other providers' own sign-ins are not part of this hand-off.
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, PATH: "/usr/bin:/bin", BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, PATH: "/usr/bin:/bin", BOTKINS_PROVIDERS: "copilot" };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dir);
 for (const name of ["ELECTRON_RUN_AS_NODE", "GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"]) delete env[name];
-const app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+const app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 try {
   const page = await app.firstWindow();
   const errors = [];

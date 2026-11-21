@@ -1,13 +1,14 @@
 // HTML frames: rich pages a bot puts inside a Today panel or a chat card (an "html" block).
 // A frame is one self-contained HTML page plus optional data. The app draws it in a sandboxed
 // frame that cannot reach the network, the app or the computer; it talks to the app through a
-// small bridge (window.commander), in the spirit of MCP Apps.
+// small bridge (window.botkins), in the spirit of MCP Apps.
 //
 //   <data>/frames/<id>.html, <id>.json     the page as the bot wrote it, and its data
 //   state.frames: [{ id, owner, botId }]   owner is "panel:<panel id>" or "chat:<chat id>"
 //
 // The page is kept out of the workspace file and out of what the app's own page receives: only
-// the frame's id travels, and the frame loads from commander-app://frame-<id>/ (desktop/main.mjs).
+// the frame's id travels, and the frame loads from botkins-app://frame-<id>/ (desktop/main.mjs).
+import { LEGACY_NAME } from "./home.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -42,7 +43,7 @@ const BRIDGE = String.raw`(() => {
   const changed = new Set();
   let seq = 0;
   let mode = "light";
-  const post = (type, more) => parent.postMessage({ commander: 1, type, ...more }, "*");
+  const post = (type, more) => parent.postMessage({ botkins: 1, type, ...more }, "*");
   const ask = (type, more) =>
     new Promise((resolve, reject) => {
       const id = ++seq;
@@ -51,7 +52,7 @@ const BRIDGE = String.raw`(() => {
     });
   addEventListener("message", (event) => {
     const m = event.data;
-    if (event.source !== parent || !m || m.commander !== 1) return;
+    if (event.source !== parent || !m || m.botkins !== 1) return;
     if (m.type === "theme") {
       mode = m.mode === "dark" ? "dark" : "light";
       root.dataset.theme = mode;
@@ -89,10 +90,9 @@ const BRIDGE = String.raw`(() => {
     set: (patch, label) => within(ask("setState", { patch, ...(label != null && { label: String(label) }) }), false).then((saved) => saved === true),
     onChange: (fn) => (changed.add(fn), () => changed.delete(fn)),
   });
-  // window.commander (the app's earlier name) and window.bighelp are the same bridge: pages
-  // bots wrote for either still run.
+  // Saved pages can also use either earlier spelling of the bridge.
   Object.defineProperty(window, "botkins", { value: Object.freeze(api) });
-  Object.defineProperty(window, "commander", { value: window.botkins });
+  Object.defineProperty(window, ${JSON.stringify(LEGACY_NAME.toLowerCase())}, { value: window.botkins });
   Object.defineProperty(window, "bighelp", { value: window.botkins });
   // The page's own height: what it needs when it is taller than the frame, and what it has when it
   // is shorter, so the frame shrinks as well as grows.

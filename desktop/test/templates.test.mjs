@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
+import { LEGACY_NAME } from "../desktop/home.mjs";
 import { FORMAT, FORMATS, Templates, parseTemplateFile } from "../desktop/templates.mjs";
 
 function setup(t) {
@@ -72,12 +73,12 @@ test("imports refuse files that aren't Botkins templates and drop looks Botkins 
   assert.equal(odd.look, undefined, "a character the kit doesn't have is left out");
 });
 
-test("a template file written when the app was called Commander still imports", (t) => {
+test("a template file written by an earlier version still imports", (t) => {
   const { dir, templates } = setup(t);
-  assert.deepEqual(FORMATS, ["botkins.bot-template", "commander.bot-template"]);
+  assert.deepEqual(FORMATS, ["botkins.bot-template", LEGACY_NAME.toLowerCase() + ".bot-template"]);
   const file = join(dir, "Old.json");
-  // As Commander 0.9 wrote it: its own format name, and a silhouette avatar.
-  writeFileSync(file, JSON.stringify({ format: "commander.bot-template", version: 1, name: "Scribe", role: "Takes notes", summary: "Meeting notes", instructions: "Write what was decided.", avatar: { body: "pocket-curios.quill", main: "#3E9B5E" } }, null, 2));
+  // An early file: its own format name, and a silhouette avatar.
+  writeFileSync(file, JSON.stringify({ format: LEGACY_NAME.toLowerCase() + ".bot-template", version: 1, name: "Scribe", role: "Takes notes", summary: "Meeting notes", instructions: "Write what was decided.", avatar: { body: "pocket-curios.quill", main: "#3E9B5E" } }, null, 2));
   const imported = templates.get(templates.importFrom(file));
   assert.deepEqual(
     [imported.name, imported.role, imported.summary, imported.instructions, imported.source, imported.from],

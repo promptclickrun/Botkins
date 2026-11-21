@@ -186,10 +186,10 @@ function UserBubble({ message, index, timestamps, id, actions, paths, media }: {
       {chips.length > 0 && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 4 }}>
           {chips.map((mention) => {
-            const Icon = mention.kind === "project" ? FolderKanban : mention.kind === "wiki" ? BookOpen : FileText;
+            const Icon = mention.kind === "project" ? FolderKanban : mention.kind === "wiki" ? BookOpen : mention.kind === "file" ? FileText : null;
             return (
               <View key={mention.kind + ":" + ("path" in mention ? mention.path : mention.id)} style={{ flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%", height: 32, paddingHorizontal: space.md, borderRadius: radius.pill, backgroundColor: colors.sunken }}>
-                <Icon size={14} color={colors.muted} strokeWidth={2.2} />
+                {Icon && <Icon size={14} color={colors.muted} strokeWidth={2.2} />}
                 <T variant="footnote" weight="600" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }}>
                   {mention.label}
                 </T>

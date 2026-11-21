@@ -51,7 +51,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 const sent = join(dir, "sent");
 const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "codex", BOTKINS_CODEX_BINARY: cli, BOTKINS_TEST_SENT: sent };
 delete env.ELECTRON_RUN_AS_NODE;
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 const launch = () => _electron.launch({ executablePath: binary, args: binary ? [] : ["."], env });
 let app;
 try {

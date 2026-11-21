@@ -1,5 +1,5 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
-// (Commander's src/types.ts); a chat arrives as a summary and its messages come separately.
+// (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type ModelInfo = {
@@ -172,7 +172,8 @@ export type TeamPart =
  * as a card after the item itself is cleared.
  */
 export type Mention =
-  | { kind: "project" | "customer"; id: string; label: string }
+  | { kind: "label"; id: string; label: string } // Display only, for older messages.
+  | { kind: "project"; id: string; label: string }
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
 export type Message = {
@@ -617,8 +618,8 @@ export type SkillInfo = {
   name: string;
   description: string;
   path: string;
-  /** commander: kept and editable in the desktop app. folder: read from a linked folder. built-in: ships with it. */
-  origin: "commander" | "folder" | "built-in";
+  /** botkins: kept and editable in the desktop app. folder: read from a linked folder. built-in: ships with it. */
+  origin: "botkins" | "folder" | "built-in";
   enabled: boolean;
   editable?: boolean;
   folderId?: string;
@@ -1357,7 +1358,7 @@ export type WikiPage = WikiPageInfo & {
   versions: number;
   /** The project record with this page's name, when the page is in projects/. */
   record?: { kind: "project"; id: string; name: string };
-  /** True for index.md and log.md, which Commander writes. They can't be edited. */
+  /** True for index.md and log.md, which Botkins writes. They can't be edited. */
   generated?: boolean;
 };
 /** An earlier version: the page as it was until `by` changed it at `time`. */

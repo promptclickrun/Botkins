@@ -16,7 +16,7 @@ const OP_VALUE = "ghp_SMOKE_STANDIN_88e1";
 const dir = mkdtempSync(join(tmpdir(), "botkins-cred-ui-"));
 const tools = join(dir, "tools");
 mkdirSync(tools);
-const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app"), BOTKINS_TOOL_PATH: tools };
+const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), BOTKINS_TOOL_PATH: tools };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.BOTKINS_KEYCHAIN;
 delete env.BOTKINS_COPILOT_SIGNIN;

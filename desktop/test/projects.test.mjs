@@ -205,8 +205,6 @@ test("workspace projects: no folder, folder choose and remove, and modes only in
   assert.equal(ws.chat(chat).mode, "default", "removing the folder turns the coding modes off");
   assert.throws(() => ws.projects.update(id, { folder: "/no/such/folder" }), /Choose a folder/);
   assert.throws(() => ws.projects.update(id, { owner: "x" }), /Unknown project field/);
-  assert.throws(() => ws.projects.update(id, { customerId: null }), /Unknown project field/, "a project has no customer");
-  assert.equal("customerId" in ws.projects.get(id), false);
   // An established chat may move between projects without folders, but not into a folder.
   ws.chat(chat).established = true;
   const other = ws.projects.create({ name: "Other" });

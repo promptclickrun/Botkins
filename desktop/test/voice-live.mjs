@@ -30,7 +30,7 @@ import { seedApp } from "./starter.mjs";
 
 if (process.platform !== "darwin") throw new Error("This check makes its speech with macOS's `say`.");
 const scenarios = (process.env.VOICE_SCENARIOS ?? "window,approval,phone,phone-approval").split(",");
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 const root = mkdtempSync(join(tmpdir(), "botkins-voice-live-"));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -72,7 +72,7 @@ function speech(name, parts) {
 async function launch(name, sound) {
   const dir = mkdtempSync(join(root, name + "-"));
   seedApp(dir);
-  const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,codex", BOTKINS_VOICE_LOG: "1" };
+  const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,codex", BOTKINS_VOICE_LOG: "1" };
   delete env.ELECTRON_RUN_AS_NODE;
   // Chromium's sound service runs in a sandbox that can't read the sound file; for this check only, the app runs without that sandbox.
   const flags = ["--mute-audio", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--use-file-for-fake-audio-capture=" + sound + "%noloop", "--no-sandbox"];

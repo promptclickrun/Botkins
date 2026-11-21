@@ -12,11 +12,11 @@ import { seedApp } from "./starter.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-context-"));
 const shots = process.env.CONTEXT_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dir);
 delete env.ELECTRON_RUN_AS_NODE;
-const launch = () => _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+const launch = () => _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 
 let app = await launch();
 await (await skipWelcome(await app.firstWindow())).getByRole("heading", { name: "Home", exact: true }).waitFor();

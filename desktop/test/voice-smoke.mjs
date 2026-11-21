@@ -44,9 +44,9 @@ writeFileSync(
     runs: [],
   }),
 );
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot" };
 delete env.ELECTRON_RUN_AS_NODE;
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 // Chromium's own stand-in microphone (a tone). The app's own permission handler decides who may use it.
 const fakeMedia = ["--use-fake-device-for-media-stream"];
 

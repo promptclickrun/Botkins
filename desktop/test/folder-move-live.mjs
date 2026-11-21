@@ -1,6 +1,4 @@
-// Live: a chat goes on after its data folder is renamed, the way a "Commander" folder becomes
-// "Botkins" (desktop/home.mjs adoptFolder). One real GitHub Copilot turn before the rename and one
-// after, in a folder of the test's own. Needs Copilot signed in here; not part of `npm test`.
+// A real Copilot chat continues after its data folder moves. Run with a signed-in test account.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,13 +8,13 @@ import { skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "botkins-move-"));
-const before = join(root, "Commander");
+const before = join(root, "previous-folder");
 const after = join(root, "Botkins");
 mkdirSync(before);
 seedApp(before);
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 const launch = (dir) => {
-  const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+  const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot" };
   delete env.ELECTRON_RUN_AS_NODE;
   return _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
 };
@@ -48,7 +46,7 @@ try {
   assert.equal(second.status, "Completed", JSON.stringify(second));
   assert.match(second.reply, /kestrel-42/, "the conversation went on: " + second.reply);
   assert.match(second.reply, /Botkins\/data\/files\/pip/, "the bot works under the new name: " + second.reply);
-  assert.doesNotMatch(second.reply, /Commander/, "and never sees the old one: " + second.reply);
+  assert.doesNotMatch(second.reply, /previous-folder/, "and never sees the old one: " + second.reply);
   console.log("After the folder was renamed, the same chat went on and the bot answered: " + JSON.stringify(second.reply));
   console.log("folder move live: ok");
 } finally {

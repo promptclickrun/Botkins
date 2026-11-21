@@ -3,9 +3,6 @@
 // own grant applies: bot.access.all, or the listed projects.
 // Turning access off never deletes anything; it only refuses new turns and hides data from tools.
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-
 export const defaultBotAccess = () => ({ all: false, projects: [] });
 
 /** A bot's grant, filling in the default for bots made before access control. */
@@ -39,47 +36,6 @@ export function projectRefusal(state, bot, project) {
 export function assertProject(state, bot, project) {
   const reason = projectRefusal(state, bot, project);
   if (reason) throw new Error(reason);
-}
-
-/**
- * Brings a workspace saved while Botkins still had Customers up to date. A bot keeps the
- * projects it reached through a customer, projects lose their customer, and the customer records
- * are written once to customers-removed.json in the data folder so nothing the person typed is
- * lost. Safe to run on every start.
- */
-export function migrateCustomers(state, dir) {
-  const projects = state.projects ?? [];
-  for (const bot of state.bots ?? []) {
-    const a = bot.access;
-    if (!a || !("customers" in a)) continue;
-    if (Array.isArray(a.customers) && a.customers.length) {
-      const listed = new Set(a.customers);
-      const own = Array.isArray(a.projects) ? a.projects : [];
-      const reached = projects.filter((p) => listed.has(p.customerId)).map((p) => p.id);
-      a.projects = [...new Set([...own, ...reached])];
-    }
-    delete a.customers;
-  }
-  for (const p of projects) delete p.customerId;
-  if (!("customers" in state)) return;
-  if (Array.isArray(state.customers) && state.customers.length) {
-    // An earlier archive is never overwritten: the next free name is used.
-    try {
-      mkdirSync(dir, { recursive: true });
-      for (let n = 1; ; n++) {
-        try {
-          writeFileSync(join(dir, n === 1 ? "customers-removed.json" : "customers-removed-" + n + ".json"), JSON.stringify(state.customers, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-          break;
-        } catch (error) {
-          if (error.code !== "EEXIST") throw error;
-        }
-      }
-    } catch {
-      // Without the archive the records stay in the workspace file, and the next start tries again.
-      return;
-    }
-  }
-  delete state.customers;
 }
 
 /** Checks a grant from the app: known projects only. */

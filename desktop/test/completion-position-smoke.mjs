@@ -10,7 +10,7 @@ import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-position-"));
 const shots = process.env.BOTKINS_POSITION_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot" };
 delete env.ELECTRON_RUN_AS_NODE;
 const id = "field-notes";
 seedApp(dir);

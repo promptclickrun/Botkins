@@ -1,7 +1,7 @@
 // Plain logic for the settings that belong to the app on the computer: its side menu, its fonts and
 // text sizes, quiet hours, who can use which project, storage and usage figures. No React Native
 // imports, so tests/settings.test.ts runs it. The words and lists are the desktop app's own
-// (Commander-Con src/places.ts, src/themes.ts, desktop/themes.json, src/access.ts, src/Usage.tsx).
+// (desktop app: src/places.ts, src/themes.ts, desktop/themes.json, src/access.ts, src/Usage.tsx).
 import type { Appearance, Bot, Preferences, Project, UsageReport, UsageTotals } from "@/link/types";
 
 // ---- The side menu (desktop src/places.ts) ----

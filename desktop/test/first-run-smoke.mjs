@@ -17,9 +17,9 @@ const errors = [];
 let app, page;
 async function start(data, home) {
   // Only GitHub Copilot, whose agents this smoke imports, whatever other providers this computer has.
-  const env = { ...process.env, BOTKINS_DATA_DIR: join(root, data), COMMANDER_DATA_DIR: join(root, data), COPILOT_HOME: join(root, home), BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+  const env = { ...process.env, BOTKINS_DATA_DIR: join(root, data), COPILOT_HOME: join(root, home), BOTKINS_PROVIDERS: "copilot" };
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await app.firstWindow();
   page.on("pageerror", (e) => errors.push(e.message));
   // Signed in as a made-up account, so the welcome offers Get started whatever this computer's sign-in is.

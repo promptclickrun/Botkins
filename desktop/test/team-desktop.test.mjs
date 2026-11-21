@@ -222,14 +222,14 @@ test("a team member is offered, and may send, only the files of chats they are i
     { kind: "file", path: join(files, "avery-notes.md") },
     { kind: "file", path: join(files, "shared", "inside.txt") },
     { kind: "board", id: item.id },
-    { kind: "customer", id: "x" },
+    { kind: "unknown", id: "x" },
   ];
   const kept = ws.mentions.resolve(ws.chat(averys), sent, avery);
   assert.deepEqual(kept.list.map((m) => m.label), ["avery-notes.md", "inside.txt", "Try a weekly digest"]);
   assert.ok(!/Owner|Private|budget|never-recorded/.test(kept.context), "nothing of the owner's is in the prompt");
   // The owner's own message is checked as before: a mention that is wrong is refused, not dropped.
   assert.equal(ws.mentions.resolve(ws.chat(averys), sent.slice(0, 4)).list.length, 4);
-  assert.throws(() => ws.mentions.resolve(ws.chat(averys), [{ kind: "customer", id: "x" }]), /Unknown mention/);
+  assert.throws(() => ws.mentions.resolve(ws.chat(averys), [{ kind: "unknown", id: "x" }]), /Unknown mention/);
   // A Today item of a bot the member's role may not see is left out.
   const narrow = { ...team, roles: [{ ...team.roles[0], bots: ["scout"] }] };
   ws.teamOf = () => narrow;

@@ -1,7 +1,7 @@
 // An html block: a page a bot wrote, drawn in a sandboxed frame inside a Today panel or a chat card,
-// in the spirit of MCP Apps. The frame loads from commander-app://frame-<id>/ (desktop/frames.mjs) with
+// in the spirit of MCP Apps. The frame loads from botkins-app://frame-<id>/ (desktop/frames.mjs) with
 // scripts only: no same origin, no network, no way to reach this page. It talks by postMessage, and
-// every message is { commander: 1, type, … }; only messages from this frame's own window count.
+// every message is { botkins: 1, type, … }; only messages from this frame's own window count.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RefreshCw, TriangleAlert } from "lucide-react";
 import { APPEARANCE_EVENT } from "./appearance";
@@ -32,7 +32,7 @@ function theme() {
   const css = getComputedStyle(root);
   const colors: Record<string, string> = {};
   for (const name of COLORS) colors[name] = css.getPropertyValue(name).trim();
-  return { commander: 1, type: "theme", mode: root.dataset.mode === "dark" ? "dark" : "light", colors };
+  return { botkins: 1, type: "theme", mode: root.dataset.mode === "dark" ? "dark" : "light", colors };
 }
 
 export default function HtmlFrame({ frame, height, title, store }: { frame: string; height: number; title?: string; /** The panel's saved state, for a view in a panel of a space. */ store?: FrameStore }) {
@@ -59,13 +59,13 @@ export default function HtmlFrame({ frame, height, title, store }: { frame: stri
     const post = (message: object) => frameWindow()?.postMessage(message, "*");
     const reply = (id: unknown, work: Promise<unknown>) =>
       work.then(
-        (value) => post({ commander: 1, type: "result", id, value: value ?? null }),
-        (e) => post({ commander: 1, type: "result", id, error: String(e instanceof Error ? e.message : e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }),
+        (value) => post({ botkins: 1, type: "result", id, value: value ?? null }),
+        (e) => post({ botkins: 1, type: "result", id, error: String(e instanceof Error ? e.message : e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "") }),
       );
     const onMessage = (event: MessageEvent) => {
       if (!ref.current || event.source !== ref.current.contentWindow) return;
       const m = event.data;
-      if (!m || typeof m !== "object" || m.commander !== 1 || typeof m.type !== "string") return;
+      if (!m || typeof m !== "object" || m.botkins !== 1 || typeof m.type !== "string") return;
       if (m.type === "ready") {
         // The bridge says this before any of the page's own code runs: a new page starts with no click to its name.
         gateOf(frame).reset();
@@ -75,18 +75,18 @@ export default function HtmlFrame({ frame, height, title, store }: { frame: stri
         post(theme());
       } else if (m.type === "size") setSize((s) => clamp(m.height, s));
       // botkins.state.get(): a view in a chat has no state.
-      else if (m.type === "state") post({ commander: 1, type: "result", id: m.id, value: held.current?.state ?? {} });
+      else if (m.type === "state") post({ botkins: 1, type: "result", id: m.id, value: held.current?.state ?? {} });
       // botkins.state.set(): passed on only soon after the person clicked or typed in this view, and
       // not too often. Anything else answers false and saves nothing.
       else if (m.type === "setState") {
         const patch = cleanPatch(m.patch);
         const save = held.current?.set;
-        const refuse = () => post({ commander: 1, type: "result", id: m.id, value: false });
+        const refuse = () => post({ botkins: 1, type: "result", id: m.id, value: false });
         if (!patch || !save || !gateOf(frame).allow()) refuse();
         else
           save(patch, cleanLabel(m.label)).then((rev) => {
             ownRevs.current.add(rev);
-            post({ commander: 1, type: "result", id: m.id, value: true });
+            post({ botkins: 1, type: "result", id: m.id, value: true });
           }, refuse);
       }
       else if (m.type === "answer" || m.type === "open") {
@@ -118,7 +118,7 @@ export default function HtmlFrame({ frame, height, title, store }: { frame: stri
     if (rev === undefined || rev === toldRev.current) return;
     toldRev.current = rev;
     if (ownRevs.current.delete(rev)) return;
-    ref.current?.contentWindow?.postMessage({ commander: 1, type: "state", state: held.current?.state ?? {} }, "*");
+    ref.current?.contentWindow?.postMessage({ botkins: 1, type: "state", state: held.current?.state ?? {} }, "*");
   }, [rev]);
 
   if (phase === "failed")
@@ -138,7 +138,7 @@ export default function HtmlFrame({ frame, height, title, store }: { frame: stri
         key={attempt}
         ref={ref}
         sandbox="allow-scripts"
-        src={"commander-app://frame-" + frame + "/"}
+        src={"botkins-app://frame-" + frame + "/"}
         referrerPolicy="no-referrer"
         title={name}
         height={size}

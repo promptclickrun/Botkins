@@ -644,7 +644,7 @@ export class Integrations {
         out.push({ ...s, ...extra, enabled: !disabled.has(s.name) });
       }
     };
-    add(skillsIn(this.skillsDir, "commander"), { editable: true });
+    add(skillsIn(this.skillsDir, "botkins"), { editable: true });
     for (const folder of this.skillState.folders) add(skillsIn(folder.path, "folder"), { folderId: folder.id });
     add(skillsIn(bundledSkills, "built-in"));
     return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -662,7 +662,7 @@ export class Integrations {
     return parseSkill(readFileSync(join(dir, "SKILL.md"), "utf8"), name);
   }
   ownSkillDir(name) {
-    const skill = skillsIn(this.skillsDir, "commander").find((s) => s.name === name);
+    const skill = skillsIn(this.skillsDir, "botkins").find((s) => s.name === name);
     if (!skill) throw new Error("This skill isn't one Botkins keeps. Skills from linked folders are edited in their folder.");
     return skill.path;
   }

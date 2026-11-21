@@ -12,7 +12,7 @@ import { _electron } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
 import { skipWelcome } from "./welcome-helper.mjs";
 
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 const out = process.env.REMOTE_SHOTS || null;
 if (out) mkdirSync(out, { recursive: true });
 const PORT = 47700 + Math.floor(Math.random() * 200);
@@ -22,7 +22,7 @@ const until = async (what, check, ms = 60000) => { const limit = Date.now() + ms
 const launch = async (name, more = {}, kept = null) => {
   const dir = kept ?? mkdtempSync(join(tmpdir(), "botkins-two-" + name + "-"));
   if (!kept) seedApp(dir);
-  const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", ...more };
+  const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", ...more };
   delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
   const page = await skipWelcome(await app.firstWindow());

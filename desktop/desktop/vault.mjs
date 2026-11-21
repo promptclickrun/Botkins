@@ -36,7 +36,7 @@ export class Vault {
     this.keyStore = typeof keyStore?.wrap === "function" && typeof keyStore?.unwrap === "function" ? keyStore : null;
     this.entries = {};
     this.key = null;
-    // The vault key as the app wrapped it under its earlier name (Commander). It stays in the
+    // The vault key as the app wrapped it under its earlier name. It stays in the
     // file as it is, beside this app's own wrapping, so an earlier version still opens the vault.
     this.earlier = null;
     // True when a vault exists here that this run can't open. It is then left exactly as it is:

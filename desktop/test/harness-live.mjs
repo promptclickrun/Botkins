@@ -14,9 +14,9 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-harness-"));
 seedApp(dir);
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,codex,claude", COMMANDER_PROVIDERS: "copilot,codex,claude" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,codex,claude" };
 delete env.ELECTRON_RUN_AS_NODE;
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 const plans = (process.env.HARNESS_PLANS ?? "codex,claude").split(",");
 const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
 const errors = [];

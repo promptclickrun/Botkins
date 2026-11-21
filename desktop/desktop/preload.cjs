@@ -374,11 +374,9 @@ api.onFrameGesture = (fn) => {
   ipcRenderer.on("frame-gesture", listener);
   return () => ipcRenderer.removeListener("frame-gesture", listener);
 };
-// The page reaches the app through window.botkins. window.commander is the same bridge under
-// the app's earlier name, kept so nothing that still says it breaks.
+// The window uses the Botkins bridge.
 // Only the window's own page gets it. This script runs in the frames of custom views too (see the
 // top of this file), and a page a bot wrote must never hold the app's bridge.
 if (process.isMainFrame === true) {
   contextBridge.exposeInMainWorld("botkins", api);
-  contextBridge.exposeInMainWorld("commander", api);
 }

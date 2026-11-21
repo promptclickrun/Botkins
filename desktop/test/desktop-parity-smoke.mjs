@@ -9,9 +9,9 @@ import { seedApp, starterBots } from "./starter.mjs";
 import { skipWelcome } from "./welcome-helper.mjs";
 
 const data = mkdtempSync(join(tmpdir(), "botkins-parity-ui-"));
-const qa = process.env.BOTKINS_QA_DIR ?? process.env.COMMANDER_QA_DIR;
+const qa = process.env.BOTKINS_QA_DIR;
 if (qa) mkdirSync(qa, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: data, COMMANDER_DATA_DIR: data };
+const env = { ...process.env, BOTKINS_DATA_DIR: data };
 delete env.ELECTRON_RUN_AS_NODE;
 
 function seedChat() {
@@ -44,8 +44,8 @@ function seedChat() {
 }
 
 const launch = () => _electron.launch({
-  args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."],
-  executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY),
+  args: process.env.BOTKINS_BINARY ? [] : ["."],
+  executablePath: process.env.BOTKINS_BINARY,
   env,
   timeout: 120_000,
 });

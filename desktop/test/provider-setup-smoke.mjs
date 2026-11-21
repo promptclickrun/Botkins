@@ -12,7 +12,7 @@ const file = join(dir, "data", "workspace.json");
 const state = JSON.parse(readFileSync(file));
 state.settings = { ...state.settings, onboarded: true };
 writeFileSync(file, JSON.stringify(state));
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "codex" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "codex" };
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
 try {

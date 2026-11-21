@@ -407,7 +407,7 @@ class Computer {
   }
   hello(via: "direct" | "relay") {
     const base = { botkins: 1, serverId: this.impostor && via === "direct" ? "someone-else" : this.serverId, publicKey: b64u(this.server.publicKey), pairing: false };
-    return via === "direct" ? { ...base, name: "Test Mac", app: "commander", version: "1.0.0" } : base;
+    return via === "direct" ? { ...base, name: "Test Mac", app: "botkins", version: "1.0.0" } : base;
   }
   async handle(via: "direct" | "relay", route: string, sessionId: string, body: Uint8Array): Promise<{ status: number; body: Uint8Array }> {
     const json = (value: unknown) => ({ status: 200, body: utf8(JSON.stringify(value)) });

@@ -273,7 +273,7 @@ test("the composer is offered the projects, wiki pages and workspace files this 
   const chat = ws.createChat("pip");
   ws.projects.setChatProject(chat, project);
   const found = ws.mentions.candidates(chat);
-  assert.equal("customers" in found, false, "there are no customers to mention");
+  assert.deepEqual(Object.keys(found).sort(), ["bots", "files", "projects", "wiki"]);
   assert.deepEqual(found.projects.map((p) => [p.name, p.hint, p.current]), [["Mail migration", "repo", true], ["Internal", "", false]], "a coding project shows its folder");
   assert.deepEqual(found.files.map((f) => [f.name, f.folder, f.where]).sort(), [["main.ts", "src", "Project folder"], ["old.txt", "", "Bot files"], ["q3.md", "reports", "Bot files"]]);
   assert.equal(found.files.at(-1).name, "old.txt", "newest first");
@@ -309,7 +309,6 @@ test("mentioned records reach the model as text and files, stay on the message, 
   });
   const [, prompt, options] = log.sent[0];
   assert.match(prompt, /^Summarise #Mail migration and #Internal using #report\.md\n\n\[Records the person mentioned\]\n#Mail migration is a project\.\nDescription: Move 400 mailboxes\nOpen to-dos \(1\): Inventory mailboxes/);
-  assert.doesNotMatch(prompt, /customer/i);
   assert.match(prompt, /#report\.md is a file at .*report\.md \(attached\)\./);
   assert.deepEqual(options.attachments.map((a) => [a.type, a.displayName]), [["file", "report.md"]]);
   const message = ws.chat(chat).messages[0];
@@ -323,7 +322,6 @@ test("mentioned records reach the model as text and files, stay on the message, 
   assert.deepEqual(ws.chat(chat).messages.at(-2).mentions.map((m) => m.label), ["Mail migration", "report.md"]);
   // Refusals: unknown or deleted records, too many, files outside the workspace (even through a link).
   const refuse = (mentions, pattern) => assert.throws(() => ws.send(chat, "x", { mentions }), pattern);
-  refuse([{ kind: "customer", id: "gone" }], /Unknown mention/);
   refuse([{ kind: "project", id: "gone" }], /project no longer exists/);
   refuse([{ kind: "team", id: "x" }], /Unknown mention/);
   refuse(Array.from({ length: 13 }, () => ({ kind: "project", id: project })), /up to 12 records/);

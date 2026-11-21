@@ -18,7 +18,7 @@ const dir = mkdtempSync(join(tmpdir(), "botkins-sidebar-"));
 const dataDir = join(dir, "app");
 seedApp(dataDir);
 // Only GitHub Copilot, so the menu does not depend on which other providers this computer has.
-const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, COMMANDER_DATA_DIR: dataDir, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, BOTKINS_PROVIDERS: "copilot" };
 delete env.ELECTRON_RUN_AS_NODE;
 const shots = process.env.SIDEBAR_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
@@ -52,7 +52,7 @@ async function shot(name) {
   await theme("light");
 }
 async function launch() {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await app.firstWindow();
   page.on("pageerror", (e) => errors.push(e.message));
   // Signed in as a made-up account, so the app opens on Home whatever this computer's sign-in is.

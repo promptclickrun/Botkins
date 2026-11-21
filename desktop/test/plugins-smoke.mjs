@@ -30,8 +30,8 @@ writeFileSync(join(plugin, "hooks", "hooks.json"), JSON.stringify({ hooks: { use
 writeFileSync(join(plugin, "hook.mjs"), "console.log(JSON.stringify({ additionalContext: 'fixture' }));\n");
 seedApp(root);
 
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
-const env = { ...process.env, BOTKINS_DATA_DIR: data, COMMANDER_DATA_DIR: data, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+const binary = process.env.BOTKINS_BINARY;
+const env = { ...process.env, BOTKINS_DATA_DIR: data, BOTKINS_PROVIDERS: "copilot" };
 delete env.ELECTRON_RUN_AS_NODE;
 const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
 let page;

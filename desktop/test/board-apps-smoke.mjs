@@ -16,11 +16,11 @@ import { seedApp } from "./starter.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-board-"));
 const shots = process.env.BOARD_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dir);
 delete env.ELECTRON_RUN_AS_NODE;
-const launch = () => _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+const launch = () => _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 
 // First launch writes a fresh workspace; then seed board items, a chat and an app into it.
 let app = await launch();
@@ -135,7 +135,7 @@ try {
   // close() shuts the app window itself, so the evaluate that calls it never returns.
   await Promise.all([appWindow.waitForEvent("close"), appWindow.evaluate(() => window.botkins.close()).catch(() => {})]);
 
-  if ((process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1") {
+  if (process.env.BOTKINS_LIVE === "1") {
     const before = (await snapshot()).runs.length;
     const id = await page.evaluate((botId) => window.botkins.createChat(botId), pip.id);
     await page.evaluate(

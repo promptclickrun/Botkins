@@ -15,9 +15,9 @@ import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-spaces-"));
 const shots = process.env.SPACES_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot" };
 delete env.ELECTRON_RUN_AS_NODE;
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 
 const now = Date.now();
 const MIN = 60_000;

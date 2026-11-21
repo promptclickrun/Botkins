@@ -12,7 +12,7 @@ import { skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-chat-sections-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
+const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app") };
 delete env.ELECTRON_RUN_AS_NODE;
 seedApp(join(dir, "app"));
 // A few conversations that already happened: two today, one yesterday, one earlier, one pinned.

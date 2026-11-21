@@ -12,17 +12,17 @@ import { starterBots } from "./starter.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-markdown-"));
 const shots = process.env.MARKDOWN_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 delete env.ELECTRON_RUN_AS_NODE;
 
 // The reply that showed its table as a line of pipes before tables were supported.
-const calendar = `Your next meeting is **12:35–1:00 p.m. CT: Discuss HPI milestones around Cowork.** It overlaps with Required Learning by 15 minutes.
+const calendar = `Your next meeting is **12:35–1:00 p.m. CT: Review the rollout schedule.** It overlaps with Required Learning by 15 minutes.
 
 **Wednesday, November 18 · Central time**
 
 | Time | What's still ahead |
 |---|---|
-| 12:35–1:00 p.m. | Discuss HPI milestones around Cowork |
+| 12:35–1:00 p.m. | Review the rollout schedule |
 | 12:45–1:30 p.m. | Required Learning |
 | 2:00–3:00 p.m. | AIBS Command Center – Use Case & Demo for CSAs |
 | 3:30–4:00 p.m. | Following: HP Usage Excellence & Copilot Gap Tracking — marked free |
@@ -113,7 +113,7 @@ const chats = [
 mkdirSync(join(dir, "data"), { recursive: true });
 writeFileSync(join(dir, "data", "workspace.json"), JSON.stringify({ bots: starterBots, chats, runs: [] }));
 
-const app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+const app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 try {
   const page = await skipWelcome(await app.firstWindow());
   const errors = [];

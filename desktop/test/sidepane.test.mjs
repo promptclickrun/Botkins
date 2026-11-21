@@ -58,10 +58,10 @@ test("a turn's tools are among the session tools", (t) => {
 test("a table opens the pane as a tab in front, with the bot that opened it", async (t) => {
   const { turn, pane } = rig(t);
   const { call, run } = turn();
-  const out = await call("side_pane_show", { kind: "table", title: "  Open   invoices ", columns: ["Customer", "Due"], rows: [["Acme", 120], ["Globex", "75"]] });
+  const out = await call("side_pane_show", { kind: "table", title: "  Open   invoices ", columns: ["Account", "Due"], rows: [["Acme", 120], ["Globex", "75"]] });
   assert.deepEqual([out.kind, out.title, out.opened], ["table", "Open invoices", true]);
   const [panel] = pane().panels;
-  assert.deepEqual([panel.id, panel.kind, panel.botId, panel.columns, panel.rows], [out.id, "table", "pip", ["Customer", "Due"], [["Acme", "120"], ["Globex", "75"]]]);
+  assert.deepEqual([panel.id, panel.kind, panel.botId, panel.columns, panel.rows], [out.id, "table", "pip", ["Account", "Due"], [["Acme", "120"], ["Globex", "75"]]]);
   assert.equal(pane().active, panel.id);
   assert.deepEqual([pane().ask.seq, pane().ask.panelId, pane().ask.runId, pane().ask.botId], [1, panel.id, run.id, "pip"]);
 });
@@ -299,7 +299,7 @@ test("a turn that is over shows nothing, and deleting the chat removes its panel
 
 test("the viewer loads the web and nothing else", () => {
   for (const url of ["https://example.com/", "http://example.com/a?b=c", "http://localhost:5173/", "http://127.0.0.1:3000/", "http://[::1]:8080/"]) assert.equal(viewable(url), true, url);
-  for (const url of ["file:///etc/hosts", "commander-app://frame-x/", "javascript:alert(1)", "data:text/html,<p>x", "about:blank", "chrome://settings", "https://user:pw@example.com/", "http://192.168.1.1/", "http://10.0.0.5:8080/", "http://169.254.169.254/", "http://[fd00::1]/", "", "example.com", null, undefined])
+  for (const url of ["file:///etc/hosts", "botkins-app://frame-x/", "javascript:alert(1)", "data:text/html,<p>x", "about:blank", "chrome://settings", "https://user:pw@example.com/", "http://192.168.1.1/", "http://10.0.0.5:8080/", "http://169.254.169.254/", "http://[fd00::1]/", "", "example.com", null, undefined])
     assert.equal(viewable(url), false, String(url));
 });
 
@@ -324,7 +324,7 @@ test("a guest is let in only as the viewer's, with its settings decided by the a
     { src: "https://example.com/" },
     { src: "file:///etc/hosts", partition: VIEWER_PARTITION },
     { src: "http://192.168.1.1/", partition: VIEWER_PARTITION },
-    { src: "commander-app://frame-x/", partition: VIEWER_PARTITION },
+    { src: "botkins-app://frame-x/", partition: VIEWER_PARTITION },
     { partition: VIEWER_PARTITION },
     undefined,
   ])

@@ -30,10 +30,7 @@ import { createRuntime } from "./runtime.mjs";
 import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
 
-// The data folder: Botkins' own (desktop/home.mjs). Tests name their own.
-// A folder from when the app was called Commander takes the app's name first (one rename, with a
-// link left at the old name), unless a test names its own folder or another copy is running there.
-// Only the installed app does this: a development run never renames a person's folder.
+// Use the Botkins path for an existing installation. A development run never changes it.
 if (app.isPackaged && !env("DATA_DIR")) adoptFolder({ appData: app.getPath("appData") });
 const home = dataHome({ appData: app.getPath("appData"), override: env("DATA_DIR") });
 app.setName(APP_NAME);
@@ -283,7 +280,7 @@ else
         else win.webContents.send("prefill", { chatId: appInfo.chatId, text });
       },
     });
-    // Html blocks of panels and cards load from commander-app://frame-<id>/ into sandboxed frames
+    // Html blocks of panels and cards load from botkins-app://frame-<id>/ into sandboxed frames
     // in the app's window (desktop/frames.mjs), with rules of their own.
     session.defaultSession.protocol.handle(APP_SCHEME, (request) => {
       const url = new URL(request.url);

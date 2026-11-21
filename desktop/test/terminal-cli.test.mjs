@@ -10,6 +10,7 @@ import { COMMANDS, main, version } from "../cli/main.mjs";
 import { find, help } from "../cli/commands/index.mjs";
 import { examine } from "../cli/commands/service.mjs";
 import { ago, duration, EXIT, table } from "../cli/output.mjs";
+import { LEGACY_NAME } from "../desktop/home.mjs";
 import { ControlError } from "../desktop/terminal/socket.mjs";
 
 const tempDir = (t) => {
@@ -50,6 +51,14 @@ async function botkins(argv, { service = fakeService(), input = "", env = {}, tt
   });
   return { exit, out, err, calls: service.calls, json: () => JSON.parse(out) };
 }
+test("skills from an earlier service have the current origin in text and JSON", async () => {
+  const skill = { name: "notes", enabled: true, description: "Take notes", origin: LEGACY_NAME.toLowerCase() };
+  const service = fakeService({ "skills.list": { skills: [skill] }, "skills.get": skill });
+  assert.match((await botkins(["skills", "list"], { service })).out, /Botkins/);
+  assert.equal((await botkins(["skills", "list", "--json"], { service })).json().skills[0].origin, "botkins");
+  assert.equal((await botkins(["skills", "show", "notes", "--json"], { service })).json().origin, "botkins");
+});
+
 const STATUS = { running: true, version: "9.9.9", pid: 77, uptimeSeconds: 3725, node: "24.0.0", platform: "linux/arm64", dataDir: "/var/lib/botkins", socket: "/var/lib/botkins/run/botkins.sock", memory: { rssMb: 91.5, heapUsedMb: 20 }, link: { enabled: true, listening: true, port: 47610, name: "Studio", addresses: ["10.0.0.5:47610"], pairing: false, devices: 2, connected: 1 }, relay: { enabled: true, connected: true, url: "https://relay.botkins.app" }, workspace: { bots: 3, chats: 4, routines: 1, working: 1, waiting: 0 }, secrets: { source: "systemd", where: "systemd credential" }, vault: { locked: false, entries: 2 }, update: { status: "idle" } };
 const DEVICES = [{ id: "d1", name: "Sam's iPhone", person: "Sam", kind: "phone", platform: "ios", connected: true, pairedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: "2026-01-02T00:00:00.000Z" }];
 

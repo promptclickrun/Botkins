@@ -105,7 +105,7 @@ test("a key goes in Authorization or in a header that carries a key by its name"
 test("skills show where they come from, and the filter finds by name, words or origin", () => {
   const folders = [{ id: "f1", path: "/Users/me/team-skills/" }];
   const skill = (name: string, origin: SkillInfo["origin"], folderId?: string): SkillInfo => ({ name, description: name + " helps", path: "/" + name, origin, enabled: true, ...(folderId && { folderId }) });
-  const skills = [skill("weekly-review", "commander"), skill("wiki", "built-in"), skill("standup", "folder", "f1"), skill("lost", "folder", "gone")];
+  const skills = [skill("weekly-review", "botkins"), skill("wiki", "built-in"), skill("standup", "folder", "f1"), skill("lost", "folder", "gone")];
   assert.equal(folderName("/Users/me/team-skills/"), "team-skills");
   assert.deepEqual(
     skills.map((item) => skillOrigin(item, folders)),

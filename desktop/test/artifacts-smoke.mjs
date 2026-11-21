@@ -28,7 +28,7 @@ function png(width, height, [r, g, b]) {
 }
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-artifacts-ui-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 delete env.ELECTRON_RUN_AS_NODE;
 seedApp(dir);
 const executablePath = process.env.BOTKINS_BINARY;

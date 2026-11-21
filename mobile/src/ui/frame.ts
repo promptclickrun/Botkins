@@ -5,7 +5,7 @@
 // The page is not trusted. It gets no network (the policy below, and the web view refuses every
 // navigation), no way to reach the app except the few messages read here, and only the data its
 // own bot gave it. The bridge is the same `window.botkins` the desktop app gives a page
-// (Commander-Con/desktop/frames.mjs), so a page written for the computer runs here unchanged.
+// (desktop/desktop/frames.mjs), so a page written for the computer runs here unchanged.
 
 /** What a view's page may do: run its own inline code and styles and show inline pictures. Nothing loads from anywhere. */
 export const FRAME_CSP = [
@@ -242,7 +242,7 @@ const BRIDGE = String.raw`(() => {
     }),
   };
   api.sendMessage = api.sendAnswer;
-  // window.commander and window.bighelp (the app's earlier names) are the same bridge.
+  // Saved pages can also use either earlier spelling of the bridge.
   Object.defineProperty(window, "botkins", { value: Object.freeze(api) });
   Object.defineProperty(window, "commander", { value: window.botkins });
   Object.defineProperty(window, "bighelp", { value: window.botkins });

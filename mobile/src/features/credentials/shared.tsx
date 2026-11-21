@@ -246,7 +246,7 @@ export function KeptNote({ text }: { text: string }) {
   );
 }
 
-// The desktop's own vault of tool keys (Commander's `credentials()`), which isn't in the link's Calls.
+// The computer's vault of tool keys (`credentials()`), which isn't in the link's Calls.
 
 /** One key a tool uses, without its secret. */
 export type ToolCredential = { id: string; label: string; kind: string; owner: string; createdAt: number; updatedAt: number; serverId?: string; usedBy?: string };

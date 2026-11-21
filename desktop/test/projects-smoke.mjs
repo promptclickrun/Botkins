@@ -13,7 +13,7 @@ import { seedApp } from "./starter.mjs";
 import { fileDetails } from "../desktop/artifact-files.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-cp-ui-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
+const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app") };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(join(dir, "app"));
 // A chat that has started, for "Add a chat…", and a file a bot made in it, for "Attach an artifact…".
@@ -34,7 +34,7 @@ seedApp(join(dir, "app"));
   ]));
 }
 delete env.ELECTRON_RUN_AS_NODE;
-const shots = (process.env.BOTKINS_CP_SHOTS ?? process.env.COMMANDER_CP_SHOTS);
+const shots = process.env.BOTKINS_CP_SHOTS;
 let app, page;
 const errors = [];
 const button = (name, scope = page) => scope.getByRole("button", { name, exact: true });
@@ -64,7 +64,7 @@ async function shot(name, locator, tall = false) {
 }
 
 try {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
@@ -91,7 +91,6 @@ try {
   await expect(page.getByRole("heading", { name: "Mail migration", level: 1 })).toBeVisible();
   await expect(page.locator(".project-meta")).toHaveCount(0);
   const project = (await snap()).projects.find((p) => p.name === "Mail migration");
-  assert.equal("customerId" in project, false);
   assert.equal(project.folder, undefined);
   const menu = page.getByRole("navigation", { name: "Project sections" });
   await expect(button("Changes", menu)).toHaveCount(0);
@@ -291,7 +290,7 @@ try {
     ],
   });
   writeFileSync(file, JSON.stringify(data));
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1240, 860));

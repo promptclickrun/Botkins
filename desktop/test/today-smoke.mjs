@@ -10,14 +10,14 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-today-"));
 const fixtures = createSources(dir);
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dir);
 delete env.ELECTRON_RUN_AS_NODE;
 const launch = () =>
   _electron.launch({
-    args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."],
-    executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY),
+    args: process.env.BOTKINS_BINARY ? [] : ["."],
+    executablePath: process.env.BOTKINS_BINARY,
     env,
   });
 let app = await launch(),
@@ -140,7 +140,7 @@ try {
     "Home, Today, bot creation, configured sources, live discovery, slash selection and cache clearing passed.",
   );
 
-  if ((process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1") {
+  if (process.env.BOTKINS_LIVE === "1") {
     let s = await submit("sample-skill", "");
     assert.equal(s.runs[0].skill, "sample-skill");
     assert.ok(

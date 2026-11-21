@@ -14,11 +14,11 @@ import { seedApp } from "./starter.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-int-ui-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
+const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app") };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(join(dir, "app"));
 delete env.ELECTRON_RUN_AS_NODE;
-const shots = (process.env.BOTKINS_INT_SHOTS ?? process.env.COMMANDER_INT_SHOTS);
+const shots = process.env.BOTKINS_INT_SHOTS;
 let app, page;
 const errors = [];
 const snap = () => page.evaluate(() => window.botkins.snapshot());
@@ -73,7 +73,7 @@ writeFileSync(env.BOTKINS_MCP_OAUTH_CLIENTS_FILE, JSON.stringify({ clients: [{
 }] }));
 
 try {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
@@ -98,7 +98,7 @@ try {
   await expect(settings.getByRole("switch", { name: "release-notes", exact: true })).toBeChecked();
   let skill = (await skills()).skills.find((s) => s.name === "release-notes");
   assert.equal(skill.editable, true);
-  assert.equal(skill.origin, "commander");
+  assert.equal(skill.origin, "botkins");
   await settings.getByRole("button", { name: "Edit release-notes" }).click();
   sheet = page.getByRole("dialog", { name: "Edit skill" });
   await expect(sheet.getByRole("textbox", { name: "When to use it" })).toHaveValue("Use when writing release notes.");
@@ -138,7 +138,7 @@ try {
   await expect(settings.getByRole("status")).toHaveText("Added the skill solo-skill.");
   let list = await skills();
   assert.equal(list.folders.length, 1);
-  assert.equal(list.skills.find((s) => s.name === "solo-skill").origin, "commander");
+  assert.equal(list.skills.find((s) => s.name === "solo-skill").origin, "botkins");
   assert.equal(list.skills.find((s) => s.name === "my-skill").origin, "folder");
   if (shots) {
     await shot("skills");
@@ -267,7 +267,7 @@ try {
   await settings.getByRole("button", { name: "Remove docs" }).click();
   await page.getByRole("dialog", { name: "Remove docs?" }).getByRole("button", { name: "Remove" }).click();
   await expect.poll(async () => (await snap()).mcpServers.map((s) => s.name)).toEqual(["local-tools", "github"]);
-  if ((process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1") {
+  if (process.env.BOTKINS_LIVE === "1") {
     await settings.getByRole("button", { name: "Test github" }).click();
     await expect(settings.locator(".int-item", { hasText: "github" }).locator(".int-note")).not.toContainText("Connecting", { timeout: 30000 });
     console.log("Live test: " + (await settings.locator(".int-item", { hasText: "github" }).locator(".int-note").innerText()));
@@ -386,7 +386,7 @@ try {
     ipcMain.removeHandler("testMcpServer");
     if (globalThis.realTest) ipcMain.handle("testMcpServer", globalThis.realTest);
   });
-  if ((process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1") {
+  if (process.env.BOTKINS_LIVE === "1") {
     await settings.getByRole("button", { name: "Test words" }).click();
     await expect(row("words").locator(".int-note", { hasText: /Connect|tool|sign|connect/ }).last()).not.toContainText("Connecting", { timeout: 60000 });
     console.log("Live test of words: " + (await row("words").locator(".int-note").last().innerText()));
@@ -532,7 +532,7 @@ try {
   // 12. A vault this computer can't read: Credentials says so, servers ask for their values, and Reset starts over.
   await app.close();
   writeFileSync(join(dir, "app", "data", "vault.json"), "not a vault");
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();

@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { CliError, EXIT, table, usage } from "../output.mjs";
+import { LEGACY_NAME } from "../../desktop/home.mjs";
 import { shownText } from "../../desktop/shown-text.mjs";
 import { ask, confirm, readAll } from "./input.mjs";
 
@@ -24,6 +25,13 @@ const one = (context, what) => {
   if (context.args.length !== 1) throw usage(what);
   return context.args[0];
 };
+/** An updated CLI can still be talking to an earlier running service. Normalize its skill
+ * metadata before either the table or the JSON formatter sees it. */
+async function skillResult(context, method, ...args) {
+  const value = await context.client.call(method, ...args);
+  const current = (skill) => skill?.origin === LEGACY_NAME.toLowerCase() ? { ...skill, origin: "botkins" } : skill;
+  return Array.isArray(value?.skills) ? { ...value, skills: value.skills.map(current) } : current(value);
+}
 /** What must be seen is written to standard error whatever --json is: a caller that reads JSON still shows its person what will start. */
 const show = (context, text) => void context.stderr.write(text + "\n");
 // A name is a name. A word with a value in it ("API_KEY=sk-…", "Authorization: Bearer …") is refused
@@ -324,14 +332,14 @@ export const tools = {
         summary: "List the skills",
         usage: "botkins skills list",
         async run(context) {
-          context.print(await context.client.call("skills.list"), (all) => (all.skills.length ? table(["NAME", "STATE", "FROM", "DESCRIPTION"], all.skills.map((skill) => [skill.name, skill.enabled ? "on" : "off", skill.origin === "commander" ? "Botkins" : skill.origin, skill.description.length > 70 ? skill.description.slice(0, 69) + "…" : skill.description])) : "No skills yet. Add one with `botkins skills add`."));
+          context.print(await skillResult(context, "skills.list"), (all) => (all.skills.length ? table(["NAME", "STATE", "FROM", "DESCRIPTION"], all.skills.map((skill) => [skill.name, skill.enabled ? "on" : "off", skill.origin === "botkins" ? "Botkins" : skill.origin, skill.description.length > 70 ? skill.description.slice(0, 69) + "…" : skill.description])) : "No skills yet. Add one with `botkins skills add`."));
         },
       },
       show: {
         summary: "Show one skill, with its instructions when Botkins keeps it",
         usage: "botkins skills show <skill>",
         async run(context) {
-          context.print(await context.client.call("skills.get", one(context, "Name the skill.")), (skill) => [skill.name + (skill.enabled ? "" : " (off)"), skill.description, skill.instructions !== undefined ? "\n" + skill.instructions : "\nIts instructions are in " + skill.path + "."].join("\n"));
+          context.print(await skillResult(context, "skills.get", one(context, "Name the skill.")), (skill) => [skill.name + (skill.enabled ? "" : " (off)"), skill.description, skill.instructions !== undefined ? "\n" + skill.instructions : "\nIts instructions are in " + skill.path + "."].join("\n"));
         },
       },
       add: {
@@ -348,7 +356,7 @@ export const tools = {
           if (o.description === undefined) throw usage("Give --description: one line that says when a bot should use the skill.");
           if ((o.instructions === undefined) === (o["instructions-file"] === undefined)) throw usage("Give --instructions or --instructions-file, one of them.");
           const instructions = o.instructions ?? (await textFrom(context, o["instructions-file"], "file"));
-          context.print(await context.client.call("skills.save", { name, description: o.description, instructions }), (skill) => "Added " + skill.name + ". Every bot has it now; `botkins bots skills <bot> --off " + skill.name + "` takes it from one.");
+          context.print(await skillResult(context, "skills.save", { name, description: o.description, instructions }), (skill) => "Added " + skill.name + ". Every bot has it now; `botkins bots skills <bot> --off " + skill.name + "` takes it from one.");
         },
       },
       edit: {
@@ -365,10 +373,10 @@ export const tools = {
           const o = context.options;
           if (o.instructions !== undefined && o["instructions-file"] !== undefined) throw usage("Give --instructions or --instructions-file, not both.");
           if (o.name === undefined && o.description === undefined && o.instructions === undefined && o["instructions-file"] === undefined) throw usage("Say what to change: --name, --description, --instructions or --instructions-file.");
-          const before = await context.client.call("skills.get", ref);
+          const before = await skillResult(context, "skills.get", ref);
           if (before.instructions === undefined) throw new CliError(before.name + " is not a skill that Botkins keeps. Change it in its folder: " + before.path);
           const instructions = o.instructions ?? (o["instructions-file"] !== undefined ? await textFrom(context, o["instructions-file"], "file") : before.instructions);
-          context.print(await context.client.call("skills.save", { original: before.name, name: o.name ?? before.name, description: o.description ?? before.description, instructions }), (skill) => "Saved " + skill.name + ".");
+          context.print(await skillResult(context, "skills.save", { original: before.name, name: o.name ?? before.name, description: o.description ?? before.description, instructions }), (skill) => "Saved " + skill.name + ".");
         },
       },
       remove: {
@@ -385,21 +393,21 @@ export const tools = {
         summary: "Turn a skill on for every bot that has it",
         usage: "botkins skills enable <skill>",
         async run(context) {
-          context.print(await context.client.call("skills.enable", one(context, "Name the skill."), true), (skill) => skill.name + " is on.");
+          context.print(await skillResult(context, "skills.enable", one(context, "Name the skill."), true), (skill) => skill.name + " is on.");
         },
       },
       disable: {
         summary: "Turn a skill off for every bot, and keep it",
         usage: "botkins skills disable <skill>",
         async run(context) {
-          context.print(await context.client.call("skills.enable", one(context, "Name the skill."), false), (skill) => skill.name + " is off.");
+          context.print(await skillResult(context, "skills.enable", one(context, "Name the skill."), false), (skill) => skill.name + " is off.");
         },
       },
       folders: {
         summary: "List the linked folders of skills",
         usage: "botkins skills folders",
         async run(context) {
-          context.print(await context.client.call("skills.list"), (all) => {
+          context.print(await skillResult(context, "skills.list"), (all) => {
             const rows = [...all.folders.map((folder) => [folder.id, "skills", folder.missing ? "missing" : String(folder.skills), folder.path]), ...all.plugins.map((folder) => [folder.id, "plugin", folder.missing ? "missing" : "", folder.path])];
             return rows.length ? table(["ID", "KIND", "SKILLS", "PATH"], rows) : "No folders are linked. Link one with `botkins skills add-folder <path>`.";
           });

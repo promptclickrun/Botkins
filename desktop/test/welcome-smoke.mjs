@@ -15,12 +15,12 @@ const dir = mkdtempSync(join(tmpdir(), "botkins-welcome-"));
 const shots = process.env.WELCOME_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
 // GitHub Copilot and Claude only, whatever else this computer has; the provider list itself is stubbed below.
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,claude", COMMANDER_PROVIDERS: "copilot,claude" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,claude" };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dir);
 delete env.ELECTRON_RUN_AS_NODE;
 const launch = () =>
-  _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 const errors = [];
 let app, page;
 async function start() {

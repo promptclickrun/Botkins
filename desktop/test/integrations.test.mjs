@@ -156,7 +156,7 @@ test("skills are made in Botkins, copied or linked from folders, and switched of
   const listed = ws.integrations.skills();
   assert.deepEqual(
     listed.filter((s) => s.origin !== "built-in").map((s) => [s.name, s.origin, !!s.editable]),
-    [["notes", "commander", true], ["retro", "folder", false], ["standup", "folder", false], ["triage", "commander", true]],
+    [["notes", "botkins", true], ["retro", "folder", false], ["standup", "folder", false], ["triage", "botkins", true]],
   );
   const folders = ws.integrations.folders();
   // Folders are kept by their real path.

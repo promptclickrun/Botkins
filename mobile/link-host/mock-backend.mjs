@@ -43,8 +43,8 @@ const PROVIDERS = [
 ];
 
 const SKILLS = [
-  { name: "weekly-review", description: "Run a weekly review: wins, misses and next steps.", path: "/skills/weekly-review", origin: "commander", enabled: true, editable: true, instructions: "# Weekly review\n\n1. List what shipped.\n2. List what slipped and why.\n3. Propose three priorities for next week." },
-  { name: "meeting-notes", description: "Turn a transcript into decisions and action items.", path: "/skills/meeting-notes", origin: "commander", enabled: true, editable: true, instructions: "# Meeting notes\n\nSummarize decisions first, then action items with owners." },
+  { name: "weekly-review", description: "Run a weekly review: wins, misses and next steps.", path: "/skills/weekly-review", origin: "botkins", enabled: true, editable: true, instructions: "# Weekly review\n\n1. List what shipped.\n2. List what slipped and why.\n3. Propose three priorities for next week." },
+  { name: "meeting-notes", description: "Turn a transcript into decisions and action items.", path: "/skills/meeting-notes", origin: "botkins", enabled: true, editable: true, instructions: "# Meeting notes\n\nSummarize decisions first, then action items with owners." },
   { name: "wiki", description: "Read and keep the shared wiki.", path: "/built-in/wiki", origin: "built-in", enabled: true },
   { name: "html-apps", description: "Show a small interactive page in a chat.", path: "/built-in/html-apps", origin: "built-in", enabled: true },
   // From a linked folder (state.skills.folders), so the phone has more than eight skills to filter.
@@ -2434,7 +2434,7 @@ export class MockBackend {
       const clean = text(name, 64, "name").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
       const existing = this.skillList.find((s) => s.name === (original ?? clean));
       if (existing) Object.assign(existing, { name: clean, description, instructions });
-      else this.skillList.unshift({ name: clean, description, instructions, path: "/skills/" + clean, origin: "commander", enabled: true, editable: true });
+      else this.skillList.unshift({ name: clean, description, instructions, path: "/skills/" + clean, origin: "botkins", enabled: true, editable: true });
       return clean;
     },
     removeSkill(name) {

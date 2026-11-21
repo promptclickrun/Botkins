@@ -145,7 +145,7 @@ test("a link host opens a pairing without a phone, and calls outside the list st
   const calls = [];
   const adopted = [];
   const backend = {
-    info: () => ({ app: "commander", version: "0.0.0", platform: process.platform }),
+    info: () => ({ app: "botkins", version: "0.0.0", platform: process.platform }),
     snapshot: () => ({ bots: [], chats: [], runs: [] }),
     call: (name, args) => calls.push([name, args]),
     subscribe: () => () => {},

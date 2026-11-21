@@ -5,7 +5,7 @@ import type { Bot, Mention, MentionInput, Mentionables } from "./types";
 import "./mentions.css";
 
 /** A mention picked in the composer: what is sent, plus the label typed into the message. */
-export type DraftMention = Exclude<Mention, { kind: "customer" }>;
+export type DraftMention = Exclude<Mention, { kind: "label" }>;
 export const MAX_MENTIONS = 12;
 
 /** The text a mention puts in the message, without the trailing space. */
@@ -15,7 +15,6 @@ export const toInput = (m: DraftMention): MentionInput =>
   "path" in m ? { kind: m.kind, path: m.path } : { kind: m.kind, id: m.id };
 
 export function MentionIcon({ kind, size = 13 }: { kind: Mention["kind"]; size?: number }) {
-  // A mention saved by an earlier version ("customer") has no icon: it shows as a plain label.
   return kind === "project" ? (
     <FolderKanban size={size} aria-hidden="true" />
   ) : kind === "wiki" ? (
