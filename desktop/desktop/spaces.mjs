@@ -25,6 +25,11 @@ export const LIMITS = { spaces: 60, panels: 40, notes: 50, note: 2000, state: 64
 export const STARTS = { checklist: "Make it a checklist.", tracker: "Make it a tracker.", chart: "Make it a chart.", table: "Make it a table.", notes: "Make it a place for notes.", app: "Make it an app people use together." };
 /** The most a link's copy may be once it is packed: 4 MiB, less what sealing adds. */
 export const COPY_BYTES = 4 * 1024 * 1024 - 28;
+/** The host's own pace for what a person does in an app panel (Spaces.paced). `every` is milliseconds for one more. */
+export const PACE = {
+  state: { burst: 10, every: 1000, wait: "Wait a moment before you change this panel again." },
+  note: { burst: 5, every: 5000, wait: "Wait a moment before you write another note." },
+};
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const newId = () => "s_" + [...randomBytes(10)].map((byte) => BASE32[byte % 32]).join("");
@@ -41,7 +46,8 @@ function record(name, person, builtin, now = Date.now()) {
  * Goals by their kind.
  */
 export function migrateSpaces(state) {
-  state.spaces = Array.isArray(state.spaces) ? state.spaces : [];
+  // (Only records count: an entry that is not one, from a file that was changed by hand, is dropped and not tripped over.)
+  state.spaces = (Array.isArray(state.spaces) ? state.spaces : []).filter((space) => space && typeof space === "object" && typeof space.id === "string" && space.id);
   const mine = (builtin) => {
     let space = state.spaces.find((item) => item.builtin === builtin && !item.createdBy);
     if (!space) state.spaces.push((space = record(BUILTIN[builtin].name, OWNER, builtin)));
@@ -59,6 +65,9 @@ export class Spaces {
   constructor(workspace) {
     this.ws = workspace;
     migrateSpaces(workspace.state);
+    this.pace = new Map();
+    // A clock that only goes forward, for the pace above.
+    this.clock = () => performance.now();
   }
   get all() {
     return this.ws.state.spaces;
@@ -101,8 +110,27 @@ export class Spaces {
   }
   /** The built-in space of a person that holds cards of a kind ("feed", "idea", "goal"). */
   forCards(person, kind) {
+    // (Someone who is no longer on the team gets no spaces made for them.)
+    if (person !== OWNER && !this.ws.teamOf()?.members?.some((member) => member.id === person)) throw new Error("That person is no longer on the team.");
     const builtin = Object.keys(BUILTIN).find((name) => BUILTIN[name].kind === kind) ?? "feed";
     return this.ensure(person)[builtin];
+  }
+  /**
+   * How often one person may change one panel's state or write a note on it. The window and the
+   * phone hold a page to a real touch and once a second; this is the host's own limit, for a
+   * client that does not: each save writes the whole workspace. Ten changes at once, then one a
+   * second; five notes at once, then one every five seconds.
+   */
+  paced(kind, person, panelId) {
+    const { burst, every, wait } = PACE[kind];
+    const now = this.clock();
+    const key = kind + ":" + person + ":" + panelId;
+    const had = this.pace.get(key);
+    const tokens = Math.min(burst, (had ? had.tokens + (now - had.at) / every : burst));
+    if (tokens < 1) throw new Error(wait);
+    this.pace.set(key, { tokens: tokens - 1, at: now });
+    // What is full again says nothing: forgotten, so the list stays short.
+    if (this.pace.size > 2000) for (const [name, entry] of this.pace) if (entry.tokens + (now - entry.at) / PACE[name.split(":")[0]].every >= PACE[name.split(":")[0]].burst) this.pace.delete(name);
   }
 
   /** A new space, private until its maker shares it. Answers its id. */
@@ -164,8 +192,9 @@ export class Spaces {
   need(space, person, level = "open") {
     const can = this.can(space, person);
     if (!can) throw new Error("This space no longer exists.");
-    if (level === "change" && can === "view") throw new Error("You can look at " + space.name + ", not change it.");
-    if (level === "own" && can !== "own") throw new Error("Only the person who made " + space.name + " can do that.");
+    // (The link's own sentences for the same refusals, word for word: desktop/link/SPACES.md, "Sentences the link answers with".)
+    if (level === "change" && can === "view") throw new Error("You can look at this space, not change it.");
+    if (level === "own" && can !== "own") throw new Error("Only the person who made this space can do that.");
     return can;
   }
   /** The name the team has for a person, for a panel's last line and for notes. */
@@ -291,7 +320,8 @@ export class Spaces {
   /** Starts a chat with a bot about a space, or with `panelId` about one of its panels. Answers { chatId }. */
   ask({ spaceId, botId, text, panelId } = {}, person = OWNER) {
     const space = this.get(spaceId);
-    this.need(space, person);
+    // Asking a bot from a space is acting in it: for someone who may change it (the contract's "Who can do what").
+    this.need(space, person, "change");
     const said = textField(text, 32000, "message");
     if (panelId != null && this.ws.panels.get(panelId).spaceId !== space.id) throw new Error("Panel no longer exists");
     const chat = this.chatAbout(space, botId, person, panelId ?? undefined);
@@ -305,7 +335,8 @@ export class Spaces {
     if (!space) return "";
     const people = this.ws.turnPeople(chat).people;
     if (!this.canAll(space, people)) return "";
-    const panels = this.panels(space.id).filter((panel) => !panel.hidden);
+    // (Not the panels of a bot that the role of one of the chat's people hides, as `read` leaves them out.)
+    const panels = this.panels(space.id).filter((panel) => !panel.hidden && people.every((person) => this.seesBot(person, panel.botId)));
     const about = chat.aboutPanelId && panels.find((panel) => panel.id === chat.aboutPanelId);
     const bot = (panel) => this.ws.state.bots.find((item) => item.id === panel.botId)?.name ?? "a bot";
     return (
@@ -377,21 +408,41 @@ export class Spaces {
       panels,
       cards,
     };
-    // Packed as it will be sent. Over the limit, the largest page goes, then the next, until it fits.
-    const packed = () => gzipSync(JSON.stringify(copy)).length;
-    while (packed() > limit) {
-      let largest = null;
-      for (const panel of panels) for (const block of panel.blocks) if (block.type === "html" && (!largest || block.page.length > largest.block.page.length)) largest = { panel, block };
-      if (!largest) break;
-      largest.panel.blocks = largest.panel.blocks.filter((block) => block.type !== "html");
-      largest.panel.left = "size";
-    }
+    // Packed as it will be sent. Over the limit, the largest page goes, then the next, until it
+    // fits. Each page is measured once, by itself; the whole copy is packed again only to check
+    // a cut that should fit, not at every step.
+    const size = (value) => gzipSync(JSON.stringify(value)).length;
+    let packed = size(copy);
+    if (packed <= limit) return copy;
+    const cut = (pieces, take) => {
+      // The largest first. What a piece weighs alone is close to what the copy loses without it.
+      const measured = pieces.map((piece) => ({ ...piece, bytes: size(piece.what) })).sort((a, b) => b.bytes - a.bytes);
+      let estimate = packed;
+      for (let at = 0; at < measured.length && packed > limit; at++) {
+        take(measured[at]);
+        estimate -= measured[at].bytes;
+        if (estimate <= limit || at === measured.length - 1) estimate = packed = size(copy);
+      }
+    };
+    // First the pages of custom views.
+    cut(panels.flatMap((panel) => panel.blocks.filter((block) => block.type === "html").map((block) => ({ panel, block, what: block.page }))), ({ panel, block }) => {
+      panel.blocks = panel.blocks.filter((other) => other !== block);
+      panel.left = "size";
+    });
+    // Then all of a panel but its title: its other blocks and what people saved in it.
+    cut(panels.map((panel) => ({ panel, what: [panel.blocks, panel.state ?? null] })), ({ panel }) => {
+      panel.blocks = [];
+      delete panel.state;
+      panel.left = "size";
+    });
+    // Then cards, the largest first. A copy that is still too large is not given: it is never sent over its limit.
+    cut(cards.map((card) => ({ card, what: card })), ({ card }) => void copy.cards.splice(copy.cards.indexOf(card), 1));
+    if (packed > limit) throw new Error("This space is too large to share by link.");
     return copy;
   }
   /**
    * A member left the team: the spaces they made pass to the owner, the panels made for them
-   * are the owner's from here, and the routines they set are paused (a refresh in the name of
-   * someone who is gone would run with nobody's limits). Their notes stay, with their name.
+   * are the owner's from here, and the routines they set are paused. Their notes stay, with their name.
    * Safe to repeat. The link takes away what it keeps itself: who the spaces were shared with,
    * their links, and the member's own view.
    */
@@ -404,7 +455,18 @@ export class Spaces {
       // Two of the owner's built-in spaces of one kind can't be: what the member's held joins the owner's, and theirs goes.
       if (space.builtin) {
         const own = this.ensure(OWNER)[space.builtin];
-        for (const panel of this.ws.state.panels) if (panel.spaceId === space.id) panel.spaceId = own.id;
+        for (const panel of this.ws.state.panels) {
+          if (panel.spaceId !== space.id) continue;
+          // A bot has one panel by a key in a space. Where the owner's already has that key, this one gets the next free one.
+          const taken = (key) => this.ws.state.panels.some((other) => other !== panel && other.spaceId === own.id && other.botId === panel.botId && other.key === key);
+          if (taken(panel.key)) {
+            const base = panel.key.slice(0, 66);
+            let n = 2;
+            while (taken(base + "-" + n)) n++;
+            panel.key = base + "-" + n;
+          }
+          panel.spaceId = own.id;
+        }
         for (const card of this.ws.state.board) if (card.spaceId === space.id) card.spaceId = own.id;
         for (const chat of this.ws.state.chats) if (chat.spaceId === space.id) chat.spaceId = own.id;
         this.touch(own.id, now);
@@ -418,10 +480,12 @@ export class Spaces {
         delete panel.createdBy;
         changed = true;
       }
-      if (panel.routine?.setBy === memberId) {
+      // The routine they set stops. It keeps their name as its writer: its prompt is their text, and
+      // run again as it is (by hand, or resumed) it gets the limits of someone who is on no team,
+      // which are the narrowest. Setting the routine anew makes it the setter's.
+      if (panel.routine?.setBy === memberId && panel.routine.enabled !== false) {
         panel.routine.enabled = false;
         panel.routine.nextAt = null;
-        delete panel.routine.setBy;
         changed = true;
       }
       if (changed) this.touch(panel.spaceId, now);
@@ -443,6 +507,7 @@ export class Spaces {
       by = this.named(by);
     }
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("A panel's state is changed with an object of the keys to set.");
+    if (by) this.paced("state", by.id, panel.id);
     const state = { ...(panel.state ?? {}) };
     for (const [key, value] of Object.entries(patch)) {
       if (value === null) delete state[key];
@@ -476,8 +541,10 @@ export class Spaces {
     }
     const notes = (panel.notes ??= []);
     if (notes.length >= LIMITS.notes) throw new Error("This panel has " + LIMITS.notes + " notes. Remove one first.");
+    const written = textField(text, LIMITS.note, "note");
+    this.paced("note", by.id, panel.id);
     const now = Date.now();
-    const note = { id: newId().replace("s_", "n_"), by: by.id, name: by.name, text: textField(text, LIMITS.note, "note"), at: now };
+    const note = { id: newId().replace("s_", "n_"), by: by.id, name: by.name, text: written, at: now };
     notes.push(note);
     panel.last = { by: by.id, name: by.name, label: "wrote a note", at: now };
     this.touch(panel.spaceId, now);
@@ -488,7 +555,7 @@ export class Spaces {
   /** Removes a note. `mayRemoveAny` is for the space's maker and the computer's owner; anyone else removes their own. */
   removeNote(panelId, noteId, person, mayRemoveAny = this.can(this.of(this.ws.panels.get(panelId)), person) === "own") {
     const panel = this.ws.panels.get(panelId);
-    this.need(this.of(panel), person);
+    this.need(this.of(panel), person, "change");
     const note = panel.notes?.find((item) => item.id === noteId);
     if (!note) throw new Error("This note no longer exists.");
     if (!mayRemoveAny && note.by !== person) throw new Error("You can remove your own notes.");

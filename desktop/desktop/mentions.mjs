@@ -89,6 +89,11 @@ export class Mentions {
    * `memberId` is set when a team member asks: projects and the wiki are the owner's, so a member
    * is offered neither, and only the files of chats they are in.
    */
+  /** Whether a member can open the space a card is in. A card in no space, or in one that is gone, is the owner's alone. */
+  opens(card, memberId) {
+    const space = this.ws.spaces.all.find((item) => item.id === card.spaceId);
+    return !!space && !!this.ws.spaces.can(space, memberId);
+  }
   candidates(chatId, botId, memberId) {
     const chat = chatId ? this.ws.chat(chatId) : { botId: this.ws.bot(botId).id };
     const bots = this.bots(chat);
@@ -142,7 +147,11 @@ export class Mentions {
       const team = this.ws.teamOf();
       mentions = mentions.filter((m) => {
         if (m?.kind === "file") return mine(String(m.path));
-        if (m?.kind === "board") return memberSeesBot(author.memberId, team, (state.board ?? []).find((item) => item.id === m.id)?.botId);
+        // A card of a space the member cannot open is not there for them, as an unknown id is not.
+        if (m?.kind === "board") {
+          const card = (state.board ?? []).find((item) => item.id === m.id);
+          return !!card && memberSeesBot(author.memberId, team, card.botId) && this.opens(card, author.memberId);
+        }
         return false;
       });
     }

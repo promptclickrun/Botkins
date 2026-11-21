@@ -557,7 +557,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "spaces.create": (data, person) => {
       const id = workspace.spaces.create(data, person);
       if (person === undefined && typeof link?.spacesFor === "function") {
-        const mine = link.spacesFor("owner") ?? [];
+        // The owner's own order, without the members' spaces: those are not the owner's to arrange by this.
+        const mine = link.spacesFor("owner", { admin: false }) ?? [];
         link.arrangeSpaces("owner", { order: mine.map((space) => space.id), pinned: [...mine.filter((space) => space.pinned).map((space) => space.id), id] });
       }
       return id;
@@ -1070,6 +1071,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   /** What the app's own view shows of this computer: the workspace, the team, and a number that goes up when a phone changes. */
   // `spaces` is the owner's own list, as the link makes one for every person. A link from before
   // spaces makes none, and the window then has no `spaces`, which is how it knows.
+  // (This one is for a caller with no window: the terminal host's own status and its command
+  // line, which show everything, as an owner with Admin mode on. The desktop app's window gets
+  // its snapshot from desktop/main.mjs, cut by the window's own Admin mode: desktop/admin-view.mjs.)
   const snapshot = () => ({ ...workspace.snapshot(), spaces: link?.spacesFor?.("owner"), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
   const tick = () => {
     tickChatSchedules(workspace);
