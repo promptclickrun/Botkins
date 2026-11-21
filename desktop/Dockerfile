@@ -7,7 +7,7 @@
 # The stages before it are the earlier headless setup, kept for a phone that should see and
 # control a screen: a `host` that owns the paired-phone identity and the screen grant, and a
 # `workspace` that runs Electron on a virtual display and exposes only a Unix socket through the
-# shared runtime volume. `docker compose --profile display up` runs those two.
+# shared runtime volume. `docker compose --profile display up host workspace` runs those two.
 FROM node:24-bookworm-slim AS botkins
 
 ENV DEBIAN_FRONTEND=noninteractive
