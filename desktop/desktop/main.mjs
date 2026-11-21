@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { chunk, fileDetails, publicFile } from "./artifact-files.mjs";
 import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
+import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
 import { FRAME_CSP } from "./frames.mjs";
@@ -41,6 +42,8 @@ app.setAsDefaultProtocolClient("botkins");
 let appWindows;
 let pendingPrefill = null;
 let pendingTeamJoin = null;
+/** This computer's own Admin mode choice (desktop/admin-view.mjs). */
+let adminMode = null;
 const html = fileURLToPath(new URL("../dist/index.html", import.meta.url));
 const artifactMedia = new ArtifactMedia(APP_SCHEME);
 let win,
@@ -74,12 +77,11 @@ const viewerGuests = new Set();
 const appSnapshot = () => {
   const using = remote?.inUse() ?? null;
   return {
-    ...(using ? remote.snapshot(workspace.state.settings) : workspace.snapshot()),
+    // This computer's own workspace goes to its window as the owner is shown it: the owner's view
+    // of the spaces, and with Admin mode off only what the owner is part of (desktop/admin-view.mjs).
+    // Another computer's snapshot is already cut for this device by that computer's link.
+    ...(using ? remote.snapshot(workspace.state.settings) : ownerWindowView(workspace.snapshot(), link, adminMode?.get() === true)),
     ...(!using && link ? { team: link.team() } : {}),
-    // The app's own list of spaces is never the window's. The window gets the owner's view of it,
-    // which the link makes as it does for every person. A link from before spaces makes none:
-    // the window then has no `spaces`, and that is how it knows to show the Today page as before.
-    ...(!using && { spaces: link?.spacesFor?.("owner") }),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },
   };
@@ -263,6 +265,8 @@ else
     });
     // The app opens on the computer it was on when it was closed: this one, or a paired one.
     remote.resume();
+    // Admin mode is each owner device's own. This window's choice is this computer's, off at first.
+    adminMode = adminModeStore(join(dataDir, "window.json"));
     runtime = await createRuntime({ host, dataDir, trial, pushed: push });
     ({ workspace, link } = runtime);
     // An app's answer goes into its chat's message box for the person to review and send.
@@ -383,6 +387,14 @@ else
         const value = pendingPrefill;
         pendingPrefill = null;
         return value;
+      },
+      // The link's name for the call, so the window says the same thing on this computer and when
+      // it uses another (there the name goes to that computer, which keeps the choice for this device).
+      "link.team.setAdminMode": (on) => {
+        if (!hasAdminMode(link)) throw new Error("Admin mode needs a newer phone link than this copy of Botkins has.");
+        const now = adminMode.set(on === true);
+        push();
+        return now;
       },
     };
     // A real touch, click or key press inside a custom view (desktop/preload.cjs). The view is named
