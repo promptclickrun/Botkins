@@ -14,7 +14,7 @@ import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 import { CALLER, ClaudePool, PlanError, assemble, claudeTurn, cliArgs, extraBody, frames, listedTools, sessionIdFor, startedUp, thinkingLevel, toolNames, toolSchema } from "../desktop/harness/claude.mjs";
 import { CHATGPT_URL, chatgptSignIn, chatgptTurn, completeOutput, planRequest } from "../desktop/harness/chatgpt.mjs";
 import { Gateway } from "../desktop/harness/gateway.mjs";
-import { HARNESSES, Harness, harnessField, planModel } from "../desktop/harness/index.mjs";
+import { HARNESSES, Harness, PI_PLANS, harnessField, piModel, planModel } from "../desktop/harness/index.mjs";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/fake-claude.mjs", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "botkins-harness-test-"));
@@ -1305,9 +1305,10 @@ const standIn = () => {
 const harness = (providers, choice = () => "copilot", gate = standIn()) => new Harness({ providers, choice, dir: root, bridge: null, gateway: gate });
 
 test("one harness is the usual choice, and a saved value that is not a harness is that choice", () => {
-  assert.deepEqual(HARNESSES, ["copilot", "provider"]);
+  assert.deepEqual(HARNESSES, ["copilot", "provider", "pi"]);
   assert.equal(harnessField("copilot"), "copilot");
   assert.equal(harnessField("provider"), "provider");
+  assert.equal(harnessField("pi"), "pi");
   for (const value of ["opencode", "", "COPILOT", undefined, null, 3, {}]) assert.equal(harnessField(value), "copilot", String(value));
 });
 
@@ -1347,6 +1348,49 @@ test("runner gives the Copilot runtime for a hosted selection and the model's ow
   assert.equal(one.runner({ provider: "copilot", model: "gpt-5" }), providers.byId.get("copilot"));
   assert.equal(one.runner({ provider: "opencode", model: "x" }), providers.byId.get("opencode"));
   assert.equal(harness(providers, () => "provider").runner({ provider: "claude", model: "opus" }), providers.byId.get("claude"));
+});
+
+test("with Pi chosen, Pi runs ChatGPT and Claude plan models, and every other model runs as before", () => {
+  const providers = registry({ ids: ["copilot", "codex", "claude", "opencode", "pi"] });
+  const pi = harness(providers, () => "pi");
+  assert.equal(pi.via({ provider: "codex", model: "gpt-6-astra" }), "pi");
+  assert.equal(pi.via({ provider: "claude", model: "opus" }), "pi");
+  assert.equal(pi.runner({ provider: "codex", model: "gpt-6-astra" }), providers.byId.get("pi"));
+  assert.equal(pi.runner({ provider: "claude", model: "opus" }), providers.byId.get("pi"));
+  // GitHub Copilot's plan needs its own runtime; OpenCode is a whole agent.
+  assert.equal(pi.runner({ provider: "copilot", model: "gpt-5" }), providers.byId.get("copilot"));
+  assert.equal(pi.runner({ provider: "opencode", model: "x" }), providers.byId.get("opencode"));
+  assert.equal(pi.hosts({ provider: "codex", model: "gpt-6-astra" }), false, "the Copilot runtime hosts nothing then");
+  // A recovered turn names where it ran.
+  assert.equal(harness(providers).runner({ provider: "claude", model: "opus" }, "pi"), providers.byId.get("pi"));
+  // An app without Pi runs each provider's own.
+  const without = harness(registry(), () => "pi");
+  assert.equal(without.via({ provider: "codex", model: "gpt-6-astra" }), null);
+  assert.equal(without.runner({ provider: "codex", model: "gpt-6-astra" }), without.providers.byId.get("codex"));
+});
+
+test("Pi's session has a connection to the gateway for each plan with models, in Pi's own format", async () => {
+  const gate = standIn();
+  const one = harness(registry({ ids: ["copilot", "codex", "claude", "pi"], models: async () => CATALOG }), () => "pi", gate);
+  const out = await one.session({ provider: "claude", model: "opus", reasoningEffort: "high" }, "pi");
+  assert.deepEqual(out.model, { model: "opus", source: PI_PLANS.claude.name, reasoningEffort: "high" });
+  const [chatgpt, claude] = out.inference.providers;
+  assert.equal(chatgpt.name, "botkins-chatgpt");
+  assert.deepEqual({ ...chatgpt.config, models: undefined }, { name: "ChatGPT", baseUrl: "http://127.0.0.1:1/chatgpt", api: "openai-responses", apiKey: "s", authHeader: true, models: undefined });
+  // The plan's endpoint takes the bot's instructions as a system message, which Pi sends only when the model says so.
+  assert.ok(chatgpt.config.models.every((model) => model.compat?.supportsDeveloperRole === false));
+  assert.deepEqual(chatgpt.config.models.map((model) => model.id), ["gpt-6-astra", "gpt-6-sol"], "an unavailable model isn't offered");
+  assert.equal(claude.name, "botkins-claude");
+  assert.deepEqual({ ...claude.config, models: undefined }, { name: "Claude", baseUrl: "http://127.0.0.1:1/claude", api: "anthropic-messages", apiKey: "s", models: undefined });
+  assert.deepEqual(claude.config.models, [piModel({ id: "opus", name: "Claude Opus 5.5" })]);
+  assert.equal(out.inference.models, undefined, "Pi's models are inside its connections");
+  assert.equal(gate.started, 1);
+});
+
+test("a plan's model as Pi is told of it: the stated window and reply size, else Pi's defaults, and no cost", () => {
+  assert.deepEqual(piModel({ id: "m", name: "M", efforts: ["low"], contextWindow: 400000, maxOutput: 128000 }), { id: "m", name: "M", reasoning: true, input: ["text", "image"], contextWindow: 400000, maxTokens: 128000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+  const plain = piModel({ id: "x", vision: false });
+  assert.deepEqual([plain.reasoning, plain.input, plain.contextWindow, plain.maxTokens], [false, ["text"], 128000, 16384]);
 });
 
 const CATALOG = [

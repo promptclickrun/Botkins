@@ -15,6 +15,7 @@ import { CodexProvider } from "./providers/codex/index.mjs";
 import { ClaudeProvider } from "./providers/claude/index.mjs";
 import { OpenCodeProvider } from "./providers/opencode/index.mjs";
 import { AcpProvider } from "./providers/acp/index.mjs";
+import { PiProvider } from "./providers/pi/index.mjs";
 import { ACP_AGENTS } from "./providers/acp/agents.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
 import { tickChatSchedules } from "./schedules.mjs";
@@ -228,6 +229,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     new OpenCodeProvider({ dataDir: join(dataDir, "opencode"), bridge }),
     // Agents that speak the Agent Client Protocol (desktop/providers/acp). Off until the person adds one.
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
+    // Pi, a harness for the ChatGPT and Claude plans (Settings › Harness), not a model provider.
+    new PiProvider({ dataDir: join(dataDir, "pi"), bridge }),
   ];
   // BOTKINS_PROVIDERS=copilot,claude keeps only those (in that list's order here), for tests
   // that must not depend on which tools this computer happens to have.
@@ -806,6 +809,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         return { ...status, signInWays: signIns.ways(provider), signOut: status.signOut || signIns.hasToken(provider.id) };
       });
     },
+    // The harnesses that are programs of their own (Pi), and whether each is installed, for Settings › Harness.
+    harnesses: () => providers.harnessStatuses(),
     // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;
     // the sign-in or the install command is this computer's own (desktop/terminal/signin.mjs).
     providerSignInStart: (id, options) =>

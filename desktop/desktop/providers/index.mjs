@@ -37,9 +37,13 @@ export class Providers {
   constructor(list, { statusWait = 12000, modelsWait = 8000 } = {}) {
     if (!list?.length) throw new Error("Botkins needs at least one model provider.");
     for (const p of list) if (!(p instanceof ModelProvider) || !p.id) throw new Error("Invalid model provider");
-    this.list = list;
+    // A harness (Pi) runs other providers' models and has none of its own: it is found by its id,
+    // for the conversations it runs, but it isn't one of the model providers.
+    this.list = list.filter((p) => !p.harness);
+    this.harnesses = list.filter((p) => p.harness);
+    if (!this.list.length) throw new Error("Botkins needs at least one model provider.");
     this.byId = new Map(list.map((p) => [p.id, p]));
-    this.default = list[0];
+    this.default = this.list[0];
     this.statusWait = statusWait;
     this.modelsWait = modelsWait;
     this.statusCache = new Map();
@@ -121,9 +125,23 @@ export class Providers {
       }),
     );
   }
-  /** One provider's status, as statuses() reports it. */
+  /** One provider's status, as statuses() reports it; a harness's as harnessStatuses() does. */
   async status(id) {
-    return (await this.statuses()).find((s) => s.id === this.require(id).id);
+    const provider = this.require(id);
+    if (provider.harness) return (await this.harnessStatuses()).find((s) => s.id === provider.id);
+    return (await this.statuses()).find((s) => s.id === provider.id);
+  }
+  /** Each harness (Pi), as statuses() reports a provider, with `harness: true`. */
+  async harnessStatuses() {
+    return Promise.all(
+      this.harnesses.map(async (provider) => {
+        const base = { id: provider.id, name: provider.name, description: provider.description, enabled: true, default: false, harness: true };
+        const entry = this.cached(this.statusCache, provider.id, STATUS_FRESH, () => provider.status());
+        if (entry.loading) await entry.loading;
+        if (entry.error) return { ...base, installed: false, connected: false, signIn: null, signOut: false, error: String(entry.error.message ?? entry.error).slice(0, 500) };
+        return { ...base, ...entry.value };
+      }),
+    );
   }
   /**
    * The models of every provider that is switched on and connected, in one catalog. Each entry
@@ -181,6 +199,6 @@ export class Providers {
     return lists.flat();
   }
   async stop() {
-    await Promise.allSettled(this.list.map((p) => p.stop()));
+    await Promise.allSettled([...this.list, ...this.harnesses].map((p) => p.stop()));
   }
 }

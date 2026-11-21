@@ -74,6 +74,7 @@ const POLICY = {
   models: ["agents", "view"],
   setModel: ["agents", "manage"],
   providers: ["settings", "view"],
+  harnesses: ["settings", "view"],
   setProviderEnabled: "owner",
   auth: "owner",
   signIn: "owner",

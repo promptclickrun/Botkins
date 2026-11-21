@@ -6,7 +6,8 @@ import { plainError, reloadProviders, toolName } from "./providers";
 const api = window.botkins;
 type InstallAttempt = { session?: string; cancelling?: boolean };
 
-export function ProviderInstall({ provider, available, windows }: { provider: ProviderStatus; available: boolean; windows: boolean }) {
+/** Installs a provider's tool from the app. `onInstalled` replaces the providers' reload (a harness reads its own status). */
+export function ProviderInstall({ provider, available, windows, onInstalled }: { provider: Pick<ProviderStatus, "id" | "name" | "installed" | "starting" | "message" | "install">; available: boolean; windows: boolean; onInstalled?: () => Promise<unknown> }) {
   const [copied, setCopied] = useState(false);
   const [running, setRunning] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
@@ -76,7 +77,7 @@ export function ProviderInstall({ provider, available, windows }: { provider: Pr
         if (view.error || !view.result?.installed) throw Error(view.error || "The tool was not found after installation.");
         const version = view.result.version;
         setResult(provider.name + " is installed" + (version ? " (" + version + ")" : "") + ".");
-        await reloadProviders(true);
+        await (onInstalled ? onInstalled() : reloadProviders(true));
         break;
       }
     } catch (e) {

@@ -154,14 +154,18 @@ export class DemoSignIns {
     if (now.installed) throw new Error(provider.name + " is already installed.");
     if (!provider.install?.command) throw new Error(provider.name + " can't be installed from Botkins. Its guide: " + provider.install?.url);
     const session = this.open(provider.id, "install");
-    const lines = ["$ " + provider.install.command, "Downloading " + provider.name + " CLI 1.4.0 for macOS (arm64)…", "Verifying checksum…", "Installed to ~/.local/bin/grok"];
+    const pi = provider.id === "pi";
+    const version = pi ? "1.6.0" : "1.4.0";
+    const lines = pi
+      ? ["$ " + provider.install.command, "No terminal detected; continuing without confirmation.", "Installing @earendil-works/pi-coding-agent 1.6.0…", "Linked ~/.local/bin/pi"]
+      : ["$ " + provider.install.command, "Downloading " + provider.name + " CLI 1.4.0 for macOS (arm64)…", "Verifying checksum…", "Installed to ~/.local/bin/grok"];
     this.run(session, async () => {
       for (const text of lines) {
         if (!(await this.pause(session, 700))) return;
         this.emit(session, { type: "output", text });
       }
-      this.set(provider.id, { installed: true, version: "1.4.0", connected: false });
-      this.finish(session, { result: { installed: true, version: "1.4.0" } });
+      this.set(provider.id, { installed: true, version, connected: pi });
+      this.finish(session, { result: { installed: true, version } });
     });
     return { session: session.id };
   }

@@ -498,8 +498,9 @@ export class Workspace {
   async applyModelCommand(session, chat, value) {
     const selection = validateSelection(await this.models(), value);
     // A model that another program runs starts a new session there on the next turn (see openSession).
-    if (this.harness.runner(selection) === this.providers.get(chat.sessionProvider))
-      await session.switchModel(this.harness.hosts(selection) ? (await this.harness.session(selection)).model : selection);
+    const via = this.harness.via(selection);
+    if (this.harness.runner(selection, via) === this.providers.get(chat.sessionProvider))
+      await session.switchModel(via ? (await this.harness.session(selection, via)).model : selection);
     chat.model = selection;
     this.clearCatalogs();
   }
@@ -1126,13 +1127,15 @@ export class Workspace {
     // A model of a provider the person switched off answers nothing, rather than quietly using it.
     if (!this.providers.isEnabled(owner))
       throw new Error(owner.name + " is switched off. Choose another model for this chat, or switch " + owner.name + " on in Settings › Model providers.");
-    // With one harness, the Copilot runtime runs the turn and the model's own plan answers it.
-    const useHost = previous?.hosted ?? this.harness.hosts(choice);
-    const hosted = useHost ? await this.harness.session(choice) : null;
-    const provider = hosted ? this.harness.host : owner;
+    // With one harness (the Copilot runtime, or Pi), it runs the turn and the model's own plan answers it.
+    // A recovered turn goes on where it ran; one saved before Pi says only whether Copilot hosted it.
+    const via = previous ? (previous.via ?? (previous.hosted ? "copilot" : null)) : this.harness.via(choice);
+    const runner = via ? this.harness.runner(choice, via) : null;
+    const hosted = runner ? await this.harness.session(choice, via) : null;
+    const provider = runner ?? owner;
     if (task && !chat.helper) {
       task.gateway = hosted ? this.harness.gateway.server : null;
-      task.route = { choice, hosted: useHost };
+      task.route = { choice, hosted: !!hosted, via: hosted ? via : null };
     }
     // A conversation whose model moved to another provider starts a session there. Its transcript
     // goes along in the instructions, the way a forked chat's does.
@@ -1280,7 +1283,7 @@ export class Workspace {
   /** Open sessions reconnect to their MCP servers: a sign-in changed, so what they hold is out of date. */
   releaseServerSessions() {
     this.clearCatalogs();
-    for (const provider of this.providers.list) provider.releaseSessions({ busy: true }).catch(() => {});
+    for (const provider of [...this.providers.list, ...this.providers.harnesses]) provider.releaseSessions({ busy: true }).catch(() => {});
   }
   releaseBotSessions(botId, { busy = false } = {}) {
     for (const chat of this.state.chats) {
@@ -1703,7 +1706,7 @@ export class Workspace {
       // The run remembers the model it really ran on and whose it is, for Work and Usage. A plan's
       // model that the Copilot runtime ran is still that plan's model.
       const chosen = task.route.choice;
-      if (task.route.hosted) run.model = { model: chosen.model, provider: this.providers.for(chosen).id, ...(current?.reasoningEffort && { reasoningEffort: current.reasoningEffort }), harness: "copilot" };
+      if (task.route.hosted) run.model = { model: chosen.model, provider: this.providers.for(chosen).id, ...(current?.reasoningEffort && { reasoningEffort: current.reasoningEffort }), harness: task.route.via ?? "copilot" };
       else if (current) run.model = { ...current, ...(chat.sessionProvider && { provider: chat.sessionProvider }) };
       let todoRead = 0;
       unsubscribe = session.on((event) => {

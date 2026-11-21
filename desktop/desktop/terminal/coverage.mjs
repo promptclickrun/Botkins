@@ -50,6 +50,7 @@ export const WORKSPACE = {
   listFolders: cmd("folders"),
   // ── Model providers and models ──
   providers: cmd("providers list"),
+  harnesses: owed("d"),
   setProviderEnabled: cmd("providers enable"),
   providerServices: cmd("providers services"),
   ...each("providerSignInStart providerSignInRead providerSignInInput providerSignInCancel", cmd("providers login")),

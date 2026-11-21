@@ -54,7 +54,7 @@ export const REMOTE_METHODS = new Set([
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
   // Models and providers
-  "models", "setModel", "providers", "setProviderEnabled", "auth", "signIn", "cancelSignIn", "signOut",
+  "models", "setModel", "providers", "harnesses", "setProviderEnabled", "auth", "signIn", "cancelSignIn", "signOut",
   "providerServices", "connectProviderService", "finishProviderService", "cancelProviderService", "disconnectProviderService",
   // Signing in and installing from a phone ("provider-signin-v1"): the computer runs the provider's
   // own sign-in or install command; the phone only names the provider.
