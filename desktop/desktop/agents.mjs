@@ -180,6 +180,8 @@ export class Agents {
       pinned: false,
       hidden: false,
     });
+    // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
+    delete copy.createdBy;
     this.state.bots.splice(this.state.bots.indexOf(source) + 1, 0, copy);
     this.ws.save();
     return copy.id;
@@ -211,7 +213,12 @@ export class Agents {
     this.state.bots = this.state.bots.filter((b) => b !== bot);
     this.state.chats = this.state.chats.filter((c) => !chatIds.has(c.id));
     this.state.runs = this.state.runs.filter((r) => !chatIds.has(r.chatId));
-    for (const panel of this.state.panels) if (panel.botId === id) this.ws.frames?.removeOwner("panel:" + panel.id);
+    for (const panel of this.state.panels) {
+      if (panel.botId !== id) continue;
+      this.ws.frames?.removeOwner("panel:" + panel.id);
+      // The space lost a panel: its count goes up, so whoever shows it (a link's copy too) reads it again.
+      this.ws.spaces?.touch(panel.spaceId);
+    }
     for (const chatId of chatIds) this.ws.frames?.removeOwner("chat:" + chatId);
     this.state.panels = this.state.panels.filter((p) => p.botId !== id);
     this.ws.board?.removeBot(id);

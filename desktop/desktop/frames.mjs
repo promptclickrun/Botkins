@@ -39,6 +39,7 @@ const BRIDGE = String.raw`(() => {
   const data = __DATA__;
   const pending = new Map();
   const themed = new Set();
+  const changed = new Set();
   let seq = 0;
   let mode = "light";
   const post = (type, more) => parent.postMessage({ commander: 1, type, ...more }, "*");
@@ -57,6 +58,10 @@ const BRIDGE = String.raw`(() => {
       root.style.colorScheme = mode;
       for (const [name, value] of Object.entries(m.colors || {})) if (/^--[a-z-]+$/.test(name)) root.style.setProperty(name, String(value));
       for (const fn of themed) fn(mode);
+    } else if (m.type === "state") {
+      // Someone else changed this panel's saved state.
+      const state = m.state && typeof m.state === "object" ? m.state : {};
+      for (const fn of changed) fn(state);
     } else if (m.type === "result") {
       const waiting = pending.get(m.id);
       pending.delete(m.id);
@@ -73,6 +78,17 @@ const BRIDGE = String.raw`(() => {
     close: () => {},
   };
   api.sendMessage = api.sendAnswer;
+  // What people change in a panel's page is kept with the panel, for everyone who can open its
+  // space (desktop/spaces.mjs). The app that shows the page answers "state" with the saved
+  // object and "setState" with whether the change was saved; it passes a change on only soon
+  // after the person touched the page, so a page can't write in a person's name by itself. An
+  // app from before this never answers: after a few seconds there is no state, and nothing was saved.
+  const within = (promise, otherwise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(otherwise), 5000))]).catch(() => otherwise);
+  api.state = Object.freeze({
+    get: () => within(ask("state", {}), {}).then((state) => (state && typeof state === "object" ? state : {})),
+    set: (patch, label) => within(ask("setState", { patch, ...(label != null && { label: String(label) }) }), false).then((saved) => saved === true),
+    onChange: (fn) => (changed.add(fn), () => changed.delete(fn)),
+  });
   // window.commander (the app's earlier name) and window.bighelp are the same bridge: pages
   // bots wrote for either still run.
   Object.defineProperty(window, "botkins", { value: Object.freeze(api) });
@@ -195,18 +211,24 @@ export class Frames {
   removeOwner(owner, keep = []) {
     this.remove(this.all.filter((f) => f.owner === owner && !keep.includes(f.id)).map((f) => f.id));
   }
-  /** The chat a frame's answer goes to: its card's chat, or the chat its panel was made in. */
+  /**
+   * The chat a frame's answer goes to: its card's chat, or the chat its panel was made in. null
+   * when that chat is gone. This only looks: it makes no chat. A panel is in a space that several
+   * people may open, and a chat made here would be made for whoever happened to look. An answer
+   * from a panel whose chat is gone starts an ask about that panel instead (`spaces.ask`), which
+   * is the asker's own chat.
+   */
   chatFor(id) {
     const frame = this.get(id);
     const [kind, owner] = frame.owner.split(":");
     const exists = (chatId) => chatId && this.ws.state.chats.some((c) => c.id === chatId && !c.panelId);
     if (kind === "chat") return exists(owner) ? owner : null;
     const panel = this.ws.state.panels.find((p) => p.id === owner);
-    if (!panel) return null;
-    if (exists(panel.chatId)) return panel.chatId;
-    // The chat the panel was made in is gone: one new chat takes its place, and is remembered.
-    panel.chatId = this.ws.createChat(panel.botId);
-    this.ws.save();
-    return panel.chatId;
+    return panel && exists(panel.chatId) ? panel.chatId : null;
+  }
+  /** The panel a frame is a view of, or null for a card's view in a chat. */
+  panelOf(id) {
+    const [kind, owner] = this.get(id).owner.split(":");
+    return kind === "panel" ? (this.ws.state.panels.find((p) => p.id === owner) ?? null) : null;
   }
 }

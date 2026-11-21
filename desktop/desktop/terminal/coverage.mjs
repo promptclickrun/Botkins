@@ -53,7 +53,8 @@ export const WORKSPACE = {
   ...each("auth signIn cancelSignIn signOut installProvider providerUseToken connectProviderService finishProviderService cancelProviderService disconnectProviderService providerUsage", owed("d")),
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
-  ...each("renameChat deleteChat forkChat compact setChatFlags setChatProject createGroupChat retry unqueue sendNow mentionables", owed("d")),
+  // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
+  ...each("renameChat deleteChat forkChat compact setChatFlags setChatProject createGroupChat retry unqueue sendNow mentionables sideQuestion", owed("d")),
   // ── Routines ──
   runRoutine: cmd("routines run"),
   setRoutineEnabled: cmd("routines pause"),
@@ -87,6 +88,9 @@ export const WORKSPACE = {
   ...each("macToolsStatus setMacTool", owed("d")),
   // ── Panels and the team ──
   ...each("changePanel refreshPanel routine boardAct", owed("e")),
+  // Spaces ("spaces-v1"): the app's twelve calls, and the link's own for sharing, order and "Notify me", as the owner's window makes them.
+  ...each("spaces.read spaces.create spaces.rename spaces.remove spaces.setProject spaces.setPanelProject spaces.newPanel spaces.ask spaces.movePanel spaces.patchState spaces.note spaces.removeNote", owed("e")),
+  ...each("link.spaces.share link.spaces.newLink link.spaces.arrange link.spaces.seen link.spaces.notify link.spaces.here link.team.setLinkSharing", owed("e")),
   ...each("team renameTeam saveTeamRole deleteTeamRole saveTeamGroup deleteTeamGroup createTeamInvite revokeTeamInvite approveTeamRequest denyTeamRequest moveTeamMember removeTeamMember chatPeople inviteToChat removeFromChat", owed("e")),
   // ── This computer: updates, phones, the relay ──
   ...each("appUpdateStatus checkAppUpdate installAppUpdate", cmd("update")),
@@ -108,7 +112,7 @@ export const WORKSPACE = {
   ...each("startDictation startLiveVoice endLiveVoice liveVoiceTool transcribe speak", no("window")), // the window's microphone and speaker
   ...each("testNotification requestScreenPermission allowLocalNetwork grantMacTool setPhoneScreen", no("window")), // a notification or a permission the system asks for on the screen
   // ── What only the window uses to draw itself ──
-  ...each("sidePane sideQuestion frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
+  ...each("sidePane frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
 };
 
 /** The phone link's own calls: every `link.*` name of `LinkHost` (desktop/link/server.mjs). */

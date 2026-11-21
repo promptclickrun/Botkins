@@ -52,14 +52,17 @@ export class Board {
     if (!item) throw new Error("This item no longer exists.");
     return item;
   }
-  post(botId, { kind, title, body, links: raw, category: cat, source }) {
+  /** `spaceId` is the Feed, Ideas or Goals the card goes to: a person's own. Left out, the owner's. */
+  post(botId, { kind, title, body, links: raw, category: cat, source }, spaceId) {
     this.ws.bot(botId);
     if (!BOARD_KINDS.includes(kind)) throw new Error("Use feed, idea or goal.");
     const now = Date.now();
+    spaceId ??= this.ws.spaces.forCards("owner", kind).id;
     const item = {
       id: randomUUID(),
       botId,
       kind,
+      spaceId,
       title: textField(title, 120, "title"),
       body: optionalText(body, 4000, "body"),
       links: links(raw),
@@ -72,7 +75,8 @@ export class Board {
       updatedAt: now,
     };
     this.items.unshift(item);
-    const open = this.items.filter((i) => i.botId === botId && i.kind === kind && i.status === "open");
+    // Old open items roll off within one space: what a bot posts for one person never clears another person's.
+    const open = this.items.filter((i) => i.botId === botId && i.kind === kind && i.spaceId === spaceId && i.status === "open");
     for (const old of open.slice(OPEN_LIMIT)) Object.assign(old, { status: "cleared", updatedAt: now });
     // Finished items are history; keep the newest 300 per bot.
     const finished = this.items.filter((i) => i.botId === botId && i.status !== "open");
@@ -80,13 +84,14 @@ export class Board {
       const drop = new Set(finished.slice(300));
       this.ws.state.board = this.items.filter((i) => !drop.has(i));
     }
+    this.ws.spaces.touch(spaceId, now);
     this.ws.save();
     return item;
   }
-  /** A bot's own items with the person's answers, so it can learn what helps. */
-  list(botId, kind) {
+  /** A bot's own items with the person's answers, so it can learn what helps. `spaceIds`, when given, are the spaces it may look in. */
+  list(botId, kind, spaceIds) {
     return this.items
-      .filter((i) => i.botId === botId && (!kind || i.kind === kind))
+      .filter((i) => i.botId === botId && (!kind || i.kind === kind) && (!spaceIds || spaceIds.has(i.spaceId)))
       .slice(0, 80)
       .map(({ id, kind, title, status, answer, rating, reason, category, read, createdAt }) => ({
         id, kind, title, status, answer, rating, reason, category, read,
@@ -106,6 +111,7 @@ export class Board {
       item.status = patch.status;
     }
     item.updatedAt = Date.now();
+    this.ws.spaces.touch(item.spaceId, item.updatedAt);
     this.ws.save();
     return { id: item.id, title: item.title, status: item.status };
   }
@@ -138,7 +144,8 @@ export class Board {
         if (item.kind !== "idea") throw new Error("Only ideas become goals.");
         item.answer = "goal";
         item.status = "done";
-        created = this.post(item.botId, { kind: "goal", title: item.title, body: item.body, links: item.links, category: GOAL_CATEGORIES.includes(value) ? value : "other" });
+        // The goal goes to the Goals of the person whose Ideas the idea was in.
+        created = this.post(item.botId, { kind: "goal", title: item.title, body: item.body, links: item.links, category: GOAL_CATEGORIES.includes(value) ? value : "other" }, this.ws.spaces.forCards(this.ws.spaces.maker(this.ws.spaces.of(item)), "goal").id);
         created.read = true;
         break;
       }
@@ -163,15 +170,25 @@ export class Board {
         throw new Error("Unknown board action");
     }
     item.updatedAt = now;
+    this.ws.spaces.touch(item.spaceId, now);
     this.ws.save();
     return created?.id;
   }
   removeBot(botId) {
+    for (const spaceId of new Set(this.items.filter((i) => i.botId === botId).map((i) => i.spaceId))) this.ws.spaces.touch(spaceId);
     this.ws.state.board = this.items.filter((i) => i.botId !== botId);
   }
   /** Copilot tools that let a bot post to and maintain its own Feed, Ideas and Goals. */
   tools(bot, chat, run, task) {
     let posted = 0;
+    // The people this turn works for (workspace.turnPeople): a card goes to the chat starter's
+    // own Feed, Ideas or Goals, and the bot reads and changes its cards only in the spaces all of
+    // them can open or change. A bot serves several people; one person's cards are not another's.
+    const turn = this.ws.turnPeople(chat, task);
+    const spaces = this.ws.spaces;
+    const changes = (space) => {
+      if (!["own", "edit"].includes(spaces.canAll(space, turn.people))) throw new Error("The people in this chat can't change " + space.name + ".");
+    };
     const tool = (name, description, properties, required, handler) =>
       defineTool(name, {
         description,
@@ -194,7 +211,10 @@ export class Board {
         ["kind", "title"],
         (args) => {
           if (++posted > 10) throw new Error("Post at most ten items per reply.");
-          const item = this.post(bot.id, args);
+          if (!turn.sees()) throw new Error("The person this chat is for has a role that can't open spaces, so there is nowhere to post this.");
+          const space = spaces.forCards(turn.starter, BOARD_KINDS.includes(args.kind) ? args.kind : "feed");
+          changes(space);
+          const item = this.post(bot.id, args, space.id);
           return { posted: item.id, kind: item.kind, title: item.title };
         },
       ),
@@ -203,14 +223,20 @@ export class Board {
         "List your own Feed posts, ideas and goals, with the person's answers: rating up or down, the reason for a thumbs down, and whether they said yes to an idea or finished a goal. Use it to avoid repeats and to post more of what helps.",
         { kind: { enum: BOARD_KINDS } },
         [],
-        ({ kind }) => this.list(bot.id, kind),
+        ({ kind }) => this.list(bot.id, kind, new Set(turn.sees() ? spaces.open(turn.people).map((space) => space.id) : [])),
       ),
       tool(
         "board_update",
         "Change one of your own board items: its title, body, links or goal category, or set status to done, cleared or open.",
         { id: string, title: string, body: string, links: linkList, category: { enum: GOAL_CATEGORIES }, status: { enum: ["open", "done", "cleared"] } },
         ["id"],
-        ({ id, ...patch }) => this.update(bot.id, id, patch),
+        ({ id, ...patch }) => {
+          const item = this.items.find((entry) => entry.id === id && entry.botId === bot.id && spaces.canAll(spaces.of(entry), turn.people));
+          // A card in a space these people can't open is not there for them.
+          if (!item) throw new Error("This item no longer exists.");
+          changes(spaces.of(item));
+          return this.update(bot.id, id, patch);
+        },
       ),
     ];
   }

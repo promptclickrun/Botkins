@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { chunk, fileDetails, publicFile } from "./artifact-files.mjs";
 import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
+import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
 import { FRAME_CSP } from "./frames.mjs";
@@ -41,6 +42,8 @@ app.setAsDefaultProtocolClient("botkins");
 let appWindows;
 let pendingPrefill = null;
 let pendingTeamJoin = null;
+/** This computer's own Admin mode choice (desktop/admin-view.mjs). */
+let adminMode = null;
 const html = fileURLToPath(new URL("../dist/index.html", import.meta.url));
 const artifactMedia = new ArtifactMedia(APP_SCHEME);
 let win,
@@ -74,12 +77,24 @@ const viewerGuests = new Set();
 const appSnapshot = () => {
   const using = remote?.inUse() ?? null;
   return {
-    ...(using ? remote.snapshot(workspace.state.settings) : workspace.snapshot()),
+    // This computer's own workspace goes to its window as the owner is shown it: the owner's view
+    // of the spaces, and with Admin mode off only what the owner is part of (desktop/admin-view.mjs).
+    // Another computer's snapshot is already cut for this device by that computer's link.
+    ...(using ? remote.snapshot(workspace.state.settings) : ownerWindowView(workspace.snapshot(), link, adminMode?.get() === true)),
     ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },
   };
 };
+/** The id of the custom view whose frame loaded from this address, or null. */
+function frameIdOf(address) {
+  try {
+    const url = new URL(address);
+    return url.protocol === APP_SCHEME + ":" ? (/^frame-([0-9a-f-]{36})$/.exec(url.hostname)?.[1] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 /** The window hears of a change at most every 35 ms. */
 function push() {
   if (pending) return;
@@ -163,6 +178,13 @@ function openWindow() {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // The preload also runs inside each custom view's frame, in a world of its own that the
+      // view's page cannot reach. There it does one thing: it says when the person touched,
+      // clicked or pressed a key in that view (desktop/preload.cjs, "frame-gesture" below). The
+      // window cannot see input in a frame of another origin, and the page's word for it is not
+      // enough. The frame gets no bridge and no call: the preload gives the app's bridge to the
+      // main frame only, and every call below is refused unless the window's own page made it.
+      nodeIntegrationInSubFrames: true,
       // The side pane's website viewer is a guest of this window. What a guest may be is decided
       // below, in the main process (desktop/webviewer.mjs), whatever the page asks for.
       webviewTag: true,
@@ -245,6 +267,8 @@ else
     });
     // The app opens on the computer it was on when it was closed: this one, or a paired one.
     remote.resume();
+    // Admin mode is each owner device's own. This window's choice is this computer's, off at first.
+    adminMode = adminModeStore(join(dataDir, "window.json"));
     runtime = await createRuntime({ host, dataDir, trial, pushed: push });
     ({ workspace, link } = runtime);
     // An app's answer goes into its chat's message box for the person to review and send.
@@ -366,7 +390,24 @@ else
         pendingPrefill = null;
         return value;
       },
+      // The link's name for the call, so the window says the same thing on this computer and when
+      // it uses another (there the name goes to that computer, which keeps the choice for this device).
+      "link.team.setAdminMode": (on) => {
+        if (!hasAdminMode(link)) throw new Error("Admin mode needs a newer phone link than this copy of Botkins has.");
+        const now = adminMode.set(on === true);
+        push();
+        return now;
+      },
     };
+    // A real touch, click or key press inside a custom view (desktop/preload.cjs). The view is named
+    // by the address its frame loaded from, never by what was sent; anything else is not heard.
+    // The window is told which view, and decides what that allows (a save of an app panel's state).
+    ipcMain.on("frame-gesture", (event) => {
+      const frame = event.senderFrame;
+      if (!win || win.isDestroyed() || event.sender !== win.webContents || !frame || frame === win.webContents.mainFrame) return;
+      const id = frameIdOf(frame.url);
+      if (id) win.webContents.send("frame-gesture", { frame: id });
+    });
     for (const [name, fn] of Object.entries(handlers))
       ipcMain.handle(name, (event, ...args) => {
         if (

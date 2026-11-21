@@ -1,4 +1,22 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
+// This script also runs inside each custom view's frame (nodeIntegrationInSubFrames, desktop/main.mjs):
+// a page a bot wrote, in a world of its own that the page cannot reach. There it does one thing.
+// It tells the app when the person touched, clicked or pressed a key in that view, so that the
+// app can let the view save its state only then. An event the page made itself is not trusted,
+// and is not told. The frame gets no bridge: see the last lines of this file.
+if (process.isMainFrame === false) {
+  let told = 0;
+  const tell = (event) => {
+    if (!event.isTrusted) return;
+    // A held key or a fast hand says it a few times a second, not hundreds.
+    const now = Date.now();
+    if (now - told < 250) return;
+    told = now;
+    ipcRenderer.send("frame-gesture");
+  };
+  window.addEventListener("pointerdown", tell, true);
+  window.addEventListener("keydown", tell, true);
+}
 const api = {};
 for (const name of [
   "snapshot",
@@ -35,6 +53,8 @@ for (const name of [
   "link.spaces.notify",
   "link.spaces.here",
   "link.team.setLinkSharing",
+  // Admin mode ("link.team.setAdminMode"): this computer keeps its own window's choice.
+  "link.team.setAdminMode",
   "artifacts.list",
   "artifacts.read",
   "artifacts.resolve",
@@ -321,7 +341,18 @@ api.onLiveVoice = (fn) => {
   ipcRenderer.on("live-voice", listener);
   return () => ipcRenderer.removeListener("live-voice", listener);
 };
+// The person touched, clicked or pressed a key inside a custom view: { frame } is that view's id.
+// The main process says so only for real input in that frame (desktop/main.mjs, "frame-gesture").
+api.onFrameGesture = (fn) => {
+  const listener = (_, gesture) => fn(gesture);
+  ipcRenderer.on("frame-gesture", listener);
+  return () => ipcRenderer.removeListener("frame-gesture", listener);
+};
 // The page reaches the app through window.botkins. window.commander is the same bridge under
 // the app's earlier name, kept so nothing that still says it breaks.
-contextBridge.exposeInMainWorld("botkins", api);
-contextBridge.exposeInMainWorld("commander", api);
+// Only the window's own page gets it. This script runs in the frames of custom views too (see the
+// top of this file), and a page a bot wrote must never hold the app's bridge.
+if (process.isMainFrame === true) {
+  contextBridge.exposeInMainWorld("botkins", api);
+  contextBridge.exposeInMainWorld("commander", api);
+}

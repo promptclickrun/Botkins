@@ -284,6 +284,72 @@ test("a provider signs in from the terminal: its own sign-in is followed, and a 
   await assert.rejects(client.call("providers.login", "nope", {}), /Unknown model provider/);
 });
 
+test("a paired phone has its spaces on the terminal host: the built-in four, one it makes, names, reads and deletes", { skip }, async (t) => {
+  const { client, dir, env } = await service(t);
+  await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });
+  const pairing = await client.call("pair.start");
+  const link = new URL(pairing.url);
+  link.searchParams.set("h", "127.0.0.1:" + (await client.call("status")).link.port);
+  const { stdout } = await run(process.execPath, [phone, "--link", link.href, "--via", "lan", "--save", join(dir, "pairing.json"), "--space", "Launch"], { env, timeout: 60_000 });
+  const { spaces } = JSON.parse(stdout);
+  assert.deepEqual(spaces, {
+    capability: true,
+    builtin: ["Today", "Feed", "Ideas", "Goals"],
+    others: [],
+    made: { sameId: true, can: "own", access: "private", pinned: true },
+    read: { sameId: true, panels: 0, cards: 0, seenAt: "number" },
+    refused: "Today can't be renamed.",
+    left: 0,
+  });
+});
+
+test("a team member has their own spaces on the terminal host, and not the owner's private one", { skip }, async (t) => {
+  const { client, dir, env, paths } = await service(t);
+  await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });
+  const address = "127.0.0.1:" + (await client.call("status")).link.port;
+  const phoneDoes = async (args) => JSON.parse((await run(process.execPath, [phone, "--via", "lan", ...args], { env, timeout: 60_000 })).stdout);
+  // The owner's phone pairs, makes a private space, lets the team's role use spaces, and makes an invite.
+  const pairing = await client.call("pair.start");
+  const link = new URL(pairing.url);
+  link.searchParams.set("h", address);
+  const owners = join(dir, "owner.json");
+  const first = await phoneDoes(["--link", link.href, "--save", owners, "--call", JSON.stringify([["spaces.create", { name: "Owner's plan" }], ["link.team.get"]])]);
+  const [plan, team] = first.calls;
+  assert.match(plan, /^s_/);
+  const role = team.roles.find((item) => item.id === team.groups.find((group) => group.id === "g_everyone").roleId);
+  const allowed = { ...role, bots: "all", perms: { ...role.perms, today: ["view", "use", "create", "manage", "delete"] } };
+  const [, invite] = (await phoneDoes(["--pairing", owners, "--call", JSON.stringify([["link.team.saveRole", allowed], ["link.team.createInvite", { groupId: "g_everyone", days: 1, maxUses: 1 }]])])).calls;
+  assert.match(invite.link, /join/);
+  // The member's phone asks to join; the owner's phone approves; the member then does what the owner did, as themselves.
+  const members = join(dir, "member.json");
+  const joining = phoneDoes(["--join", invite.link, "--host", address, "--server", first.device.server, "--save", members, "--name", "Avery's phone", "--space", "Launch", "--call", JSON.stringify([["spaces.read", plan], ["spaces.rename", plan, "Mine now"]])]);
+  let request;
+  for (let tries = 0; tries < 100 && !request; tries++) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    request = (await phoneDoes(["--pairing", owners, "--call", JSON.stringify([["link.team.get"]])])).calls[0].requests?.[0];
+  }
+  assert.ok(request, "the request to join reached the owner");
+  await phoneDoes(["--pairing", owners, "--call", JSON.stringify([["link.team.approve", request.id]])]);
+  const member = await joining;
+  assert.equal(member.you.kind, "member");
+  assert.deepEqual(member.spaces, {
+    capability: true,
+    builtin: ["Today", "Feed", "Ideas", "Goals"],
+    others: [],
+    made: { sameId: true, can: "own", access: "private", pinned: true },
+    read: { sameId: true, panels: 0, cards: 0, seenAt: "number" },
+    refused: "Today can't be renamed.",
+    left: 0,
+  });
+  // The owner's private space is not there for the member: not in the list, not to read, not to change.
+  assert.deepEqual(member.calls, [{ error: "This space no longer exists." }, { error: "This space no longer exists." }]);
+  // The member's four built-in spaces are theirs, not the owner's: the app keeps one set for each person.
+  const after = await phoneDoes(["--pairing", owners, "--call", JSON.stringify([["link.team.get"]])]);
+  const memberId = after.calls[0].members[0].id;
+  const state = JSON.parse(readFileSync(join(paths.dataDir, "workspace.json"), "utf8"));
+  assert.deepEqual(state.spaces.filter((space) => space.builtin).map((space) => space.createdBy ?? "owner").sort(), ["owner", "owner", "owner", "owner", memberId, memberId, memberId, memberId].sort());
+});
+
 test("a phone pairs from the terminal's code, chats with a bot and is listed, renamed and removed", { skip }, async (t) => {
   const { client, dir, env } = await service(t);
   await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });

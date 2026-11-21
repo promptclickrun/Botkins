@@ -11,6 +11,17 @@ import { deviceArgs } from "./folders.mjs";
  * Nobody else's message is. A member is offered only what is theirs to mention, and a live voice
  * they start is told nothing from the owner's notes.
  */
+/**
+ * The calls that are about a space, a panel or a card, with how many arguments each takes. The
+ * person who called ("owner" or a member's id) goes in after those, in the same place whatever
+ * the device left out; a handler never reads the person from what the device sent.
+ */
+const FOR_A_PERSON = {
+  "spaces.read": 1, "spaces.create": 1, "spaces.rename": 2, "spaces.remove": 1, "spaces.setProject": 2, "spaces.setPanelProject": 2,
+  "spaces.newPanel": 1, "spaces.ask": 1, "spaces.movePanel": 2, "spaces.patchState": 3, "spaces.note": 2, "spaces.removeNote": 2,
+  changePanel: 2, routine: 2, refreshPanel: 1, boardAct: 3,
+};
+
 export function deviceCall({ workspace, handlers, folders }) {
   return async (name, args, context = {}) => {
     const checked = await deviceArgs(folders, name, args);
@@ -28,8 +39,14 @@ export function deviceCall({ workspace, handlers, folders }) {
       if (name === "createRoutine") return workspace.panels.routines.create(checked[0] ?? {}, undefined, member.memberId);
       if (name === "duplicateRoutine") return workspace.panels.routines.duplicate(checked[0], checked[1], undefined, member.memberId);
     }
+    if (Object.hasOwn(FOR_A_PERSON, name)) return handlers[name](...Array.from({ length: FOR_A_PERSON[name] }, (_, at) => checked[at]), member ? member.memberId : "owner");
     const result = await handlers[name](...callArgs);
     if (member) {
+      // A bot a member makes or copies is marked as theirs. One without the mark is the owner's.
+      if (["addBot", "duplicateBot"].includes(name) && typeof result === "string") {
+        const bot = workspace.state.bots.find((item) => item.id === result);
+        if (bot) bot.createdBy = member.memberId;
+      }
       if (["createChat", "createGroupChat", "forkChat"].includes(name) && typeof result === "string") {
         const chat = workspace.state.chats.find((item) => item.id === result);
         if (chat) chat.createdBy = member.memberId;

@@ -121,14 +121,19 @@ test("a card's html block belongs to its chat, and answers go to the right chat"
   const frame = card.blocks[0].frame;
   assert.deepEqual(ws.state.frames.map((f) => f.owner), ["chat:" + chat]);
   assert.equal(ws.frames.chatFor(frame), chat);
-  // A panel's frame answers into the chat the panel was made in; when that is gone, a new chat with its bot.
+  // A panel's frame answers into the chat the panel was made in. When that chat is gone there is
+  // none, and asking does not make one: a panel is in a space several people may open, and a chat
+  // made by a look would be made for whoever looked.
   ws.panels.write("scout", chat, { key: "p", title: "P", blocks: [{ type: "html", html: "<p>p</p>" }] });
   const panelFrame = ws.state.panels[0].blocks[0].frame;
   assert.equal(ws.frames.chatFor(panelFrame), chat);
+  assert.equal(ws.frames.panelOf(panelFrame).key, "p");
+  assert.equal(ws.frames.panelOf(frame), null, "a card's view in a chat is no panel's");
   await ws.agents.deleteChat(chat);
   assert.throws(() => ws.frames.html(frame), /no longer exists/, "the card's frame went with its chat");
-  const made = ws.frames.chatFor(panelFrame);
-  assert.equal(ws.chat(made).botId, "scout");
+  const chats = ws.state.chats.length;
+  assert.equal(ws.frames.chatFor(panelFrame), null);
+  assert.equal(ws.state.chats.length, chats, "no chat was made by asking");
   assert.throws(() => ws.frames.get("../../etc/passwd"), /no longer exists/);
   // Deleting a bot removes its panels' frames.
   await ws.agents.deleteBot("scout");
@@ -136,7 +141,7 @@ test("a card's html block belongs to its chat, and answers go to the right chat"
   assert.deepEqual(existsSync(join(dir, "frames")) ? readdirSync(join(dir, "frames")) : [], []);
 });
 
-test("a refused card stores no page, and a panel's answers keep going to one chat", async (t) => {
+test("a refused card stores no page, and a panel whose chat is gone has no chat until someone asks", async (t) => {
   const dir = tempDir(t);
   let outcome;
   const fake = fakeClient(async (_id, _options, session) => {
@@ -155,14 +160,13 @@ test("a refused card stores no page, and a panel's answers keep going to one cha
   assert.match(outcome, /Invalid replies/);
   assert.deepEqual(ws.state.frames, [], "the page of a card that was refused isn't kept");
   assert.deepEqual(existsSync(join(dir, "frames")) ? readdirSync(join(dir, "frames")) : [], []);
-  // A panel whose first chat is gone gets one new chat, once.
+  // A panel whose first chat is gone: looking for its chat, however often, makes none.
   ws.panels.write("scout", "gone-chat", { key: "p", title: "P", blocks: [{ type: "html", html: "<p>p</p>" }] });
   const frame = ws.state.panels[0].blocks[0].frame;
-  const first = ws.frames.chatFor(frame);
-  assert.equal(ws.frames.chatFor(frame), first);
-  assert.equal(ws.frames.chatFor(frame), first);
-  assert.equal(ws.state.chats.filter((c) => c.botId === "scout").length, 1);
-  assert.equal(ws.state.panels[0].chatId, first);
+  assert.equal(ws.frames.chatFor(frame), null);
+  assert.equal(ws.frames.chatFor(frame), null);
+  assert.equal(ws.state.chats.filter((c) => c.botId === "scout").length, 0);
+  assert.equal(ws.state.panels[0].chatId, "gone-chat");
 });
 
 test("a bot's page is served with the guard first, whatever its markup begins with", (t) => {

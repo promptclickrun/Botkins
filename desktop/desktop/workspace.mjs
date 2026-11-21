@@ -74,7 +74,8 @@ import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Templates } from "./templates.mjs";
 import { Access, migrateCustomers } from "./access.mjs";
-import { memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
+import { memberCanSpaces, memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
+import { Spaces } from "./spaces.mjs";
 
 function textFieldOptional(text) {
   if (typeof text !== "string" || text.length > 4000)
@@ -126,6 +127,10 @@ export class Workspace {
     this.peopleOf = options?.people ?? null;
     // (chatId) => whether the computer's owner is one of a chat's people, when the link answers that itself.
     this.ownerIn = options?.notifiesOwner ?? null;
+    // (space, person) => "own" | "edit" | "view" | null: what a person may do with a space, from
+    // the link, which keeps who a space is shared with (desktop/spaces.mjs).
+    this.spaceCanOf = options?.spaceCan ?? null;
+    this.spaceEventOf = options?.spaceEvent ?? null;
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
     this.file = join(dir, "workspace.json");
@@ -239,6 +244,8 @@ export class Workspace {
     this.phone = new PhoneTools(this, options?.phoneTools);
     this.agents = new Agents(this);
     this.board = new Board(this);
+    // Pages of panels and cards, each a person's (desktop/spaces.mjs). Every panel and card is in one.
+    this.spaces = new Spaces(this);
     this.projects = new Projects(this);
     this.artifacts = new Artifacts(this);
     this.artifactEvents = new ArtifactEvents(this);
@@ -311,6 +318,9 @@ export class Workspace {
   snapshot() {
     return {
       ...this.state,
+      // Each space with what it holds, for the link to make each person's own list from
+      // (docs/spaces.md, "What each device is sent"). No app is sent this part as it is.
+      spaces: this.spaces.part(),
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
       // Resolved provider inputs are private restart data and can contain large attachments.
@@ -593,7 +603,11 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, author, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, author, also: rawAlso, ...context } = options;
+    // People whose limits apply to this turn beside the chat's maker and the message's writer:
+    // someone else wrote text that runs in it (a routine's prompt on a panel that another person
+    // refreshes). Members only: the owner narrows nothing.
+    const also = [...new Set((Array.isArray(rawAlso) ? rawAlso : []).filter((id) => typeof id === "string" && id && id !== "owner"))].slice(0, 8);
     // A routine that sends its result elsewhere tells the bot so, in this turn's prompt (desktop/routines.mjs).
     const where = context.scheduleId != null ? this.panels.routines.destinationNote(this.state.chats.find((c) => c.id === chatId), context.scheduleId) : "";
     const prompt = textField(text, 32000, "message");
@@ -642,6 +656,7 @@ export class Workspace {
       runId: run.id,
       time: chat.time,
       ...(author && { author }),
+      ...(also.length && { also }),
       ...(attachments.length && { attachments }),
       ...(quote && { quote }),
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
@@ -673,6 +688,7 @@ export class Workspace {
       attachments: [...attachments, ...mentionedFiles],
       quote,
       author: message.author,
+      also: message.also,
       context: extra ? (message.context || "") + "\n\n" + extra : message.context,
     };
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
@@ -844,6 +860,7 @@ export class Workspace {
       attachments,
       quote: message.quote,
       author: message.author,
+      ...(message.also?.length && { also: message.also }),
       ...(mentions.length && { mentions }),
       ...(run.panelId && { panelId: run.panelId }),
       // A retried routine or task run is still unattended work: it keeps its read-only memory and wiki.
@@ -946,6 +963,7 @@ export class Workspace {
         : "") +
       forkSystemMessage(chat.forkContext) +
       this.projects.context(chat, bot) +
+      this.spaces.context(chat) +
       (chat.groupInstructions || "") +
       this.teamwork.brief(bot, chat) +
       this.wiki.context() +
@@ -992,6 +1010,36 @@ export class Workspace {
     ];
   }
   /**
+   * The people a bot's turn works for, as far as spaces go: the chat's starter, and whoever wrote
+   * the message when that is a member. `people` are their ids ("owner" or a member's id). A bot
+   * sees a space only when all of them can open it and changes it only when all of them can
+   * (desktop/spaces.mjs); `sees` and `needs` add what a member's role allows.
+   */
+  turnPeople(chat, task) {
+    const starter = chat?.createdBy ?? "owner";
+    const last = [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user");
+    const writer = (task?.author ?? last?.author)?.memberId;
+    // And anyone else whose text runs in the turn (see `send`, `also`).
+    const also = (task?.also ?? last?.also ?? []).filter((id) => typeof id === "string" && id);
+    const people = [...new Set([starter, ...(writer ? [writer] : []), ...also])];
+    const members = people.filter((person) => person !== "owner");
+    const allows = (action) => members.every((person) => memberCanSpaces(person, this.teamOf(), action));
+    return {
+      starter,
+      writer,
+      people,
+      sees: () => allows("view"),
+      needs: (action) => {
+        if (!allows(action)) throw new Error("The role of the person this is for doesn't allow that. The owner can change it in Team settings.");
+      },
+    };
+  }
+  /** A member as the author of a message: { memberId, name }, with the name the team has for them. */
+  memberAuthor(memberId) {
+    const name = this.teamOf()?.members?.find((item) => item.id === memberId)?.name;
+    return { memberId, name: typeof name === "string" && name ? name : "A member" };
+  }
+  /**
    * A chat's people: who made it ("owner" when a member did not) and whom they invited. A person
    * is "owner" or a member's id. The link keeps invites; without it a chat has its creator only.
    */
@@ -1028,9 +1076,13 @@ export class Workspace {
     // only when both may use it. So a member's chat keeps that member's limits when the owner
     // writes in it, and an invited member's turn in the owner's chat has the member's. A provider
     // gets a turn's tools with the turn (a warm session with other tools is not reused).
+    // A third kind of person joins them when their text runs in the turn: whoever set the routine
+    // whose prompt a refresh sends, when another person started that refresh (`also`).
     const team = this.teamOf();
-    const writer = task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
-    return narrower(turnAccess(chat?.createdBy ? { memberId: chat.createdBy } : null, team), turnAccess(writer, team));
+    const last = [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user");
+    const writer = task?.author ?? last?.author;
+    const also = (task?.also ?? last?.also ?? []).filter((id) => typeof id === "string" && id);
+    return [turnAccess(writer, team), ...also.map((memberId) => turnAccess({ memberId }, team))].reduce(narrower, turnAccess(chat?.createdBy ? { memberId: chat.createdBy } : null, team));
   }
   /**
    * Opens the provider session for a chat (or a member's or teammate's view of one). `run` and
@@ -1823,6 +1875,7 @@ export class Workspace {
                 : run.status,
             detail: run.detail,
           };
+        if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
       if (run.status !== "Stopped" && !run.panelId && !chat.temporary) chat.unread = true;

@@ -63,6 +63,11 @@ const page = (label) => `<!doctype html><html><head><title>${label}</title>
   try { tries.parentDom = window.parent.document.title; } catch (e) { tries.parentDom = "blocked"; }
   try { tries.top = window.top.location.href; } catch (e) { tries.top = "blocked"; }
   tries.ownBridge = Object.keys(window.botkins).sort().join(",");
+  tries.appBridge = [typeof require, typeof window.ipcRenderer, typeof process, typeof window.botkins.snapshot, typeof window.commander.snapshot].join(",");
+  window.forge = () => {
+    document.getElementById("title").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+  };
   document.getElementById("answer").onclick = () =>
     commander.sendAnswer("Plan the launch for ${label}").then(() => (tries.answer = "ok"), (e) => (tries.answer = e.message));
   document.getElementById("link").onclick = () =>
@@ -237,7 +242,8 @@ try {
   assert.equal(reach.parentBridge, "blocked", "the page can't reach the app's window.botkins");
   assert.equal(reach.parentDom, "blocked", "the page can't reach the app's page");
   assert.equal(reach.top, "blocked", "the page can't read the app's address");
-  assert.equal(reach.ownBridge, ["bighelp", "close", "getData", "onData", "onTheme", "openLink", "sendAnswer", "sendMessage", "theme"].filter((k) => k !== "bighelp").join(","));
+  assert.equal(reach.ownBridge, ["bighelp", "close", "getData", "onData", "onTheme", "openLink", "sendAnswer", "sendMessage", "state", "theme"].filter((k) => k !== "bighelp").join(","));
+  assert.equal(reach.appBridge, "undefined,undefined,undefined,undefined,undefined", "the app's own script runs beside the page to hear real input; the page gets nothing of it");
   await frame.click("#leave");
   // The app blocks the load; the frame shows its own page again, never another address or an error page.
   await win.waitForTimeout(1200);
@@ -248,6 +254,29 @@ try {
   // The app's own page is untouched by the frame.
   assert.equal(await win.evaluate(() => typeof window.botkins.snapshot), "function");
   console.log("fetch, a remote image and leaving the frame load nothing; the page can't reach the app.");
+
+  // ---- The app hears of real input inside a view, by the view's id, and of nothing the page makes up.
+  await win.evaluate(() => {
+    window.gestures = [];
+    window.botkins.onFrameGesture((gesture) => window.gestures.push(gesture));
+  });
+  const gestures = () => win.evaluate(() => window.gestures.splice(0));
+  await win.waitForTimeout(400);
+  await gestures();
+  await frame.evaluate(() => window.forge());
+  await win.getByRole("heading", { name: "Acme dashboard" }).click();
+  await win.waitForTimeout(400);
+  assert.deepEqual(await gestures(), [], "an event the page made, and a click beside the view, say nothing");
+  await frame.click("#title");
+  await expect.poll(() => win.evaluate(() => window.gestures.length)).toBe(1);
+  assert.deepEqual(await gestures(), [{ frame: panelFrame }], "a click in the view");
+  await win.waitForTimeout(300);
+  await win.keyboard.press("a");
+  await expect.poll(() => win.evaluate(() => window.gestures.length)).toBe(1);
+  assert.deepEqual(await gestures(), [{ frame: panelFrame }], "a key press in the view");
+  // The frame's word alone is not taken: only the window's own page may call the app.
+  assert.equal(await frame.evaluate(() => typeof window.botkins.onFrameGesture), "undefined");
+  console.log("Real input inside a view reaches the app with the view's id; made-up input and input elsewhere do not.");
 
   // ---- A view the person isn't working in can't act by itself: no text for the message box, no question.
   await win.getByRole("heading", { name: "Today", exact: true }).click();

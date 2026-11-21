@@ -107,3 +107,48 @@ test("a team member's answer that leaves no line in the chat marks nobody else's
   assert.deepEqual(await allowed, { allow: true, interactive: true });
   assert.equal(ws.chat(chatId).messages.find((message) => message.role === "user").author, undefined);
 });
+
+test("a call about a space is handed the person who made it, whatever the device sent", async (t) => {
+  const { ws } = open(t);
+  const seen = [];
+  const handlers = Object.fromEntries(["spaces.rename", "spaces.read", "spaces.patchState", "changePanel", "refreshPanel", "boardAct"].map((name) => [name, (...args) => void seen.push([name, ...args])]));
+  const call = deviceCall({ workspace: ws, handlers, folders: {} });
+  // The owner, by a device with no team, and by one the link names as the owner.
+  await call("spaces.rename", ["s_1", "Launch"]);
+  await call("spaces.read", ["s_1"], { principal: { kind: "owner" } });
+  // A member. The person goes in after what the call takes, in the same place when the device left something out,
+  await call("spaces.patchState", ["p_1", { done: true }], { principal: avery });
+  await call("refreshPanel", ["p_1"], { principal: avery });
+  // and a device that adds a person of its own choosing is not heard.
+  await call("spaces.rename", ["s_1", "Mine", "owner"], { principal: avery });
+  await call("changePanel", ["p_1", "hide", "owner", "extra"], { principal: avery });
+  await call("boardAct", ["c_1", "clear"], { principal: avery });
+  assert.deepEqual(seen, [
+    ["spaces.rename", "s_1", "Launch", "owner"],
+    ["spaces.read", "s_1", "owner"],
+    ["spaces.patchState", "p_1", { done: true }, undefined, "m_avery"],
+    ["refreshPanel", "p_1", "m_avery"],
+    ["spaces.rename", "s_1", "Mine", "m_avery"],
+    ["changePanel", "p_1", "hide", "m_avery"],
+    ["boardAct", "c_1", "clear", undefined, "m_avery"],
+  ]);
+});
+
+test("a bot a member makes or copies is marked as theirs, and one without the mark is the owner's", async (t) => {
+  const { ws } = open(t);
+  const handlers = { addBot: (data) => ws.agents.create(data), duplicateBot: (id) => ws.agents.duplicateBot(id) };
+  const call = deviceCall({ workspace: ws, handlers, folders: {} });
+  const made = await call("addBot", [{ name: "Avery's helper", role: "Helper", instructions: "Help." }], { principal: avery });
+  assert.equal(ws.bot(made).createdBy, "m_avery");
+  // A copy answers its id, and is the person's who made the copy: a member's copy of the owner's bot is the member's,
+  const copied = await call("duplicateBot", ["pip"], { principal: avery });
+  assert.equal(typeof copied, "string");
+  assert.deepEqual([ws.bot(copied).createdBy, "createdBy" in ws.bot("pip")], ["m_avery", false]);
+  // and the owner's copy of a member's bot is the owner's.
+  const owners = await call("duplicateBot", [made]);
+  assert.equal("createdBy" in ws.bot(owners), false);
+  const mine = await call("addBot", [{ name: "Mine", role: "Helper", instructions: "Help." }], { principal: { kind: "owner" } });
+  assert.equal("createdBy" in ws.bot(mine), false);
+  // The mark is kept when the app starts again.
+  assert.equal(new Workspace(ws.dir, fakeClient().client, () => {}).bot(made).createdBy, "m_avery");
+});
