@@ -2,7 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { VoiceSettings } from "../src/link/types";
-import { dictationSummary, keysSummary, LIVE_INPUTS, liveInputLine, liveSummary, readingSummary, setupFor, UNBUILT } from "../src/features/voice/settings/summary";
+import { effectiveLive, effectiveTts, tidyVoice, unpinIfBare, withProvider } from "../src/features/voice/botVoice";
+import { effectiveLive as computersLive, effectiveTts as computersTts } from "../link-host/voice.mjs";
+import { botVoiceSummary, dictationSummary, keysSummary, LIVE_INPUTS, liveInputLine, liveSummary, readingSummary, setupFor, UNBUILT } from "../src/features/voice/settings/summary";
 
 const settings = (patch: Partial<VoiceSettings> = {}, providers: Partial<VoiceSettings["providers"]> = {}): VoiceSettings => ({
   stt: { provider: "device" },
@@ -72,4 +74,36 @@ test("a provider that needs something opens its own sheet; the phone and ChatGPT
   assert.equal(setupFor("device"), null);
   assert.equal(setupFor("codex"), null);
   assert.equal(setupFor(null), null);
+});
+
+test("a bot's voice on its page: Same as Settings, or only what the bot changes", () => {
+  const shared = settings({ tts: { provider: "openai", voice: "cedar", speed: 1.5 }, live: { provider: "openai" } });
+  assert.equal(botVoiceSummary(undefined, shared), "Same as Settings");
+  assert.equal(botVoiceSummary({}, shared), "Same as Settings");
+  // A voice picked for a bot keeps its provider; cleared again, a bare pin on the shared provider goes too.
+  assert.deepEqual(unpinIfBare({ tts: { provider: "openai", voice: "nova" } }, "tts", "openai"), { tts: { provider: "openai", voice: "nova" } });
+  assert.equal(unpinIfBare({ tts: { provider: "openai" } }, "tts", "openai"), null);
+  assert.deepEqual(unpinIfBare({ tts: { provider: "openai", speed: 1.2 } }, "tts", "openai"), { tts: { speed: 1.2 } });
+  assert.deepEqual(unpinIfBare({ tts: { provider: "azure" } }, "tts", "openai"), { tts: { provider: "azure" } });
+  // A system voice this phone keeps for the bot shows while the bot reads with "This phone".
+  assert.equal(botVoiceSummary(undefined, { ...shared, tts: { ...shared.tts, provider: "device" } }, { voice: "com.apple.voice.compact.en-GB.Daniel" }), "This phone · Daniel");
+  assert.equal(botVoiceSummary({ tts: { voice: "nova" } }, shared), "OpenAI \u00b7 Nova");
+  assert.equal(botVoiceSummary({ tts: { provider: "openai", voice: "nova" }, live: { provider: "gemini", voice: "Puck" } }, shared), "OpenAI \u00b7 Nova \u00b7 Live: Gemini \u00b7 Puck");
+  assert.equal(botVoiceSummary({ tts: { provider: "device" }, live: { model: "gpt-realtime-2" } }, shared), "This phone \u00b7 Live: OpenAI");
+  // An opaque voice id (an ElevenLabs voice) is not shown as a name; Gemini has no speed.
+  assert.equal(botVoiceSummary({ tts: { provider: "elevenlabs", voice: "21m00Tcm4TlvDq8ikWAM", speed: 1.25 } }, shared), "ElevenLabs \u00b7 1.25\u00d7");
+  assert.equal(botVoiceSummary({ tts: { provider: "gemini", speed: 1.25 } }, shared), "Gemini");
+});
+
+test("the phone resolves a bot's voice as the computer does, and another provider drops the old model and voice", () => {
+  const shared = settings({ tts: { provider: "openai", model: "tts-1-hd", voice: "cedar", speed: 1.5 }, live: { provider: "openai", voice: "marin" } });
+  for (const own of [undefined, { voice: "sage" }, { provider: "openai", speed: 0.8 }, { provider: "gemini", voice: "Puck" }, { provider: "device" }] as const)
+    assert.deepEqual(effectiveTts(shared.tts, own as any), computersTts(shared.tts, own), JSON.stringify(own));
+  for (const own of [undefined, { voice: "Puck" }, { provider: "gemini", voice: "Puck" }, { provider: "openai", model: "gpt-realtime-2" }] as const)
+    assert.deepEqual(effectiveLive(shared.live, own as any), computersLive(shared.live, own), JSON.stringify(own));
+  assert.deepEqual(effectiveTts(shared.tts, { provider: "gemini" }), { provider: "gemini", model: undefined, voice: undefined, speed: 1.5 });
+  // Choosing a provider keeps the speed and drops the model and voice; undoing every choice leaves no voice.
+  const mine = { tts: { provider: "openai" as const, model: "tts-1", voice: "nova", speed: 1.25 }, live: { voice: "Puck" } };
+  assert.deepEqual(withProvider(mine, "tts", "gemini"), { tts: { provider: "gemini", speed: 1.25 }, live: { voice: "Puck" } });
+  assert.equal(tidyVoice({ tts: { provider: undefined, voice: "" } }), null);
 });

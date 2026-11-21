@@ -12,7 +12,7 @@ import {
   useMentionables,
   type DraftMention,
 } from "./MentionMenu";
-import type { Attachment, Bot, Capability, MentionInput } from "./types";
+import type { Attachment, Bot, BotVoice, Capability, MentionInput } from "./types";
 import { useComposerVoice } from "./ComposerVoice";
 import ProviderIcon, { hasProviderMark } from "./ProviderIcon";
 
@@ -44,6 +44,8 @@ type Props = {
   setMentions?: (list: DraftMention[]) => void;
   /** The bot this composer talks to, for the Live Voice panel. */
   botName?: string;
+  /** That bot's voice of its own, if it has one: Live Voice starts with it. */
+  botVoice?: BotVoice;
   /** Makes a chat to talk in when there is none yet (the home composer). */
   startChat?: () => Promise<string>;
 };
@@ -66,6 +68,7 @@ export default function Composer({
   mentions = NO_MENTIONS,
   setMentions = () => {},
   botName,
+  botVoice,
   startChat,
 }: Props) {
   const [focused, focus] = useState(false);
@@ -139,7 +142,7 @@ export default function Composer({
   }, [listId, mentionAt, mentioning]);
   const quote = reply?.quote || "";
   // Dictation and Live Voice (src/ComposerVoice.tsx).
-  const voice = useComposerVoice({ chatId, botName, draft, change, input, startChat });
+  const voice = useComposerVoice({ chatId, botName, botVoice, draft, change, input, startChat });
   // Enter guides an active reply. Queue explicitly saves a separate turn.
   const ready = !!draft.trim() || files.length > 0;
   function addFiles(list: Attachment[]) {

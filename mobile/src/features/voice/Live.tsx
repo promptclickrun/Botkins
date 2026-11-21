@@ -12,7 +12,7 @@ import { type AvatarState, useBot, useWatchedChat } from "@/state/hooks";
 import { loadDevicePrefs, useDevicePrefs } from "@/state/devicePrefs";
 import { api } from "@/state/link";
 import { useApp } from "@/state/store";
-import { BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
 import { RequestPanel } from "../chat/RequestPanel";
 import { chatAccess } from "./chatAccess";
 import { liveContext } from "./live/context";
@@ -21,7 +21,8 @@ import type { Connect, InputMode, SocketLike } from "./live/types";
 import { readLocation } from "./location";
 import { audioModule, duplexAudio, keepAwakeModule, webrtcModule } from "./native";
 import { loadPhoneVoice, usePhoneVoice } from "./prefs";
-import { UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
+import { botVoiceOf, UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
+import { effectiveLive } from "./botVoice";
 import { stopSpeech } from "./tts";
 
 const UPDATE_APP = "Update the app to use this live voice.";
@@ -55,14 +56,15 @@ const MAIN = 96;
 
 const AVATAR: Record<LiveStatus, AvatarState> = { connecting: "pending", listening: "listening", thinking: "thinking", talking: "talking", ended: "idle" };
 
-export default function Live() {
+function LiveScreen() {
   const { chatId, botId } = useLocalSearchParams<{ chatId: string; botId: string }>();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const bot = useBot(botId);
   const supported = useVoiceSupported();
   const voice = useVoiceSettings();
-  const provider = voice?.live.provider ?? null;
+  // This bot's own live voice, when it has one, over the shared choice (the computer applies it to the call).
+  const provider = voice ? effectiveLive(voice.live, botVoiceOf(botId)?.live).provider : null;
   const request = useApp((state) => state.parts.live?.requests.find((item) => item.chatId === chatId));
   useWatchedChat(chatId);
 
@@ -343,4 +345,13 @@ function statusLine(status: LiveStatus): string {
     default:
       return "Call ended";
   }
+}
+
+/** Avatars move on this screen (see `AvatarMotion`). */
+export default function Live() {
+  return (
+    <AvatarMotion>
+      <LiveScreen />
+    </AvatarMotion>
+  );
 }

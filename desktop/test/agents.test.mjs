@@ -43,6 +43,23 @@ test("bots are created and edited with a look, about text and partial updates", 
   assert.throws(() => ws.updateBot(id, { name: "" }), /Invalid name/);
 });
 
+test("a bot's own voice is checked, kept on the bot and carried by a copy; null clears it; the app names the capability", async (t) => {
+  const { ws } = setup(t);
+  const id = ws.addBot({ name: "Nova", role: "Editor", instructions: "Edit prose", look, voice: { tts: { provider: "openai", voice: "nova" } } });
+  assert.deepEqual(ws.bot(id).voice, { tts: { provider: "openai", voice: "nova" } });
+  ws.updateBot(id, { voice: { live: { provider: "gemini", voice: "Puck" }, tts: { speed: 1.25 } } });
+  assert.deepEqual(ws.bot(id).voice, { tts: { speed: 1.25 }, live: { provider: "gemini", voice: "Puck" } });
+  // Junk is refused and the voice stays; a partial update of something else leaves it.
+  for (const bad of [{ tts: { provider: "nope" } }, { tts: { speed: 3 } }, { live: { provider: "device" } }, { tts: { key: "sk-x" } }, "nova"]) assert.throws(() => ws.updateBot(id, { voice: bad }), /can't be saved|isn't supported|between 0\.5 and 2/);
+  ws.updateBot(id, { name: "Nova 2" });
+  assert.deepEqual(ws.bot(id).voice, { tts: { speed: 1.25 }, live: { provider: "gemini", voice: "Puck" } });
+  assert.deepEqual(ws.bot(ws.agents.duplicateBot(id)).voice, ws.bot(id).voice, "a copy sounds the same");
+  ws.updateBot(id, { voice: null });
+  assert.equal("voice" in ws.bot(id), false, "the bot follows Settings › Voice again");
+  const { CAPABILITIES, linkCapabilities } = await import("../desktop/runtime.mjs");
+  assert.ok(CAPABILITIES.includes("bot-voice-v1") && linkCapabilities().includes("bot-voice-v1"));
+});
+
 test("pins, hiding, primary bot, order and sections", (t) => {
   const { ws } = setup(t);
   const [pip, scout, patch] = ws.state.bots.map((b) => b.id);

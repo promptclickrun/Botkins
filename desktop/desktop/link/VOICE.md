@@ -152,6 +152,24 @@ How the caller connects (from the same documentation):
 
 A session is kept by id until `endLive(id)` (the 32 newest are kept). `endLive` calls `adapter().codex.end(id)` for a Codex session, and for the others only forgets the id: the caller closes its own socket or peer connection. Unknown ids are ignored.
 
+## A voice of a bot's own (`bot-voice-v1`)
+
+A bot may keep a voice of its own, saved with the bot by the app (`bot.voice`, sent to phones in the `bots` part; `updateBot(id, { voice })` sets it and `voice: null` clears it):
+
+```ts
+type BotVoice = {
+  tts?: { provider?: TtsProvider; model?: string; voice?: string; speed?: number };
+  live?: { provider?: LiveProvider; model?: string; voice?: string };
+};
+```
+
+Every field is optional, and an absent one means the same as the shared settings above. No key is ever in it: keys stay per provider, shared. `botVoiceField(value)` is the check (known providers only, `model` and `voice` as in `set()`, `speed` 0.5 to 2): it throws a plain sentence for anything else, and `cleanBotVoice` gives a saved voice back or null. `remoteArgs` (`methods.mjs`) cuts a phone's `updateBot` and `addBot` to that shape.
+
+- **Reading aloud.** `link.voice.speak` takes an optional `botId`. The provider, model, voice and speed are the bot's own where it set them, else the shared ones (`effectiveTts`). The shared model and voice belong to the shared provider, so a bot that names another provider gets none of them. A `voice` or `speed` named in the call still wins.
+- **Live voice.** `link.voice.live` already takes `botId`; the bot's `live` part is applied over the shared `live` settings (`effectiveLive`). A provider named in the call comes first, and the bot's model and voice count only for the provider they were chosen for. A bot whose provider has no key fails with the sentence the shared setting gives ("Add a Gemini key in Settings › Voice first.").
+- **"This phone" and "This computer" (`device`).** A system voice isn't portable between a phone and a computer. When a bot's reading provider is `device`, nothing is asked of this module: each device keeps its own voice and speed for that bot (the phone in its own saved prefs, the desktop window in its local settings).
+- **The capability** `bot-voice-v1` is named by the app (`backend.capabilities`) and by the demo computer (`BOTKINS_DEV_BOT_VOICE=off` leaves it out). A phone shows the controls only with it.
+
 ## Errors and limits
 
 - Every request has a time limit: 60 s, and 15 s for lists and tokens. Each carries an `AbortSignal`. `close()` aborts what is waiting.

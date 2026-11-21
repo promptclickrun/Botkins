@@ -1,13 +1,13 @@
 // A project's changes (the desktop's Project Changes, src/ProjectChanges.tsx): the branch, the
 // changed files with what was added and removed, one file's changes as text, and Commit all.
 import { useLocalSearchParams } from "expo-router";
-import { ArrowLeft, GitBranch, GitCommitHorizontal } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { ArrowLeft, GitBranch, GitCommitHorizontal, RefreshCw } from "lucide-react-native";
+import { type ReactNode, useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ChangedFile, ProjectChanges } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api } from "@/state/link";
-import { Button, EmptyState, Field, Group, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
+import { Button, EmptyState, Field, Group, IconButton, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
 import { changedPath, type DiffLine, diffLineKind, fileCount, kindLetter } from "./side";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -71,6 +71,30 @@ function DiffView({ text }: { text: string }) {
 
 export default function Changes() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  return <ChangesView id={id} />;
+}
+
+/** The second page of a chat on a phone half folded like a book: the same view, without the sheet. */
+function PageFrame({ title, onAction, actionDisabled, children }: { title: string; action?: string; onAction?: () => void; actionDisabled?: boolean; actionLoading?: boolean; children: ReactNode }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xl, paddingVertical: space.sm }}>
+        <T variant="title2" numberOfLines={1} style={{ flex: 1 }}>
+          {title}
+        </T>
+        {onAction && <IconButton icon={RefreshCw} label="Refresh" onPress={onAction} disabled={actionDisabled} />}
+      </View>
+      <ScrollView contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: space.xxl, gap: space.xl }} showsVerticalScrollIndicator={false}>
+        {children}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** A project's uncommitted changes. `inline` draws it as a page beside the chat instead of a sheet. */
+export function ChangesView({ id, inline }: { id?: string; inline?: boolean }) {
+  const Frame = inline ? PageFrame : Sheet;
   const project = usePart("projects")?.find((p) => p.id === id);
   const [changes, setChanges] = useState<ProjectChanges>();
   const [file, setFile] = useState("");
@@ -129,13 +153,13 @@ export default function Changes() {
 
   if (!project)
     return (
-      <Sheet title="Changes">
+      <Frame title="Changes">
         <EmptyState title="This project is gone" />
-      </Sheet>
+      </Frame>
     );
 
   return (
-    <Sheet title={file ? file.split("/").pop() || file : "Changes"} action={file ? undefined : "Refresh"} onAction={() => void load()} actionDisabled={busy} actionLoading={busy && !!changes}>
+    <Frame title={file ? file.split("/").pop() || file : "Changes"} action={file ? undefined : "Refresh"} onAction={file ? undefined : () => void load()} actionDisabled={busy} actionLoading={busy && !!changes}>
       {!!error && (
         <T variant="subhead" color="danger" accessibilityRole="alert">
           {error}
@@ -222,7 +246,7 @@ export default function Changes() {
             ))}
         </View>
       )}
-    </Sheet>
+    </Frame>
   );
 }
 

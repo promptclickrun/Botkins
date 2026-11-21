@@ -788,6 +788,8 @@ function botIdOf(method, args) {
   if (method === "createRoutine") return args[0]?.botId;
   if (method === "duplicateRoutine") return args[1];
   if (method === "link.voice.live") return args[0]?.botId;
+  // Reading aloud in a bot's own voice ("bot-voice-v1") names the bot: a member uses only one their role can see.
+  if (method === "link.voice.speak") return args[0]?.botId ?? null;
   if (method === "setModel" && args[0] === "bot") return args[1];
   if (method === "plugins.setBots") return args[1];
   if (method === "plugins.install" && Array.isArray(args[1]?.bots)) return args[1].bots;

@@ -1,8 +1,8 @@
 import { MenuView } from "@react-native-menu/menu";
-import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { ChevronRight, Ellipsis, Repeat, X } from "lucide-react-native";
+import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
+import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
 import { useShallow } from "zustand/react/shallow";
@@ -14,7 +14,7 @@ import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { BotAvatar, Chip, EmptyState, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Chip, EmptyState, IconButton, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useShape, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { completions } from "./completion";
@@ -25,7 +25,9 @@ import { arrived, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose"
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
+import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
+import { drafts, keepDraft, useChatSplit } from "./split";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
@@ -76,7 +78,7 @@ function ChatTitle({ chat, bot, bots, state, model, room }: { chat: ChatSummary;
   );
 }
 
-function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, panes = 0, onPane }: { /** How many tabs the chat's side pane has, and opening it. */ panes?: number; onPane?: () => void; chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; /** The chat has messages: its project and mode are settled. */ started: boolean; projects?: Project[]; settings?: Preferences; onDelete: () => void }) {
+function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, panes = 0, onPane, onOpen }: { /** How many tabs the chat's side pane has, and opening it. */ panes?: number; onPane?: () => void; /** Opens another chat in the same place (beside the list); else it replaces this page. */ onOpen?: (id: string) => void; chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; /** The chat has messages: its project and mode are settled. */ started: boolean; projects?: Project[]; settings?: Preferences; onDelete: () => void }) {
   const { colors } = useTheme();
   const canManage = useCan("agents", "manage");
   const project = projects?.find((p) => p.id === chat.projectId);
@@ -119,7 +121,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
         if (action === "people") return void router.push({ pathname: "/chat/people", params: { id: chat.id } });
         if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id)) as Href);
         else if (action === "new" && bot)
-          void attempt(api.createChat(bot.id)).then((id) => id && router.replace({ pathname: "/chat/[id]", params: { id } }));
+          void attempt(api.createChat(bot.id)).then((id) => id && (onOpen ? onOpen(id) : router.replace({ pathname: "/chat/[id]", params: { id } })));
         else if (action === "model") router.push({ pathname: "/chat/model", params: { scope: "chat", id: chat.id } });
         else if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }), chat.pinned ? "Unpinned" : "Pinned");
         else if (action === "rename") rename();
@@ -436,11 +438,20 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
   );
 }
 
-export default function ChatScreen() {
+/**
+ * `pane` shows the chat beside the Chats list (two panes, see split.ts) instead of on its own page:
+ * it draws its own bar, and `onLeave` takes the place of going back.
+ */
+function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?: string; onLeave?: () => void; onList?: () => void }) {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
   // `at` lands on one message (its place in the whole chat, from 0): Open chat on an artifact.
-  const { id: chatId, draft, board, at } = useLocalSearchParams<{ id: string; draft?: string; board?: string; at?: string }>();
+  const params = useLocalSearchParams<{ id: string; draft?: string; board?: string; at?: string }>();
+  const chatId = paneId ?? params.id;
+  const { draft, board, at } = paneId ? { draft: undefined, board: undefined, at: undefined } : params;
+  const shape = useShape();
+  const leave = () => (leavePane ? leavePane() : router.back());
+  const openChat = (id: string) => (paneId ? useChatSplit.setState({ id }) : router.push({ pathname: "/chat/[id]", params: { id } }));
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
   // A bot's request leaves room for the bar above it and the composer below it, also over the keyboard.
@@ -467,7 +478,26 @@ export default function ChatScreen() {
   const group = !!chat?.botIds && chat.botIds.length > 1;
   const canChat = useCan("agents", "chat");
 
-  const [text, setText] = useState(draft ?? "");
+  // Unfolding on a chat that came from the Chats list: it goes back beside the list, still chosen.
+  // Only while this page is in front: with a sheet over it, going back would close the sheet.
+  const splitActive = useChatSplit((split) => split.active);
+  const focused = useIsFocused();
+  useEffect(() => {
+    if (paneId || !splitActive || !focused || useChatSplit.getState().pushed !== chatId) return;
+    useChatSplit.setState({ id: chatId, pushed: null });
+    if (router.canGoBack()) router.back();
+  }, [paneId, splitActive, focused, chatId]);
+  useEffect(() => {
+    if (paneId) return;
+    return () => {
+      if (useChatSplit.getState().pushed === chatId) useChatSplit.setState({ pushed: null });
+    };
+  }, [paneId, chatId]);
+  // A draft goes with the chat between the pane and its own page (folding or unfolding the phone).
+  const [text, setText] = useState(draft ?? drafts.get(chatId)?.text ?? "");
+  useEffect(() => {
+    keepDraft(chatId, { text });
+  }, [chatId, text]);
   const [pinnedId, setPinnedId] = useState(board);
   const pinned = usePart("board")?.find((item) => item.id === pinnedId);
   const boardMentions = !!usePart("meta")?.capabilities.includes("board-mentions-v1");
@@ -477,7 +507,10 @@ export default function ChatScreen() {
   };
   const [leaving, setLeaving] = useState(false);
   // A message being replied to (Reply in its menu): it goes with the next message as a quote.
-  const [quote, setQuote] = useState("");
+  const [quote, setQuote] = useState(() => drafts.get(chatId)?.quote ?? "");
+  useEffect(() => {
+    keepDraft(chatId, { quote });
+  }, [chatId, quote]);
   // The latest side question (/btw, /ask) and its answer, shown beside the chat and never in it.
   const [side, setSide] = useState<Side | null>(null);
   const projects = usePart("projects");
@@ -630,11 +663,11 @@ export default function ChatScreen() {
         ? undefined
         : (index) =>
             void attempt(api.forkChat(chatId, index)).then((id) => {
-              if (id) router.push({ pathname: "/chat/[id]", params: { id } });
+              if (id) openChat(id);
             }),
       busy: working,
     }),
-    [group, chatId, working],
+    [group, chatId, working, paneId],
   );
   const pick = (starter: string) => {
     setText(starter);
@@ -643,7 +676,7 @@ export default function ChatScreen() {
   const remove = async () => {
     setLeaving(true);
     const done = await attempt(api.deleteChat(chatId).then(() => true));
-    if (done) router.back();
+    if (done) leave();
     else setLeaving(false);
   };
 
@@ -660,8 +693,8 @@ export default function ChatScreen() {
     if (before === null || before === lastKey) return;
     // A talk by turns reads its replies itself (voice/talk.ts), so they aren't read twice.
     if (useTalk.getState().chatId === chatId) return;
-    if (readAloud && lastMessage?.role === "assistant" && lastMessage.text) speakText(chatId + ":" + lastKey, lastMessage.text, { queue: true, quiet: true });
-  }, [view, lastKey, lastMessage, readAloud, chatId]);
+    if (readAloud && lastMessage?.role === "assistant" && lastMessage.text) speakText(chatId + ":" + lastKey, lastMessage.text, { queue: true, quiet: true, botId: lastMessage.botId ?? chat?.botId });
+  }, [view, lastKey, lastMessage, readAloud, chatId, chat?.botId]);
   // Leaving the chat ends what is being read, and a talk in this chat.
   useEffect(
     () => () => {
@@ -674,34 +707,49 @@ export default function ChatScreen() {
 
   // The composer rides the keyboard; with the keyboard down it clears the home indicator.
   const keyboard = useReanimatedKeyboardAnimation();
-  const bottomInset = insets.bottom;
+  // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
+  const bottomInset = insets.bottom + (paneId ? shape.tabRoom : 0);
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
 
   if (leaving) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />;
   if (!chat)
     return (
       <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
-        {chatsLoaded ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={() => router.back()} /> : <Loading />}
+        {chatsLoaded && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : <Loading />}
       </View>
     );
 
   const empty = !!view && view.messages.length === 0 && !streaming;
   const measured = chat.context && chat.context.limit > 0 ? chat.context : undefined;
-  const header = (
+  const barEnd = (
+    <View style={{ flexDirection: "row", alignItems: "center" }}>
+      {measured && <ContextMeter chatId={chat.id} context={measured} />}
+      <ChatMenu chat={chat} bot={bot} bots={bots} started={!!view && view.messages.length > 0} projects={projects} settings={settings} onDelete={() => void remove()} panes={pane.tabs} onPane={() => pane.show()} onOpen={paneId ? openChat : undefined} />
+    </View>
+  );
+  const header = paneId ? (
+    // Beside the list there is no navigation bar: the pane draws the same title and menu itself.
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }}>
+      {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
+      <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
+        <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} />
+      </View>
+      {barEnd}
+    </View>
+  ) : (
     <Stack.Screen
       options={{
         headerTitle: () => <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={measured ? 206 : 150} />,
-        headerRight: () => (
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            {measured && <ContextMeter chatId={chat.id} context={measured} />}
-            <ChatMenu chat={chat} bot={bot} bots={bots} started={!!view && view.messages.length > 0} projects={projects} settings={settings} onDelete={() => void remove()} panes={pane.tabs} onPane={() => pane.show()} />
-          </View>
-        ),
+        headerRight: () => barEnd,
       }}
     />
   );
 
-  return (
+  // Half folded like a book (iPhone Duo), a chat in a project shows what its bot changed on the
+  // second page, and the chat keeps to the first, clear of the fold.
+  const project = projects?.find((item) => item.id === chat.projectId);
+  const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
+  const column = (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       {header}
       <RoutineBanner chat={chat} />
@@ -769,8 +817,32 @@ export default function ChatScreen() {
       <Animated.View style={spacer} />
     </View>
   );
+  if (!book || !project) return column;
+  return (
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.canvas }}>
+      <View style={{ width: Math.max(0, book.x - shape.left) }}>{column}</View>
+      <View style={{ width: book.width }} />
+      <View style={{ flex: 1, paddingTop: insets.top }}>
+        <ChangesView id={project.id} inline />
+      </View>
+    </View>
+  );
 }
 
 function Gap() {
   return <View style={{ height: space.xl }} />;
+}
+
+/** Avatars move on this screen (see `AvatarMotion`). */
+export default function ChatScreen() {
+  return (
+    <AvatarMotion>
+      <ChatScreenScreen />
+    </AvatarMotion>
+  );
+}
+
+/** A chat beside the Chats list, when there is room for two panes (see split.ts). */
+export function ChatPane({ id, onLeave, onList }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void }) {
+  return <ChatScreenScreen key={id} pane={id} onLeave={onLeave} onList={onList} />;
 }

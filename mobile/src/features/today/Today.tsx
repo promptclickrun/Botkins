@@ -13,7 +13,7 @@ import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, TwoUp, useTheme } from "@/ui";
 
 type Segment = "feed" | "idea" | "goal" | "panels";
 const SEGMENTS: { value: Segment; label: string }[] = [
@@ -453,7 +453,7 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                   />
                 )
               ) : (
-                list.map((item) => <ItemCard key={item.id} item={item} bot={bots.get(item.botId)} />)
+                <TwoUp>{list.map((item) => <ItemCard key={item.id} item={item} bot={bots.get(item.botId)} />)}</TwoUp>
               )}
               <Button title={finished ? "Show open" : "Show finished"} variant="ghost" size="sm" onPress={() => setFinished(!finished)} style={{ alignSelf: "center" }} />
             </>
@@ -465,10 +465,12 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                 ) : (
                   <EmptyState art={<Mascot size={96} />} title={EMPTY.panels} action={canCreate ? "Ask a bot" : undefined} onAction={canCreate ? openNewPanel : undefined} />
                 ))}
-              {shownPanels.map((panel) => {
-                const index = all.indexOf(panel);
-                return <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} order={{ first: index === 0, last: index === all.length - 1 }} />;
-              })}
+              <TwoUp>
+                {shownPanels.map((panel) => {
+                  const index = all.indexOf(panel);
+                  return <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} order={{ first: index === 0, last: index === all.length - 1 }} />;
+                })}
+              </TwoUp>
               {shownPanels.length > 0 && canCreate && <Button title="Create panel" icon={Plus} variant="secondary" size="sm" onPress={openNewPanel} style={{ alignSelf: "center" }} />}
               {hiddenPanels.length > 0 && (
                 <View style={{ marginTop: space.sm }}>

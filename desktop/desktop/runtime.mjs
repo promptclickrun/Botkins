@@ -96,7 +96,9 @@ const REPLY_MS = 1500;
 export const APP_UPDATE = "app-update-v1";
 /** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
 export const PROVIDER_SIGNIN = "provider-signin-v1";
-export const CAPABILITIES = ["quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES];
+/** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
+export const BOT_VOICE = "bot-voice-v1";
+export const CAPABILITIES = ["quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.

@@ -150,11 +150,20 @@ export async function disablePush() {
 }
 
 /** Keeps one key for each paired computer where the notification extension can read them (none removes them all). */
+let savedKeys: string | undefined; // what the keychain was last given, so an unchanged set is not written again
 async function saveKeys(pairings: Pairing[]) {
   if (!Activities) return;
-  if (typeof Activities.setPushKeys === "function") await Activities.setPushKeys(pairings.map((pairing) => ({ host: pairing.serverId, key: base64(pushKeyOf(pairing)) })));
-  // A build from before several computers keeps one key: the one of the computer in use.
-  else await Activities.setPushKey(pairings.length ? base64(pushKeyOf(useApp.getState().pairing ?? pairings[0]!)) : null);
+  const several = typeof Activities.setPushKeys === "function";
+  const keys = several
+    ? pairings.map((pairing) => ({ host: pairing.serverId, key: base64(pushKeyOf(pairing)) }))
+    : // A build from before several computers keeps one key: the one of the computer in use.
+      pairings.length ? base64(pushKeyOf(useApp.getState().pairing ?? pairings[0]!)) : null;
+  const said = JSON.stringify(keys);
+  if (said === savedKeys) return;
+  savedKeys = undefined;
+  if (several) await Activities.setPushKeys!(keys as { host: string; key: string }[]);
+  else await Activities.setPushKey(keys as string | null);
+  savedKeys = said;
 }
 
 // ── Presence: the computer says nothing about a chat that is on screen ──────────────────────────

@@ -31,7 +31,7 @@ import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
-import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
+import { cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
 
 export const PROTOCOL = 1;
@@ -281,7 +281,8 @@ export class LinkHost extends EventEmitter {
         return this.voice.transcribe({ audio, format: a[0].format, language: a[0].language });
       },
       "link.voice.speak": async (_session, a) => {
-        const spoken = await this.voice.speak({ text: a[0]?.text, voice: a[0]?.voice, speed: a[0]?.speed });
+        // `botId` ("bot-voice-v1"): the bot's own reading voice over the shared one. A voice or speed named here still wins.
+        const spoken = await this.voice.speak({ text: a[0]?.text, voice: a[0]?.voice, speed: a[0]?.speed, override: this.botVoice(a[0]?.botId)?.tts });
         return { audio: spoken.audio.toString("base64"), format: spoken.format };
       },
       "link.voice.live": (session, a) => this.liveVoice(a[0], session.principal),
@@ -440,6 +441,13 @@ export class LinkHost extends EventEmitter {
 
   // ── Live voice ──────────────────────────────────────────────────────────────────────────────
 
+  /** A bot's own voice (`bot.voice`, as the app saved it), or null: the bot is unknown or uses the shared settings. */
+  botVoice(botId) {
+    if (typeof botId !== "string" || !botId) return null;
+    const bot = (this.backend.snapshot().bots ?? []).find((item) => item.id === botId);
+    return cleanBotVoice(bot?.voice);
+  }
+
   /**
    * Sets up a live voice session for a chat with a bot. The voice is told who it speaks for, the
    * chat so far, what the app knows of the bot and the person (`backend.liveContext`), and roughly
@@ -452,10 +460,12 @@ export class LinkHost extends EventEmitter {
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     const bot = (state.bots ?? []).find((item) => item.id === botId);
     if (!chat || !bot) throw new Failure("That chat is gone.");
+    // The voice speaks for a bot of this chat, with that bot's voice: never another bot's against this chat.
+    if (chat.botId !== bot.id && !(chat.botIds ?? []).includes(bot.id)) throw new Failure("That bot isn't in this chat.");
     // A member's call says so: the app leaves the owner's own notes out of what it hands over.
     const notes = await this.liveNotes(chat.id, bot.id, principal?.kind === "member" ? principal.memberId : undefined);
     const instructions = liveInstructions({ bot, messages: chat.messages ?? [], bots: state.bots ?? [], notes, location });
-    const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name } });
+    const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name }, override: cleanBotVoice(bot.voice)?.live });
     return { ...session, tools: [ASK_BOT] };
   }
 

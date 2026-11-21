@@ -21,6 +21,7 @@
 // named from the wiki's own top, and what a message may attach (see remoteArgs).
 import { basename } from "node:path";
 import { safeName } from "./uploads.mjs";
+import { botVoiceField } from "./voice.mjs";
 
 /** The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs. */
 export const PLUGIN_METHODS = [
@@ -328,6 +329,15 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     }
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
+  }
+  // A bot's own voice ("bot-voice-v1"): only the shape the computer keeps; null clears it. Anything else is refused with a sentence.
+  if ((method === "updateBot" || method === "addBot") && args[method === "addBot" ? 0 : 1]?.voice !== undefined) {
+    const at = method === "addBot" ? 0 : 1;
+    const data = args[at];
+    if (data === null || typeof data !== "object" || Array.isArray(data)) return args;
+    const next = [...args];
+    next[at] = { ...data, voice: botVoiceField(data.voice) };
+    return next;
   }
   return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
 }

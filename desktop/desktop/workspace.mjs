@@ -55,6 +55,7 @@ import {
 } from "./canvas.mjs";
 import { Agents, instructionsField, migrateAgents, summaryField } from "./agents.mjs";
 import { linkLooks, lookField, migrateLooks, nextLook } from "./looks.mjs";
+import { botVoiceField } from "./link/voice.mjs";
 import { Board } from "./board.mjs";
 import { Projects } from "./projects.mjs";
 import {
@@ -574,6 +575,9 @@ export class Workspace {
     };
     // `avatar` (a silhouette from an earlier version, which a phone or a template may still send) is not kept.
     bot.look = data.look ? lookField(data.look) : nextLook(bot.id, this.state.bots.map((b) => b.look));
+    // A voice of the bot's own (desktop/link/voice.mjs, botVoiceField): checked here, and kept only when something is set.
+    const voice = data.voice === undefined ? null : botVoiceField(data.voice);
+    if (voice) bot.voice = voice;
     this.state.bots.push(bot);
     this.save();
     return bot.id;
@@ -596,6 +600,12 @@ export class Workspace {
       }),
     };
     Object.assign(bot, fields);
+    // A voice of the bot's own: null clears it, so the bot follows Settings › Voice again.
+    if (data.voice !== undefined) {
+      const voice = botVoiceField(data.voice);
+      if (voice) bot.voice = voice;
+      else delete bot.voice;
+    }
     this.save();
   }
   createChat(botId, title = "New chat", panelId) {

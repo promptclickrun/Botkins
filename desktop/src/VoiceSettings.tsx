@@ -84,14 +84,15 @@ function keyNote(s: DeskVoiceSettings, provider: string) {
 }
 
 /** The models and voices a provider offers, read when the choice changes. */
-function useOptions(kind: "stt" | "tts" | "live", provider: string | null, stamp: string) {
+export function useOptions(kind: "stt" | "tts" | "live", provider: string | null, stamp: string) {
   const [options, setOptions] = useState<VoiceOptions>({ models: [], voices: [] });
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
     setOptions({ models: [], voices: [] });
     setError("");
-    if (!provider || provider === "device" || provider === "codex") return;
+    // Codex lists live voices (through the computer's app), as the phone shows them; it has nothing for speech in or out.
+    if (!provider || provider === "device" || (provider === "codex" && kind !== "live")) return;
     api
       .voiceOptions(kind, provider)
       .then((o) => live && setOptions(o))

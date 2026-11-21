@@ -1,0 +1,7 @@
+{
+  "license": "MIT",
+  "name": "botkins-fold",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "private": true
+}

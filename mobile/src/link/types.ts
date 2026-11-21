@@ -131,6 +131,8 @@ export type Bot = {
   avatar?: BotAvatarSpec;
   /** The Botkin chosen for this bot on a phone. Without one, the bot shows its default character. */
   look?: BotkinLook;
+  /** A voice of this bot's own ("bot-voice-v1"). A field it leaves out is the same as Settings › Voice. */
+  voice?: BotVoice;
   summary?: string;
   pinned?: boolean;
   hidden?: boolean;
@@ -911,6 +913,8 @@ export type UsageReport = {
  * list, a file in pieces, a small picture of it, and the paths written in a chat), and the app's
  * "secure-input-v1" (a bot asks for a password, a code or another secret in a request of kind
  * "secure": the value goes to the computer only, and the bot gets a handle, never the value).
+ * "bot-voice-v1" (the app's: a bot may have a voice of its own, `Bot.voice`, set with `updateBot`;
+ * `link.voice.speak` takes a `botId` and `link.voice.live` applies the bot's live voice).
  * "provider-signin-v1" (the app's: a model provider signed in from a phone with no browser on the
  * computer, by its own page and code, its own questions, or a pasted token; and a provider's
  * command-line tool installed from a phone).
@@ -1223,6 +1227,16 @@ export type DeviceAnswer = { ok: true; result: unknown } | { ok: false; error: s
 export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom" | "local";
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
 export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
+/**
+ * A voice of a bot's own ("bot-voice-v1"), saved with the bot by the computer's app. Every field is
+ * optional: one that is absent means the same as the shared VoiceSettings. No key is ever in it.
+ * `updateBot(id, { voice })` sets it and `voice: null` clears it; the computer drops what isn't one
+ * of its providers, and `speed` is 0.5 to 2.
+ */
+export type BotVoice = {
+  tts?: { provider?: TtsProvider; model?: string; voice?: string; speed?: number };
+  live?: { provider?: LiveProvider; model?: string; voice?: string };
+};
 export type VoiceKeyProvider = "openai" | "azure" | "elevenlabs" | "gemini" | "custom";
 export type LocalVoiceModel = { id: string; name: string; kind: "stt" | "tts"; installed: boolean; sizeMB?: number; voices?: { id: string; name: string }[] };
 export type VoiceSettings = {
@@ -1276,7 +1290,7 @@ export type Calls = {
   /** Installing by itself, on a host that can (`auto` present). Refused elsewhere. */
   setAppUpdateAuto(on: boolean): AppUpdate;
   addBot(bot: BotInput): string;
-  updateBot(id: string, patch: Partial<Pick<Bot, "role" | "instructions" | "name" | "clarificationInstructions" | "summary" | "avatar">>): void;
+  updateBot(id: string, patch: Partial<Pick<Bot, "role" | "instructions" | "name" | "clarificationInstructions" | "summary" | "avatar">> & { voice?: BotVoice | null }): void;
   setBotFlags(id: string, flags: Partial<Pick<Bot, "pinned" | "hidden" | "sectionId" | "teamwork">>): void;
   makePrimary(id: string): void;
   reorderBots(ids: string[]): void;
@@ -1606,7 +1620,7 @@ export type Calls = {
   /** Speech to text on the computer's provider. `audio` is base64, at most about two minutes of 16 kHz WAV. */
   "link.voice.transcribe"(input: { audio: string; format: "wav" | "m4a" | "mp3" | "webm"; language?: string }): { text: string };
   /** Text to speech on the computer's provider: base64 audio to play. At most 4,000 characters; split long text by sentence. */
-  "link.voice.speak"(input: { text: string; voice?: string; speed?: number }): { audio: string; format: "mp3" | "wav" };
+  "link.voice.speak"(input: { text: string; voice?: string; speed?: number; botId?: string }): { audio: string; format: "mp3" | "wav" };
   /** Sets up a live voice session for a chat with a bot. `sdp` is this phone's WebRTC offer, for the providers that use WebRTC. */
   /**
    * `context` is what the phone says about itself for the voice: roughly where the person is, only

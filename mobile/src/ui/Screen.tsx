@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { ActivityIndicator, Platform, RefreshControl, ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useShape } from "./useShape";
 import { useRestarting } from "@/state/appUpdate";
 import { wake } from "@/state/link";
 import { useApp } from "@/state/store";
@@ -13,7 +14,7 @@ import { T } from "./Text";
 import { radius, slopFor, space, useTheme } from "./theme";
 
 /** Room the floating tab bar needs under the last row of a tab's screen. */
-export const TAB_BAR_ROOM = Platform.select({ ios: 64, default: 96 });
+export { TAB_BAR_ROOM } from "./useShape";
 
 /** Says so when the computer can't be reached, with a way to try again. Nothing while in step. */
 export function LinkBanner() {
@@ -90,6 +91,8 @@ export type PageProps = {
 export function Page({ title, caption, actions, children, tab, scroll = true, onRefresh, refreshing = false, keyboard, contentStyle, quietLink, footer, onScroll }: PageProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  // A tab's root lays itself out beside the side rail (a pushed page gets that room from its stack).
+  const shape = useShape();
   const head = (title || actions) && (
     <View style={{ flexDirection: "row", alignItems: "flex-end", gap: space.md, marginBottom: space.xs }}>
       <View style={{ flex: 1, gap: 2 }}>
@@ -107,7 +110,13 @@ export function Page({ title, caption, actions, children, tab, scroll = true, on
       {!!actions && <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingBottom: 3 }}>{actions}</View>}
     </View>
   );
-  const padding = { paddingHorizontal: space.xl, paddingTop: tab ? insets.top + space.md : space.sm, paddingBottom: (tab ? TAB_BAR_ROOM : 0) + insets.bottom + space.xxl, gap: space.xl };
+  const padding = {
+    paddingLeft: space.xl + (tab ? shape.left : 0),
+    paddingRight: space.xl + (tab ? shape.right : 0),
+    paddingTop: tab ? insets.top + space.md : space.sm,
+    paddingBottom: (tab ? shape.tabRoom : 0) + insets.bottom + space.xxl,
+    gap: space.xl,
+  };
   const body = (
     <>
       {head}

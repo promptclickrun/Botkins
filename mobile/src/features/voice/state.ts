@@ -1,7 +1,8 @@
 // What voice knows about the computer: whether it speaks voice-v1, and the shared settings.
-import type { SttProvider, TtsProvider, VoiceSettings } from "@/link/types";
+import type { BotVoice, LiveProvider, SttProvider, TtsProvider, VoiceSettings } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { useApp } from "@/state/store";
+import { BOT_VOICE_CAPABILITY, effectiveLive } from "./botVoice";
 
 export const VOICE_CAPABILITY = "voice-v1";
 export const UPDATE_COMPUTER = "Update Botkins on your computer";
@@ -25,3 +26,13 @@ export const ttsProvider = (voice = voiceSettings()): TtsProvider => voice?.tts.
 
 export const useSttProvider = (): SttProvider => useVoiceSettings()?.stt.provider ?? "device";
 export const useTtsProvider = (): TtsProvider => useVoiceSettings()?.tts.provider ?? "device";
+
+// ---- A voice of a bot's own ("bot-voice-v1")
+export const botVoiceSupported = () => !!useApp.getState().parts.meta?.capabilities?.includes(BOT_VOICE_CAPABILITY);
+export const useBotVoiceSupported = () => !!usePart("meta")?.capabilities?.includes(BOT_VOICE_CAPABILITY);
+
+/** The bot's own voice, or undefined when it has none or the computer doesn't keep one. */
+export const botVoiceOf = (botId: string | undefined): BotVoice | undefined => (botId && botVoiceSupported() ? useApp.getState().parts.bots?.find((bot) => bot.id === botId)?.voice : undefined);
+
+/** The live provider a call with this bot uses: its own, else the shared one. */
+export const liveProviderFor = (botId: string | undefined, voice = voiceSettings()): LiveProvider | null => (voice ? effectiveLive(voice.live, botVoiceOf(botId)?.live).provider : null);

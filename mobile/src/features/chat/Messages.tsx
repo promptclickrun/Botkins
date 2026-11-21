@@ -8,6 +8,7 @@ import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
 import type { Artifact, Bot, Message, Run } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
+import { useChat } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { clockTime } from "@/state/time";
@@ -252,7 +253,7 @@ function Speaker({ bot }: { bot?: Bot }) {
 }
 
 /** Reads a reply aloud, or stops it while it is being read. Small and quiet, with a 44-point target. */
-function ReadAloud({ id, text }: { id: string; text: string }) {
+function ReadAloud({ id, text, botId }: { id: string; text: string; botId?: string }) {
   const { colors } = useTheme();
   const reading = useSpeakingNow((state) => state.id === id);
   return (
@@ -261,14 +262,14 @@ function ReadAloud({ id, text }: { id: string; text: string }) {
       size={28}
       color={reading ? colors.accentText : colors.faint}
       label={reading ? "Stop reading" : "Read aloud"}
-      onPress={() => (reading ? stopSpeech() : speakText(id, text))}
+      onPress={() => (reading ? stopSpeech() : speakText(id, text, { botId }))}
       style={{ marginLeft: -6 }}
     />
   );
 }
 
 /** A bot's reply. A long press offers Copy, Select text, Read aloud (or Stop reading), Share, Reply and Fork from here. */
-function Reply({ message, index, id, markdown, actions, paths, parts }: { message: Message; index: number; id: string; markdown: boolean; actions?: MessageActions; paths?: PathLinks; /** The text and its MEDIA: attachments in order, when it has any the computer knows. */ parts?: MessagePart[] }) {
+function Reply({ message, index, id, botId, markdown, actions, paths, parts }: { message: Message; index: number; id: string; /** The bot that wrote it, for its own voice. */ botId?: string; markdown: boolean; actions?: MessageActions; paths?: PathLinks; /** The text and its MEDIA: attachments in order, when it has any the computer knows. */ parts?: MessagePart[] }) {
   const reading = useSpeakingNow((state) => state.id === id);
   const selecting = useSelecting((state) => state.id === id);
   // While its text is being selected the message is one native text view, outside the menu: a
@@ -292,7 +293,7 @@ function Reply({ message, index, id, markdown, actions, paths, parts }: { messag
         const action = nativeEvent.event;
         if (action === "copy") void Clipboard.setStringAsync(message.text).then(() => showToast("Copied", "success"));
         else if (action === "select") select(id);
-        else if (action === "read") speakText(id, message.text);
+        else if (action === "read") speakText(id, message.text, { botId });
         else if (action === "stop") stopSpeech();
         else if (action === "share") void Share.share({ message: message.text }).catch(() => {});
         else runExtra(action, message, index, actions);
@@ -318,6 +319,9 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
   const { message, run, end, latest } = item;
+  // Whose voice reads it: the bot that wrote it, or the chat's bot.
+  const chatBot = useChat(chatId)?.botId;
+  const speaker = message.botId ?? chatBot;
   // Paths the computer knows become links, and a reply's MEDIA: attachments are drawn where they were
   // written (under the text in the person's own message). A reply still
   // being written is left alone until it ends, so half a path is never asked about.
@@ -329,10 +333,10 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   return (
     <View style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      <Reply message={message} index={item.index} id={chatId + ":" + item.key} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
+      <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       {!!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          <ReadAloud id={chatId + ":" + item.key} text={message.text} />
+          <ReadAloud id={chatId + ":" + item.key} text={message.text} botId={speaker} />
           {timestamps && <Stamp time={message.time} align="flex-start" />}
         </View>
       )}

@@ -20,7 +20,7 @@ import { plainPreview } from "@/features/chat/bits";
 import { newBotChat, openBotChat } from "@/features/chat/open";
 import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_ACTIONS, toggleHidden } from "@/features/bots/menus";
 import type { Bot, ChatSummary, Section } from "@/link/types";
-import { activityLabel, useBotActivity, useBots, useCan, usePart, useCanArrange, useMember } from "@/state/hooks";
+import { activityLabel, useBotActivity, useBots, useCan, useIsPrimaryBot, usePart, useCanArrange, useMember } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
 import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
@@ -85,6 +85,8 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
   const last = chat?.last ? plainPreview(chat.last.text) : undefined;
   const line = status || last || bot.role || "Bot";
   const busy = !!status;
+  // Only the primary bot moves on Home (battery); the others hold their state's pose.
+  const primary = useIsPrimaryBot(bot.id);
   return (
     <BotMenu bot={bot}>
       <Tap
@@ -97,7 +99,7 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
         onAccessibilityAction={actions ? (event) => actions.run(event.nativeEvent.actionName) : undefined}
         style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: 10 }}
       >
-        <BotAvatar bot={bot} state={state} size={AVATAR} />
+        <BotAvatar bot={bot} state={state} size={AVATAR} animated={primary} />
         <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
           <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm }}>
             <T variant="name" numberOfLines={1} style={{ flex: 1 }}>

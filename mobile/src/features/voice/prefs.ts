@@ -15,7 +15,10 @@ export type PhoneVoicePrefs = {
    * "push": it listens only while you hold the talk button.
    */
   liveInput: "conversation" | "push";
+  /** A bot's own system voice and speed on this phone, by bot id. A system voice is not portable, so each phone keeps its own choice for a bot that reads with "This phone". */
+  bots?: Record<string, BotDeviceVoice>;
 };
+export type BotDeviceVoice = { voice?: string; speed?: number };
 
 const DEFAULTS: PhoneVoicePrefs = { speed: 1, liveInput: "conversation" };
 export const usePhoneVoice = create<PhoneVoicePrefs>(() => DEFAULTS);
@@ -39,6 +42,15 @@ export function setPhoneVoice(patch: Partial<PhoneVoicePrefs>) {
     usePhoneVoice.setState(patch);
     return keep(KEY, JSON.stringify(usePhoneVoice.getState())).catch(() => {});
   });
+}
+
+/** This phone's own voice for one bot. A field set to undefined goes back to the phone's voice from Settings; nothing left forgets the bot. */
+export function setBotDeviceVoice(botId: string, patch: BotDeviceVoice) {
+  const bots = { ...usePhoneVoice.getState().bots };
+  const next = Object.fromEntries(Object.entries({ ...bots[botId], ...patch }).filter(([, value]) => value !== undefined));
+  if (Object.keys(next).length) bots[botId] = next;
+  else delete bots[botId];
+  setPhoneVoice({ bots });
 }
 
 void loadPhoneVoice();

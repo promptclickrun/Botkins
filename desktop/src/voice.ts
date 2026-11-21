@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react";
 import type { DeskLiveSession, DeskVoiceSettings, LiveVoiceEvent } from "./types";
 import { liveInputMode, MicGate, RELEASE_TAIL_MS, type InputMode } from "./liveInput";
 import { geminiManualTurn, openAiManualTurn } from "./liveProtocol";
+import { botDeviceVoices } from "./botVoice";
 
 const api = window.botkins;
 
@@ -105,11 +106,20 @@ export function systemVoices(): Promise<SpeechSynthesisVoice[]> {
   });
 }
 
+/** The system voice and speed to read with: this computer's own choice for the bot, else the one in Settings › Voice. */
+function systemVoiceFor(botId: string | undefined, tts: DeskVoiceSettings["tts"]) {
+  const own = botId ? botDeviceVoices()[botId] : undefined;
+  // The shared voice and speed are a system voice's only while "This computer" is the shared choice.
+  const shared = tts.provider === "device" ? tts : undefined;
+  return { voice: own?.voice ?? shared?.voice, speed: own?.speed ?? shared?.speed ?? 1 };
+}
+
 /**
  * Reads `text` aloud with the voice chosen in Settings › Voice, or stops when `key` is already
- * being read. Only one thing is read at a time: starting one stops the other.
+ * being read. Only one thing is read at a time: starting one stops the other. `botId` is the bot
+ * speaking: it may have a voice of its own, which the main process applies over the shared one.
  */
-export async function readAloud(key: string, text: string) {
+export async function readAloud(key: string, text: string, botId?: string) {
   const same = reading.get().key === key;
   stopReading();
   if (same) return;
@@ -125,9 +135,10 @@ export async function readAloud(key: string, text: string) {
   try {
     const settings = await api.voiceSettings();
     if (mine !== generation) return;
-    const { provider, voice, speed = 1 } = settings.tts;
-    if (provider === "device" || !settings.ready) await speakWithSystem(words, voice, speed, mine);
-    else await speakWithProvider(words, mine);
+    const system = systemVoiceFor(botId, settings.tts);
+    // A bot's own voice may be "This computer" or a provider whatever the shared one is: the main process says which.
+    if (!settings.ready || (!botId && settings.tts.provider === "device")) await speakWithSystem(words, system.voice, system.speed, mine);
+    else await speakWithProvider(words, mine, botId, system);
     finish();
   } catch (e) {
     finish(voiceError(e));
@@ -163,7 +174,7 @@ async function speakWithSystem(words: string, voiceName: string | undefined, spe
 }
 
 /** A provider's audio, a part at a time: the next part is fetched while one plays. */
-async function speakWithProvider(words: string, mine: number) {
+async function speakWithProvider(words: string, mine: number, botId: string | undefined, system: { voice?: string; speed: number }) {
   const parts = sentences(words, 1200);
   const audio = new Audio();
   let url = "";
@@ -173,15 +184,16 @@ async function speakWithProvider(words: string, mine: number) {
     cancel();
   };
   try {
-    let next = api.speak(parts[0]);
+    const options = botId ? { botId } : undefined;
+    let next = api.speak(parts[0], options);
     for (let i = 0; i < parts.length; i++) {
       const answer = await next;
       if (mine !== generation) return;
-      if (i + 1 < parts.length) next = api.speak(parts[i + 1]);
+      if (i + 1 < parts.length) next = api.speak(parts[i + 1], options);
       next?.catch(() => {});
       if ("device" in answer) {
-        // The choice changed to "This computer" meanwhile: the rest is read by the system.
-        await speakWithSystem(parts.slice(i).join(" "), undefined, 1, mine);
+        // This computer is the voice (for this bot, or the choice changed meanwhile): the rest is read by the system.
+        await speakWithSystem(parts.slice(i).join(" "), system.voice, system.speed, mine);
         return;
       }
       for (const part of answer.parts) {
