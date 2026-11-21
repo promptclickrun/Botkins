@@ -140,7 +140,14 @@ jobs:
           cache-to: type=gha,mode=max
           cache-from: type=gha
       - name: The image serves, and reports this version
-        run: sh .github/scripts/check-image.sh botkins:check "$VERSION"
+        # The tag's own copy of the check, when it has one: the list of the command line's areas
+        # in it is that version's. The default branch's list can be ahead of an older tag (it was
+        # for 0.17.0). A tag from before the check had none, and the default branch's copy is used.
+        run: |
+          check=.github/scripts/check-image.sh
+          [ ! -f "source/$check" ] || check="source/$check"
+          echo "The check: $check"
+          sh "$check" botkins:check "$VERSION"
       - name: Name the tags and the commit
         id: tags
         env:
