@@ -61,6 +61,9 @@ test("the host's parts become the state the window reads", () => {
   const space = { id: "s_launch", name: "Launch", by: { id: "owner", name: "Studio" }, mine: true, access: "private", can: "own", count: 2, changed: 1, pinned: true, notify: "daily", here: [], rev: 4, updatedAt: 9 };
   assert.deepEqual(snapshotOf({ ...parts, spaces: [space] }).spaces, [space]);
   assert.equal("spaces" in state, false);
+  // A host with chat sections names the paired person's own; one without sends none, and the window then has no sections.
+  assert.deepEqual(snapshotOf({ ...parts, chatSections: [{ id: "cs_abcdefghijk", name: "Work" }] }).chatSections, [{ id: "cs_abcdefghijk", name: "Work" }]);
+  assert.equal("chatSections" in state, false);
   // Admin mode is the owner's own devices': the window is told how the host keeps it for this one.
   assert.equal("adminMode" in state, false);
   assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: false } } }).adminMode, false);

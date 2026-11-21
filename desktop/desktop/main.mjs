@@ -27,6 +27,7 @@ import { parseJoinUrl } from "./remote/link-client.mjs";
 // file is the desktop app around them: Electron's start, the window, the tray icon, what a page in
 // the window may load, and the calls only this window makes.
 import { createRuntime } from "./runtime.mjs";
+import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
 
 // The data folder: Botkins' own (desktop/home.mjs). Tests name their own.
@@ -79,8 +80,9 @@ const appSnapshot = () => {
   return {
     // This computer's own workspace goes to its window as the owner is shown it: the owner's view
     // of the spaces, and with Admin mode off only what the owner is part of (desktop/admin-view.mjs).
+    // The chats left come with the owner's own sections, which the link keeps ("chat-sections-v1").
     // Another computer's snapshot is already cut for this device by that computer's link.
-    ...(using ? remote.snapshot(workspace.state.settings) : ownerWindowView(workspace.snapshot(), link, adminMode?.get() === true)),
+    ...(using ? remote.snapshot(workspace.state.settings) : withOwnerChatSections(ownerWindowView(workspace.snapshot(), link, adminMode?.get() === true), link)),
     ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },

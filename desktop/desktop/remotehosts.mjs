@@ -100,6 +100,8 @@ export function snapshotOf(parts, own = {}) {
     ...(parts.team && { team: parts.team }),
     bots: parts.bots ?? [],
     sections: parts.sections ?? [],
+    // The paired person's own sections on the Chats page ("chat-sections-v1"); each chat says its own.
+    ...(Array.isArray(parts.chatSections) && { chatSections: parts.chatSections }),
     chats,
     runs,
     streams: live.streams ?? {},

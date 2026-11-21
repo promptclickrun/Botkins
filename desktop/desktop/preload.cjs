@@ -75,6 +75,12 @@ for (const name of [
   "link.team.setLinkSharing",
   // Admin mode ("link.team.setAdminMode"): this computer keeps its own window's choice.
   "link.team.setAdminMode",
+  // Sections on the Chats page ("chat-sections-v1"): the link's calls, made as the owner here.
+  "link.chats.addSection",
+  "link.chats.renameSection",
+  "link.chats.deleteSection",
+  "link.chats.orderSections",
+  "link.chats.setSection",
   "artifacts.list",
   "artifacts.read",
   "artifacts.resolve",

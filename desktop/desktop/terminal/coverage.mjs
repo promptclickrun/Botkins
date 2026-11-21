@@ -55,6 +55,7 @@ export const WORKSPACE = {
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
   ...each("renameChat deleteChat forkChat compact setChatFlags setChatProject createGroupChat retry unqueue sendNow mentionables sideQuestion", owed("d")),
+  ...each("link.chats.addSection link.chats.renameSection link.chats.deleteSection link.chats.orderSections link.chats.setSection", owed("d")), // sections on the Chats page, by the link's names
   // ── Routines ──
   runRoutine: cmd("routines run"),
   setRoutineEnabled: cmd("routines pause"),
