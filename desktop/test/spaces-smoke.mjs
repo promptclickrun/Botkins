@@ -421,6 +421,23 @@ try {
   await expect.poll(() => callsOf("link.spaces.here")).toContainEqual([null]);
   console.log("The ask bar asks the first panel's bot and opens its chat; leaving the space says so.");
 
+  // ---- An app panel opens large, with "Ask <bot> to change it" under it; a panel that is not an app has no Open.
+  await menu.getByRole("button", { name: "Launch", exact: true }).click();
+  await expect(win.getByRole("button", { name: "Open Signups" })).toHaveCount(0);
+  await win.getByRole("button", { name: "Open Launch checklist" }).click();
+  const openedPanel = win.getByRole("dialog", { name: "Launch checklist" });
+  await expect(openedPanel.getByRole("heading", { name: "Launch checklist" })).toBeVisible();
+  await expect(openedPanel.locator(".space-app")).toHaveText("App");
+  await expect(openedPanel.locator(".html-frame")).not.toHaveClass(/loading/);
+  if (shots) await win.screenshot({ path: join(shots, "space-panel-opened-light.png") });
+  await clearCalls();
+  const askLuna = openedPanel.getByRole("textbox", { name: "Ask Luna to change it" });
+  await askLuna.fill("Add a row for the press release");
+  await askLuna.press("Enter");
+  await expect.poll(() => callsOf("spaces.ask")).toEqual([[{ spaceId: "s_launch", botId: "luna", text: "Add a row for the press release", panelId: "p_check" }]]);
+  await expect(win.locator(".chathead h2")).toHaveText("Luna");
+  console.log("An app panel opens large; asking there is about that panel and goes to its bot.");
+
   // ---- Add panel: the sheet "New panel".
   await menu.getByRole("button", { name: "Launch", exact: true }).click();
   await head.getByRole("button", { name: "Add panel", exact: true }).click();
