@@ -15,9 +15,9 @@ import { openKeyStore } from "../host/keystore.mjs";
 import { headlessHost } from "../host/headless.mjs";
 import { createRuntime } from "../runtime.mjs";
 import { loadConfig, saveConfig } from "./config.mjs";
-import { controlApi, dispatcher } from "./control.mjs";
+import { changeCounter, startControl } from "./control-start.mjs";
 import { createLog } from "./logs.mjs";
-import { listenControl } from "./socket.mjs";
+import { prepareReach } from "./reach.mjs";
 
 /** Makes a folder the service's own: there, and closed to everyone else. */
 function ownFolder(dir) {
@@ -39,9 +39,11 @@ function ownFolder(dir) {
  * @param options.console  True to send what the workspace's modules print through the log (the real service does).
  * @param options.updates  (service) → the update service for this copy, or undefined.
  * @param options.keySource  For tests: replaces openKeyStore.
+ * @param options.reach  Whether a bot's shell gets the `botkins` command and BOTKINS_SOCKET (desktop/terminal/reach.mjs).
+ *   It changes `env`, so a trial run (the tests, which share one process) leaves it off unless it asks.
  * @returns { runtime, api, log, config(), paths, stop(reason), stopped }
  */
-export async function startService({ paths, version, trial = false, out, console: captureConsole = false, updates, keySource = openKeyStore, env = process.env }) {
+export async function startService({ paths, version, trial = false, reach = !trial, out, console: captureConsole = false, updates, keySource = openKeyStore, env = process.env }) {
   ownFolder(paths.root);
   ownFolder(paths.runDir);
   // A config file written by hand is made the service's own to read, like everything else here.
@@ -55,12 +57,7 @@ export async function startService({ paths, version, trial = false, out, console
   const restoreConsole = captureConsole ? log.capture() : () => {};
   log.info("Botkins " + version + " terminal host starting. Data folder: " + paths.root);
   // What changed, counted, so a command line that waits (a chat's reply, the dashboard) hears of it.
-  let revision = 0;
-  const waiting = new Set();
-  const bump = () => {
-    revision++;
-    for (const wake of [...waiting]) wake();
-  };
+  const { bump, revision, waitForChange } = changeCounter();
   let keys = null;
   let signIns = null;
   let runtime;
@@ -73,23 +70,10 @@ export async function startService({ paths, version, trial = false, out, console
     log,
     config: () => config,
     keys: () => keys && { source: keys.source, where: keys.where },
-    revision: () => revision,
+    revision,
     /** Something the command line or a dashboard shows changed outside the workspace (an update's state). */
     changed: () => bump(),
-    waitForChange({ after = 0, ms = 25_000, signal } = {}) {
-      if (revision !== after || signal?.aborted) return Promise.resolve({ revision });
-      return new Promise((resolve) => {
-        const done = () => {
-          clearTimeout(timer);
-          waiting.delete(done);
-          signal?.removeEventListener("abort", done);
-          resolve({ revision });
-        };
-        const timer = setTimeout(done, ms);
-        waiting.add(done);
-        signal?.addEventListener("abort", done, { once: true });
-      });
-    },
+    waitForChange,
   };
   try {
     if (config.providers.only.length) env.BOTKINS_PROVIDERS = config.providers.only.join(",");
@@ -151,8 +135,11 @@ export async function startService({ paths, version, trial = false, out, console
     await runtime.listening;
     await apply(config);
     service.stop = stop;
-    const api = controlApi(service);
-    closeSocket = await listenControl(paths.socket, dispatcher(api, { log: (line) => log.info(line) }), () => ({ version, pid: process.pid }));
+    const control = await startControl({ service, socket: paths.socket, log });
+    const { api } = control;
+    closeSocket = control.close;
+    // A bot's shell finds the command and this socket whatever PATH the service's unit or job gave it.
+    if (reach && process.platform !== "win32") prepareReach({ dataDir: paths.root, socket: paths.socket, env });
     runtime.begin();
     const status = runtime.link.status();
     log.info("Ready. Control socket: " + paths.socket + (status.listening ? ". Phone link on port " + status.port + (status.relay.enabled ? ", relay on" : "") + "." : ". Phone access is off."));

@@ -24,7 +24,10 @@ export function ask(context, question, { hidden = false, signal } = {}) {
   const { stdin, stderr } = context;
   return new Promise((resolve, reject) => {
     const rl = createInterface({ input: stdin, output: stderr, terminal: !!stdin.isTTY });
+    // (True once the question has its end: an answer, or a close from outside. The end of input after that is not a cancel.)
+    let answered = false;
     const close = () => {
+      answered = true;
       rl.close();
       if (hidden && stdin.isTTY) stderr.write("\n");
       resolve(null);
@@ -37,12 +40,18 @@ export function ask(context, question, { hidden = false, signal } = {}) {
         if (text.includes(question)) stderr.write(question);
       };
     }
+    const cancel = () => reject(new CliError("Cancelled.", 130, "CANCELLED"));
     rl.on("SIGINT", () => {
       signal?.removeEventListener("abort", close);
       rl.close();
-      reject(new CliError("Cancelled.", 130, "CANCELLED"));
+      cancel();
+    });
+    // The end of input (Ctrl-D, or a pipe that closes) before an answer is the same as Ctrl-C.
+    rl.on("close", () => {
+      if (!answered) cancel();
     });
     rl.question(question, (answer) => {
+      answered = true;
       signal?.removeEventListener("abort", close);
       rl.close();
       if (hidden && stdin.isTTY) stderr.write("\n");

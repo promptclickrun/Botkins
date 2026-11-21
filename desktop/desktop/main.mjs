@@ -26,7 +26,7 @@ import { parseJoinUrl } from "./remote/link-client.mjs";
 // The workspace, its calls and the phone link are built in desktop/runtime.mjs, on a host. This
 // file is the desktop app around them: Electron's start, the window, the tray icon, what a page in
 // the window may load, and the calls only this window makes.
-import { createRuntime } from "./runtime.mjs";
+import { createRuntime, isSplitHost } from "./runtime.mjs";
 import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
 
@@ -60,6 +60,8 @@ let win,
 // so it never changes what starts with this computer.
 const startup = loginItem(app.isPackaged && home.from !== "override" ? { electron: app } : { home: join(home.dir, "startup") });
 let updateQuit = false;
+// The control socket of this app (desktop/terminal/control-start.mjs), or null while it is off or did not start.
+let control = null;
 autoUpdater.on("before-quit-for-update", () => {
   updateQuit = true;
   workspace?.save();
@@ -268,7 +270,7 @@ else
     remote.resume();
     // Admin mode is each owner device's own. This window's choice is this computer's, off at first.
     adminMode = adminModeStore(join(dataDir, "window.json"));
-    runtime = await createRuntime({ host, dataDir, trial, pushed: push });
+    runtime = await createRuntime({ host, dataDir, trial, pushed: () => (push(), control?.changed()) });
     ({ workspace, link } = runtime);
     // An app's answer goes into its chat's message box for the person to review and send.
     appWindows = new AppWindows(workspace.apps, {
@@ -434,6 +436,18 @@ else
     // Started by the computer at sign-in: no window, only the icon. Any other start opens the window.
     if (!startedHidden()) openWindow();
     syncTray();
+    // The control socket, and the `botkins` command for a bot's shell (desktop/terminal/reach.mjs). A trial
+    // run (tests, a development copy) has none, except the workspace of the two-container host, which is
+    // a trial run by its folder and whose bots need the command. A socket that does not start is one line in
+    // the log and never stops the app, so the import is inside the try.
+    if (!trial || isSplitHost()) {
+      try {
+        const { startAppControl } = await import("./terminal/control-start.mjs");
+        control = await startAppControl({ runtime, root: home.dir, version: app.getVersion(), keys: () => (app.isPackaged && !trial ? { source: "keychain", where: "system keychain" } : null), say: (line) => console.error(line) });
+      } catch (error) {
+        console.error("Control socket: not started (" + error.message + ").");
+      }
+    }
     runtime.begin();
     app.on("window-all-closed", () => { if (!updateQuit) app.quit(); });
     app.on("before-quit", (event) => {
@@ -442,7 +456,7 @@ else
       appWindows?.closeAll();
       event.preventDefault();
       const force = setTimeout(() => app.exit(), 5000);
-      runtime.stop().finally(() => {
+      Promise.resolve(control?.close()).catch(() => {}).then(() => runtime.stop()).finally(() => {
         clearTimeout(force);
         app.quit();
       });

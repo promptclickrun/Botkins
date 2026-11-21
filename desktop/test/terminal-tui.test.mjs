@@ -2,9 +2,20 @@
 // what each key asks the service to do. A stand-in service answers; no terminal is needed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createApp } from "../cli/tui/app.mjs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough, Writable } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
+import { createApp, runDashboard } from "../cli/tui/app.mjs";
+import { main } from "../cli/main.mjs";
+import { COMMANDS } from "../cli/commands/index.mjs";
+import { areasOf, leavesOf } from "../cli/tui/menu.mjs";
 import { fit, KEYS, render, TABS, width, wrap } from "../cli/tui/view.mjs";
-import { ControlError } from "../desktop/terminal/socket.mjs";
+import { terminalPaths } from "../desktop/terminal/paths.mjs";
+import { startService } from "../desktop/terminal/serve.mjs";
+import { controlClient, ControlError } from "../desktop/terminal/socket.mjs";
 
 const NOW = Date.parse("2026-01-02T12:00:00Z");
 const STATUS = { running: true, version: "9.9.9", pid: 77, uptimeSeconds: 3725, node: "24.0.0", platform: "linux/arm64", dataDir: "/var/lib/botkins", socket: "/var/lib/botkins/run/botkins.sock", memory: { rssMb: 91.5 }, link: { enabled: true, listening: true, port: 47610, name: "Studio", addresses: ["10.0.0.5:47610"], pairing: false, devices: 1, connected: 1 }, relay: { enabled: false, connected: false, url: "https://relay.botkins.app" }, workspace: { bots: 2, chats: 1, routines: 1, working: 1, waiting: 0 }, secrets: { source: "systemd", where: "systemd credential" }, vault: { locked: false, entries: 0 } };
@@ -267,4 +278,112 @@ test("the log follows new lines, scrolls back, and the screen says so when the s
   await app.refresh();
   assert.match(screen(), /^Botkins 9\.9\.9/);
   app.stop();
+});
+
+// ---- The commands screen, against a real service and a stand-in terminal.
+const skip = process.platform === "win32" && "The terminal host runs on Linux and macOS.";
+const freePort = () =>
+  new Promise((resolve) => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+/** A real service with one bot, and the dashboard open on a stand-in terminal of 80 by 24 that is also the commands' terminal. */
+async function liveDashboard(t) {
+  const dir = mkdtempSync(join(tmpdir(), "bk-tui-"));
+  const paths = terminalPaths({ root: join(dir, "r"), env: {} });
+  mkdirSync(paths.root, { recursive: true });
+  writeFileSync(paths.config, JSON.stringify({ providers: { only: ["grok"] }, link: { port: await freePort(), announce: false } }));
+  const running = await startService({ paths, version: "9.9.9", trial: true });
+  const client = controlClient(paths.socket, { timeout: 40_000 });
+  await client.call("bots.add", { name: "Scout", role: "Helper" });
+  let out = "";
+  const stdout = new Writable({ write: (chunk, _encoding, done) => (void (out += String(chunk)), done()) });
+  Object.assign(stdout, { isTTY: true, columns: 80, rows: 24 });
+  const stdin = new PassThrough();
+  Object.assign(stdin, { isTTY: true, setRawMode: () => stdin });
+  const run = (words, io) => main(words, { env: { NO_COLOR: "1" }, client, stdin, stdout, stderr: stdout, ...io });
+  const closed = runDashboard({ client, stdin, stdout, stderr: stdout, env: { NO_COLOR: "1" }, run });
+  t.after(async () => {
+    // Ctrl-C quits the dashboard from its screens; at the end of a command it first brings the dashboard back.
+    stdin.write("\u0003");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stdin.write("\u0003");
+    await closed;
+    await running.stop("the test ended");
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const screen = () => stripVTControlCharacters(out.split("\u001b[H").at(-1));
+  const until = async (pattern, from = () => out, what = pattern) => {
+    for (let waited = 0; waited < 8000; waited += 10) {
+      if (pattern.test(stripVTControlCharacters(from()))) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("never seen: " + what + "\n" + stripVTControlCharacters(from()).slice(-1500));
+  };
+  const keys = { down: "\u001b[B", enter: "\r" };
+  // The way to a command: the commands screen, the area, the picked row, the command.
+  const areaAt = areasOf(COMMANDS).findIndex((area) => area.word === "bots");
+  const leafAt = (name) => leavesOf({ word: "bots", command: COMMANDS.bots }).findIndex((leaf) => leaf.name === name);
+  const to = async (name, rowPicked) => {
+    stdin.write(":");
+    await until(/Commands {2}each area of the command line/, screen);
+    stdin.write(keys.down.repeat(areaAt) + keys.enter);
+    await until(/State \(botkins bots list\)[\s\S]*Scout/, screen);
+    if (rowPicked) stdin.write(keys.enter);
+    else stdin.write("\t");
+    await until(/Commands/, screen);
+    stdin.write(keys.down.repeat(leafAt(name)) + keys.enter);
+    await until(new RegExp("Usage: botkins bots " + name), screen);
+  };
+  return { client, stdin, out: () => out, screen, until, keys, to, closed, mark: () => out.length };
+}
+
+test("the commands screen lists the areas of the tree, shows an area's list, and runs the command it shows", { skip }, async (t) => {
+  const { stdin, screen, until, to, out, mark, keys } = await liveDashboard(t);
+  await until(/Botkins 9\.9\.9/, screen);
+  stdin.write(":");
+  await until(/Commands {2}each area/, screen);
+  // Each word of the tree is a row, with its summary, in the order of the tree.
+  assert.match(screen(), new RegExp("bots\\s+" + COMMANDS.bots.summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(screen(), /routines\s+/);
+  assert.doesNotMatch(screen(), /^tui\s/m, "the dashboard is not in its own list");
+  stdin.write("\u001b");
+  await until(/^Botkins 9\.9\.9/, screen);
+  // The area: the list command's rows, then its commands, then one command with its line.
+  await to("list");
+  assert.match(screen(), /botkins bots list \|/, "the line, with the cursor");
+  assert.doesNotMatch(screen(), /--yes/);
+  const before = mark();
+  stdin.write(keys.enter);
+  await until(/The command ended with exit code 0\. Press a key/, () => out().slice(before), "the real command's end");
+  const shown = stripVTControlCharacters(out().slice(before));
+  assert.match(shown, /\$ botkins bots list\n/);
+  assert.match(shown, /NAME\s+ROLE[\s\S]*Scout\s+Helper/, "what `botkins bots list` prints");
+  stdin.write(" ");
+  await until(/Last run: bots list ended with exit code 0\./, screen);
+});
+
+test("the dashboard passes no --yes and answers no question: a command that asks asks on the terminal, and a no changes nothing", { skip }, async (t) => {
+  const { client, stdin, screen, until, to, out, mark } = await liveDashboard(t);
+  // The picked row gives its name to the line; the flags are the person's to write.
+  await to("remove", true);
+  assert.match(screen(), /It asks first\./);
+  assert.match(screen(), /botkins bots remove Scout \|/);
+  const before = mark();
+  stdin.write("\r");
+  await until(/\[y\/N\]/, () => out().slice(before), "the command's own question");
+  const shown = () => stripVTControlCharacters(out().slice(before));
+  assert.match(shown(), /\$ botkins bots remove Scout\n/);
+  assert.doesNotMatch(shown(), /--yes|-y\b/);
+  // Nobody has answered: the command waits, and the bot is there.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.doesNotMatch(shown(), /exit code/);
+  assert.equal((await client.call("bots.list")).length, 1);
+  stdin.write("n\r");
+  await until(/exit code [1-9]/, shown, "the end of the refused command");
+  assert.equal((await client.call("bots.list")).length, 1, "a no removes nothing");
+  assert.equal((await client.call("bots.list"))[0].name, "Scout");
 });

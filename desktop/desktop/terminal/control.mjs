@@ -5,15 +5,15 @@
 // calls do what the desktop app's own window can do. A few are the terminal host's own (status,
 // logs, config, pairing); the rest are thin: they look a bot or a routine up by the name a person
 // typed and hand the work to the workspace's own calls (`runtime.handlers`), which a paired phone
-// uses too. "call" reaches the ones that have no command of its own yet, by name, and keeps the
-// rules that the commands hold (see `callRule`).
+// uses too. There is no call that reaches the app's calls by name: each one has a command, or a
+// reason that it has none (desktop/terminal/coverage.mjs).
 //
 // Every value is plain JSON: `--json` prints it as it is.
 import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
 import { DESKTOP_ONLY } from "../host/headless.mjs";
-import { CHANGES, thingForLog, WORKSPACE } from "./coverage.mjs";
+import { CHANGES, thingForLog } from "./coverage.mjs";
 import { toolsApi } from "./control-tools.mjs";
 import { pluginsApi } from "./control-plugins.mjs";
 import { botsApi } from "./control-bots.mjs";
@@ -24,16 +24,22 @@ import { wikiApi } from "./control-wiki.mjs";
 import { prefsApi } from "./control-prefs.mjs";
 import { credentialsApi } from "./control-credentials.mjs";
 import { voiceApi } from "./control-voice.mjs";
+import { spacesApi } from "./control-spaces.mjs";
+import { sharingApi } from "./control-sharing.mjs";
+import { teamApi } from "./control-team.mjs";
+import { checkReach } from "./reach.mjs";
 
 const WAIT_MS = 25_000;
-export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them. The owner agreed to false on 2026-11-21: nothing that reaches a saved secret runs from the command line.
+// false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them.
+// The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone."
+export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false;
 /**
  * A reference to a saved credential, { "$credential": id }, is resolved by the app to the saved
  * secret. A caller on the socket cannot read a saved credential, but it could send one to an
- * address that it chose (a plugin it wrote, a secure request that a bot made). So, while the
- * owner has not chosen, these calls refuse a reference anywhere in what they are given.
+ * address that it chose (a plugin it wrote, a secure request that a bot made). So these calls
+ * refuse a reference anywhere in what they are given.
  */
-const WITHOUT_REFERENCES = ["plugins.install", "plugins.configure", "chat.respond", "respond"];
+const WITHOUT_REFERENCES = ["plugins.install", "plugins.configure", "chat.respond"];
 // The sentence names what the call at hand has: only a plugin's install and configure take --settings.
 const CHOSEN_IN_THE_APP = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself";
 const NO_REFERENCES = (name) => CHOSEN_IN_THE_APP + (name.startsWith("plugins.") ? " (`--settings`, or the hidden question)." : ".");
@@ -42,80 +48,6 @@ const holdsReference = (value, depth = 0) => depth <= 8 && value !== null && typ
 const refuseReferences = (name, args) => {
   if (!CREDENTIAL_REFERENCES_ON_THE_SOCKET && WITHOUT_REFERENCES.includes(name) && holdsReference(args)) throw new ControlError(NO_REFERENCES(name), "BAD_ARGUMENT");
 };
-/**
- * What `call` may not reach, by the table of desktop/terminal/coverage.mjs. A call that a command
- * covers is done by that command: it shows what it changes and leaves a line in the log. A call
- * with a reason is done where that reason says. Only the calls that are still owed run through
- * `call`, and some of those are held below until their command is written.
- *
- * The rule for secrets: a call that reaches a secret which the caller cannot read by itself, or that
- * sends such a secret somewhere, is not for the socket. It stays where a person is known to be
- * there: the window, or a phone with its owner check. Everything else the window can do, the
- * socket does, with what it starts shown and a line in the log.
- * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The
- * owner agreed to this on 2026-11-21, in these words: "nothing that reaches a saved secret runs from
- * the command line, so unlocking a password manager and using a saved credential by reference stay
- * in the window and on the phone." Two things follow from that sentence and are its working-out, not
- * his words: a saved credential gets no new label from the socket, and `voice set` takes no address
- * without its key.)
- */
-export const REFUSED_BY_REASON = {
-  window: (name) => "`" + name + "` needs the app's window (a dialog, the clipboard, a notification, a microphone or a permission on the screen). It is done there, not from a terminal.",
-  "window's own": (name) => "`" + name + "` is what the app's window uses to draw itself (a pane, a preview or a thumbnail). The window makes it, and a terminal has no use for it.",
-  "phone's own": (name) => "`" + name + "` belongs to a paired phone (its notifications, its screen or its uploads). The phone makes it.",
-  person: (name) => "`" + name + "` needs a person at the app: the window, or a phone with its owner check. The terminal host cannot know that a person is there.",
-};
-export const COVERED_BY_COMMAND = (name, command) => "`" + name + "` is done by `botkins " + command + "`. Run that command: it shows what it changes and leaves a line in the log.";
-
-const IN_THE_APP = "Do it in the app's window or on a paired phone. A command for it comes.";
-const takesSecret = (name) => "`" + name + "` takes a secret as an argument, and a secret is never a word on the command line. " + IN_THE_APP;
-const removesSecrets = (name) => "`" + name + "` removes saved secrets with no question. Do it in the app's window or on a paired phone, where a person is asked. A command for it comes, and it asks first.";
-const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-// Every field of the voice settings that is a provider's web address (desktop/link/voice.mjs `merge`).
-const VOICE_ADDRESSES = [["openai", "baseUrl"], ["azure", "endpoint"], ["azure", "region"], ["custom", "baseUrl"]];
-const setsVoiceAddress = (patch) => isPlain(patch) && isPlain(patch.providers) && VOICE_ADDRESSES.some(([provider, field]) => isPlain(patch.providers[provider]) && patch.providers[provider][field] !== undefined);
-
-/**
- * The calls that are owed a command (coverage.mjs) and that `call` still holds, until their command
- * is merged: name → (arguments) → the sentence that refuses them, or nothing when they may run.
- * Each entry goes when its command is merged: the table then says `cmd(...)`, and `callRule` refuses
- * the call by that. Nothing here may be left when nothing is owed.
- * Each rule looks at an argument by its place. The places were read from the handlers (desktop/runtime.mjs) on
- * 2026-11-21: a handler that takes the same thing in another shape needs its rule here changed with it.
- */
-export const HELD = {
-  // A secret as an argument (the arguments of `call` are on the command line).
-  setVoiceKey: (args, name) => takesSecret(name),
-  providerUseToken: (args, name) => takesSecret(name),
-  saveSavedCredential: (args, name) => takesSecret(name),
-  // A key for a service of a provider, or the code that finishes a sign-in.
-  connectProviderService: (args, name) => (typeof args[2]?.key === "string" ? takesSecret(name) : null),
-  finishProviderService: (args, name) => takesSecret(name),
-  // Saved secrets removed with no question.
-  resetVault: (args, name) => removesSecrets(name),
-  removeCredential: (args, name) => removesSecrets(name),
-  removeSavedCredential: (args, name) => removesSecrets(name),
-  // A provider's address is where its key goes. (The app drops a saved key when its address is set or changed, #137.
-  // A key that the person gives later goes to the address that is set then, so the address is set where it is shown.)
-  // Choices that are no address run.
-  setVoice: (args, name) => (setsVoiceAddress(args[0]) ? "`" + name + "` with a provider's web address says where that provider's key goes. Set an address in the app's window or on a paired phone, where it is shown. A command for it comes. Choices that are no address run here." : null),
-  // The level of approval: telling a looser one needs the present value, so any change is held.
-  setPreferences: (args, name) => (isPlain(args[0]) && (Object.hasOwn(args[0], "approval") || Object.hasOwn(args[0], "access")) ? "`" + name + "` with an approval level or an access changes what the bots may do without a question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks." : null),
-  // A Mac tool that is switched on lets the bots read or use an app of this Mac. Switching one off runs.
-  setMacTool: (args, name) => (args[1] !== "off" ? "`" + name + "` gives the bots a tool of this Mac. Switch it on in the app's window, where it is shown. A command for it comes, and it shows this and asks. Switching a tool off runs here." : null),
-};
-
-/**
- * What `call` does with the app's call `name` given `args`, from the table: the sentence that
- * refuses it, or null when it may run (it is owed a command, and it is not held). A pure function.
- */
-export function callRule(name, args = []) {
-  const entry = Object.hasOwn(WORKSPACE, name) ? WORKSPACE[name] : null;
-  if (!entry) return null;
-  if ("command" in entry) return COVERED_BY_COMMAND(name, entry.command);
-  if ("reason" in entry) return REFUSED_BY_REASON[entry.reason](name);
-  return Object.hasOwn(HELD, name) ? HELD[name](args, name) : null;
-}
 const text = (value, max, what) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new ControlError("Give " + what + ".", "BAD_ARGUMENT");
   return value.trim();
@@ -324,6 +256,8 @@ export function controlApi(service) {
         secrets: service.keys() ?? { source: "file", where: "key files in the data folder (a trial run)" },
         providers: statuses.map((entry) => ({ id: entry.id, name: entry.name, enabled: entry.enabled, installed: entry.installed !== false, connected: entry.connected === true, ...(entry.account && { account: entry.account }), ...(entry.plan && { plan: entry.plan }), ...(entry.message && { message: entry.message }), ...(entry.error && { error: entry.error }) })),
         desktopOnly: DESKTOP_ONLY,
+        // What a bot's shell finds: asked of this process, with its own environment (desktop/terminal/reach.mjs).
+        botShell: await checkReach(),
       };
     },
     /** Stops the service, as its service manager would. For a `botkins serve` started by hand. */
@@ -337,7 +271,8 @@ export function controlApi(service) {
     // ── Pairing and devices ──────────────────────────────────────────────────────────────────
     /** Opens a pairing code: for the link's own few minutes, or for `minutes` (1 to 1440) when the code is handed on. */
     async "pair.start"([{ minutes } = {}] = []) {
-      if (!link.status().enabled) throw new ControlError("Phone access is off. Turn it on with `botkins config set link.enabled true`.", "LINK_OFF");
+      // (The app's socket has no `config set`: the app's own Settings turn phone access on.)
+      if (!link.status().enabled) throw new ControlError("Phone access is off. " + (service.inApp ? "Turn it on in the app's Settings, under Phone." : "Turn it on with `botkins config set link.enabled true`."), "LINK_OFF");
       if (minutes === undefined) return pairingView(link.startPairing());
       if (!Number.isInteger(minutes) || minutes < 1 || minutes > 24 * 60) throw new ControlError("A pairing code stays open for 1 to 1440 minutes.", "BAD_ARGUMENT");
       return pairingView(link.startPairing(minutes * 60_000));
@@ -469,7 +404,12 @@ export function controlApi(service) {
           const chat = state().chats.find((entry) => entry.id === run.chatId);
           return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
         }),
-    "chat.respond": ([requestId, answer]) => handlers.respond(String(requestId), answer),
+    // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
+    "chat.respond": async ([requestId, answer]) => {
+      const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
+      await handlers.respond(String(requestId), answer);
+      return { chatId: asked?.chatId ?? null, kind: asked?.kind ?? null, answered: answer?.action === "deny" || answer?.action === "cancel" ? "no" : "yes" };
+    },
 
     // ── Routines ─────────────────────────────────────────────────────────────────────────────
     "routines.list": ([ref]) => routines().list(ref ? bot(ref).id : undefined).map(routineView),
@@ -533,23 +473,6 @@ export function controlApi(service) {
       return runtime.updates.status();
     },
 
-    // ── Everything else the workspace can do ─────────────────────────────────────────────────
-    /** One of the workspace's own calls, by name (the ones the desktop app's window makes). */
-    call([name, args = []], context) {
-      if (typeof name !== "string" || !Object.hasOwn(handlers, name)) throw new ControlError("The workspace has no call named " + name + ".", "UNKNOWN_METHOD");
-      if (!Array.isArray(args)) throw new ControlError("A call's arguments are a list.", "BAD_ARGUMENT");
-      // A call with a dotted name that this service has its own version of as well ("plugins.setEnabled", …)
-      // runs that one, not the app's raw call. The rules are in the service's call: the revision that was
-      // looked at, and the log line. So `call` cannot be a way round them. (Only a dotted name: "stop" and
-      // "models" are other things here than in the app, and `call stop` must never stop the service.)
-      if (name.includes(".") && Object.hasOwn(api, name)) return api[name](args, context);
-      // The rest is by the table: a call that a command covers, or that has a reason, is not made here,
-      // and a call that is held is not either (see `callRule`). What is left runs raw.
-      const refusal = callRule(name, args);
-      if (refusal) throw new ControlError(refusal, "NOT_FOR_CALL");
-      refuseReferences(name, args);
-      return handlers[name](...args);
-    },
     methods: () => ({ control: Object.keys(api).sort(), workspace: Object.keys(handlers).sort() }),
   };
   // Tools (MCP servers), skills, and a bot's tools, skills and access (desktop/terminal/control-tools.mjs).
@@ -557,7 +480,7 @@ export function controlApi(service) {
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
   Object.assign(api, pluginsApi({ workspace, handlers, bot, signIns, log: (line) => log?.info?.(line) }));
   // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
-  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi]) {
+  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi]) {
     for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns }))) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;
@@ -581,14 +504,11 @@ export function controlApi(service) {
  * (method, args, context) → the value, for desktop/terminal/socket.mjs.
  *
  * A call that changes something leaves one line in the log once it is done: which call and which
- * thing (a bot, a device, a setting's name), never a value. `call` reaches the app's own calls by
- * name, so its line names that call and nothing of what it was given. So when a bot changed its
- * own tools from its shell, a person can see it afterwards.
+ * thing (a bot, a device, a setting's name), never a value. So when a bot changed its own tools
+ * from its shell, a person can see it afterwards.
  */
 export function dispatcher(api, { log } = {}) {
   const said = (method, args, value) => {
-    // Only the name of a call that the app has: what else was typed there is not written down.
-    if (method === "call") return "call " + (typeof args?.[0] === "string" && Object.hasOwn(WORKSPACE, args[0]) ? (thingForLog(args[0]) ?? "") : "");
     if (!Object.hasOwn(CHANGES, method)) return null;
     const where = CHANGES[method];
     const thing = where === null ? null : thingForLog(typeof where === "function" ? where(args, value) : args?.[where]);

@@ -226,11 +226,11 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   assert.ok(lines.includes("Changed from the command line: plugins.update memory@test-market"));
   assert.ok(lines.includes("Tried from the command line: plugins.setEnabled memory (it failed)"));
   assert.equal(lines.some((line) => /Tried.*plugins\.install/.test(line)), false, "what the command refused by itself never reached the service");
-  // The service itself takes no install and no update with no revision, also by the plain call that reaches the app's own.
+  // The service itself takes no install and no update with no revision, from any caller of the socket.
   await assert.rejects(client.call("plugins.install", id, {}), /Give the revision of the plugin that was looked at/);
-  await assert.rejects(client.call("call", "plugins.install", ["notes@test-market"]), /Give the revision of the plugin that was looked at/);
-  await assert.rejects(client.call("call", "plugins.update", [id, {}]), /Give the revision of the plugin that was looked at/);
-  assert.deepEqual((await logged()).slice(-3), ["Tried from the command line: plugins.install memory@test-market (it failed)", "Tried from the command line: call plugins.install (it failed)", "Tried from the command line: call plugins.update (it failed)"]);
+  await assert.rejects(client.call("plugins.install", "notes@test-market"), /Give the revision of the plugin that was looked at/);
+  await assert.rejects(client.call("plugins.update", id, {}), /Give the revision of the plugin that was looked at/);
+  assert.deepEqual((await logged()).slice(-3), ["Tried from the command line: plugins.install memory@test-market (it failed)", "Tried from the command line: plugins.install notes@test-market (it failed)", "Tried from the command line: plugins.update memory@test-market (it failed)"]);
   // A first word with a character that hides or turns text is not written to the log.
   await assert.rejects(client.call("plugins.update", "me\u202emory", { revision: "0".repeat(64) }));
   assert.equal((await logged()).at(-1), "Tried from the command line: plugins.update (it failed)");

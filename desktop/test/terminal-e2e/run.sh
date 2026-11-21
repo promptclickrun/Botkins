@@ -180,7 +180,8 @@ sleep 60
 box 'pid=$(systemctl show botkins -p MainPID --value); echo "RSS $(( $(ps -o rss= -p $pid) / 1024 )) MB (pid $pid); cgroup $(( $(systemctl show botkins -p MemoryCurrent --value) / 1048576 )) MB; tasks $(systemctl show botkins -p TasksCurrent --value)"'
 
 step "Doctor, logs, and updates (the real release list: this run's version has no published terminal build)"
-box 'botkins doctor || true'
+box 'botkins doctor || true' | tee "$work/doctor.txt"
+grep -q "^ok .*A bot's shell: Finds .botkins. at .*reaches this service" "$work/doctor.txt" || fail "A bot's shell of the service does not find the botkins command, or it does not reach the service."
 box 'botkins logs -n 6'
 box 'botkins update --check || true'
 

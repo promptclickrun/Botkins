@@ -108,6 +108,9 @@ const SERVERS_LIMIT = 20;
 const skillName = (path) => (/(?:^|\/)SKILL\.md$/.test(path) ? path.replace(/^skills\//, "").replace(/\/?SKILL\.md$/, "") || null : null);
 const markdownName = (folder) => (path) => (/\.md$/.test(path) ? path.replace(new RegExp("^" + folder + "/"), "") : null);
 
+// How many of the files are the named kind: a skill is one SKILL.md, not each script or paper beside it.
+const countNamed = (paths, pick) => list(paths).filter((path) => pick(String(path ?? "")) != null).length;
+
 // The names of one kind of file, and a count of the files that are not named. These lines only
 // tell a person what the files are called: a name decides nothing that the plugin starts (that is
 // in the lines about hooks and tools). So a cut list does not make the card not whole.
@@ -145,9 +148,9 @@ export function pluginCard(plugin, { bots, action, id } = {}) {
   lines.push(
     "Holds: " +
       [
-        plural(list(contents.skills).length, "skill", "skills"),
-        plural(list(contents.agents).length, "agent", "agents"),
-        plural(list(contents.commands).length, "command", "commands"),
+        plural(countNamed(contents.skills, skillName), "skill", "skills"),
+        plural(countNamed(contents.agents, markdownName("agents")), "agent", "agents"),
+        plural(countNamed(contents.commands, markdownName("commands")), "command", "commands"),
       ].join(", ") +
       ".",
   );
