@@ -183,7 +183,7 @@ codex?: {
 
 The link is wired (`server.mjs`): the calls `link.voice.set`, `link.voice.key`, `link.voice.options`, `link.voice.transcribe`, `link.voice.speak`, `link.voice.live` and `link.voice.endLive`, the part `voice` (the settings), and the capability `voice-v1`. One call carries at most 5 MB of audio. A key never travels back to a phone. `link.voice.key` takes a typed key or a saved credential as `{ $credential: id }` (`credentials.mjs` has that place).
 
-**A key stays with its address.** When the OpenAI address, the Azure endpoint or region, or the custom server's address is changed to another one, that provider's saved key is dropped, so a key is never sent to an address it was not given for. Setting an address for the first time keeps the key. Order for a new provider: the address, then the key.
+**A key stays with its address.** When the OpenAI address, the Azure endpoint or region, or the custom server's address is set, changed to another one or taken away, that provider's saved key is dropped, so a key is never sent to an address it was not given for. A first address drops the key too (fixed 2026-11-21: before, a key saved with no address was sent to whatever address was set next, and a call that only sets an address needs no key). The same address again changes nothing. Order for a provider: the address, then the key. `link.voice.set` and `link.voice.key` are the owner's alone (`team.mjs`); the app's own `setVoice` reaches the same code.
 
 **`voice.locked`** is a sentence when the saved settings could not be opened (a keychain that did not answer), else null. Nothing is saved while it is set.
 

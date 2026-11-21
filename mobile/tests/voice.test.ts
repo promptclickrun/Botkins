@@ -342,8 +342,8 @@ test("OpenAI transcription: route, bearer key, model, languages[] for gpt-transc
 
 test("Azure OpenAI transcription: deployment route, api-version, api-key header", async () => {
   const { voice, net } = make({ "POST contoso.openai.azure.com/openai/deployments/whisper%20one/audio/transcriptions": () => ({ text: "azure words" }), "POST contoso.openai.azure.com/openai/deployments/stt1/audio/transcriptions": () => ({ text: "azure words" }) });
-  voice.setKey("azure", "azure-key-0123456789");
   voice.set({ stt: { provider: "azure", language: "en-GB" }, providers: { azure: { kind: "openai", endpoint: "https://contoso.openai.azure.com/", sttDeployment: "stt1" } } });
+  voice.setKey("azure", "azure-key-0123456789");
   assert.deepEqual(await voice.transcribe({ audio: WAV, format: "wav" }), { text: "azure words" });
   const seen = net.last();
   assert.equal(seen.url.pathname, "/openai/deployments/stt1/audio/transcriptions");
@@ -361,8 +361,8 @@ test("Azure Speech transcription: fast transcription route, subscription key, de
     "POST swedencentral.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe": () => ({ durationMilliseconds: 1000, combinedPhrases: [{ text: "first part." }, { text: "second part." }] }),
     "POST contoso.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe": () => ({ combinedPhrases: [{ text: "custom host" }] }),
   });
-  voice.setKey("azure", "azure-key-0123456789");
   voice.set({ stt: { provider: "azure", language: "sv-SE" }, providers: { azure: { kind: "speech", region: "swedencentral" } } });
+  voice.setKey("azure", "azure-key-0123456789");
   assert.deepEqual(await voice.transcribe({ audio: WAV, format: "mp3" }), { text: "first part. second part." });
   let seen = net.last();
   assert.equal(seen.url.searchParams.get("api-version"), "2025-10-15");
@@ -525,8 +525,8 @@ test("a speech server may answer in wav; anything else it can't play is a plain 
 
 test("Azure OpenAI speech: deployment route, api-key, JSON body with the deployment as the model", async () => {
   const { voice, net } = make({ "POST contoso.openai.azure.com/openai/deployments/tts1/audio/speech": () => new Response(MP3) });
-  voice.setKey("azure", "azure-key-0123456789");
   voice.set({ tts: { provider: "azure" }, providers: { azure: { kind: "openai", endpoint: "https://contoso.openai.azure.com", ttsDeployment: "tts1" } } });
+  voice.setKey("azure", "azure-key-0123456789");
   assert.deepEqual(await voice.speak({ text: "Hello" }), { audio: MP3, format: "mp3" });
   const seen = net.last();
   assert.equal(seen.url.searchParams.get("api-version"), "2025-04-01-preview");
@@ -539,8 +539,8 @@ test("Azure Speech: SSML with the voice's language, rate, escaping and the mp3 o
     "POST swedencentral.tts.speech.microsoft.com/cognitiveservices/v1": () => new Response(MP3),
     "POST contoso.cognitiveservices.azure.com/tts/cognitiveservices/v1": () => new Response(MP3),
   });
-  voice.setKey("azure", "azure-key-0123456789");
   voice.set({ tts: { provider: "azure" }, providers: { azure: { kind: "speech", region: "swedencentral" } } });
+  voice.setKey("azure", "azure-key-0123456789");
   assert.deepEqual(await voice.speak({ text: "Fish & chips <now>" }), { audio: MP3, format: "mp3" });
   let seen = net.last();
   assert.equal(seen.headers.get("ocp-apim-subscription-key"), "azure-key-0123456789");
@@ -687,8 +687,8 @@ test("options: Azure Speech voices from the voices list", async () => {
       { DisplayName: "no short name" },
     ],
   });
-  voice.setKey("azure", "azure-key-0123456789");
   voice.set({ providers: { azure: { kind: "speech", region: "swedencentral" } } });
+  voice.setKey("azure", "azure-key-0123456789");
   const tts = await voice.options("tts", "azure");
   assert.deepEqual(tts.voices, [{ id: "en-US-JennyNeural", name: "Jenny (Female)", language: "en-US" }, { id: "sv-SE-SofieNeural", name: "Sofie", language: "sv-SE" }]);
   assert.equal(net.last().headers.get("ocp-apim-subscription-key"), "azure-key-0123456789");
@@ -703,8 +703,8 @@ test("options: a speech server's models, its own voices when it has them, else t
     return { status: 404, body: "{}" };
   });
   const { voice } = make({}, { fetch: undefined });
-  voice.setKey("custom", "custom-key-0123456789");
   voice.set({ providers: { custom: { baseUrl: server.origin + "/v1" } } });
+  voice.setKey("custom", "custom-key-0123456789");
   const tts = await voice.options("tts", "custom");
   assert.deepEqual(tts.models, [{ id: "whisper-small", name: "whisper-small" }, { id: "kokoro", name: "kokoro" }]);
   assert.deepEqual(tts.voices, [{ id: "af_heart", name: "Heart" }, { id: "bm_george", name: "bm_george" }]);
@@ -1071,8 +1071,16 @@ test("a key stays with the address it was given for, and Codex is told whom the 
   const { voice } = make();
   voice.setKey("openai", KEY);
   voice.setKey("custom", "custom-key-0123456789");
-  // A first address keeps the key: there was nowhere to send it yet.
+  // A first address drops a key that was saved before it: that key was given for no address, and a
+  // call that only sets an address must not get it sent there.
   voice.set({ providers: { custom: { baseUrl: "http://speech.lan/v1" } } });
+  assert.equal(voice.settings().providers.custom.hasKey, false);
+  assert.equal(voice.settings().providers.openai.hasKey, true, "another provider's key is not touched");
+  // The order for a provider: the address, then the key.
+  voice.setKey("custom", "custom-key-0123456789");
+  assert.equal(voice.settings().providers.custom.hasKey, true);
+  // A change that names no address keeps the key.
+  voice.set({ providers: { custom: {} }, tts: { auto: false } });
   assert.equal(voice.settings().providers.custom.hasKey, true);
   // The same address again changes nothing.
   voice.set({ providers: { custom: { baseUrl: "http://speech.lan/v1" }, openai: { baseUrl: "https://api.openai.com/v1" } } });
@@ -1083,6 +1091,27 @@ test("a key stays with the address it was given for, and Codex is told whom the 
   assert.equal(voice.settings().providers.custom.hasKey, false);
   assert.equal(voice.settings().providers.openai.hasKey, false);
   assert.equal(voice.locked, null);
+  // An address that is taken away takes its key with it.
+  voice.setKey("custom", "custom-key-0123456789");
+  voice.set({ providers: { custom: { baseUrl: "" } } });
+  assert.deepEqual([voice.settings().providers.custom.baseUrl, voice.settings().providers.custom.hasKey], [undefined, false]);
+  // Azure: a first region, a first endpoint and a change of either drop the key; the other details keep it.
+  const azure = make().voice;
+  const keyed = () => (azure.setKey("azure", "azure-key-0123456789"), azure.settings().providers.azure.hasKey);
+  assert.equal(keyed(), true);
+  azure.set({ providers: { azure: { kind: "speech", region: "eastus" } } });
+  assert.equal(azure.settings().providers.azure.hasKey, false, "a first region");
+  assert.equal(keyed(), true);
+  azure.set({ providers: { azure: { apiVersion: "2025-04-01-preview", sttDeployment: "whisper" } } });
+  assert.equal(azure.settings().providers.azure.hasKey, true, "a deployment and a version are not an address");
+  azure.set({ providers: { azure: { endpoint: "https://name.cognitiveservices.azure.com" } } });
+  assert.equal(azure.settings().providers.azure.hasKey, false, "a first endpoint, where the key would go in place of the region");
+  assert.equal(keyed(), true);
+  // With an endpoint the region is not where the key goes: changing it keeps the key.
+  azure.set({ providers: { azure: { region: "westeurope" } } });
+  assert.equal(azure.settings().providers.azure.hasKey, true);
+  azure.set({ providers: { azure: { endpoint: "https://other.cognitiveservices.azure.com" } } });
+  assert.equal(azure.settings().providers.azure.hasKey, false, "another endpoint");
 
   // Codex answers the voice's tool call itself, so it is handed the chat, the bot and its name.
   const calls: any[] = [];
