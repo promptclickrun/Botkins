@@ -1294,7 +1294,11 @@ test("a bot's own voice goes over the shared settings for reading aloud and live
     const asked: any[] = [];
     const real = (link as any).voice.live.bind((link as any).voice);
     (link as any).voice.live = (input: any) => (asked.push(input), real(input));
-    const chat = (backend.snapshot().chats as any[]).find((item) => item.id === "chat-blog");
+    const novaChat = (await backend.call("createChat", [nova])) as string;
+    const chat = (backend.snapshot().chats as any[]).find((item) => item.id === novaChat);
+    // The voice speaks only for a bot of the chat it is opened on.
+    const blog = (backend.snapshot().chats as any[]).find((item) => item.id === "chat-blog");
+    await assert.rejects((link as any).liveVoice({ chatId: blog.id, botId: blog.botId === nova ? pip : nova }), { message: "That bot isn't in this chat." });
     const session = await (link as any).liveVoice({ chatId: chat.id, botId: nova, provider: "gemini" });
     assert.equal(session.setup.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, "Puck");
     assert.deepEqual(asked[0].override, { provider: "gemini", voice: "Puck" });

@@ -133,7 +133,8 @@ function BotDetail({ bot }: { bot: Bot }) {
         />
         {canManage && <Row leading={<IconTile icon={ScrollText} color={colors.info} />} title="Instructions" subtitle={firstLine ?? "None yet"} chevron onPress={() => router.push({ pathname: "/bot/[id]/instructions", params: { id: bot.id } })} />}
         {canManage && <Row leading={<IconTile icon={Palette} color={colors.accent} />} title="Look" chevron onPress={() => router.push({ pathname: "/bot/[id]/look", params: { id: bot.id } })} />}
-        {canManage && <Row leading={<IconTile icon={AudioLines} color={colors.ink2} />} title="Voice" subtitle={botVoice ? botVoiceSummary(bot.voice, sharedVoice) : "Update the app on your computer"} chevron={botVoice} disabled={!botVoice} onPress={botVoice ? () => router.push({ pathname: "/bot/[id]/voice", params: { id: bot.id } }) : undefined} />}
+        {/* Voice settings are the owner's (a member's phone is not sent them), so a bot's voice is too. */}
+        {canManage && !member && <Row leading={<IconTile icon={AudioLines} color={colors.ink2} />} title="Voice" subtitle={botVoice ? botVoiceSummary(bot.voice, sharedVoice) : "Update the app on your computer"} chevron={botVoice} disabled={!botVoice} onPress={botVoice ? () => router.push({ pathname: "/bot/[id]/voice", params: { id: bot.id } }) : undefined} />}
         {!member && <Row leading={<IconTile icon={Wrench} color={colors.success} />} title="Skills & tools" value={capabilities} chevron onPress={() => router.push({ pathname: "/bot/[id]/capabilities", params: { id: bot.id } })} />}
         {!member && <Row leading={<IconTile icon={Brain} color={colors.warning} />} title="Memory" chevron onPress={() => router.push({ pathname: "/bot/[id]/memory", params: { id: bot.id } })} />}
         {/* The route is new: typed routes learn it the next time Metro starts. */}

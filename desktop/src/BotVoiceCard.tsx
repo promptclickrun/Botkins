@@ -3,7 +3,7 @@
 // choices are saved with the bot; keys stay shared. When the bot reads with "This computer" its
 // system voice is kept in this window's own settings, because a system voice isn't portable.
 // The phone has the same card (mobile/src/features/bots/BotVoice.tsx), in the same words.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Play, Square } from "lucide-react";
 import { botDeviceVoices, botVoiceSummary, effectiveLive, effectiveTts, LIVE_NAMES, providerLack, setBotDeviceVoice, tidyVoice, TTS_NAMES, withProvider, withSection } from "./botVoice";
 import type { Bot, BotVoice, DeskVoiceSettings, LiveProvider, TtsProvider } from "./types";
@@ -62,15 +62,19 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
   const ttsOptions = useOptions("tts", tts?.provider ?? null, stamp);
   const liveOptions = useOptions("live", live?.provider ?? null, stamp);
   const [speed, setSpeed] = useState(1);
+  // The speed is saved a moment after the slider stops: into the bot's voice as it is then, so a
+  // provider or voice picked meanwhile is not undone.
+  const latest = useRef({ own, provider: tts?.provider });
+  latest.current = { own, provider: tts?.provider };
   const shown = tts?.provider === "device" ? (local?.speed ?? 1) : (tts?.speed ?? 1);
   useEffect(() => setSpeed(shown), [shown, bot.id]);
   useEffect(() => {
     if (!shared || speed === shown) return;
     const timer = setTimeout(() => {
-      if (tts?.provider === "device") {
+      if (latest.current.provider === "device") {
         setBotDeviceVoice(bot.id, { speed });
         setLocal(botDeviceVoices()[bot.id]);
-      } else save(withSection(own, "tts", { speed }));
+      } else save(withSection(latest.current.own, "tts", { speed }));
     }, 350);
     return () => clearTimeout(timer);
   }, [speed]);
@@ -114,7 +118,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("tts", tts.provider) && <small className="muted">This provider {lackOf("tts", tts.provider)}. Set it up in Settings › Voice.</small>}
         {!onComputer && ttsOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(withSection(own, "tts", { model: model || undefined }))} />
+          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(withSection(own, "tts", { provider: own?.tts?.provider ?? tts.provider ?? undefined, model: model || undefined }))} />
         )}
         {(onComputer ? systems : ttsOptions.options.voices).length > 0 && (
           <Pick
@@ -126,7 +130,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
               if (onComputer) {
                 setBotDeviceVoice(bot.id, { voice: voice || undefined });
                 setLocal(botDeviceVoices()[bot.id]);
-              } else save(withSection(own, "tts", { voice: voice || undefined }));
+              } else save(withSection(own, "tts", { provider: own?.tts?.provider ?? tts.provider ?? undefined, voice: voice || undefined }));
             }}
           />
         )}
@@ -160,10 +164,10 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("live", live.provider) && <small className="muted">This provider {lackOf("live", live.provider)}. Set it up in Settings › Voice.</small>}
         {!!live.provider && liveOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.live?.model ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.models} change={(model) => save(withSection(own, "live", { model: model || undefined }))} />
+          <Pick label="Model" value={own?.live?.model ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.models} change={(model) => save(withSection(own, "live", { provider: own?.live?.provider ?? live.provider ?? undefined, model: model || undefined }))} />
         )}
         {!!live.provider && liveOptions.options.voices.length > 0 && (
-          <Pick label="Voice" value={own?.live?.voice ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.voices} change={(voice) => save(withSection(own, "live", { voice: voice || undefined }))} />
+          <Pick label="Voice" value={own?.live?.voice ?? ""} empty={none(live.provider === shared.live.provider)} items={liveOptions.options.voices} change={(voice) => save(withSection(own, "live", { provider: own?.live?.provider ?? live.provider ?? undefined, voice: voice || undefined }))} />
         )}
         <small className="muted">Keys and sign-ins are set in Settings › Voice.</small>
       </fieldset>

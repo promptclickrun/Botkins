@@ -91,7 +91,8 @@ export function useOptions(kind: "stt" | "tts" | "live", provider: string | null
     let live = true;
     setOptions({ models: [], voices: [] });
     setError("");
-    if (!provider || provider === "device" || provider === "codex") return;
+    // Codex lists live voices (through the computer's app), as the phone shows them; it has nothing for speech in or out.
+    if (!provider || provider === "device" || (provider === "codex" && kind !== "live")) return;
     api
       .voiceOptions(kind, provider)
       .then((o) => live && setOptions(o))

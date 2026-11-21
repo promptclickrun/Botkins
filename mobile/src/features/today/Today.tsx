@@ -504,17 +504,21 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
  * at the fold. One column otherwise, as before.
  */
 function TwoUp({ children }: { children: ReactNode }) {
-  const { wide } = useShape();
+  const shape = useShape();
   const cards = Children.toArray(children);
-  if (!wide) return <>{cards}</>;
+  if (!shape.wide) return <>{cards}</>;
+  // Half folded like a book, the columns are the two pages: the first ends before the fold and the
+  // second starts after it. Today sits in a page's padding (`space.xl` beside the safe area).
+  const fold = shape.pose === "book" ? shape.fold : null;
+  const first = fold ? Math.max(0, fold.x - shape.left - space.xl - space.sm) : undefined;
   const rows: ReactNode[][] = [];
   for (let at = 0; at < cards.length; at += 2) rows.push(cards.slice(at, at + 2));
   return (
     <>
       {rows.map((row, index) => (
-        <View key={index} style={{ flexDirection: "row", alignItems: "flex-start", gap: space.lg }}>
+        <View key={index} style={{ flexDirection: "row", alignItems: "flex-start", gap: fold ? fold.width + space.sm * 2 : space.lg }}>
           {row.map((card, column) => (
-            <View key={column} style={{ flex: 1, minWidth: 0 }}>
+            <View key={column} style={column === 0 && first !== undefined ? { width: first } : { flex: 1, minWidth: 0 }}>
               {card}
             </View>
           ))}

@@ -788,7 +788,7 @@ export class LinkClient {
     while (this.lifetime === lifetime) {
       if (this.waitsAgain) {
         this.waitsAgain = false;
-        failures = Math.min(failures, 1);
+        failures = 0;
       }
       if (this.resting) {
         // At rest until a wake (or a stop, which wakes this too).
@@ -843,7 +843,7 @@ export class LinkClient {
         // After a blip the computer is looked for again at once: the old path died, another may be up.
         if (blip) continue;
         const wait = revoked ? 30_000 : WAITS[Math.min(failures - 1, WAITS.length - 1)];
-        await this.pause(wait * (0.75 + Math.random() * 0.5));
+        await this.pause(Math.min(wait * (0.75 + Math.random() * 0.5), WAITS[WAITS.length - 1]));
       }
     }
   }
