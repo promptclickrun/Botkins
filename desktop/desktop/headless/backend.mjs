@@ -11,19 +11,28 @@ import { REMOTE_METHODS } from "../link/methods.mjs";
  * What this cannot close: a workspace container swapped for an older image faster than one look
  * (it is reached every time, so nothing is dropped), and a call that arrives after the swap and
  * before the next look. Each description of a plugin therefore carries its own mark (`starts: 1`),
- * which an older workspace cannot make.
+ * which is never saved and which an older workspace cannot make. The name stays for the sentence
+ * "update the app on your computer", which has no description to carry a mark.
  */
 export const PROMISES = ["plugin-starts-v1"];
 
-// The codes of a connection that did not happen or did not last. An answer of the workspace's own
-// (also a refusal) comes back as an error with no code, so it is never taken for one of these.
-const TRANSPORT_CODES = new Set(["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"]);
 // What the socket client (desktop/headless/transport.mjs) raises when its own timer runs out. It has no code.
 const TRANSPORT_TIMEOUT = "The workspace did not answer.";
+// What the workspace says to an action that it does not know, which only an older workspace does for an action this link asks for (desktop/headless/workspace.mjs).
+const UNKNOWN_ACTION = "Unknown workspace action.";
 
-/** True when the workspace could not be reached, false when it answered, also with an error. */
+/**
+ * True when the workspace could not be reached, false when it answered, also with an error.
+ * - An error with any code is a failed connection (`ENOENT`, `ECONNRESET`, `EACCES`, ...): an answer
+ *   of the workspace's own, also a refusal, is rebuilt by `workspaceRequest` from its text and has no code.
+ * - A body that is not JSON: `jsonBody` in transport.mjs lets the `SyntaxError` of `JSON.parse` go on as it is.
+ *   That is half an answer, from something that is not a healthy workspace, so it counts as not reached.
+ * - The client's own timer, by its message.
+ */
 function unreached(error) {
-  return TRANSPORT_CODES.has(error?.code) || (error?.code === undefined && error?.message === TRANSPORT_TIMEOUT);
+  if (typeof error?.code === "string") return true;
+  if (error instanceof SyntaxError) return true;
+  return error?.message === TRANSPORT_TIMEOUT;
 }
 
 /**
@@ -146,12 +155,15 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
     drops++;
     return had;
   }
-  /** A request to the workspace. When it cannot be reached, the promise is dropped and the same error goes on. */
+  /**
+   * A request to the workspace. When it cannot be reached, or it does not know an action that this
+   * link asks for (an older workspace), the promise is dropped and the same error goes on. No other refusal does that.
+   */
   async function request(...args) {
     try {
       return await rawRequest(...args);
     } catch (error) {
-      if (unreached(error) && dropPromises()) changes.emit("change");
+      if ((unreached(error) || error?.message === UNKNOWN_ACTION) && dropPromises()) changes.emit("change");
       throw error;
     }
   }

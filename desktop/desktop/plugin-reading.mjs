@@ -50,26 +50,38 @@ export const RESERVED = new Set(["HOME", "PATH", "NODE_PATH", "PWD", "OLDPWD", "
 /**
  * Names that make a program load or run something more than its command says. A list of single
  * names is never complete, so whole families are refused by how a name starts: a language's
- * options and search paths (PYTHON, RUBY, GEM_, NODE_, PERL, PHP, JAVA_, LUA_ ...), git, the
- * loader's libraries, a shell's start file, make, a pager. With one of these, a hook shown as
+ * options and search paths (PYTHON, RUBY, GEM_, NODE_, PERL, PHP_, JAVA_, LUA_ ...), git, the
+ * loader's libraries, a shell's start file, a pager. With one of these, a hook shown as
  * `node -v` could run a file of the plugin. A plugin sets none of them, for a hook or for a
  * tool, unless the name is in `ALLOWED_NAMES`. They are a second defense: the description also
- * names each environment name that is not set (`envNotSet`).
+ * names each environment name that is not set, with the reason (`envNotSet`).
+ * A family is only as wide as it must be: `PHP` alone would catch PHPSESSID, which is nobody's
+ * loader, so PHP has the family `PHP_` and the one name `PHPRC`; make has three single names.
  */
-const NAME_STARTS = ["PYTHON", "RUBY", "GEM_", "NODE_", "NPM_", "GIT_", "PHP", "PERL", "JAVA_", "_JAVA", "JDK_", "DOTNET_", "OPENSSL_", "LD_", "DYLD_", "BASH", "XDG_", "GIO_", "MAKE", "LESS", "LUA_"];
-/** Single names that no family above covers. */
-const REFUSED_NAMES = new Set(["ENV", "SHELLOPTS", "PROMPT_COMMAND", "PS4", "IFS", "CDPATH", "GLOBIGNORE", "ZDOTDIR", "PAGER", "EDITOR", "VISUAL", "CLASSPATH", "BUNDLE_GEMFILE", "GCONV_PATH", "SHELL", "BROWSER"]);
+const NAME_STARTS = ["PYTHON", "RUBY", "GEM_", "NODE_", "NPM_", "GIT_", "PHP_", "PERL", "JAVA_", "_JAVA", "JDK_", "DOTNET_", "OPENSSL_", "LD_", "DYLD_", "BASH", "XDG_", "GIO_", "LESS", "LUA_"];
+/** Single names that no family above covers. Most make a program start another program, or read a file of the plugin as its own settings. */
+const REFUSED_NAMES = new Set(["ENV", "SHELLOPTS", "PROMPT_COMMAND", "PS4", "IFS", "CDPATH", "GLOBIGNORE", "ZDOTDIR", "PAGER", "EDITOR", "VISUAL", "CLASSPATH", "BUNDLE_GEMFILE", "GCONV_PATH", "SHELL", "BROWSER", "PHPRC", "MAKEFLAGS", "MAKEFILES", "MAKELEVEL", "AWS_CONFIG_FILE", "KUBECONFIG", "GOFLAGS", "RUSTC_WRAPPER", "PUPPETEER_EXECUTABLE_PATH"]);
 /** Names that are harmless although a family covers them. Exact names only: they win over a family. */
 const ALLOWED_NAMES = new Set(["NODE_ENV", "PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONUTF8", "NO_COLOR", "FORCE_COLOR"]);
 /** The names a plugin may not set, for the guide and for the people who write plugins. */
 export const NAMES_NOT_SET = { reserved: [...RESERVED], names: [...REFUSED_NAMES], starts: [...NAME_STARTS], allowed: [...ALLOWED_NAMES] };
-/** True for an environment name a plugin may set. */
-export function envName(key) {
-  if (typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key)) return false;
+const LOADS_MORE = "can make a program load or start more than its command says.";
+/**
+ * The sentence that says why Botkins does not set an environment name, or null when it sets it.
+ * `value` is read only when it is given: a value that is not text is not set either.
+ */
+export function whyNotSet(key, value) {
+  if (typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key)) return "This is not a name that can be set.";
   const upper = key.toUpperCase();
-  if (RESERVED.has(upper) || REFUSED_NAMES.has(upper)) return false;
-  return ALLOWED_NAMES.has(upper) || !NAME_STARTS.some((start) => upper.startsWith(start));
+  if (RESERVED.has(upper)) return "Botkins or the system sets this name.";
+  if (REFUSED_NAMES.has(upper)) return "Botkins does not set this name. It " + LOADS_MORE;
+  const family = ALLOWED_NAMES.has(upper) ? null : NAME_STARTS.find((start) => upper.startsWith(start));
+  if (family) return "Botkins sets no name that starts with " + family + ". Such a name " + LOADS_MORE;
+  if (value !== undefined && typeof value !== "string") return "Its value is not text.";
+  return null;
 }
+/** True for an environment name a plugin may set. */
+export const envName = (key) => whyNotSet(key) === null;
 
 const object = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
 const text = (value, max) => (typeof value === "string" && value.length <= max && !value.includes("\0") ? value : null);
@@ -185,15 +197,16 @@ function headersOf(value) {
 /**
  * What an `env` object sets, as written: `env` is name → value, `envNotSet` is every key that
  * Botkins does not set (a name it sets itself or that loads code, a bad name, a value that is not
- * text). A name or a value too long to show whole refuses the thing it is for.
+ * text), each as { name, why }. A name or a value too long to show whole refuses the thing it is for.
  */
 function environmentOf(value) {
   const entries = [];
   const envNotSet = [];
   for (const [key, item] of Object.entries(object(value) ?? {})) {
     if (key.length > LIMITS.name) return { refused: "an environment name is longer than " + LIMITS.name + " characters" };
-    if (!envName(key) || typeof item !== "string") {
-      envNotSet.push(key);
+    const why = whyNotSet(key, item);
+    if (why) {
+      envNotSet.push({ name: key, why });
       continue;
     }
     if (item.length > LIMITS.value) return { refused: "an environment value is longer than " + LIMITS.value + " characters" };
@@ -227,14 +240,16 @@ function folderOf(value) {
   return inside ? { cwd: inside } : { refused: "a tool's folder leaves the plugin's own folder" };
 }
 
+/** Why a tool is not run, one fixed sentence each. */
+const NO_TOOL = { type: "Botkins has no tool of this type.", command: "This tool has no command.", address: "This tool's address is not an http or https address." };
 /**
- * What one tool of a plugin is: a program to start, an address to reach, or nothing (null).
- * `{ refused }` says why it is too long to show whole.
+ * What one tool of a plugin is: a program to start, an address to reach, `{ notRun }` with the
+ * sentence that says why it is neither, or `{ refused }` with why it is too long to show whole.
  */
 function serverPlan(config) {
   const type = config.type === "local" ? "stdio" : config.type === "streamable-http" ? "http" : (config.type ?? (config.url || config.serverUrl ? "http" : "stdio"));
   if (type === "stdio") {
-    if (typeof config.command !== "string" || !config.command) return null;
+    if (typeof config.command !== "string" || !config.command) return { notRun: NO_TOOL.command };
     const command = text(config.command, LIMITS.command);
     if (!command) return { refused: "a tool's command is longer than " + LIMITS.command + " characters" };
     // Every word of a list is taken or the tool is not started: a line with a word left out is another line.
@@ -252,9 +267,11 @@ function serverPlan(config) {
     if (refused) return { refused };
     return { kind: "local", command, args, env, envNotSet, cwd };
   }
-  if (type !== "http" && type !== "sse") return null;
-  const url = text(String(config.url ?? config.serverUrl ?? ""), LIMITS.url);
-  if (!url || !/^https?:\/\//i.test(url)) return null;
+  if (type !== "http" && type !== "sse") return { notRun: NO_TOOL.type };
+  const written = String(config.url ?? config.serverUrl ?? "");
+  if (written.length > LIMITS.url) return { refused: "a tool's address is longer than " + LIMITS.url + " characters" };
+  const url = text(written, LIMITS.url);
+  if (!url || !/^https?:\/\//i.test(url)) return { notRun: NO_TOOL.address };
   // Sign-in through a browser: a mark, an object with a client's id, or the same below `authentication`.
   const declared = config.oauth || config.authentication?.oauth;
   const oauth = declared === true ? {} : object(declared) ? declared : config.oauthClientId ? { clientId: config.oauthClientId } : null;
@@ -280,25 +297,40 @@ function hookSource(read, manifest) {
 }
 /** Names that Claude-format plugins use for an event that only differs from one of ours in spelling. Written as `canonicalEvent` compares: lower case, no "-", "_" or space. */
 const EVENT_ALIASES = { userpromptsubmit: "userPromptSubmitted", stop: "agentStop" };
+const plain = (name) => String(name ?? "").replace(/[-_ ]/g, "").toLowerCase();
 const canonicalEvent = (name) => {
-  const value = String(name ?? "").replace(/[-_ ]/g, "").toLowerCase();
+  const value = plain(name);
   return Object.keys(EVENTS).find((event) => event.toLowerCase() === value) ?? EVENT_ALIASES[value] ?? null;
 };
+/** An event that an earlier Botkins did not run: it knew only its own spellings. */
+const isAlias = (name) => Object.hasOwn(EVENT_ALIASES, plain(name)) && !Object.keys(EVENTS).some((event) => event.toLowerCase() === plain(name));
 /** A matcher of "*" or "" means all: it is no matcher. Any other makes the hook one Botkins cannot hold to, so it does not run it. */
 const hasMatcher = (entry) => ["matcher", "match"].some((key) => Object.hasOwn(entry, key) && !["", "*"].includes(String(entry[key]).trim()));
-/** The entries below one event, with lists opened. An entry with a matcher is left out and counted in `seen.matched`. */
-const flatten = (value, seen, depth = 0) => {
+/** A matcher of "*" or "" on the entry itself. An earlier Botkins took any matcher to mean "do not run", so such a hook runs now and did not before. */
+const allMatcher = (entry) => ["matcher", "match"].some((key) => Object.hasOwn(entry, key) && ["", "*"].includes(String(entry[key]).trim()));
+/** The same, on the entry or a step down from it. */
+const matchesAll = (entry, depth = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) || depth > 20) return false;
+  return allMatcher(entry) || matchesAll(entry.hooks, depth + 1) || matchesAll(entry.commands, depth + 1);
+};
+/**
+ * The entries below one event, with lists opened, each as { entry, all }: `all` is true when the
+ * entry, or a step above or below it, has a matcher of "*" or "". An entry with another matcher
+ * is left out and counted in `seen.matched`.
+ */
+const flatten = (value, seen, depth = 0, all = false) => {
   if (depth > 20) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => flatten(item, seen, depth + 1));
+  if (Array.isArray(value)) return value.flatMap((item) => flatten(item, seen, depth + 1, all));
   if (value && typeof value === "object") {
     if (hasMatcher(value)) {
       seen.matched++;
       return [];
     }
-    if (Array.isArray(value.hooks)) return flatten(value.hooks, seen, depth + 1);
-    if (Array.isArray(value.commands)) return flatten(value.commands, seen, depth + 1);
+    const here = all || allMatcher(value);
+    if (Array.isArray(value.hooks)) return flatten(value.hooks, seen, depth + 1, here);
+    if (Array.isArray(value.commands)) return flatten(value.commands, seen, depth + 1, here);
   }
-  return value ? [value] : [];
+  return value ? [{ entry: value, all: all || matchesAll(value) }] : [];
 };
 /**
  * The one command of a hook entry: the entry itself when it is text, else the first of these keys
@@ -316,7 +348,16 @@ const commandFor = (entry, depth = 0) => {
 };
 
 /** Why a thing is not run, one fixed sentence each: the person is told, not left to wonder. */
-const WHY = { matcher: "Botkins runs no hook with a matcher.", event: "Botkins has no event with this name." };
+const WHY = {
+  matcher: "Botkins runs no hook with a matcher.",
+  event: "Botkins has no event with this name.",
+  command: "This hook has no command.",
+  spelling: "Another spelling of this event comes later in the file, and only that one runs.",
+};
+/** The plan keeps this many rows of what is not run, and counts the rest: a hooks file of a megabyte cannot make a plan of megabytes. */
+export const PLAN_NOT_RUN_ROWS = 2_000;
+/** The description shows this many rows of what is not run, and says how many there are. */
+export const SHOWN_NOT_RUN_ROWS = 40;
 /** A reason as one sentence: a capital letter first, a full stop last. */
 const sentence = (reason) => reason.charAt(0).toUpperCase() + reason.slice(1) + ".";
 const shortName = (name) => String(name).slice(0, LIMITS.name);
@@ -328,9 +369,13 @@ const shortName = (name) => String(name).slice(0, LIMITS.name);
  *             `env` and `headers` are name → the value as written (it can hold ${SETTING}); `args` are all text;
  *             `envNotSet` lists each key of the plugin's `env` that Botkins does not set;
  *             `cwd` is null for the plugin's own folder, an absolute path as written, or a path below the plugin's own folder ("server/bin")
- *   hooks     [{ event, command, env, envNotSet, timeoutMs }], in the order they run
- *   notRun    [{ what: "hook" | "tool", name, why }] what the plugin has and Botkins does not run: a hook with a matcher, a hook for an event Botkins does not have.
- *             `name` is the event as the plugin wrote it. A thing here is in neither list above.
+ *   hooks     [{ event, command, env, envNotSet, timeoutMs, newlyRun? }], in the order they run
+ *             `newlyRun: true` marks a hook that an earlier Botkins did not run: a matcher of "*" or "", or the event spelled UserPromptSubmit or Stop
+ *   notRun    [{ what: "hook" | "tool", name, why }] what the plugin has and Botkins does not run: a hook with a matcher, a hook for an event Botkins does not have,
+ *             a hook with no command, the earlier of two spellings of one event, a tool with no command, a tool of a type or with an address that Botkins has not.
+ *             `name` is the event or the tool as the plugin wrote it. A thing here is in neither list above.
+ *             Only the first 2,000 rows are kept; `notRunCount` is how many there are.
+ *   notRunCount   the number of things that are not run (at least `notRun.length`)
  *   refused   [{ what, name, why }] what cannot be shown whole (a command or value too long, a folder that leaves the plugin): such a thing is in neither list above.
  *             `why` is a sentence.
  * The runtime starts what is in `servers` and `hooks` and nothing more of a plugin.
@@ -339,11 +384,20 @@ export function pluginStarts(read) {
   const { path: manifestPath, manifest } = firstManifest(read);
   const refused = [];
   const notRun = [];
-  if (!manifest) return { manifestPath, manifest: null, servers: [], hooks: [], notRun, refused };
+  let notRunCount = 0;
+  const addNotRun = (row) => {
+    notRunCount++;
+    if (notRun.length < PLAN_NOT_RUN_ROWS) notRun.push(row);
+  };
+  if (!manifest) return { manifestPath, manifest: null, servers: [], hooks: [], notRun, notRunCount, refused };
   const byName = new Map();
   for (const { name, config } of serverEntries(read, manifest)) {
     const plan = serverPlan(config);
-    if (!plan) continue;
+    if (plan.notRun) {
+      // What was started under this name before stays as it is: only this tool is not run.
+      addNotRun({ what: "tool", name: shortName(name), why: plan.notRun });
+      continue;
+    }
     if (plan.refused || text(name, LIMITS.name) === null) {
       // Nothing runs under a name whose last word cannot be shown.
       byName.delete(name);
@@ -357,13 +411,17 @@ export function pluginStarts(read) {
     const seen = { matched: 0 };
     const entries = [];
     let found = false;
-    for (const entry of flatten(rawEntries, seen)) {
+    let noCommand = false;
+    for (const { entry, all } of flatten(rawEntries, seen)) {
       const { command, matcher } = commandFor(entry);
       if (matcher) {
         seen.matched++;
         continue;
       }
-      if (typeof command !== "string" || !command.trim()) continue;
+      if (typeof command !== "string" || !command.trim()) {
+        noCommand = true;
+        continue;
+      }
       found = true;
       if (!event) continue;
       if (!text(command, LIMITS.hookCommand)) {
@@ -376,15 +434,20 @@ export function pluginStarts(read) {
         continue;
       }
       const seconds = Number(object(entry)?.timeoutSec || 10);
-      entries.push({ event, command, env, envNotSet, timeoutMs: Math.max(250, Math.min(30_000, (Number.isFinite(seconds) ? seconds : 10) * 1_000)) });
+      entries.push({ event, command, env, envNotSet, timeoutMs: Math.max(250, Math.min(30_000, (Number.isFinite(seconds) ? seconds : 10) * 1_000)), ...((all || isAlias(rawEvent)) && { newlyRun: true }) });
     }
     // One line for an event, not one for each of its entries.
-    if (!event && (found || seen.matched)) notRun.push({ what: "hook", name, why: WHY.event });
-    else if (event && seen.matched) notRun.push({ what: "hook", name, why: WHY.matcher });
-    // The same event under two spellings: the later one is the one that runs.
-    if (entries.length) byEvent.set(event, entries);
+    if (!event && (found || seen.matched)) addNotRun({ what: "hook", name, why: WHY.event });
+    else if (event && seen.matched) addNotRun({ what: "hook", name, why: WHY.matcher });
+    if (event && noCommand) addNotRun({ what: "hook", name, why: WHY.command });
+    // The same event under two spellings: the later one is the one that runs, and the earlier is said not to.
+    if (entries.length) {
+      const earlier = byEvent.get(event);
+      if (earlier) addNotRun({ what: "hook", name: earlier.name, why: WHY.spelling });
+      byEvent.set(event, { name, entries });
+    }
   }
-  return { manifestPath, manifest, servers: [...byName.values()], hooks: [...byEvent.values()].flat(), notRun, refused };
+  return { manifestPath, manifest, servers: [...byName.values()], hooks: [...byEvent.values()].flatMap((one) => one.entries), notRun, notRunCount, refused };
 }
 
 /** The names of a plugin's language servers, sorted. Nothing is started from them: Botkins skips a plugin's language servers, and the description only lists them. A file that is not JSON gives none. */
@@ -401,16 +464,21 @@ export function lspNames(read) {
 
 const settingsIn = (value) => [...String(value).matchAll(PLACEHOLDER)].map((match) => match[1]).filter((key) => !BUILT_IN_VALUES.includes(key));
 
+/** The words of a local tool's line, as the plan and the description have it: the command, then each argument. */
+export const lineOf = (server) => [server.command, ...server.args];
+
 const shownEnv = (env) => Object.entries(env).map(([name, value]) => ({ name, value }));
 
 /**
  * The same, as a person is shown it (`contents.mcpServers` and `contents.hooks` of plugins-v1),
  * a command's words, its folder, and each environment name with its value as the plugin wrote it
- * (it can hold ${SETTING}; a secret is never there, it comes only from the settings). A header is
- * shown by name only.
- *   envNotSet   (only when not empty) the names the plugin asks for that Botkins does not set
+ * (it can hold ${SETTING}; a secret is never there, it comes only from the settings). A tool on the web
+ * is shown with its type, its address, each header with its written value, and its sign-in client's id.
+ *   envNotSet   (only when not empty) the names the plugin asks for that Botkins does not set: [{ name, why }]
+ *   newlyRun   true when a hook of the plan is one that an earlier Botkins did not run
  *   sentTo   setting → where its value goes: [{ tool, env } | { tool, header, url } | { hook, env }]
- *   notRun   (only when not empty) what the plugin has and Botkins does not run: the plan's `notRun`, then its `refused`; each { what, name, why }
+ *   notRun   (only when something is not run) { count, items }: `count` is how many things the plugin has that Botkins does not run (the plan's, then its `refused`),
+ *            `items` the first 40 of them, each { what, name, why }
  */
 export function describeStarts(starts) {
   const sentTo = new Map();
@@ -420,17 +488,19 @@ export function describeStarts(starts) {
   const mcpServers = starts.servers.map((server) => {
     if (server.kind === "local") {
       for (const [name, value] of Object.entries(server.env)) goes(value, { tool: server.name, env: name });
-      return { name: server.name, kind: "local", command: server.command, args: [...server.args], env: shownEnv(server.env), ...(server.envNotSet?.length && { envNotSet: [...server.envNotSet] }), ...(server.cwd && { cwd: server.cwd }) };
+      return { name: server.name, kind: "local", command: server.command, args: [...server.args], env: shownEnv(server.env), ...(server.envNotSet?.length && { envNotSet: server.envNotSet.map(({ name, why }) => ({ name, why })) }), ...(server.cwd && { cwd: server.cwd }) };
     }
     for (const [name, value] of Object.entries(server.headers)) goes(value, { tool: server.name, header: name, url: server.url });
-    return { name: server.name, kind: "remote", url: server.url, headers: Object.keys(server.headers), ...(server.oauth && { oauth: true }) };
+    return { name: server.name, kind: "remote", type: server.type, url: server.url, headers: shownEnv(server.headers), ...(server.oauth && { oauth: true }), ...(server.oauth?.clientId && { oauthClientId: server.oauth.clientId }) };
   });
   const hooks = starts.hooks.map((hook) => {
     for (const [name, value] of Object.entries(hook.env)) goes(value, { hook: hook.event, env: name });
-    return { event: hook.event, command: hook.command, env: shownEnv(hook.env), ...(hook.envNotSet?.length && { envNotSet: [...hook.envNotSet] }), timeoutSec: hook.timeoutMs / 1_000 };
+    return { event: hook.event, command: hook.command, env: shownEnv(hook.env), ...(hook.envNotSet?.length && { envNotSet: hook.envNotSet.map(({ name, why }) => ({ name, why })) }), timeoutSec: hook.timeoutMs / 1_000 };
   });
-  const notRun = [...(starts.notRun ?? []), ...(starts.refused ?? [])].map((item) => ({ what: item.what, name: item.name, why: item.why }));
-  return { mcpServers, hooks, sentTo, ...(notRun.length && { notRun }) };
+  const rows = [...(starts.notRun ?? []), ...(starts.refused ?? [])];
+  const count = Math.max(starts.notRunCount ?? 0, starts.notRun?.length ?? 0) + (starts.refused?.length ?? 0);
+  const items = rows.slice(0, SHOWN_NOT_RUN_ROWS).map((item) => ({ what: item.what, name: item.name, why: item.why }));
+  return { mcpServers, hooks, sentTo, newlyRun: starts.hooks.some((hook) => hook.newlyRun), ...(count > 0 && { notRun: { count, items } }) };
 }
 
 const START_WARNINGS = {
@@ -441,8 +511,9 @@ const START_WARNINGS = {
   envNotSet: "Botkins does not set some environment names that this plugin asks for. Its tools or hooks may not work.",
   notRun: "Botkins does not run some hooks or tools of this plugin.",
 };
-/** A description's warnings, with the sentences about what the plugin starts made again from its lists. `notRun` is the description's list of what is not run. */
+/** A description's warnings, with the sentences about what the plugin starts made again from its lists. `notRun` is the description's `{ count, items }` of what is not run, or a list of rows. */
 export function startWarnings(mcpServers, hooks, others = [], notRun = []) {
+  const somethingNotRun = Array.isArray(notRun) ? notRun.length > 0 : Number(notRun?.count) > 0 || Boolean(notRun?.items?.length);
   const local = mcpServers.some((server) => server.kind === "local");
   return [
     ...others.filter((line) => !Object.values(START_WARNINGS).includes(line)),
@@ -451,7 +522,7 @@ export function startWarnings(mcpServers, hooks, others = [], notRun = []) {
     ...(hooks.length || local ? [START_WARNINGS.files] : []),
     ...(mcpServers.some((server) => server.kind === "remote") ? [START_WARNINGS.remote] : []),
     ...([...mcpServers, ...hooks].some((item) => item.envNotSet?.length) ? [START_WARNINGS.envNotSet] : []),
-    ...(notRun.length ? [START_WARNINGS.notRun] : []),
+    ...(somethingNotRun ? [START_WARNINGS.notRun] : []),
   ];
 }
 
@@ -462,8 +533,9 @@ export function startWarnings(mcpServers, hooks, others = [], notRun = []) {
  */
 export const STARTS = 1;
 
-const CONFIG_NAMES = new Set([".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", "package.json", "package-lock.json", "bunfig.toml", "deno.json", "makefile", "gnumakefile", "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "pipfile", ".python-version", ".tool-versions", ".nvmrc", ".node-version", "gemfile", ".ruby-version", "go.mod", "cargo.toml", ".env", ".envrc", ".gitconfig", ".gitattributes", "tsconfig.json", ".babelrc", "composer.json", "php.ini"]);
-const CONFIG_FOLDERS = new Set(["node_modules", ".venv", "venv", "vendor", ".bundle"]);
+const CONFIG_NAMES = new Set([".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", "package.json", "package-lock.json", "bunfig.toml", "deno.json", "makefile", "gnumakefile", "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "pipfile", ".python-version", ".tool-versions", ".nvmrc", ".node-version", "gemfile", ".ruby-version", "go.mod", "cargo.toml", ".env", ".envrc", ".gitconfig", ".gitattributes", "tsconfig.json", ".babelrc", "composer.json", "php.ini", "uv.toml", ".pnp.cjs", "pyvenv.cfg", "conftest.py", "pytest.ini", "mise.toml", "deno.jsonc"]);
+/** Folders that hold a program's dependencies or settings. Each is listed as one row, whatever is below it. `.cargo/config.toml` is marked by this list. */
+const CONFIG_FOLDERS = new Set(["node_modules", ".venv", "venv", "vendor", ".bundle", ".mvn", ".cargo"]);
 /**
  * True for a file that a tool reads by itself when a command runs in this folder (npm reads
  * `.npmrc`, make reads `Makefile`, python reads `pyproject.toml`, node reads `node_modules`). A
@@ -473,6 +545,18 @@ const CONFIG_FOLDERS = new Set(["node_modules", ".venv", "venv", "vendor", ".bun
 export function configFile(path) {
   const parts = String(path).toLowerCase().split("/");
   return CONFIG_NAMES.has(parts.at(-1)) || parts.some((part) => CONFIG_FOLDERS.has(part));
+}
+
+/**
+ * The path up to and including the top-most folder of dependencies or settings that a file is
+ * below (`a/node_modules/`), or null. The file's own name is not a folder. `path` has "/" between
+ * its parts. The description lists such a folder as one row, so that its files cannot crowd out
+ * the other files.
+ */
+export function dependencyFolder(path) {
+  const parts = String(path).split("/");
+  const at = parts.slice(0, -1).findIndex((part) => CONFIG_FOLDERS.has(part.toLowerCase()));
+  return at < 0 ? null : parts.slice(0, at + 1).join("/") + "/";
 }
 
 /**

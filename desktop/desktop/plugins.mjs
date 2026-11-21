@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { PluginCatalog, snapshotStamp, verifySnapshot } from "./plugin-catalog.mjs";
-import { describeStarts, folderReader, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
+import { describeStarts, folderReader, lineOf, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
 import { pluginSession, pluginOAuthServers } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
@@ -26,17 +26,49 @@ const digest = (value) => createHash("sha256").update(value).digest("hex").slice
 /**
  * Which reading made the description that is kept with an installed plugin. Before 2, the
  * description came from other code than the code that starts a plugin's tools and hooks, and the
- * two could say different things. Since 2 both come from desktop/plugin-reading.mjs.
+ * two could say different things. Since 2 both come from desktop/plugin-reading.mjs. A row that was
+ * marked 2 has a complete description, but nobody looked for a hook that runs now and did not run
+ * before: 3 means that look was made (see reviewOld).
  */
-const READING = 2;
+const READING = 3;
 /** Why Botkins itself switched a plugin off. The person switches it on again after a look. */
 const HELD_BACK = {
   unseen: "Botkins switched this plugin off. An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts, and switch it on again if you agree.",
   unread: "Botkins switched this plugin off. Its installed files could not be read, so Botkins cannot show what it starts. Update the plugin to write its files again, then switch it on.",
+  newhook: "Botkins switched this plugin off. A hook of this plugin did not run before this version of Botkins and runs now. Look at what it starts, and switch it on again if you agree.",
   linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
 };
 const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
-/** The mark on a description that is the one reading of an intact copy (STARTS of plugin-reading.mjs). */
+/** The check of the copy could not be done (a read error). That says nothing about the files, so it is not "changed". */
+const UNREADABLE_COPY = "Botkins could not read the installed files of this plugin to check them. Try again. If it stays so, update the plugin: Botkins writes its files again and keeps your settings.";
+/** The catalog's refusal for a revision that is not the source's now. Here the right step is to look again, not to remove the plugin. */
+const REVISION_CHANGED = /was reviewed; preview it again/;
+/** Why a tool that the files describe as starting is not started. */
+const SECRET_IN_LINE = "A word of this tool's command holds the value of a secret setting, so Botkins does not start it.";
+/** The runtime does not start a tool for a secret that is shorter than this (plugin-runtime.mjs). */
+const MIN_SECRET_LENGTH = 4;
+/**
+ * The mark `starts` is put on an answer only (public()). It is never kept: an older Botkins that is put
+ * back over the same data would answer a kept mark as it is, for a description its own code made.
+ * Returns the same preview when there is nothing to take off.
+ */
+function unmarked(preview) {
+  if (!preview || typeof preview !== "object") return preview;
+  const inContents = preview.contents && typeof preview.contents === "object" && "starts" in preview.contents;
+  if (!("starts" in preview) && !inContents) return preview;
+  const { starts: _mark, ...rest } = preview;
+  if (!inContents) return rest;
+  const { starts: _inner, ...contents } = preview.contents;
+  return { ...rest, contents };
+}
+/** A row with no mark in its description. The same row when it has none. */
+function unmarkedRow(row) {
+  const preview = unmarked(row?.preview);
+  return preview === row?.preview ? row : { ...row, preview };
+}
+/** What a description says is not run: a list (earlier shape) or { count, items }. */
+const notRunItems = (notRun) => (Array.isArray(notRun) ? notRun : (notRun?.items ?? []));
+const notRunCount = (notRun) => (Array.isArray(notRun) ? notRun.length : (notRun?.count ?? 0));
 /** The id of a linked plugin folder that could not be copied, so a client can show it and remove it. */
 const linkedId = (path) => "linked-" + createHash("sha256").update(path).digest("hex").slice(0, 12);
 /** One short sentence, with no stack, for the person to read. */
@@ -65,7 +97,13 @@ export class Plugins {
     this.vault = ws.vault;
     this.catalog = new PluginCatalog(join(ws.dir, "plugin-marketplace"));
     this.file = join(ws.dir, "plugins.json");
-    this.records = existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : [];
+    let marked = false;
+    // (A row that an earlier build wrote with the mark in its description loses it here, and the file is written again.)
+    this.records = (existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : []).map((row) => {
+      const bare = unmarkedRow(row);
+      if (bare !== row) marked = true;
+      return bare;
+    });
     // Once the host has restarted, no earlier session can still be reading an old revision.
     // File cleanup is best effort and precedes the first mutation in this process.
     this.queue = existsSync(this.catalog.pluginDir)
@@ -76,10 +114,14 @@ export class Plugins {
     this.oauthSchemas = new Map();
     this.descriptions = new Map(); // folder → what the copy starts, as a person is shown it
     this.checked = new Map(); // folder → { stamp, ok }: the last check of the copy against its revision
+    this.unreadable = new Map(); // folder → { since, times }: the last check could not be done (a read error), and how often in a row
+    this.stopped = new Map(); // folder + refs → names of the tools that a secret's value keeps from starting
     this.unadopted = new Map(); // linked plugin folder → why Botkins could not copy it
-    this.reviewOld();
-    // Each copy is checked once at the start, and a plugin folder that an earlier version linked
-    // live becomes an installed plugin. Neither holds up the start of the app.
+    // The one-time look at rows from an older version is made here, before the first answer: nothing of a copy that was
+    // not checked may be shown or stored. It hashes the copy of each such row. A row that is already at READING is passed
+    // by with no file opened. Its copy is checked in the queue below, which is also where an adopted folder is copied.
+    this.reviewOld(marked);
+    // These do not hold up the start of the app.
     this.queue = this.queue.then(async () => {
       // (Every copy is checked, not only up to the first bad one.)
       if (this.records.map((row) => this.intact(row)).includes(false)) this.ws.notify?.();
@@ -110,16 +152,58 @@ export class Plugins {
     const ok = stamp !== null && verifySnapshot(row.folder, row.revision ?? basename(row.folder));
     this.descriptions.delete(row.folder);
     this.oauthSchemas.delete(row.folder);
+    this.forgetStopped(row.folder);
     if (ok === null) {
-      // The check itself failed (a read error), which says nothing about the files. Nothing is kept, so the next look
-      // tries again, and the app shows no "changed" sentence. The plugin is not used until a check says yes.
+      // The check itself failed (a read error), which says nothing about the files. No answer is kept, so the next look
+      // tries again, and the app shows no "changed" sentence. The plugin is not used until a check says yes. That the
+      // check could not be done is kept, so a copy that can never be read is shown as an error, not as ready.
       this.checked.delete(row.folder);
+      const was = this.unreadable.get(row.folder);
+      this.unreadable.set(row.folder, { since: was?.since ?? Date.now(), times: (was?.times ?? 0) + 1 });
       console.warn("Botkins could not check the installed files of the plugin " + row.preview.id + " this time, so it does not use it now. It tries again at the next look.");
       return false;
     }
+    this.unreadable.delete(row.folder);
     this.checked.set(row.folder, { stamp, ok });
     if (!ok) console.warn("Botkins does not use the plugin " + row.preview.id + ": its installed files are not the files that were reviewed.");
     return ok;
+  }
+  /** Says why a copy is not sound: a check that could not be done is not a change of the files. */
+  assertIntact(row) {
+    if (this.intact(row)) return;
+    throw new Error(this.unreadable.has(row.folder) ? UNREADABLE_COPY : CHANGED_COPY);
+  }
+  /** The names of the tools of the copy that the runtime does not start, because a secret setting's value is in their line. */
+  stoppedTools(row, fresh) {
+    const key = row.folder + "\0" + JSON.stringify(row.refs);
+    if (!this.stopped.has(key)) {
+      // (Public answers are made for every state message: the vault is not opened for each one. A locked vault is asked again later.)
+      if (this.vault.locked) return [];
+      const secrets = [];
+      try {
+        for (const field of row.preview.config) {
+          if (field.secret !== true || !row.refs[field.key]) continue;
+          const value = this.vault.get(row.refs[field.key]);
+          if (typeof value === "string" && value.length >= MIN_SECRET_LENGTH) secrets.push(value);
+        }
+      } catch {
+        return [];
+      }
+      // (`lineOf` is the line the runtime checks: the command and each argument.)
+      const names = secrets.length ? fresh.mcpServers.filter((server) => server.kind === "local" && lineOf(server).some((word) => secrets.some((secret) => String(word).includes(secret)))).map((server) => server.name) : [];
+      this.stopped.set(key, names);
+    }
+    return this.stopped.get(key);
+  }
+  forgetStopped(folder) {
+    for (const key of [...this.stopped.keys()]) if (key.startsWith(folder + "\0")) this.stopped.delete(key);
+  }
+  /** Writes the rows to the file, with no mark `starts` in any description. Returns the rows as written. */
+  persist(rows) {
+    const clean = rows.map(unmarkedRow);
+    writeFileSync(this.file + ".tmp", JSON.stringify(clean), { mode: 0o600 });
+    renameSync(this.file + ".tmp", this.file);
+    return clean;
   }
   /**
    * The descriptions kept from before the one reading are made again from the copies. An old
@@ -128,9 +212,12 @@ export class Plugins {
    * and starts anything beyond that is switched off, with the reason, until the person has
    * looked: nobody was shown the rest. A copy that cannot be read is not marked as read, so it
    * is looked at again at the next start.
+   *
+   * A row that is marked 2 was described by the one reading already, so its description is
+   * complete: only the second rule below applies to it, and then it is marked 3.
+   * `changed` says that the file is to be written again, for a reason found before this look.
    */
-  reviewOld() {
-    let changed = false;
+  reviewOld(changed = false) {
     // (An item with settings of its own for a program or a command was never shown by an old description.)
     const extras = (item) => Boolean(item.env?.length || item.envNotSet?.length);
     const unseen = (fresh, before) => {
@@ -151,6 +238,7 @@ export class Plugins {
       // it falls through to "could not be read" below.)
       if (existsSync(row.folder) && !this.intact(row)) continue;
       const fresh = this.described(row);
+      const complete = row.reading === 2;
       if (!fresh) {
         if (row.enabled) {
           Object.assign(row, { enabled: false, heldBack: "unread" });
@@ -159,23 +247,28 @@ export class Plugins {
         continue;
       }
       const before = row.preview.contents ?? {};
-      if (row.enabled && unseen(fresh, before)) Object.assign(row, { enabled: false, heldBack: "unseen" });
+      if (!complete && row.enabled && unseen(fresh, before)) Object.assign(row, { enabled: false, heldBack: "unseen" });
+      // A hook that earlier versions never ran (a matcher that means every case, an event under its other spelling) runs
+      // now. The person agreed to a plugin whose hook, in fact, never ran: they look one time. What such a hook gets: the
+      // person's prompt, which it can change or block; with a matcher of "*" on a tool event, the arguments and the result
+      // of each tool call; and an agentStop hook can make the bot go on.
+      else if (row.enabled && fresh.newlyRun) Object.assign(row, { enabled: false, heldBack: "newhook" });
       row.preview = this.refreshed(row.preview, fresh);
       row.reading = READING;
       changed = true;
     }
     if (!changed) return;
     try {
-      writeFileSync(this.file + ".tmp", JSON.stringify(this.records), { mode: 0o600 });
-      renameSync(this.file + ".tmp", this.file);
+      this.records = this.persist(this.records);
     } catch {}
   }
   /** A kept description with what the copy starts, as the one reading shows it: tools, hooks, what is not run, and the warnings made from them. */
   refreshed(preview, fresh) {
-    const { warnings: _old, ...rest } = preview;
-    const { notRun: _was, ...before } = preview.contents ?? {};
+    // (The mark `starts` is not kept: public() puts it on the answer.)
+    const { warnings: _old, starts: _mark, ...rest } = preview;
+    const { notRun: _was, starts: _inner, ...before } = preview.contents ?? {};
     const warnings = startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], fresh.notRun ?? []);
-    return { ...rest, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks, ...(fresh.notRun?.length && { notRun: fresh.notRun }) }, ...(warnings.length && { warnings }) };
+    return { ...rest, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks, ...(notRunCount(fresh.notRun) > 0 && { notRun: fresh.notRun }) }, ...(warnings.length && { warnings }) };
   }
   /**
    * A plugin folder that an earlier version linked live (Settings, Skills) was read by the
@@ -228,14 +321,16 @@ export class Plugins {
     const id = removeId ?? row.preview.id;
     const next = this.records.filter((r) => r.preview.id !== id);
     if (row) next.push(row);
+    let written;
     try {
-      writeFileSync(this.file + ".tmp", JSON.stringify(next), { mode: 0o600 });
-      renameSync(this.file + ".tmp", this.file);
+      // (The rows kept in memory are the rows written: neither has the mark `starts`.)
+      written = this.persist(next);
     } catch (error) {
       for (const ref of created) this.vault.remove(ref);
       throw error;
     }
-    this.records = next;
+    this.records = written;
+    this.stopped.clear();
     this.generation++;
     this.vault.prune("plugin:" + digest(id), new Set(Object.values(row?.refs ?? {})));
     this.ws.releaseServerSessions();
@@ -313,10 +408,19 @@ export class Plugins {
     const unavailable = config.some((field) => row.refs[field.key] && !field.set);
     // (The last check of the copy. This is called for every look at the app's state, so it reads no file.)
     const changedCopy = this.checked.get(row.folder)?.ok === false;
-    let status = unavailable || changedCopy ? "error" : config.some((f) => f.required && !f.set) ? "needs-config" : "ready";
+    // (The last check could not be done: the files are not known to be changed, but nothing of them is shown as checked.)
+    const unreadable = this.unreadable.has(row.folder);
+    let status = unavailable || changedCopy || unreadable ? "error" : config.some((f) => f.required && !f.set) ? "needs-config" : "ready";
     // What the plugin starts is read from the copy, not taken from what was kept at install.
-    const fresh = changedCopy ? null : this.described(row);
-    const warnings = fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], fresh.notRun ?? []) : (preview.warnings ?? []);
+    const fresh = changedCopy || unreadable ? null : this.described(row);
+    // A tool that the files describe as starting, and that is not started because a secret's value is in its line, is said as not run.
+    const held = fresh ? this.stoppedTools(row, fresh) : [];
+    let notRun = fresh?.notRun;
+    if (held.length) {
+      const items = [...notRunItems(notRun), ...held.map((name) => ({ what: "tool", name, why: SECRET_IN_LINE }))];
+      notRun = Array.isArray(notRun) ? items : { count: notRunCount(notRun) + held.length, items };
+    }
+    const warnings = fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], notRun ?? []) : (preview.warnings ?? []);
     let servers = [];
     if (status === "ready") {
       try {
@@ -342,10 +446,10 @@ export class Plugins {
       // The way back for a copy that is changed, gone or not readable is an update: it writes the
       // reviewed files again and keeps the settings. A client offers Update from this mark, not
       // from the words of `detail`, also when the source did not change.
-      ...((changedCopy || (row.heldBack === "unread" && !row.enabled)) && { repair: "update" }),
+      ...((changedCopy || unreadable || (row.heldBack === "unread" && !row.enabled)) && { repair: "update" }),
       ...(row.heldBack && !row.enabled && { detail: HELD_BACK[row.heldBack] }),
       ...(status === "error" && {
-        detail: unavailable ? "This computer could not open a saved plugin setting." : changedCopy && existsSync(row.folder) ? CHANGED_COPY : row.heldBack === "unread" && !row.enabled ? HELD_BACK.unread : "The installed plugin files could not be opened.",
+        detail: unavailable ? "This computer could not open a saved plugin setting." : unreadable ? UNREADABLE_COPY : changedCopy && existsSync(row.folder) ? CHANGED_COPY : row.heldBack === "unread" && !row.enabled ? HELD_BACK.unread : "The installed plugin files could not be opened.",
       }),
       ...(status === "needs-sign-in" && { detail: "Sign in to the plugin’s remote tools on this computer." }),
       limits: limitsFor(preview),
@@ -354,7 +458,7 @@ export class Plugins {
       contents: {
         ...(fresh ? storedContents : preview.contents),
         ...(fresh && { hooks: fresh.hooks }),
-        ...(fresh?.notRun?.length && { notRun: fresh.notRun }),
+        ...(notRunCount(notRun) > 0 && { notRun }),
         mcpServers: (fresh?.mcpServers ?? preview.contents.mcpServers).map((s) => {
           const auth = servers.find((a) => a.manifestName === s.name);
           return auth ? { ...s, serverId: auth.id } : s;
@@ -423,18 +527,35 @@ export class Plugins {
       this.save(row, undefined, created);
     });
   }
-  setBots(id, bots) {
-    return this.serialize(() => this.save({ ...this.get(id), bots: this.scope(bots) }));
+  /**
+   * A yes that names the revision it was given for. The compare is made inside the queue, so an
+   * update that is under way finishes first, and the old yes is not used for the new version.
+   * `options` is nothing, or { revision } with a revision as a 64-character hash.
+   */
+  lookedAt(row, options) {
+    if (options === undefined || options === null) return;
+    const plain = typeof options === "object" && !Array.isArray(options) && [Object.prototype, null].includes(Object.getPrototypeOf(options));
+    if (!plain || (options.revision !== undefined && (typeof options.revision !== "string" || !/^[a-f0-9]{64}$/.test(options.revision)))) throw new Error("Check the plugin request.");
+    if (options.revision !== undefined && options.revision !== (row.revision ?? basename(row.folder)))
+      throw new Error("This plugin is not the one that was looked at: its revision is another one now. Look at it again.");
   }
-  setEnabled(id, enabled, verify) {
+  setBots(id, bots, options) {
+    return this.serialize(() => {
+      const row = this.get(id);
+      this.lookedAt(row, options);
+      this.save({ ...row, bots: this.scope(bots) });
+    });
+  }
+  setEnabled(id, enabled, options, verify) {
     return this.serialize(() => {
       verify?.();
       if (typeof enabled !== "boolean") throw new Error("Choose on or off.");
+      this.lookedAt(this.get(id), options);
       // (Switching on is the person's yes after a look: a reason Botkins switched it off for is done with.)
       const { heldBack: _reason, ...row } = this.get(id);
       if (enabled && row.reading !== READING) {
         // The copy is checked before it is read. (A copy that is gone is "could not be read", below.)
-        if (existsSync(row.folder) && !this.intact(row)) throw new Error(CHANGED_COPY);
+        if (existsSync(row.folder)) this.assertIntact(row);
         // A copy that could not be read at the start is read again now, not from what was kept.
         this.descriptions.delete(row.folder);
         const fresh = this.described(row);
@@ -443,7 +564,7 @@ export class Plugins {
         row.reading = READING;
         row.preview = this.refreshed(row.preview, fresh);
       }
-      if (enabled && !this.intact(row)) throw new Error(CHANGED_COPY);
+      if (enabled) this.assertIntact(row);
       this.save({ ...row, enabled });
     });
   }
@@ -453,12 +574,14 @@ export class Plugins {
       this.reviewed(options);
       const before = this.get(id);
       // The way back that a client offers is an update. Where the update cannot work either, the person is told the next step.
-      const repairing = this.checked.get(before.folder)?.ok === false || before.heldBack === "unread";
+      const repairing = this.checked.get(before.folder)?.ok === false || this.unreadable.has(before.folder) || before.heldBack === "unread";
       let material;
       try {
         material = await this.catalog.materialize(id, options.revision);
       } catch (error) {
-        if (repairing) throw new Error(String(error?.message ?? error) + " If the plugin cannot be updated, remove it.");
+        // (Not for the catalog's refusal of a revision that is another one now: there the step is to look again.
+        // That error is told by a stable part of its text.)
+        if (repairing && !REVISION_CHANGED.test(String(error?.message ?? error))) throw new Error(String(error?.message ?? error) + " If the plugin cannot be updated, remove it.");
         throw error;
       }
       verify?.();
@@ -477,7 +600,7 @@ export class Plugins {
       // The folder is the same one when the source did not change. The files were written again,
       // so what was cached about the old files is dropped and the copy is checked again.
       for (const cache of [this.checked, this.descriptions, this.oauthSchemas]) cache.delete(row.folder);
-      if (!this.intact(row)) throw new Error(CHANGED_COPY);
+      this.assertIntact(row);
       const currentServers = new Set(this.knownOAuthServers(row).map((server) => server.id));
       this.save(row);
       for (const server of previousServers) {
@@ -505,6 +628,7 @@ export class Plugins {
       this.save(null, id);
       this.vault.prune("plugin-oauth:" + digest(id));
       this.oauthSchemas.delete(row.folder);
+      this.unreadable.delete(row.folder);
       if (row.sourceFolder) await this.catalog.forgetFolder(id);
     });
   }

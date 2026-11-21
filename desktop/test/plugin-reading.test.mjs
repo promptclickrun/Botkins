@@ -13,7 +13,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { inspectPlugin, PluginCatalog, snapshotStamp, verifySnapshot } from "../desktop/plugin-catalog.mjs";
-import { BUILT_IN_VALUES, configFile, describeStarts, envName, EVENTS, filesReader, LIMITS, lspNames, NAMES_NOT_SET, PLACEHOLDER, pluginStarts, startWarnings, STARTS } from "../desktop/plugin-reading.mjs";
+import { BUILT_IN_VALUES, configFile, dependencyFolder, describeStarts, envName, EVENTS, filesReader, LIMITS, lineOf, lspNames, NAMES_NOT_SET, PLACEHOLDER, pluginStarts, startWarnings, STARTS, whyNotSet } from "../desktop/plugin-reading.mjs";
 import { plainAgentFile, pluginServerName, pluginSession } from "../desktop/plugin-runtime.mjs";
 
 const temp = (t) => {
@@ -75,7 +75,7 @@ async function started(t, folder, { config = [], values = {}, written = {} } = {
   }
   const servers = new Map(
     Object.entries(session.mcpServers).map(([sdkName, server]) => {
-      if (server.type !== "stdio") return [sdkName, { kind: "remote", url: server.url, headers: Object.keys(server.headers) }];
+      if (server.type !== "stdio") return [sdkName, { kind: "remote", type: server.type, url: server.url, headers: Object.entries(server.headers).map(([name, value]) => ({ name, value })) }];
       const spec = JSON.parse(Buffer.from(server.args[1], "base64url").toString("utf8"));
       assert.deepEqual(Object.keys(server.env).filter((name) => name !== "ELECTRON_RUN_AS_NODE"), spec.envKeys, "the environment handed to the launcher is the list in its line");
       for (const name of ["PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"]) if (name in server.env) builtins[name] ??= server.env[name];
@@ -96,19 +96,23 @@ async function both(t, files, options = {}) {
   // The description has each value as written; a session has ${NAME} filled in, from Botkins' own values and the person's.
   const given = options.values ?? {};
   const filled = (list) => list.map(({ name, value }) => ({ name, value: value.replace(PLACEHOLDER, (_match, key) => real.builtins[key] ?? given[key] ?? "${" + key + "}") }));
-  const asRun = ({ envNotSet: _notSet, ...item }) => (item.env ? { ...item, env: filled(item.env) } : item);
+  // A tool on the web is compared the same way: its type and address as they are, its header names exactly, and each value as written or with its settings filled in.
+  const asRun = ({ envNotSet: _notSet, ...item }) => ({ ...item, ...(item.env && { env: filled(item.env) }), ...(item.headers && { headers: filled(item.headers) }) });
   assert.deepEqual(real.hooks, shown.hooks.map(asRun), "the hooks that run are the hooks that are shown");
   // An event that is named as not run is never one that is shown: a hook is in one list or the other.
-  for (const item of shown.notRun ?? []) if (item.what === "hook" && item.why === NO_EVENT) assert.equal(shown.hooks.some((hook) => hook.event === item.name), false, item.name + " is shown and not run");
+  for (const item of shown.notRun?.items ?? []) if (item.what === "hook" && item.why === NO_EVENT) assert.equal(shown.hooks.some((hook) => hook.event === item.name), false, item.name + " is shown and not run");
   assert.deepEqual([...real.servers.keys()].sort(), shown.mcpServers.map((server) => pluginServerName("p", server.name)).sort(), "the tools that start are the tools that are shown");
-  for (const { name, oauth: _signIn, ...server } of shown.mcpServers) assert.deepEqual(real.servers.get(pluginServerName("p", name)), asRun(server), "the tool " + name + " starts as it is shown");
+  for (const { name, oauth: _signIn, oauthClientId: _clientId, ...server } of shown.mcpServers) assert.deepEqual(real.servers.get(pluginServerName("p", name)), asRun(server), "the tool " + name + " starts as it is shown");
   return { folder, shown, real };
 }
 const manifest = (more = {}) => ({ name: "fixture", version: "1.0.0", ...more });
 const NO_MATCHER = "Botkins runs no hook with a matcher.";
 const NO_EVENT = "Botkins has no event with this name.";
+const NO_COMMAND = "This hook has no command.";
+const EARLIER = "Another spelling of this event comes later in the file, and only that one runs.";
 /** A reason as the plan says it: a sentence. */
 const said = (reason) => reason[0].toUpperCase() + reason.slice(1) + ".";
+const RESERVED_WHY = "Botkins or the system sets this name.";
 
 test("an ordinary plugin: a tool on the web, a program with its words, folder and values, and a hook", async (t) => {
   const { shown } = await both(t, {
@@ -123,10 +127,75 @@ test("an ordinary plugin: a tool on the web, a program with its words, folder an
   }, { values: { API_KEY: "k-123" } });
   // A program is shown with every word of its line, its folder and each environment value as written (a setting is the ${NAME}, never its value): not "npx" alone.
   assert.deepEqual(shown.mcpServers, [
-    { name: "docs", kind: "remote", url: "https://docs.example/mcp", headers: ["Authorization"], oauth: true },
+    { name: "docs", kind: "remote", type: "http", url: "https://docs.example/mcp", headers: [{ name: "Authorization", value: "Bearer ${API_KEY}" }], oauth: true },
     { name: "files", kind: "local", command: "npx", args: ["-y", "@scope/pkg", "--root", "${PLUGIN_ROOT}"], env: [{ name: "TOKEN", value: "${API_KEY}" }, { name: "MODE", value: "fast" }], cwd: "/srv/data" },
   ]);
   assert.deepEqual(shown.hooks, [{ event: "sessionStart", command: "node \"${PLUGIN_ROOT}/start.mjs\"", env: [{ name: "LEVEL", value: "${API_KEY}" }, { name: "HERE", value: "${PLUGIN_ROOT}/x" }], timeoutSec: 3 }]);
+});
+
+test("a tool on the web is shown with its type, its address, each header with its written value, and its sign-in client's id", async (t) => {
+  const { shown } = await both(t, {
+    "plugin.json": manifest({ userConfig: { API_KEY: { sensitive: true } } }),
+    ".mcp.json": {
+      mcpServers: {
+        stream: { type: "sse", url: "https://stream.example/sse", headers: { "X-Mode": "fast", "X-Key": "${API_KEY}" }, oauth: { clientId: "abc" } },
+        flat: { type: "http", url: "https://flat.example/mcp", oauthClientId: "xyz" },
+        plain: { url: "https://plain.example/mcp" },
+      },
+    },
+  }, { values: { API_KEY: "k-123" } });
+  // The secret is never in the description: the header has the ${NAME}, and the type and the client's id are as the plugin named them.
+  assert.deepEqual(shown.mcpServers, [
+    { name: "stream", kind: "remote", type: "sse", url: "https://stream.example/sse", headers: [{ name: "X-Mode", value: "fast" }, { name: "X-Key", value: "${API_KEY}" }], oauth: true, oauthClientId: "abc" },
+    { name: "flat", kind: "remote", type: "http", url: "https://flat.example/mcp", headers: [], oauth: true, oauthClientId: "xyz" },
+    { name: "plain", kind: "remote", type: "http", url: "https://plain.example/mcp", headers: [] },
+  ]);
+  assert.equal(JSON.stringify(shown).includes("k-123"), false);
+});
+
+test("a hook that runs now and did not run before is flagged in the description as a whole, not on the hook", () => {
+  const flag = (hooks) => describeStarts(planOf({ "plugin.json": manifest(), "hooks.json": { hooks } }));
+  for (const hooks of [
+    { sessionStart: [{ matcher: "*", command: "a" }] },
+    { sessionStart: [{ matcher: "", command: "a" }] },
+    { sessionStart: [{ hooks: { matcher: "*", command: "a" } }] },
+    { sessionStart: [{ matcher: "*", hooks: [{ command: "a" }] }] },
+    { UserPromptSubmit: [{ command: "a" }] },
+    { "stop": [{ command: "a" }] },
+    { "user-prompt_submit": [{ command: "a" }] },
+    { "user-prompt-submit": [{ command: "a" }] },
+    { USER_PROMPT_SUBMIT: [{ command: "a" }] },
+    { Stop: [{ command: "a" }] },
+    // Every form of "every case", on the entry or a step above or below it.
+    { sessionStart: [{ matcher: " * ", command: "a" }] },
+    { sessionStart: [{ match: "*", command: "a" }] },
+    { sessionStart: [{ match: "", command: "a" }] },
+    { sessionStart: [{ matcher: [], command: "a" }] },
+    { sessionStart: [{ matcher: ["*"], command: "a" }] },
+    { sessionStart: [{ match: [], command: "a" }] },
+    { sessionStart: [{ match: ["*"], command: "a" }] },
+    { sessionStart: [{ matcher: [], hooks: [{ command: "a" }] }] },
+    { sessionStart: [{ hooks: { matcher: ["*"], command: "a" } }] },
+    { sessionStart: [{ commands: [{ match: [], bash: "a" }] }] },
+  ]) {
+    const shown = flag(hooks);
+    assert.equal(shown.hooks.length, 1, JSON.stringify(hooks));
+    assert.equal(shown.newlyRun, true, JSON.stringify(hooks));
+    assert.equal("newlyRun" in shown.hooks[0], false, "the shown hook has no such key");
+  }
+  for (const hooks of [{ userPromptSubmitted: [{ command: "a" }] }, { agentStop: [{ command: "a" }] }, { sessionStart: [{ command: "a" }] }, { sessionStart: [{ matcher: "Bash", command: "a" }, { command: "b" }] }]) assert.equal(flag(hooks).newlyRun, false, JSON.stringify(hooks));
+  // Any other list is a real matcher: the hook does not run, and it is said not to. The plan and the description agree.
+  for (const matcher of [["Bash"], ["*", "Bash"], ["", ""], [" ", "*"], null, 0, false, {}]) {
+    for (const key of ["matcher", "match"]) {
+      const plan = planOf({ "plugin.json": manifest(), "hooks.json": { hooks: { sessionStart: [{ [key]: matcher, command: "a" }] } } });
+      assert.deepEqual([plan.hooks.length, plan.notRun], [0, [{ what: "hook", name: "sessionStart", why: NO_MATCHER }]], JSON.stringify(matcher));
+      assert.equal(describeStarts(plan).newlyRun, false);
+    }
+  }
+  // The plan has the flag on the hook that runs now and none on one that did before.
+  const plan = planOf({ "plugin.json": manifest(), "hooks.json": { hooks: { sessionStart: [{ matcher: "*", command: "new" }, { command: "old" }] } } });
+  assert.deepEqual(plan.hooks.map((hook) => [hook.command, "newlyRun" in hook]), [["new", true], ["old", false]]);
+  assert.equal(describeStarts(plan).newlyRun, true);
 });
 
 test("where a setting goes is in the description: the names and the address that get its value", async (t) => {
@@ -200,9 +269,18 @@ test("a plugin sets no name that makes a program load something more; what it se
   const { folder, shown, real } = await both(t, { "plugin.json": manifest(), "hooks.json": { hooks: { sessionStart: [{ command: "node -v", env }] } }, ".mcp.json": { mcpServers: { tool: { command: "node", args: ["-v"], env } } } });
   // A harmless name is shown with its value as written. Every other key is named as not set: the person sees why a tool fails.
   const notSet = Object.keys(env).filter((name) => name !== "GOOD" && name !== "MODE");
+  const names = (list) => list.map((item) => item.name);
   const set = [{ name: "GOOD", value: "1" }, { name: "MODE", value: "fast" }];
   assert.deepEqual([shown.hooks[0].env, shown.mcpServers[0].env], [set, set]);
-  assert.deepEqual([shown.hooks[0].envNotSet, shown.mcpServers[0].envNotSet], [notSet, notSet]);
+  assert.deepEqual([names(shown.hooks[0].envNotSet), names(shown.mcpServers[0].envNotSet)], [notSet, notSet]);
+  // Each has the sentence that says why.
+  assert.deepEqual(shown.hooks[0].envNotSet, shown.mcpServers[0].envNotSet);
+  const why = new Map(shown.hooks[0].envNotSet.map((item) => [item.name, item.why]));
+  const family = (start) => "Botkins sets no name that starts with " + start + ". Such a name can make a program load or start more than its command says.";
+  assert.deepEqual([why.get("NODE_OPTIONS"), why.get("node_options"), why.get("GIT_SSH_COMMAND"), why.get("NPM_CONFIG_SCRIPT_SHELL"), why.get("DYLD_INSERT_LIBRARIES"), why.get("BASH_ENV")], [family("NODE_"), family("NODE_"), family("GIT_"), family("NPM_"), family("DYLD_"), family("BASH")]);
+  assert.deepEqual([why.get("PATH"), why.get("HOME"), why.get("PLUGIN_ROOT")], [RESERVED_WHY, RESERVED_WHY, RESERVED_WHY]);
+  assert.deepEqual([why.get("ENV"), why.get("PAGER")], Array(2).fill("Botkins does not set this name. It can make a program load or start more than its command says."));
+  assert.deepEqual([why.get("BAD NAME"), why.get("NUMBER")], ["This is not a name that can be set.", "Its value is not text."]);
   assert.equal(shown.hooks[0].env.some(({ name }) => name === "GIT_SSH_COMMAND"), false);
   // The names Botkins sets itself keep the values Botkins gives them, in the hook's environment and in the tool's.
   const [hookEnv] = real.environments;
@@ -232,11 +310,11 @@ test("the plan has, for a local tool and for a hook, its env as name to written 
     "hooks.json": { hooks: { sessionStart: [{ command: "true", env: { MODE: "fast", GIT_SSH_COMMAND: "x" }, timeoutSec: 2 }, { command: "false" }] } },
   });
   assert.deepEqual(plan.servers, [
-    { name: "tool", kind: "local", command: "node", args: ["a", "3", "true"], env: { MODE: "${A}-x" }, envNotSet: ["PATH", "N"], cwd: "server/bin" },
+    { name: "tool", kind: "local", command: "node", args: ["a", "3", "true"], env: { MODE: "${A}-x" }, envNotSet: [{ name: "PATH", why: RESERVED_WHY }, { name: "N", why: "Its value is not text." }], cwd: "server/bin" },
     { name: "bare", kind: "local", command: "node", args: [], env: {}, envNotSet: [], cwd: null },
   ]);
   assert.deepEqual(plan.hooks, [
-    { event: "sessionStart", command: "true", env: { MODE: "fast" }, envNotSet: ["GIT_SSH_COMMAND"], timeoutMs: 2_000 },
+    { event: "sessionStart", command: "true", env: { MODE: "fast" }, envNotSet: [{ name: "GIT_SSH_COMMAND", why: "Botkins sets no name that starts with GIT_. Such a name can make a program load or start more than its command says." }], timeoutMs: 2_000 },
     { event: "sessionStart", command: "false", env: {}, envNotSet: [], timeoutMs: 10_000 },
   ]);
   assert.deepEqual(plan.refused, []);
@@ -263,7 +341,7 @@ test("an environment value is shown whole or the plugin is refused: the thing wi
   }
   // A long value under a name that is not set is no value to show: the name is only said not to be set.
   const notSet = planOf(files({ PATH: "v".repeat(LIMITS.value + 1) }));
-  assert.deepEqual([notSet.refused, notSet.servers[1].envNotSet], [[], ["PATH"]]);
+  assert.deepEqual([notSet.refused, notSet.servers[1].envNotSet], [[], [{ name: "PATH", why: RESERVED_WHY }]]);
 });
 
 test("an argument that is a number or true/false is its text; any other that is not text refuses the tool with a sentence that says so", async (t) => {
@@ -320,7 +398,7 @@ test("an event written two ways: the later one is shown and run. A hook for no k
   });
   // A matcher of "*" means all: that hook runs.
   assert.deepEqual(shown.hooks.map((hook) => [hook.event, hook.command]), [["sessionStart", "second"], ["sessionEnd", "matched"], ["preToolUse", "nested"]]);
-  assert.deepEqual(shown.notRun, [{ what: "hook", name: "whenever", why: NO_EVENT }]);
+  assert.deepEqual(shown.notRun, { count: 2, items: [{ what: "hook", name: "sessionStart", why: EARLIER }, { what: "hook", name: "whenever", why: NO_EVENT }] });
 });
 
 test("a matcher on any step down is a matcher: a hook with one never runs and is said not to, whether its commands are in a list or in an object; \"*\" and \"\" mean all", async (t) => {
@@ -344,7 +422,7 @@ test("a matcher on any step down is a matcher: a hook with one never runs and is
   });
   assert.deepEqual(shown.hooks.map((hook) => hook.command), ["all-object", "plain", "all-list", "listed", "all-empty", "all-padded"]);
   // One line for the event, in the plan's words.
-  assert.deepEqual(shown.notRun, [{ what: "hook", name: "sessionStart", why: NO_MATCHER }]);
+  assert.deepEqual(shown.notRun, { count: 1, items: [{ what: "hook", name: "sessionStart", why: NO_MATCHER }] });
   assert.match(inspectPlugin(plugin(t, { "plugin.json": manifest(), "hooks.json": { hooks: { sessionStart: [{ matcher: "Bash", command: "x" }] } } })).warnings.join(" "), /does not run some hooks or tools/);
 });
 
@@ -355,7 +433,7 @@ test("a Claude-format event name is the event it matches; an event with another 
   });
   assert.deepEqual(shown.hooks.map((hook) => [hook.event, hook.command]), [["userPromptSubmitted", "prompt"], ["agentStop", "stop"], ["subagentStop", "sub"], ["preToolUse", "pre"], ["postToolUse", "post"], ["sessionStart", "start"], ["sessionEnd", "end"]]);
   // An event with nothing under it has nothing to say.
-  assert.deepEqual(shown.notRun, [{ what: "hook", name: "Notification", why: NO_EVENT }, { what: "hook", name: "PreCompact", why: NO_EVENT }, { what: "hook", name: "MadeUp", why: NO_EVENT }]);
+  assert.deepEqual(shown.notRun.items, [{ what: "hook", name: "Notification", why: NO_EVENT }, { what: "hook", name: "PreCompact", why: NO_EVENT }, { what: "hook", name: "MadeUp", why: NO_EVENT }]);
 });
 
 test("the description never lists a hook that is not run, and the plan says each thing that is not run in its fixed words", () => {
@@ -368,23 +446,144 @@ test("the description never lists a hook that is not run, and the plan says each
   assert.deepEqual(plan.notRun, [{ what: "hook", name: "preToolUse", why: NO_MATCHER }, { what: "hook", name: "Notification", why: NO_EVENT }, { what: "hook", name: "x".repeat(LIMITS.name), why: NO_EVENT }]);
   assert.deepEqual(plan.refused, [{ what: "tool", name: "big", why: "A tool's argument is longer than 4000 characters." }, { what: "hook", name: "sessionEnd", why: "A hook's command is longer than 4000 characters." }]);
   const shown = describeStarts(plan);
-  // `notRun` of the description is the plan's notRun, then its refused.
-  assert.deepEqual(shown.notRun, [...plan.notRun, ...plan.refused]);
+  // `notRun` of the description is the plan's notRun, then its refused, with their number.
+  assert.deepEqual(shown.notRun, { count: 5, items: [...plan.notRun, ...plan.refused] });
+  assert.equal(plan.notRunCount, 3);
   assert.deepEqual(shown.hooks.map((hook) => hook.command), ["runs"]);
-  for (const item of shown.notRun) if (item.what === "hook" && item.why === NO_EVENT) assert.equal(shown.hooks.some((hook) => hook.event === item.name), false);
+  for (const item of shown.notRun.items) if (item.what === "hook" && item.why === NO_EVENT) assert.equal(shown.hooks.some((hook) => hook.event === item.name), false);
   assert.equal("notRun" in describeStarts(planOf({ "plugin.json": manifest(), "hooks.json": { hooks: { sessionStart: [{ command: "a" }] } } })), false, "nothing to say: no key");
 });
 
+test("what is not run is counted and its rows are limited: the plan stops adding rows at 2,000 and the description shows 40", (t) => {
+  const hooks = Object.fromEntries(Array.from({ length: 5_000 }, (_, index) => ["Unknown" + index, [{ command: "touch /tmp/never" }]]));
+  const plan = planOf({ "plugin.json": manifest(), "hooks.json": { hooks } });
+  assert.deepEqual([plan.notRunCount, plan.notRun.length, plan.hooks.length], [5_000, 2_000, 0]);
+  const shown = describeStarts(plan);
+  assert.equal(shown.notRun.count, 5_000);
+  assert.deepEqual(shown.notRun.items, plan.notRun.slice(0, 40));
+  assert.equal(shown.notRun.items.length, 40);
+  assert.deepEqual(shown.notRun.items[0], { what: "hook", name: "Unknown0", why: NO_EVENT });
+  // Whole description of such a plugin stays small in every state message.
+  const { contents } = inspectPlugin(plugin(t, { "plugin.json": manifest(), "hooks.json": { hooks } }));
+  assert.equal(contents.notRun.count, 5_000);
+  assert.equal(contents.notRun.items.length, 40);
+  assert.ok(JSON.stringify(contents).length < 20_000, String(JSON.stringify(contents).length));
+  // Refused things are counted with them, and still come after the plan's rows.
+  const withRefused = describeStarts({ ...planOf({ "plugin.json": manifest() }), notRun: [{ what: "hook", name: "a", why: NO_EVENT }], notRunCount: 1, refused: [{ what: "tool", name: "b", why: "Too long." }] });
+  assert.deepEqual(withRefused.notRun, { count: 2, items: [{ what: "hook", name: "a", why: NO_EVENT }, { what: "tool", name: "b", why: "Too long." }] });
+  // A plan from before the count (rows only) is counted by its rows.
+  assert.equal(describeStarts({ servers: [], hooks: [], notRun: [{ what: "hook", name: "a", why: NO_EVENT }] }).notRun.count, 1);
+  // The warning is made from the count or the rows, in either shape.
+  const says = "Botkins does not run some hooks or tools of this plugin.";
+  for (const shape of [[{ what: "hook" }], { count: 1, items: [] }, { count: 0, items: [{ what: "hook" }] }]) assert.equal(startWarnings([], [], [], shape).includes(says), true, JSON.stringify(shape));
+  for (const shape of [[], { count: 0, items: [] }, undefined, null, {}]) assert.equal(startWarnings([], [], [], shape).includes(says), false, JSON.stringify(shape));
+  assert.deepEqual(startWarnings([], [], [], shown.notRun), [says]);
+});
+
+test("each tool and hook that is not run is a row, with its fixed sentence", async (t) => {
+  const NO_TYPE = "Botkins has no tool of this type.";
+  const NO_TOOL_COMMAND = "This tool has no command.";
+  const NO_ADDRESS = "This tool's address is not an http or https address.";
+  const { shown } = await both(t, {
+    "plugin.json": manifest(),
+    ".mcp.json": {
+      mcpServers: {
+        socket: { type: "websocket", url: "wss://x.example" },
+        numberType: { type: 5, command: "sh" },
+        emptyType: { type: "", command: "sh" },
+        bare: {},
+        noCommand: { type: "stdio", args: ["-v"] },
+        emptyCommand: { command: "" },
+        numberCommand: { command: 7 },
+        ftp: { type: "http", url: "ftp://x.example/mcp" },
+        noUrl: { type: "sse" },
+        noUrlHttp: { type: "streamable-http", url: 5 },
+        socketUrl: { url: "wss://x.example/mcp" },
+        fine: { command: "node" },
+        local: { type: "local", command: "node" },
+        web: { type: "streamable-http", url: "https://x.example/mcp" },
+        eventsUrl: { type: "sse", serverUrl: "http://x.example/sse" },
+      },
+    },
+  });
+  assert.deepEqual(shown.mcpServers.map((server) => server.name), ["fine", "local", "web", "eventsUrl"]);
+  assert.deepEqual(shown.notRun.items.map((item) => [item.what, item.name, item.why]), [
+    ["tool", "socket", NO_TYPE],
+    ["tool", "numberType", NO_TYPE],
+    ["tool", "emptyType", NO_TYPE],
+    ["tool", "bare", NO_TOOL_COMMAND],
+    ["tool", "noCommand", NO_TOOL_COMMAND],
+    ["tool", "emptyCommand", NO_TOOL_COMMAND],
+    ["tool", "numberCommand", NO_TOOL_COMMAND],
+    ["tool", "ftp", NO_ADDRESS],
+    ["tool", "noUrl", NO_ADDRESS],
+    ["tool", "noUrlHttp", NO_ADDRESS],
+    ["tool", "socketUrl", NO_ADDRESS],
+  ]);
+  assert.equal(shown.notRun.count, 11);
+  // An address too long to show whole is not run either, and the plugin is not installed, as for any value too long.
+  const long = planOf({ "plugin.json": manifest(), ".mcp.json": { mcpServers: { far: { url: "https://x.example/" + "a".repeat(LIMITS.url) } } } });
+  assert.deepEqual([long.servers.length, long.refused.map((item) => item.why)], [0, ["A tool's address is longer than 4000 characters."]]);
+  // A tool that is not run takes nothing from an earlier one of its name: that one still starts.
+  assert.deepEqual(planOf({ "plugin.json": manifest(), ".mcp.json": { mcpServers: { a: { command: "first" } } }, "mcp.json": { mcpServers: { a: { type: "websocket" } } } }).servers.map((server) => server.command), ["first"]);
+
+  // A hook with no command: one row for the event, not one for each entry; a matcher stops it first, an unknown event says its own.
+  const hooks = await both(t, {
+    "plugin.json": manifest(),
+    "hooks.json": { hooks: { sessionStart: [{ command: "runs" }, { type: "command" }, {}, 5, { hooks: {} }, { command: "  " }], sessionEnd: [{ type: "prompt", prompt: "x" }], agentStop: [{ matcher: "Bash", type: "command" }], "Made-Up": [{ type: "command" }], preToolUse: [] } },
+  });
+  assert.deepEqual(hooks.shown.hooks.map((hook) => [hook.event, hook.command]), [["sessionStart", "runs"]]);
+  assert.deepEqual(hooks.shown.notRun.items, [{ what: "hook", name: "sessionStart", why: NO_COMMAND }, { what: "hook", name: "sessionEnd", why: NO_COMMAND }, { what: "hook", name: "agentStop", why: NO_MATCHER }]);
+
+  // Two spellings of one event: a row for the earlier, as the plugin wrote it, and only the later runs.
+  const spelling = await both(t, {
+    "plugin.json": manifest(),
+    "hooks.json": { hooks: { "session-start": [{ command: "first" }], SESSION_START: [{ command: "second" }], sessionStart: [{ command: "third" }], Stop: [{ command: "one" }], agentStop: [{ command: "two" }], preToolUse: [{ command: "alone" }] } },
+  });
+  assert.deepEqual(spelling.shown.hooks.map((hook) => [hook.event, hook.command]), [["sessionStart", "third"], ["agentStop", "two"], ["preToolUse", "alone"]]);
+  assert.deepEqual(spelling.shown.notRun.items, [{ what: "hook", name: "session-start", why: EARLIER }, { what: "hook", name: "SESSION_START", why: EARLIER }, { what: "hook", name: "Stop", why: EARLIER }]);
+  // The later spelling with nothing to run takes nothing from the earlier one.
+  const kept = await both(t, { "plugin.json": manifest(), "hooks.json": { hooks: { sessionStart: [{ command: "kept" }], "session-start": [{ matcher: "Bash", command: "no" }] } } });
+  assert.deepEqual([kept.shown.hooks.map((hook) => hook.command), kept.shown.notRun.items.map((item) => item.why)], [["kept"], [NO_MATCHER]]);
+});
+
+test("lineOf is the command and each argument of a local tool, in the plan and in the description", () => {
+  const plan = planOf({ "plugin.json": manifest(), ".mcp.json": { mcpServers: { x: { command: "node", args: ["a", 3] }, y: { command: "sh" } } } });
+  assert.deepEqual(plan.servers.map(lineOf), [["node", "a", "3"], ["sh"]]);
+  assert.deepEqual(describeStarts(plan).mcpServers.map(lineOf), [["node", "a", "3"], ["sh"]]);
+});
+
 test("an environment name is refused by its family, and a short list is let back in, in any letter case", () => {
-  const refused = ["PYTHONUSERBASE", "GEM_PATH", "GEM_HOME", "PHP_INI_SCAN_DIR", "PHPRC", "OPENSSL_CONF", "GCONV_PATH", "GIO_EXTRA_MODULES", "MAKEFILES", "GIT_DIR", "GIT_WORK_TREE", "GIT_TEMPLATE_DIR", "GIT_AUTHOR_NAME", "SHELL", "BROWSER", "NODE_OPTIONS", "NPM_CONFIG_REGISTRY", "RUBYOPT", "PERL5LIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "DOTNET_STARTUP_HOOKS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "BASH_FUNC_x%%", "XDG_CONFIG_HOME", "LESSOPEN", "LUA_PATH", "ENV", "IFS", "PAGER", "EDITOR", "CLASSPATH", "PYTHONDONTWRITEBYTECODE", "NODE_PATH", "PATH", "HOME"];
+  const refused = ["PYTHONUSERBASE", "GEM_PATH", "GEM_HOME", "PHP_INI_SCAN_DIR", "PHPRC", "OPENSSL_CONF", "GCONV_PATH", "GIO_EXTRA_MODULES", "MAKEFILES", "MAKEFLAGS", "MAKELEVEL", "AWS_CONFIG_FILE", "KUBECONFIG", "GOFLAGS", "RUSTC_WRAPPER", "PUPPETEER_EXECUTABLE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_TEMPLATE_DIR", "GIT_AUTHOR_NAME", "SHELL", "BROWSER", "NODE_OPTIONS", "NPM_CONFIG_REGISTRY", "RUBYOPT", "PERL5LIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "DOTNET_STARTUP_HOOKS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "BASH_FUNC_x%%", "XDG_CONFIG_HOME", "LESSOPEN", "LUA_PATH", "ENV", "IFS", "PAGER", "EDITOR", "CLASSPATH", "PYTHONDONTWRITEBYTECODE", "NODE_PATH", "PATH", "HOME"];
   for (const name of refused) for (const form of [name, name.toLowerCase(), name[0] + name.slice(1).toLowerCase()]) assert.equal(envName(form), false, form);
-  for (const name of ["NODE_ENV", "PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONUTF8", "NO_COLOR", "FORCE_COLOR", "LDAP_URL", "API_KEY", "MODE", "_x"]) for (const form of [name, name.toLowerCase()]) assert.equal(envName(form), true, form);
+  for (const name of ["NODE_ENV", "PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONUTF8", "NO_COLOR", "FORCE_COLOR", "LDAP_URL", "API_KEY", "MODE", "_x", "PHPSESSID", "MAKER_KEY"]) for (const form of [name, name.toLowerCase()]) assert.equal(envName(form), true, form);
   // The lists that the guide prints are these lists.
   assert.deepEqual(Object.keys(NAMES_NOT_SET).sort(), ["allowed", "names", "reserved", "starts"]);
   assert.deepEqual(NAMES_NOT_SET.allowed, ["NODE_ENV", "PYTHONUNBUFFERED", "PYTHONIOENCODING", "PYTHONUTF8", "NO_COLOR", "FORCE_COLOR"]);
   assert.equal(NAMES_NOT_SET.starts.includes("PYTHON"), true);
   assert.equal(NAMES_NOT_SET.names.includes("SHELL"), true);
   assert.equal(NAMES_NOT_SET.reserved.includes("PATH"), true);
+  // PHP and make are no wide families: PHPSESSID and MAKER_KEY are nobody's loader.
+  assert.deepEqual([NAMES_NOT_SET.starts.includes("PHP"), NAMES_NOT_SET.starts.includes("PHP_"), NAMES_NOT_SET.starts.includes("MAKE")], [false, true, false]);
+  for (const name of ["PHPRC", "MAKEFLAGS", "MAKEFILES", "MAKELEVEL", "AWS_CONFIG_FILE", "KUBECONFIG", "GOFLAGS", "RUSTC_WRAPPER", "PUPPETEER_EXECUTABLE_PATH"]) assert.equal(NAMES_NOT_SET.names.includes(name), true, name);
+});
+
+test("whyNotSet says why a name is not set, in a fixed sentence, and null when it is set", () => {
+  const loads = "can make a program load or start more than its command says.";
+  assert.equal(whyNotSet("NPM_TOKEN"), "Botkins sets no name that starts with NPM_. Such a name " + loads);
+  assert.equal(whyNotSet("java_home"), "Botkins sets no name that starts with JAVA_. Such a name " + loads);
+  assert.equal(whyNotSet("PYTHONPATH"), "Botkins sets no name that starts with PYTHON. Such a name " + loads);
+  assert.equal(whyNotSet("PHP_INI_SCAN_DIR"), "Botkins sets no name that starts with PHP_. Such a name " + loads);
+  for (const name of ["PHPRC", "MAKEFLAGS", "kubeconfig", "GOFLAGS", "RUSTC_WRAPPER", "PAGER"]) assert.equal(whyNotSet(name), "Botkins does not set this name. It " + loads, name);
+  for (const name of ["PATH", "home", "ELECTRON_RUN_AS_NODE"]) assert.equal(whyNotSet(name), "Botkins or the system sets this name.", name);
+  for (const name of ["A-B", "", "1A", "N".repeat(129), 5, null]) assert.equal(whyNotSet(name), "This is not a name that can be set.", String(name));
+  assert.equal(whyNotSet("MODE", 3), "Its value is not text.");
+  assert.equal(whyNotSet("MODE", null), "Its value is not text.");
+  // A name is judged before its value.
+  assert.equal(whyNotSet("PATH", 3), "Botkins or the system sets this name.");
+  for (const name of ["MODE", "NODE_ENV", "PHPSESSID", "MAKER_KEY"]) assert.equal(whyNotSet(name, "x"), null, name);
+  assert.equal(envName("NPM_TOKEN"), false);
+  assert.equal(envName("MODE"), true);
 });
 
 test("the files beside a command are in the description: the totals, the ones tools read by themselves first and marked, and not the skills", async (t) => {
@@ -408,7 +607,7 @@ test("the files beside a command are in the description: the totals, the ones to
     files: [
       { path: ".npmrc", bytes: size(".npmrc"), config: true },
       { path: "Makefile", bytes: size("Makefile"), config: true },
-      { path: "node_modules/x/index.js", bytes: 1, config: true },
+      { path: "node_modules/", bytes: 1, files: 1, config: true },
       { path: "hooks.json", bytes: size("hooks.json") },
       { path: "plugin.json", bytes: size("plugin.json") },
       { path: "scripts/run.sh", bytes: size("scripts/run.sh") },
@@ -425,13 +624,49 @@ test("the files beside a command are in the description: the totals, the ones to
   many["zz/vendor/lib.rb"] = "x";
   const big = inspectPlugin(plugin(t, many)).contents.otherFiles;
   assert.deepEqual([big.count, big.bytes, big.files.length], [63, 60 + 2 + 1 + Buffer.byteLength(JSON.stringify(many["plugin.json"])), 40]);
-  assert.deepEqual(big.files.slice(0, 2).map((file) => [file.path, file.config]), [["zz/.nvmrc", true], ["zz/vendor/lib.rb", true]]);
+  assert.deepEqual(big.files.slice(0, 2).map((file) => [file.path, file.config]), [["zz/.nvmrc", true], ["zz/vendor/", true]]);
   assert.equal(big.files[2].path, "files/f00.txt");
   assert.deepEqual(inspectPlugin(plugin(t, { "plugin.json": manifest() })).contents.otherFiles.files.map((file) => file.path), ["plugin.json"]);
 });
 
+test("a folder of dependencies is one row and cannot crowd out the files beside it; a configuration file below skills is listed too", async (t) => {
+  const files = { "plugin.json": manifest(), "package.json": "{}", "pyproject.toml": "[x]", "skills/x/SKILL.md": "s", "skills/x/package.json": "{}", "skills/x/notes.txt": "n" };
+  for (let index = 0; index < 30; index++) {
+    files["node_modules/a/f" + index + ".js"] = "xx";
+    files["node_modules/b/f" + index + ".js"] = "xx";
+  }
+  const { contents } = inspectPlugin(plugin(t, files));
+  const size = (name) => Buffer.byteLength(typeof files[name] === "string" ? files[name] : JSON.stringify(files[name]));
+  const marked = contents.otherFiles.files.filter((file) => file.config);
+  assert.deepEqual(marked, [
+    { path: "node_modules/", bytes: 120, files: 60, config: true },
+    { path: "package.json", bytes: 2, config: true },
+    { path: "pyproject.toml", bytes: 3, config: true },
+    { path: "skills/x/package.json", bytes: 2, config: true },
+  ]);
+  // The unmarked rest is the manifest alone: skills/x/SKILL.md and notes.txt are in the skills list.
+  assert.deepEqual(contents.otherFiles.files.slice(4), [{ path: "plugin.json", bytes: size("plugin.json") }]);
+  // The totals are over the files that are not in the lists: the 60 files, package.json, pyproject.toml and the manifest. skills/x/package.json is in a list.
+  assert.deepEqual([contents.otherFiles.count, contents.otherFiles.bytes], [63, 120 + 2 + 3 + size("plugin.json")]);
+  assert.equal(contents.skills.includes("skills/x/package.json"), true);
+  // The top-most folder is the one: below it, a nested folder is no row of its own. A file's own name is no folder.
+  assert.equal(dependencyFolder("a/node_modules/b/vendor/x.rb"), "a/node_modules/");
+  assert.equal(dependencyFolder("Vendor/x.rb"), "Vendor/");
+  assert.equal(dependencyFolder("vendor"), null);
+  assert.equal(dependencyFolder("src/vendors/x.js"), null);
+  for (const folder of ["node_modules", ".venv", "venv", "vendor", ".bundle", ".mvn", ".cargo"]) assert.equal(dependencyFolder("x/" + folder + "/y/z"), "x/" + folder + "/", folder);
+  // Each row is a folder or a file, once: a Maven wrapper's settings and a Cargo config are in their folder's row.
+  const more = inspectPlugin(plugin(t, { "plugin.json": manifest(), ".mvn/wrapper/a.properties": "a", ".mvn/jvm.config": "b", ".cargo/config.toml": "c", "src/.cargo/x": "d" })).contents.otherFiles.files;
+  assert.deepEqual(more.filter((file) => file.config), [{ path: ".cargo/", bytes: 1, files: 1, config: true }, { path: ".mvn/", bytes: 2, files: 2, config: true }, { path: "src/.cargo/", bytes: 1, files: 1, config: true }]);
+  // At most 40 rows, the marked first.
+  const crowd = { "plugin.json": manifest() };
+  for (let index = 0; index < 50; index++) crowd["d" + String(index).padStart(2, "0") + "/node_modules/x"] = "x";
+  const rows = inspectPlugin(plugin(t, crowd)).contents.otherFiles;
+  assert.deepEqual([rows.files.length, rows.count, rows.files.every((file) => file.config)], [40, 51, true]);
+});
+
 test("a file that tools read by themselves is marked: by its name in any letter case, or by a folder of packages", () => {
-  for (const path of [".npmrc", "package.json", "sub/Makefile", "GNUmakefile", "pyproject.toml", ".tool-versions", ".env", ".gitconfig", "a/b/.NVMRC", "php.ini", "node_modules/x/y.js", "a/.venv/bin/python", "venv/x", "vendor/x.rb", "a/.bundle/config", ".yarnrc.yml", ".pnpmfile.cjs"]) assert.equal(configFile(path), true, path);
+  for (const path of ["uv.toml", ".pnp.cjs", "pyvenv.cfg", "a/conftest.py", "pytest.ini", "mise.toml", "deno.jsonc", "DENO.JSONC", ".cargo/config.toml", "x/.mvn/maven.config", "a/.cargo/anything", ".npmrc", "package.json", "sub/Makefile", "GNUmakefile", "pyproject.toml", ".tool-versions", ".env", ".gitconfig", "a/b/.NVMRC", "php.ini", "node_modules/x/y.js", "a/.venv/bin/python", "venv/x", "vendor/x.rb", "a/.bundle/config", ".yarnrc.yml", ".pnpmfile.cjs"]) assert.equal(configFile(path), true, path);
   for (const path of ["run.sh", "scripts/run.sh", "plugin.json", "hooks.json", "README.md", "src/vendors/x.js", "node_modules.txt", "a/package.json.bak"]) assert.equal(configFile(path), false, path);
 });
 

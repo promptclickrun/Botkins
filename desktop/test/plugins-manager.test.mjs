@@ -256,7 +256,7 @@ test("a plugin installed by an earlier version that starts anything its descript
   assert.equal(byName("gone").repair, "update");
   const stored = () => JSON.parse(readFileSync(file, "utf8"));
   const marked = (name) => stored().find((row) => row.preview.name === name + "-fixture").reading;
-  assert.deepEqual(["remote", "args", "long", "short", "mixed"].map(marked), [2, 2, 2, 2, 2]);
+  assert.deepEqual(["remote", "args", "long", "short", "mixed"].map(marked), [3, 3, 3, 3, 3]);
   assert.equal(marked("gone"), undefined);
   assert.equal(stored().find((row) => row.preview.name === "gone-fixture").heldBack, "unread");
   // It cannot be switched on while it cannot be read.
@@ -275,7 +275,7 @@ test("a plugin installed by an earlier version that starts anything its descript
   // After the update it is off with no reason and no mark: the next thing is the person's "Turn on".
   assert.deepEqual([named("gone").enabled, named("gone").repair, named("gone").detail], [false, undefined, undefined]);
   await third.plugins.setEnabled(named("gone").id, true);
-  assert.deepEqual([named("gone").enabled, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").heldBack], [true, undefined, 2, undefined]);
+  assert.deepEqual([named("gone").enabled, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").heldBack], [true, undefined, 3, undefined]);
 });
 
 test("a changed copy is put right by an update, which writes the reviewed files again and keeps the settings", async (t) => {
@@ -395,7 +395,7 @@ test("a copy that is not the reviewed files is checked before an old description
   // An update writes the reviewed files again, and the row is the one reading.
   const fixed = await again.plugins.update(added.id, { revision: stored.revision });
   assert.deepEqual([fixed.status, fixed.repair, fixed.starts], ["ready", undefined, 1]);
-  assert.equal(JSON.parse(readFileSync(file, "utf8"))[0].reading, 2);
+  assert.equal(JSON.parse(readFileSync(file, "utf8"))[0].reading, 3);
 });
 
 test("a check of the copy that could not be done is not kept, is not called a change, and is tried again at the next look", async (t) => {
@@ -421,11 +421,27 @@ test("a check of the copy that could not be done is not kept, is not called a ch
   assert.ok(!/not the files that were reviewed/.test(warn.mock.calls.at(-1).arguments[0]));
   // It is not used now, and the app does not say that the files changed.
   assert.deepEqual(await ws.plugins.session(ws.bot("pip"), { id: "chat-1" }), { directories: [], mcpServers: {}, hooks: undefined });
-  assert.deepEqual([ws.plugins.list()[0].status, ws.plugins.list()[0].detail], ["ready", undefined]);
-  // Once the files can be read, the next look gives a real answer.
+  // A copy that cannot be read is not "ready": it is an error with its own sentence, the way back is an update, and nothing of it is marked as checked.
+  const sentence = "Botkins could not read the installed files of this plugin to check them. Try again. If it stays so, update the plugin: Botkins writes its files again and keeps your settings.";
+  const unread = (error) => error.message === sentence;
+  const [listed] = ws.plugins.list();
+  assert.deepEqual([listed.status, listed.repair, "starts" in listed], ["error", "update", false]);
+  assert.equal(listed.detail, sentence);
+  // Switching on and updating say the same, not "changed".
+  await assert.rejects(ws.plugins.setEnabled(row.preview.id, true), unread);
+  // (An update that writes the files again would put it right. This one is a catalog that gives back the same unreadable copy.)
+  const real = ws.plugins.catalog.materialize.bind(ws.plugins.catalog);
+  ws.plugins.catalog.materialize = async () => ({ folder: row.folder, preview: row.preview, revision: row.revision });
+  await assert.rejects(ws.plugins.update(row.preview.id, { revision: row.revision }), unread);
+  ws.plugins.catalog.materialize = real;
+  // How often in a row it could not be done is kept.
+  assert.ok(ws.plugins.unreadable.get(row.folder).times >= 3);
+  // Once the files can be read, the next look gives a real answer, and the state is gone.
   chmodSync(hooks, 0o644);
   assert.equal(ws.plugins.intact(row), true);
   assert.equal(ws.plugins.checked.get(row.folder).ok, true);
+  assert.equal(ws.plugins.unreadable.has(row.folder), false);
+  assert.deepEqual([ws.plugins.list()[0].status, ws.plugins.list()[0].detail, ws.plugins.list()[0].repair, ws.plugins.list()[0].starts], ["ready", undefined, undefined, 1]);
 });
 
 test("an installed plugin is marked starts: 1 only when its description is the one reading of an intact copy", async (t) => {
@@ -477,7 +493,7 @@ test("switching on a row the one reading has not read stores what the copy start
   row.preview = { ...row.preview, contents: { ...row.preview.contents, hooks: [] }, warnings: [] };
   await ws.plugins.setEnabled(added.id, true);
   const [stored] = JSON.parse(readFileSync(file, "utf8"));
-  assert.equal(stored.reading, 2);
+  assert.equal(stored.reading, 3);
   assert.deepEqual(stored.preview.contents.hooks.map((hook) => hook.command), ["echo stored-command-77"]);
   assert.ok(stored.preview.warnings.some((line) => /Runs a command/.test(line)));
 });
@@ -549,4 +565,224 @@ test("the app names the capability that says its description of a plugin is what
   // A client tells an app with the one reading from an older one by this name, and asks first for every plugin without it.
   assert.equal(PLUGIN_STARTS, "plugin-starts-v1");
   assert.ok(CAPABILITIES.includes(PLUGIN_STARTS));
+});
+
+const ANOTHER = /This plugin is not the one that was looked at: its revision is another one now\. Look at it again\./;
+
+test("a switch-on and a choice of bots can name the revision that was looked at, and the app compares it", async (t) => {
+  const { open, source, file } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "look-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const { revision } = ws.plugins.records[0];
+  const before = readFileSync(file, "utf8");
+  // Another revision: refused, and nothing is kept.
+  await assert.rejects(ws.plugins.setEnabled(added.id, true, { revision: "0".repeat(64) }), ANOTHER);
+  await assert.rejects(ws.plugins.setBots(added.id, ["pip"], { revision: "0".repeat(64) }), ANOTHER);
+  assert.equal(readFileSync(file, "utf8"), before);
+  // A request that is not nothing or { revision: a hash }.
+  for (const bad of ["abc", 7, [], { revision: "abc" }, { revision: 7 }, { revision: null }]) {
+    await assert.rejects(ws.plugins.setEnabled(added.id, true, bad), /Check the plugin request\./, JSON.stringify(bad));
+    await assert.rejects(ws.plugins.setBots(added.id, ["pip"], bad), /Check the plugin request\./, JSON.stringify(bad));
+  }
+  assert.equal(readFileSync(file, "utf8"), before);
+  // The revision that is installed: it works.
+  await ws.plugins.setBots(added.id, ["pip"], { revision });
+  await ws.plugins.setEnabled(added.id, true, { revision });
+  assert.deepEqual([ws.plugins.list()[0].enabled, ws.plugins.list()[0].bots], [true, ["pip"]]);
+  // None: as before (nothing, null and an object with no revision).
+  await ws.plugins.setEnabled(added.id, false);
+  await ws.plugins.setEnabled(added.id, true, null);
+  await ws.plugins.setBots(added.id, "all", {});
+  await ws.plugins.setBots(added.id, ["pip"]);
+  assert.deepEqual([ws.plugins.list()[0].enabled, ws.plugins.list()[0].bots], [true, ["pip"]]);
+});
+
+test("an update that is under way finishes before a yes is compared, so an old yes does not switch on the new version", async (t) => {
+  const { open, source, file } = managed(t);
+  const ws = open();
+  const folder = source("mine", { "plugin.json": { name: "race-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
+  const added = await ws.plugins.addFolder(folder);
+  const old = ws.plugins.records[0].revision;
+  writeFileSync(join(folder, "hooks.json"), JSON.stringify({ hooks: { sessionStart: [{ command: "echo something else" }] } }));
+  const { revision: newer } = await ws.plugins.preview(added.id);
+  assert.notEqual(newer, old);
+  // Not awaited: the yes joins the queue behind the update.
+  const updating = ws.plugins.update(added.id, { revision: newer });
+  const yes = ws.plugins.setEnabled(added.id, true, { revision: old });
+  await assert.rejects(yes, ANOTHER);
+  assert.equal((await updating).revision, newer);
+  assert.equal(ws.plugins.records[0].revision, newer);
+  assert.deepEqual([ws.plugins.list()[0].enabled, JSON.parse(readFileSync(file, "utf8"))[0].enabled], [false, false]);
+  // The same for more bots.
+  await ws.plugins.setEnabled(added.id, true, { revision: newer });
+  await assert.rejects(ws.plugins.setBots(added.id, ["pip"], { revision: old }), ANOTHER);
+  assert.equal(ws.plugins.list()[0].bots, "all");
+  await ws.plugins.setBots(added.id, ["pip"], { revision: newer });
+  assert.deepEqual(ws.plugins.list()[0].bots, ["pip"]);
+});
+
+test("a hook that earlier versions never ran and runs now switches the plugin off once, with the reason", async (t) => {
+  const { open, source, file } = managed(t);
+  // The old description had the hook by its command, and the hook has no settings of its own: nothing else is unseen.
+  const alias = source("alias", { "plugin.json": { name: "alias-fixture", version: "1.0.0" }, "hooks.json": { hooks: { UserPromptSubmit: [{ command: "echo hi" }] } } });
+  const same = source("same", { "plugin.json": { name: "same-fixture", version: "1.0.0" }, "hooks.json": { hooks: { userPromptSubmitted: [{ command: "echo hi" }] } } });
+  const ws = open();
+  for (const folder of [alias, same]) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  // The file as an earlier version kept it: no mark of the reading, a hook by its event and command.
+  writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8")).map(({ reading: _mark, ...row }) => ({ ...row, preview: { ...row.preview, contents: { ...row.preview.contents, hooks: row.preview.contents.hooks.map(({ event, command }) => ({ event, command })) } } }))));
+  const stored = () => JSON.parse(readFileSync(file, "utf8"));
+  const after = open();
+  const byName = (workspace, name) => workspace.plugins.list().find((row) => row.name === name + "-fixture");
+  assert.equal(byName(after, "alias").enabled, false);
+  assert.match(byName(after, "alias").detail, /did not run before this version of Botkins and runs now/);
+  assert.equal(byName(after, "same").enabled, true);
+  assert.equal(byName(after, "same").detail, undefined);
+  // The person looks, and switches it on: it stays on at the next open.
+  await after.plugins.setEnabled(byName(after, "alias").id, true);
+  assert.equal(stored().find((row) => row.preview.name === "alias-fixture").heldBack, undefined);
+  const third = open();
+  assert.deepEqual([byName(third, "alias").enabled, byName(third, "alias").detail, byName(third, "same").enabled], [true, undefined, true]);
+});
+
+/** A marketplace of one plugin, for an install by name. */
+function marketplace(t, name, files) {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-plugin-market-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const market = join(dir, "market");
+  const plugin = join(market, "plugins", name);
+  mkdirSync(join(market, ".github", "plugin"), { recursive: true });
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(market, ".github", "plugin", "marketplace.json"), JSON.stringify({ name: "test-market", plugins: [{ name, source: "plugins/" + name }] }));
+  for (const [file, value] of Object.entries(files)) writeFileSync(join(plugin, file), JSON.stringify(value));
+  return { dir, market, plugin };
+}
+
+test("the mark starts is never written to plugins.json, and an older file that has it loses it at the first open", async (t) => {
+  const { open, source, file } = managed(t);
+  const made = marketplace(t, "garden", { "plugin.json": { name: "garden", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
+  const ws = open();
+  await ws.plugins.catalog.addMarketplace(made.market);
+  const card = await ws.plugins.preview("garden@test-market");
+  assert.equal(card.starts, 1, "the catalog's description carries the mark");
+  const installed = await ws.plugins.install("garden@test-market", { revision: card.revision });
+  assert.equal(installed.starts, 1);
+  const stored = () => readFileSync(file, "utf8");
+  assert.ok(!stored().includes('"starts"'), "install");
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "mine-fixture", version: "1.0.0" } }));
+  assert.equal(added.starts, 1);
+  assert.ok(!stored().includes('"starts"'), "addFolder");
+  assert.ok(ws.plugins.records.every((row) => !("starts" in row.preview) && !("starts" in row.preview.contents)), "the rows in memory have no mark either");
+  const updated = await ws.plugins.update("garden@test-market", { revision: card.revision });
+  assert.equal(updated.starts, 1);
+  assert.ok(!stored().includes('"starts"'), "update");
+  // Switching on stores a fresh description: no mark in it either.
+  await ws.plugins.setEnabled(added.id, true);
+  assert.ok(!stored().includes('"starts"'), "setEnabled");
+  // A file as an earlier build of this change wrote it: the mark in the description, and in its contents.
+  writeFileSync(file, JSON.stringify(JSON.parse(stored()).map((row) => ({ ...row, preview: { ...row.preview, starts: 1, contents: { ...row.preview.contents, starts: 1 } } }))));
+  assert.ok(stored().includes('"starts"'));
+  const again = open();
+  assert.ok(!stored().includes('"starts"'), "the file is written again at the first open");
+  assert.ok(again.plugins.records.every((row) => !("starts" in row.preview)));
+  // The answer still carries the mark for an intact copy.
+  assert.deepEqual(again.plugins.list().map((row) => row.starts), [1, 1]);
+});
+
+test("a row marked 2 is looked at once for a hook that runs now, and not for what its complete description already showed", async (t) => {
+  const { open, source, file } = managed(t);
+  const plugin = (name, files) => source(name, { "plugin.json": { name: name + "-fixture", version: "1.0.0" }, ...files });
+  const ws = open();
+  const folders = [
+    plugin("prompt", { "hooks.json": { hooks: { UserPromptSubmit: [{ command: "echo hi" }] } } }),
+    plugin("every", { "hooks.json": { hooks: { preToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "echo all" }] }] } } }),
+    plugin("plain", { "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }),
+    // A tool with arguments: the old rule would switch a row with no mark off, a row marked 2 was shown them.
+    plugin("tool", { ".mcp.json": { mcpServers: { files: { command: "sh", args: ["-c", "true"] } } } }),
+  ];
+  for (const folder of folders) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  const stored = () => JSON.parse(readFileSync(file, "utf8"));
+  const rowOf = (name) => stored().find((row) => row.preview.name === name + "-fixture");
+  // The file as the earlier build of this change kept it: marked 2, on.
+  writeFileSync(file, JSON.stringify(stored().map((row) => ({ ...row, reading: 2 }))));
+  const after = open();
+  const byName = (workspace, name) => workspace.plugins.list().find((row) => row.name === name + "-fixture");
+  for (const name of ["prompt", "every"]) {
+    assert.equal(byName(after, name).enabled, false, name);
+    assert.match(byName(after, name).detail, /did not run before this version of Botkins and runs now/);
+    assert.equal(rowOf(name).heldBack, "newhook");
+  }
+  for (const name of ["plain", "tool"]) assert.deepEqual([byName(after, name).enabled, byName(after, name).detail], [true, undefined], name);
+  assert.deepEqual(["prompt", "every", "plain", "tool"].map((name) => rowOf(name).reading), [3, 3, 3, 3]);
+  // The person looks and switches it on: it stays so at the second open, and at a third.
+  await after.plugins.setEnabled(byName(after, "prompt").id, true);
+  const second = open();
+  assert.deepEqual([byName(second, "prompt").enabled, byName(second, "prompt").detail], [true, undefined]);
+  assert.equal(byName(second, "every").enabled, false, "what the person has not switched on stays off");
+  assert.deepEqual(["prompt", "every", "plain", "tool"].map((name) => rowOf(name).reading), [3, 3, 3, 3]);
+  assert.equal(byName(open(), "prompt").enabled, true);
+});
+
+test("the sentence about removing a plugin is only for an update that cannot work, not for a revision to look at again", async (t) => {
+  const { open, source } = managed(t);
+  const folder = source("mine", { "plugin.json": { name: "again-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
+  const ws = open();
+  const added = await ws.plugins.addFolder(folder);
+  const [row] = ws.plugins.records;
+  writeFileSync(join(row.folder, "extra.txt"), "x");
+  assert.equal(ws.plugins.intact(row), false);
+  assert.equal(ws.plugins.list()[0].repair, "update");
+  const remove = / If the plugin cannot be updated, remove it\./;
+  // The catalog says the source is another revision now: the step is to look again.
+  await assert.rejects(ws.plugins.update(added.id, { revision: "0".repeat(64) }), (error) => /was reviewed; preview it again/.test(error.message) && !remove.test(error.message));
+  // No revision at all: this app's own refusal, with nothing added.
+  await assert.rejects(ws.plugins.update(added.id, {}), (error) => /Look at the plugin first/.test(error.message) && !remove.test(error.message));
+  // The source is gone: the update cannot work, and the person is told what is left.
+  rmSync(folder, { recursive: true, force: true });
+  await assert.rejects(ws.plugins.update(added.id, { revision: row.revision }), remove);
+});
+
+test("a tool whose line holds the value of a secret setting is said as not run, and the vault is not opened for each answer", async (t) => {
+  const { open, source } = managed(t);
+  const folder = source("mine", {
+    "plugin.json": { name: "secret-fixture", version: "1.0.0", userConfig: { KEY: { title: "Key", sensitive: true }, SHORT: { title: "Short", sensitive: true } } },
+    ".mcp.json": { mcpServers: { holds: { command: "node", args: ["--key", "s3cret-value"] }, clean: { command: "node", args: ["server.js"] } } },
+  });
+  const ws = open();
+  const added = await ws.plugins.addFolder(folder);
+  const items = (listed) => {
+    const notRun = listed.contents.notRun;
+    return notRun === undefined ? [] : Array.isArray(notRun) ? notRun : notRun.items;
+  };
+  // No value set yet: both tools are said to start.
+  assert.deepEqual(items(ws.plugins.list()[0]), []);
+  await ws.plugins.configure(added.id, { KEY: "s3cret-value", SHORT: "ab" });
+  const [listed] = ws.plugins.list();
+  assert.deepEqual(items(listed), [{ what: "tool", name: "holds", why: "A word of this tool's command holds the value of a secret setting, so Botkins does not start it." }]);
+  // The list stays what the files say.
+  assert.deepEqual(listed.contents.mcpServers.map((tool) => tool.name), ["holds", "clean"]);
+  const notRun = listed.contents.notRun;
+  if (!Array.isArray(notRun)) assert.equal(notRun.count, 1);
+  // The vault is asked once for the same copy and settings, not for each answer.
+  const get = t.mock.method(ws.plugins.vault, "get");
+  ws.plugins.list();
+  ws.plugins.list();
+  assert.equal(get.mock.callCount(), 0);
+  // A new value is a new key: the answer follows it.
+  await ws.plugins.configure(added.id, { KEY: "another-value" });
+  assert.deepEqual(items(ws.plugins.list()[0]), []);
+});
+
+test("a row that is already at the current reading is not hashed in the constructor, and one from before is", async (t) => {
+  const { open, source, file } = managed(t);
+  const ws = open();
+  const current = await ws.plugins.addFolder(source("now", { "plugin.json": { name: "now-fixture", version: "1.0.0" } }));
+  const old = await ws.plugins.addFolder(source("old", { "plugin.json": { name: "old-fixture", version: "1.0.0" } }));
+  writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8")).map(({ reading, ...row }) => (row.preview.id === old.id ? row : { ...row, reading }))));
+  const again = open();
+  // (The queue checks the rest later, so right after the start only the old row has been checked.)
+  const checked = again.plugins.records.filter((row) => again.plugins.checked.has(row.folder)).map((row) => row.preview.id);
+  assert.deepEqual(checked, [old.id]);
+  assert.ok(current);
+  await again.plugins.queue;
+  assert.equal(again.plugins.checked.size, 2);
 });

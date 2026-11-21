@@ -56,7 +56,7 @@ test("catalog browses a local marketplace and parses components without executin
   const preview = await catalog.preview("memory@test-market");
   assert.match(preview.revision, /^[a-f0-9]{64}$/);
   assert.deepEqual(preview.contents.skills, ["skills/remember/SKILL.md"]);
-  assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", url: "https://example.test/mcp", headers: ["Authorization"] }]);
+  assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", type: "http", url: "https://example.test/mcp", headers: [{ name: "Authorization", value: "Bearer ${MEMORY_API_KEY}" }] }]);
   // The fixture's hook has the matcher "*", which means all: the hook runs, so it is shown.
   assert.deepEqual(preview.contents.hooks, [{ event: "userPromptSubmitted", command: "node \"${PLUGIN_ROOT}/recall.mjs\"", env: [], timeoutSec: 10 }]);
   assert.equal("notRun" in preview.contents, false);
@@ -159,7 +159,7 @@ test("a preview shows each environment value as written, says which names are no
   const parsed = inspectPlugin(plugin);
   assert.deepEqual(parsed.contents.mcpServers, [{
     name: "local", kind: "local", command: "node", args: ["--port", "3000"],
-    env: [{ name: "MODE", value: "fast" }], envNotSet: ["GIT_SSH_COMMAND"], cwd: "server",
+    env: [{ name: "MODE", value: "fast" }], envNotSet: [{ name: "GIT_SSH_COMMAND", why: "Botkins sets no name that starts with GIT_. Such a name can make a program load or start more than its command says." }], cwd: "server",
   }]);
   assert.equal(parsed.warnings.filter((line) => /does not set some environment names/.test(line)).length, 1);
   assert.deepEqual(parsed.contents.agents, ["agents/a.md"]);

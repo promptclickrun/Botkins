@@ -1,6 +1,7 @@
 // Bots may suggest a change. Only the person can authorize its reviewed revision, even in
 // approve-all chats. Values from a secure settings prompt go from Interactions to the vault.
 import { defineTool } from "./providers/provider.mjs";
+import { pluginCardLines } from "./plugin-card.mjs";
 
 export function pluginTools(ws, bot, chat, run, task) {
   if (!task || !run || chat.helper || run.scheduleId != null || run.panelId || run.taskId) return [];
@@ -41,18 +42,13 @@ export function pluginTools(ws, bot, chat, run, task) {
           if (generation !== plugins.generation)
             throw new Error("The plugins changed while this request was open. Review the change again.");
         };
-        const detail = [
-          "Plugin: " + card.name + " (" + id + ")",
-          "Bots: " +
-            (action === "install"
-              ? bot.name
-              : existing.bots === "all"
-                ? "All bots"
-                : existing.bots.map((x) => ws.state.bots.find((b) => b.id === x)?.name ?? x).join(", ")),
-          ...card.contents.hooks.map((h) => h.event + ": " + h.command),
-          ...card.contents.mcpServers.map((s) => s.name + ": " + (s.command || s.url || s.kind)),
-          ...(card.warnings ?? []),
-        ].join("\n");
+        const bots =
+          action === "install"
+            ? bot.name
+            : existing.bots === "all"
+              ? "All bots"
+              : existing.bots.map((x) => ws.state.bots.find((b) => b.id === x)?.name ?? x).join(", ");
+        const detail = pluginCardLines(card, { bots, action, id }).join("\n");
         const decision = await ws.interactions.request(chat, task, {
           botId: bot.id,
           kind: "permission",
@@ -94,7 +90,7 @@ export function pluginTools(ws, bot, chat, run, task) {
         else if (action === "configure") await plugins.configure(id, values, stillCurrent);
         else if (action === "update") await plugins.update(id, { revision: card.revision }, stillCurrent);
         else if (action === "uninstall") await plugins.uninstall(id, stillCurrent);
-        else await plugins.setEnabled(id, action === "enable", stillCurrent);
+        else await plugins.setEnabled(id, action === "enable", undefined, stillCurrent);
         return "Plugin change saved.";
       },
     }),

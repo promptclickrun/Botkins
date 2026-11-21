@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { configFile, declaredPath, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
+import { configFile, declaredPath, dependencyFolder, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
@@ -357,26 +357,46 @@ function assertPlainNames(files) {
   }
 }
 
-/** How many of the plugin's other files are listed by name. The totals count all of them. */
+/** How many rows of the plugin's other files are listed. The totals count all of the files. */
 const MAX_OTHER_FILES = 40;
 /**
  * The plugin's files that are not handed on as skills, agents or commands: the manifest, the hook
  * and tool files, scripts, dotfiles, a `node_modules`. A command runs in the plugin's folder, so
- * these files decide what it does; the person sees at least that they are there. The listed files
- * are the ones that tools read by themselves first (`config`), then the rest, each by path.
+ * these files decide what it does; the person sees at least that they are there.
+ *   - `count` and `bytes` are totals over the files that are NOT in the three lists, so that the
+ *     numbers keep their meaning;
+ *   - the rows are those files, plus every file anywhere that a tool reads by itself (`config`),
+ *     also below `skills/`, `agents/` and `commands/`: a `package.json` there would change what
+ *     `npm test` does, and its place in a list does not say so;
+ *   - all files below a folder of dependencies (`node_modules/`, `vendor/` ...) are one row for the
+ *     top-most such folder, with their total and their number, so that they cannot push out the
+ *     other rows;
+ *   - the marked rows come first, then the rest, each group by path; at most 40 rows.
  */
 function otherFiles(files, handed) {
-  const rows = [];
+  let count = 0;
   let bytes = 0;
+  const rows = [];
+  const folders = new Map();
   for (const [path, entry] of files) {
-    if (handed.has(path)) continue;
     const size = entry.bytes.length;
-    bytes += size;
-    rows.push({ path, bytes: size, ...(configFile(path) && { config: true }) });
+    const outside = !handed.has(path);
+    if (outside) {
+      count++;
+      bytes += size;
+    }
+    const folder = dependencyFolder(path);
+    if (folder) {
+      const row = folders.get(folder) ?? { path: folder, bytes: 0, files: 0, config: true };
+      row.bytes += size;
+      row.files++;
+      folders.set(folder, row);
+    } else if (outside || configFile(path)) rows.push({ path, bytes: size, ...(configFile(path) && { config: true }) });
   }
   const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  const listed = [...rows.filter((row) => row.config).sort(byPath), ...rows.filter((row) => !row.config).sort(byPath)].slice(0, MAX_OTHER_FILES);
-  return { count: rows.length, bytes, files: listed };
+  const all = [...rows, ...folders.values()];
+  const listed = [...all.filter((row) => row.config).sort(byPath), ...all.filter((row) => !row.config).sort(byPath)].slice(0, MAX_OTHER_FILES);
+  return { count, bytes, files: listed };
 }
 
 function parsePluginFiles(files, folder = undefined) {
@@ -389,7 +409,7 @@ function parsePluginFiles(files, folder = undefined) {
   if (!name) fail("Plugin manifest is missing a name.");
   // What is shown is shown whole. A plugin with a command too long to show is not installed.
   if (starts.refused.length) fail(`This plugin cannot be shown whole, so Botkins does not install it. ${starts.refused[0].why}`);
-  const { mcpServers, hooks, sentTo, notRun = [] } = describeStarts(starts);
+  const { mcpServers, hooks, sentTo, notRun } = describeStarts(starts);
   const config = fieldsFromManifest(manifest.userConfig ?? manifest.settings);
   // A setting the plugin uses and does not declare is asked for too.
   for (const key of sentTo.keys()) {
@@ -410,7 +430,7 @@ function parsePluginFiles(files, folder = undefined) {
     commands,
     mcpServers: clone(mcpServers),
     hooks: clone(hooks),
-    ...(notRun.length ? { notRun: clone(notRun) } : {}),
+    ...(notRun ? { notRun: clone(notRun) } : {}),
     ...(lspServers.length ? { lspServers } : {}),
     otherFiles: otherFiles(files, new Set([...skills, ...agents, ...commands])),
   };

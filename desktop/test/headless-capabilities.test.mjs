@@ -30,7 +30,8 @@ function setup(overrides = {}) {
 }
 
 test("a call that cannot reach the workspace drops the promise and keeps the other names; a refusal of the workspace does not", async () => {
-  for (const code of ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"]) {
+  // Any code is a connection that did not happen or did not last, not only the first five.
+  for (const code of ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT", "EACCES", "ENOTCONN", "ECONNABORTED", "EAGAIN", "EHOSTUNREACH"]) {
     const { flags, backend, refresh } = setup();
     await refresh();
     assert.deepEqual(backend.capabilities, ["models-v2", OWNER, PROMISE]);
@@ -54,7 +55,7 @@ test("a call that cannot reach the workspace drops the promise and keeps the oth
     assert.deepEqual(backend.capabilities, ["models-v2", OWNER]);
   }
   // The workspace answered with an error of its own: it is there, so its promise stands.
-  for (const message of ["This plugin is no longer installed.", "Unknown workspace call.", "connect ENOENT (said by the workspace)"]) {
+  for (const message of ["This plugin is no longer installed.", "Unknown workspace call.", "Unknown workspace action", "Unknown workspace action. And more.", "connect ENOENT (said by the workspace)"]) {
     const { flags, backend, refresh } = setup();
     await refresh();
     let changes = 0;
@@ -66,6 +67,53 @@ test("a call that cannot reach the workspace drops the promise and keeps the oth
     assert.equal(changes, 0);
   }
   assert.deepEqual(PROMISES, [PROMISE]);
+});
+
+test("an answer that is not JSON drops the promise, as the transport lets the reading error go on", async () => {
+  // The same error that `jsonBody` in headless/transport.mjs lets out for a body that is not JSON.
+  const reading = (text) => { try { JSON.parse(text); } catch (error) { return error; } };
+  for (const error of [reading("<html>Bad Gateway</html>"), reading(""), new SyntaxError("Unexpected end of JSON input")]) {
+    assert.ok(error instanceof SyntaxError);
+    const { flags, backend, refresh } = setup();
+    await refresh();
+    let changes = 0;
+    backend.subscribe(() => changes++);
+    flags.fail = error;
+    flags.only = "call";
+    await assert.rejects(backend.call("send", ["c1", "Hi", {}], person), (caught) => caught === error);
+    assert.deepEqual(backend.capabilities, ["models-v2", OWNER]);
+    assert.equal(changes, 1);
+  }
+});
+
+test("a refusal \"Unknown workspace action.\" is the sign of an older workspace and drops the promise, and no other refusal does", async () => {
+  const { ws, flags, backend, refresh } = setup();
+  await refresh();
+  let changes = 0;
+  backend.subscribe(() => changes++);
+  flags.fail = refused("Unknown workspace action.");
+  flags.only = "call";
+  await assert.rejects(backend.call("send", ["c1", "Hi", {}], person), (error) => error === flags.fail);
+  assert.deepEqual(backend.capabilities, ["models-v2", OWNER]);
+  assert.equal(changes, 1);
+  // The next look asks for a whole answer and brings the name back from a workspace that now says it.
+  flags.fail = null;
+  ws.seen.length = 0;
+  await refresh();
+  assert.equal(ws.seen.find(([method]) => method === "state")[1][0], null);
+  assert.deepEqual(backend.capabilities, ["models-v2", OWNER, PROMISE]);
+  // Also when it is another of the link's own requests that an older workspace does not know.
+  flags.fail = refused("Unknown workspace action.");
+  flags.only = "setLook";
+  await assert.rejects(backend.setLook({}), /Unknown workspace action\./);
+  assert.deepEqual(backend.capabilities, ["models-v2", OWNER]);
+  // Another refusal of the workspace leaves it alone.
+  flags.fail = null;
+  await refresh();
+  flags.fail = refused("This chat is gone.");
+  flags.only = "call";
+  await assert.rejects(backend.call("send", ["c1", "Hi", {}], person), /This chat is gone\./);
+  assert.deepEqual(backend.capabilities, ["models-v2", OWNER, PROMISE]);
 });
 
 test("the promise comes back only with an answer that carries the whole list, also after a failed call", async () => {
@@ -132,6 +180,9 @@ test("the team rule on routines survives a failed look and a failed call", async
   await refresh();
   // What the link's own code does (desktop/link/server.mjs, `dispatch`): the member's call is held to
   // the routine's maker while the app's list has the name.
+  // `routineOwners` below is a COPY of the expression in `LinkHost.dispatch` (search `routineOwners` in
+  // desktop/link/server.mjs). That is a method of a class that needs a whole server, and nothing exports
+  // it, so this test does not follow a change there: change both together.
   const team = { ...{ roles: BUILTIN_ROLES.map((role) => ({ ...role, perms: { ...role.perms } })), groups: [EVERYONE_GROUP] }, members: [{ id: "m_avery", groupId: "g_everyone" }] };
   team.roles = team.roles.map((role) => (role.id === "r_guest" ? { ...role, perms: { ...role.perms, today: ["view", "use", "create", "manage", "delete"] }, bots: "all" } : role));
   const state = { bots: [{ id: "pip" }], chats: [{ id: "routine-1", botId: "pip", createdBy: "m_someone_else" }] };
