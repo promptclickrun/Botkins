@@ -12,6 +12,7 @@ import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import { relayFetch } from "@/link/relay";
 import type { Calls, ChatDetail } from "@/link/types";
+import { liveTextOn, useChatPrefs } from "./chatPrefs";
 import { loadPrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
 import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
@@ -32,6 +33,7 @@ const fetcher = relayFetch(expoFetch as unknown as FetchLike);
 setRandomSource((length) => Crypto.getRandomBytes(length));
 
 let client: LinkClient | null = null;
+useChatPrefs.subscribe((prefs, before) => prefs.liveText !== before.liveText && client?.liveTextChanged());
 /** Who waits for the next sync to come back (`freshSync`). */
 const syncWaiters = new Set<() => void>();
 
@@ -41,6 +43,7 @@ function follow(pairing: Pairing) {
     fetch: fetcher,
     streamAppends: true,
     lightSteps: true,
+    liveText: (route) => liveTextOn(useChatPrefs.getState().liveText, route),
     onParts: applyParts,
     onState: (link) => {
       useApp.setState({ link });

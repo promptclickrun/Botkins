@@ -8,7 +8,7 @@ import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-nati
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Preferences, Project, QueuedMessage, Run } from "@/link/types";
-import { useChatPrefs } from "@/state/chatPrefs";
+import { liveTextOn, useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
@@ -38,6 +38,7 @@ import { chatTimeline, type Item, reuseItems, TIMELINE_V1, underWay } from "./tu
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
 import { endSelecting, selectionEnds } from "./selecting";
+import { arm, disarm, settle, snapReveals } from "./reveal";
 import { usePane } from "../pane/usePane";
 import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
@@ -356,6 +357,19 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
     return () => subscription.remove();
   }, []);
   const still = useReducedMotion();
+  // Without live text a reply lands whole: one that comes while this chat is open is shown word by word (reveal.ts).
+  const liveText = useChatPrefs((prefs) => prefs.liveText);
+  const route = useApp((state) => state.route);
+  const textOff = useCapability("live-text-off-v1");
+  const reveals = textOff && !still && !liveTextOn(liveText, route);
+  const turnLive = streaming || !!underWay(runPart);
+  const chatEnd = view.from + view.messages.length;
+  useEffect(() => {
+    if (!reveals) disarm(chatId);
+    else if (turnLive) arm(chatId, chatEnd);
+    else settle(chatId);
+  }, [reveals, turnLive, chatId, chatEnd]);
+  useEffect(() => () => disarm(chatId), [chatId]);
   useEffect(() => {
     const step = completions.check(chatId, {
       mode: completionPosition,
@@ -383,7 +397,11 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
 
   if (emptyView) return emptyView;
   return (
-    <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
+    <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}
+      onTouchStart={(event) => {
+        snapReveals();
+        selectionEnds.onTouchStart(event);
+      }}>
       <FlatList
         ref={list}
         inverted
@@ -399,6 +417,7 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
           }
         }}
         scrollEventThrottle={64}
+        onScrollBeginDrag={snapReveals}
         // Back at the newest content by their own hand: the list follows it again.
         onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
         data={data}
@@ -606,6 +625,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       setQuote("");
     }
     setText("");
+    snapReveals();
     onLeave.current.wrote = true;
     setParked(false);
     list.current?.scrollToOffset({ offset: 0, animated: true });

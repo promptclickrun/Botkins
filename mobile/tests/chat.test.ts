@@ -8,6 +8,36 @@ import type { BoardItem, Bot, ModelInfo, RunSummary } from "../src/link/types";
 import { boardMessage, boardQuote, findTrigger, joinDictation, mentionKey, teammates, tokenOf, toInput, withBoardQuote, arrived, waitingCopies } from "../src/features/chat/compose";
 import { chatRuns, contextParts, contextPercent, contextTone, tokens, usageSummary } from "../src/features/chat/contextMath";
 import { contextFact, effortRows, modelFacts } from "../src/features/models/facts";
+import { arm, claim, disarm, revealedText, revealMs, settle } from "../src/features/chat/reveal";
+
+test("a reply that lands whole is revealed in whole words, faster when it is short", () => {
+  assert.equal(revealMs(10), 300);
+  assert.equal(revealMs(200), 800);
+  assert.equal(revealMs(5000), 1200);
+  const text = "one two three four five six seven eight nine ten";
+  assert.equal(revealedText(text, 0), "");
+  let last = "";
+  for (let at = 0; at <= revealMs(text.length); at += 30) {
+    const shown = revealedText(text, at);
+    assert.ok(text.startsWith(shown) && shown.length >= last.length, "grows as a prefix");
+    assert.ok(shown === "" || shown === text || /\s/.test(text[shown.length]), "ends at a word: " + JSON.stringify(shown));
+    last = shown;
+  }
+  assert.equal(revealedText(text, revealMs(text.length)), text);
+  assert.equal(revealedText("oneword", 100), "oneword");
+});
+
+test("only a reply after the turn began while the chat was open is revealed, once", () => {
+  assert.equal(claim("c", 5), null, "not armed: history");
+  arm("c", 4);
+  assert.equal(claim("c", 3, 100), null, "older than the turn");
+  assert.equal(claim("c", 4, 100), 100);
+  assert.equal(claim("c", 4, 900), 100, "drawn again, it carries on");
+  settle("c", 1000);
+  assert.equal(claim("c", 5, 1200), 1200, "just after the turn ended");
+  assert.equal(claim("c", 6, 10_000), null, "long after");
+  disarm("c");
+});
 
 test("a trigger is the sigil word that ends at the caret", () => {
   assert.deepEqual(findTrigger("#", 1), { sigil: "#", query: "", start: 0, end: 1 });

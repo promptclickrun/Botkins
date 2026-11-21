@@ -351,9 +351,9 @@ export type LinkOptions = {
   onHosts?(hosts: string[]): void;
   /** How the phone is connected changed: null while there is no session. */
   onRoute?(route: LinkRoute | null): void;
-  /** While connected through the relay, the first wait before looking for a direct address (default 60 s). */
+  /** While connected through the relay, the first wait before looking for a direct address (default 5 s). Each wait after doubles. */
   probeMs?: number;
-  /** The longest wait between direct probes (default 5 minutes). */
+  /** The longest wait between direct probes (default 60 s). */
   probeMaxMs?: number;
   /** Called when the link wakes: the transport proves its open connections are alive (the relay's sockets). */
   check?(): void;
@@ -366,6 +366,8 @@ export type LinkOptions = {
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
 /** How long a direct address that answered and then failed is left out, when there is a relay to use. */
 const DISTRUST_MS = 10 * 60_000;
+/** How long a direct probe waits for its hello. Longer than the first look's 1.5 s: nobody waits on it. */
+const PROBE_HELLO_MS = 3000;
 
 export class LinkClient {
   state: LinkState = "connecting";
@@ -399,8 +401,8 @@ export class LinkClient {
     private options: LinkOptions,
   ) {
     this.deviceKey = deviceKeyOf(pairing);
-    this.probeMs = options.probeMs ?? 60_000;
-    this.probeMaxMs = Math.max(this.probeMs, options.probeMaxMs ?? 300_000);
+    this.probeMs = options.probeMs ?? 5_000;
+    this.probeMaxMs = Math.max(this.probeMs, options.probeMaxMs ?? 60_000);
     this.probeDelay = this.probeMs;
   }
 
@@ -509,7 +511,8 @@ export class LinkClient {
   }
 
   /**
-   * While connected through the relay: asks the direct addresses (1.5 s) and, when one answers as the
+   * While connected through the relay: asks the direct addresses (3 s, in the background: a phone's
+   * VPN can be slow to wake) and, when one answers as the
    * right computer, drops the session so the next request opens a direct one. A call in flight keeps
    * the session it started with; only the waiting sync request is cut short. True when it switched.
    */
@@ -523,7 +526,7 @@ export class LinkClient {
     try {
       const direct = this.trusted(this.pairing.hosts.filter((host) => !isRelayHost(host)));
       if (!direct.length) return false;
-      await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, 1500);
+      await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, PROBE_HELLO_MS);
       if (this.session !== seen || this.opening) return false;
       this.useSession(null);
       this.poll?.abort();
