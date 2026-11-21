@@ -666,7 +666,7 @@ export type SpaceSummary = {
   updatedAt: number;
 };
 /** A space's content, asked for with `spaces.read`. Read again when the `rev` in the `spaces` part passes this one. */
-export type SpaceContent = { id: string; rev: number; /** When the person last opened it before this read. */ seenAt: number; panels: PanelView[]; cards: BoardItem[] };
+export type SpaceContent = { id: string; rev: number; /** When the person last opened it before this read. */ seenAt: number; /** When they opened a panel or card on its own since (item id → time). Absent from an older computer. */ seenItems?: Record<string, number>; panels: PanelView[]; cards: BoardItem[] };
 export type PanelStart = "checklist" | "tracker" | "chart" | "table" | "notes" | "app";
 export type SpaceShareInput = { access: SpaceAccess; grants?: { id: string; can: "view" | "edit" }[]; teamCan?: "view" | "edit" };
 export type BoardItem = {
@@ -1560,7 +1560,8 @@ export type Calls = {
   "link.spaces.newLink"(id: string): { link: string };
   /** The caller's own order and pins. */
   "link.spaces.arrange"(input: { order: string[]; pinned: string[] }): null;
-  "link.spaces.seen"(id: string): null;
+  /** With `itemId`, only that panel or card was seen (opened). An older computer takes it as the whole space. */
+  "link.spaces.seen"(id: string, itemId?: string): null;
   "link.spaces.notify"(id: string, mode: SpaceNotify): null;
   /** The caller is looking at this space (and panel) now; null on leaving. Sent every 30 seconds while it stays in view. */
   "link.spaces.here"(id: string | null, panelId?: string): null;

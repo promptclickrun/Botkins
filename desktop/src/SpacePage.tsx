@@ -392,6 +392,9 @@ export function SpacePage({
   // What changed is told against the visit before this one, so the line and dots stay while the page is open.
   const seenAt = useRef<number | undefined>(undefined);
   const changedAtOpen = useRef(space.changed);
+  // The panels opened on their own: before this visit (the read's `seenItems`), and on this page.
+  // Opening one clears its dot at once, and tells the computer, so it is not news on the phone either.
+  const [openedItems, setOpenedItems] = useState<Record<string, number>>({});
   const [adding, setAdding] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [hidden, showHidden] = useState(false);
@@ -464,7 +467,12 @@ export function SpacePage({
         if (!live) return;
         if (seenAt.current === undefined) {
           seenAt.current = next.seenAt;
+          if (next.seenItems) setOpenedItems((now) => ({ ...next.seenItems, ...now }));
           // Seen once it is read, so the read still says when it was opened before.
+          void api["link.spaces.seen"](space.id).catch(() => {});
+        } else if (!document.hidden) {
+          // A change that arrives while the person is here is seen too, so the space is not left
+          // marked changed once they leave. The line and dots still tell it until then.
           void api["link.spaces.seen"](space.id).catch(() => {});
         }
         held.current = next.rev;
@@ -492,7 +500,14 @@ export function SpacePage({
   const project = space.projectId ? state.projects?.find((p) => p.id === space.projectId) : undefined;
   // Once the space is read, the line counts its panels as the dots do, so a person's own tick or
   // note is not news to them. Before that, and for a space never opened, the computer's count.
-  const line = content && seenAt.current ? changedLine(changedPanels(panels, seenAt.current, me), seenAt.current) : changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
+  const line = content && seenAt.current ? changedLine(changedPanels(panels, seenAt.current, me, openedItems), seenAt.current) : changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
+  /** The person opened this panel (clicked in it): its dot clears, here and on their other devices. */
+  function openedPanel(panel: SpaceContent["panels"][number]) {
+    if (!panelChanged(panel, seenAt.current, me, openedItems)) return;
+    // Up to the change it shows: a newer one brings the dot back.
+    setOpenedItems((now) => ({ ...now, [panel.id]: panel.updatedAt }));
+    void api["link.spaces.seen"](space.id, panel.id).catch(() => {});
+  }
   const shown = panels.filter((p) => p.hidden === hidden);
   const drag = usePanelDrag(
     shown.map((p) => p.id),
@@ -587,7 +602,7 @@ export function SpacePage({
               key={p.id}
               state={state}
               panel={{ ...p, size: resize.sizeOf(p.id, p.size) }}
-              outer={place && { ...place, className: [place.className, resize.pulling === p.id && "pulling"].filter(Boolean).join(" ") || undefined }}
+              outer={{ ...place, className: (place && [place.className, resize.pulling === p.id && "pulling"].filter(Boolean).join(" ")) || undefined, onClick: () => openedPanel(p) }}
               top={arrange ? drag.handle(p.id) : undefined}
               after={arrange && resize.corner(p)}
               fail={fail}
@@ -599,7 +614,7 @@ export function SpacePage({
               badges={
                 <>
                   {p.blocks.some((b) => b.type === "html") && <span className="space-app">App</span>}
-                  {panelChanged(p, seenAt.current, me) && <i className="space-dot" aria-label="Changed" />}
+                  {panelChanged(p, seenAt.current, me, openedItems) && <i className="space-dot" aria-label="Changed" />}
                 </>
               }
               tools={

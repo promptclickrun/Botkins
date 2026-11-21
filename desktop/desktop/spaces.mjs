@@ -382,7 +382,8 @@ export class Spaces {
           // `by`: the person who made the newest change, as long as a bot has not published since (a publish moves `updatedAt` past `last.at`).
           return { id: panel.id, botId: panel.botId, updatedAt, ...(panel.last?.by && panel.last.at >= updatedAt && { by: panel.last.by }) };
         }),
-        ...this.cards(space.id).filter((card) => card.status === "open").map((card) => ({ id: card.id, botId: card.botId, updatedAt: card.updatedAt ?? card.createdAt ?? 0 })),
+        // `by` for a card: the person whose answer (a rating, Not today…) was its newest change.
+        ...this.cards(space.id).filter((card) => card.status === "open").map((card) => ({ id: card.id, botId: card.botId, updatedAt: card.updatedAt ?? card.createdAt ?? 0, ...(typeof card.by === "string" && { by: card.by }) })),
       ],
     }));
   }

@@ -69,7 +69,8 @@ export type PanelView = ShownPanel &
   };
 export type SpaceCard = BoardItem & { spaceId?: string };
 /** The answer of `spaces.read(id)`. `seenAt` is when the person last opened it before this read. */
-export type SpaceContent = { id: string; rev: number; seenAt: number; panels: PanelView[]; cards: SpaceCard[] };
+/** `seenItems`: when the person opened a panel or card on its own since `seenAt` (item id → time); absent from an older link. */
+export type SpaceContent = { id: string; rev: number; seenAt: number; seenItems?: Record<string, number>; panels: PanelView[]; cards: SpaceCard[] };
 export type SpaceGrant = { id: string; can: "view" | "edit" };
 export type SpaceShareInput = { access: SpaceAccess; grants?: SpaceGrant[]; teamCan?: "view" | "edit" };
 
@@ -152,17 +153,21 @@ export function lastLine(last: PanelLast, now = Date.now(), locale?: string) {
   return firstName(last.name) + " " + what + " · " + ago(last.at, now, locale);
 }
 
+/** Panel or card id → when the person opened that one on its own (the link's `seenItems`, and what they opened since). */
+export type OpenedItems = Readonly<Record<string, number>>;
+
 /**
- * Whether a panel changed for this person since they last opened its space. A person's own tick or
- * note is not news to them: `last` is theirs and is the panel's newest change (the computer stamps
- * the two times together; the phone allows the same two seconds between them).
+ * Whether a panel changed for this person since they last opened its space, or since they opened
+ * that panel (`opened`). A person's own tick or note is not news to them: `last` is theirs and is
+ * the panel's newest change (the computer stamps the two times together; the phone allows the same
+ * two seconds between them).
  */
-export const panelChanged = (panel: Pick<Panel, "updatedAt"> & { last?: Pick<PanelLast, "by" | "at"> }, seenAt: number | undefined, me?: string) =>
-  !!seenAt && panel.updatedAt > seenAt && !(!!me && panel.last?.by === me && panel.last.at >= panel.updatedAt - 2000);
+export const panelChanged = (panel: Pick<Panel, "updatedAt"> & { id?: string; last?: Pick<PanelLast, "by" | "at"> }, seenAt: number | undefined, me?: string, opened?: OpenedItems) =>
+  !!seenAt && panel.updatedAt > Math.max(seenAt, (panel.id && opened?.[panel.id]) || 0) && !(!!me && panel.last?.by === me && panel.last.at >= panel.updatedAt - 2000);
 
 /** How many of a space's panels changed for this person, for "2 panels changed since yesterday". A hidden panel is not counted. */
-export const changedPanels = (panels: readonly (Pick<Panel, "updatedAt" | "hidden"> & { last?: Pick<PanelLast, "by" | "at"> })[], seenAt: number | undefined, me?: string) =>
-  panels.filter((panel) => !panel.hidden && panelChanged(panel, seenAt, me)).length;
+export const changedPanels = (panels: readonly (Pick<Panel, "updatedAt" | "hidden"> & { id?: string; last?: Pick<PanelLast, "by" | "at"> })[], seenAt: number | undefined, me?: string, opened?: OpenedItems) =>
+  panels.filter((panel) => !panel.hidden && panelChanged(panel, seenAt, me, opened)).length;
 
 /**
  * The new panel's project, for the owner's "Project" row of New panel: what the person picked

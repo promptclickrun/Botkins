@@ -587,7 +587,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     boardAct: (id, action, value, person = "owner") => {
       workspace.spaces.need(workspace.spaces.of(workspace.board.item(id)), person, "change");
-      return workspace.board.act(id, action, value);
+      return workspace.board.act(id, action, value, person);
     },
     // Spaces (desktop/spaces.mjs; the contract is docs/spaces.md). The last argument is the person.
     // A device's call arrives with its person (desktop/device-call.mjs), and the link then does
@@ -628,7 +628,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         "link.spaces.share": (id, input) => link.shareSpace("owner", id, input),
         "link.spaces.newLink": (id) => link.newSpaceLink("owner", id),
         "link.spaces.arrange": (input) => link.arrangeSpaces("owner", input),
-        "link.spaces.seen": (id) => link.seenSpace("owner", id),
+        "link.spaces.seen": (id, itemId) => link.seenSpace("owner", id, itemId),
         "link.spaces.notify": (id, mode) => link.notifySpace("owner", id, mode),
         "link.spaces.here": (id, panelId) => link.hereInSpace("owner", id, panelId),
         "link.team.setLinkSharing": (on) => link.setLinkSharing(on),

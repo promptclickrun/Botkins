@@ -48,18 +48,26 @@ export function since(seenAt: number, now = Date.now()): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(seenAt);
 }
 
-/** Whether a panel changed for this person since they last looked. Their own tick or note is not news to them. */
-const newTo = (panel: Pick<PanelView, "updatedAt" | "last">, seenAt: number, me?: string) => panel.updatedAt > seenAt && !(me && panel.last?.by === me && panel.last.at >= panel.updatedAt - 2000);
+/** Panel or card id → up to which change the person opened that one on its own (the read's `seenItems`, and this phone's marks since). */
+export type Opened = Readonly<Record<string, number>>;
+
+/**
+ * Whether a panel changed for this person since they last looked at its space, or since they
+ * opened that panel (`opened`). Their own tick or note is not news to them.
+ */
+const newTo = (panel: Pick<PanelView, "id" | "updatedAt" | "last">, seenAt: number, me?: string, opened?: Opened) =>
+  panel.updatedAt > Math.max(seenAt, opened?.[panel.id] ?? 0) && !(me && panel.last?.by === me && panel.last.at >= panel.updatedAt - 2000);
 
 /** "2 panels changed since yesterday", or nothing when nothing did or the space was never opened. `me` is this phone's person. */
-export function changedLine(panels: Pick<PanelView, "updatedAt" | "hidden" | "last">[], seenAt: number, now = Date.now(), me?: string): string | undefined {
+export function changedLine(panels: Pick<PanelView, "id" | "updatedAt" | "hidden" | "last">[], seenAt: number, now = Date.now(), me?: string, opened?: Opened): string | undefined {
   if (!seenAt) return undefined;
-  const changed = panels.filter((panel) => !panel.hidden && newTo(panel, seenAt, me)).length;
+  const changed = panels.filter((panel) => !panel.hidden && newTo(panel, seenAt, me, opened)).length;
   return changed ? count(changed, "panel", "panels") + " changed since " + since(seenAt, now) : undefined;
 }
 
-/** The ids of the panels that changed since the person last opened the space: each gets a dot. */
-export const changedSince = (panels: Pick<PanelView, "id" | "updatedAt" | "last">[], seenAt: number, me?: string) => new Set(seenAt ? panels.filter((panel) => newTo(panel, seenAt, me)).map((panel) => panel.id) : []);
+/** The ids of the panels that changed since the person last opened the space, or that panel: each gets a dot. */
+export const changedSince = (panels: Pick<PanelView, "id" | "updatedAt" | "last">[], seenAt: number, me?: string, opened?: Opened) =>
+  new Set(seenAt ? panels.filter((panel) => newTo(panel, seenAt, me, opened)).map((panel) => panel.id) : []);
 
 /**
  * All spaces, in sections: Pinned (in the person's order, as sent), More, and for an owner with

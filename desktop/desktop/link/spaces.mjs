@@ -14,6 +14,8 @@ import { Failure } from "./tools.mjs";
 const GONE = "This space no longer exists.";
 const HERE_MS = 75_000;
 const NOTIFY = ["off", "daily", "all"];
+/** At most this many single items a person opened are remembered (`seenItems`); the oldest go first. */
+const SEEN_ITEMS = 400;
 
 /** A link's id: it belongs to the host's relay key and a salt, so nobody else can ever put a copy under it. */
 export const shareIdOf = (relayPublicKey, salt) => b64u(createHash("sha256").update("botkins-space-id-v1:" + relayPublicKey + ":" + salt, "utf8").digest().subarray(0, 16));
@@ -172,10 +174,24 @@ export class Spaces {
     this.saveView(person, { order: opens(input?.order), pinned: opens(input?.pinned) });
     return null;
   }
-  /** The caller has seen this space now. */
-  seen(person, id) {
+  /**
+   * The caller has seen this space now, or with `itemId` only that panel or card of it (they
+   * opened it). Seeing the whole space forgets its items' own marks, which it covers.
+   */
+  seen(person, id, itemId) {
     if (!this.can(id, person)) throw new Failure(GONE);
-    this.saveView(person, { seen: { ...spacesViewOf(this.team(), person).seen, [id]: Date.now() } });
+    const view = spacesViewOf(this.team(), person);
+    const now = Date.now();
+    const items = (this.record(id)?.items ?? []).map((item) => item?.id).filter((one) => typeof one === "string");
+    if (itemId != null) {
+      if (typeof itemId !== "string" || !items.includes(itemId)) return null;
+      // The newest marks are kept: a person's marks never grow past what a few spaces hold.
+      const kept = Object.entries({ ...view.seenItems, [itemId]: now }).sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0)).slice(0, SEEN_ITEMS);
+      this.saveView(person, { seenItems: Object.fromEntries(kept) });
+      return null;
+    }
+    const seenItems = Object.fromEntries(Object.entries(view.seenItems).filter(([one]) => !items.includes(one)));
+    this.saveView(person, { seen: { ...view.seen, [id]: now }, seenItems });
     return null;
   }
   notify(person, id, mode) {

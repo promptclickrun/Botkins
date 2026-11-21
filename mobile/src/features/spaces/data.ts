@@ -66,9 +66,34 @@ export function useSpaceContent(id: string | undefined): { content?: SpaceConten
   return { content: held?.content, error: held?.content ? undefined : held?.error, loading: !held?.content && !held?.error, retry: () => id && read(id) };
 }
 
+/**
+ * What this phone marked seen since the space was last read: a space up to the newest change it
+ * showed, and a panel or card opened on its own up to its change (by id). A read does not follow a
+ * mark (the space's `rev` does not move), so the screens hold these on top of the read's `seenAt`.
+ * Times are the computer's (`updatedAt`), never this phone's clock.
+ */
+type Marks = { spaces: Record<string, number>; items: Record<string, number> };
+export const useSeenMarks = create<Marks>(() => ({ spaces: {}, items: {} }));
+onComputerChange(() => useSeenMarks.setState({ spaces: {}, items: {} }, true));
+
+const newest = (content: SpaceContent | undefined) => Math.max(0, ...(content?.panels ?? []).map((panel) => panel.updatedAt), ...(content?.cards ?? []).map((card) => card.updatedAt ?? 0));
+
 /** The person has looked at this space now: its dots clear. Quietly: a failed mark is not worth a toast. */
 export function markSeen(id: string) {
+  const upTo = newest(useContents.getState()[id]?.content);
+  if (upTo) useSeenMarks.setState((marks) => ({ spaces: { ...marks.spaces, [id]: Math.max(marks.spaces[id] ?? 0, upTo) } }));
   api["link.spaces.seen"](id).catch(() => {});
+}
+
+/**
+ * The person opened one panel (or card) of a space: its dot clears, on this phone at once and on
+ * their other devices. `upTo` is the change it showed (`updatedAt`); a newer one brings the dot back.
+ * An older computer takes the mark as one for the whole space.
+ */
+export function markItemSeen(spaceId: string, itemId: string, upTo: number) {
+  if ((useSeenMarks.getState().items[itemId] ?? 0) >= upTo) return;
+  useSeenMarks.setState((marks) => ({ items: { ...marks.items, [itemId]: upTo } }));
+  api["link.spaces.seen"](spaceId, itemId).catch(() => {});
 }
 
 /** The person is looking at this space (and this panel) now, or at none. The computer forgets after a while, so a screen says it again. */
