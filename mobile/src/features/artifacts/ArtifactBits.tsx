@@ -2,11 +2,12 @@
 // attachments under a chat message.
 import { Image } from "expo-image";
 import { File, FileCode, FileText, Film, Folder, Image as ImageIcon, type LucideIcon, Music, Package } from "lucide-react-native";
+import { useState } from "react";
 import { View } from "react-native";
 import type { Artifact } from "@/link/types";
 import { useCapability } from "@/state/hooks";
 import { Group, IconTile, Label, radius, Row, space, T, Tap, useTheme } from "@/ui";
-import { openArtifact, openArtifactList, useArtifactList, useThumbnail } from "./data";
+import { openArtifact, openArtifactList, useArtifactList, useInlinePicture, useThumbnail } from "./data";
 import { type PreviewKind, previewKind, rowLine } from "./logic";
 
 export const KIND_ICON: Record<PreviewKind, LucideIcon> = {
@@ -48,6 +49,48 @@ export function ArtifactChips({ items, align }: { items: Artifact[]; align: "fle
           <Attachment key={artifact.id} artifact={artifact} />
         ),
       )}
+    </View>
+  );
+}
+
+/** The most room a picture takes in a message, in points. */
+const INLINE = { width: 420, height: 480 };
+
+/**
+ * A MEDIA: attachment drawn in a message, where its line was. A picture is shown itself, as wide as
+ * the message up to a limit and no taller than most of a screen; a tap opens it. Anything else (a
+ * video, a sound, a file), and a picture that can't be drawn, is a chip that opens it.
+ */
+export function InlineMedia({ artifact }: { artifact: Artifact }) {
+  const { colors } = useTheme();
+  const picture = useInlinePicture(artifact);
+  const [room, setRoom] = useState(0);
+  const [ratio, setRatio] = useState(4 / 3);
+  const [broken, setBroken] = useState(false);
+  if (artifact.kind !== "image" || broken || (picture.settled && !picture.uri)) return <View style={{ alignItems: "flex-start" }}><Attachment artifact={artifact} /></View>;
+  // As wide as there is room, up to the limit; a tall picture is made narrower rather than cut.
+  const wide = Math.min(room || INLINE.width, INLINE.width);
+  const height = Math.min(wide / ratio, INLINE.height);
+  const width = Math.min(wide, height * ratio);
+  return (
+    <View onLayout={(event) => setRoom(event.nativeEvent.layout.width)}>
+      <Tap onPress={() => openArtifact(artifact)} feel="select" sink={0.99} accessibilityRole="imagebutton" accessibilityLabel={"Open " + artifact.name} style={{ alignSelf: "flex-start" }}>
+        <View style={{ width, height, borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.sunken, alignItems: "center", justifyContent: "center" }}>
+          {picture.uri ? (
+            <Image
+              source={{ uri: picture.uri }}
+              style={{ width, height }}
+              contentFit="contain"
+              transition={120}
+              accessibilityIgnoresInvertColors
+              onLoad={(event) => event.source.width > 0 && event.source.height > 0 && setRatio(Math.min(4, Math.max(0.3, event.source.width / event.source.height)))}
+              onError={() => setBroken(true)}
+            />
+          ) : (
+            <ImageIcon size={22} color={colors.muted} strokeWidth={2} />
+          )}
+        </View>
+      </Tap>
     </View>
   );
 }

@@ -1623,6 +1623,12 @@ export class MockBackend {
         reply = "I opened the side pane with a table, a chart, a website and the screen.";
       }
       this.changed();
+    } else if (live() && /mockups?|pictures/i.test(prompt)) {
+      // Several pictures, each under a line of its own, as a bot sends mockups: each is drawn in the
+      // reply where its MEDIA: line is. The last one names a file the computer does not know.
+      const pictures = this.artifacts.filter((entry) => entry.item.botId === chat.botId && !entry.parent && entry.item.kind === "image").map((entry) => entry.item).slice(0, 3);
+      reply = ["Here are the mockups, one image each:", "", ...pictures.flatMap((item, at) => ["**" + (at + 1) + ". " + item.name.replace(/\.\w+$/, "") + ".** As it looks today.", "MEDIA:" + item.path, ""]), "**" + (pictures.length + 1) + ". One I can't show**", "MEDIA:/Users/demo/secret/draft.png"].join("\n");
+      this.changed();
     } else if (live() && /artifact|what did you make|show.*files/i.test(prompt)) {
       // Paths and a MEDIA: attachment in the reply, for the links a chat makes of them. One path is not in the index.
       const mine = this.artifacts.filter((entry) => entry.item.botId === chat.botId && !entry.parent).map((entry) => entry.item);
@@ -2812,6 +2818,8 @@ export class MockBackend {
     },
     // The demo hands a picture back whole (they are small); it makes no poster for anything else.
     "artifacts.thumbnail"(id) {
+      // BOTKINS_DEV_THUMBS=off: a host with no display makes no small pictures (a server host).
+      if (process.env.BOTKINS_DEV_THUMBS === "off") return null;
       const entry = this.artifacts.find((each) => each.item.id === id);
       return entry?.item.kind === "image" && entry.data ? { data: entry.data.toString("base64"), mime: entry.item.mime } : null;
     },

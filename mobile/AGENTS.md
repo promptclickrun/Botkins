@@ -10,7 +10,7 @@ Botkins is the phone app for the Botkins app on the person's computer (the deskt
 
 ```sh
 npx tsc --noEmit     # typecheck (fast; run it after every change)
-npm test             # 599 tests: the link, the computer's end of it, several devices, the relay path, push and Live Activities, device tools, voice, custom views, limits, chat logic, selectable text, looks, tables, themes
+npm test             # 606 tests: the link, the computer's end of it, several devices, the relay path, push and Live Activities, device tools, voice, custom views, limits, chat logic, selectable text, looks, tables, themes
 (cd relay && npm test)            # the relay Worker's own tests: 137 (they start wrangler dev)
 npm run dev-host     # a demo computer to pair with (link-host/dev-host.mjs); see "The demo computer"
 npx expo start       # Metro, for a build that is already installed
@@ -246,7 +246,8 @@ What a bot made or was given: files it wrote, pictures, video and sound it sent,
 - **The four calls** (`Calls` in `src/link/types.ts`; their shapes are checked in `link-host/methods.mjs`): `artifacts.list` (a bot's artifacts, 50 a page, newest first; `kind` "files" or "media"; `folder` lists what is in a folder artifact), `artifacts.read` (a file in pieces of at most 512 KiB), `artifacts.thumbnail`, and `artifacts.resolve` (the artifacts behind paths written in a chat, 20 at a time). `revs.artifacts` goes up when the index changes.
 - **Where.** A bot's page has an "Artifacts" section (the newest 3 and "All artifacts"). The list page (`/artifacts`) has the chips All · Files · Media (Media is images, video and audio; Files is everything else, folders too). The preview (`/artifacts/view`) is chosen by type (`previewKind`): picture, video and sound, text, Markdown, code, PDF, and a fallback with Share. Its bar has Share, Save to Photos (pictures and video) and Open chat. Everything is in `src/features/artifacts/`: `logic.ts` (plain, tested), `data.ts` (lists, downloads into the phone's cache in pieces, thumbnails, path lookups; emptied on a change of computer), and the screens.
 - **Paths in a chat.** `src/features/chat/paths.ts` finds the absolute paths and `MEDIA:` attachments in a message. A path becomes a link only after the computer says it can show it; anything else stays plain text. The rules and 40 cases are shared with the desktop app in `docs/path-detection.json`: change the cases there first, then both detectors. `Markdown` takes the links through its `paths` prop.
-- **To try it**, send the demo bot "what did you make": its reply has paths that resolve, one that does not, a whole-line path in a code block and an attachment.
+- **Media in a reply.** A `MEDIA:` attachment the computer knows is drawn in the reply where its line is, and the raw line is not shown (`messageParts` in `logic.ts`, `InlineMedia` in `ArtifactBits.tsx`): a picture as itself, anything else as a chip that opens it. One the computer does not know stays as the text it is. A picture comes from the computer's small picture first; the file itself is read when it is at most 3 MB (a sharp picture), or at most 8 MB when the computer makes no small picture (a server host has no display to make one with). The computer takes a `MEDIA:` file only from the bot's own folder, a project folder or the chat's session folder: a path in prose never opens another place on the computer.
+- **To try it**, send the demo bot "what did you make": its reply has paths that resolve, one that does not, a whole-line path in a code block and an attachment. "mockups" sends three pictures, each under a line of its own, and one the computer does not know.
 
 ## Teams: people in a chat, and each person's own view
 
@@ -369,6 +370,7 @@ Dictation, reading replies aloud and live voice, in `src/features/voice/`. `link
 | `BOTKINS_DEV_FOLDERS` | `ask` makes the first look inside the made-up Documents folder answer that the computer is still deciding, as a Mac does. |
 | `BOTKINS_DEV_EMPTY` | `1` starts the demo with no bots, so Home shows "Bring in your agents". With `PORT` and `BOTKINS_DEV_DIR` set to others, it is a second computer to pair with. |
 | `BOTKINS_DEV_HEADLESS` | `1` makes the demo a headless host: it names `screen-grant-v1`, starts with the screen off and keeps the level a phone sets. `BOTKINS_DEV_DISPLAY=off` says its display isn't running. |
+| `BOTKINS_DEV_THUMBS` | `off` makes the demo answer no small picture for any artifact, as a server host with no display does. The phone then reads a picture itself to draw it. |
 | `BOTKINS_DEV_NO_OUTPUT` | `off` leaves `routine-no-output-v1` out, as an older computer would. |
 | `BOTKINS_DEV_APPENDS` | `off` omits `stream-appends-v1` and serves full-string `live` even when a phone asks for appends. |
 | `BOTKINS_DEV_TIMELINE` | `off` leaves `turn-timeline-v1` out, as an older computer would: no interim messages, answers or helper steps. |

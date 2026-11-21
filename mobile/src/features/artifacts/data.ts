@@ -14,7 +14,7 @@ import { useCapability, useOnline, usePart } from "@/state/hooks";
 import { api } from "@/state/link";
 import { onComputerChange, useApp } from "@/state/store";
 import type { PathLinks } from "@/ui";
-import { type Filter, inFilter, type Known, kindOf, linkKey, mediaOf, PathResolver, TEXT_LIMIT, uniquePaths } from "./logic";
+import { type Filter, inFilter, INLINE_PICTURE_MAX, INLINE_PICTURE_SHARP, type Known, kindOf, linkKey, mediaOf, type MessagePart, messageParts, PathResolver, TEXT_LIMIT, uniquePaths } from "./logic";
 
 const errorText = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
 
@@ -137,23 +137,62 @@ function keepThumb(id: string, uri: string | null) {
   if (thumbs.size > THUMBS) thumbs.delete(thumbs.keys().next().value as string);
 }
 
-/** A picture's or a video's small picture, as a data uri; null when the computer has none. */
-export function loadThumbnail(id: string): Promise<string | null> {
-  if (thumbs.has(id)) return Promise.resolve(thumbs.get(id) ?? null);
-  let asking = thumbsAsked.get(id);
+/** The size of a list's small picture, and of the one a message draws in place (the largest the computer makes). */
+const THUMB = 160;
+const THUMB_LARGE = 512;
+const thumbKey = (id: string, size: number) => (size === THUMB ? id : id + ":" + size);
+
+/** A picture's or a video's small picture, as a data uri; null when the computer has none (a host with no display makes none). */
+export function loadThumbnail(id: string, size = THUMB): Promise<string | null> {
+  const key = thumbKey(id, size);
+  if (thumbs.has(key)) return Promise.resolve(thumbs.get(key) ?? null);
+  let asking = thumbsAsked.get(key);
   if (!asking) {
-    asking = api["artifacts.thumbnail"](id, { size: 160 })
+    asking = api["artifacts.thumbnail"](id, { size })
       .then((thumb) => {
         const uri = thumb && typeof thumb.data === "string" && /^image\/[\w.+-]+$/.test(thumb.mime) ? "data:" + thumb.mime + ";base64," + thumb.data : null;
-        keepThumb(id, uri);
+        keepThumb(key, uri);
         return uri;
       })
       // A failed one is not kept, so it is asked again next time.
       .catch(() => null)
-      .finally(() => thumbsAsked.delete(id));
-    thumbsAsked.set(id, asking);
+      .finally(() => thumbsAsked.delete(key));
+    thumbsAsked.set(key, asking);
   }
   return asking;
+}
+
+/**
+ * A picture to draw in a message, where its MEDIA: line was. The computer's small picture comes
+ * first when it makes one. The file itself is read when it is small enough to be worth a sharp
+ * picture, or when there is no small picture at all (a server host has nothing to make one with).
+ * `settled` says nothing more is coming: with no `uri` then, the picture can only be opened.
+ */
+export function useInlinePicture(artifact: Artifact): { uri: string | null; settled: boolean } {
+  const can = useCapability("artifacts-v1");
+  const [state, setState] = useState<{ id: string; uri: string | null; settled: boolean }>({ id: artifact.id, uri: null, settled: false });
+  const latest = useRef(artifact);
+  useEffect(() => {
+    latest.current = artifact;
+  });
+  const { id, kind } = artifact;
+  const size = artifact.size ?? 0;
+  useEffect(() => {
+    if (!can || kind !== "image") return;
+    let live = true;
+    void loadThumbnail(id, THUMB_LARGE).then(async (thumb) => {
+      const whole = size > 0 && (size <= INLINE_PICTURE_SHARP || (!thumb && size <= INLINE_PICTURE_MAX));
+      if (live) setState({ id, uri: thumb, settled: !whole });
+      if (!whole) return;
+      const file = await download(latest.current).catch(() => null);
+      if (live) setState({ id, uri: file ?? thumb, settled: true });
+    });
+    return () => {
+      live = false;
+    };
+  }, [can, id, kind, size]);
+  if (!can || kind !== "image") return { uri: null, settled: true };
+  return state.id === id ? { uri: state.uri, settled: state.settled } : { uri: null, settled: false };
 }
 
 /** The thumbnail for an artifact that has one (a picture or a video), once it has loaded. */
@@ -170,7 +209,7 @@ export function useThumbnail(artifact: Pick<Artifact, "id" | "kind">): string | 
     };
   }, [wanted, artifact.id]);
   if (!wanted) return null;
-  return loaded?.id === artifact.id ? loaded.uri : (thumbs.get(artifact.id) ?? null);
+  return loaded?.id === artifact.id ? loaded.uri : (thumbs.get(thumbKey(artifact.id, THUMB)) ?? null);
 }
 
 // ---- Reading
@@ -359,7 +398,7 @@ function spansOf(text: string): PathSpan[] {
  * attachments. Nothing is asked without "artifacts-v1", or while `active` is false (a reply still
  * being written).
  */
-export function useMessageLinks(chatId: string, text: string, active: boolean): { paths?: PathLinks; media: Artifact[] } {
+export function useMessageLinks(chatId: string, text: string, active: boolean): { paths?: PathLinks; media: Artifact[]; /** The message in order, each attachment where it was written; undefined while it has none. */ parts?: MessagePart[] } {
   const can = useCapability("artifacts-v1");
   const on = can && active && !!chatId && !!text;
   const spans = useMemo(() => (on ? spansOf(text) : NO_SPANS), [on, text]);
@@ -386,6 +425,7 @@ export function useMessageLinks(chatId: string, text: string, active: boolean): 
         if (artifact) openArtifact(artifact);
       },
     };
-    return { paths, media: mediaOf(spans, known) };
-  }, [key, chatId, spans]);
+    const media = mediaOf(spans, known);
+    return { paths, media, ...(media.length > 0 && { parts: messageParts(text, spans, known) }) };
+  }, [key, chatId, spans, text]);
 }

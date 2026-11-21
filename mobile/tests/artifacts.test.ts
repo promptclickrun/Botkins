@@ -7,7 +7,7 @@ import { MAX_ARTIFACT_CHUNK, MAX_RESOLVE_PATHS, REMOTE_METHODS, remoteArgs } fro
 import { detectPaths, isLinkablePath } from "../src/features/chat/paths";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import type { Artifact, ArtifactChunk, ArtifactPage } from "../src/link/types";
-import { batches, canSaveToPhotos, extOf, FILTERS, inFilter, isBig, isMedia, isTextPreview, kindOf, type Known, linkedSpans, linkKey, mediaOf, PathResolver, type PreviewKind, previewKind, rowLine, sizeWords, sourceWord, TEXT_LIMIT, uniquePaths } from "../src/features/artifacts/logic";
+import { batches, canSaveToPhotos, extOf, FILTERS, inFilter, isBig, isMedia, isTextPreview, kindOf, type Known, linkedSpans, linkKey, mediaOf, messageParts, PathResolver, type PreviewKind, previewKind, rowLine, sizeWords, sourceWord, TEXT_LIMIT, uniquePaths } from "../src/features/artifacts/logic";
 
 const said = (fn: () => unknown) => {
   try {
@@ -179,6 +179,58 @@ test("which spans in a message become links: only resolved ones, and MEDIA: ones
   assert.notEqual(linkKey(spans, { ...known, "~/notes.md": art({ id: "n1" }) }), before);
   assert.equal(linkKey([], known), "");
   assert.deepEqual(batches([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+});
+
+test("a message is cut at its MEDIA: attachments, so each picture is drawn where it was written", () => {
+  const dir = "/opt/data/.local/share/botkins/data/copilot/session-state/54c0c38b-a7f1-4c01-8ded-5de1139a704f/files/duo/";
+  // The owner's message of 2026-11-20: a heading, then the attachment on the next line.
+  const text = [
+    "Here are the mockups, one image each:",
+    "",
+    "**1. Side menu layout.** The numbers mark the order from top to bottom.",
+    "MEDIA:" + dir + "01-anatomy.png",
+    "",
+    "**2. Closed, Home**",
+    "MEDIA:" + dir + "02-closedHome.png",
+    "",
+    "That is all.",
+  ].join("\n");
+  const spans = detectPaths(text);
+  const one = art({ id: "a1", name: "01-anatomy.png", kind: "image" });
+  const two = art({ id: "a2", name: "02-closedHome.png", kind: "image" });
+  const known: Known = { [dir + "01-anatomy.png"]: one, [dir + "02-closedHome.png"]: two };
+  assert.deepEqual(messageParts(text, spans, known), [
+    { kind: "text", text: "Here are the mockups, one image each:\n\n**1. Side menu layout.** The numbers mark the order from top to bottom." },
+    { kind: "media", artifact: one },
+    { kind: "text", text: "**2. Closed, Home**" },
+    { kind: "media", artifact: two },
+    { kind: "text", text: "That is all." },
+  ]);
+  // Nothing of the raw line is left in the text.
+  assert.ok(!messageParts(text, spans, known).some((part) => part.kind === "text" && part.text.includes("MEDIA:")));
+  // An attachment the computer does not know stays as the text it is; with none known, the message is whole.
+  assert.deepEqual(messageParts(text, spans, { [dir + "01-anatomy.png"]: one, [dir + "02-closedHome.png"]: null }).map((part) => part.kind), ["text", "media", "text"]);
+  assert.ok((messageParts(text, spans, { [dir + "01-anatomy.png"]: one }).at(-1) as { text: string }).text.includes("MEDIA:" + dir + "02-closedHome.png"));
+  assert.deepEqual(messageParts(text, spans, undefined), [{ kind: "text", text }]);
+  assert.deepEqual(messageParts("No files here.", [], known), [{ kind: "text", text: "No files here." }]);
+
+  // Words beside an attachment stay, and the picture follows that line. A list mark alone is not words.
+  const beside = "Here it is: MEDIA:/tmp/a.png\n- MEDIA:/tmp/b.png\n- MEDIA:/tmp/a.png\nDone";
+  const a = art({ id: "a", kind: "image" });
+  const b = art({ id: "b", kind: "video" });
+  assert.deepEqual(messageParts(beside, detectPaths(beside), { "/tmp/a.png": a, "/tmp/b.png": b }), [
+    { kind: "text", text: "Here it is:" },
+    { kind: "media", artifact: a },
+    { kind: "media", artifact: b },
+    // The same file a second time is not drawn again.
+    { kind: "text", text: "Done" },
+  ]);
+  // Two on one line, and a message that is nothing but an attachment.
+  const pair = "MEDIA:/tmp/a.png MEDIA:/tmp/b.png";
+  assert.deepEqual(messageParts(pair, detectPaths(pair), { "/tmp/a.png": a, "/tmp/b.png": b }).map((part) => part.kind), ["media", "media"]);
+  // A code block is never cut: MEDIA: is not read inside one.
+  const fenced = "```\nMEDIA:/tmp/a.png\n```";
+  assert.deepEqual(messageParts(fenced, detectPaths(fenced), { "/tmp/a.png": a }), [{ kind: "text", text: fenced }]);
 });
 
 test("paths are asked 20 at a time, once per chat and path, and a failed call can be asked again", async () => {

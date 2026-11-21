@@ -139,6 +139,60 @@ export function mediaOf(spans: readonly PathSpan[], known: Known | undefined): A
   return out;
 }
 
+/** A message in order: its text, and each MEDIA: attachment the computer knows, where it was written. */
+export type MessagePart = { kind: "text"; text: string } | { kind: "media"; artifact: Artifact };
+
+/** The largest picture the phone reads whole to draw it in a message; a larger one shows its small picture, or a tile to open. */
+export const INLINE_PICTURE_MAX = 8 * 1024 * 1024;
+/** Up to this size a picture is drawn from the file itself, sharp; over it, from the small picture the computer makes. */
+export const INLINE_PICTURE_SHARP = 3 * 1024 * 1024;
+
+/**
+ * A message cut at its MEDIA: attachments, so each is drawn where it was written and its raw line
+ * is not shown: "MEDIA:/path/chart.png" on a line of its own becomes the picture; with words beside
+ * it, the words stay and the picture follows that line. An attachment the computer does not know
+ * stays as the text it is. The same file written twice is drawn once, at its first place.
+ * (MEDIA: is never read inside a code block, so a cut never falls in one.)
+ */
+export function messageParts(text: string, spans: readonly PathSpan[], known: Known | undefined): MessagePart[] {
+  const media = linkedSpans(spans, known).filter(({ span }) => span.media);
+  if (!media.length) return [{ kind: "text", text }];
+  const parts: MessagePart[] = [];
+  const seen = new Set<string>();
+  let held: string[] = [];
+  const flush = () => {
+    const kept = held.join("\n").replace(/^\n+|\s+$/g, "");
+    if (kept.trim()) parts.push({ kind: "text", text: kept });
+    held = [];
+  };
+  let at = 0;
+  for (const line of text.split("\n")) {
+    const end = at + line.length;
+    const here = media.filter(({ span }) => span.start >= at && span.end <= end);
+    if (!here.length) held.push(line);
+    else {
+      // The line without its attachments. What is left is kept when it says something: more than a list mark or a colon.
+      let rest = "";
+      let from = 0;
+      for (const { span } of here) {
+        rest += line.slice(from, span.start - at);
+        from = span.end - at;
+      }
+      rest = (rest + line.slice(from)).replace(/[ \t]+$/, "");
+      if (/[\p{L}\p{N}]/u.test(rest.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ""))) held.push(rest);
+      flush();
+      for (const { artifact } of here) {
+        if (seen.has(artifact.id)) continue;
+        seen.add(artifact.id);
+        parts.push({ kind: "media", artifact });
+      }
+    }
+    at = end + 1;
+  }
+  flush();
+  return parts;
+}
+
 /** A short text that changes only when what a message's links point at changes (a screen re-draws on it). */
 export function linkKey(spans: readonly PathSpan[], known: Known | undefined): string {
   return linkedSpans(spans, known)
