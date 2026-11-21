@@ -189,9 +189,12 @@ export type Invite = {
   link?: string;
 };
 export type JoinRequest = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
+/** Someone a chat can be shared with ("team-people-v1"): the owner (id "owner", named after the computer) or a member. */
+export type Person = { id: string; name: string };
 export type TeamPart =
-  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[] }
+  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[]; people?: Person[] }
   | {
+      people?: Person[];
       me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] } };
       team: { name: string };
     };
@@ -367,6 +370,8 @@ export type ChatSummary = {
   botIds?: string[];
   /** The member who created it. Missing on an owner chat. */
   createdBy?: string;
+  /** The people invited to it ("team-people-v1"): "owner" or a member's id. The owner and the chat's people get it. */
+  invited?: string[];
   title: string;
   time: number;
   pinned?: boolean;
@@ -825,6 +830,9 @@ export type UsageReport = {
  * "provider-signin-v1" (the app's: a model provider signed in from a phone with no browser on the
  * computer, by its own page and code, its own questions, or a pasted token; and a provider's
  * command-line tool installed from a phone).
+ * "team-people-v1" (the people in a chat: `ChatSummary.invited`, `link.team.inviteToChat` and
+ * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
+ * view of bots and chats, kept by the computer for them).
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
@@ -1303,6 +1311,9 @@ export type Calls = {
   /** `revision` is the preview's the person reviewed; the computer refuses another. */
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;
+  /** Invites a person ("owner" or a member's id) to a chat, or takes them out ("team-people-v1"). Each answers who is invited afterwards. The chat's starter or the owner invites; someone invited may take themselves out. */
+  "link.team.inviteToChat"(chatId: string, personId: string): string[];
+  "link.team.removeFromChat"(chatId: string, personId: string): string[];
   "link.messages"(chatId: string, before: number, limit?: number): ChatDetail | null;
   /** A step's input and output, for a step that says `more` ("step-details-v1"). Null when the step is gone. */
   "link.step"(chatId: string, runId: string, stepId: string): StepDetail | null;

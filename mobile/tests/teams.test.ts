@@ -240,7 +240,7 @@ test("an approved member is authorized, sees only their chat, and is revoked wit
   }
 });
 
-test("join pushes go to owner devices and chat pushes only to a member's own chat", async () => {
+test("join pushes go to owner devices, and a chat's pushes only to its people", async () => {
   const sent: any[] = [];
   const relayKey = newRelayKey();
   const devices = [
@@ -279,8 +279,29 @@ test("join pushes go to owner devices and chat pushes only to a member's own cha
   state.runs[1].status = "Failed";
   push.look();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(sent.filter((item) => item.type === "alert").length, 3, "owner gets both, member gets only their chat");
+  // "team-people-v1": the owner hears of the owner's chat and the member of theirs; a member's chat is no longer the owner's to hear of.
+  assert.equal(sent.filter((item) => item.type === "alert").length, 2, "each person gets only their own chat");
   assert.ok(sent.every((item) => item.payload.b));
+  sent.length = 0;
+  // Invited to the member's chat, the owner hears of it too; an approval there reaches the owner either way.
+  const invitedPush = new Push({
+    store: fake,
+    deviceKey: () => random(32),
+    relayUrl: () => "https://relay.test",
+    snapshot: () => state,
+    people: (chat: any, person: string) => (chat.createdBy || "owner") === person || (chat.id === "member-chat" && person === "owner"),
+    fetch: async (_url: string, init: any) => {
+      sent.push(...JSON.parse(JSON.parse(init.body).sends));
+      return { ok: true, status: 204, json: async () => ({ results: [] }) };
+    },
+  });
+  state.runs.forEach((run) => (run.status = "Working"));
+  invitedPush.look();
+  state.runs.forEach((run) => (run.status = "Failed"));
+  invitedPush.look();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(sent.filter((item) => item.type === "alert").length, 3, "the invited owner hears of the member's chat as well");
+  invitedPush.dispose();
   sent.length = 0;
   push.teamJoin({ name: "New member" });
   await new Promise((resolve) => setTimeout(resolve, 10));

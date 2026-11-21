@@ -4,12 +4,13 @@ import { useMemo, useState } from "react";
 import { Alert, TextInput, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBots, useCan, useChatActivity, useChats } from "@/state/hooks";
+import { activityLabel, isConversation, useBots, useCan, useChatActivity, useChats, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, dayBucket } from "@/state/time";
 import { BotAvatar, Chip, Dot, EmptyState, HoldMenu, IconButton, Label, Mascot, Page, radius, space, T, Tap, useTheme } from "@/ui";
 import { GroupFace, plainPreview } from "./bits";
+import { myPlace, myself } from "./people";
 
 const isArchivedConversation = (chat: ChatSummary) => !!chat.archived && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine);
 
@@ -45,21 +46,22 @@ function ChatRow({ chat, bots }: { chat: ChatSummary; bots: Map<string, Bot> }) 
   const live = activityLabel(state);
   const group = chat.botIds && chat.botIds.length > 1;
   const canChat = useCan("agents", "chat");
+  const me = myself(usePart("meta"));
   const speaker = chat.last?.role === "user" ? "You" : group && chat.last?.botId ? bots.get(chat.last.botId)?.name : undefined;
   const preview = chat.last ? (speaker ? speaker + ": " : "") + plainPreview(chat.last.text) : "No messages yet";
   const title = chat.title || bot?.name || "Chat";
+  // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
+  const mine = myPlace(chat, me) === "manages";
+  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }] : [];
+  const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
   const actions = chat.archived
-    ? [
-        { id: "restore", title: "Restore", image: "tray.and.arrow.up" },
-        { id: "rename", title: "Rename…", image: "pencil" },
-        { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-      ]
+    ? [{ id: "restore", title: "Restore", image: "tray.and.arrow.up" }, ...starters, ...ends]
     : [
         { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
         { id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" },
-        { id: "rename", title: "Rename…", image: "pencil" },
+        ...starters,
         { id: "archive", title: "Archive", image: "archivebox" },
-        { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+        ...ends,
       ];
   return (
     <HoldMenu

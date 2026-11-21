@@ -133,6 +133,9 @@ export class LinkStore {
       members: Array.isArray(saved.members) ? saved.members : [],
       invites: Array.isArray(saved.invites) ? saved.invites : [],
       requests: Array.isArray(saved.requests) ? saved.requests : [],
+      // "team-people-v1": who was invited to each chat, and each member's own view of bots and chats.
+      chats: saved.chats && typeof saved.chats === "object" && !Array.isArray(saved.chats) ? saved.chats : {},
+      views: saved.views && typeof saved.views === "object" && !Array.isArray(saved.views) ? saved.views : {},
     };
   }
   /** The relay key pair, made the first time it is needed. Only its public half is ever shown or sent. */

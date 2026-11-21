@@ -10,7 +10,8 @@ import { Alert, Linking, ScrollView, Text, TextInput, View } from "react-native"
 import Svg, { Circle } from "react-native-svg";
 import type { BoardItem, Bot, MentionInput } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { useCan, usePart, useSettings } from "@/state/hooks";
+import { useCan, useChat, usePart, useSettings } from "@/state/hooks";
+import { myPlace, myself } from "./people";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
@@ -187,7 +188,10 @@ export function Composer({
   const canManage = useCan("agents", "manage");
   const { colors, dark, type } = useTheme();
   const enterSends = useChatPrefs((prefs) => prefs.enterSends);
-  const capabilities = usePart("meta")?.capabilities;
+  const meta = usePart("meta");
+  const capabilities = meta?.capabilities;
+  const here = useChat(chatId);
+  const mine = !here || myPlace(here, myself(meta)) === "manages";
   const canUpload = !!capabilities?.includes("uploads-v1");
   const canListPulls = !!capabilities?.includes("prs-v1");
   // One voice button. Live voice takes it when it is on (Settings › Voice); otherwise it talks by
@@ -217,7 +221,8 @@ export function Composer({
   let loading = false;
   let note: string | undefined;
   if (sigil === "/") {
-    options = slashOptions(query, catalog.items, colors.muted);
+    // "/model" and "/compact" change the chat itself: its starter's (and the owner's), not someone's who was invited.
+    options = slashOptions(query, catalog.items, colors.muted).filter((option) => mine || !option.action);
     loading = catalog.loading;
     note = catalog.error || undefined;
   } else if (sigil === "@") {
@@ -297,7 +302,7 @@ export function Composer({
     if (option.action) {
       replace(value.slice(0, trigger.start) + value.slice(trigger.end).replace(/^ /, ""), trigger.start);
       if (option.action === "model") {
-        if (canManage) router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } });
+        if (canManage && mine) router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } });
       } else void attempt(api.compact(chatId), "Compacting");
       return;
     }
@@ -549,7 +554,7 @@ export function Composer({
           <View style={{ flex: 1 }} />
           {/* The model: only its provider's mark, beside the main button. The chat's header names the model. */}
           <Tap
-            onPress={canManage ? () => router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } }) : undefined}
+            onPress={canManage && mine ? () => router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } }) : undefined}
             disabled={!canManage}
             feel="select"
             sink={0.9}

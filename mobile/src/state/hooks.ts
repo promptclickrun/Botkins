@@ -19,6 +19,17 @@ export const useSettings = () => usePart("settings");
 export const useOnline = () => useApp((state) => state.link === "online");
 export const useCan = (scope: Scope, action: string) => useApp((state) => can(state.parts, scope, action));
 export const useMember = () => useApp((state) => state.parts.meta?.you?.kind === "member");
+/**
+ * Whether the person may arrange their own view of the bots: pin, hide and order them. With
+ * "team-people-v1" a member's arrangement is their own (the computer keeps it for them), so seeing
+ * the bots is enough; on an older computer it changes everyone's, and needs "manage".
+ */
+export const useCanArrange = () =>
+  useApp((state) => {
+    const member = state.parts.meta?.you?.kind === "member";
+    if (member && state.parts.meta?.capabilities.includes("team-people-v1")) return can(state.parts, "agents", "view");
+    return can(state.parts, "agents", "manage");
+  });
 /** Whether the computer's app names a capability (`meta.capabilities`). False until the computer has answered. */
 export const useCapability = (name: string) => useApp((state) => state.parts.meta?.capabilities.includes(name) ?? false);
 

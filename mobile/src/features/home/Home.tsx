@@ -12,7 +12,7 @@ import { openBotChat } from "@/features/chat/open";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart } from "@/state/hooks";
+import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
@@ -214,7 +214,7 @@ export default function Home() {
   const board = usePart("board");
   const panels = usePart("panels");
   const canCreate = useCan("agents", "create");
-  const canManage = useCan("agents", "manage");
+  const canArrange = useCanArrange();
   const canSeeToday = useCan("today", "view");
 
   const shown = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)), [bots]);
@@ -326,7 +326,7 @@ export default function Home() {
               scroll={scroll}
               onDrop={order.drop}
               onDragging={setDragging}
-              manageable={canManage}
+              manageable={canArrange}
             />
           )}
           {/* Today is always under the bots, even with nothing open: it has its own empty states. */}

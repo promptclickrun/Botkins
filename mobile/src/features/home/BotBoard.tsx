@@ -20,7 +20,7 @@ import { plainPreview } from "@/features/chat/bits";
 import { newBotChat, openBotChat } from "@/features/chat/open";
 import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_ACTIONS, toggleHidden } from "@/features/bots/menus";
 import type { Bot, ChatSummary, Section } from "@/link/types";
-import { activityLabel, useBotActivity, useBots, useCan, usePart } from "@/state/hooks";
+import { activityLabel, useBotActivity, useBots, useCan, usePart, useCanArrange, useMember } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
 import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
@@ -38,21 +38,19 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
   const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canManage = useCan("agents", "manage");
+  const canArrange = useCanArrange();
+  const member = useMember();
   const canDelete = useCan("agents", "delete");
   return (
     <HoldMenu
       actions={[
         ...(canChat ? [{ id: "new", title: "New chat", image: "square.and.pencil" }] : []),
         { id: "page", title: "Bot page", image: "person.crop.circle" },
-        ...(canManage
-          ? [
-              { id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" },
-              moveToSection(bot, sections),
-              { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } },
-            ]
-          : []),
+        // Pinning and hiding are a person's own view; sections and the primary bot are the owner's arrangement.
+        ...(canArrange ? [{ id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" }] : []),
+        ...(canManage && !member ? [moveToSection(bot, sections), { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } }] : []),
         ...(canCreate ? [{ id: "duplicate", title: "Duplicate", image: "doc.on.doc" }] : []),
-        ...(canManage ? [hideAction(bot, primary)] : []),
+        ...(canArrange ? [hideAction(bot, primary && !member)] : []),
         ...(canDelete ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true, disabled: bots.length < 2 } }] : []),
       ]}
       onPressAction={({ nativeEvent }) => {

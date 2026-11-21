@@ -23,7 +23,8 @@ export function chatForTap(chats: ChatSummary[], botId: string, tap: BotTap): { 
     const latest = mine.find((chat) => !chat.archived);
     return latest ? { id: latest.id } : null;
   }
-  const empty = mine.filter((chat) => chat.count === 0 && !chat.schedules?.length && !chat.pinned);
+  // Not a chat that was started in a project: reusing it would put the new chat into that project.
+  const empty = mine.filter((chat) => chat.count === 0 && !chat.schedules?.length && !chat.pinned && !chat.projectId);
   const open = empty.find((chat) => !chat.archived) ?? empty[0];
   return open ? { id: open.id, ...(open.archived && { archived: true as const }) } : null;
 }

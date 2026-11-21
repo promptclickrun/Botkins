@@ -31,6 +31,8 @@ test("selecting a bot opens its latest chat, or a new one each time", () => {
   // One that was archived when it was left is used again, and comes out of the archive.
   assert.deepEqual(chatForTap([...chats, chat("left", { time: 5, count: 0, archived: true })], "mira", "new"), { id: "left", archived: true });
   assert.deepEqual(chatForTap([...chats, chat("left", { time: 9, count: 0, archived: true }), chat("open", { time: 5, count: 0 })], "mira", "new"), { id: "open" });
+  // Never one that was started in a project.
+  assert.equal(chatForTap([...chats, chat("in-project", { time: 5, count: 0, projectId: "p1" })], "mira", "new"), null);
   // Not another bot's, and "latest" never opens an archived chat.
   assert.equal(chatForTap([...chats, chat("empty", { time: 5, count: 0, botId: "patch" })], "mira", "new"), null);
   assert.deepEqual(chatForTap([chat("gone", { archived: true, time: 99 }), chat("kept", { time: 1 })], "mira", "latest"), { id: "kept" });

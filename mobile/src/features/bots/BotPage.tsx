@@ -7,7 +7,7 @@ import { newBotChat, openBotChat } from "@/features/chat/open";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Bot } from "@/link/types";
 import { shareFrom } from "@/state/files";
-import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability, useChats, useMember, useModels, usePart, useRoutines, useSettings, useSkills } from "@/state/hooks";
+import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability, useChats, useMember, useModels, usePart, useRoutines, useSettings, useSkills, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
@@ -55,6 +55,7 @@ function BotDetail({ bot }: { bot: Bot }) {
   const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canManage = useCan("agents", "manage");
+  const canArrange = useCanArrange();
   const canDelete = useCan("agents", "delete");
   const canSeeToday = useCan("today", "view");
   const canCreateToday = useCan("today", "create");
@@ -134,10 +135,10 @@ function BotDetail({ bot }: { bot: Bot }) {
         {!member && <Row leading={<IconTile icon={FolderKanban} color={colors.info} />} title="Access" value={projects ? grantSummary(settings, bot, projects) : undefined} chevron onPress={() => router.push(("/bot/access?id=" + encodeURIComponent(bot.id)) as Href)} />}
       </Group>
 
-      {(canManage || !member) && <Group>
+      {(canManage || canArrange || !member) && <Group>
         {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
-        {canManage && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
-        {canManage && sections && (
+        {canArrange && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
+        {canManage && !member && sections && (
           <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event)}>
             <View accessible accessibilityRole="button" accessibilityLabel={"Section, " + (section?.name ?? "None")} accessibilityHint="Moves the bot to a section">
               <Row leading={<IconTile icon={Folder} color={colors.ink2} />} title="Section" value={section?.name ?? "None"} chevron />
@@ -179,7 +180,7 @@ function BotDetail({ bot }: { bot: Bot }) {
         </View>
       )}
 
-      {(canCreate || canManage || canDelete || !member) && <Group>
+      {(canCreate || canManage || canArrange || canDelete || !member) && <Group>
         {canCreate && <Row leading={<IconTile icon={Copy} color={colors.ink2} />} title="Duplicate" onPress={() => void duplicate()} />}
         {!member && <Row leading={<IconTile icon={BookmarkPlus} color={colors.ink2} />} title="Save as template" onPress={() => void attempt(api.saveTemplate(bot.id), "Saved as a template")} />}
         {!member && <Row
@@ -190,7 +191,7 @@ function BotDetail({ bot }: { bot: Bot }) {
           onPress={() => void shareFrom(api.exportTemplateText({ botId: bot.id }), "Template exported. Anyone with Botkins can import it.")}
         />}
         {canManage && !primary && <Row leading={<IconTile icon={Star} color={colors.ink2} />} title="Make primary" subtitle="Shown first on Home" onPress={() => void attempt(api.makePrimary(bot.id), bot.name + " is first now")} />}
-        {canManage && <Row
+        {canArrange && <Row
           leading={<IconTile icon={bot.hidden ? Eye : EyeOff} color={colors.ink2} />}
           title={bot.hidden ? "Show" : "Hide"}
           subtitle={primary && !bot.hidden ? "The primary bot can't be hidden" : bot.hidden ? "Hidden from the bot list" : undefined}
