@@ -120,7 +120,7 @@ test("the ChatGPT account, its plan and the model list come from Codex", async (
     return {};
   });
   assert.deepEqual(await provider.status(), { installed: true, version: "9.8.7", signIn: "browser", connected: true, signOut: true, account: "ada@example.com", plan: "ChatGPT Plus" });
-  assert.deepEqual(log[0], ["initialize", { clientInfo: { name: "botkins", title: "Botkins", version: "1.2.3" }, capabilities: { experimentalApi: false, requestAttestation: false } }]);
+  assert.deepEqual(log[0], ["initialize", { clientInfo: { name: "botkins", title: "Botkins", version: "1.2.3" }, capabilities: { experimentalApi: true, requestAttestation: false } }]);
   assert.deepEqual(log[1], ["initialized", undefined]);
   assert.deepEqual(await provider.auth(), { connected: true, login: "ada@example.com", type: "ChatGPT Plus" });
   account = { type: "apiKey" };
