@@ -14,7 +14,8 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { LEGACY_NAME } from "../../desktop/home.mjs";
 import { hasUnshown, shownText } from "../../desktop/shown-text.mjs";
-import { ask, confirm, readAll } from "./input.mjs";
+import { ask, confirm, readAll, secret } from "./input.mjs";
+import { followSignIn } from "./workspace.mjs";
 
 // No short form: a program's own "-y" (`npx -y …`) must never be read as this yes.
 const YES = { yes: { type: "boolean", about: "Don't ask first" } };
@@ -129,6 +130,94 @@ const TOOL_OPTIONS = {
   secrets: { type: "string", value: "path", about: "A JSON file with the values: { \"env\": { NAME: value }, \"headers\": { NAME: value }, \"clientSecret\": value }. \"-\" reads standard input" },
   ...YES,
 };
+/** The forms of a sign-in from a terminal, for `tools sign-in` and `plugins sign-in`. */
+export const SIGN_IN_OPTIONS = {
+  start: { type: "boolean", about: "With no terminal, step 1: print the page to open, and leave the sign-in open" },
+  finish: { type: "boolean", about: "With no terminal, step 2: read the address the browser was sent back to from standard input, and wait for the end" },
+  cancel: { type: "boolean", about: "End a sign-in that is open" },
+};
+/** What a sign-in from a terminal is, for the details of both commands. */
+export const SIGN_IN_DETAILS = [
+  "A tool on the web signs in through a browser, and this computer may have none. So the command prints a page. Open it on any device and sign in there.",
+  "The browser then goes to an address on this computer (it starts with http://127.0.0.1). On another device that page does not load, which is expected. Copy the whole address from the browser's address bar and paste it here. It is not shown when you paste it: it holds a code.",
+  "",
+  "With no terminal (an agent, a script) the same has two steps:",
+  "  --start     prints the page, and the start of the address to look for, and leaves the sign-in open (a second --start gives the same page again)",
+  "  --finish    reads the pasted address from standard input, and waits for the end",
+  "The pasted address is never a word on the command line: it holds a code.",
+  "",
+  "What is accepted: only the address this sign-in named, with the mark (`state`) of this sign-in. The tool's sign-in server is checked by its name in the address (`iss`) when it gives one. The code in the address works one time, and only with a secret this computer made for this sign-in. A wrong `state`, another address or no code is turned away, and the sign-in stays open for the right one. An answer in which the server names itself wrongly (`iss`) ends the sign-in: start it again. The address and the code are never in the log.",
+].join("\n");
+/**
+ * A tool's sign-in from a terminal, in its three forms (`--start`/`--finish`, the plain form at
+ * a terminal, `--cancel`). The service's calls are `calls` ("tools.signIn" or "plugins.signIn")
+ * with `target` after the call's own words (the tool, or the plugin and its tool); the session
+ * itself is read and typed to with the `tools.signIn` calls. `next(started)` is the command for step 2,
+ * every word of it written for a shell. The pasted address is never a word on the command line.
+ */
+export async function signInCommand(context, { calls, target, next }) {
+  const { start, finish, cancel } = context.options;
+  if ([start, finish, cancel].filter(Boolean).length > 1) throw usage("Use one of --start, --finish and --cancel.");
+  const { client } = context;
+  if (cancel) return void context.print(await client.call(calls + ".end", ...target), (done) => (done.cancelled ? "The sign-in to " + safe(done.name) + " is ended." : safe(done.name) + " has no open sign-in."));
+  if (finish) {
+    // From standard input, or typed without being shown: never from the command line.
+    const address = await secret(context, "The address the browser was sent back to (not shown): ").catch((error) => {
+      if (error.code === "USAGE") throw usage("No address was given. Give the address the browser was sent back to on standard input.");
+      throw error;
+    });
+    let done;
+    try {
+      done = await client.call(calls + ".answer", ...target, address);
+    } catch (error) {
+      // The reason is the service's own sentence and never has the address.
+      // BAD_ADDRESS: this address was turned away, and the sign-in is open still.
+      if (error.code === "BAD_ADDRESS") throw new CliError(error.message + " The sign-in is still open: run --finish again with the right address.", EXIT.failed, "BAD_ADDRESS");
+      // ANSWERED: the sign-in has its answer, and nothing more is asked of the person.
+      if (error.code === "ANSWERED") throw new CliError(error.message + " Look at the result with `botkins " + (calls.startsWith("plugins") ? "plugins show " + shellWord(target[0], "<the plugin>") : "tools show " + shellWord(target[0], "<the tool>")) + "`.", EXIT.failed, "ANSWERED");
+      throw error;
+    }
+    return void context.print({ done: true, ...done }, () => safe(done.name) + " is signed in.");
+  }
+  if (!start && (!context.stdin.isTTY || context.json))
+    throw usage("With no terminal this sign-in has two steps. Run it with --start: it prints the page to open, and leaves the sign-in open. Then run it with --finish: it reads the address the browser was sent back to from standard input.");
+  // `hold`: with --start nobody follows the sign-in. It stays open for --finish, and a second --start gets it again.
+  const started = await client.call(calls, ...target, ...(start ? [{ hold: true }] : []));
+  if (!start) {
+    const done = await followSignIn(context, started.session, "tools.signIn", { intro: "Sign in to " + safe(started.name) + "." });
+    return void context.print({ done: true, ...done }, () => safe(done?.name ?? started.name) + " is signed in.");
+  }
+  // Step 1 only: wait for the page, say it, and leave the sign-in open for step 2.
+  for (let after = 0; ; ) {
+    const view = await client.call("tools.signIn.read", started.session, after);
+    after = view.next;
+    const page = view.events.find((event) => event.type === "open");
+    if (page) {
+      const command = next(started);
+      const { session: _session, ...about } = started;
+      const left = started.minutes + (started.minutes === 1 ? " minute" : " minutes");
+      return void context.print({ ...about, open: page.url, back: page.back, next: command }, () =>
+        [
+          ...(started.already ? ["This sign-in is already open. It stays open for " + (started.minutes === 1 ? "1 more minute" : started.minutes + " more minutes") + ".", ""] : []),
+          "Sign in to " + safe(started.name) + ".",
+          "",
+          "Open this page on any device and sign in:",
+          "",
+          "    " + safe(page.url),
+          "",
+          "The browser then goes to an address that starts with " + safe(page.back) + ". On another device than this computer that page does not load, which is expected.",
+          "Copy the whole address from the browser's address bar, and give it to the second step in the next " + left + ":",
+          "",
+          "    " + command,
+          "",
+          "That step reads the address from standard input, or asks for it and does not show it.",
+          ...(["<its id>", "<the tool>"].some((word) => command.includes(word)) ? ["A word of the second step has a character that cannot be written in a command, so it is a placeholder in angle brackets. Take the real word from `botkins " + (calls.startsWith("plugins") ? "plugins" : "tools") + " list --json`."] : []),
+        ].join("\n"),
+      );
+    }
+    if (view.done) throw new CliError(view.error ?? "The sign-in ended before it gave a page.", EXIT.failed, "SIGN_IN_FAILED");
+  }
+}
 const toolLine = (tool) => (tool.kind === "command" ? shown(tool.runs) : safe(tool.url));
 const toolText = (tool) =>
   [
@@ -137,7 +226,7 @@ const toolText = (tool) =>
     tool.env.length ? "Environment values: " + tool.env.map(safe).join(", ") : null,
     tool.headers.length ? "Headers: " + tool.headers.map(safe).join(", ") : null,
     tool.needs?.length ? "Needs its value again: " + tool.needs.map(safe).join(", ") : null,
-    tool.auth?.type === "oauth" ? "Sign-in: " + (tool.auth.signedIn ? "signed in" : "not signed in. A tool signs in through a browser: do it from a paired phone or from the app's window.") : null,
+    tool.auth?.type === "oauth" ? "Sign-in: " + (tool.auth.signedIn ? "signed in" : "not signed in. Sign it in with `botkins tools sign-in " + shellWord(tool.name, "<the tool>") + "`." + (hasUnshown(tool.name) ? " Take the tool's id from `botkins tools list --json`: its name has a character that cannot be written in a command." : "")) : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -322,10 +411,19 @@ export const tools = {
           context.print(await context.client.call("tools.import", json), (result) => (result.added.length ? "Added " + result.added.map(safe).join(", ") + "." : "Nothing was added.") + (result.skipped.length ? " Left out: " + result.skipped.map(safe).join(", ") + " (the name is taken, or the limit of 50 tools is reached)." : ""));
         },
       },
+      "sign-in": {
+        summary: "Sign a tool on the web in, with a browser on any device",
+        usage: "botkins tools sign-in <tool> [--start | --finish | --cancel]",
+        options: SIGN_IN_OPTIONS,
+        details: SIGN_IN_DETAILS,
+        async run(context) {
+          const ref = one(context, "Name the tool (its name or id).");
+          return signInCommand(context, { calls: "tools.signIn", target: [ref], next: (started) => "botkins tools sign-in --finish -- " + shellWord(started.id, "<its id>") });
+        },
+      },
       "sign-out": {
         summary: "Forget a tool's sign-in",
         usage: "botkins tools sign-out <tool>",
-        details: "Signing a tool in from this command line is not built yet. Until it is, sign it in from a paired phone (Settings, Tools) or from the app's window.",
         async run(context) {
           context.print(await context.client.call("tools.signOut", one(context, "Name the tool (its name or id).")), (tool) => tool.name + " is signed out.");
         },

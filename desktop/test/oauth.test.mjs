@@ -559,3 +559,132 @@ test("a session puts the sign-in token on an http server, and on no other", asyn
   const none = await serversWithTokens({ mcpServers: servers, mcpAuth: async () => null });
   for (const name of Object.keys(servers)) assert.equal(none[name], servers[name], name);
 });
+
+// ---- A sign-in whose browser is on another device (a terminal host): the person copies the address
+// the browser was sent back to and gives it to `answer()`. It is judged as the browser's own answer is.
+
+/**
+ * Starts a sign-in with an `open` of its own that visits nothing, and plays the person's browser on
+ * another device: it fetches the sign-in page itself and keeps the address the browser would be sent
+ * back to. `done` is the sign-in; `back` is that address.
+ */
+async function otherDevice(t, serverOptions, signInOptions = {}) {
+  const env = await setup(t, serverOptions);
+  let shown;
+  const page = new Promise((resolve) => (shown = resolve));
+  const done = env.ws.integrations.signIn(env.id, { open: async (address, { redirect }) => shown({ address, redirect }), ...signInOptions });
+  done.catch(() => {});
+  const { address, redirect } = await page;
+  const first = await fetch(address, { redirect: "manual" });
+  const back = first.headers.get("location");
+  assert.ok(back, "the sign-in server sent the browser back");
+  const params = new URL(back).searchParams;
+  return { ...env, done, address, redirect, back, code: params.get("code"), state: params.get("state"), answer: (text) => env.ws.integrations.answerSignIn(env.id, text), open: () => env.ws.integrations.oauth.flows.has(env.id) };
+}
+/** The pasted address with one change. */
+const changed = (back, change) => {
+  const url = new URL(back);
+  change(url);
+  return url.href;
+};
+
+test("a pasted address is taken only when it is the address this sign-in named, and every other one leaves the sign-in open", async (t) => {
+  const { remote, ws, id, view, done, back, redirect, code, state, answer, open, opened, files } = await otherDevice(t);
+  assert.equal(opened.length, 0, "no browser was opened on this computer");
+  assert.equal(redirect, new URL(back).origin + new URL(back).pathname, "the address that the browser was sent to is the one the sign-in named");
+  const refusals = [];
+  const refused = (text, said) => {
+    // An address that is turned away has no code of its own: the sign-in is open still, and the caller says so.
+    assert.throws(() => answer(text), (error) => (refusals.push(error.message), said.test(error.message) && error.code === undefined), String(text).slice(0, 60));
+    assert.equal(open(), true, "the sign-in is open still");
+  };
+  // Another place: another port or host, another path, another scheme.
+  refused(changed(back, (url) => (url.port = String(Number(url.port) + 1))), /not the address this sign-in sends the browser back to/);
+  refused(changed(back, (url) => (url.hostname = "localhost")), /not the address this sign-in sends the browser back to/);
+  refused(changed(back, (url) => (url.pathname = "/elsewhere")), /not the address this sign-in sends the browser back to/);
+  refused(changed(back, (url) => (url.protocol = "https:")), /not the address this sign-in sends the browser back to/);
+  // The mark is compared as a whole: one of the same length that differs, and one that is the start of the right one.
+  refused(changed(back, (url) => url.searchParams.set("state", "x".repeat(state.length))), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.set("state", state.slice(0, -1))), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.set("state", state + "x")), /not the answer to this sign-in/);
+  // The right place with the mark of another sign-in, with none, and with no code.
+  refused(changed(back, (url) => url.searchParams.set("state", "from-another-sign-in")), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.delete("state")), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.delete("code")), /no code in it/);
+  // Not an address at all, nothing, and far too much.
+  refused("this is not an address", /not a web address/);
+  refused("", /not a web address/);
+  refused("http://127.0.0.1:1/callback?" + "x".repeat(9000), /not a web address/);
+  // What was said about each refusal never has the code or the mark of this sign-in.
+  for (const said of refusals) for (const secret of [code, state]) assert.equal(said.includes(secret), false, said);
+  assert.equal(remote.state.log.some((r) => r.path === "/token"), false, "nothing went to the token address for an address that was turned away");
+  // With spaces around it, as a copy from a terminal has it, the right one finishes the sign-in.
+  answer("  " + back + "\n");
+  // The first answer ends the sign-in: another one now is not taken, and says so (its own code, not "turned away").
+  assert.throws(() => answer(back), (error) => error.code === "ANSWERED" && /has its answer already/.test(error.message));
+  const auth = await done;
+  assert.equal(auth.signedIn, true);
+  assert.equal(view().auth.signedIn, true);
+  assert.deepEqual(ws.vault.list().map((entry) => [entry.label, entry.kind]), [["words sign-in", "oauth"]]);
+  assert.equal(open(), false, "the sign-in is over");
+  // The code was used with the secret this computer made for this sign-in, once.
+  const exchange = new URLSearchParams(remote.state.log.find((r) => r.path === "/token").body);
+  assert.equal(exchange.get("code"), code);
+  assert.ok(exchange.get("code_verifier").length >= 43);
+  assert.equal(remote.state.log.filter((r) => r.path === "/token").length, 1);
+  assert.equal(files().includes(code) || files().includes(state), false, "neither the code nor the mark is kept");
+  // Nothing is waiting any more.
+  assert.throws(() => answer(back), (error) => error.code === "NO_SIGN_IN" && /No sign-in is waiting/.test(error.message));
+});
+
+test("an address that says access was denied ends the sign-in as cancelled, and one with nothing open is turned away", async (t) => {
+  const { ws, id, view, done, back, answer, open } = await otherDevice(t);
+  answer(changed(back, (url) => (url.searchParams.delete("code"), url.searchParams.set("error", "access_denied"))));
+  await assert.rejects(done, /Sign-in was cancelled\./);
+  assert.ok(!view().auth.signedIn);
+  assert.equal(open(), false);
+  assert.throws(() => answer(back), /No sign-in is waiting for that address/);
+  // The same for a sign-in that was never started, and for a server that is not there.
+  assert.throws(() => ws.integrations.answerSignIn(id, back), (error) => error.code === "NO_SIGN_IN");
+  assert.throws(() => ws.integrations.answerSignIn("nobody", back));
+  // Another kind of error says what the server said, in a few words.
+  const second = await otherDevice(t);
+  second.answer(changed(second.back, (url) => (url.searchParams.delete("code"), url.searchParams.set("error", "server_error"), url.searchParams.set("error_description", "The server broke"))));
+  await assert.rejects(second.done, /Sign-in failed: The server broke/);
+  // An error with another sign-in's mark is not an answer to this one: it ends nothing.
+  const third = await otherDevice(t);
+  assert.throws(() => third.answer(changed(third.back, (url) => (url.searchParams.delete("code"), url.searchParams.set("error", "access_denied"), url.searchParams.set("state", "other")))), /not the answer to this sign-in/);
+  assert.equal(third.open(), true);
+  third.ws.integrations.cancelSignIn(third.id);
+  await assert.rejects(third.done, /Sign-in was cancelled/);
+});
+
+test("the sign-in server's name in a pasted address is checked as in the browser's own answer", async (t) => {
+  const supported = { tweak: { server: (doc) => ({ ...doc, authorization_response_iss_parameter_supported: true }) } };
+  // A server that says it names itself, and an address with no name.
+  const none = await otherDevice(t, supported);
+  none.answer(none.back);
+  await assert.rejects(none.done, /came from a different server than the one asked/);
+  assert.ok(!none.view().auth.signedIn);
+  // An address with another server's name.
+  const other = await otherDevice(t, supported);
+  other.answer(changed(other.back, (url) => url.searchParams.set("iss", "https://someone-else.example")));
+  await assert.rejects(other.done, /came from a different server than the one asked/);
+  assert.equal(other.remote.state.log.some((r) => r.path === "/token"), false, "a code from another server is not sent anywhere");
+  // With the right name it finishes.
+  const right = await otherDevice(t, supported);
+  right.answer(changed(right.back, (url) => url.searchParams.set("iss", right.remote.origin)));
+  assert.equal((await right.done).signedIn, true);
+});
+
+test("a sign-in in a terminal host waits as long as it was given, and no longer", async (t) => {
+  const { ws, id, view } = await setup(t);
+  const started = Date.now();
+  // Nobody answers: the wait is the one given (50 ms), not the five minutes of the window's own sign-in.
+  await assert.rejects(ws.integrations.signIn(id, { open: async () => {}, patience: 50 }), /Sign-in timed out\. Try again\./);
+  assert.ok(Date.now() - started < 5000);
+  assert.equal(ws.integrations.oauth.flows.has(id), false, "the sign-in is over and its port is free");
+  assert.ok(!view().auth.signedIn);
+  // Without a patience the window's own wait stays (no browser opens here: it is answered through the stand-in).
+  assert.equal((await ws.integrations.signIn(id)).signedIn, true);
+});

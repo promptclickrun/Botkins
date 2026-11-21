@@ -683,10 +683,14 @@ export class Plugins {
     this.ws.releaseServerSessions();
     this.ws.notify();
   }
-  async signIn(id) {
+  /** The address the browser was sent back to, for a sign-in a terminal host started (oauth.answer). */
+  answerSignIn(id, address) {
+    this.oauth.answer(id, address);
+  }
+  async signIn(id, { open, patience } = {}) {
     const server = this.authServer(id);
     if (!server) throw new Error("This plugin sign-in is unavailable.");
-    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined });
+    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }) });
     if (!this.authServer(id)) {
       this.vault.remove(this.oauth.entry(server));
       throw new Error("The plugin changed during sign-in.");

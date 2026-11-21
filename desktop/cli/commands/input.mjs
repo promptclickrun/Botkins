@@ -15,11 +15,22 @@ export async function readAll(stream) {
   return text;
 }
 
-/** One line typed at the terminal. `hidden` shows nothing of it (a token, a key). */
-export function ask(context, question, { hidden = false } = {}) {
+/**
+ * One line typed at the terminal. `hidden` shows nothing of it (a token, a key). `signal` closes
+ * the question from outside (the thing it was asked for is over): it resolves with null, and what
+ * was typed so far is dropped, never used.
+ */
+export function ask(context, question, { hidden = false, signal } = {}) {
   const { stdin, stderr } = context;
   return new Promise((resolve, reject) => {
     const rl = createInterface({ input: stdin, output: stderr, terminal: !!stdin.isTTY });
+    const close = () => {
+      rl.close();
+      if (hidden && stdin.isTTY) stderr.write("\n");
+      resolve(null);
+    };
+    if (signal?.aborted) return close();
+    signal?.addEventListener("abort", close, { once: true });
     if (hidden && stdin.isTTY) {
       // Whatever is typed is not drawn: only the question stays on the line.
       rl._writeToOutput = (text) => {
@@ -27,10 +38,12 @@ export function ask(context, question, { hidden = false } = {}) {
       };
     }
     rl.on("SIGINT", () => {
+      signal?.removeEventListener("abort", close);
       rl.close();
       reject(new CliError("Cancelled.", 130, "CANCELLED"));
     });
     rl.question(question, (answer) => {
+      signal?.removeEventListener("abort", close);
       rl.close();
       if (hidden && stdin.isTTY) stderr.write("\n");
       resolve(answer);

@@ -522,12 +522,12 @@ export function controlApi(service) {
     methods: () => ({ control: Object.keys(api).sort(), workspace: Object.keys(handlers).sort() }),
   };
   // Tools (MCP servers), skills, and a bot's tools, skills and access (desktop/terminal/control-tools.mjs).
-  Object.assign(api, toolsApi({ workspace, handlers, bot }));
+  Object.assign(api, toolsApi({ workspace, handlers, bot, signIns }));
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
-  Object.assign(api, pluginsApi({ workspace, handlers, bot }));
+  Object.assign(api, pluginsApi({ workspace, handlers, bot, signIns }));
   // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
   for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi]) {
-    for (const [name, call] of Object.entries(area({ workspace, handlers, bot }))) {
+    for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns }))) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;
     }

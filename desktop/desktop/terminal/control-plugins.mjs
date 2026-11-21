@@ -2,6 +2,7 @@
 // plugin by its name, bots by their names, and a plugin's sign-outs. The other plugin calls go by
 // the app's own names ("plugins.install", "plugins.preview", …), as a phone makes them
 // (desktop/terminal/control.mjs).
+import { startToolSignIn } from "./control-tools.mjs";
 import { ControlError } from "./socket.mjs";
 import { pluginRuns } from "../plugin-reading.mjs";
 
@@ -12,7 +13,7 @@ export { pluginRuns };
 export const pluginReaches = (contents) => (contents?.mcpServers ?? []).filter((server) => server.kind === "remote").map((server) => ({ name: server.name, ...(server.type && { type: server.type }), url: server.url, headers: server.headers ?? [], ...(server.oauth && { signsIn: true }), ...(server.oauthClientId && { oauthClientId: server.oauthClientId }) }));
 const LOOK_AGAIN = "This plugin is not the one that was looked at: its revision is another one now. Look at it again with `botkins plugins show`.";
 
-export function pluginsApi({ workspace, handlers, bot }) {
+export function pluginsApi({ workspace, handlers, bot, signIns }) {
   /**
    * The installed plugins as they are now. What the app keeps of the last check of a copy can be
    * old (a file was changed since), so each copy is checked first. It reads no file when nothing
@@ -54,6 +55,25 @@ export function pluginsApi({ workspace, handlers, bot }) {
     if (typeof options?.revision !== "string" || !/^[a-f0-9]{64}$/.test(options.revision)) throw new ControlError("Give the revision of the plugin that was looked at (`botkins plugins show` prints it). A plugin is not installed or updated without it.", "BAD_ARGUMENT");
     return options;
   };
+  /**
+   * The tool of a plugin that signs in, for a sign-in: the one it has, or the one named. A plugin
+   * with several needs the name (the tool's name in the plugin's description), and the refusal lists them.
+   */
+  const signingTool = (ref, toolName) => {
+    const found = plugin(ref);
+    const servers = workspace.plugins.knownOAuthServers(workspace.plugins.get(found.id));
+    const names = servers.map((server) => server.manifestName);
+    if (!servers.length) throw new ControlError((found.name ?? found.id) + " has no tool that signs in.", "NOT_FOUND");
+    if (toolName === undefined || toolName === null) {
+      if (servers.length > 1) throw new ControlError((found.name ?? found.id) + " has " + servers.length + " tools that sign in: " + names.join(", ") + ". Say which with --tool.", "BAD_ARGUMENT");
+      return { found, server: servers[0] };
+    }
+    const server = servers.find((entry) => entry.manifestName === toolName);
+    if (!server) throw new ControlError((found.name ?? found.id) + " has no tool by that name that signs in. It has: " + names.join(", ") + ".", "NOT_FOUND");
+    return { found, server };
+  };
+  /** A plugin's tool as a sign-in names it: the plugin, then the tool. */
+  const called = ({ found, server }) => (found.name ?? found.id) + " / " + server.manifestName;
   return {
     "plugins.list": () => installed().map(view),
     "plugins.get": ([ref]) => view(plugin(ref)),
@@ -97,7 +117,25 @@ export function pluginsApi({ workspace, handlers, bot }) {
       await handlers["plugins.setBots"](found.id, ids, revision == null ? undefined : { revision });
       return view(plugin(found.id));
     },
-    /** Forgets the sign-ins of a plugin's tools. Signing one in needs a browser: a paired phone or the app's window does that. */
+    /**
+     * Starts the sign-in of a tool of a plugin through a browser on any device, as `tools.signIn`
+     * does for a tool of the list (the session is read, typed to and ended with `tools.signIn.read`,
+     * `.input` and `.cancel`). The answer is { session, minutes, id, name, plugin, tool }.
+     */
+    async "plugins.signIn"([ref, toolName, options]) {
+      const chosen = signingTool(ref, toolName);
+      return { ...(await startToolSignIn(signIns, workspace.plugins, { id: chosen.server.id, name: called(chosen) }, options)), plugin: chosen.found.id, tool: chosen.server.manifestName };
+    },
+    /** The second step with no terminal: the address the browser was sent back to. Waits for the end of the sign-in. */
+    async "plugins.signIn.answer"([ref, toolName, address]) {
+      return signIns.answerTool(signingTool(ref, toolName).server.id, address);
+    },
+    /** Ends the open sign-in of a plugin's tool, whoever started it. */
+    async "plugins.signIn.end"([ref, toolName]) {
+      const chosen = signingTool(ref, toolName);
+      return { id: chosen.server.id, name: called(chosen), cancelled: await signIns.cancelTool(chosen.server.id) };
+    },
+    /** Forgets the sign-ins of a plugin's tools. */
     async "plugins.signOut"([ref]) {
       const found = plugin(ref);
       // The plugin's own list of the tools that sign in, whatever state the plugin is in: one that

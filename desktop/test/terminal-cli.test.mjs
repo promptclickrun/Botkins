@@ -216,7 +216,13 @@ test("a sign-in the service runs is followed line by line, and a piped line answ
     { events: [{ n: 4, type: "prompt", text: "Paste the code" }], next: 4, done: false },
     { events: [], next: 4, done: true, result: { connected: true, account: "sam", plan: null } },
   ];
-  const service = fakeService({ "providers.login": { session: "s1" }, "providers.login.read": () => views.shift(), "providers.login.input": null, "providers.login.cancel": true });
+  // As the real service does, the last view (the sign-in is over) is given only after the line was typed: a read waits for what happens.
+  let answered = false;
+  const read = async () => {
+    while (views.length === 1 && !answered) await new Promise((resolve) => setTimeout(resolve, 5));
+    return views.shift();
+  };
+  const service = fakeService({ "providers.login": { session: "s1" }, "providers.login.read": read, "providers.login.input": () => void (answered = true), "providers.login.cancel": true });
   const result = await botkins(["providers", "login", "copilot"], { service, input: "the-code\n" });
   assert.equal(result.exit, EXIT.ok);
   assert.match(result.out, /https:\/\/github\.com\/login\/device/);
