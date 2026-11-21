@@ -12,14 +12,13 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { CliError, EXIT, table, usage } from "../output.mjs";
+import { shownText } from "../../desktop/shown-text.mjs";
 import { ask, confirm, readAll } from "./input.mjs";
 
 // No short form: a program's own "-y" (`npx -y …`) must never be read as this yes.
 const YES = { yes: { type: "boolean", about: "Don't ask first" } };
-/** Characters that change what a person sees when a word is printed: control characters, and the marks that turn text around. */
-const UNSHOWN = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-/** A word as it can be shown: such a character is written as its number, so it cannot move or hide the text around it. */
-const safe = (word) => String(word).replace(UNSHOWN, (char) => "\\u{" + char.codePointAt(0).toString(16) + "}");
+// A word as it can be shown: a character that would move or hide the text around it is written as its number (desktop/shown-text.mjs).
+const safe = shownText;
 const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(safe(word)))).join(" ");
 const one = (context, what) => {
   if (context.args.length !== 1) throw usage(what);
