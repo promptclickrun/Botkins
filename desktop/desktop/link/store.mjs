@@ -136,6 +136,11 @@ export class LinkStore {
       // "team-people-v1": who was invited to each chat, and each member's own view of bots and chats.
       chats: saved.chats && typeof saved.chats === "object" && !Array.isArray(saved.chats) ? saved.chats : {},
       views: saved.views && typeof saved.views === "object" && !Array.isArray(saved.views) ? saved.views : {},
+      // "spaces-v1": how each space is shared, copies still to delete from a relay, the switch for links, and the one-time move.
+      spaces: saved.spaces && typeof saved.spaces === "object" && !Array.isArray(saved.spaces) ? saved.spaces : {},
+      spaceCopies: Array.isArray(saved.spaceCopies) ? saved.spaceCopies : [],
+      linkSharing: saved.linkSharing === true,
+      ...(saved.spacesMoved === true && { spacesMoved: true }),
     };
   }
   /** The relay key pair, made the first time it is needed. Only its public half is ever shown or sent. */

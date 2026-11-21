@@ -10,6 +10,11 @@ import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
 
 const now = () => Date.now();
+/** The demo computer's owner, as a person. */
+const OWNER_NAME = "Alex";
+const BUILTIN_SPACES = [["today", "Today"], ["feed", "Feed"], ["ideas", "Ideas"], ["goals", "Goals"]];
+const CARD_SPACE = { feed: "feed", idea: "ideas", goal: "goals" };
+const SPACE_LIMIT = { spaces: 60, panels: 40, notes: 50 };
 // The two seeded projects work in this repository, so pull requests have a folder to look in.
 const REPO = fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]$/, "");
 const MIN = 60_000;
@@ -495,6 +500,44 @@ const text = (value, limit, what) => {
 // A custom view the demo bot shows when asked for a chart: one self-contained page, as a real bot
 // writes one for the desktop app. It reads its numbers with botkins.getData(), follows the app's
 // colors, and has one button that hands text to the message box and one link.
+// An app panel's page ("spaces-v1"): a checklist people tick together. What they tick is kept in the
+// panel's state with botkins.state, each change under a short label ("Ticked Press kit").
+const CHECKLIST_VIEW = String.raw`<style>
+  body { margin: 0; font: 15px/1.4 -apple-system, system-ui, sans-serif; color: var(--botkins-ink, #1a1420); }
+  label { display: flex; gap: 10px; align-items: center; padding: 8px 2px; }
+  input { width: 20px; height: 20px; }
+  .done { opacity: 0.55; text-decoration: line-through; }
+</style>
+<div id="list"></div>
+<script>
+  const list = document.getElementById("list");
+  let items = [];
+  const draw = (state) => {
+    const ticked = (state && state.ticked) || {};
+    list.textContent = "";
+    for (const item of items) {
+      const row = document.createElement("label");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = !!ticked[item];
+      box.onchange = () => {
+        const next = Object.assign({}, ticked, { [item]: box.checked });
+        botkins.state.set({ ticked: next }, (box.checked ? "Ticked " : "Unticked ") + item).then((saved) => { if (!saved) box.checked = !box.checked; });
+      };
+      const text = document.createElement("span");
+      text.textContent = item;
+      if (box.checked) text.className = "done";
+      row.append(box, text);
+      list.append(row);
+    }
+  };
+  botkins.getData().then((data) => {
+    items = (data && data.items) || [];
+    return botkins.state.get();
+  }).then(draw);
+  botkins.state.onChange(draw);
+</script>`;
+
 const DEMO_VIEW = String.raw`<style>
   body { padding: 4px 2px; }
   h3 { margin: 0 0 10px; font-size: 15px; }
@@ -959,6 +1002,18 @@ export class MockBackend {
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
     if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
+    // "spaces-v1" (docs/spaces.md): pages of panels. The owner's four built-in spaces hold what was on
+    // Today; "Launch" has an app panel people tick together, with notes; "Money" is private.
+    this.spacesOn = process.env.BOTKINS_DEV_SPACES !== "off";
+    this.spaceRecords = [];
+    if (this.spacesOn) {
+      this.capabilities.push("spaces-v1");
+      // The app's own half, host-side (link-host/spaces.mjs): built-in spaces for a person, and a member who left.
+      this.spaces = {
+        ensure: (person) => void this.ensureSpaces(person),
+        release: (person) => this.releaseSpaces(person),
+      };
+    }
     // "app-update-v1": made-up updates of this computer's own Botkins (mock-update.mjs, BOTKINS_DEV_UPDATE).
     this.updates = new DemoUpdates(this, process.env.BOTKINS_DEV_UPDATE);
     if (this.updates.capable) this.capabilities.push("app-update-v1");
@@ -992,6 +1047,7 @@ export class MockBackend {
       },
       chatFor: (id) => this.pages.get(id)?.chatId ?? null,
     };
+    if (this.spacesOn) this.seedSpaces();
     this.extras = {
       adoptMcpSignIn: (serverId) => {
         const server = this.server(serverId);
@@ -1007,6 +1063,16 @@ export class MockBackend {
   snapshot() {
     // The installed plugins as a phone sees them: a secret setting says only that it is set.
     if (this.pluginsOn) this.state.plugins = this.plugins.installed.map((record) => this.pluginView(record));
+    // Each space with what the link needs to count for a person: its panels and open cards (docs/spaces.md).
+    if (this.spacesOn) {
+      this.state.spaces = this.spaceRecords.map((space) => ({
+        ...space,
+        items: [
+          ...this.state.panels.filter((panel) => panel.spaceId === space.id && !panel.hidden).map((panel) => ({ id: panel.id, botId: panel.botId, updatedAt: panel.updatedAt })),
+          ...this.state.board.filter((item) => item.spaceId === space.id && item.status === "open").map((item) => ({ id: item.id, botId: item.botId, updatedAt: item.updatedAt })),
+        ],
+      }));
+    }
     return this.state;
   }
   /**
@@ -1124,11 +1190,13 @@ export class MockBackend {
     if (this.callContexts.length > 100) this.callContexts.shift();
     const fn = this.handlers[method];
     if (!fn) throw new Error("The demo computer doesn't do " + method + " yet.");
+    // The person a call is made for (spaces are a person's): "owner", or a member's id and name.
+    this.caller = context.principal?.kind === "member" ? { id: context.principal.memberId, name: context.principal.name || "A member" } : { id: "owner", name: OWNER_NAME };
     const result = await fn.apply(this, args);
     const principal = context.principal;
     if (principal?.kind === "member") {
-      if (method === "createChat" || method === "createGroupChat" || method === "forkChat") {
-        const chat = this.state.chats.find((item) => item.id === result);
+      if (method === "createChat" || method === "createGroupChat" || method === "forkChat" || method === "spaces.newPanel" || method === "spaces.ask") {
+        const chat = this.state.chats.find((item) => item.id === (result?.chatId ?? result));
         if (chat) chat.createdBy = principal.memberId;
       }
       if (method === "send") {
@@ -1139,6 +1207,84 @@ export class MockBackend {
     }
     this.changed();
     return result;
+  }
+  // ── Spaces ("spaces-v1") ──
+  newSpace(name, more = {}) {
+    const at = now();
+    const space = { id: "s_" + randomUUID().replace(/-/g, "").slice(0, 10), name, createdAt: at, updatedAt: at, rev: 1, ...more };
+    this.spaceRecords.push(space);
+    return space;
+  }
+  /** A person's built-in space of one kind. */
+  builtin(person, kind) {
+    return this.spaceRecords.find((space) => space.builtin === kind && (space.createdBy || "owner") === person);
+  }
+  /** The four built-in spaces every person has. Safe to repeat. */
+  ensureSpaces(person) {
+    let made = false;
+    for (const [kind, name] of BUILTIN_SPACES) {
+      if (this.builtin(person, kind)) continue;
+      this.newSpace(name, { builtin: kind, ...(person !== "owner" && { createdBy: person }) });
+      made = true;
+    }
+    if (made) this.changed();
+  }
+  /** A member was removed: what they made passes to the owner, and the routines they set are paused. */
+  releaseSpaces(person) {
+    for (const space of this.spaceRecords) if (space.createdBy === person) delete space.createdBy;
+    // The owner already has the four built-in ones; a second set would be named the same.
+    const seen = new Set();
+    this.spaceRecords = this.spaceRecords.filter((space) => {
+      if (!space.builtin || space.createdBy) return true;
+      if (seen.has(space.builtin) && !this.state.panels.some((panel) => panel.spaceId === space.id) && !this.state.board.some((item) => item.spaceId === space.id)) return false;
+      if (seen.has(space.builtin)) delete space.builtin;
+      seen.add(space.builtin);
+      return true;
+    });
+    for (const panel of this.state.panels) {
+      if (panel.createdBy === person) delete panel.createdBy;
+      if (panel.routine?.setBy === person) Object.assign(panel.routine, { enabled: false, nextAt: null });
+    }
+    this.changed();
+  }
+  seedSpaces() {
+    this.ensureSpaces("owner");
+    const t = now();
+    for (const panel of this.state.panels) panel.spaceId = this.builtin("owner", "today").id;
+    for (const item of this.state.board) item.spaceId = this.builtin("owner", CARD_SPACE[item.kind]).id;
+    if (!this.state.bots.length) return;
+    const bot = this.state.bots[0];
+    const launch = this.newSpace("Launch", { createdAt: t - 30 * HOUR, updatedAt: t - 2 * MIN, rev: 12 });
+    const frame = randomUUID();
+    const items = ["Pricing page copy", "Changelog reviewed", "Press kit", "Support macros", "Status page"];
+    this.pages.set(frame, { html: CHECKLIST_VIEW, data: { items }, chatId: null });
+    this.state.panels.push(
+      {
+        id: "panel-checklist", spaceId: launch.id, key: "launch-checklist", botId: bot.id, chatId: this.state.chats[0]?.id ?? "", title: "Launch checklist", hidden: false, size: "tall", revision: 4, updatedAt: t - 2 * MIN, routine: null,
+        blocks: [{ type: "html", frame, height: 260 }],
+        state: { ticked: { "Pricing page copy": true, "Press kit": true } }, stateRev: 3,
+        notes: [{ id: "n1", by: "owner", name: OWNER_NAME, text: "Changelog needs one more pass before Thursday.", at: t - 3 * HOUR }],
+        last: { by: "owner", name: OWNER_NAME, label: "Ticked Press kit", at: t - 2 * MIN },
+      },
+      { id: "panel-signups", spaceId: launch.id, key: "signups", botId: this.state.bots[2]?.id ?? bot.id, chatId: this.state.chats[0]?.id ?? "", title: "Signups", hidden: false, size: "small", revision: 9, updatedAt: t - 50 * MIN, routine: { cron: "0 8 * * *", timezone: "America/Chicago", prompt: "Refresh the signup count", nextAt: t + 14 * HOUR, enabled: true }, blocks: [{ type: "metric", label: "This week", value: "1,284", note: "+12% on last week" }, { type: "line", label: "Daily", labels: ["Mon", "Tue", "Wed", "Thu", "Fri"], series: [{ name: "Signups", values: [180, 210, 260, 290, 344] }] }] },
+    );
+    const money = this.newSpace("Money", { createdAt: t - 80 * HOUR, updatedAt: t - 26 * HOUR, rev: 3, ...(this.state.projects[0] && { projectId: this.state.projects[0].id }) });
+    this.state.panels.push({ id: "panel-runway", spaceId: money.id, key: "runway", botId: this.state.bots[2]?.id ?? bot.id, chatId: this.state.chats[0]?.id ?? "", title: "Runway", hidden: false, size: "wide", revision: 2, updatedAt: t - 26 * HOUR, routine: null, blocks: [{ type: "bars", label: "Months of runway", items: [{ label: "Now", value: 14 }, { label: "With hire", value: 11 }] }] });
+  }
+  spaceOf(id) {
+    const space = this.spaceRecords.find((item) => item.id === id);
+    if (!space) throw new Error("This space no longer exists.");
+    return space;
+  }
+  panelOf(id) {
+    const panel = this.state.panels.find((item) => item.id === id);
+    if (!panel) throw new Error("This panel no longer exists.");
+    return panel;
+  }
+  /** Something in a space changed: its `rev` goes up, so an app reads it again. */
+  touch(spaceId) {
+    const space = this.spaceRecords.find((item) => item.id === spaceId);
+    if (space) Object.assign(space, { rev: space.rev + 1, updatedAt: now() });
   }
   bot(id) {
     const bot = this.state.bots.find((b) => b.id === id);
@@ -1741,7 +1887,9 @@ export class MockBackend {
       const asked = /^\/today-panel\s+([\s\S]+)/.exec(prompt);
       if (asked) {
         const what = asked[1].trim();
-        this.state.panels.push({ id: "panel-" + randomUUID().slice(0, 8), key: randomUUID().slice(0, 8), botId: chat.botId, chatId: id, title: clip(what.split("\n")[0], 40), hidden: false, size: "small", revision: 1, updatedAt: now(), routine: null, blocks: [{ type: "markdown", text: "A made-up panel for: " + what }] });
+        const spaceId = this.spacesOn ? (chat.spaceId ?? this.builtin(chat.createdBy || "owner", "today")?.id) : undefined;
+        if (spaceId) this.touch(spaceId);
+        this.state.panels.push({ ...(spaceId && { spaceId }), ...(chat.createdBy && { createdBy: chat.createdBy }), id: "panel-" + randomUUID().slice(0, 8), key: randomUUID().slice(0, 8), botId: chat.botId, chatId: id, title: clip(what.split("\n")[0], 40), hidden: false, size: "small", revision: 1, updatedAt: now(), routine: null, blocks: [{ type: "markdown", text: "A made-up panel for: " + what }] });
       }
       this.turn(chat, run, prompt).catch((error) => console.error(error));
     },
@@ -2036,7 +2184,120 @@ export class MockBackend {
       this.state.tasks = this.state.tasks.filter((t) => t.id !== id);
     },
     // Today
-    refreshPanel() {},
+    refreshPanel(id) {
+      const panel = this.state.panels.find((p) => p.id === id);
+      if (panel?.spaceId) {
+        Object.assign(panel, { revision: panel.revision + 1, updatedAt: now(), lastCheck: { time: now(), status: "ok" } });
+        this.touch(panel.spaceId);
+      }
+    },
+    // Spaces ("spaces-v1", docs/spaces.md). The link has already checked who may do each of these.
+    "spaces.read"(id) {
+      const space = this.spaceOf(id);
+      return { id, rev: space.rev, panels: this.state.panels.filter((panel) => panel.spaceId === id), cards: this.state.board.filter((item) => item.spaceId === id && item.status === "open") };
+    },
+    "spaces.create"({ name }) {
+      const mine = this.spaceRecords.filter((space) => (space.createdBy || "owner") === this.caller.id);
+      if (mine.length >= SPACE_LIMIT.spaces) throw new Error("You have " + SPACE_LIMIT.spaces + " spaces. Delete one first.");
+      return this.newSpace(text(name, 40, "name"), { ...(this.caller.id !== "owner" && { createdBy: this.caller.id }) }).id;
+    },
+    "spaces.rename"(id, name) {
+      const space = this.spaceOf(id);
+      if (space.builtin) throw new Error("This space can't be renamed.");
+      space.name = text(name, 40, "name");
+      this.touch(id);
+    },
+    "spaces.remove"(id) {
+      const space = this.spaceOf(id);
+      if (space.builtin) throw new Error("This space can't be deleted.");
+      this.state.panels = this.state.panels.filter((panel) => panel.spaceId !== id);
+      this.state.board = this.state.board.filter((item) => item.spaceId !== id);
+      this.spaceRecords = this.spaceRecords.filter((item) => item.id !== id);
+    },
+    "spaces.setProject"(id, projectId) {
+      const space = this.spaceOf(id);
+      if (space.createdBy) throw new Error("Only the owner's spaces can be attached to a project.");
+      if (projectId && !this.state.projects.some((project) => project.id === projectId)) throw new Error("This project no longer exists.");
+      if (projectId) space.projectId = projectId;
+      else delete space.projectId;
+      this.touch(id);
+    },
+    "spaces.setPanelProject"(panelId, projectId) {
+      const panel = this.panelOf(panelId);
+      if (projectId && !this.state.projects.some((project) => project.id === projectId)) throw new Error("This project no longer exists.");
+      if (projectId) panel.projectId = projectId;
+      else delete panel.projectId;
+      this.touch(panel.spaceId);
+    },
+    // A new panel: a chat with the bot, in that space, and the person's sentence as "/today-panel" sends it.
+    "spaces.newPanel"({ spaceId, botId, prompt, start, refresh }) {
+      this.spaceOf(spaceId);
+      if (this.state.panels.filter((panel) => panel.spaceId === spaceId).length >= SPACE_LIMIT.panels) throw new Error("A space holds up to " + SPACE_LIMIT.panels + " panels. Remove one first.");
+      const chatId = this.handlers.createChat.call(this, botId);
+      const chat = this.chat(chatId);
+      chat.spaceId = spaceId;
+      if (this.caller.id !== "owner") chat.createdBy = this.caller.id;
+      const starts = { checklist: "Make it a checklist.", tracker: "Make it a tracker.", chart: "Make it a chart.", table: "Make it a table.", notes: "Make it notes.", app: "Make it an app." };
+      this.handlers.send.call(this, chatId, "/today-panel " + prompt + (start ? "\n" + starts[start] : ""));
+      const panel = this.state.panels.at(-1);
+      if (refresh && panel?.chatId === chatId) panel.routine = { cron: refresh.cron, timezone: refresh.timezone, prompt, enabled: true, nextAt: now() + 16 * HOUR, ...(this.caller.id !== "owner" && { setBy: this.caller.id }) };
+      return { chatId };
+    },
+    "spaces.ask"({ spaceId, botId, text: asked, panelId }) {
+      const space = this.spaceOf(spaceId);
+      if (panelId !== undefined && this.panelOf(panelId).spaceId !== spaceId) throw new Error("This panel no longer exists.");
+      const chatId = this.handlers.createChat.call(this, botId);
+      const chat = this.chat(chatId);
+      Object.assign(chat, { spaceId, ...(panelId && { panelId: undefined, aboutPanel: panelId }), title: clip(space.name + ": " + asked, 40) });
+      if (this.caller.id !== "owner") chat.createdBy = this.caller.id;
+      this.handlers.send.call(this, chatId, asked);
+      return { chatId };
+    },
+    "spaces.movePanel"(panelId, { spaceId, before }) {
+      const panel = this.panelOf(panelId);
+      this.spaceOf(spaceId);
+      const from = panel.spaceId;
+      const rest = this.state.panels.filter((item) => item.id !== panelId);
+      const at = before ? rest.findIndex((item) => item.id === before && item.spaceId === spaceId) : -1;
+      panel.spaceId = spaceId;
+      if (at >= 0) rest.splice(at, 0, panel);
+      else rest.push(panel);
+      this.state.panels = rest;
+      this.touch(from);
+      if (from !== spaceId) this.touch(spaceId);
+    },
+    // An app panel's saved state: a shallow merge, so two people ticking different items don't undo each other.
+    "spaces.patchState"(panelId, patch, label) {
+      const panel = this.panelOf(panelId);
+      if (!panel.blocks.some((block) => block.type === "html")) throw new Error("Only an app panel keeps state.");
+      const state = { ...(panel.state ?? {}) };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete state[key];
+        else state[key] = value;
+      }
+      if (JSON.stringify(state).length > 64 * 1024 || Object.keys(state).length > 200) throw new Error("That change is too large to save.");
+      Object.assign(panel, { state, stateRev: (panel.stateRev ?? 0) + 1, updatedAt: now(), last: { by: this.caller.id, name: this.caller.name, ...(label && { label }), at: now() } });
+      this.touch(panel.spaceId);
+      return { rev: panel.stateRev };
+    },
+    "spaces.note"(panelId, words) {
+      const panel = this.panelOf(panelId);
+      if ((panel.notes ?? []).length >= SPACE_LIMIT.notes) throw new Error("A panel holds up to " + SPACE_LIMIT.notes + " notes. Remove one first.");
+      const note = { id: "n-" + randomUUID().slice(0, 8), by: this.caller.id, name: this.caller.name, text: text(words, 2000, "note"), at: now() };
+      Object.assign(panel, { notes: [...(panel.notes ?? []), note], updatedAt: now(), last: { by: this.caller.id, name: this.caller.name, label: "Wrote a note", at: now() } });
+      this.touch(panel.spaceId);
+      return note.id;
+    },
+    // A person removes their own notes; the space's maker and the owner remove any.
+    "spaces.removeNote"(panelId, noteId) {
+      const panel = this.panelOf(panelId);
+      const note = (panel.notes ?? []).find((item) => item.id === noteId);
+      if (!note) return;
+      const maker = this.spaceOf(panel.spaceId).createdBy || "owner";
+      if (note.by !== this.caller.id && this.caller.id !== "owner" && this.caller.id !== maker) throw new Error("Only the person who wrote this note can remove it.");
+      panel.notes = panel.notes.filter((item) => item.id !== noteId);
+      this.touch(panel.spaceId);
+    },
     changePanel(id, action) {
       const panels = this.state.panels;
       const i = panels.findIndex((p) => p.id === id);
@@ -2046,9 +2307,13 @@ export class MockBackend {
       else if (action === "hide" || action === "show") panel.hidden = action === "hide";
       else if (["small", "wide", "tall"].includes(action)) panel.size = action;
       else if (action === "earlier" || action === "later") {
-        const j = i + (action === "earlier" ? -1 : 1);
-        if (j >= 0 && j < panels.length) [panels[i], panels[j]] = [panels[j], panels[i]];
+        // With the panel before or after it in the same space.
+        const same = panels.map((p, index) => ({ p, index })).filter(({ p }) => p.spaceId === panel.spaceId);
+        const at = same.findIndex(({ p }) => p.id === id);
+        const other = same[at + (action === "earlier" ? -1 : 1)];
+        if (other) [panels[i], panels[other.index]] = [panels[other.index], panels[i]];
       } else throw new Error("Unknown panel action");
+      if (panel.spaceId) this.touch(panel.spaceId);
     },
     // A panel's own routine, as desktop/panels.mjs keeps it (cron, time zone, refresh instructions).
     routine(id, { action, cron, prompt, timezone } = {}) {

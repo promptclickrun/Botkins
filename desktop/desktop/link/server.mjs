@@ -24,8 +24,9 @@ import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
 import { Screen } from "./screen.mjs";
+import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
-import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, inChat, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags } from "./team.mjs";
+import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -203,7 +204,7 @@ export class LinkHost extends EventEmitter {
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, demoSpaceLinks = false, log = () => {} }) {
     super();
     Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
@@ -325,7 +326,29 @@ export class LinkHost extends EventEmitter {
       "link.team.rename": async (_session, a) => this.renameTeam(a[0]),
       "link.team.inviteToChat": async (_session, a) => this.inviteToChat(a[0], a[1]),
       "link.team.removeFromChat": async (_session, a) => this.removeFromChat(a[0], a[1]),
+      // Spaces: sharing, and the caller's own view of the list. The caller is the person.
+      "link.spaces.share": async (session, a) => this.spaces.share(personOf(session.principal), a[0], a[1]),
+      "link.spaces.newLink": async (session, a) => this.spaces.newLink(personOf(session.principal), a[0]),
+      "link.spaces.arrange": async (session, a) => this.spaces.arrange(personOf(session.principal), a[0]),
+      "link.spaces.seen": async (session, a) => this.spaces.seen(personOf(session.principal), a[0]),
+      "link.spaces.notify": async (session, a) => this.spaces.notify(personOf(session.principal), a[0], a[1]),
+      "link.spaces.here": async (session, a) => this.spaces.lookingAt(personOf(session.principal), a[0], a[1]),
+      "link.team.setLinkSharing": async (_session, a) => this.spaces.setLinkSharing(a[0]),
     };
+    // Spaces ("spaces-v1"): how each is shared and each person's view of the list (spaces.mjs).
+    this.spaces = new Spaces({
+      records: () => {
+        const spaces = this.backend.snapshot().spaces;
+        return Array.isArray(spaces) ? spaces : null;
+      },
+      team: () => this.store.data.team,
+      setTeam: (team) => this.setTeam(team),
+      names: () => new Map(teamPeople(this.store.data.team, this.ownerName()).map((person) => [person.id, person.name])),
+      relay: () => ({ on: !!this.relaySettings(), base: this.relayUrl(), publicKey: this.store.relayKey().publicKey }),
+      changed: () => this.changed(),
+      app: () => this.backend.spaces,
+      demoLinks: demoSpaceLinks === true,
+    });
     this.grants = new ScreenGrants({
       serverId: this.store.data.serverId,
       device: (id) => this.store.device(id),
@@ -495,6 +518,7 @@ export class LinkHost extends EventEmitter {
     this.cancelPairing();
     clearTimeout(this.pumping);
     this.push.dispose();
+    this.spaces.dispose();
     for (const timer of this.inviteTimers.values()) clearTimeout(timer);
     this.inviteTimers.clear();
     this.device.dispose();
@@ -1106,12 +1130,64 @@ export class LinkHost extends EventEmitter {
     // Their invitations and their own view go with them.
     const chats = Object.fromEntries(Object.entries(team.chats ?? {}).map(([id, invited]) => [id, invited.filter((person) => person !== memberId)]).filter(([, invited]) => invited.length));
     const { [memberId]: _gone, ...views } = team.views ?? {};
-    this.setTeam({ ...team, members: team.members.filter((item) => item.id !== memberId), chats, views });
+    // Their grants on spaces go; the spaces they made pass to the owner and become private.
+    this.setTeam({ ...this.spaces.withoutMember(team, memberId), members: team.members.filter((item) => item.id !== memberId), chats, views });
     return this.team();
   }
 
   // ── People in a chat, and each member's own view ("team-people-v1") ─────────────────
 
+  // ── Spaces, for the app on the host (the person first: "owner" for its own window) ──
+  spacesFor(person) {
+    return this.spaces.for(person);
+  }
+  spaceCan(spaceId, person) {
+    return this.spaces.can(spaceId, person);
+  }
+  shareSpace(person, id, input) {
+    return this.spaces.share(person, id, input);
+  }
+  newSpaceLink(person, id) {
+    return this.spaces.newLink(person, id);
+  }
+  arrangeSpaces(person, input) {
+    return this.spaces.arrange(person, input);
+  }
+  seenSpace(person, id) {
+    return this.spaces.seen(person, id);
+  }
+  notifySpace(person, id, mode) {
+    return this.spaces.notify(person, id, mode);
+  }
+  hereInSpace(person, id, panelId) {
+    return this.spaces.lookingAt(person, id, panelId);
+  }
+  setLinkSharing(on) {
+    return this.spaces.setLinkSharing(on);
+  }
+  /**
+   * `spaces.read`'s answer for one person: panels as `PanelView`, and for a member only the panels
+   * and cards of bots their role sees. `seenAt` is when they last opened the space before this read.
+   */
+  spaceContent(principal, answer, state) {
+    if (!answer || typeof answer !== "object") return answer;
+    const team = this.store.data.team;
+    const person = personOf(principal);
+    const member = principal.kind === "member";
+    const role = member ? roleOfMember(team, person) : null;
+    const sees = (botId) => !member || role?.bots === "all" || (Array.isArray(role?.bots) && role.bots.includes(botId));
+    const space = (state.spaces ?? []).find((item) => item.id === answer.id);
+    const can = spaceCan(team, space, person);
+    const mayChange = (can === "own" || can === "edit") && (!member || hasAction(role?.perms, "today", "manage"));
+    const chats = new Map((state.chats ?? []).map((chat) => [chat.id, chat]));
+    const cut = (panel) => panelView(panel, { member, inChat: (chatId) => inChat(team, chats.get(chatId), person), mayChange });
+    return {
+      ...answer,
+      seenAt: Number(spacesViewOf(team, person).seen[answer.id]) || 0,
+      panels: (answer.panels ?? []).filter((panel) => sees(panel.botId)).map(cut),
+      cards: (answer.cards ?? []).filter((card) => sees(card.botId)),
+    };
+  }
   /** What the owner is called as a person: the name on one of the owner's devices ("Your name"), else the computer's. */
   ownerName() {
     return this.store.data.devices.find((device) => !device.memberId && device.person)?.person || this.store.name || "";
@@ -1497,6 +1573,12 @@ export class LinkHost extends EventEmitter {
       run: (id) => (state.runs ?? []).find((run) => run.id === id),
       // The app says who made each routine once it names "routine-owner-v1".
       routineOwners: Array.isArray(this.backend.capabilities) && this.backend.capabilities.includes("routine-owner-v1"),
+      // With spaces, a call also needs the space of the panel or card it names.
+      ...(Array.isArray(state.spaces) && {
+        space: (id) => state.spaces.find((space) => space.id === id),
+        panel: (id) => (state.panels ?? []).find((panel) => panel.id === id),
+        card: (id) => (state.board ?? []).find((item) => item.id === id),
+      }),
     });
     if (refusal) throw new Failure(refusal);
     let forApp = args;
@@ -1511,17 +1593,30 @@ export class LinkHost extends EventEmitter {
       }
       // A custom view in a chat is that chat's people's.
       if (method === "link.frame.page" || method === "link.frame.chat") {
-        // A view on a Today panel the member is sent follows Today's own rule; any other is a chat's, and its people's.
+        // A view on a panel follows its panel: the member's role must see the panel's bot, and with
+        // spaces they must be able to open its space. The panel is found by its blocks, never by
+        // searching what people wrote. Any other view is a chat's, and its people's.
         const id = typeof args[0] === "string" ? args[0] : "";
-        const panels = filterParts({ panels: state.panels ?? [], bots: state.bots ?? [] }, principal, this.store.data.team).panels;
-        if (!(id && JSON.stringify(panels).includes(JSON.stringify(id)))) {
+        const panel = id ? panelOfFrame(state.panels, id) : undefined;
+        if (panel) {
+          const shown = filterParts({ panels: [panel], bots: state.bots ?? [] }, principal, this.store.data.team).panels.length > 0;
+          const opens = !Array.isArray(state.spaces) || !!spaceCan(this.store.data.team, state.spaces.find((space) => space.id === panel.spaceId), principal.memberId);
+          if (!shown || !opens) throw new Failure("This view no longer exists.");
+        } else {
           const from = await this.frameChat(args[0]).catch(() => ({ chatId: null }));
           const chat = from.chatId ? (state.chats ?? []).find((item) => item.id === from.chatId) : null;
           if (from.chatId && !(chat && inChat(this.store.data.team, chat, principal.memberId))) throw new Failure("This view no longer exists.");
         }
       }
     }
-    if (method === "link.sync") return this.sync(session, args[0] ?? {}, gone);
+    if (method === "link.sync") {
+      // A person's four built-in spaces exist before their device is first sent its parts.
+      if (this.spaces.on) {
+        this.spaces.moveOnce();
+        await this.spaces.ensure(personOf(principal));
+      }
+      return this.sync(session, args[0] ?? {}, gone);
+    }
     if (method === "link.messages") {
       const limit = Math.max(1, Math.min(Number(args[2]) || CHAT_PAGE, 200));
       const page = chatPart(this.backend.snapshot(), String(args[0]), undefined, { before: Number(args[1]), limit });
@@ -1574,6 +1669,16 @@ export class LinkHost extends EventEmitter {
     const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
     if (!secrets.length) {
       const answer = await this.backend.call(method, callArgs, { principal });
+      // A space a person makes starts pinned for them (the pins are theirs, kept here).
+      if (method === "spaces.create" && typeof answer === "string" && answer) {
+        const person = personOf(principal);
+        const mine = this.spaces.for(person);
+        this.spaces.arrange(person, { order: mine.map((space) => space.id), pinned: [...mine.filter((space) => space.pinned).map((space) => space.id), answer] });
+      }
+      // A space that was deleted takes its sharing along; its link's copy leaves the relay.
+      if (method === "spaces.remove") this.spaces.removed(String(args[0]));
+      // A space's content as this person is sent it, with when they last opened it.
+      if (method === "spaces.read") return this.spaceContent(principal, answer, state);
       // A chat that was deleted takes its invitations and everyone's marks on it along.
       if (method === "deleteChat") this.removeChatPeople(String(args[0]));
       // A chat a member starts is read by them from the start: their unread is theirs, not the workspace's.
@@ -1679,6 +1784,15 @@ export class LinkHost extends EventEmitter {
     next.quietLive = quietLive(next.live);
     next.meta.you = { kind: "owner" };
     next.team = this.team();
+    // Spaces: the app's own list is never sent. The owner's devices get the owner's view of it;
+    // `panels` and `board` stay for an app that doesn't know spaces (every Today's panels).
+    if (Array.isArray(state.spaces)) {
+      const kinds = new Map(state.spaces.map((space) => [space.id, space.builtin]));
+      next.spaces = this.spaces.for(OWNER);
+      // A panel or card the app has put in no space yet is still the owner's to see, never a member's.
+      next.panels = (next.panels ?? []).filter((panel) => !panel.spaceId || kinds.get(panel.spaceId) === "today").map((panel) => panelView(panel));
+      next.board = (next.board ?? []).filter((item) => !item.spaceId || kinds.get(item.spaceId));
+    } else delete next.spaces;
     // Who was invited to each chat, for the owner's lists; a member's are added with their own cut (filterParts).
     const invites = this.store.data.team.chats ?? {};
     next.chats = (next.chats ?? []).map((chat) => (invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
@@ -1738,7 +1852,8 @@ export class LinkHost extends EventEmitter {
     // The computer's own indicators name every chat, so they stay out: a member's are made below
     // from the member's own `live`, after it was cut to their chats.
     const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, JSON.parse(part.json)]));
-    const values = filterParts(raw, principal, this.store.data.team);
+    const records = this.backend.snapshot().spaces;
+    const values = filterParts(raw, principal, this.store.data.team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(principal.memberId) } : {});
     const put = (name, value) => {
       const json = JSON.stringify(value ?? null);
       if (previous.get(name)?.json !== json) previous.set(name, { json, v: ++this.version });

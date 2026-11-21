@@ -64,6 +64,8 @@ const host = new LinkHost({
   screenInput,
   // The demo computer uses no relay unless one is named, so it never opens an outside connection by itself.
   relay: process.env.BOTKINS_DEV_RELAY ? { url: process.env.BOTKINS_DEV_RELAY } : false,
+  // A space can be shared by link without a relay here, so the Share sheet can be tried: the link is made, nothing is published.
+  demoSpaceLinks: !process.env.BOTKINS_DEV_RELAY,
   log: (line) => console.log(line),
 });
 // The demo bot can use a paired phone: a message with "calendar", "contact", "where am I", "photo",
@@ -97,6 +99,9 @@ if (process.env.BOTKINS_DEV_AWAY === "1" && process.env.BOTKINS_DEV_RELAY) {
   host.hosts = () => all().filter((entry) => entry.startsWith("relay!"));
 }
 await host.setEnabled(true);
+// "Launch" starts shared with all members, who may change it, so a member's phone has a shared space to open.
+const launch = host.spacesFor("owner").find((space) => space.name === "Launch" && space.access === "private");
+if (launch) host.shareSpace("owner", launch.id, { access: "team", teamCan: "edit" });
 
 async function open() {
   const pairing = host.startPairing(24 * 60 * 60_000);
