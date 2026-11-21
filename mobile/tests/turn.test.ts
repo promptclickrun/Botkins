@@ -382,6 +382,27 @@ test("a row that didn't change is the same object the next time, so it isn't dra
   assert.equal(third.items[1], second.items[1], "and is kept when it didn't change again");
 });
 
+test("a long turn's earlier work rows are kept when the run arrives again with one more step", async () => {
+  const { reuseItems } = await import("../src/features/chat/turn");
+  // The computer sends the whole run with every step: new objects, the same earlier steps.
+  const fresh = (count: number) =>
+    chatTimeline(
+      input({
+        messages: [ask, { role: "assistant", text: "That is the first part.", runId: "r1", time: at(10), interim: true }],
+        // Two steps before the bot's update, the rest after it.
+        running: run({ steps: Array.from({ length: count }, (_, i) => step("s" + i, i < 2 ? 2 + i * 2 : 20 + i * 2)) }),
+        live: {},
+      }),
+    );
+  const first = reuseItems(undefined, fresh(4));
+  const second = reuseItems(first.byKey, fresh(5));
+  const work = (items: Item[]) => items.filter((item) => item.kind === "work");
+  assert.ok(work(first.items).length >= 1, "there is work before the interim text");
+  // The steps before the interim text did not change: that row is the same object, though its run is a new one.
+  assert.equal(work(second.items)[0], work(first.items)[0]);
+  assert.equal(second.items.find((item) => item.kind === "text"), first.items.find((item) => item.kind === "text"));
+});
+
 test("the worked example in docs/turn-timeline.md reads as the doc says, from either computer", () => {
   const messages: Message[] = [
     { role: "user", text: "Check the deploy and fix what's broken", runId: "r1", time: 0 },

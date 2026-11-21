@@ -354,6 +354,11 @@ type TextDelta = { id: string; stream: Append; thinking: Append };
 export type LinkOptions = {
   /** Opt in to boolean live indicators and expanded text:<chatId> parts for watched chats. */
   streamAppends?: boolean;
+  /**
+   * Ask for steps without their long input and output ("step-details-v1"): such a step says
+   * `more: true`, and `link.step` reads it when it is opened. A computer without it sends them whole.
+   */
+  lightSteps?: boolean;
   fetch: FetchLike;
   /** Parts that changed on the computer, by name. A chat's detail is "chat:<id>", its running turn "run:<id>". */
   onParts(parts: Record<string, unknown>): void;
@@ -775,7 +780,7 @@ export class LinkClient {
         const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
           watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
         const appends = requestText ? { appends: this.cursors() } : {};
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
+        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
         if (this.lifetime !== lifetime) break;
         failures = 0;
         this.setState("online");

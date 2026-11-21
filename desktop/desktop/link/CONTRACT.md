@@ -75,6 +75,22 @@ client.watch([chatId]);                                       // at most 4 chats
 - `LinkClient` reconnects by itself. Call `client.wake()` when the app comes to the front or the network changes.
 - `state === "revoked"` means the host no longer knows this device. Delete the stored `Pairing` and show the pairing screen. Do not retry.
 
+### Light steps (`step-details-v1`)
+
+Most of a long turn's bytes are the inputs and outputs of its steps, and a chat shows them only when a step is opened. A client that sends `steps: "light"` in the `link.sync` argument gets `chat:<id>` and `run:<id>` with light steps: a step keeps its `input` and `output` only when each is at most 400 characters, when the step is a question the bot asked (`ask_user`, `ask`), or when it started a helper. Any other step comes without them and says `more: true`. `link.messages` answers in the form the session follows in.
+
+`link.step(chatId, runId, stepId)` answers `{ input?, output? }` for one step, each cut to 4,000 characters as a whole step always was, or `null` when the step is gone. A team member may read a step only in a chat they may read (the policy of `link.messages`).
+
+A client names the form on every sync and keeps to it: the versions it holds are for that form. A client that does not ask gets whole steps, and a host without the capability ignores the field and sends whole steps, with no `more`.
+
+### Streaming text
+
+A host with `stream-appends-v1` accepts an optional `appends` object in the existing `link.sync` argument. Its keys are watched chat IDs (at most four, 1–128 UTF-16 units each). Each value is `{ id: string, stream: number, thinking: number }`. The text ID is 1–128 units and the numbers are non-negative safe integers counting UTF-16 code units held. Send `{}` for a first read. The phone can include this optional field on its first sync and omits it after a host advertises no support. An invalid or unsupported field selects the original full-string `live` format.
+
+With appends, `live.streams` and `live.thinking` map chat IDs to booleans. A key means the corresponding stream exists, and true means it has text. Other fields are identical. The two forms of `live` have distinct versions. For a watched chat the host sends `text:<chatId>` as `{ id, stream: { from, add }, thinking: { from, add } }`. Append each string at its indicated UTF-16 offset. A fresh ID, unknown cursor, new epoch or out-of-range offset sends both bodies from zero. When neither body exists, a held cursor gets `null`. These parts are acknowledged by cursors, outside the version map.
+
+A waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
+
 ### What a client may call
 
 `link-host/methods.mjs` (`REMOTE_METHODS`) lists the app's calls. A call that opens a window, a file dialog or the browser on the host is not in it. The link's own calls start with `link.`; `Calls` in `types.ts` types all of them. Check `meta.capabilities` before using a feature, and say "Update the app on your computer" when its name is missing.

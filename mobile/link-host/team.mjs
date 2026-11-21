@@ -174,6 +174,7 @@ const POLICY = {
   "plugins.uninstall": ["plugins", "uninstall"],
   "link.sync": ["agents", "view"],
   "link.messages": ["agents", "chat"],
+  "link.step": ["agents", "chat"],
   "link.setLook": ["agents", "manage"],
   "link.unpair": ["settings", "view"],
   "link.push.register": ["settings", "view"],
@@ -324,7 +325,7 @@ const SELF_METHODS = new Set([
   "link.unpair",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive"]);
+const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive"]);
 const READ_REQUEST_METHODS = new Set(["respond"]);
 
 function roleFor(principal, team) {

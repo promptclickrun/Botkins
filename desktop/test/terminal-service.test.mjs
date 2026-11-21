@@ -83,6 +83,11 @@ test("the control socket is the owner's only, answers calls, and says plainly wh
 });
 
 /** A service on a folder of its own, with the stand-in agent as its only provider. */
+// The pause between the pieces of the stand-in's reply. The link sends a phone a reply's text at most
+// every 200 ms (link/server.mjs, TEXT_PUMP_MS), so the reply has to last several of those for a phone
+// to see it grow: about a dozen pieces, 90 ms apart.
+const PIECE_MS = "90";
+
 async function service(t, { signedIn = true, config = {} } = {}) {
   const dir = tempDir(t);
   const bin = join(dir, "bin");
@@ -90,10 +95,10 @@ async function service(t, { signedIn = true, config = {} } = {}) {
   // The provider "grok" finds its tool on the PATH: the stand-in takes that name.
   writeFileSync(join(bin, "grok"), "#!/bin/sh\nexec " + JSON.stringify(process.execPath) + " " + JSON.stringify(agent) + ' "$@"\n');
   chmodSync(join(bin, "grok"), 0o755);
-  const env = { ...process.env, PATH: bin + delimiter + process.env.PATH, STANDIN_AGENT_HOME: join(dir, "agent"), STANDIN_AGENT_PIECE_MS: "25" };
+  const env = { ...process.env, PATH: bin + delimiter + process.env.PATH, STANDIN_AGENT_HOME: join(dir, "agent"), STANDIN_AGENT_PIECE_MS: PIECE_MS };
   const before = { PATH: process.env.PATH, STANDIN_AGENT_HOME: process.env.STANDIN_AGENT_HOME, STANDIN_AGENT_PIECE_MS: process.env.STANDIN_AGENT_PIECE_MS, BOTKINS_PROVIDERS: process.env.BOTKINS_PROVIDERS };
   // The tools the service starts inherit its environment.
-  Object.assign(process.env, { PATH: env.PATH, STANDIN_AGENT_HOME: env.STANDIN_AGENT_HOME, STANDIN_AGENT_PIECE_MS: "25" });
+  Object.assign(process.env, { PATH: env.PATH, STANDIN_AGENT_HOME: env.STANDIN_AGENT_HOME, STANDIN_AGENT_PIECE_MS: PIECE_MS });
   t.after(() => {
     for (const [name, value] of Object.entries(before)) value === undefined ? delete process.env[name] : (process.env[name] = value);
   });

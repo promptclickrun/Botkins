@@ -19,7 +19,7 @@ import { DeviceTools } from "./device.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
-import { baseParts, CHAT_PAGE, chatPart, quietLive, runPart, runsByChat, textDelta } from "./parts.mjs";
+import { baseParts, CHAT_PAGE, chatPart, lightPart, quietLive, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
 import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
@@ -57,7 +57,7 @@ const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following p
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 const MAX_FRAME_HTML = 300_000;
 const MAX_FRAME_DATA = 200_000;
@@ -1412,8 +1412,11 @@ export class LinkHost extends EventEmitter {
     if (method === "link.sync") return this.sync(session, args[0] ?? {}, gone);
     if (method === "link.messages") {
       const limit = Math.max(1, Math.min(Number(args[2]) || CHAT_PAGE, 200));
-      return chatPart(this.backend.snapshot(), String(args[0]), undefined, { before: Number(args[1]), limit });
+      const page = chatPart(this.backend.snapshot(), String(args[0]), undefined, { before: Number(args[1]), limit });
+      // A session that follows with light steps gets its earlier pages the same way.
+      return session.light ? lightPart(page) : page;
     }
+    if (method === "link.step") return stepDetail(this.backend.snapshot(), String(args[0]), String(args[1]), String(args[2]));
     if (method === "link.setLook") {
       const bots = this.backend.snapshot().bots ?? [];
       if (!bots.some((bot) => bot.id === args[0])) throw new Error("This bot no longer exists.");
@@ -1639,7 +1642,9 @@ export class LinkHost extends EventEmitter {
       if (known[name] === part.v) continue;
       const legacyTextOnly = name === "live" && !cursors && known.live > (values.get("quietLive")?.v ?? Infinity);
       if (!legacyTextOnly) textOnly = false;
-      parts.push(JSON.stringify(name) + ":" + part.json);
+      // A chat's page and its run with light steps ("step-details-v1"), made once for each version.
+      const light = session.light && (name.startsWith("chat:") || name.startsWith("run:"));
+      parts.push(JSON.stringify(name) + ":" + (light ? (part.light ??= JSON.stringify(lightPart(JSON.parse(part.json)))) : part.json));
     }
     for (const chat of cursors ? watching : []) {
       const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
@@ -1656,9 +1661,11 @@ export class LinkHost extends EventEmitter {
     session.watchUntil = session.lastNews + MAX_WAIT;
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
   }
-  sync(session, { epoch, have, watch, wait, appends }, gone) {
+  sync(session, { epoch, have, watch, wait, appends, steps }, gone) {
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     session.watching = watching;
+    // One form for a session: a client names it on every sync, and the versions it holds are for that form.
+    session.light = steps === "light";
     session.watchUntil = Date.now() + MAX_WAIT;
     const known = epoch === this.epoch && have && typeof have === "object" ? have : {};
     this.refresh(watching);
