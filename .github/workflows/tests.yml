@@ -195,3 +195,30 @@ jobs:
       # desktop/test/skill-allowed-tools-live.mjs). The model is the script itself, on 127.0.0.1.
       - name: The permission question, a hook's changed command, and the limits
         run: npm run test:runtime
+
+  # A trial, not for `main`: does the macOS update check hold on a runner? Three runs side by side.
+  macos-update-trial:
+    name: Trial of the macOS update check (run ${{ matrix.run }})
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - name: GnuPG, from the runner's image or from Homebrew
+        run: command -v gpg || brew install gnupg
+      - name: An update between versions, from the packaged file, started from the running service
+        run: |
+          uptime
+          time bash test/terminal-e2e/macos-update.sh
