@@ -3,7 +3,7 @@ import { type MenuAction, MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { Ellipsis, ExternalLink, MessageCircle, Plus, ThumbsDown, ThumbsUp } from "lucide-react-native";
-import { type ComponentRef, createContext, type ReactNode, type RefObject, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Children, type ComponentRef, createContext, type ReactNode, type RefObject, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Dimensions, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { actOnIdea, discussBoardItem } from "@/features/chat/open";
@@ -13,7 +13,7 @@ import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, useShape, useTheme } from "@/ui";
 
 type Segment = "feed" | "idea" | "goal" | "panels";
 const SEGMENTS: { value: Segment; label: string }[] = [
@@ -453,7 +453,7 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                   />
                 )
               ) : (
-                list.map((item) => <ItemCard key={item.id} item={item} bot={bots.get(item.botId)} />)
+                <TwoUp>{list.map((item) => <ItemCard key={item.id} item={item} bot={bots.get(item.botId)} />)}</TwoUp>
               )}
               <Button title={finished ? "Show open" : "Show finished"} variant="ghost" size="sm" onPress={() => setFinished(!finished)} style={{ alignSelf: "center" }} />
             </>
@@ -465,10 +465,12 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
                 ) : (
                   <EmptyState art={<Mascot size={96} />} title={EMPTY.panels} action={canCreate ? "Ask a bot" : undefined} onAction={canCreate ? openNewPanel : undefined} />
                 ))}
-              {shownPanels.map((panel) => {
-                const index = all.indexOf(panel);
-                return <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} order={{ first: index === 0, last: index === all.length - 1 }} />;
-              })}
+              <TwoUp>
+                {shownPanels.map((panel) => {
+                  const index = all.indexOf(panel);
+                  return <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} order={{ first: index === 0, last: index === all.length - 1 }} />;
+                })}
+              </TwoUp>
               {shownPanels.length > 0 && canCreate && <Button title="Create panel" icon={Plus} variant="secondary" size="sm" onPress={openNewPanel} style={{ alignSelf: "center" }} />}
               {hiddenPanels.length > 0 && (
                 <View style={{ marginTop: space.sm }}>
@@ -494,5 +496,31 @@ export function TodayContent({ seen }: { seen?: SeenSignal }) {
         </Animated.View>
       )}
     </Seen.Provider>
+  );
+}
+
+/**
+ * Cards two to a row when there is room (iPhone Duo opened, an iPad): an even count splits cleanly
+ * at the fold. One column otherwise, as before.
+ */
+function TwoUp({ children }: { children: ReactNode }) {
+  const { wide } = useShape();
+  const cards = Children.toArray(children);
+  if (!wide) return <>{cards}</>;
+  const rows: ReactNode[][] = [];
+  for (let at = 0; at < cards.length; at += 2) rows.push(cards.slice(at, at + 2));
+  return (
+    <>
+      {rows.map((row, index) => (
+        <View key={index} style={{ flexDirection: "row", alignItems: "flex-start", gap: space.lg }}>
+          {row.map((card, column) => (
+            <View key={column} style={{ flex: 1, minWidth: 0 }}>
+              {card}
+            </View>
+          ))}
+          {row.length === 1 && <View style={{ flex: 1 }} />}
+        </View>
+      ))}
+    </>
   );
 }

@@ -11,13 +11,13 @@ import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability,
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
-import { BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTheme } from "@/ui";
 import { BotArtifacts } from "@/features/artifacts/ArtifactBits";
 import { sectionOf } from "@/features/home/arrange";
 import { grantSummary } from "./projectAccess";
 import { moveToSection, runSectionChoice, toggleHidden } from "./menus";
 
-export default function BotPage() {
+function BotPageScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const bot = useBot(id);
   const synced = useApp((state) => state.synced);
@@ -201,5 +201,14 @@ function BotDetail({ bot }: { bot: Bot }) {
         {canDelete && <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Delete bot" tone="danger" onPress={remove} />}
       </Group>}
     </Page>
+  );
+}
+
+/** Avatars move on this screen (see `AvatarMotion`). */
+export default function BotPage() {
+  return (
+    <AvatarMotion>
+      <BotPageScreen />
+    </AvatarMotion>
   );
 }

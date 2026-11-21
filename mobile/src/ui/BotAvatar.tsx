@@ -14,6 +14,7 @@ import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, M
 import { lookOf, type ResolvedLook, resolveLook } from "@/data/botLook";
 import type { BotkinLook } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
+import { useAvatarMotion } from "./avatarMotion";
 import { avatarBeat, avatarMotion, schedulePasses, scheduleRestPasses } from "./avatarRest";
 import { useOnShow } from "./useOnShow";
 
@@ -74,8 +75,9 @@ export type BotAvatarProps = {
   /** Kept so older callers compile. Avatars are always drawn bare, with nothing behind them. */
   tile?: boolean;
   /**
-   * Every avatar that can be seen moves. Pass false only for a picture that must hold still; the
-   * phone's Reduce Motion stills them all, and an avatar whose screen can't be seen holds still by itself.
+   * Left out, an avatar moves only inside an `AvatarMotion` screen (Home's primary bot passes true,
+   * Home's other bots false). The phone's Reduce Motion stills them all, and an avatar whose screen
+   * can't be seen holds still by itself.
    */
   animated?: boolean;
   /** The state's badge at the corner. On by default from 40 points up. */
@@ -102,7 +104,9 @@ function Head({ look, size }: { look: ResolvedLook; size: number }) {
   );
 }
 
-export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated = true, badge, style }: BotAvatarProps) {
+export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated: asked, badge, style }: BotAvatarProps) {
+  const screenMoves = useAvatarMotion();
+  const animated = asked ?? screenMoves;
   const spec = given ?? lookOf(bot ?? {});
   const colorKey = spec.colors?.join(",");
   const look = useMemo(() => resolveLook(spec), [spec.head, spec.palette, spec.eyes, colorKey]);

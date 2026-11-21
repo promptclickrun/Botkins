@@ -12,7 +12,7 @@ import { type AvatarState, useBot, useWatchedChat } from "@/state/hooks";
 import { loadDevicePrefs, useDevicePrefs } from "@/state/devicePrefs";
 import { api } from "@/state/link";
 import { useApp } from "@/state/store";
-import { BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
 import { RequestPanel } from "../chat/RequestPanel";
 import { chatAccess } from "./chatAccess";
 import { liveContext } from "./live/context";
@@ -55,7 +55,7 @@ const MAIN = 96;
 
 const AVATAR: Record<LiveStatus, AvatarState> = { connecting: "pending", listening: "listening", thinking: "thinking", talking: "talking", ended: "idle" };
 
-export default function Live() {
+function LiveScreen() {
   const { chatId, botId } = useLocalSearchParams<{ chatId: string; botId: string }>();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -343,4 +343,13 @@ function statusLine(status: LiveStatus): string {
     default:
       return "Call ended";
   }
+}
+
+/** Avatars move on this screen (see `AvatarMotion`). */
+export default function Live() {
+  return (
+    <AvatarMotion>
+      <LiveScreen />
+    </AvatarMotion>
+  );
 }

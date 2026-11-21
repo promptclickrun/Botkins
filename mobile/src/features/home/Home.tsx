@@ -15,11 +15,11 @@ import { HomeSpaces } from "@/features/spaces/HomeSpaces";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange } from "@/state/hooks";
+import { activityLabel, isConversation, useBotActivity, useBots, useCan, useIsPrimaryBot, useChats, usePart, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, TAB_BAR_ROOM, Tap, useTheme } from "@/ui";
+import { BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
 import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
@@ -34,11 +34,13 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
   const state = useBotActivity(bot.id);
   const status = activityLabel(state);
   const canChat = useCan("agents", "chat");
+  // Only the primary bot moves on Home (battery); the others hold their state's pose.
+  const primary = useIsPrimaryBot(bot.id);
   return (
     <View style={width ? { width, alignItems: "center" } : { flex: 1, alignItems: "center" }}>
       <BotMenu bot={bot}>
         <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
-          <BotAvatar bot={bot} state={state} size={size} />
+          <BotAvatar bot={bot} state={state} size={size} animated={primary} />
           <T variant="footnote" weight="600" color="ink2" numberOfLines={1} center>
             {bot.name}
           </T>
@@ -122,14 +124,16 @@ function FirstBot() {
 function HomeFrame({ children, scroll, scrollEnabled, onScrolled }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; onScrolled: () => void }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
+  const shape = useShape();
   const { height } = useWindowDimensions();
   const view = useSharedValue(0);
   const content = useSharedValue(0);
   const told = useSharedValue(0);
   const { edges, offset, max } = scroll;
   useEffect(() => {
-    edges.value = { top: insets.top, bottom: height - TAB_BAR_ROOM - insets.bottom };
-  }, [edges, insets.top, insets.bottom, height]);
+    edges.value = { top: insets.top, bottom: height - shape.tabRoom - insets.bottom };
+  }, [edges, insets.top, insets.bottom, height, shape.tabRoom]);
   // The offset on the UI thread for the drag; Today hears of a scroll a few times a second at most.
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -146,7 +150,7 @@ function HomeFrame({ children, scroll, scrollEnabled, onScrolled }: { children: 
       <Animated.ScrollView
         ref={scroll.ref}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: insets.top + space.md, paddingBottom: TAB_BAR_ROOM + insets.bottom + space.xxl, gap: space.xl }}
+        contentContainerStyle={{ paddingLeft: space.xl + shape.left, paddingRight: space.xl + shape.right, paddingTop: insets.top + space.md, paddingBottom: shape.tabRoom + insets.bottom + space.xxl, gap: space.xl }}
         contentInsetAdjustmentBehavior="never"
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"

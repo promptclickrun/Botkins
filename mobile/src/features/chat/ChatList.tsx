@@ -1,15 +1,17 @@
 import { router } from "expo-router";
 import { Archive, FolderPlus, Search, SquarePen, X } from "lucide-react-native";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { TextInput, useWindowDimensions, View } from "react-native";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import type { ChatSummary } from "@/link/types";
 import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { Chip, EmptyState, IconButton, LinkBanner, Mascot, radius, space, T, TAB_BAR_ROOM, Tap, useTheme } from "@/ui";
+import { AvatarMotion, Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
+import { ChatPane } from "./ChatScreen";
+import { useChatSplit } from "./split";
 import { newSection } from "./sectionMenus";
 
 const isArchivedConversation = (chat: ChatSummary) => !!chat.archived && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine);
@@ -66,16 +68,19 @@ function Skeleton() {
  * the top or bottom edge scrolls the page (Page has no handle on its scroll view). Keep it like
  * Page's, and like Home's own frame.
  */
-function ChatsFrame({ children, scroll, scrollEnabled, actions }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode }) {
+/** `inner`: the list is the first of two panes, so its right side meets the chat, not the rail. */
+function ChatsFrame({ children, scroll, scrollEnabled, actions, inner }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode; inner?: boolean }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
+  const shape = useShape();
   const { height } = useWindowDimensions();
   const view = useSharedValue(0);
   const content = useSharedValue(0);
   const { edges, offset, max } = scroll;
   useEffect(() => {
-    edges.value = { top: insets.top, bottom: height - TAB_BAR_ROOM - insets.bottom };
-  }, [edges, insets.top, insets.bottom, height]);
+    edges.value = { top: insets.top, bottom: height - shape.tabRoom - insets.bottom };
+  }, [edges, insets.top, insets.bottom, height, shape.tabRoom]);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
       offset.value = event.contentOffset.y;
@@ -86,7 +91,7 @@ function ChatsFrame({ children, scroll, scrollEnabled, actions }: { children: Re
       <Animated.ScrollView
         ref={scroll.ref}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: insets.top + space.md, paddingBottom: TAB_BAR_ROOM + insets.bottom + space.xxl, gap: space.xl }}
+        contentContainerStyle={{ paddingLeft: space.xl + shape.left, paddingRight: inner ? space.lg : space.xl + shape.right, paddingTop: insets.top + space.md, paddingBottom: shape.tabRoom + insets.bottom + space.xxl, gap: space.xl }}
         contentInsetAdjustmentBehavior="never"
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
@@ -118,7 +123,7 @@ function ChatsFrame({ children, scroll, scrollEnabled, actions }: { children: Re
   );
 }
 
-export default function ChatList() {
+function ChatListScreen() {
   const { colors } = useTheme();
   const chats = useChats();
   const allBots = useBots();
@@ -150,8 +155,32 @@ export default function ChatList() {
   const empty = synced && conversations.length === 0 && archived.length === 0;
   const nothing = shown.length === 0 && old.length === 0 && (!!needle || !sections?.length);
 
-  return (
-    <ChatsFrame scroll={scroll} scrollEnabled={!dragging} actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
+  // With room for two panes (iPhone Duo opened, an iPad) the chosen chat opens beside the list.
+  const shape = useShape();
+  const { width } = useWindowDimensions();
+  const split = shape.wide;
+  const picked = useChatSplit((state) => state.id);
+  const paneId = picked && chats.some((chat) => chat.id === picked) ? picked : split ? (shown[0]?.id ?? null) : null;
+  useEffect(() => {
+    useChatSplit.setState({ active: split });
+  }, [split]);
+  // The newest chat is open beside the list until the person picks another (its row is marked).
+  useEffect(() => {
+    if (split && paneId && paneId !== picked) useChatSplit.setState({ id: paneId });
+  }, [split, paneId, picked]);
+  // Folding with a chat open beside the list: it goes on its own page, so the person stays in it.
+  const before = useRef(split);
+  useEffect(() => {
+    const was = before.current;
+    before.current = split;
+    if (was && !split && picked) {
+      useChatSplit.setState({ id: null, pushed: picked });
+      router.push({ pathname: "/chat/[id]", params: { id: picked } });
+    }
+  }, [split, picked]);
+
+  const frame = (
+    <ChatsFrame scroll={scroll} scrollEnabled={!dragging} inner={split} actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
       {!synced ? (
         <Skeleton />
       ) : empty ? (
@@ -180,5 +209,30 @@ export default function ChatList() {
         </Animated.View>
       )}
     </ChatsFrame>
+  );
+  if (!split) return frame;
+  const gap = foldGap(shape);
+  return (
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.canvas }}>
+      <View style={{ width: shape.left + listWidth(shape, width) }}>{frame}</View>
+      {/* In book pose the fold is the gap between the pages; flat, a hairline. */}
+      <View style={{ width: gap || StyleSheet.hairlineWidth, backgroundColor: gap ? colors.canvas : colors.line }} />
+      <View style={{ flex: 1, paddingRight: shape.right }}>
+        {paneId ? (
+          <ChatPane id={paneId} onLeave={() => useChatSplit.setState({ id: null })} />
+        ) : (
+          <EmptyState art={<Mascot size={88} />} title="No chat open" />
+        )}
+      </View>
+    </View>
+  );
+}
+
+/** Avatars move on this screen (see `AvatarMotion`). */
+export default function ChatList() {
+  return (
+    <AvatarMotion>
+      <ChatListScreen />
+    </AvatarMotion>
   );
 }

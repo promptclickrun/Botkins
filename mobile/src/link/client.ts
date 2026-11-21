@@ -334,13 +334,33 @@ export async function findInvite(
   return { code: clean, serverId: card.serverId, serverKey: card.serverKey, name: card.name.slice(0, 60), hosts: card.hosts.filter((host) => typeof host === "string"), room: card.room, relayBase: base };
 }
 
+/**
+ * A pairing's keys never change, but X25519 in plain JavaScript is BigInt arithmetic, slow on the
+ * phone's engine. Deriving them again on every reconnect is what kept the owner's iPhone at 77–93%
+ * CPU for minutes (build 12's cpu_resource reports), so each is derived once per pairing.
+ */
+const derived = new Map<string, { device: Uint8Array; push?: Uint8Array }>();
+function keysOf(pairing: Pairing) {
+  const id = pairing.serverId + "\n" + pairing.deviceId + "\n" + pairing.serverKey + "\n" + pairing.secretKey;
+  let held = derived.get(id);
+  if (!held) {
+    if (derived.size >= 32) derived.clear();
+    held = { device: hkdf(agree(unb64u(pairing.secretKey), unb64u(pairing.serverKey)), utf8(pairing.deviceId), INFO.device) };
+    derived.set(id, held);
+  }
+  return held;
+}
 /** The key this phone and its computer share from pairing. Sessions are built on it. */
-const deviceKeyOf = (pairing: Pairing) => hkdf(agree(unb64u(pairing.secretKey), unb64u(pairing.serverKey)), utf8(pairing.deviceId), INFO.device);
+const deviceKeyOf = (pairing: Pairing) => keysOf(pairing).device;
 /**
  * The key sealed notifications are opened with (link-host/push.mjs seals with the same one). The
  * phone keeps it where its notification extension can read it; it never leaves the phone.
  */
-export const pushKeyOf = (pairing: Pairing) => hkdf(deviceKeyOf(pairing), utf8(pairing.deviceId), "botkins/push/v1");
+export function pushKeyOf(pairing: Pairing): Uint8Array {
+  const held = keysOf(pairing);
+  held.push ??= hkdf(held.device, utf8(pairing.deviceId), "botkins/push/v1");
+  return held.push;
+}
 
 type Session = { id: string; toHost: Uint8Array; toPhone: Uint8Array; seq: number; base: string };
 const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRelayHost(session.base.replace(/^http:\/\//, "")) ? "relay" : "direct") : null);
@@ -381,7 +401,10 @@ export type LinkOptions = {
   onSync?(): void;
 };
 
-const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
+// While the computer stays away the waits grow to five minutes, as T3 Code's link does: a computer
+// that is asleep or a phone off its network used to cost a look at every address every 15 s for as
+// long as the app was open. A wake (the app in front again, another network) starts them over.
+const WAITS = [400, 1000, 2000, 4000, 8000, 15_000, 30_000, 60_000, 120_000, 300_000];
 /** How long a direct address that answered and then failed is left out, when there is a relay to use. */
 const DISTRUST_MS = 10 * 60_000;
 
@@ -414,6 +437,8 @@ export class LinkClient {
   private suspect = false;
   /** Set by `rest`: the app is in the background, so nothing is followed until `wake`. */
   private resting = false;
+  /** Set by `wake`: the next failure waits the shortest time again. */
+  private waitsAgain = false;
 
   constructor(
     private pairing: Pairing,
@@ -458,6 +483,7 @@ export class LinkClient {
     // On another network, an address that failed on the last one gets a fresh try.
     if (reason === "network") this.distrusted.clear();
     this.suspect = true;
+    this.waitsAgain = true;
     // A socket can look open long after the system closed it under a suspended app.
     this.options.check?.();
     this.wakeUp?.();
@@ -760,6 +786,10 @@ export class LinkClient {
   private async follow(lifetime: object) {
     let failures = 0;
     while (this.lifetime === lifetime) {
+      if (this.waitsAgain) {
+        this.waitsAgain = false;
+        failures = Math.min(failures, 1);
+      }
       if (this.resting) {
         // At rest until a wake (or a stop, which wakes this too).
         await new Promise<void>((resolve) => {

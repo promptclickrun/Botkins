@@ -18,6 +18,7 @@ import { activityLabel, useCan, useChatActivity, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
+import { openFromList, useChatSplit } from "./split";
 import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
 import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
@@ -64,6 +65,9 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   const speaker = chat.last?.role === "user" ? "You" : group && chat.last?.botId ? bots.get(chat.last.botId)?.name : undefined;
   const preview = chat.last ? (speaker ? speaker + ": " : "") + plainPreview(chat.last.text) : "No messages yet";
   const title = chat.title || bot?.name || "Chat";
+  // With the chat open beside the list (two panes), its row is marked.
+  const picked = useChatSplit((split) => split.active && split.id === chat.id);
+  const { colors } = useTheme();
   // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
   const mine = myPlace(chat, me) === "manages";
   const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }] : [];
@@ -95,7 +99,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
       }}
     >
       <Tap
-        onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })}
+        onPress={() => openFromList(chat.id)}
         sink={1}
         feel="select"
         hitSlop={0}
@@ -104,7 +108,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         accessibilityActions={actions?.list}
         onAccessibilityAction={actions ? (event) => actions.run(event.nativeEvent.actionName) : undefined}
       >
-        <View style={{ minHeight: 72, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md }}>
+        <View style={[{ minHeight: 72, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md }, picked && { backgroundColor: colors.sunken, borderRadius: radius.lg, marginHorizontal: -space.sm, paddingHorizontal: space.sm }]} accessibilityState={picked ? { selected: true } : undefined}>
           {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>

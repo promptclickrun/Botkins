@@ -12,6 +12,8 @@ export function usePart<K extends keyof PhoneParts>(key: K): PhoneParts[K] | und
   return useApp((state) => state.parts[key]);
 }
 export const useBots = (): Bot[] => usePart("bots") ?? NONE;
+/** Whether this is the primary bot (the first one). A boolean, so a row re-renders only when that changes. */
+export const useIsPrimaryBot = (id: string): boolean => useApp((state) => state.parts.bots?.[0]?.id === id);
 export const useBot = (id: string | undefined) => useApp((state) => state.parts.bots?.find((bot) => bot.id === id));
 export const useChats = (): ChatSummary[] => usePart("chats") ?? NONE;
 export const useChat = (id: string | undefined) => useApp((state) => state.parts.chats?.find((chat) => chat.id === id));

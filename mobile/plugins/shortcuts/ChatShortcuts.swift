@@ -1,6 +1,7 @@
 import AppIntents
 internal import BotkinsActivity
 internal import Expo
+internal import React
 import UIKit
 
 enum ShortcutError: LocalizedError {
@@ -17,7 +18,11 @@ func runShortcut(_ fields: [String: String]) async throws -> String {
   guard let factory = (UIApplication.shared.delegate as? ExpoReactNativeFactoryProvider)?.reactNativeFactory else {
     throw ShortcutError.message("Open Botkins and try the shortcut again.")
   }
-  factory.rootViewFactory.initializeReactHost(launchOptions: nil, bundleConfiguration: factory.bundleConfiguration, devMenuConfiguration: factory.devMenuConfiguration ?? .default())
+  // A release build has no developer menu: React Native's `defaultConfiguration` is nil there, and
+  // force-unwrapping it crashed every shortcut in TestFlight (build 13). React Native itself passes
+  // that nil along; Swift can't, so a release build passes an empty configuration, which nothing reads.
+  let menu: RCTDevMenuConfiguration = factory.devMenuConfiguration ?? (RCTDevMenuConfiguration.default() as RCTDevMenuConfiguration?) ?? RCTDevMenuConfiguration()
+  factory.rootViewFactory.initializeReactHost(launchOptions: nil, bundleConfiguration: factory.bundleConfiguration, devMenuConfiguration: menu)
   return try await ShortcutRequests.run(fields)
 }
 

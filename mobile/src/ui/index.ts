@@ -1,7 +1,10 @@
 export { AppLogo } from "./AppLogo";
 export { Badge, Chip, Divider, Dot, EmptyState, Segmented, type Tone } from "./Bits";
 export { Blocks } from "./Blocks";
+export { AvatarMotion, useAvatarMotion } from "./avatarMotion";
 export { BotAvatar } from "./BotAvatar";
+export { foldGap, listWidth, type Shape, shapeOf, WIDE_MIN } from "./shape";
+export { useShape } from "./useShape";
 export { Button, IconButton } from "./Button";
 export { ColorPicker } from "./ColorPicker";
 export { Field } from "./Field";

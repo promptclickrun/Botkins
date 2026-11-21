@@ -12,12 +12,13 @@ import { forget, readKept } from "@/state/keep";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { JOIN_ATTEMPT_KEY, resumeDecision } from "@/features/pair/joinLogic";
-import { ToastHost, useTheme } from "@/ui";
+import { ToastHost, useShape, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const theme = useTheme();
+  const shape = useShape();
   const { colors } = theme;
   const booted = useApp((state) => state.booted);
   const paired = useApp((state) => !!state.pairing);
@@ -59,6 +60,9 @@ export default function RootLayout() {
   if (!booted) return null;
 
   const base = theme.dark ? DarkTheme : DefaultTheme;
+  // Every pushed page and sheet keeps out of the side rail (iPhone Duo puts the bars on one edge).
+  // The tabs lay themselves out: their tab bar is that rail.
+  const sides = { paddingLeft: shape.left, paddingRight: shape.right };
   const navigation = { ...base, colors: { ...base.colors, background: colors.canvas, card: colors.canvas, text: colors.ink, border: colors.line, primary: colors.accent } };
   // A pushed page: a bare native bar with a back button, the page draws its own title.
   const page = {
@@ -69,7 +73,7 @@ export default function RootLayout() {
     headerBackButtonDisplayMode: "minimal",
     headerTintColor: colors.ink,
     headerStyle: { backgroundColor: colors.canvas },
-    contentStyle: { backgroundColor: colors.canvas },
+    contentStyle: { backgroundColor: colors.canvas, ...sides },
   } as const;
   const sheet = { presentation: "formSheet", headerShown: false, sheetGrabberVisible: true, sheetCornerRadius: 28, contentStyle: { backgroundColor: colors.canvas } } as const;
   const tall = { ...sheet, sheetAllowedDetents: [1] };
@@ -86,7 +90,7 @@ export default function RootLayout() {
               <Stack.Screen name="welcome" options={{ headerShown: false, animation: "fade" }} />
             </Stack.Protected>
             <Stack.Protected guard={paired} redirectTo="/welcome">
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: colors.canvas } }} />
               <Stack.Screen name="chat/[id]" />
               {/* Links from widgets, Live Activities and notifications (src/features/open): each hands over to a real screen at once. */}
               <Stack.Screen name="open/bot/[id]" options={{ headerShown: false, animation: "none" }} />
