@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Workspace } from "./starter.mjs";
 import { FRAME_CSP, framePage } from "../desktop/frames.mjs";
+import { VIEW_GUARD, guardedPage, unshadow } from "../desktop/view-guard.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
 
 function setup(t) {
@@ -166,4 +167,29 @@ test("a refused card stores no page, and a panel whose chat is gone has no chat 
   assert.equal(ws.frames.chatFor(frame), null);
   assert.equal(ws.state.chats.filter((c) => c.botId === "scout").length, 0);
   assert.equal(ws.state.panels[0].chatId, "gone-chat");
+});
+
+test("a bot's page is served with the guard first, whatever its markup begins with", (t) => {
+  // The guard takes away the ways to open a peer-to-peer connection, and keeps frames out of the page.
+  for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "WebTransport"]) assert.ok(VIEW_GUARD.includes('"' + name + '"'), name);
+  assert.ok(VIEW_GUARD.includes('"iframe,frame,object,embed,portal,fencedframe"'));
+  assert.ok(!/<\/script/i.test(VIEW_GUARD), "the guard cannot end its own script");
+  assert.doesNotThrow(() => new Function(VIEW_GUARD), "the guard is one whole piece of code");
+  // It stands at the very start of the document, in a script of its own, before the bridge and the page.
+  const early = "<script>window.first = 1</script><html><head><title>T</title></head><body><p>Hi</p></body></html>";
+  const served = guardedPage(framePage(unshadow(early), null));
+  assert.ok(served.startsWith("<!doctype html><script>" + VIEW_GUARD + "</script>"));
+  assert.ok(served.indexOf(VIEW_GUARD) < served.indexOf("window.first = 1"), "a script the page puts before its head still runs after the guard");
+  assert.ok(served.indexOf("window.first = 1") > 0 && served.indexOf('window, "botkins"') > 0);
+  // Markup that would make a shadow root as the page is read is unnamed, in any spelling.
+  assert.equal(unshadow('<template shadowrootmode="open"><iframe></iframe></template><div ShadowRootMode=closed>'), '<template data-no-shadowrootmode="open"><iframe></iframe></template><div data-no-shadowrootMode=closed>'.replace("data-no-shadowrootMode", "data-no-shadowroot" + "Mode"));
+  assert.equal(unshadow("<p>Plain</p>"), "<p>Plain</p>");
+  // What the workspace serves for a frame is the guarded page.
+  const { ws } = setup(t);
+  const chat = ws.createChat("pip");
+  const id = ws.frames.create("chat:" + chat, "pip", { html: '<template shadowrootmode="open"><b>x</b></template><p>Mine</p>', json: JSON.stringify({ n: 1 }) });
+  const page = ws.frames.page(id);
+  assert.ok(page.startsWith("<!doctype html><script>" + VIEW_GUARD + "</script>"));
+  assert.ok(page.includes("<p>Mine</p>") && page.includes("data-no-shadowrootmode") && !/<template shadowrootmode/i.test(page));
+  assert.equal(ws.frames.html(id).includes("<template shadowrootmode"), true, "the page as the bot wrote it is kept as it is");
 });

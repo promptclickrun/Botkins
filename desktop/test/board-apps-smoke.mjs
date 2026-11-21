@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
+import { probeListeners, probePage } from "./webrtc-probe.mjs";
 import { openBoard } from "./spaces-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
@@ -44,8 +45,10 @@ ws.runs.unshift({ id: runId, chatId, title: "Show an app", time: now, status: "C
   apps: [{ id: appId, title: "Number pad", description: "Pick a number and send it.", sendsAnswers: true }] });
 ws.apps = [{ id: appId, botId: pip.id, chatId, runId, title: "Number pad", description: "Pick a number and send it.", sendsAnswers: true, createdAt: now, updatedAt: now }];
 mkdirSync(join(dir, "data", "apps", appId), { recursive: true });
+// The app's page is also a probe: it tries to reach the network through WebRTC (test/webrtc-probe.mjs).
+const probe = await probeListeners();
 writeFileSync(join(dir, "data", "apps", appId, "index.html"),
-  "<!doctype html><title>Pad</title><body><h1 id=n>…</h1><script>window.botkins.getData().then(d=>{document.getElementById('n').textContent=d.n})</script>");
+  probePage(probe).replace('<p id="probe-title">Probe</p>', "<h1 id=n>…</h1><script>window.botkins.getData().then(d=>{document.getElementById('n').textContent=d.n})</script>"));
 writeFileSync(join(dir, "data", "apps", appId, "data.json"), JSON.stringify({ n: 7 }));
 writeFileSync(file, JSON.stringify(ws));
 
@@ -106,6 +109,16 @@ try {
   await shoot("app-card");
   const [appWindow] = await Promise.all([app.waitForEvent("window"), page.getByRole("button", { name: "Open app" }).click()]);
   await appWindow.locator("#n").filter({ hasText: "7" }).waitFor();
+  // The app cannot reach the network through WebRTC, from its page or from a frame it makes.
+  await appWindow.waitForTimeout(4000);
+  const found = await appWindow.evaluate(() => ({ has: window.probe.has, tried: window.probe.tried, nested: window.probe.nested, borrowed: window.probe.borrowed ?? null, frames: document.querySelectorAll("iframe,frame,object,embed").length }));
+  // The app's page has an address of its own, so it can reach into an empty frame it makes and find
+  // WebRTC there for a moment (`borrowed`). That frame is taken out at once, and the window's session
+  // has no way out for a connection, so nothing may arrive either way.
+  const { borrowed, ...rest } = found;
+  assert.deepEqual(rest, { has: "undefined", tried: "refused", nested: [], frames: 0 });
+  assert.ok(borrowed === null || borrowed === "function");
+  assert.deepEqual(probe.heard, { tcp: 0, udp: 0 }, "an HTML app reached the network through WebRTC");
   const sandbox = await appWindow.evaluate(async () => {
     let network = "allowed";
     try {
@@ -146,5 +159,6 @@ try {
   console.log("Feed, Ideas and Goals actions, the sandboxed HTML app window, its data bridge and its answer passed.");
 } finally {
   await app.close();
+  probe.close();
   rmSync(dir, { recursive: true, force: true });
 }
