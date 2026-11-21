@@ -56,7 +56,7 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
         className={"account host-button" + (using ? " remote" : "")}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={"Computer: " + name + (using ? ". " + hostLine(using) : "") + ". Switch computer"}
+        aria-label={"Computer: " + name + (state.adminMode ? ". Admin mode" : "") + (using ? ". " + hostLine(using) : "") + ". Switch computer"}
         title={collapsed ? name : undefined}
         onClick={(e) => {
           const at = e.currentTarget.getBoundingClientRect();
@@ -70,6 +70,8 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
         </span>
         <span className="nav-label">
           {name}
+          {/* While Admin mode is on, the computer's name says so. */}
+          {state.adminMode && <span className="admin-tag">Admin mode</span>}
           {using && <small>{using.member ? memberLabel(using.team) : hostLine(using)}</small>}
         </span>
       </button>

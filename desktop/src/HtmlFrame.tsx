@@ -67,6 +67,8 @@ export default function HtmlFrame({ frame, height, title, store }: { frame: stri
       const m = event.data;
       if (!m || typeof m !== "object" || m.commander !== 1 || typeof m.type !== "string") return;
       if (m.type === "ready") {
+        // The bridge says this before any of the page's own code runs: a new page starts with no click to its name.
+        gateOf(frame).reset();
         heard.current = true;
         shown.current = true;
         setPhase("ready");

@@ -13,6 +13,7 @@ import {
   Plus,
   SquarePen,
   X,
+  ShieldCheck,
 } from "lucide-react";
 import { MOD, placeOrder } from "./places";
 import { PlaceIcon } from "./PlaceIcon";
@@ -713,6 +714,12 @@ function App() {
             <span className="nav-label">Settings</span>
             {teamRequests > 0 && <span className="settings-badge" aria-hidden="true">{teamRequests}</span>}
           </button>
+          {/* With no other computer paired there is no computer's name in the menu, so the tag stands here. */}
+          {state.adminMode && !state.remote?.hosts.length && (
+            <button className="admin-tag" aria-label="Admin mode" title={collapsed ? "Admin mode" : undefined} onClick={() => settings("Team")}>
+              {collapsed ? <ShieldCheck size={15} /> : "Admin mode"}
+            </button>
+          )}
           {!collapsed && toggle}
         </div>
         <HostSwitcher state={state} collapsed={collapsed} connect={() => settings("Phone")} />
