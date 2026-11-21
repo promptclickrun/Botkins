@@ -449,6 +449,11 @@ test("the demo: an owner and two members make, share, open and change spaces, ea
     await owner.call("spaces.remove", launch.id);
     assert.equal(link.store.data.team.spaces[launch.id], undefined);
     await ben.until(() => !ben.space("Launch"), "Launch is gone for Ben");
+    // The app's own window deletes one: it tells the link, since no device's call did.
+    await owner.call("link.spaces.share", tripId, { access: "team", teamCan: "view" });
+    assert.equal(link.store.data.team.spaces[tripId].access, "team");
+    link.spaceRemoved(tripId);
+    assert.equal(link.store.data.team.spaces[tripId], undefined);
   } finally {
     await stop();
   }

@@ -245,6 +245,12 @@ Host-side only, never remote, on `backend.spaces`: `ensure(person)` (the four bu
 
 **For the app on the host** (its own window has no device): the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `spacesFor(person)` → `SpaceSummary[]`, `spaceCan(space, person)` (`space` is an id or the app's own `SpaceRecord`), `shareSpace(person, id, input)`, `newSpaceLink(person, id)`, `arrangeSpaces(person, input)`, `seenSpace(person, id)`, `notifySpace(person, id, mode)`, `hereInSpace(person, id | null, panelId?)`, `setLinkSharing(on)`. `LinkHost` emits `"status"` when a list changes.
 
+What a device's call gets from the link by itself, the window's own call has to ask for:
+
+- `spaceContent(principal, answer, state)`: the app's `spaces.read` answer as that person is sent it, with `seenAt`. For the window, `principal` is `{ kind: "owner" }`.
+- `spaceRemoved(id)`: after the window's own `spaces.remove`. The sharing goes, and a link's copy leaves the relay.
+- A space made in the window is pinned for the owner by the app, with `spacesFor("owner")` and `arrangeSpaces("owner", …)`, as the link does for a device.
+
 **Sentences the link answers with**, shown as they come: "This space no longer exists.", "This panel no longer exists.", "This item no longer exists.", "You can look at this space, not change it.", "Only the person who made this space can do that.", "The owner hasn't turned on sharing by link for members.", "Turn on the relay on your computer to share by link.", "That person's role can't open spaces. Change their role in Team settings first.", "That person is no longer on the team.", "This space isn't shared by link.", "Choose who can open this space.", "Choose Off, Once a day or Every change."
 
 Every name in these two tables has an entry in `TEAM_METHODS`. The test that exists covers `REMOTE_METHODS` only, and a missing `link.*` name quietly becomes owner only, so a new test lists both tables.

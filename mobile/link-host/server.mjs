@@ -1186,6 +1186,10 @@ export class LinkHost extends EventEmitter {
   setLinkSharing(on) {
     return this.spaces.setLinkSharing(on);
   }
+  /** The app deleted a space from its own window: its sharing goes, and its link's copy leaves the relay. */
+  spaceRemoved(id) {
+    this.spaces.removed(String(id));
+  }
   /**
    * `spaces.read`'s answer for one person: panels as `PanelView`, and for a member only the panels
    * and cards of bots their role sees. `seenAt` is when they last opened the space before this read.
