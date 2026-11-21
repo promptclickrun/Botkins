@@ -18,6 +18,15 @@
 # the one that runs, and a plugin's hook cannot keep a turn going without end. A new version of
 # the SDK that changes one of these fails here. It needs no account, no token and no network.
 #
+# The "terminal host on macOS" job installs this checkout as a launchd job in the runner's own
+# session, with the host key in its login keychain, and uses it from start to end
+# (desktop/test/terminal-e2e/macos.sh): a stand-in provider signs in, a bot answers, a stand-in
+# phone pairs on the local network, and the service is restarted, killed, stopped and refreshed.
+# Then it packages the checkout as a release's own macOS file, installs that, and has the service
+# update itself between versions (desktop/test/terminal-e2e/macos-update.sh).
+# On Linux the release itself is installed and updated (release.yml); on macOS this was a run by
+# hand on one computer.
+#
 # No job uses a secret, so a pull request from a fork runs the same checks.
 name: Tests
 
@@ -195,3 +204,41 @@ jobs:
       # desktop/test/skill-allowed-tools-live.mjs). The model is the script itself, on 127.0.0.1.
       - name: The permission question, a hook's changed command, and the limits
         run: npm run test:runtime
+
+  terminal-macos:
+    name: Terminal host on macOS, end to end
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      # The script changes two things of the runner's user and puts both back: the launchd job
+      # app.botkins.terminal and the keychain item "Botkins Terminal Host". Its last line is
+      # MACOS END TO END: PASSED. It runs with --no-relay: a check on each pull request does not
+      # take a place at the public relay. (The first run of this job was with the relay step,
+      # and it passed; run the script by hand with no option for that step.)
+      - name: Install as a launchd job, pair a stand-in phone, restart, kill, stop and refresh
+        run: bash test/terminal-e2e/macos.sh --no-relay
+      # The second script packages this checkout as the release's own file for this Mac, installs
+      # that, and has the running service update itself two times through a mirror on this machine
+      # with a key made for the run: once to a version with another job file, and once to a version
+      # that does not stay up, which is put back. It needs GnuPG. Its watch on a new version is 30
+      # seconds, and launchd on a busy machine can start a job late, so a failure gets one more
+      # try, with a warning that says so. (Three of three runs passed on a runner, in about three
+      # minutes each, before this step was added.)
+      - name: GnuPG, from the runner's image or from Homebrew
+        run: command -v gpg || brew install gnupg
+      - name: An update between versions, from the packaged file, started from the running service
+        run: |
+          if ! bash test/terminal-e2e/macos-update.sh; then
+            echo "::warning::The macOS update check failed once. It gets one more try, because launchd can start a job late on a busy machine."
+            bash test/terminal-e2e/macos-update.sh
+          fi
