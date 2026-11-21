@@ -1,6 +1,7 @@
 // Copilot permission requests, described in Botkins' neutral terms (desktop/providers/provider.mjs).
 import { approveAll } from "@microsoft/copilot-sdk";
 import { displayValue } from "../../display.mjs";
+import { shownText } from "../../shown-text.mjs";
 
 const escapesSandbox = (req) => !!(req.requestSandboxBypass || req.requestSandboxPermissive || req.sandboxPathGrant);
 
@@ -49,8 +50,12 @@ function describe(req) {
       // label. Without this the card had an empty first line, and the command was only inside the detail.
       const args = req.toolArgs;
       const command = args && typeof args === "object" && typeof args.command === "string" ? args.command : null;
+      // The hook's words are a plugin's text on a card where a person says yes or no. They are made safe to show,
+      // kept on one line, and the card says whose words they are: a hook cannot write a line that reads as Botkins'
+      // own or as the bot's.
+      const said = typeof req.hookMessage === "string" ? shownText(req.hookMessage.trim().replace(/\s+/g, " ")).slice(0, 300) : "";
       return {
-        label: typeof req.hookMessage === "string" && req.hookMessage.trim() ? req.hookMessage.trim().slice(0, 300) : "A plugin's hook asks you first",
+        label: said ? "The plugin's hook says: " + said : "A plugin's hook asks you first",
         preview: command ?? (args === undefined ? "" : displayValue(args, Infinity)),
       };
     }
