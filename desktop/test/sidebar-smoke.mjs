@@ -1,5 +1,5 @@
 // The side menu smoke, in an isolated data folder with the three test bots. No Copilot turns.
-// A new workspace shows the menu as icons only: the six places' icons from the Botkins navigation
+// A new workspace shows the menu as icons only: the five places' icons from the Botkins navigation
 // pack, each 24px in a 48px button, with its name beside it on hover and on keyboard focus.
 // Settings › Side menu: reorder the places by keyboard (Move up / Move down) and by dragging, and the
 // navigation follows; Reset to the usual order. Open and collapse the menu with its button and with
@@ -21,7 +21,7 @@ const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, COMMANDER_DATA_DIR: dat
 delete env.ELECTRON_RUN_AS_NODE;
 const shots = process.env.SIDEBAR_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const USUAL = ["Home", "Today", "Chats", "Work", "Projects", "Wiki"];
+const USUAL = ["Home", "Today", "Chats", "Work", "Wiki"];
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 const errors = [];
 let app, page;
@@ -139,7 +139,7 @@ try {
   await expect(nav().getByRole("button").first().locator(".nav-label")).toHaveCSS("opacity", "1");
   await shot("sidebar-collapsed-label");
   await page.mouse.move(600, 420);
-  console.log("A new workspace shows the side menu as icons only: the pack's six icons, 24px in 48px buttons, each with its name on hover and on keyboard focus.");
+  console.log("A new workspace shows the side menu as icons only: the pack's five icons, 24px in 48px buttons, each with its name on hover and on keyboard focus.");
 
   // ---- Settings › Side menu: Move up / Move down by keyboard; the navigation follows at once.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -148,30 +148,30 @@ try {
   await settings.getByRole("heading", { name: "Side menu", level: 2 }).waitFor();
   await expect(settings.getByRole("switch", { name: "Show icons only" })).toBeChecked();
   const places = settings.getByRole("list", { name: "Places in the side menu" });
-  await expect(places.getByRole("listitem")).toHaveCount(6);
+  await expect(places.getByRole("listitem")).toHaveCount(5);
   await expect(settings.getByRole("button", { name: "Reset to the usual order" })).toBeDisabled();
   await expect(settings.getByRole("button", { name: "Move Home up" })).toBeDisabled();
   await settings.getByRole("button", { name: "Move Wiki up" }).focus();
   await page.keyboard.press("Enter");
   await expect(settings.getByRole("button", { name: "Move Wiki up" })).toBeFocused();
-  // Six places now: two moves (Enter, then Space) take Wiki from 6 to 4.
+  // Five places (Projects are a tab of Work): two moves (Enter, then Space) take Wiki from 5 to 3.
   await page.keyboard.press("Space");
-  const moved = ["Home", "Today", "Chats", "Wiki", "Work", "Projects"];
+  const moved = ["Home", "Today", "Wiki", "Chats", "Work"];
   await expect.poll(navOrder).toEqual(moved);
   await expect.poll(async () => (await snap()).settings.sidebar.order).toEqual(moved);
-  await expect(settings.getByRole("status").filter({ hasText: "Wiki moved to position 4 of 6." })).toBeVisible();
+  await expect(settings.getByRole("status").filter({ hasText: "Wiki moved to position 3 of 5." })).toBeVisible();
   // Tab reaches Move down on the same place; it moves back one.
   await page.keyboard.press("Tab");
   await expect(settings.getByRole("button", { name: "Move Wiki down" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect.poll(navOrder).toEqual(["Home", "Today", "Chats", "Work", "Wiki", "Projects"]);
+  await expect.poll(navOrder).toEqual(["Home", "Today", "Chats", "Wiki", "Work"]);
   console.log("Move up and Move down by keyboard reorder the side menu at once; focus stays on the place that moved.");
 
   // ---- Dragging a place moves it too.
   const row = (name) => places.locator('[data-place="' + name + '"]');
-  await row("Projects").dragTo(row("Home"), { targetPosition: { x: 40, y: 4 } });
-  await expect.poll(navOrder).toEqual(["Projects", "Home", "Today", "Chats", "Work", "Wiki"]);
-  console.log("Dragging Projects above Home moves it to the top.");
+  await row("Work").dragTo(row("Home"), { targetPosition: { x: 40, y: 4 } });
+  await expect.poll(navOrder).toEqual(["Work", "Home", "Today", "Chats", "Wiki"]);
+  console.log("Dragging Work above Home moves it to the top.");
   await shot("sidebar-settings");
 
   // ---- Reset.
@@ -184,7 +184,7 @@ try {
   // An order to keep across the relaunch: Home down two places.
   await settings.getByRole("button", { name: "Move Home down" }).click();
   await settings.getByRole("button", { name: "Move Home down" }).click();
-  const kept = ["Today", "Chats", "Home", "Work", "Projects", "Wiki"];
+  const kept = ["Today", "Chats", "Home", "Work", "Wiki"];
   await expect.poll(navOrder).toEqual(kept);
   await settings.getByRole("button", { name: "Close dialog" }).click();
   await expect(settings).toHaveCount(0);

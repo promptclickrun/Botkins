@@ -651,6 +651,8 @@ try {
   const data = JSON.parse(readFileSync(workspace, "utf8"));
   const chat = data.chats.find((c) => c.id === askChat);
   chat.title = "Fabrikam notes";
+  // The send above went to a stand-in, so the chat had no message when it was left, and leaving archived it.
+  delete chat.archived;
   chat.messages = [
     { role: "user", text: "What do we know about #Fabrikam?", time: Date.now() - 60000, mentions: [{ kind: "wiki", path: "projects/fabrikam.md", label: "Fabrikam" }] },
     { role: "assistant", text: "They met us at Ignite.", time: Date.now() - 50000 },

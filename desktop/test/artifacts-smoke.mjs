@@ -56,6 +56,25 @@ try {
   await expect(sent).toContainText("Sent");
   await written.click();
   await expect(page.locator(".artifact-text")).toContainText("Artifacts preview fixture");
+  // "Add to a project…" is offered once there is a project, and puts the artifact on that project's list.
+  await expect(page.getByRole("button", { name: "Add to a project…" })).toHaveCount(0);
+  const projectId = await page.evaluate(() => window.botkins.createProject({ name: "Field notes" }));
+  await page.getByRole("button", { name: "Add to a project…" }).click();
+  const toProject = page.getByRole("dialog", { name: "Add to a project" });
+  await expect(toProject).toContainText("artifact-preview.txt");
+  await expect(toProject.getByRole("list", { name: "Projects" }).getByRole("listitem")).toHaveText([/Field notes.*Nothing attached yet\./]);
+  await toProject.getByRole("button", { name: "Add to Field notes" }).click();
+  await expect(toProject.getByRole("button", { name: "Added to Field notes" })).toBeDisabled();
+  await toProject.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(toProject).toBeHidden();
+  assert.deepEqual((await page.evaluate(() => window.botkins.snapshot())).projects.find((p) => p.id === projectId).artifacts, ["smoke-artifact"]);
+  // The same from the right-click menu.
+  await sent.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Add to a project…" }).click();
+  await toProject.getByRole("button", { name: "Add to Field notes" }).click();
+  await toProject.getByRole("button", { name: "Done", exact: true }).click();
+  assert.deepEqual((await page.evaluate(() => window.botkins.snapshot())).projects.find((p) => p.id === projectId).artifacts, ["smoke-sent", "smoke-artifact"]);
+  await written.click();
   if (process.env.BOTKINS_QA_DIR) {
     mkdirSync(process.env.BOTKINS_QA_DIR, { recursive: true });
     for (const theme of ["light", "dark"]) {

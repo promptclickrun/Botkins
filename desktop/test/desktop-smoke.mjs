@@ -91,6 +91,7 @@ try {
     assert.equal(data.runs[0].status, "Completed", data.runs[0].detail);
     assert.ok(data.chats[0].messages.at(-1).text.includes(nonce));
     await page.getByRole("button", { name: "Work", exact: true }).click();
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page.getByRole("button", { name: /What was the code/ }).click();
     assert.equal(await page.locator("article.assistant").count(), 2);
     console.log(

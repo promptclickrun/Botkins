@@ -253,6 +253,7 @@ try {
     assert.equal(restored.routine.enabled, false);
     assert.equal(restored.lastCheck.status, "Updated");
     await nav("Work");
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
     await page
       .getByRole("button", { name: /Update Sample count.*Scheduled/ })
       .first()

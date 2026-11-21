@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FolderMinus,
   CircleAlert,
   Copy,
   Ellipsis,
@@ -875,6 +876,10 @@ function chatMenuItems(chat: Chat, actions: PageActions, ask: AskFn): MenuItem[]
       icon: chat.archived ? ArchiveRestore : Archive,
       run: () => run(actions, api().setChatFlags(chat.id, { archived: !chat.archived })),
     },
+    // A chat in a project can leave it. One that already worked in the project's folder says why it can't.
+    ...(chat.projectId
+      ? [{ label: "Remove from project", icon: FolderMinus, run: () => run(actions, api().setChatProject(chat.id, null, "default")) }]
+      : []),
     "separator",
     {
       label: "Delete…",

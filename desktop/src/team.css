@@ -75,8 +75,44 @@
   line-height: 1.2;
   overflow-wrap: anywhere;
 }
-.team-invite-card > .set-button {
+.team-invite-words > .set-button {
   align-self: flex-start;
+}
+/* The code and its copy button at the left, the invite's QR code at the right. */
+.team-invite-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.team-invite-words {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.team-invite-qr {
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.team-invite-qr > div {
+  width: 168px;
+  height: 168px;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.team-invite-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.team-invite-qr figcaption {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
 }
 .team-invite-link {
   display: flex;

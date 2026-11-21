@@ -1,8 +1,5 @@
 /* Routines, the Work page additions and Usage. Colors come from the tokens in tokens.css. */
 
-.routines-head {
-  margin-bottom: 6px;
-}
 .routines-lede {
   max-width: 640px;
 }
@@ -399,27 +396,28 @@
   font-size: calc(12px * var(--text-scale));
 }
 
-/* Work */
-.work-head {
-  margin-bottom: 0;
+/* Work: the title with its tools at the right, and the tabs under it (src/WorkBar.tsx). */
+.work-bar {
+  margin-bottom: 18px;
 }
-.work-doors {
+.work-tools {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: center;
   gap: 4px;
 }
-.work-doors button {
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 600;
-  color: var(--ink-2);
+.work-tools .primary {
+  margin-left: 8px;
 }
-.work-doors button svg {
-  color: var(--muted);
+.work-tabs {
+  margin-top: 14px;
 }
-.work-doors .count {
+.work-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding-inline: 16px;
+}
+.work-tabs .count {
   min-width: 18px;
   padding: 0 6px;
   border-radius: 99px;
@@ -429,6 +427,13 @@
   background: var(--accent);
   color: var(--on-accent);
   text-align: center;
+}
+/* The way back to Work, above Activity and Usage. */
+.work-back {
+  margin-bottom: 6px;
+}
+.work-head {
+  margin-bottom: 14px;
 }
 /* Filters as quiet chips: no outline, the chosen one on the selected fill. */
 .filters.chips button {

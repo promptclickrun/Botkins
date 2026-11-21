@@ -25,7 +25,8 @@ import ProviderIcon from "./ProviderIcon";
 import { isConnected, useModelCatalog, useProviders } from "./providers";
 import ChatView, { type SideAnswer } from "./ChatView";
 import { ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
-import { WorkPage } from "./Work";
+import { ActivityPage } from "./Work";
+import { WORK_TABS, WorkBack, type WorkNav, type WorkTab } from "./WorkBar";
 import RoutinesPage from "./Routines";
 import TasksPage from "./Tasks";
 import Usage from "./Usage";
@@ -41,12 +42,15 @@ import type { Attachment, Bot, Chat, MentionInput, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
+import { leftEmpty } from "./emptyChat";
 import "./style.css";
 
 // The remembered colors go on before anything is drawn.
 startAppearance();
 const api = window.botkins;
-type Page = "Home" | "Today" | "Chats" | "Work" | "Projects" | "Wiki" | "Routines" | "Usage" | "Tasks";
+// Work is three pages with tabs between them (Routines, Projects, Tasks); Activity and Usage open from its top.
+type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage";
+const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
   !chat.archived && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
@@ -107,6 +111,11 @@ function App() {
   const [later, setLater] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
+  /** The tab Work shows when it is opened from the side menu: the one last looked at. */
+  const [workTab, setWorkTab] = useState<WorkTab>("Routines");
+  useEffect(() => {
+    if ((WORK_TABS as Page[]).includes(page)) setWorkTab(page as WorkTab);
+  }, [page]);
   /** Where Routines opens; `n` remounts the page for each visit. */
   const [routineTarget, setRoutineTarget] = useState<{ id?: string; botId?: string; create?: boolean; n: number }>({ n: 0 });
   // Where Projects opens; `n` remounts the page for each visit (src/Projects.tsx).
@@ -185,6 +194,19 @@ function App() {
       try { localStorage.setItem(visitKey(host, chat.botId), chat.id); } catch { /* storage unavailable */ }
     }
   }, [chat, host]);
+  // A new chat nobody wrote in is archived when the person leaves it (src/emptyChat.ts). Only a
+  // chat left on the same computer counts: after a switch, the id belongs to the other one.
+  const lastShown = useRef({ host, id: "" });
+  const leaving = useRef({ state, drafts, sending });
+  leaving.current = { state, drafts, sending };
+  useEffect(() => {
+    const before = lastShown.current;
+    lastShown.current = { host, id: chatId };
+    const now = leaving.current;
+    if (!before.id || before.id === chatId || before.host !== host || now.sending || !now.state) return;
+    if (leftEmpty(now.state.chats.find((c) => c.id === before.id), now.state, now.drafts[before.id]))
+      void api.setChatFlags(before.id, { archived: true }).catch(() => {});
+  }, [chatId, host]);
   // A reply that lands in the open chat marks it unread on the backend. It counts as read once the
   // window is visible and focused, so a reply that arrives while Botkins sits in the tray stays unread.
   useEffect(() => {
@@ -266,6 +288,11 @@ function App() {
       setProjectTarget((t) => ({ ...target, n: t.n + 1 }));
     });
   }
+  function workPage(tab: WorkTab) {
+    if (tab === "Routines") routines();
+    else if (tab === "Projects") projects();
+    else nav("Tasks");
+  }
   function wiki(path?: string) {
     leave(() => {
       nav("Wiki");
@@ -314,6 +341,14 @@ function App() {
   }
   function botChat(b: Bot) {
     const chats = state?.chats.filter((c) => c.botId === b.id && personalChat(c)) ?? [];
+    // Settings › Chat › When you select a bot: "Start a new chat". A new chat nobody wrote in yet
+    // is that new chat, so selecting the bot twice makes one, not two.
+    if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
+      const blank = chats.find((c) => leftEmpty(c, state));
+      if (blank) open(blank.id);
+      else void newChat(b.id).catch(fail);
+      return;
+    }
     let visited: string | null = null;
     try { visited = localStorage.getItem(visitKey(host, b.id)); } catch { /* storage unavailable */ }
     const eligible = new Set(chats.map((c) => c.id));
@@ -521,6 +556,15 @@ function App() {
     if (place === "Work") return teamCan(state, "today", "view") || teamCan(state, "today", "use");
     return false;
   };
+  // Projects belong to the computer's owner; a team member's Work has the other two tabs.
+  const work: WorkNav = {
+    tabs: memberHost ? WORK_TABS.filter((tab) => tab !== "Projects") : WORK_TABS,
+    go: workPage,
+    activity: () => nav("Activity"),
+    usage: () => nav("Usage"),
+    waiting: (state.tasks ?? []).filter((t) => t.status === "review" || t.status === "blocked").length,
+  };
+  const openWork = () => workPage(work.tabs.includes(workTab) ? workTab : work.tabs[0]);
   // Collapses the side menu to icons: beside Settings when open, at the top of the strip when collapsed.
   const toggle = (
     <button
@@ -551,14 +595,14 @@ function App() {
         <nav aria-label="Workspace">
           {placeOrder(state.settings.sidebar?.order).filter(placeAllowed).map((p) => {
             const working = p === "Work" && Object.keys(state.streams).length > 0;
-            const selected = (p === page || (p === "Work" && (page === "Routines" || page === "Usage" || page === "Tasks")));
+            const selected = p === "Work" ? WORK_PAGES.includes(page) : p === page;
             return (
               <button
                 key={p}
                 className={selected ? "selected" : ""}
                 aria-current={selected ? "page" : undefined}
                 aria-description={working ? "Bots are working" : undefined}
-                onClick={() => (p === "Projects" ? projects() : p === "Wiki" ? wiki() : nav(p))}
+                onClick={() => (p === "Work" ? openWork() : p === "Wiki" ? wiki() : nav(p))}
               >
                 <PlaceIcon place={p} size={collapsed ? 24 : 20} />
                 {/* With icons only, the name shows beside the icon on hover and on keyboard focus. */}
@@ -735,16 +779,8 @@ function App() {
                 setQuery={setQuery}
               />
             )}
-            {page === "Work" && (
-              <WorkPage
-                state={state}
-                actions={actions}
-                filter={filter}
-                setFilter={setFilter}
-                routines={routines}
-                usage={() => nav("Usage")}
-                tasks={() => nav("Tasks")}
-              />
+            {page === "Activity" && (
+              <ActivityPage state={state} actions={actions} filter={filter} setFilter={setFilter} routines={routines} back={openWork} />
             )}
             {page === "Home" && state.bots.length === 0 && (
               <div className="empty">
@@ -756,13 +792,15 @@ function App() {
                 key={projectTarget.n}
                 state={state}
                 target={projectTarget}
+                work={work}
+                actions={actions}
                 openChat={open}
                 botPage={botPage}
                 fail={fail}
               />
             )}
             {page === "Tasks" && (
-              <TasksPage state={state} openChat={open} back={() => nav("Work")} fail={fail} />
+              <TasksPage state={state} openChat={open} work={work} fail={fail} />
             )}
             {page === "Routines" && (
               <RoutinesPage
@@ -770,11 +808,13 @@ function App() {
                 state={state}
                 actions={actions}
                 initial={routineTarget}
+                work={work}
                 openToday={() => nav("Today")}
               />
             )}
             {page === "Usage" && (
               <div className="usage-page">
+                <WorkBack back={openWork} />
                 <h1>Usage</h1>
                 <Usage runCount={state.runs.length} />
               </div>

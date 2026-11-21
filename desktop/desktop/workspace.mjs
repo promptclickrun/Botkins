@@ -307,6 +307,8 @@ export class Workspace {
   snapshot() {
     return {
       ...this.state,
+      // A project's list of artifacts holds only the ones that still exist.
+      projects: this.projects.listed(),
       // Resolved provider inputs are private restart data and can contain large attachments.
       runs: this.state.runs.map((run) => {
         if (!run.recovery) return run;

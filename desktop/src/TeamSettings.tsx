@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   ChevronLeft,
@@ -10,6 +10,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
+import { qrPath } from "../desktop/qr.mjs";
 import { BotAvatar } from "./Avatar";
 import { Group, Row, Sheet, errorText } from "./SettingsRows";
 import { useAsk } from "./Pages";
@@ -261,6 +262,29 @@ function Requests({ team, update, run, busy }: Actions) {
   );
 }
 
+/** An invite's link as a QR code, for the phone app's "Join a team" to scan. It draws its own light square, so a camera reads it in every theme. */
+function InviteQr({ link }: { link: string }) {
+  const qr = useMemo(() => {
+    try {
+      return qrPath(link);
+    } catch {
+      return null; // A link too long for a code: the code and the link above still work.
+    }
+  }, [link]);
+  if (!qr) return null;
+  return (
+    <figure className="team-invite-qr">
+      <div role="img" aria-label="Invite QR code">
+        <svg viewBox={"0 0 " + qr.size + " " + qr.size} shapeRendering="crispEdges">
+          <rect width={qr.size} height={qr.size} fill="#fff" />
+          <path d={qr.d} fill="#1a1420" />
+        </svg>
+      </div>
+      <figcaption>Scan to join</figcaption>
+    </figure>
+  );
+}
+
 function Invites({ team, update, run, busy }: Actions) {
   const [groupId, setGroup] = useState(team.groups[0]?.id ?? "g_everyone");
   const [days, setDays] = useState(7);
@@ -329,10 +353,15 @@ function Invites({ team, update, run, busy }: Actions) {
       {shown && (
         <Group title="Invite">
           <div className="set-row stacked team-invite-card">
-            <code className="team-invite-code">{formatCode(shown.code)}</code>
-            <button type="button" className="set-button" onClick={() => void copy(formatCode(shown.code), "code")}>
-              {copied === "code" ? <Check size={14} /> : <Copy size={14} />} {copied === "code" ? "Copied" : "Copy code"}
-            </button>
+            <div className="team-invite-main">
+              <div className="team-invite-words">
+                <code className="team-invite-code">{formatCode(shown.code)}</code>
+                <button type="button" className="set-button" onClick={() => void copy(formatCode(shown.code), "code")}>
+                  {copied === "code" ? <Check size={14} /> : <Copy size={14} />} {copied === "code" ? "Copied" : "Copy code"}
+                </button>
+              </div>
+              <InviteQr link={shown.link} />
+            </div>
             <div className="team-invite-link">
               <Link size={14} aria-hidden="true" />
               <code>{shown.link}</code>

@@ -147,6 +147,20 @@ export class Artifacts {
     return null;
   }
 
+  /**
+   * A test for whether an id still names something in the index: (id) => boolean. It reads no
+   * file, so it is cheap enough for every snapshot; `entry` is the check that looks at the disk.
+   */
+  known() {
+    const ids = new Set(this.rows.map((row) => row.id));
+    return (id) => {
+      if (typeof id !== "string") return false;
+      if (!id.startsWith("child:")) return ids.has(id);
+      try { return ids.has(fromKey(id.slice(6))[0]); }
+      catch { return false; }
+    };
+  }
+
   list({ botId, chatId, kind, folder, cursor } = {}) {
     if (typeof botId !== "string" || (kind !== undefined && !["files", "media"].includes(kind))) throw new Error("Choose a bot and a valid filter.");
     const allowed = this.rows.filter((r) => r.botId === botId && (!chatId || r.chatId === chatId));

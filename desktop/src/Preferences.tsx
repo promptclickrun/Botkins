@@ -239,6 +239,12 @@ export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
           <option value="open">Open</option><option value="folded">Folded</option><option value="hidden">Hidden</option>
         </select>}
       </Row>
+      <Row label="When you select a bot">
+        {(id) => <select className="bot-tap" id={id} value={settings.botTap ?? "latest"} onChange={e => saveChatDisplay({ botTap: e.target.value === "new" ? "new" : "latest" })}>
+          <option value="latest">Open the latest chat</option>
+          <option value="new">Start a new chat</option>
+        </select>}
+      </Row>
     </Group>
   );
 }

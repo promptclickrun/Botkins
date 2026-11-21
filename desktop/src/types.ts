@@ -594,6 +594,11 @@ declare global {
       chooseProjectFolder(id: string): Promise<string | null>;
       /** A new chat in a project with one bot, or 2 to 6 for a group. Every bot needs access. */
       startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): Promise<string>;
+      /** Attaches an artifact to a project; one already there moves to the front. Answers the project's list afterwards. */
+      addProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
+      removeProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
+      /** A project's artifacts as they are now, newest attached first. One that is gone is not among them. */
+      projectArtifacts(projectId: string): Promise<{ items: Artifact[] }>;
       addTodo(projectId: string, text: string): Promise<string>;
       updateTodo(projectId: string, todoId: string, patch: { text?: string; done?: boolean }): Promise<void>;
       deleteTodo(projectId: string, todoId: string): Promise<void>;
@@ -1461,6 +1466,8 @@ export type Preferences = {
   model: ModelChoice;
   appearance: Appearance;
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
+  /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */
+  botTap?: import("./chatDisplay").ChatDisplay["botTap"];
   steps?: "folded" | "every" | "failed" | "hidden";
   thinking?: "open" | "folded" | "hidden";
   foldTools: boolean;
@@ -1483,7 +1490,7 @@ export type Preferences = {
   macTools?: MacToolLevels;
   /**
    * The side menu: its places in the person's order (always every place once: "Home", "Today",
-   * "Chats", "Work", "Projects", "Wiki") and whether the menu is collapsed to icons, which is
+   * "Chats", "Work", "Wiki") and whether the menu is collapsed to icons, which is
    * the usual menu. `picked` is there once the person has opened or collapsed it themselves.
    * Set either field with setPreferences({ sidebar: { order } }) or ({ sidebar: { collapsed } }).
    */
@@ -1588,6 +1595,8 @@ export type Project = {
   color?: ProjectColor;
   folder?: string;
   todos: ProjectTodo[];
+  /** Artifacts a person attached, as their ids, newest first (capability "project-artifacts-v1"). Left out while there are none. */
+  artifacts?: string[];
   lastUsed: number;
   createdAt: number;
 };

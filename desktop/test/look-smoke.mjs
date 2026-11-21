@@ -202,18 +202,27 @@ try {
       await page.getByRole("dialog", { name: "Create a bot" }).waitFor();
     },
     today: () => place("Today"),
-    work: () => place("Work"),
+    // Work's three tabs, and Activity, which opens from its top.
+    work: async () => {
+      await place("Work");
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
+      await page.waitForTimeout(300);
+    },
     routines: async () => {
       await place("Work");
-      await page.getByRole("button", { name: /Routines/ }).first().click();
+      await page.getByRole("tab", { name: "Routines", exact: true }).click();
       await page.waitForTimeout(300);
     },
     tasks: async () => {
       await place("Work");
-      await page.getByRole("button", { name: /Tasks/ }).first().click();
+      await page.getByRole("tab", { name: /^Tasks/ }).click();
       await page.waitForTimeout(300);
     },
-    projects: () => place("Projects"),
+    projects: async () => {
+      await place("Work");
+      await page.getByRole("tab", { name: "Projects", exact: true }).click();
+      await page.waitForTimeout(300);
+    },
     wiki: async () => {
       await place("Wiki");
       await page.waitForTimeout(500);
