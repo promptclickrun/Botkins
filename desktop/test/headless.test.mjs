@@ -87,8 +87,11 @@ test("the headless server opens and renews a private pairing file and clears it 
     stdio: "ignore",
   });
   const exit = once(child, "exit");
+  // The server is a new process: on a slow machine it takes more than a few seconds to start and to publish its first
+  // file (5 seconds were not enough once on a macOS runner). So the wait is long, and it ends at once when the file is
+  // there or the server has ended.
   async function pairing(previous) {
-    for (let i = 0; i < 200 && child.exitCode === null; i++) {
+    for (let i = 0; i < 2400 && child.exitCode === null; i++) {
       try {
         const value = JSON.parse(readFileSync(owner, "utf8"));
         if (value.code !== previous) return value;
@@ -98,7 +101,7 @@ test("the headless server opens and renews a private pairing file and clears it 
       }
       await delay(25);
     }
-    throw new Error("The server did not publish a fresh pairing file.");
+    throw new Error(child.exitCode === null ? "The server did not publish a fresh pairing file in 60 seconds." : "The server ended (exit code " + child.exitCode + ") before it published a fresh pairing file.");
   }
   try {
     const first = await pairing();
@@ -138,7 +141,7 @@ test("with BOTKINS_RELAY_URL the headless server pairs a phone through a self-ho
   const exit = once(child, "exit");
   try {
     let value;
-    for (let i = 0; i < 400 && child.exitCode === null; i++) {
+    for (let i = 0; i < 2400 && child.exitCode === null; i++) {
       if (existsSync(owner)) {
         value = JSON.parse(readFileSync(owner, "utf8"));
         if (value.relay?.connected) break;
@@ -160,7 +163,7 @@ test("with BOTKINS_RELAY_URL the headless server pairs a phone through a self-ho
     const away = () => Promise.reject(new TypeError("Network request failed"));
     const target = parsePairingUrl(value.url);
     await pair(relayFetch(away, { idleMs: 500 }), target, { name: "Away phone", platform: "ios" });
-    for (let i = 0; i < 200 && existsSync(owner); i++) await delay(25);
+    for (let i = 0; i < 2400 && existsSync(owner); i++) await delay(25);
     assert.equal(existsSync(owner), false);
     assert.equal(JSON.parse(readFileSync(join(dir, "link", "link.json"), "utf8")).devices.length, 1);
   } finally {
@@ -193,7 +196,7 @@ test("with BOTKINS_RELAY_OWN a phone that only has the server's own relay sets t
   /** Pairs through the relay alone, with a presence key, and opens a session. */
   const meet = async (child) => {
     let value;
-    for (let i = 0; i < 400 && child.exitCode === null; i++) {
+    for (let i = 0; i < 2400 && child.exitCode === null; i++) {
       if (existsSync(owner)) {
         value = JSON.parse(readFileSync(owner, "utf8"));
         if (value.relay?.connected) break;
@@ -207,7 +210,7 @@ test("with BOTKINS_RELAY_OWN a phone that only has the server's own relay sets t
     const parts = {};
     const phone = new LinkClient(pairing, { fetch: fetcher, onState() {}, onParts: (next) => Object.assign(parts, next) });
     phone.start();
-    for (let i = 0; i < 400 && !(parts.meta && parts.host); i++) await delay(25);
+    for (let i = 0; i < 2400 && !(parts.meta && parts.host); i++) await delay(25);
     return { phone, parts, pairing, key };
   };
   const stop = async (child) => {
