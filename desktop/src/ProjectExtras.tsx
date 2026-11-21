@@ -2,9 +2,10 @@
 // artifacts a person attached to the project (the computer's calls addProjectArtifact,
 // removeProjectArtifact and projectArtifacts; capability "project-artifacts-v1").
 import { useEffect, useMemo, useRef, useState } from "react";
-import { File, FileAudio, FileImage, FileText, FileVideo, Folder, MessageCircle, Paperclip, Plus, X } from "lucide-react";
+import { File, FileAudio, FileImage, FileText, FileVideo, Folder, FolderGit2, FolderKanban, MessageCircle, Paperclip, Plus, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { dateLabel } from "./Pages";
+import { memberTeam } from "./teamAccess";
 import type { Artifact, Chat, Project, State } from "./types";
 
 const api = window.botkins;
@@ -13,6 +14,8 @@ const plural = (n: number, one: string, many = one + "s") => n + " " + (n === 1 
 
 /** Whether the computer in use keeps artifacts on a project. Another computer may run an older Botkins. */
 export const hasProjectArtifacts = (state: State) => !state.remote?.using || state.remote.using.capabilities?.includes("project-artifacts-v1");
+/** Whether an artifact can be offered "Add to a project…": projects are the owner's, and there must be one. */
+export const canAddToProject = (state: State) => hasProjectArtifacts(state) && !memberTeam(state) && state.remote?.using?.member !== true && !!state.projects?.length;
 
 /** The chats a person can add to a project: their own conversations and groups, not a routine's or a panel's chat. */
 export function chatsToAdd(state: State, project: Project) {
@@ -29,7 +32,7 @@ export function chatsToAdd(state: State, project: Project) {
     .sort((a, b) => b.time - a.time);
 }
 
-/** "Add existing chat": the chats outside this project, with a search. Adding one moves it here. */
+/** "Add a chat…": the chats outside this project, with a search. Adding one moves it here. */
 export function AddChatDialog({ state, project, close }: { state: State; project: Project; close: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [query, setQuery] = useState("");
@@ -56,9 +59,9 @@ export function AddChatDialog({ state, project, close }: { state: State; project
     }
   }
   return (
-    <dialog ref={ref} className="task-dialog pick-dialog" aria-label="Add existing chat" onCancel={close} onClose={close}>
+    <dialog ref={ref} className="task-dialog pick-dialog" aria-label="Add chats" onCancel={close} onClose={close}>
       <div className="sectionhead">
-        <h2>Add existing chat</h2>
+        <h2>Add chats</h2>
         <button type="button" aria-label="Close dialog" onClick={close}>
           <X size={19} />
         </button>
@@ -122,7 +125,7 @@ function ArtifactLine({ state, item }: { state: State; item: Artifact }) {
   );
 }
 
-/** A project's Artifacts section: what is attached, newest first, and "Attach artifact". */
+/** A project's Artifacts section: what is attached, newest first, and "Attach an artifact…". */
 export function ProjectArtifacts({ state, project, openChat }: { state: State; project: Project; openChat: (id: string, messageIndex?: number) => void }) {
   const [items, setItems] = useState<Artifact[]>();
   const [error, setError] = useState("");
@@ -147,13 +150,12 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
         <div className="form-card-head">
           <div>
             <h3 id="card-artifacts">Artifacts</h3>
-            <small>{count ? plural(count, "artifact") : "No artifacts attached yet"}</small>
+            <small>{count ? plural(count, "artifact") : "Nothing attached yet."}</small>
           </div>
           <button type="button" className="secondary" onClick={() => setPicking(true)}>
-            <Paperclip size={14} /> Attach artifact
+            <Paperclip size={14} /> Attach an artifact…
           </button>
         </div>
-        {!count && <p className="muted">Attach files your bots made or were given, so the project keeps them in one place.</p>}
         {error && (
           <p className="field-error list-note" role="alert">
             {error}
@@ -174,7 +176,7 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
                     <MessageCircle size={16} />
                   </button>
                 )}
-                <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from this project"} title="Remove from this project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
+                <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from project"} title="Remove from project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
                   <X size={16} />
                 </button>
               </li>
@@ -187,7 +189,7 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
   );
 }
 
-/** "Attach artifact": one bot's artifacts, newest first. A folder is attached whole. */
+/** "Attach artifacts": one bot's artifacts, newest first. A folder is attached whole. */
 function AttachArtifactDialog({ state, project, close }: { state: State; project: Project; close: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const bots = state.bots;
@@ -235,9 +237,9 @@ function AttachArtifactDialog({ state, project, close }: { state: State; project
     }
   }
   return (
-    <dialog ref={ref} className="task-dialog pick-dialog" aria-label="Attach artifact" onCancel={close} onClose={close}>
+    <dialog ref={ref} className="task-dialog pick-dialog" aria-label="Attach artifacts" onCancel={close} onClose={close}>
       <div className="sectionhead">
-        <h2>Attach artifact</h2>
+        <h2>Attach artifacts</h2>
         <button type="button" aria-label="Close dialog" onClick={close}>
           <X size={19} />
         </button>
@@ -284,6 +286,72 @@ function AttachArtifactDialog({ state, project, close }: { state: State; project
           Show more
         </button>
       )}
+      <div className="ask-actions">
+        <button type="button" className="primary" onClick={close}>
+          Done
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
+/** "Add to a project…" on an artifact: the projects by name. Adding puts the artifact at the top of that project's list. */
+export function AddToProjectDialog({ state, artifact, close }: { state: State; artifact: Artifact; close: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    ref.current?.showModal();
+  }, []);
+  const projects = [...(state.projects ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  async function add(project: Project) {
+    setBusy(project.id);
+    setError("");
+    try {
+      await api.addProjectArtifact(project.id, artifact.id);
+    } catch (e) {
+      setError(clean(e));
+    } finally {
+      setBusy("");
+    }
+  }
+  return (
+    <dialog ref={ref} className="task-dialog pick-dialog" aria-label="Add to a project" onCancel={close} onClose={close}>
+      <div className="sectionhead">
+        <h2>Add to a project</h2>
+        <button type="button" aria-label="Close dialog" onClick={close}>
+          <X size={19} />
+        </button>
+      </div>
+      <p className="muted pick-what">{artifact.name}</p>
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+      <ul className="edit-list pick-list" aria-label="Projects">
+        {projects.map((p) => {
+          const added = p.artifacts?.includes(artifact.id);
+          return (
+            <li key={p.id}>
+              {p.folder ? <FolderGit2 size={18} className={"project-color " + (p.color ?? "")} /> : <FolderKanban size={18} className={"project-color " + (p.color ?? "")} />}
+              <span className="grow">
+                <strong>{p.name}</strong>
+                <small>{p.artifacts?.length ? plural(p.artifacts.length, "artifact") : "Nothing attached yet."}</small>
+              </span>
+              {added ? (
+                <button type="button" className="secondary" disabled aria-label={"Added to " + p.name}>
+                  Added
+                </button>
+              ) : (
+                <button type="button" className="secondary" disabled={!!busy} aria-label={"Add to " + p.name} onClick={() => void add(p)}>
+                  <Plus size={14} /> Add
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
       <div className="ask-actions">
         <button type="button" className="primary" onClick={close}>
           Done

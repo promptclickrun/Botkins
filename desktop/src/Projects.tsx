@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { Block } from "./Today";
-import { ChatRow, useAsk } from "./Pages";
+import { ChatRow, useAsk, type PageActions } from "./Pages";
 import ProjectChanges, { modeLabels } from "./ProjectChanges";
 import { accessVia, canUseProject, globalAccess, grantOf } from "./access";
 import type { Bot, ChatMode, Project, ProjectColor, ProjectTodo, State } from "./types";
@@ -46,12 +46,14 @@ export default function Projects({
   state,
   target,
   work,
+  actions,
   openChat,
   botPage,
   fail,
 }: {
   state: State;
   target: ProjectsTarget;
+  actions: PageActions;
   /** Work's tabs and tools, shown above the list of projects. */
   work: WorkNav;
   openChat: (id: string, messageIndex?: number) => void;
@@ -70,6 +72,7 @@ export default function Projects({
           state={state}
           project={project}
           back={() => setSelected("")}
+          actions={actions}
           openChat={openChat}
           botPage={botPage}
           fail={fail}
@@ -203,6 +206,7 @@ function ProjectPage({
   state,
   project,
   back,
+  actions,
   openChat,
   botPage,
   fail,
@@ -210,6 +214,7 @@ function ProjectPage({
   state: State;
   project: Project;
   back: () => void;
+  actions: PageActions;
   openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
   fail: (e: unknown) => void;
@@ -236,12 +241,14 @@ function ProjectPage({
   useEffect(() => {
     if (section === "changes" && !repo) setSection("overview");
   }, [repo]);
+  // The same sections, in the same order and by the same names, as the phone app's project page.
+  // Overview (the name, the description and the folder) and Changes are the computer's own.
   const menu: [Section, string, typeof Info, string][] = [
     ["overview", "Overview", Info, ""],
+    ["todos", "To-do", ListTodo, open ? String(open) : ""],
     ["chats", "Chats", MessagesSquare, chats.length ? String(chats.length) : ""],
-    ["panels", "Panels", LayoutDashboard, panels.length ? String(panels.length) : ""],
-    ["todos", "To-do list", ListTodo, open ? String(open) : ""],
     ...(hasProjectArtifacts(state) ? ([["artifacts", "Artifacts", Paperclip, project.artifacts?.length ? String(project.artifacts.length) : ""]] as [Section, string, typeof Info, string][]) : []),
+    ["panels", "Panels", LayoutDashboard, panels.length ? String(panels.length) : ""],
     ["access", "Access", ShieldCheck, globalAccess(state) ? "All" : allowed + "/" + state.bots.length],
     ...(repo ? ([["changes", "Changes", GitCompareArrows, ""]] as [Section, string, typeof Info, string][]) : []),
   ];
@@ -276,7 +283,7 @@ function ProjectPage({
         </nav>
         <div className="project-section">
           {section === "overview" && <Overview key={project.id} state={state} project={project} deleted={back} fail={fail} />}
-          {section === "chats" && <ProjectChats state={state} project={project} chats={chats} openChat={openChat} botPage={botPage} />}
+          {section === "chats" && <ProjectChats state={state} project={project} chats={chats} actions={actions} openChat={openChat} botPage={botPage} />}
           {section === "panels" && <ProjectPanels state={state} panels={panels} />}
           {section === "todos" && <TodoList project={project} fail={fail} />}
           {section === "artifacts" && <ProjectArtifacts state={state} project={project} openChat={openChat} />}
@@ -460,12 +467,15 @@ function ProjectChats({
   state,
   project,
   chats,
+  actions,
   openChat,
   botPage,
 }: {
   state: State;
   project: Project;
   chats: State["chats"];
+  /** For each chat's row menu: pin, rename, archive, "Remove from project" and delete. */
+  actions: PageActions;
   openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
 }) {
@@ -492,20 +502,20 @@ function ProjectChats({
         note={chats.length ? plural(chats.length, "chat") : "No chats in this project yet"}
         action={
           <button type="button" className="secondary" disabled={!chatsToAdd(state, project).length} onClick={() => setAdding(true)}>
-            <Plus size={14} /> Add existing chat
+            <Plus size={14} /> Add a chat…
           </button>
         }
       >
         {chats.length > 0 && (
           <div className="project-chats">
             {chats.map((c) => (
-              <ChatRow key={c.id} state={state} chat={c} open={openChat} />
+              <ChatRow key={c.id} state={state} chat={c} open={openChat} actions={actions} />
             ))}
           </div>
         )}
       </Card>
       <Card
-        title="New chat in this project"
+        title="New chat"
         note="The bot gets the project as context, and can keep the to-do list."
         action={
           project.folder && (
@@ -677,7 +687,7 @@ function TodoList({ project, fail }: { project: Project; fail: (e: unknown) => v
   );
   return (
     <div className="record-detail">
-      <Card title="To-do list" note={plural(open.length, "open item") + (done.length ? " · " + done.length + " done" : "")}>
+      <Card title="To-do" note={plural(open.length, "open item") + (done.length ? " · " + done.length + " done" : "")}>
         <form
           className="inline-add todo-add"
           onSubmit={(e) => {

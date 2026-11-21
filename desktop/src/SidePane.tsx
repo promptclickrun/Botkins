@@ -8,6 +8,7 @@ import { BotAvatar, type AvatarState } from "./Avatar";
 import ChatSide from "./ChatSide";
 import HtmlFrame from "./HtmlFrame";
 import { ScreenPanel } from "./ScreenSettings";
+import { AddToProjectDialog, canAddToProject } from "./ProjectExtras";
 import type { Artifact, Bot, Chat, PanePanel, State } from "./types";
 import "./blocks.css";
 import "./sidepane.css";
@@ -314,6 +315,9 @@ function ArtifactsPanel({ bot, chat, state, openChat, preview }: { bot: Bot; cha
   const [nextCursors, setNextCursors] = useState<Record<string, string | null>>({});
   const [contextMenu, setContextMenu] = useState<{ item: Artifact; x: number; y: number } | null>(null);
   const [selectedLocal, setSelectedLocal] = useState(false);
+  /** The artifact "Add to a project…" was chosen for. A file inside a shared folder can be added too. */
+  const [toProject, setToProject] = useState<Artifact | null>(null);
+  const projectsOffered = canAddToProject(state);
   const request = useRef(0);
   const botIds = chat.botIds?.length ? chat.botIds : [bot.id];
   const reload = async (reset = true) => {
@@ -365,6 +369,7 @@ function ArtifactsPanel({ bot, chat, state, openChat, preview }: { bot: Bot; cha
       onOpen={() => open(item)}
       onReveal={() => reveal(item)}
       onChat={item.chatId && openChat ? () => openChat(item.chatId!, item.messageIndex) : undefined}
+      onProject={projectsOffered ? () => setToProject(item) : undefined}
       onContextMenu={(event) => {
         event.preventDefault();
         setSelected(item);
@@ -405,13 +410,15 @@ function ArtifactsPanel({ bot, chat, state, openChat, preview }: { bot: Bot; cha
           onClose={() => setContextMenu(null)}
           onOpen={() => { open(contextMenu.item); setContextMenu(null); }}
           onReveal={() => { reveal(contextMenu.item); setContextMenu(null); }}
+          onProject={projectsOffered ? () => { setToProject(contextMenu.item); setContextMenu(null); } : undefined}
         />
       )}
+      {toProject && <AddToProjectDialog state={state} artifact={toProject} close={() => setToProject(null)} />}
     </section>
   );
 }
 
-function ArtifactRow({ item, selected, thumbnail, onSelect, onOpen, onReveal, onChat, onContextMenu }: { item: Artifact; selected: boolean; thumbnail?: string; onSelect: () => void; onOpen: () => void; onReveal: () => void; onChat?: () => void; onContextMenu: (event: React.MouseEvent<HTMLLIElement>) => void }) {
+function ArtifactRow({ item, selected, thumbnail, onSelect, onOpen, onReveal, onChat, onProject, onContextMenu }: { item: Artifact; selected: boolean; thumbnail?: string; onSelect: () => void; onOpen: () => void; onReveal: () => void; onChat?: () => void; onProject?: () => void; onContextMenu: (event: React.MouseEvent<HTMLLIElement>) => void }) {
   const Icon = artifactIcon(item);
   return <li className={selected ? "selected" : ""} onDoubleClick={onOpen} onContextMenu={onContextMenu}>
     <button type="button" className="artifact-row" onClick={onSelect}>
@@ -421,16 +428,17 @@ function ArtifactRow({ item, selected, thumbnail, onSelect, onOpen, onReveal, on
         <small>{[artifactSourceLabel[item.source], readableSize(item.size), readableTime(item.time), item.chatTitle].filter(Boolean).join(" · ")}</small>
       </span>
     </button>
-    {selected && <div className="artifact-actions"><button type="button" onClick={onOpen}>Open</button><button type="button" onClick={onReveal}>Show in folder</button>{onChat && <button type="button" onClick={onChat}>Go to message</button>}</div>}
+    {selected && <div className="artifact-actions"><button type="button" onClick={onOpen}>Open</button><button type="button" onClick={onReveal}>Show in folder</button>{onChat && <button type="button" onClick={onChat}>Go to message</button>}{onProject && <button type="button" onClick={onProject}>Add to a project…</button>}</div>}
   </li>;
 }
 
-function ArtifactMenu({ menu, onClose, onOpen, onReveal }: { menu: { item: Artifact; x: number; y: number }; onClose: () => void; onOpen: () => void; onReveal: () => void }) {
+function ArtifactMenu({ menu, onClose, onOpen, onReveal, onProject }: { menu: { item: Artifact; x: number; y: number }; onClose: () => void; onOpen: () => void; onReveal: () => void; onProject?: () => void }) {
   return <div className="artifact-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={onClose}>
     <button type="button" role="menuitem" onClick={onOpen}>Open</button>
     <button type="button" role="menuitem" onClick={() => { void navigator.clipboard?.writeText(menu.item.path); onClose(); }}>Copy path</button>
     <button type="button" role="menuitem" onClick={onReveal}>Show in folder</button>
     <button type="button" role="menuitem" onClick={onClose}>Preview in Artifacts</button>
+    {onProject && <button type="button" role="menuitem" onClick={onProject}>Add to a project…</button>}
   </div>;
 }
 

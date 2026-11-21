@@ -793,6 +793,7 @@ function App() {
                 state={state}
                 target={projectTarget}
                 work={work}
+                actions={actions}
                 openChat={open}
                 botPage={botPage}
                 fail={fail}

@@ -1,5 +1,5 @@
 // Projects and agent access smoke, in an isolated data folder. No Copilot turns.
-// Projects are a tab of Work. Creates a project with to-dos, adds a chat that already exists, attaches an
+// Projects are a tab of Work. Creates a project with to-dos, adds a chat that already exists (and removes it), attaches an
 // artifact, then turns global access off and checks that a bot without access is blocked in the UI and the
 // backend until it gets a grant. Set BOTKINS_CP_SHOTS to a folder to save light and dark screenshots.
 import assert from "node:assert/strict";
@@ -15,7 +15,7 @@ const dir = mkdtempSync(join(tmpdir(), "botkins-cp-ui-"));
 const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(join(dir, "app"));
-// A chat that has started, for "Add existing chat", and a file a bot made in it, for "Attach artifact".
+// A chat that has started, for "Add a chat…", and a file a bot made in it, for "Attach an artifact…".
 {
   const file = join(dir, "app", "data", "workspace.json");
   const data = JSON.parse(readFileSync(file, "utf8"));
@@ -94,7 +94,7 @@ try {
   assert.equal(project.folder, undefined);
   const menu = page.getByRole("navigation", { name: "Project sections" });
   await expect(button("Changes", menu)).toHaveCount(0);
-  await menu.getByRole("button", { name: /To-do list/ }).click();
+  await menu.getByRole("button", { name: /To-do/ }).click();
   for (const text of ["Inventory mailboxes", "Pilot with IT", "Schedule cutover"]) {
     await page.getByLabel("New to-do").fill(text);
     await page.getByLabel("New to-do").press("Enter");
@@ -128,8 +128,10 @@ try {
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await menu.getByRole("button", { name: /Chats/ }).click();
   await expect(page.getByRole("region", { name: "Chats", exact: true })).toContainText("No chats in this project yet");
-  await button("Add existing chat").click();
-  const adding = page.getByRole("dialog", { name: "Add existing chat" });
+  // The sections are the phone app's, in its order, between the computer's own Overview and Changes.
+  await expect(menu.getByRole("button")).toHaveText([/Overview/, /To-do/, /Chats/, /Artifacts/, /Panels/, /Access/]);
+  await button("Add a chat…").click();
+  const adding = page.getByRole("dialog", { name: "Add chats" });
   await adding.getByLabel("Search chats").fill("nothing like this");
   await expect(adding).toContainText("No chats match.");
   await adding.getByLabel("Search chats").fill("mailbox");
@@ -139,7 +141,16 @@ try {
   await button("Done", adding).click();
   await expect(adding).toBeHidden();
   await expect(page.locator(".project-chats .row")).toHaveCount(1);
-  await expect(button("Add existing chat")).toBeDisabled();
+  await expect(button("Add a chat…")).toBeDisabled();
+  // "Remove from project" in the chat's row menu takes it out; adding it again puts it back.
+  await page.locator(".project-chats").getByRole("button", { name: "Chat options" }).click();
+  await page.getByRole("menuitem", { name: "Remove from project" }).click();
+  await expect(page.locator(".project-chats .row")).toHaveCount(0);
+  assert.equal("projectId" in (await snap()).chats.find((c) => c.id === "seeded-pip"), false);
+  await button("Add a chat…").click();
+  await button("Add Mailbox plan", adding).click();
+  await button("Done", adding).click();
+  await expect(page.locator(".project-chats .row")).toHaveCount(1);
   const pipChat = (await snap()).chats.find((c) => c.id === "seeded-pip");
   assert.equal(pipChat.projectId, project.id);
   assert.equal(pipChat.mode, "default");
@@ -152,9 +163,9 @@ try {
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await menu.getByRole("button", { name: /Artifacts/ }).click();
   const artifacts = page.getByRole("region", { name: "Artifacts", exact: true });
-  await expect(artifacts).toContainText("No artifacts attached yet");
-  await button("Attach artifact", artifacts).click();
-  const attaching = page.getByRole("dialog", { name: "Attach artifact" });
+  await expect(artifacts).toContainText("Nothing attached yet.");
+  await button("Attach an artifact…", artifacts).click();
+  const attaching = page.getByRole("dialog", { name: "Attach artifacts" });
   await expect(attaching.getByRole("list", { name: "Artifacts" }).getByRole("listitem")).toHaveText([/cutover-plan\.md.*Pip.*Mailbox plan/]);
   await shot("project-attach-artifact", attaching);
   await button("Attach cutover-plan.md", attaching).click();
@@ -165,8 +176,8 @@ try {
   await expect(menu.getByRole("button", { name: /Artifacts/ })).toContainText("1");
   assert.deepEqual((await snap()).projects.find((p) => p.id === project.id).artifacts, ["seeded-plan"]);
   await shot("project-artifacts");
-  await button("Remove cutover-plan.md from this project", artifacts).click();
-  await expect(artifacts).toContainText("No artifacts attached yet");
+  await button("Remove cutover-plan.md from project", artifacts).click();
+  await expect(artifacts).toContainText("Nothing attached yet.");
   assert.equal("artifacts" in (await snap()).projects.find((p) => p.id === project.id), false);
   await page.evaluate((id) => window.botkins.addProjectArtifact(id, "seeded-plan"), project.id);
   await expect(artifacts.getByRole("list", { name: "Attached artifacts" }).getByRole("listitem")).toHaveCount(1);
@@ -185,7 +196,7 @@ try {
   await expect(page.locator(".project-list .record-row").last()).toContainText("Personal admin");
   await shot("projects");
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
-  await menu.getByRole("button", { name: /To-do list/ }).click();
+  await menu.getByRole("button", { name: /To-do/ }).click();
   await shot("project-todos");
   await menu.getByRole("button", { name: /Overview/ }).click();
   await shot("project-overview");
