@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Botkins on iPhone Duo: layout mockups</title>
+<link rel="stylesheet" href="../botkins-kit/theme/botkins.css">
+<style>
+  :root{--rail:62px;--bezel:#1d1613;--fold:rgba(66,41,31,.16)}
+  *{box-sizing:border-box}
+  body{margin:0;background:#efe3cc;color:var(--bk-ink);font:15px/1.45 var(--bk-body)}
+  header.page{padding:48px 64px 8px;max-width:1500px}
+  h1{font:700 44px/1.1 var(--bk-display);margin:0 0 12px}
+  h2{font:700 26px/1.2 var(--bk-display);margin:0 0 6px}
+  h3{font:700 17px/1.25 var(--bk-display);margin:0 0 6px}
+  .lede{max-width:900px;color:var(--bk-muted);font-size:17px}
+  section{padding:36px 64px;border-top:1px solid var(--bk-border);max-width:1700px}
+  .row{display:flex;flex-wrap:wrap;gap:48px;align-items:flex-start;margin-top:22px}
+  .shot{display:flex;flex-direction:column;gap:14px}
+  .cap{max-width:520px}
+  .cap ul{margin:6px 0 0;padding-left:18px;color:var(--bk-muted)}
+  .cap li{margin:3px 0}
+  .tag{display:inline-block;font:600 11px/1 var(--bk-body);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;border-radius:99px;background:var(--bk-surface);border:1px solid var(--bk-border);color:var(--bk-muted);margin-right:6px}
+  .tag.hot{background:var(--bk-action);color:var(--bk-onAction);border-color:transparent}
+
+  /* device */
+  .dev{background:var(--bezel);border-radius:46px;padding:11px;box-shadow:0 24px 50px -20px rgba(40,20,10,.45);position:relative}
+  .scr{position:relative;border-radius:36px;overflow:hidden;background:var(--bk-canvas);display:flex}
+  .outer-p .scr{width:466px;height:678px}
+  .outer-l .scr{width:678px;height:466px}
+  .inner-l .scr{width:890px;height:626px}
+  .inner-p .scr{width:626px;height:890px}
+  .scr.dark{background:#251E1A;color:#FFF0D6;--bk-canvas:#251E1A;--bk-surface:#332820;--bk-ink:#FFF0D6;--bk-muted:#D3BDA3;--bk-border:#695447;--bk-action:#EF9E78;--bk-onAction:#392117}
+  .content{flex:1;min-width:0;position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .pane{padding:22px 22px 18px;display:flex;flex-direction:column;min-width:0;position:relative;overflow:hidden}
+  .pane+.pane{border-left:1px solid var(--bk-border)}
+
+  /* rail */
+  .rail{width:var(--rail);flex:none;display:flex;flex-direction:column;align-items:center;padding:14px 0 14px;gap:10px;position:relative;z-index:2}
+  .rail.left{order:-1}
+  .island{width:38px;height:38px;border-radius:19px;background:#0d0907;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:12px;flex:none}
+  .island .lens{width:12px;height:12px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#3a4a5a,#0a0a0a 60%);flex:none}
+  .island.live{height:116px;gap:7px}
+  .island.live img{width:30px;height:30px}
+  .island.live .ring{width:22px;height:22px;border-radius:50%;border:3px solid #E8A945;border-right-color:#3a2a20;flex:none}
+  .island.live small{color:#FFE7B8;font:600 10px/1 var(--bk-body)}
+  .status{display:flex;flex-direction:column;align-items:center;gap:4px;font:600 12px/1 var(--bk-body)}
+  .status svg{width:15px;height:15px}
+  .tools{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:6px}
+  .btn{width:44px;height:44px;border-radius:50%;background:var(--bk-surface);border:1px solid var(--bk-border);display:grid;place-items:center;color:var(--bk-ink);position:relative}
+  .btn.prime{background:var(--bk-action);color:var(--bk-onAction);border-color:transparent}
+  .btn svg{width:20px;height:20px}
+  .grow{flex:1}
+  .tabs{width:54px;border-radius:27px;background:var(--bk-surface);border:1px solid var(--bk-border);display:flex;flex-direction:column;padding:4px 0;box-shadow:0 6px 18px -10px rgba(40,20,10,.5)}
+  .tab{height:46px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font:600 9px/1 var(--bk-body);color:var(--bk-ink);position:relative;border-radius:22px;margin:0 3px}
+  .tab svg{width:20px;height:20px}
+  .tab.on{background:color-mix(in srgb,var(--bk-action) 16%,transparent);color:var(--bk-action)}
+  .badge{position:absolute;top:4px;right:5px;min-width:16px;height:16px;border-radius:8px;background:var(--bk-action);color:var(--bk-onAction);font:700 10px/16px var(--bk-body);text-align:center;padding:0 4px}
+  .tabs.min{height:auto}
+  /* horizontal bars (inner portrait) */
+  .hbar{display:flex;align-items:center;gap:10px;padding:14px 22px 6px}
+  .htabs{margin:0 auto 18px;display:flex;border-radius:32px;background:var(--bk-surface);border:1px solid var(--bk-border);padding:4px;gap:4px;box-shadow:0 6px 18px -10px rgba(40,20,10,.5)}
+  .htabs .tab{width:84px;height:52px;margin:0;font-size:10px}
+  .htabs .badge{right:18px}
+
+  /* content bits */
+  .big{font:700 34px/1.05 var(--bk-display);margin:2px 0 10px}
+  .label{font:700 11px/1 var(--bk-body);letter-spacing:.1em;text-transform:uppercase;color:var(--bk-muted);margin:14px 0 8px}
+  .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:99px;background:var(--bk-surface);border:1px solid var(--bk-border);font-size:14px;align-self:flex-start}
+  .dot{width:8px;height:8px;border-radius:50%;background:#41633D;display:inline-block}
+  .bot{display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid color-mix(in srgb,var(--bk-border) 60%,transparent)}
+  .bot img{width:44px;height:44px;flex:none}
+  .bot .t{flex:1;min-width:0}
+  .bot b{font:700 17px/1.2 var(--bk-display);display:block}
+  .bot span{color:var(--bk-muted);font-size:13.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bot time{color:var(--bk-muted);font-size:12px;align-self:flex-start;margin-top:3px}
+  .bot.sel{background:color-mix(in srgb,var(--bk-action) 10%,transparent);border-radius:14px;padding:9px 10px;margin:0 -10px;border-bottom-color:transparent}
+  .card{background:var(--bk-surface);border:1px solid var(--bk-border);border-radius:18px;padding:14px 16px}
+  .card h4{margin:6px 0 4px;font:600 16px/1.3 var(--bk-body)}
+  .card p{margin:0;color:var(--bk-muted);font-size:13.5px}
+  .seg{display:flex;background:color-mix(in srgb,var(--bk-border) 35%,transparent);border-radius:14px;padding:3px;margin:8px 0 12px}
+  .seg div{flex:1;text-align:center;padding:7px 0;font-size:13.5px;color:var(--bk-muted);border-radius:11px}
+  .seg .on{background:var(--bk-surface);color:var(--bk-ink)}
+  .chathead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .chathead img{width:34px;height:34px}
+  .chathead b{font:700 18px/1.1 var(--bk-display);display:block}
+  .chathead span{font-size:12.5px;color:var(--bk-muted)}
+  .msgs{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:10px;font-size:14.5px;min-height:0}
+  .me{align-self:flex-end;max-width:78%;background:#F5DDBD;color:#42291F;border-radius:18px 18px 4px 18px;padding:10px 14px}
+  .dark .me{background:#5a3b2b;color:#FFF0D6}
+  .code{background:color-mix(in srgb,var(--bk-border) 30%,var(--bk-surface));border:1px solid var(--bk-border);border-radius:12px;padding:10px 12px;font:12.5px/1.5 ui-monospace,Menlo,monospace}
+  .code i{color:#923F26;font-style:normal}
+  .meta{font-size:12.5px;color:var(--bk-muted)}
+  .composer{margin-top:12px;border:1px solid var(--bk-border);background:var(--bk-surface);border-radius:22px;padding:10px 10px 10px 16px;display:flex;align-items:center;gap:8px;color:var(--bk-muted);font-size:14.5px}
+  .composer .chip{font-size:12px;background:color-mix(in srgb,var(--bk-border) 40%,transparent);border-radius:99px;padding:5px 10px;color:var(--bk-ink)}
+  .composer .send{width:34px;height:34px;border-radius:50%;background:var(--bk-action);color:var(--bk-onAction);display:grid;place-items:center;margin-left:auto;flex:none}
+  .composer .send svg{width:18px;height:18px}
+  .panehead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .panehead h3{margin:0;flex:1;font-size:22px}
+  .mini{width:34px;height:34px;border-radius:50%;background:var(--bk-surface);border:1px solid var(--bk-border);display:grid;place-items:center}
+  .mini svg{width:17px;height:17px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;text-align:center;font-size:12.5px}
+  .grid4 img{width:60px;height:60px;display:block;margin:0 auto 2px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .diff{font:12px/1.55 ui-monospace,Menlo,monospace;border:1px solid var(--bk-border);border-radius:12px;overflow:hidden;background:var(--bk-surface)}
+  .diff div{padding:0 10px;white-space:pre}
+  .diff .a{background:rgba(65,99,61,.15)}
+  .diff .d{background:rgba(159,57,53,.13)}
+  .diff .h{background:color-mix(in srgb,var(--bk-border) 40%,transparent);color:var(--bk-muted);padding:6px 10px}
+  .toggle{width:44px;height:26px;border-radius:13px;background:var(--bk-action);position:relative;flex:none}
+  .toggle:after{content:"";position:absolute;right:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#fff}
+  .toggle.off{background:#cfc6b8}.toggle.off:after{right:auto;left:3px}
+
+  /* fold + poses */
+  .foldline{position:absolute;top:0;bottom:0;left:50%;width:0;border-left:1px dashed var(--fold);z-index:5;pointer-events:none}
+  .foldzone{position:absolute;top:0;bottom:0;left:calc(50% - 22px);width:44px;background:repeating-linear-gradient(135deg,rgba(180,84,50,.10) 0 6px,transparent 6px 12px);z-index:4;pointer-events:none}
+  .foldzone.h{left:0;right:0;width:auto;top:calc(50% - 22px);bottom:auto;height:44px}
+  .book{perspective:1400px}
+  .book .scr{transform-style:preserve-3d}
+  .halves{display:flex;width:100%;height:100%}
+  .half{flex:1;display:flex;min-width:0;position:relative}
+  .book .half.l{transform:rotateY(14deg);transform-origin:right center}
+  .book .half.r{transform:rotateY(-14deg);transform-origin:left center}
+  .laptop .top{transform:perspective(1600px) rotateX(-7deg);transform-origin:bottom center}
+  .bigbtn svg{flex:none}
+  .title2{display:flex;align-items:baseline;gap:10px;margin:0 0 6px}
+  .title2 .big{margin:0}
+  .cam-in{position:absolute;top:16px;left:75%;width:10px;height:10px;border-radius:50%;border:1px dashed rgba(66,41,31,.35);z-index:6}
+  .note-pin{position:absolute;z-index:9;background:var(--bk-action);color:var(--bk-onAction);font:700 12px/22px var(--bk-body);width:22px;height:22px;border-radius:50%;text-align:center;box-shadow:0 0 0 3px #efe3cc}
+
+  /* anatomy */
+  .anat{display:flex;gap:28px;align-items:stretch}
+  .anat ol{margin:0;padding-left:20px}
+  .anat li{margin:0 0 10px}
+  table{border-collapse:collapse;font-size:14px;background:var(--bk-surface);border-radius:14px;overflow:hidden}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--bk-border);vertical-align:top}
+  th{font:700 12px/1.2 var(--bk-body);letter-spacing:.06em;text-transform:uppercase;color:var(--bk-muted)}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:22px;margin-top:18px}
+  .arrow{font:700 40px/1 var(--bk-display);color:var(--bk-action);align-self:center}
+  .stand{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:24px 30px;gap:14px}
+  .standrow{display:flex;gap:26px}
+  .standrow div{text-align:center;font-size:14px;width:120px}
+  .standrow img{width:84px;height:84px;display:block;margin:0 auto 6px}
+  .standrow b{display:block;font:700 18px/1.2 var(--bk-display)}
+  .standrow span{color:var(--bk-muted)}
+  .remote{flex:1;background:linear-gradient(160deg,#5b7a8c,#2c3d4a);border-radius:12px;position:relative;overflow:hidden}
+  .remote .win{position:absolute;background:#f6efe2;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.35)}
+  .remote .cursor{position:absolute;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:16px solid #fff;transform:rotate(-30deg);filter:drop-shadow(0 1px 2px #000)}
+  .trackpad{flex:1;border-radius:18px;border:1px solid var(--bk-border);background:var(--bk-surface);display:grid;place-items:center;color:var(--bk-muted);font-size:13px}
+  .bigbtn{flex:1;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;gap:8px;font:600 15px/1 var(--bk-body);border:1px solid var(--bk-border);background:var(--bk-surface)}
+  .bigbtn.stop{background:#9F3935;color:#fff;border-color:transparent}
+  .safari{flex:1;background:#f4f4f6;display:flex;flex-direction:column;color:#222}
+  .safari .bar{height:46px;display:flex;align-items:center;justify-content:center;font-size:13px;color:#555}
+  .safari .bar span{background:#e3e3e8;padding:6px 40px;border-radius:10px}
+  .safari .page{flex:1;margin:0 14px 14px;border-radius:12px;background:#fff;padding:18px;font-size:13px;color:#444}
+  .safari .page h5{margin:0 0 8px;font-size:18px;color:#111}
+  .sysrail{width:var(--rail);display:flex;flex-direction:column;align-items:center;gap:10px;padding:18px 0;background:#f4f4f6}
+  .sysrail .b{width:40px;height:40px;border-radius:50%;background:#e3e3e8}
+  .divider{width:8px;background:#1d1613;display:grid;place-items:center}
+  .divider i{width:4px;height:44px;border-radius:2px;background:#8a7a70}
+  .warn{border-left:4px solid var(--bk-attention);padding:8px 14px;background:color-mix(in srgb,var(--bk-attention) 9%,transparent);border-radius:0 10px 10px 0;margin:10px 0;max-width:1100px}
+</style>
+</head>
+<body>
+
+<header class="page">
+  <span class="tag hot">Design proposal</span><span class="tag">iOS 27.1 · iPhone Duo</span><span class="tag">Not implemented</span>
+  <h1>Botkins on iPhone Duo</h1>
+  <p class="lede">One resizable iOS app, two displays, six poses. Closed, Botkins is the phone app you know with its bars moved to the side rail. Open, it shows one more level of hierarchy: the chat list beside the chat, the chat beside what the bot changed. Half-folded, it turns into a remote control for the bot's computer. Specs and rules come from Apple's <a href="https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo">Designing for iPhone Duo</a> HIG. Sizes are drawn in points at 1× (outer 466×678 pt, inner 890×626 pt).</p>
+</header>
+
+<section>
+  <h2>1 · The side rail, and what Botkins puts on it</h2>
+  <p class="lede">On the outer display, and on the inner display in landscape, the system moves the status bar, toolbar and tab bar into one vertical rail on the trailing edge, aligned under the camera. That rail is the "weird side menu". The trick is to treat it as two stacks: <b>navigation and actions from the top</b>, <b>tabs from the bottom</b>, and let overflow eat the middle.</p>
+  <div class="row">
+    <div class="anat">
+      <div class="dev outer-p"><div class="scr" id="anatomy"></div></div>
+      <div class="cap" style="max-width:460px">
+        <h3>Rail order, top to bottom</h3>
+        <ol>
+          <li><b>Camera and Dynamic Island.</b> Always present. Botkins' existing Live Activity (the working bot head) expands down the rail here, not across the top.</li>
+          <li><b>Status bar.</b> System-owned. Stacked, not rotated.</li>
+          <li><b>Back / Close.</b> Always first. HIG: primary navigation sits at the top of the rail.</li>
+          <li><b>Prominent action.</b> New chat, New task, Send to bot. Filled, accent color. Highest visibility priority so it never overflows.</li>
+          <li><b>Remaining toolbar group.</b> Model, Context, People. Symbol plus title for every item; titles appear in the overflow menu.</li>
+          <li><b>Overflow (…).</b> System menu only. Botkins' own "…" menus move into it, so there is one ellipsis.</li>
+          <li><b>Tab bar.</b> Home, Chats, Work, Market, Settings. Badges stay visible longest because they carry status ("Needs you").</li>
+        </ol>
+        <p class="meta">Items overflow bottom-to-top by default. We set priority so Back, the prominent action and badged tabs survive.</p>
+      </div>
+      <div class="cap" style="max-width:420px">
+        <h3>Compression policy per screen</h3>
+        <table>
+          <tr><th>Screen</th><th>Kind</th><th>When space runs out</th></tr>
+          <tr><td>Home</td><td>Navigation</td><td>Toolbar into …, keep tab bar</td></tr>
+          <tr><td>Chats</td><td>Navigation</td><td>Toolbar into …, keep tab bar</td></tr>
+          <tr><td>Chat</td><td>Task</td><td>Minimize tab bar to one control, keep Back, Model, Context</td></tr>
+          <tr><td>Work</td><td>Navigation</td><td>Keep tab bar (Work badge)</td></tr>
+          <tr><td>Task / Review</td><td>Task</td><td>Minimize tab bar, keep Approve / Request changes</td></tr>
+          <tr><td>Remote screen</td><td>Task</td><td>Minimize tab bar, keep Stop and Take over</td></tr>
+          <tr><td>Market, Settings</td><td>Navigation</td><td>Toolbar into …</td></tr>
+        </table>
+        <p class="meta" style="margin-top:10px">Text buttons ("Done", "Review") cannot go vertical. Botkins uses symbols on the rail and keeps text-only actions in the content.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2 · Closed: the outer display</h2>
+  <p class="lede">Wider and shorter than any other iPhone (1.45:1). Compact width, so one pane. The rail gives back the top and bottom bars, which is roughly two extra chat messages of height.</p>
+  <div class="row">
+    <div class="shot">
+      <div class="dev outer-p"><div class="scr" id="closedHome"></div></div>
+      <div class="cap"><span class="tag">Closed · portrait</span><h3>Home</h3>
+        <ul><li>The custom top row ("Demo Mac" pill, round + button) goes away: the computer becomes a menu beside the title, + becomes the rail's prominent action.</li>
+        <li>Bot list and Today keep full width. Nothing in content is inset for a bottom bar any more.</li>
+        <li>Work badge stays on the rail tab.</li></ul></div>
+    </div>
+    <div class="shot">
+      <div class="dev outer-p"><div class="scr" id="closedChat"></div></div>
+      <div class="cap"><span class="tag">Closed · portrait</span><h3>Chat, bot working</h3>
+        <ul><li>Task-oriented: tab bar minimizes to one control, the toolbar keeps Back, Model, Context, People.</li>
+        <li>Patch's Live Activity grows down the rail under the camera. Tap opens the turn timeline.</li>
+        <li>Composer stays in content, horizontal. Send stays next to the text it sends; it is not a rail action.</li></ul></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="shot">
+      <div class="dev outer-l"><div class="scr" id="closedLand"></div></div>
+      <div class="cap"><span class="tag">Closed · landscape</span><h3>Chat in landscape</h3>
+        <ul><li>Only 466 pt of rail. Tab bar minimized, Context and People drop into the overflow menu; Back and Model stay.</li>
+        <li>The rail follows the camera, so it is drawn on the edge the camera lands on. Which edge that is depends on rotation direction. <b>Verify in Xcode Device Hub before building.</b></li>
+        <li>Messages get a readable 60-character measure instead of a full-width line.</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>3 · Open: the inner display</h2>
+  <p class="lede">Regular width. Add exactly one level of hierarchy, the Mail pattern: closed shows the list <i>or</i> the chat, open shows both. Same tabs, same actions, same state.</p>
+  <div class="row">
+    <div class="shot">
+      <div class="dev inner-l"><div class="scr" id="openLand"></div></div>
+      <div class="cap" style="max-width:890px"><span class="tag">Open · landscape</span><h3>Chats list beside the chat</h3>
+        <ul><li>Rail stays on the trailing edge, same order as closed (People moves to overflow at this height), so muscle memory carries over when you unfold.</li>
+        <li>List controls (Search, Filter, New) sit above the leading pane because they act on the list. The rail only holds controls for the chat. That is the HIG's "controls near the content they affect" rule.</li>
+        <li>Built on <code>NavigationSplitView</code> semantics: collapses back to one pane when closed, keeps the selected chat.</li>
+        <li>Inner camera is under the display and hidden (dashed circle). Nothing reserves space for it until it turns on.</li></ul></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="shot">
+      <div class="dev inner-p"><div class="scr" id="openPort"></div></div>
+      <div class="cap" style="max-width:626px"><span class="tag">Open · portrait</span><h3>Home with horizontal bars</h3>
+        <ul><li>The one pose where the rail goes away: standard top and bottom bars come back. Same five tabs in the same order.</li>
+        <li>Team grid uses <b>4 columns</b> and Today uses <b>2</b>. Even column counts split cleanly at the fold.</li>
+        <li>Today panels get room for the rich HTML panels they already render.</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4 · Half-folded poses</h2>
+  <p class="lede">The fold becomes a reserved region. Keep taps and key text out of the hatched band, give each half one job, and change as little as possible on the way from flat to folded.</p>
+  <div class="row">
+    <div class="shot">
+      <div class="dev inner-l book"><div class="scr" id="book"></div></div>
+      <div class="cap" style="max-width:890px"><span class="tag">Book · landscape, partly folded</span><h3>Chat on the left, what the bot changed on the right</h3>
+        <ul><li>Panes snap to equal widths when folded (Notes pattern), then relax to list-plus-detail when flat.</li>
+        <li>Right half is the existing Changes / artifact view: the diff Patch made, with Approve on the rail. Reading a diff while you talk about it is the best use of two pages.</li>
+        <li>Built with an <b>arrangement view</b> (split) inside the chat screen. Navigation stays outside it, per the HIG.</li></ul></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="shot">
+      <div class="dev inner-p laptop"><div class="scr" id="laptop"></div></div>
+      <div class="cap" style="max-width:500px"><span class="tag hot">Best new use</span><span class="tag">Laptop · portrait, folded flat on a table</span><h3>Remote screen: watch a bot drive your computer</h3>
+        <ul><li>Top half is a display, angled toward you: the live Screen view of the paired Mac or VM. No taps up there.</li>
+        <li>Bottom half is the control surface, flat on the table: trackpad, keyboard, and two big buttons, <b>Stop</b> and <b>Take over</b>.</li>
+        <li>This is the posture where Duo beats every other phone for Botkins. It's a tiny laptop pointed at the bot's machine.</li>
+        <li>Same screen flat? The viewer simply grows to fill; controls stay at the bottom.</li></ul></div>
+    </div>
+    <div class="shot">
+      <div class="dev outer-l"><div class="scr dark" id="tent"></div></div>
+      <div class="cap"><span class="tag">Tent · standing on its edges, outer display out</span><h3>Team board on StandBy</h3>
+        <ul><li>A StandBy widget, not an app screen. Big heads, one-word states, readable from across a desk.</li>
+        <li>No tap targets beyond "open". Needs-you count is the only number.</li>
+        <li>Reuses the widget target and Live Activity data the app already ships.</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>5 · Split View and the unfold moment</h2>
+  <div class="row">
+    <div class="shot">
+      <div class="dev inner-l"><div class="scr" id="split"></div></div>
+      <div class="cap" style="max-width:890px"><span class="tag">Open · 50/50 Split View</span><h3>Botkins on the left, its rail on the left</h3>
+        <ul><li>In Split View each app puts its rail on its <b>outer</b> edge. Botkins on the left means a left rail, never one at the hinge.</li>
+        <li>At this width Botkins is compact again: one pane, same as closed. No special layout needed if safe areas are honored.</li>
+        <li>Content must respect the other app's rail too (asymmetric insets).</li></ul></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="shot"><div class="dev outer-p" style="transform:scale(.62);transform-origin:top left;margin:0 -177px -258px 0"><div class="scr" id="contA"></div></div></div>
+    <div class="arrow">→</div>
+    <div class="shot"><div class="dev inner-l" style="transform:scale(.62);transform-origin:top left;margin:0 -338px -238px 0"><div class="scr" id="contB"></div></div></div>
+    <div class="cap" style="max-width:380px"><span class="tag">Continuity</span><h3>Unfolding mid-conversation</h3>
+      <ul><li>The chat you were in stays selected and scrolled to the same message. The draft in the composer survives.</li>
+      <li>The list slides in from the leading edge. The rail does not move.</li>
+      <li>Folding back drops the list and returns to the exact chat. Never pop to the Chats tab.</li></ul></div>
+  </div>
+</section>
+
+<section>
+  <h2>6 · Recommendations and risks</h2>
+  <div class="cols">
+    <div class="card"><h3>Do</h3><ul style="margin:0;padding-left:18px">
+      <li>Ship the standard rail. Don't override placement. It's the platform's core pattern.</li>
+      <li>Add one hierarchy level when open: Chats|Chat, Work list|Task, Market|Detail, Settings|Detail.</li>
+      <li>Give every toolbar item a symbol and a title, and set visibility priorities.</li>
+      <li>Make Remote screen pose-aware: split viewer and controls at the fold in laptop pose.</li>
+      <li>Use even column counts for team grids and Today panels.</li></ul></div>
+    <div class="card"><h3>Don't</h3><ul style="margin:0;padding-left:18px">
+      <li>Build a separate "Duo layout". Size classes, safe areas and reserved regions cover every pose.</li>
+      <li>Put Send, the model picker chip or text buttons on the rail. They belong to the composer.</li>
+      <li>Keep Botkins' own "…" menu next to the system overflow. One ellipsis.</li>
+      <li>Rearrange controls when folding. Small shifts only.</li></ul></div>
+    <div class="card"><h3>Risks in our stack</h3><ul style="margin:0;padding-left:18px">
+      <li><b>Custom headers won't move.</b> Chat's round Back and … buttons and Home's pill/+ row are drawn in content. Only native toolbar items reach the rail. These need to become <code>Stack</code> header items.</li>
+      <li><b>expo-router NativeTabs</b> wraps UITabBarController, so it should get the vertical tab bar for free. Unverified on Expo 58 / RN 0.88: test in the Duo simulator first.</li>
+      <li><code>ReservedRegion</code>, arrangement views and compression behavior are new UIKit/SwiftUI APIs with no React Native binding yet. A small native module is likely.</li></ul></div>
+  </div>
+  <p class="warn"><b>Assumption to check:</b> the landscape rail edge on the outer display (drawn here on the camera side) and whether Live Activities expand down the rail exactly as drawn. Both come from Apple's written guidance, not a simulator run.</p>
+</section>
+
+<script>
+const AV={mira:"tinker",patch:"pip",scout:"posy",quill:"pearl",tally:"wicket",ivy:"sprig",otto:"goggle",juno:"luna"};
+const av=n=>`../botkins-kit/avatars/${AV[n]}.svg`;
+const P={
+ house:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+ chats:'<path d="M4 4h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M19 8h1a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1v3l-3-3h-4"/>',
+ bolt:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+ grid:'<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+ gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+ back:'<path d="M15 5l-7 7 7 7"/>',
+ plus:'<path d="M12 5v14M5 12h14"/>',
+ more:'<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>',
+ mic:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+ search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+ model:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+ context:'<path d="M4 6h16M4 12h11M4 18h7"/>',
+ people:'<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.2"/><path d="M17 14c2.5 0 4 1.6 4 4"/>',
+ send:'<path d="M12 19V5M6 11l6-6 6 6"/>',
+ check:'<path d="M5 12l5 5 9-10"/>',
+ filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',
+ screen:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+ kb:'<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+ stop:'<rect x="7" y="7" width="10" height="10" rx="2"/>',
+ doc:'<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/>',
+ wifi:'<path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="currentColor"/>',
+ batt:'<rect x="2" y="7" width="17" height="10" rx="2.5" fill="currentColor"/><path d="M21 10v4"/>'
+};
+const ic=(n,s="")=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" ${s}>${P[n]}</svg>`;
+const TABS=[["house","Home"],["chats","Chats"],["bolt","Work"],["grid","Market"],["gear","Settings"]];
+
+function rail(o={}){
+  const side=o.side==="left"?" left":"";
+  const island=o.live?`<div class="island live"><span class="lens"></span><img src="${av(o.live)}" alt=""><span class="ring"></span><small>${o.liveText||"3m"}</small></div>`:`<div class="island"><span class="lens"></span></div>`;
+  const status=o.nostatus?"":`<div class="status"><span>9:41</span>${ic("wifi")}${ic("batt")}</div>`;
+  const tools=(o.tools||[]).map(t=>`<div class="btn${t[1]?" prime":""}" title="${t[0]}">${ic(t[0])}</div>`).join("");
+  const badges=o.badges||{};
+  let tabs;
+  if(o.tabs==="min"){
+    const [i,l]=TABS.find(t=>t[1]===o.active);
+    tabs=`<div class="tabs min"><div class="tab on">${ic(i)}${l}${badges.any?`<span class="badge">${badges.any}</span>`:""}</div></div>`;
+  }else{
+    tabs=`<div class="tabs">${TABS.map(([i,l])=>`<div class="tab${l===o.active?" on":""}">${ic(i)}${l}${badges[l]?`<span class="badge">${badges[l]}</span>`:""}</div>`).join("")}</div>`;
+  }
+  return `<div class="rail${side}">${island}${status}<div class="tools">${tools}</div><div class="grow"></div>${tabs}</div>`;
+}
+const botRow=(n,name,time,msg,sel)=>`<div class="bot${sel?" sel":""}"><img src="${av(n)}" alt=""><div class="t"><b>${name}</b><span>${msg}</span></div>${time?`<time>${time}</time>`:""}</div>`;
+const LIST=[["mira","Mira","19m","Here's a quick plan for the launch week: Monday, f…"],["patch","Patch","now","Working · reading src/auth/renew.ts"],["scout","Scout","Tue","All three sit between $12 and $20 per seat. Two bil…"],["quill","Quill","Mon","Here's a shorter version that leads with the result."],["tally","Tally","","Data analyst"]];
+const bots=(sel)=>LIST.map(r=>botRow(...r,r[0]===sel)).join("");
+const chatBody=(compact)=>`
+  <div class="chathead"><img src="${av("patch")}" alt=""><div><b>Patch</b><span>Claude Fable 5.2 · working</span></div></div>
+  <div class="msgs">
+    <div class="me">The refresh token rotates twice when two tabs wake up. Can you find where?</div>
+    <div>Found it. Both tabs call <code>renew()</code> before either writes the new token.</div>
+    <div class="code"><i>const</i> running = renewals.get(id);<br><i>if</i> (running) <i>return</i> running;</div>
+    ${compact?"":`<div>Sharing one in-flight renewal per server fixes the race. I'm patching it now.</div>`}
+    <div class="meta">Worked for 41s · 5 steps ›</div>
+  </div>
+  <div class="composer">Message Patch<span class="chip">Fable 5.2 · High</span><span class="send">${ic("send")}</span></div>`;
+const today=`<div class="label">Today</div><div class="seg"><div class="on">Feed</div><div>Ideas</div><div>Goals</div><div>Panels</div></div>
+  <div class="card"><div class="meta"><img src="${av("scout")}" width="18" style="vertical-align:-4px"> Scout · Yesterday</div><h4>Two competitors raised prices</h4><p>Both moved their team plan from $15 to $18 per seat this week.</p></div>`;
+const $=id=>document.getElementById(id);
+
+/* anatomy */
+$("anatomy").innerHTML=`<div class="content"><div class="pane" style="flex:1">${chatBody()}</div></div>
+ ${rail({live:"patch",tools:[["back"],["plus",1],["model"],["context"],["more"]],active:"Chats",badges:{Work:1}})}
+ ${[[18,"1"],[160,"2"],[238,"3"],[290,"4"],[340,"5"],[440,"6"],[560,"7"]].map(([t,n])=>`<span class="note-pin" style="top:${t}px;right:60px">${n}</span>`).join("")}`;
+
+/* closed */
+$("closedHome").innerHTML=`<div class="content"><div class="pane" style="flex:1">
+  <div class="title2"><div class="big">Team</div><span class="meta"><span class="dot"></span> Demo Mac ▾</span></div>${bots()}${today}</div></div>
+  ${rail({tools:[["plus",1]],active:"Home",badges:{Work:1,Chats:1}})}`;
+$("closedChat").innerHTML=`<div class="content"><div class="pane" style="flex:1">${chatBody()}</div></div>
+  ${rail({live:"patch",tools:[["back"],["model"],["context"],["people"]],tabs:"min",active:"Chats",badges:{any:2}})}`;
+$("closedLand").innerHTML=`${rail({side:"left",live:"patch",liveText:"3m",nostatus:true,tools:[["back"],["model"],["more"]],tabs:"min",active:"Chats",badges:{any:2}})}
+  <div class="content"><div class="pane" style="flex:1;padding-left:8px;max-width:600px">${chatBody(true)}</div></div>`;
+
+/* open landscape */
+$("openLand").innerHTML=`<span class="cam-in" title="inner camera, hidden"></span><div class="content" style="flex-direction:row">
+  <div class="pane" style="width:320px;flex:none">
+    <div class="panehead"><h3>Chats</h3><span class="mini">${ic("search")}</span><span class="mini">${ic("filter")}</span><span class="mini">${ic("plus")}</span></div>
+    ${bots("patch")}</div>
+  <div class="pane" style="flex:1">${chatBody()}</div></div>
+  ${rail({live:"patch",tools:[["model"],["context"],["more"]],active:"Chats",badges:{Work:1}})}`;
+
+/* open portrait */
+$("openPort").innerHTML=`<div class="content">
+  <div class="hbar" style="justify-content:space-between;font:600 14px var(--bk-body)"><span>9:41</span><span style="display:flex;gap:6px;width:46px">${ic("wifi",'width=16')}${ic("batt",'width=18')}</span></div>
+  <div class="hbar"><span class="pill"><span class="dot"></span>Demo Mac</span><span class="grow"></span><span class="btn prime">${ic("plus")}</span></div>
+  <div class="pane" style="flex:1;padding-top:6px">
+    <div class="big">Team</div>
+    <div class="grid4">${["mira","patch","scout","quill","tally","ivy","otto","juno"].map(n=>`<div><img src="${av(n)}" alt="">${n[0].toUpperCase()+n.slice(1)}</div>`).join("")}</div>
+    <div class="label" style="margin-top:22px">Today</div><div class="seg"><div class="on">Feed</div><div>Ideas</div><div>Goals</div><div>Panels</div></div>
+    <div class="grid2">
+      <div class="card"><div class="meta">Scout · Yesterday</div><h4>Two competitors raised prices</h4><p>Both moved their team plan from $15 to $18 per seat.</p></div>
+      <div class="card"><div class="meta">Tally · Panel</div><h4>Signups this week</h4><svg viewBox="0 0 200 60" width="100%" height="60"><polyline fill="none" stroke="#923F26" stroke-width="3" points="0,50 30,44 60,46 90,30 120,34 150,18 200,10"/></svg></div>
+      <div class="card"><div class="meta">Mira · Goal</div><h4>Ship the beta by Friday</h4><p>3 of 5 steps done.</p></div>
+      <div class="card"><div class="meta">Patch · Idea</div><h4>Cache renewals per server</h4><p>Say yes and Patch opens the PR.</p></div>
+    </div></div>
+  <div class="htabs">${TABS.map(([i,l])=>`<div class="tab${l==="Home"?" on":""}">${ic(i)}${l}${l==="Work"?'<span class="badge">1</span>':""}</div>`).join("")}</div>
+</div>`;
+
+/* book */
+$("book").innerHTML=`<div class="halves">
+  <div class="half l"><div class="pane" style="flex:1;padding-right:34px">${chatBody(true)}</div></div>
+  <div class="half r"><div class="pane" style="flex:1;padding-left:34px;padding-right:12px">
+    <div class="panehead"><span class="mini">${ic("doc")}</span><h3 style="font-size:18px">Changes · 1 file</h3></div>
+    <div class="diff"><div class="h">src/auth/renew.ts</div><div> export async function renew(id) {</div><div class="d">-  return fetchToken(id);</div><div class="a">+  const running = renewals.get(id);</div><div class="a">+  if (running) return running;</div><div class="a">+  const p = fetchToken(id)</div><div class="a">+    .finally(() => renewals.delete(id));</div><div class="a">+  renewals.set(id, p);</div><div class="a">+  return p;</div><div> }</div></div>
+    <p class="meta" style="margin-top:10px">Tests: 14 passed · 1 file changed</p>
+  </div>${rail({live:"patch",tools:[["check",1],["back"],["more"]],tabs:"min",active:"Chats"})}</div>
+</div><div class="foldzone"></div><div class="foldline"></div>`;
+
+/* laptop */
+$("laptop").innerHTML=`<div class="content">
+  <div class="top" style="height:50%;display:flex;flex-direction:column;padding:30px 18px 26px">
+    <div class="chathead"><img src="${av("otto")}" alt=""><div><b>Otto is using Demo Mac</b><span>Booking a table · step 4 of 6</span></div></div>
+    <div class="remote"><div class="win" style="left:8%;top:12%;width:70%;height:72%"><div style="height:22px;background:#e9dfcf;border-radius:8px 8px 0 0"></div><div style="padding:12px;font:13px var(--bk-body);color:#42291F"><b>Corvino · Sat 7:30 PM</b><br>Party of 2 · Window<br><span style="display:inline-block;margin-top:10px;background:#923F26;color:#fff;padding:6px 12px;border-radius:8px">Confirm</span></div></div><span class="cursor" style="left:34%;top:62%"></span></div>
+  </div>
+  <div style="height:50%;display:flex;flex-direction:column;gap:12px;padding:28px 18px 18px">
+    <div style="display:flex;gap:12px"><div class="bigbtn stop">${ic("stop",'width=18 height=18')}Stop Otto</div><div class="bigbtn">Take over</div><div class="bigbtn" style="flex:none;width:60px">${ic("kb",'width=22')}</div></div>
+    <div class="trackpad">Trackpad · only active after Take over</div>
+    <div class="composer" style="margin-top:0">Tell Otto…<span class="send">${ic("mic")}</span></div>
+  </div>
+</div><div class="foldzone h"></div>`;
+
+/* tent */
+$("tent").innerHTML=`<div class="stand">
+  <div style="font:700 15px var(--bk-body);letter-spacing:.1em;color:#D3BDA3">BOTKINS · 3 WORKING · 1 NEEDS YOU</div>
+  <div class="standrow">
+    <div><img src="${av("patch")}"><b>Patch</b><span>Coding · 3m</span></div>
+    <div><img src="${av("scout")}"><b>Scout</b><span>Browsing</span></div>
+    <div><img src="${av("otto")}"><b>Otto</b><span>Needs you</span></div>
+    <div><img src="${av("mira")}"><b>Mira</b><span>Idle</span></div>
+  </div></div><span class="island" style="position:absolute;top:12px;left:12px"><span class="lens"></span></span>`;
+
+/* split view */
+$("split").innerHTML=`${rail({side:"left",tools:[["plus",1],["more"]],active:"Chats",badges:{Work:1}})}
+  <div class="content" style="flex:none;width:368px"><div class="pane" style="flex:1;padding-left:8px"><div class="big" style="font-size:28px">Chats</div>${bots()}</div></div>
+  <div class="divider"><i></i></div>
+  <div class="safari"><div class="bar"><span>corvino.com</span></div><div class="page"><h5>Reservations</h5>Saturday, 7:30 PM · Party of 2<br><br>Window table available.</div></div>
+  <div class="sysrail"><div class="b"></div><div class="b"></div><div class="grow"></div><div class="b"></div></div>`;
+
+/* continuity */
+$("contA").innerHTML=$("closedChat").innerHTML;
+$("contB").innerHTML=$("openLand").innerHTML;
+</script>
+</body>
+</html>
