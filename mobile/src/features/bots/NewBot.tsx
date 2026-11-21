@@ -1,11 +1,12 @@
-import { type Href, router } from "expo-router";
+import { type Href, router, useLocalSearchParams } from "expo-router";
 import { Bot as BotIcon, FileUp, Palette, Shuffle } from "lucide-react-native";
 import { type ReactNode, useEffect, useState } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { type BotkinLook, cleanLook, lookOf, needsLooksV2, randomLook } from "@/data/botLook";
 import { STARTERS } from "@/data/templates";
-import type { BotInput, BotTemplate, ImportableAgent } from "@/link/types";
+import { fromLine } from "@/features/market/agents/logic";
+import type { BotInput, BotTemplate, ImportableAgent, MarketAgentTemplate } from "@/link/types";
 import { pickTextFile, shareFrom } from "@/state/files";
 import { useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -28,6 +29,16 @@ const savedStart = (template: BotTemplate): Start => ({
   look: lookOf(template),
   face: "idle",
   avatar: template.avatar,
+});
+/** A template from Marketplace › Agents (docs/agent-templates.md). */
+const marketStart = (template: MarketAgentTemplate): Start => ({
+  key: "market:" + template.id,
+  name: template.name,
+  role: template.role,
+  instructions: template.instructions,
+  summary: template.summary || undefined,
+  look: template.look ? cleanLook(lookOf({ id: template.id, look: template.look })) : undefined,
+  face: "idle",
 });
 const agentStart = (agent: ImportableAgent): Start => ({ key: "agent:" + agent.key, name: agent.name, role: agent.role, instructions: agent.instructions, summary: agent.summary || undefined, face: "idle", agent });
 
@@ -86,6 +97,22 @@ function NewBotEditor() {
     api.importableAgents().then(setAgents, () => {});
   }, []);
   const providers = [...new Set(agents.map((agent) => agent.providerName))];
+  // Install on a template in Marketplace › Agents opens this sheet with its id. Until it arrives, the fields stay as they are.
+  const { template } = useLocalSearchParams<{ template?: string }>();
+  const [market, setMarket] = useState<MarketAgentTemplate>();
+  useEffect(() => {
+    if (!template) return;
+    let live = true;
+    void attempt(api["agents.template"](template)).then((found) => {
+      if (!live || !found) return;
+      setMarket(found);
+      pick(marketStart(found));
+    });
+    return () => {
+      live = false;
+    };
+  }, [template]);
+  const marketNote = market && start?.key === "market:" + market.id ? fromLine(market) : undefined;
 
   const pick = (next: Start) => {
     if (next.agent?.problem) return showToast(next.agent.problem, "error");
@@ -204,6 +231,12 @@ function NewBotEditor() {
           {addable(agents.filter((item) => item.providerName === provider)).length > 1 && <Chip label="Add several…" onPress={() => router.replace("/bot/agents" as Href)} />}
         </StartRow>
       ))}
+
+      {!!marketNote && (
+        <T variant="footnote" color="muted">
+          {marketNote}
+        </T>
+      )}
 
       {agent && (
         <T variant="footnote" color="muted">

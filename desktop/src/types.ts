@@ -752,6 +752,18 @@ declare global {
       "plugins.setEnabled"(id: string, on: boolean, options?: { revision?: string }): Promise<void>;
       "plugins.update"(id: string, options?: { revision?: string }): Promise<InstalledPlugin>;
       "plugins.uninstall"(id: string): Promise<void>;
+      // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
+      "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
+      "agents.template"(id: string): Promise<MarketAgentTemplate>;
+      // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in
+      "composio.catalog"(): Promise<ComposioCatalog>;
+      /** The apps the person connected, as Composio's own tool names them; null when it doesn't say. */
+      "composio.connected"(): Promise<string[] | null>;
+      /** Each app's accounts, by slug (at most 50 apps). An app with none maps to []. */
+      "composio.accounts"(slugs: string[]): Promise<Record<string, ComposioAccount[]>>;
+      /** Starts connecting an app: the page to finish on (open it in the browser), and the account it will become. */
+      "composio.connect"(slug: string): Promise<{ redirectUrl: string | null; pendingId?: string; accounts: ComposioAccount[] }>;
+      "composio.removeAccount"(slug: string, accountId: string): Promise<void>;
       /** Native folder chooser for local plugin installs. Remote hosts do not expose this method. */
       pickPluginFolder?(): Promise<string | null>;
       /** Folder-browser fallback for a paired/remote host when no native chooser is available. */
@@ -1163,6 +1175,33 @@ export type PluginMarketplace = {
   updatedAt?: number;
   error?: string;
 };
+/** An agent template in a marketplace ("agent-templates-v1"). The id is name@marketplace and opaque. */
+export type MarketAgent = {
+  id: string;
+  /** The bot's name, shown as the title. */
+  name: string;
+  role: string;
+  /** Shown as the description. */
+  summary: string;
+  look?: BotLook;
+  category?: string;
+  categoryName?: string;
+  marketplace: string;
+  marketplaceName: string;
+  /** A marketplace that comes with Botkins. */
+  builtIn: boolean;
+  version?: string;
+  author?: string;
+  keywords?: string[];
+};
+export type MarketAgentCategory = { id: string; name: string; count: number };
+export type MarketAgentTemplate = MarketAgent & { instructions: string };
+
+/** The public list of apps Composio connects, as the computer read it. */
+export type ComposioToolkit = { slug: string; name: string; description: string; logo: string | null; categories: string[]; noAuth: boolean };
+export type ComposioCatalog = { revision: string; /** Largest first. */ categories: { id: string; name: string; count: number }[]; /** Most used first. */ toolkits: ComposioToolkit[] };
+export type ComposioAccount = { id: string; status: "active" | "pending" | "failed" | "other"; /** The account's email, or its alias. */ label?: string };
+
 export type PluginListing = {
   id: string;
   name: string;

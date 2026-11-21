@@ -80,6 +80,18 @@ const templateText = (template) =>
     ...(template.instructions !== undefined ? ["", "Instructions:", indent(template.instructions, "  ")] : []),
   ].join("\n");
 
+/** A marketplace template, as `templates show` and `templates use` show it. */
+const marketText = (template) =>
+  [
+    named(template.name) + "   " + template.id,
+    "Role: " + named(template.role),
+    ...(template.summary ? ["About: " + named(template.summary)] : []),
+    "From: " + named(template.marketplaceName) + (template.categoryName ? " · " + template.categoryName : "") + (template.version ? " · v" + named(template.version) : "") + (template.builtIn ? "" : " (someone else wrote these instructions: read them first)"),
+    "",
+    "Instructions:",
+    indent(template.instructions, "  "),
+  ].join("\n");
+
 export const botsCommands = {
   bots: {
     summary: "List, add, change and remove bots",
@@ -244,8 +256,43 @@ export const botsCommands = {
       show: {
         summary: "Show one template, with its instructions",
         usage: "botkins templates show <template>",
+        details: "A template of your own by its name or id, or one from a marketplace by its id from `botkins templates browse` (name@marketplace).",
         async run(context) {
-          context.print(await call(context, "templates.get", one(context, "Name the template (its name or id).")), templateText);
+          const ref = one(context, "Name the template (its name or id, or name@marketplace from `botkins templates browse`).");
+          try {
+            context.print(await call(context, "templates.get", ref), templateText);
+          } catch (error) {
+            if (!ref.includes("@")) throw error;
+            context.print(await call(context, "templates.market", ref), marketText);
+          }
+        },
+      },
+      browse: {
+        summary: "List the agent templates the marketplaces offer",
+        usage: "botkins templates browse [<search>] [--category <id>] [--marketplace <id>]",
+        options: {
+          category: { type: "string", value: "id", about: "Only this category (writing, productivity, …)" },
+          marketplace: { type: "string", value: "id", about: "Only this marketplace" },
+        },
+        details: "The same templates as Marketplace › Agents. Show one with `botkins templates show <id>`, and make a bot from it with `botkins templates use <id>`.",
+        async run(context) {
+          if (context.args.length > 1) throw usage("Give at most one search.");
+          const o = context.options;
+          const found = await call(context, "templates.browse", { ...(context.args[0] && { query: context.args[0] }), ...(o.category && { category: o.category }), ...(o.marketplace && { marketplace: o.marketplace }) });
+          context.print(found, (result) => (result.agents.length ? table(["NAME", "ROLE", "CATEGORY", "FROM", "ID"], result.agents.map((agent) => [named(agent.name), named(agent.role), agent.categoryName ?? "", named(agent.marketplaceName), agent.id])) : "No agent templates match."));
+        },
+      },
+      use: {
+        summary: "Make a bot from a marketplace template",
+        usage: "botkins templates use <id> [--name <text>] [--yes]",
+        options: { name: { type: "string", value: "text", about: "The bot's name (the template's without it)" }, ...YES },
+        details: "Shows the template's name, role, about text and whole instructions first, and asks: they steer the new bot. With no terminal it needs --yes. Change the bot afterwards with `botkins bots edit`.",
+        async run(context) {
+          const id = one(context, "Name the template by its id (see `botkins templates browse`).");
+          const found = await call(context, "templates.market", id);
+          show(context, ["This template's words steer the bot that is made from it:", "", marketText(found)].join("\n"));
+          if (!(await confirm(context, "Make a bot from it?"))) return EXIT.failed;
+          context.print(await call(context, "templates.use", id, context.options.name), (made) => "Added " + named(made.name) + " (" + named(made.role) + "). Talk to it with `botkins chat " + shellWord(made.name, "<the bot>") + "`.");
         },
       },
       save: {

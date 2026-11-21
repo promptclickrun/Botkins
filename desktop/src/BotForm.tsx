@@ -3,7 +3,7 @@ import { Bot as BotIcon, ChevronDown, Download, Ellipsis, LayoutTemplate, Plus, 
 import { BotStudio } from "./BotStudio";
 import { BotAvatar } from "./Avatar";
 import { freshLook } from "./botkins";
-import type { BotLook, BotTemplate, ImportableAgent } from "./types";
+import type { BotLook, BotTemplate, ImportableAgent, MarketAgentTemplate } from "./types";
 import "./agents.css";
 import "./settings.css";
 import "./botpage.css";
@@ -68,6 +68,7 @@ export default function BotForm({
   saved = [],
   agents: given,
   taken,
+  start,
 }: {
   created: (id: string) => void;
   fail: (e: unknown) => void;
@@ -79,6 +80,8 @@ export default function BotForm({
   agents?: ImportableAgent[];
   /** The looks of the bots there already are, so the new bot starts as a character few of them have. */
   taken?: (BotLook | undefined)[];
+  /** An agent template from Marketplace › Agents to start from: the form opens filled in from it. */
+  start?: MarketAgentTemplate;
 }) {
   const [found, setFound] = useState<ImportableAgent[]>([]);
   const agents = given ?? found;
@@ -90,18 +93,21 @@ export default function BotForm({
   /** The existing agent the form was filled from. */
   const [agentKey, setAgentKey] = useState<string>();
   const agent = agents.find((a) => a.key === agentKey);
-  const [look, setLook] = useState<BotLook>(() => freshLook(taken));
+  const [look, setLook] = useState<BotLook>(() => start?.look ?? freshLook(taken));
   const [studio, setStudio] = useState(false);
   const [template, setTemplate] = useState<Template>();
   const [mine, setMine] = useState<string>();
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("");
-  const [summary, setSummary] = useState("");
-  const [instructions, setInstructions] = useState("");
+  /** The marketplace template the form was filled from, until another start is chosen. */
+  const [market, setMarket] = useState(start);
+  const [name, setName] = useState(start?.name ?? "");
+  const [role, setRole] = useState(start?.role ?? "");
+  const [summary, setSummary] = useState(start?.summary ?? "");
+  const [instructions, setInstructions] = useState(start?.instructions ?? "");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const chosen = saved.find((t) => t.id === mine);
   function use(t: Template) {
+    setMarket(undefined);
     setTemplate(t);
     setMine(undefined);
     setAgentKey(undefined);
@@ -112,6 +118,7 @@ export default function BotForm({
     setPicking(false);
   }
   function useAgent(a: ImportableAgent) {
+    setMarket(undefined);
     setTemplate(undefined);
     setMine(undefined);
     setAgentKey(a.key);
@@ -122,6 +129,7 @@ export default function BotForm({
     setPicking(false);
   }
   function useMine(t: BotTemplate) {
+    setMarket(undefined);
     setTemplate(undefined);
     setMine(t.id);
     setAgentKey(undefined);
@@ -171,7 +179,7 @@ export default function BotForm({
         <TemplateMenu
           open={picking}
           setOpen={setPicking}
-          current={agent ? "Agent: " + agent.name : current && "Template: " + current}
+          current={agent ? "Agent: " + agent.name : market ? "Marketplace: " + market.name : current && "Template: " + current}
           template={template}
           mine={mine}
           saved={saved}
@@ -188,6 +196,12 @@ export default function BotForm({
           exportOne={(id) => void window.botkins.exportTemplate({ templateId: id }).catch(fail)}
         />
       </div>
+      {market && (
+        <p className="template-note" role="note">
+          From {market.marketplaceName === "Botkins" ? "the Botkins marketplace" : market.marketplaceName}.
+          {!market.builtIn && " Someone else wrote these instructions: read them first."}
+        </p>
+      )}
       {chosen?.source === "imported" && (
         <p className="template-note" role="note">
           Imported from {chosen.from ?? "a file"}. Someone else wrote these instructions: read them first.
@@ -258,7 +272,7 @@ export default function BotForm({
         <textarea
           name="instructions"
           placeholder="How should this bot help? What should it always or never do?"
-          rows={chosen || agent ? 6 : 5}
+          rows={chosen || agent || market ? 6 : 5}
           required
           maxLength={30000}
           value={instructions}

@@ -9,7 +9,6 @@ import {
   Plus,
   Search,
   ShieldAlert,
-  Store,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -22,8 +21,11 @@ import type {
   PluginListing,
   PluginMarketplace,
   PluginPreview,
+  MarketAgentTemplate,
   State,
 } from "./types";
+import MarketApps from "./MarketApps";
+import MarketAgents from "./MarketAgents";
 import { CredentialChoice, useSavedCredentials, type Picked } from "./CredentialPicker";
 import { useAsk } from "./Pages";
 import { Group, Sheet, errorText } from "./SettingsRows";
@@ -33,7 +35,17 @@ import { PLUGIN_STARTS, decisionText, heldBack, linkedError, onOffLabel, readTol
 import "./plugins.css";
 
 const api = window.botkins;
-type View = "plugins" | "apps";
+type View = "apps" | "agents" | "plugins";
+/** Where the window keeps the Marketplace view last looked at, as the phone keeps its own. */
+const VIEW = "botkins.market.view";
+function readView(): View {
+  try {
+    const saved = localStorage.getItem(VIEW);
+    return saved === "agents" || saved === "plugins" ? saved : "apps";
+  } catch {
+    return "apps";
+  }
+}
 type PluginMode = "browse" | "installed";
 type Selection = { kind: "listing" | "installed"; id: string };
 type FolderBrowser = { path?: string };
@@ -49,8 +61,16 @@ function statusLabel(plugin: InstalledPlugin) {
 const TOLD = "botkins.plugins.switchedOffTold";
 
 /** Settings › Marketplace: catalog browsing, trusted installs and installed plugin controls. */
-export default function PluginsSettings({ state, bots, open }: { state: State; bots: Bot[]; /** An installed plugin to show at once (from Settings › Skills). */ open?: string }) {
-  const [view, setView] = useState<View>("plugins");
+export default function PluginsSettings({ state, bots, open, createBot }: { state: State; bots: Bot[]; /** An installed plugin to show at once (from Settings › Skills). */ open?: string; /** Opens Create a bot filled in from an agent template. */ createBot?: (template: MarketAgentTemplate) => void }) {
+  const [view, setViewNow] = useState<View>(() => (open ? "plugins" : readView()));
+  const setView = (next: View) => {
+    setViewNow(next);
+    try {
+      localStorage.setItem(VIEW, next);
+    } catch {
+      // Only a convenience: the view is still shown.
+    }
+  };
   const [mode, setMode] = useState<PluginMode>(open ? "installed" : "browse");
   const [markets, setMarkets] = useState<PluginMarketplace[]>([]);
   const [marketplace, setMarketplace] = useState("");
@@ -207,13 +227,12 @@ export default function PluginsSettings({ state, bots, open }: { state: State; b
   const switchedOff = switchedOffNotice(installed, told, where, hostId);
   function toldNow(keys: string[]) { const next = [...told, ...keys]; setTold(next); writeTold(TOLD, next); }
 
-  if (!supported) return <div className="int-section plugin-settings" {...stopCancel}><Group><div className="int-empty plugin-unavailable"><span className="int-empty-icon" aria-hidden="true"><ShieldAlert size={20} /></span><strong>Marketplace needs an update</strong><p>Update the app on your computer to use Marketplace plugins here.</p></div></Group></div>;
   const detail = selection && <PluginDetail selection={selection} preview={preview} previewLoading={previewLoading} installed={selectedInstalled} where={where} markets={markets} bots={bots} busy={busy} note={note} error={error} onBack={() => { setSelection(undefined); setPreview(undefined); setError(""); }} onInstall={() => void startInstall()} onConfigure={(plugin) => setConfigPlugin(plugin)} onEnabled={(plugin, enabled) => void setEnabled(plugin, enabled)} onBots={(plugin, selectedBots) => void setBots(plugin, selectedBots)} onUpdate={(plugin) => void openUpdateReview(plugin)} onRemove={(plugin) => void uninstall(plugin)} onSignIn={(serverId, name) => void signIn(serverId, name)} onRetry={() => setPreviewRevision((value) => value + 1)} />;
   return <div className="int-section plugin-settings" {...stopCancel}>
-    <div className="plugin-top-tabs" role="tablist" aria-label="Marketplace"><button type="button" role="tab" aria-selected={view === "apps"} onClick={() => { setView("apps"); setSelection(undefined); }}>Apps</button><button type="button" role="tab" aria-selected={view === "plugins"} onClick={() => { setView("plugins"); setSelection(undefined); }}>Plugins</button></div>
-    {note && !selection && <p className="set-status" role="status">{note}</p>}
+    <div className="plugin-top-tabs" role="tablist" aria-label="Marketplace"><button type="button" role="tab" aria-selected={view === "apps"} onClick={() => { setView("apps"); setSelection(undefined); }}>Apps</button><button type="button" role="tab" aria-selected={view === "agents"} onClick={() => { setView("agents"); setSelection(undefined); }}>Agents</button><button type="button" role="tab" aria-selected={view === "plugins"} onClick={() => { setView("plugins"); setSelection(undefined); }}>Plugins</button></div>
+    {note && !selection && view === "plugins" && <p className="set-status" role="status">{note}</p>}
     {switchedOff && !selection && view === "plugins" && <div className="plugin-notice" role="status" aria-label={switchedOff.title}><ShieldAlert size={16} aria-hidden="true" /><div><strong>{switchedOff.title}</strong><p>{switchedOff.text}</p></div><button type="button" className="set-button" onClick={() => { toldNow(switchedOff.keys); setMode("installed"); }}>OK</button></div>}
-    {selection ? detail : view === "apps" ? <Group><div className="int-empty"><span className="int-empty-icon" aria-hidden="true"><Store size={20} /></span><strong>Apps are coming soon</strong><p>Plugins are available now for skills, tools, hooks, agents and commands.</p><button type="button" className="set-button primary" onClick={() => setView("plugins")}>Browse plugins</button></div></Group> : <><div className="plugin-mode-tabs" role="tablist" aria-label="Plugins"><button type="button" role="tab" aria-selected={mode === "browse"} onClick={() => setMode("browse")}>Browse</button><button type="button" role="tab" aria-selected={mode === "installed"} onClick={() => setMode("installed")}>Installed ({installed.length})</button></div>{mode === "browse" ? <>
+    {view === "apps" ? <MarketApps state={state} /> : view === "agents" ? <MarketAgents state={state} createBot={createBot} /> : !supported ? <Group><div className="int-empty plugin-unavailable"><span className="int-empty-icon" aria-hidden="true"><ShieldAlert size={20} /></span><strong>Plugins need an update</strong><p>Update the app on your computer to use Marketplace plugins here.</p></div></Group> : selection ? detail : <><div className="plugin-mode-tabs" role="tablist" aria-label="Plugins"><button type="button" role="tab" aria-selected={mode === "browse"} onClick={() => setMode("browse")}>Browse</button><button type="button" role="tab" aria-selected={mode === "installed"} onClick={() => setMode("installed")}>Installed ({installed.length})</button></div>{mode === "browse" ? <>
       <div className="set-toolbar int-toolbar plugin-toolbar"><label className="int-filter"><Search size={14} aria-hidden="true" /><input type="search" aria-label="Search plugins" placeholder="Search plugins" value={query} onChange={(e) => setQuery(e.target.value)} /></label><button type="button" className="set-button" onClick={() => void addFolder()} disabled={busy}><FolderPlus size={14} /> Add from computer</button><button type="button" className="set-button" onClick={() => setAddMarketplaceOpen(true)}><Plus size={14} /> Add marketplace</button></div>
       <div className="plugin-market-chips" role="group" aria-label="Plugin marketplaces"><button type="button" className={marketplace ? "" : "selected"} aria-pressed={!marketplace} onClick={() => setMarketplace("")}>All</button>{markets.map((market) => <button type="button" key={market.id} className={marketplace === market.id ? "selected" : ""} aria-pressed={marketplace === market.id} onClick={() => setMarketplace(market.id)}>{market.name}</button>)}</div>
       {marketLoading && <p className="set-status">Loading marketplaces…</p>}{error && <ErrorNotice message={error} retry={() => void loadBrowse()} />}<Group title="Plugins" footer="Plugins can add skills, tools, hooks, agents and commands to your bots.">{loading ? <p className="set-status">Searching plugins…</p> : listings.length ? listings.map((plugin) => <PluginListingRow key={plugin.id} plugin={plugin} marketplace={marketplaceLabel(markets, plugin.marketplace)} onClick={() => setSelection({ kind: "listing", id: plugin.id })} />) : <div className="set-row"><small>No plugins match this search.</small></div>}{cursor && <div className="set-actions"><button type="button" className="set-button" onClick={() => void loadBrowse(cursor)} disabled={loading}>More plugins</button></div>}</Group>

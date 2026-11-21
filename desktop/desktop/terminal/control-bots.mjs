@@ -243,6 +243,19 @@ export function botsApi({ workspace, handlers, bot }) {
       const { look, ...plain } = fields;
       return { ...plain, ...(name && { from: name }), look: look !== undefined, exists: templates().some((entry) => entry.name.toLowerCase() === fields.name.toLowerCase()) };
     },
+    // ── Agent templates in the marketplaces ("agent-templates-v1") ──
+    /** The templates the marketplaces offer: { agents, categories }, as Marketplace › Agents shows them. */
+    "templates.browse": ([query]) => handlers["agents.browse"](query ?? {}),
+    /** One marketplace template with its instructions (its id is name@marketplace). */
+    "templates.market": ([id]) => handlers["agents.template"](id),
+    /** Makes a bot from a marketplace template, as Install and then Create a bot do: its name (or the one given), role, about, instructions and look. */
+    async "templates.use"([id, name]) {
+      const found = await handlers["agents.template"](id);
+      if (name !== undefined && name !== null) text(name, 48, "the bot a name");
+      const botId = await handlers.addBot({ name: name ?? found.name, role: found.role, instructions: found.instructions, ...(found.summary && { summary: found.summary }), ...(found.look && { look: found.look }) });
+      const made = bot(botId);
+      return { id: made.id, name: made.name, role: made.role, template: found.id };
+    },
     /** Saves the template of a file that someone shared: { name?, text }. It makes no bot. */
     async "templates.import"([file]) {
       importFile(file);

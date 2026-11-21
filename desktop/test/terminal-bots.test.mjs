@@ -436,7 +436,7 @@ test("`botkins help --json` lists the new commands, and says which ones ask", as
   out = "";
   assert.equal(await main(["help", "templates", "--json"], io), 0);
   const templates = JSON.parse(out).areas[0].commands;
-  assert.deepEqual(templates.map((entry) => entry.command), ["templates list", "templates show", "templates save", "templates rename", "templates remove", "templates export", "templates import"]);
-  assert.deepEqual(templates.filter((entry) => entry.asks).map((entry) => entry.command), ["templates remove", "templates export", "templates import"]);
+  assert.deepEqual(templates.map((entry) => entry.command), ["templates list", "templates show", "templates browse", "templates use", "templates save", "templates rename", "templates remove", "templates export", "templates import"]);
+  assert.deepEqual(templates.filter((entry) => entry.asks).map((entry) => entry.command), ["templates use", "templates remove", "templates export", "templates import"]);
   for (const entry of [...bots.filter((item) => /duplicate|order|primary|flags|memory|sections|import/.test(item.command)), ...templates]) assert.ok(entry.summary && entry.usage.startsWith("botkins " + entry.command), entry.command);
 });

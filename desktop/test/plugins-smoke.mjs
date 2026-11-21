@@ -59,6 +59,8 @@ async function openMarketplace() {
   const dialog = settings();
   await dialog.getByRole("tab", { name: "Marketplace", exact: true }).click();
   await dialog.getByRole("heading", { name: "Marketplace", exact: true }).waitFor();
+  // Marketplace opens on the view last looked at (Apps the first time): these checks are in Plugins.
+  await dialog.getByRole("tab", { name: "Plugins", exact: true }).click();
   return dialog;
 }
 async function snapshot() { return page.evaluate(() => window.botkins.snapshot()); }

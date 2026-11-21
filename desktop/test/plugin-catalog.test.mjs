@@ -223,3 +223,36 @@ test("a marketplace whose own name is more than one word is not added", async (t
   await writeFile(file, JSON.stringify({ name: "good.market_1", plugins: entries }));
   assert.equal((await new PluginCatalog(join(root, "host-data")).addMarketplace(market)).id, "good.market_1");
 });
+
+test("a marketplace's agent templates are read, checked and kept, and a bad one is left out", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "botkins-agent-templates-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const market = join(root, "market");
+  await mkdir(join(market, ".github", "plugin"), { recursive: true });
+  await mkdir(join(market, "agents"), { recursive: true });
+  const template = (name) => JSON.stringify({ format: "botkins.bot-template", version: 1, name, role: "Inbox helper", summary: "Sorts " + name + "'s mail.", instructions: "Sort the mail.", look: { head: "pip", palette: "fern" } });
+  await writeFile(join(market, "agents", "sorter.json"), template("Sorter"));
+  await writeFile(join(market, "agents", "scout.json"), template("Scout"));
+  await writeFile(join(market, "agents", "broken.json"), "{ not json");
+  await writeFile(join(market, ".github", "plugin", "marketplace.json"), JSON.stringify({ name: "agent-market", plugins: [], agents: [
+    { name: "sorter", source: "./agents/sorter.json", category: "productivity", version: "1.0.0", keywords: ["email"] },
+    { name: "scout", source: "agents/scout.json", category: "a word of its own" },
+    { name: "broken", source: "./agents/broken.json" },
+    { name: "outside", source: "../outside.json" },
+  ] }));
+  const catalog = new PluginCatalog(join(root, "host-data"));
+  await catalog.addMarketplace(market);
+  const { agents, categories } = await catalog.agents({ marketplace: "agent-market" });
+  assert.deepEqual(agents.map((agent) => [agent.id, agent.name, agent.category, agent.builtIn]), [["sorter@agent-market", "Sorter", "productivity", false], ["scout@agent-market", "Scout", "other", false]]);
+  assert.deepEqual(categories.map((c) => [c.id, c.count]), [["other", 1], ["productivity", 1]]);
+  assert.equal("instructions" in agents[0], false);
+  assert.deepEqual((await catalog.agents({ marketplace: "agent-market", query: "EMAIL" })).agents.map((agent) => agent.id), ["sorter@agent-market"]);
+  assert.deepEqual((await catalog.agents({ marketplace: "agent-market", category: "productivity" })).agents.map((agent) => agent.id), ["sorter@agent-market"]);
+  const sorter = await catalog.agentTemplate("sorter@agent-market");
+  assert.equal(sorter.instructions, "Sort the mail.");
+  assert.deepEqual(sorter.look, { head: "pip", palette: "fern" });
+  await assert.rejects(catalog.agentTemplate("broken@agent-market"), /no longer in agent-market/);
+  // Kept with the catalog: a fresh start shows them without reading the files again.
+  await rm(join(market, "agents", "sorter.json"));
+  assert.equal((await new PluginCatalog(join(root, "host-data")).agentTemplate("sorter@agent-market")).name, "Sorter");
+});

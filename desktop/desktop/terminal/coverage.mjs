@@ -118,6 +118,15 @@ export const WORKSPACE = {
   "plugins.configure": cmd("plugins configure"),
   "plugins.setBots": cmd("plugins bots"),
   "plugins.addFolder": cmd("plugins add-folder"),
+  // ── Agent templates in the marketplaces ("agent-templates-v1") ──
+  "agents.browse": cmd("templates browse"),
+  "agents.template": cmd("templates show"),
+  // ── Marketplace › Apps: the person's Composio apps through this computer's Composio tool ──
+  "composio.catalog": cmd("apps list"),
+  "composio.connected": cmd("apps connected"),
+  "composio.accounts": cmd("apps accounts"),
+  "composio.connect": cmd("apps connect"),
+  "composio.removeAccount": cmd("apps remove"),
   // ── Tools (MCP servers) and skills ──
   saveMcpServer: cmd("tools add"),
   setMcpServerEnabled: cmd("tools enable"),
@@ -390,6 +399,7 @@ export const CHANGES = {
   // An export also keeps a copy of the file among the bot's files: it is a change, by the file's name.
   "templates.export": (args, value) => value?.name,
   "templates.import": (args, value) => value?.name,
+  "templates.use": (args, value) => value?.name,
   // ── Chats (control-chats.mjs) ──
   // A chat is named by its id: a title is a text that a person (or a model) wrote, so it is not in the log. A section is by its id too, and a new one by its name.
   "chats.rename": (args, value) => value?.id,
@@ -530,12 +540,16 @@ export const CHANGES = {
   "team.removeMember": (args, value) => value?.id,
   "team.inviteToChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
   "team.removeFromChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
+  // ── Marketplace › Apps (control-apps.mjs) ──
+  // By the app's slug: never the page to sign in on, an account's id or its email.
+  "apps.connect": (args, value) => value?.slug ?? args?.[0],
+  "apps.remove": (args, value) => value?.slug ?? args?.[0],
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
-  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
+  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
@@ -549,6 +563,8 @@ export const MORE_READS = {
   sharing: ["sharing.list", "sharing.get"],
   // (The team)
   team: ["team.get", "team.roles", "team.role", "team.groups", "team.invites", "team.requests", "team.members", "team.chatPeople", "team.look"],
+  // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
+  apps: ["apps.list", "apps.connected", "apps.accounts"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 

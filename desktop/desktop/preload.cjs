@@ -53,6 +53,14 @@ for (const name of [
   "plugins.setEnabled",
   "plugins.update",
   "plugins.uninstall",
+  // Agent templates in the marketplaces ("agent-templates-v1"), and Marketplace › Apps (Composio)
+  "agents.browse",
+  "agents.template",
+  "composio.catalog",
+  "composio.connected",
+  "composio.accounts",
+  "composio.connect",
+  "composio.removeAccount",
   // Spaces ("spaces-v1"): the app's calls, then the link's.
   "spaces.read",
   "spaces.create",
