@@ -1,9 +1,8 @@
-// The icons of the six places, drawn from the Botkins navigation pack (assets/brand/nav-icons),
+// The icons of the five places, drawn from the Botkins navigation pack (assets/brand/nav-icons),
 // file for file: 24 × 24, rounded 1.75 strokes in the current text color. An icon is decoration;
 // the place's name is the button's label.
 import chats from "../assets/brand/nav-icons/chats.svg?raw";
 import home from "../assets/brand/nav-icons/home.svg?raw";
-import projects from "../assets/brand/nav-icons/projects.svg?raw";
 import today from "../assets/brand/nav-icons/today.svg?raw";
 import wiki from "../assets/brand/nav-icons/wiki.svg?raw";
 import work from "../assets/brand/nav-icons/work.svg?raw";
@@ -16,7 +15,6 @@ const ART: Record<Place, string> = {
   Today: shapes(today),
   Chats: shapes(chats),
   Work: shapes(work),
-  Projects: shapes(projects),
   Wiki: shapes(wiki),
 };
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { qrPath } from "../desktop/link/qr.mjs";
 import { _electron, expect } from "@playwright/test";
 import { LinkHost } from "../desktop/link/index.mjs";
 import { skipWelcome } from "./welcome-helper.mjs";
@@ -72,6 +73,15 @@ try {
 
   await settings.getByRole("tab", { name: "Invite", exact: true }).click();
   await expect(settings.locator(".team-invite-code")).toContainText("-");
+  // The invite's link as a QR code beside its code, for the phone app's "Join a team" to scan.
+  const qr = settings.getByRole("img", { name: "Invite QR code" });
+  await expect(qr).toBeVisible();
+  const link = await settings.locator(".team-invite-link code").textContent();
+  assert.match(link, /\/join#/);
+  assert.equal(await qr.locator("svg path").getAttribute("d"), qrPath(link).d, "the code holds the invite's link");
+  const square = await qr.boundingBox();
+  assert.ok(square.width >= 160 && Math.abs(square.width - square.height) < 1, "large enough to scan from a screen");
+  await expect(settings.locator(".team-invite-qr")).toContainText("Scan to join");
   await page.screenshot({ path: join(shots, "teams-desktop-invite.png") });
 
   await settings.getByRole("tab", { name: "Roles", exact: true }).click();

@@ -64,7 +64,7 @@ try {
   }).toPass({ timeout: 20000 });
   await page.locator("aside nav").getByRole("button", { name: "Work", exact: true }).click();
   const main = page.locator("main");
-  await main.getByRole("button", { name: "Routines", exact: true }).click();
+  await main.getByRole("tab", { name: "Routines", exact: true }).click();
   await main.getByRole("button", { name: "New routine", exact: true }).click();
   await expect(main.getByRole("radio", { name: "No output" })).toHaveAttribute("aria-checked", "true");
   const notify = main.getByRole("switch", { name: /Notify me/ });

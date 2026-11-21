@@ -22,6 +22,8 @@ import { Notifier } from "./notify.mjs";
 import { usageCsv, usageReport } from "./usage.mjs";
 import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
+import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
+import { REMOTE_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
@@ -89,7 +91,13 @@ const REPLY_MS = 1500;
 export const APP_UPDATE = "app-update-v1";
 /** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
 export const PROVIDER_SIGNIN = "provider-signin-v1";
-export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN];
+export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN];
+/**
+ * What a paired device is told this app supports. A feature whose calls the link does not carry
+ * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
+ */
+export const linkCapabilities = (methods = REMOTE_METHODS) =>
+  CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call)));
 
 /**
  * Builds the workspace, its calls and the phone link on `host`.
@@ -549,6 +557,10 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return paths[0];
     },
     startProjectChat: (botIds, projectId, mode) => workspace.projects.startChat(botIds, projectId, mode),
+    // Artifacts a person attached to a project (capability "project-artifacts-v1").
+    addProjectArtifact: (projectId, artifactId) => workspace.projects.addArtifact(projectId, artifactId),
+    removeProjectArtifact: (projectId, artifactId) => workspace.projects.removeArtifact(projectId, artifactId),
+    projectArtifacts: (projectId) => workspace.projects.artifacts(projectId),
     addTodo: (projectId, text) => workspace.projects.addTodo(projectId, text).id,
     updateTodo: (projectId, todoId, patch) => void workspace.projects.updateTodo(projectId, todoId, patch),
     deleteTodo: (projectId, todoId) => workspace.projects.deleteTodo(projectId, todoId),
@@ -842,7 +854,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // told whether there is a display to show at all (desktop/link/server.mjs, headless()).
     ...(host.headless && { headless: true, displayStatus: () => host.displayStatus() }),
     // What this app supports beyond the link's own calls, by the names the phone looks for.
-    capabilities: updates ? [...CAPABILITIES, APP_UPDATE] : CAPABILITIES,
+    capabilities: updates ? [...linkCapabilities(), APP_UPDATE] : linkCapabilities(),
     // The person is looking at this window, and at that chat: a reply there needs no ping on a phone.
     attention: () => {
       const focused = host.window.focused();

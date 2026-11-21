@@ -19,6 +19,7 @@ import { useAsk, type PageActions } from "./Pages";
 import { Choices } from "./Preferences";
 import { categories as goalCategories } from "./Board";
 import type { Bot, Cadence, Chat, ChatSchedule, Run, RoutineDelivery, State } from "./types";
+import { WorkBar, type WorkNav } from "./WorkBar";
 import "./routines.css";
 
 const api = window.botkins;
@@ -323,12 +324,15 @@ export default function RoutinesPage({
   state,
   actions,
   initial,
+  work,
   openToday,
 }: {
   state: State;
   actions: PageActions;
   /** Opens a routine, or the editor for a bot, when the page is reached from elsewhere. */
   initial?: { id?: string; botId?: string; create?: boolean };
+  /** Work's tabs and tools, shown above the list. */
+  work: WorkNav;
   openToday: () => void;
 }) {
   const [view, setView] = useState<View>(
@@ -381,13 +385,7 @@ export default function RoutinesPage({
   const act = (p: Promise<unknown>) => void p.catch(actions.fail);
   return (
     <div className="routines">
-      <div className="sectionhead routines-head">
-        <h1>Routines</h1>
-        <button className="primary" onClick={() => setView({ mode: "edit", botId: botFilter || undefined })}>
-          <Plus size={16} />
-          New routine
-        </button>
-      </div>
+      <WorkBar work={work} tab="Routines" add={{ label: "New routine", run: () => setView({ mode: "edit", botId: botFilter || undefined }) }} />
       <p className="muted routines-lede">Work your bots do on a schedule, each in its own chat.</p>
       {owners.length > 1 || botFilter ? (
         <div className="filters chips" role="group" aria-label="Filter by bot">

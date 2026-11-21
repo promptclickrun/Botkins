@@ -209,6 +209,8 @@ try {
   const t = Date.now() - 600000;
   const step = (id, name, label, status, start, secs) => ({ id, name, label, status, started: t + start, finished: t + start + secs * 1000 });
   chat.title = "Migration check-in";
+  // Nothing was sent in it above (the send is a stand-in), so leaving it archived it. With messages it is a conversation again.
+  delete chat.archived;
   chat.messages = [
     {
       role: "user",
@@ -327,7 +329,7 @@ try {
 
   // The project chip opens its project.
   await button("Open project Mail migration").click();
-  await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Projects", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Work", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Mail migration" }).first()).toBeVisible();
   console.log("The project chip opens its project; the old customer mention stays a plain label.");
 

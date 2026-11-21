@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, MessageCircle, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, MessageCircle, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { RichText } from "./RichText";
 import type { BotTask, State, TaskPriority, TaskStatus } from "./types";
+import { WorkBar, type WorkNav } from "./WorkBar";
 import "./tasks.css";
 
 const api = window.botkins;
@@ -20,12 +21,13 @@ const priorities: TaskPriority[] = ["low", "normal", "high", "urgent"];
 export default function TasksPage({
   state,
   openChat,
-  back,
+  work,
   fail,
 }: {
   state: State;
   openChat: (id: string) => void;
-  back: () => void;
+  /** Work's tabs and tools, shown above the board. */
+  work: WorkNav;
   fail: (e: unknown) => void;
 }) {
   const [editing, setEditing] = useState<BotTask | { status: "later" | "ready" } | null>(null);
@@ -47,17 +49,7 @@ export default function TasksPage({
   }
   return (
     <div className="tasks-page">
-      <div className="sectionhead">
-        <button className="textbutton" onClick={back}>
-          <ArrowLeft size={15} /> Work
-        </button>
-      </div>
-      <div className="titleline">
-        <h1>Tasks</h1>
-        <button className="primary" onClick={() => setEditing({ status: "ready" })}>
-          <Plus size={16} /> New task
-        </button>
-      </div>
+      <WorkBar work={work} tab="Tasks" add={{ label: "New task", run: () => setEditing({ status: "ready" }) }} />
       <p className="muted tasks-intro">A Ready task starts when its bot is free. Finished ones wait here for you.</p>
       <div className="task-lanes">
         {lanes.map((lane) => {

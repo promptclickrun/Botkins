@@ -13,6 +13,11 @@ import { assertProject, canUseProject } from "./access.mjs";
 
 const run = promisify(execFile);
 export const MODES = ["default", "plan", "yolo"];
+/** A project keeps a list of artifacts a person attached to it (`addProjectArtifact`, `removeProjectArtifact`, `projectArtifacts`). */
+export const PROJECT_ARTIFACTS = "project-artifacts-v1";
+export const MAX_PROJECT_ARTIFACTS = 200;
+/** The calls a paired device needs before the capability means anything to it. */
+export const PROJECT_ARTIFACT_CALLS = ["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"];
 const MAX_DIFF = 400_000;
 
 // A repository's own config could otherwise run programs when Botkins reads it: fsmonitor, hooks,
@@ -112,6 +117,8 @@ export function migrateProject(p) {
   p.lastUsed ??= Date.now();
   p.createdAt ??= p.lastUsed;
   if (!p.folder) delete p.folder;
+  if (Array.isArray(p.artifacts)) p.artifacts = [...new Set(p.artifacts.filter((id) => typeof id === "string"))].slice(0, MAX_PROJECT_ARTIFACTS);
+  if (!p.artifacts?.length) delete p.artifacts;
   return p;
 }
 
@@ -208,6 +215,64 @@ export class Projects {
     for (const bot of this.ws.state.bots)
       if (bot.access?.projects) bot.access.projects = bot.access.projects.filter((p) => p !== id);
     this.ws.save();
+  }
+  /**
+   * Attaches an artifact to a project: a list on the project, newest first. It changes nothing
+   * about the artifact and gives a bot nothing new. One that is already there moves to the
+   * front. Returns the project's list as it is afterwards.
+   */
+  addArtifact(projectId, artifactId) {
+    const p = this.get(projectId);
+    const found = typeof artifactId === "string" ? this.ws.artifacts.entry(artifactId) : null;
+    if (!found) throw new Error("This artifact no longer exists.");
+    const id = found.artifact.id;
+    const rest = this.attached(p).filter((other) => other !== id);
+    if (rest.length >= MAX_PROJECT_ARTIFACTS) throw new Error("A project holds up to " + MAX_PROJECT_ARTIFACTS + " artifacts. Remove one first.");
+    p.artifacts = [id, ...rest];
+    this.ws.save();
+    return [...p.artifacts];
+  }
+  /** Takes an artifact off a project. One that is not attached is no error. Returns the list afterwards. */
+  removeArtifact(projectId, artifactId) {
+    const p = this.get(projectId);
+    const before = p.artifacts ?? [];
+    const rest = this.attached(p).filter((id) => id !== artifactId);
+    if (rest.length !== before.length) {
+      if (rest.length) p.artifacts = rest;
+      else delete p.artifacts;
+      this.ws.save();
+    }
+    return rest;
+  }
+  /**
+   * A project's artifacts as they are now, newest attached first: { items: Artifact[] }. One whose
+   * file or bot is gone drops out, and the stored list is cleaned of it.
+   */
+  artifacts(projectId) {
+    const p = this.get(projectId);
+    const before = p.artifacts ?? [];
+    const items = before.map((id) => this.ws.artifacts.entry(id)?.artifact).filter(Boolean);
+    if (items.length !== before.length) {
+      if (items.length) p.artifacts = items.map((item) => item.id);
+      else delete p.artifacts;
+      this.ws.save();
+    }
+    return { items };
+  }
+  /** The ids on a project's list whose artifact is still in the index. Reads no file. */
+  attached(p, known = this.ws.artifacts.known()) {
+    return (p.artifacts ?? []).filter((id) => known(id));
+  }
+  /** The projects as a window sees them: an artifact that is gone is not on a project's list. */
+  listed() {
+    if (!this.all.some((p) => p.artifacts)) return this.all;
+    const known = this.ws.artifacts.known();
+    return this.all.map((p) => {
+      if (!p.artifacts) return p;
+      const { artifacts, ...rest } = p;
+      const still = artifacts.filter((id) => known(id));
+      return still.length ? { ...rest, artifacts: still } : rest;
+    });
   }
   /** The chats in a project, newest first. */
   chats(id) {

@@ -1,7 +1,8 @@
-import { BarChart3, BriefcaseBusiness, CalendarClock, ChevronRight, KanbanSquare } from "lucide-react";
+import { BriefcaseBusiness, CalendarClock, ChevronRight } from "lucide-react";
 import { dateLabel, type PageActions } from "./Pages";
 import { scheduleSummary, upcomingRuns, whenLabel } from "./Routines";
 import type { Run, State } from "./types";
+import { WorkBack } from "./WorkBar";
 import "./routines.css";
 
 const FILTERS = ["All", "Working", "Needs you", "Completed"] as const;
@@ -15,14 +16,14 @@ export function workCategory(run: Run, state: Pick<State, "requests">) {
   return "Other";
 }
 
-export function WorkPage({
+/** Activity: every request a bot was given, newest first, and what is scheduled next. Opened from Work. */
+export function ActivityPage({
   state,
   actions,
   filter,
   setFilter,
   routines,
-  usage,
-  tasks,
+  back,
 }: {
   state: State;
   actions: PageActions;
@@ -30,9 +31,8 @@ export function WorkPage({
   setFilter: (f: string) => void;
   /** Opens Routines, optionally on one routine. */
   routines: (target?: { id?: string }) => void;
-  usage: () => void;
-  /** Opens the Tasks board. */
-  tasks?: () => void;
+  /** Back to Work. */
+  back: () => void;
 }) {
   const category = new Map(state.runs.map((r) => [r.id, workCategory(r, state)]));
   const counts = Object.fromEntries(
@@ -43,27 +43,9 @@ export function WorkPage({
   const chatBot = (chatId: string) => state.bots.find((b) => b.id === state.chats.find((c) => c.id === chatId)?.botId);
   return (
     <>
-      <div className="sectionhead work-head">
-        <h1>Work</h1>
-        <div className="work-doors">
-          {tasks && (
-            <button onClick={tasks}>
-              <KanbanSquare size={15} />
-              Tasks
-              {!!state.tasks?.filter((t) => t.status === "review" || t.status === "blocked").length && (
-                <span className="count">{state.tasks.filter((t) => t.status === "review" || t.status === "blocked").length}</span>
-              )}
-            </button>
-          )}
-          <button onClick={() => routines()}>
-            <CalendarClock size={15} />
-            Routines
-          </button>
-          <button onClick={usage}>
-            <BarChart3 size={15} />
-            Usage
-          </button>
-        </div>
+      <WorkBack back={back} />
+      <div className="titleline work-head">
+        <h1>Activity</h1>
       </div>
       <div className="filters chips">
         {FILTERS.map((f) => (
@@ -99,7 +81,7 @@ export function WorkPage({
         <div className="empty">
           <BriefcaseBusiness />
           <div>
-            <strong>{filter === "All" ? "No work yet" : "No matching work"}</strong>
+            <strong>{filter === "All" ? "No activity yet" : "No matching activity"}</strong>
             <small>Each request you send to a bot appears here.</small>
           </div>
         </div>

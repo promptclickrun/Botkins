@@ -5,7 +5,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
-import { Projects, parseStatus } from "../desktop/projects.mjs";
+import { MAX_PROJECT_ARTIFACTS, PROJECT_ARTIFACTS, Projects, parseStatus } from "../desktop/projects.mjs";
+import { CAPABILITIES, linkCapabilities } from "../desktop/runtime.mjs";
 import { decide } from "../desktop/providers/copilot/permissions.mjs";
 
 function setup(t) {
@@ -239,4 +240,92 @@ test("project to-dos: add, check off, rename, reorder and delete", (t) => {
   assert.throws(() => ws.projects.updateTodo(id, b.id, { done: true }), /no longer exists/);
   assert.throws(() => ws.projects.addTodo(id, " "), /1 to 500/);
   assert.throws(() => ws.projects.updateTodo(id, a.id, { done: "yes" }), /Invalid/);
+});
+
+test("artifacts on a project: attach, move to the front, take off, and one that is gone drops out", (t) => {
+  const { dir, ws, projects } = setup(t);
+  assert.equal(PROJECT_ARTIFACTS, "project-artifacts-v1");
+  assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
+  // A paired device hears of it only when the link carries all three calls.
+  const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS);
+  assert.deepEqual(linkCapabilities(new Set()), others);
+  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact"])), others);
+  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES);
+  const files = join(dir, "files");
+  mkdirSync(join(files, "site"), { recursive: true });
+  const put = (name, text = name) => (writeFileSync(join(files, name), text), join(files, name));
+  const chatId = ws.createChat("pip");
+  const record = (name, time) => ws.artifacts.record(put(name), { botId: "pip", chatId, source: "tool", time }).id;
+  const [report, chart, notes] = [record("report.md", 1), record("chart.png", 2), record("notes.txt", 3)];
+  put("site/index.html");
+  const site = ws.artifacts.record(join(files, "site"), { botId: "pip", chatId, source: "tool", time: 4 }).id;
+  const page = ws.artifacts.list({ botId: "pip", folder: site }).items[0].id;
+  assert.match(page, /^child:/);
+
+  const id = projects.create({ name: "Launch" });
+  const shown = () => ws.snapshot().projects.find((p) => p.id === id).artifacts;
+  assert.equal(shown(), undefined, "the field is left out while a project has none");
+  assert.deepEqual(projects.addArtifact(id, report), [report]);
+  assert.deepEqual(projects.addArtifact(id, chart), [chart, report], "newest first");
+  assert.deepEqual(projects.addArtifact(id, report), [report, chart], "one that is already there moves to the front");
+  assert.deepEqual(projects.addArtifact(id, page), [page, report, chart], "a file inside a shared folder can be attached");
+  assert.deepEqual(projects.addArtifact(id, join(files, "notes.txt")), [notes, page, report, chart], "a path is kept as the artifact's id");
+  assert.deepEqual(shown(), [notes, page, report, chart]);
+  assert.deepEqual(projects.artifacts(id).items.map((item) => item.name), ["notes.txt", "index.html", "report.md", "chart.png"]);
+  assert.equal(projects.artifacts(id).items[2].chatId, chatId, "each comes described as in the artifact list");
+
+  for (const bad of ["nothing-by-this-id", join(files, "never-recorded.txt"), "child:not-a-key", "", null, 7, { id: report }])
+    assert.throws(() => projects.addArtifact(id, bad), /^Error: This artifact no longer exists\.$/, String(bad));
+  assert.throws(() => projects.addArtifact("no-such-project", report), /Unknown project/);
+  assert.throws(() => projects.update(id, { artifacts: [] }), /Unknown project field/, "the list changes only through its two calls");
+
+  assert.deepEqual(projects.removeArtifact(id, page), [notes, report, chart]);
+  assert.deepEqual(projects.removeArtifact(id, page), [notes, report, chart], "taking off one that is not attached is no error");
+  assert.deepEqual(projects.removeArtifact(id, "nothing-by-this-id"), [notes, report, chart]);
+
+  // A file that is deleted: the described list drops it and cleans what is stored.
+  rmSync(join(files, "chart.png"));
+  assert.deepEqual(projects.artifacts(id).items.map((item) => item.id), [notes, report]);
+  assert.deepEqual(projects.get(id).artifacts, [notes, report]);
+  // A row that left the index is off the list a window gets at once, before anything is saved again.
+  ws.artifacts.rows = ws.artifacts.rows.filter((row) => row.id !== report);
+  assert.deepEqual(projects.get(id).artifacts, [notes, report], "still stored");
+  assert.deepEqual(shown(), [notes]);
+  assert.deepEqual(projects.removeArtifact(id, "nothing-by-this-id"), [notes], "and the next change cleans the stored list");
+  assert.deepEqual(projects.get(id).artifacts, [notes]);
+  assert.deepEqual(projects.removeArtifact(id, notes), []);
+  assert.equal("artifacts" in projects.get(id), false);
+  assert.equal(shown(), undefined);
+
+  // A second project keeps its own list, and removing a project takes its list with it.
+  const other = projects.create({ name: "Other" });
+  projects.addArtifact(other, notes);
+  projects.addArtifact(id, notes);
+  projects.remove(other);
+  assert.deepEqual(shown(), [notes]);
+
+  // What is saved comes back, and a list from a damaged file is brought into shape.
+  const again = new Workspace(join(dir, "data"), async () => ({}), () => {});
+  assert.deepEqual(again.projects.get(id).artifacts, [notes]);
+  again.state.projects[0].artifacts = [notes, 5, notes, null];
+  const repaired = new Projects(again);
+  assert.deepEqual(repaired.get(id).artifacts, [notes]);
+});
+
+test("a project holds up to 200 artifacts", (t) => {
+  const { dir, ws, projects } = setup(t);
+  const files = join(dir, "files");
+  mkdirSync(files);
+  const ids = [];
+  for (let i = 0; i <= MAX_PROJECT_ARTIFACTS; i++) {
+    writeFileSync(join(files, "f" + i + ".txt"), String(i));
+    ids.push(ws.artifacts.record(join(files, "f" + i + ".txt"), { botId: "pip", source: "tool", time: i }).id);
+  }
+  const id = projects.create({ name: "Full" });
+  ws.artifacts.batch(() => { for (const artifact of ids.slice(0, MAX_PROJECT_ARTIFACTS)) projects.addArtifact(id, artifact); });
+  assert.equal(projects.get(id).artifacts.length, 200);
+  assert.throws(() => projects.addArtifact(id, ids[200]), /^Error: A project holds up to 200 artifacts\. Remove one first\.$/);
+  assert.equal(projects.addArtifact(id, ids[0])[0], ids[0], "one that is already attached still moves to the front");
+  projects.removeArtifact(id, ids[1]);
+  assert.equal(projects.addArtifact(id, ids[200]).length, 200);
 });

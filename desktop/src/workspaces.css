@@ -28,9 +28,6 @@
 .project-color.pink, .project-mark.pink, .swatch.pink { color: var(--project-pink); }
 .project-color.gray, .project-mark.gray, .swatch.gray { color: var(--project-gray); }
 
-.projects-page .titleline {
-  align-items: flex-end;
-}
 .edit-list > li.link-row {
   padding: 2px;
 }
@@ -290,4 +287,51 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The dialogs that pick something for a project: an existing chat, or an artifact to attach. */
+.pick-dialog[open] {
+  display: grid;
+  gap: 12px;
+}
+.pick-dialog .sectionhead {
+  margin-bottom: 0;
+}
+.pick-dialog .pick-list {
+  overflow-y: auto;
+  min-height: 0;
+  max-height: min(380px, calc(100vh - 300px));
+  margin: 0 -6px;
+}
+.pick-list li,
+.artifact-pick-list li {
+  padding-left: 8px;
+}
+.pick-list .grow strong,
+.artifact-pick-list .grow strong {
+  display: block;
+  font-size: calc(14px * var(--text-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-list .grow small,
+.artifact-pick-list .grow small {
+  display: block;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-kind {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.pick-empty {
+  padding: 18px 0;
+  text-align: center;
+}
+.pick-more {
+  justify-self: center;
 }

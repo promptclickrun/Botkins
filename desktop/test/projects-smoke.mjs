@@ -1,5 +1,6 @@
 // Projects and agent access smoke, in an isolated data folder. No Copilot turns.
-// Creates a project with to-dos and a chat, then turns global access off and checks that a bot without access is blocked in the UI and the
+// Projects are a tab of Work. Creates a project with to-dos, adds a chat that already exists, attaches an
+// artifact, then turns global access off and checks that a bot without access is blocked in the UI and the
 // backend until it gets a grant. Set BOTKINS_CP_SHOTS to a folder to save light and dark screenshots.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -8,11 +9,29 @@ import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
+import { fileDetails } from "../desktop/artifact-files.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-cp-ui-"));
 const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(join(dir, "app"));
+// A chat that has started, for "Add existing chat", and a file a bot made in it, for "Attach artifact".
+{
+  const file = join(dir, "app", "data", "workspace.json");
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  const time = Date.now() - 60_000;
+  data.chats.push({ id: "seeded-pip", botId: "pip", title: "Mailbox plan", time, established: false, messages: [
+    { role: "user", text: "Plan the mailbox move.", time },
+    { role: "assistant", text: "Here is a first plan.", time, botId: "pip" },
+  ] });
+  writeFileSync(file, JSON.stringify(data));
+  const made = join(dir, "cutover-plan.md");
+  writeFileSync(made, "# Cutover plan\n\nFinance moves first.\n");
+  const info = fileDetails(made);
+  writeFileSync(join(dir, "app", "data", "artifacts.json"), JSON.stringify([
+    { id: "seeded-plan", botId: "pip", chatId: "seeded-pip", messageIndex: 1, source: "tool", path: info.path, identity: info.identity, time },
+  ]));
+}
 delete env.ELECTRON_RUN_AS_NODE;
 const shots = (process.env.BOTKINS_CP_SHOTS ?? process.env.COMMANDER_CP_SHOTS);
 let app, page;
@@ -20,6 +39,12 @@ const errors = [];
 const button = (name, scope = page) => scope.getByRole("button", { name, exact: true });
 const snap = () => page.evaluate(() => window.botkins.snapshot());
 const sidebar = (name) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name, exact: true });
+// Projects are the middle tab of Work.
+const openProjects = async () => {
+  await sidebar("Work").click();
+  await page.getByRole("tab", { name: "Projects", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Projects", exact: true })).toHaveAttribute("aria-selected", "true");
+};
 const theme = (mode) => page.evaluate((mode) => window.botkins.setPreferences({ appearance: { theme: mode } }), mode);
 async function shot(name, locator, tall = false) {
   if (!shots) return;
@@ -47,8 +72,13 @@ try {
   assert.equal(initial.settings.access.allBots, true, "access is global by default");
 
   // 1. A project, with to-dos.
-  await sidebar("Projects").click();
-  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+  await expect(sidebar("Projects")).toHaveCount(0);
+  await sidebar("Work").click();
+  await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Work" }).getByRole("tab")).toHaveText(["Routines", "Projects", "Tasks"]);
+  await expect(page.getByRole("tab", { name: "Routines", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Projects", exact: true }).click();
+  await expect(sidebar("Work")).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Start a project" })).toBeVisible();
   await button("New project").first().click();
   const create = page.getByRole("dialog", { name: "New project" });
@@ -85,15 +115,69 @@ try {
   await expect(page.locator(".chathead h2")).toHaveText("Pip");
   await expect(page.locator(".project-label")).toContainText("Mail migration");
   await expect(button("Changes")).toHaveCount(0);
-  const pipChat = (await snap()).chats[0];
+  const blank = (await snap()).chats[0];
+  assert.equal(blank.projectId, project.id);
+  assert.equal(blank.mode, "default");
+  // A new chat nobody wrote in is archived when it is left.
+  await sidebar("Chats").click();
+  await expect.poll(async () => (await snap()).chats.find((c) => c.id === blank.id).archived).toBe(true);
+  console.log("Started a chat in the project; left without a message, it is archived.");
+
+  // 2b. A chat that already exists is added to the project.
+  await openProjects();
+  await page.locator(".record-row", { hasText: "Mail migration" }).click();
+  await menu.getByRole("button", { name: /Chats/ }).click();
+  await expect(page.getByRole("region", { name: "Chats", exact: true })).toContainText("No chats in this project yet");
+  await button("Add existing chat").click();
+  const adding = page.getByRole("dialog", { name: "Add existing chat" });
+  await adding.getByLabel("Search chats").fill("nothing like this");
+  await expect(adding).toContainText("No chats match.");
+  await adding.getByLabel("Search chats").fill("mailbox");
+  await shot("project-add-chat", adding);
+  await button("Add Mailbox plan", adding).click();
+  await expect(adding).toContainText("There are no other chats to add.");
+  await button("Done", adding).click();
+  await expect(adding).toBeHidden();
+  await expect(page.locator(".project-chats .row")).toHaveCount(1);
+  await expect(button("Add existing chat")).toBeDisabled();
+  const pipChat = (await snap()).chats.find((c) => c.id === "seeded-pip");
   assert.equal(pipChat.projectId, project.id);
   assert.equal(pipChat.mode, "default");
   await sidebar("Chats").click();
   await expect(page.locator(".row-folder").first()).toHaveText(/^\s*Mail migration\s*$/);
-  console.log("Started a chat in the project; the Chats list names the project.");
+  console.log("Added an existing chat to the project; the Chats list names the project.");
+
+  // 2c. An artifact is attached to the project, and taken off again.
+  await openProjects();
+  await page.locator(".record-row", { hasText: "Mail migration" }).click();
+  await menu.getByRole("button", { name: /Artifacts/ }).click();
+  const artifacts = page.getByRole("region", { name: "Artifacts", exact: true });
+  await expect(artifacts).toContainText("No artifacts attached yet");
+  await button("Attach artifact", artifacts).click();
+  const attaching = page.getByRole("dialog", { name: "Attach artifact" });
+  await expect(attaching.getByRole("list", { name: "Artifacts" }).getByRole("listitem")).toHaveText([/cutover-plan\.md.*Pip.*Mailbox plan/]);
+  await shot("project-attach-artifact", attaching);
+  await button("Attach cutover-plan.md", attaching).click();
+  await expect(button("cutover-plan.md is attached", attaching)).toBeDisabled();
+  await button("Done", attaching).click();
+  await expect(artifacts.getByRole("list", { name: "Attached artifacts" }).getByRole("listitem")).toHaveText([/cutover-plan\.md/]);
+  await expect(artifacts).toContainText("1 artifact");
+  await expect(menu.getByRole("button", { name: /Artifacts/ })).toContainText("1");
+  assert.deepEqual((await snap()).projects.find((p) => p.id === project.id).artifacts, ["seeded-plan"]);
+  await shot("project-artifacts");
+  await button("Remove cutover-plan.md from this project", artifacts).click();
+  await expect(artifacts).toContainText("No artifacts attached yet");
+  assert.equal("artifacts" in (await snap()).projects.find((p) => p.id === project.id), false);
+  await page.evaluate((id) => window.botkins.addProjectArtifact(id, "seeded-plan"), project.id);
+  await expect(artifacts.getByRole("list", { name: "Attached artifacts" }).getByRole("listitem")).toHaveCount(1);
+  // "Go to chat" opens the chat the file was made in.
+  await button("Go to the chat of cutover-plan.md", artifacts).click();
+  await expect(page.locator(".chathead h2")).toHaveText("Pip");
+  await expect(page.locator(".project-label")).toContainText("Mail migration");
+  console.log("Attached an artifact to the project, took it off, attached it again and opened its chat.");
 
   // Screenshots of the pages so far.
-  await sidebar("Projects").click();
+  await openProjects();
   await expect(page.locator(".project-list .record-row")).toHaveCount(1);
   await page.evaluate(() => window.botkins.createProject({ name: "Personal admin" }));
   await expect(page.locator(".project-list .record-row")).toHaveCount(2);
@@ -120,7 +204,7 @@ try {
   await settings.getByRole("button", { name: "Close dialog" }).click();
   await expect(settings).toBeHidden();
 
-  await sidebar("Projects").click();
+  await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await menu.getByRole("button", { name: /Chats/ }).click();
   await expect(button("Start chat with Scout")).toBeDisabled();
@@ -136,7 +220,7 @@ try {
   console.log("With global access off, Scout is disabled in the project and refused by the backend; Pip's chat shows why it's blocked.");
 
   // 4. Grant Scout the project on its bot page; then it can start a chat in the project.
-  await sidebar("Projects").click();
+  await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await menu.getByRole("button", { name: /Chats/ }).click();
   await button("Open Scout's access").click();
@@ -147,7 +231,7 @@ try {
   await expect.poll(async () => (await snap()).bots.find((b) => b.id === "scout").access.projects).toEqual([project.id]);
   await card.scrollIntoViewIfNeeded();
   await shot("bot-access", card);
-  await sidebar("Projects").click();
+  await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await menu.getByRole("button", { name: /Access/ }).click();
   await expect(page.locator(".access-list li", { hasText: "Scout" })).toContainText("Granted for this project");
@@ -201,7 +285,7 @@ try {
   await sidebar("Today").click();
   await expect(page.locator(".live-panel .panel-project")).toHaveText("Mail migration");
   await shot("today-panel");
-  await sidebar("Projects").click();
+  await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: /Panels/ }).click();
   await expect(page.getByRole("region", { name: "Cutover status" })).toContainText("412 / 1,200");

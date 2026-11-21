@@ -104,9 +104,12 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
 
-  // Work: counts on the chips, the failed scheduled run under Needs you, the doors.
+  // Work opens on its first tab; Activity, at its top, has counts on the chips and the failed scheduled run under Needs you.
   await navTo("Work");
   await page.getByRole("heading", { name: "Work", exact: true }).waitFor();
+  await expect(main().getByRole("tablist", { name: "Work" }).getByRole("tab")).toHaveText(["Routines", "Projects", "Tasks"]);
+  await main().getByRole("button", { name: "Activity", exact: true }).click();
+  await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
   await expect(main().getByRole("button", { name: /^All\s*41$/ })).toBeVisible();
   await expect(main().getByRole("button", { name: /^Needs you\s*1$/ })).toBeVisible();
   await expect(main().getByRole("button", { name: /^Completed\s*40$/ })).toBeVisible();
@@ -115,9 +118,10 @@ try {
   await expect(main().getByRole("button", { name: /Scheduled · Morning scan/ })).toBeVisible();
   await main().getByRole("button", { name: /^All/ }).click();
 
-  // Routines: create through the editor.
-  await main().getByRole("button", { name: "Routines", exact: true }).click();
-  await page.getByRole("heading", { name: "Routines", exact: true }).waitFor();
+  // Routines: create through the editor. "Work" above Activity leads back to the tab.
+  await shot("activity");
+  await main().getByRole("button", { name: "Work", exact: true }).click();
+  await expect(main().getByRole("tab", { name: "Routines", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(main().getByText("No routines yet")).toBeVisible();
   await expect(main().getByRole("region", { name: "Chat schedules" }).getByText("Check the nightly build")).toBeVisible();
   await main().getByRole("button", { name: "New routine", exact: true }).click();
@@ -228,7 +232,7 @@ try {
   await button("Delete…").click();
   await page.getByRole("dialog", { name: "Delete Smoke check?" }).getByRole("button", { name: "Delete routine" }).click();
   await wait(async () => (await routines()).some((x) => x.chatId === id)).toBe(false);
-  await page.getByRole("heading", { name: "Routines", exact: true }).waitFor();
+  await expect(main().getByRole("tab", { name: "Routines", exact: true })).toHaveAttribute("aria-selected", "true");
 
   // The bot page lists the bot's routines and opens one.
   await page.locator("aside .botnav-item", { hasText: "Pip" }).click({ button: "right" });

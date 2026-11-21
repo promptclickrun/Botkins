@@ -36,8 +36,8 @@ try {
     await page.evaluate(() => window.botkins.setPreferences({ appearance: { theme: "light" } }));
   }
   await page.getByRole("navigation").getByRole("button", { name: "Work", exact: true }).click();
-  await page.getByRole("button", { name: "Tasks", exact: true }).click();
-  await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
+  await page.getByRole("tab", { name: "Tasks", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Tasks", exact: true })).toHaveAttribute("aria-selected", "true");
 
   // Add a task to Later through the lane's Add button; it waits there.
   await lane("Later").getByRole("button", { name: "Add" }).click();

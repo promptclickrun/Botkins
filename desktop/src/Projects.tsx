@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   ListTodo,
   MessagesSquare,
+  Paperclip,
   Plus,
   ShieldCheck,
   SquarePen,
@@ -27,6 +28,8 @@ import type { Bot, ChatMode, Project, ProjectColor, ProjectTodo, State } from ".
 import "./records.css";
 import "./workspaces.css";
 
+import { WorkBar, type WorkNav } from "./WorkBar";
+import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from "./ProjectExtras";
 const api = window.botkins;
 const COLORS: ProjectColor[] = ["coral", "amber", "green", "teal", "blue", "violet", "pink", "gray"];
 const clean = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
@@ -42,13 +45,16 @@ export function sortedProjects(state: State) {
 export default function Projects({
   state,
   target,
+  work,
   openChat,
   botPage,
   fail,
 }: {
   state: State;
   target: ProjectsTarget;
-  openChat: (id: string) => void;
+  /** Work's tabs and tools, shown above the list of projects. */
+  work: WorkNav;
+  openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
   fail: (e: unknown) => void;
 }) {
@@ -70,13 +76,7 @@ export default function Projects({
         />
       ) : (
         <>
-          <div className="titleline">
-            <h1>Projects</h1>
-            <button className="primary" onClick={() => setCreating(true)}>
-              <Plus size={16} />
-              New project
-            </button>
-          </div>
+          <WorkBar work={work} tab="Projects" add={{ label: "New project", run: () => setCreating(true) }} />
           <p className="muted page-lede">Chats, panels and a to-do list for each piece of work.</p>
           {!projects.length ? (
             <div className="empty-detail projects-empty">
@@ -115,7 +115,8 @@ export default function Projects({
 
 function ProjectRow({ state, project: p, open }: { state: State; project: Project; open: () => void }) {
   const todo = p.todos.filter((t) => !t.done).length;
-  const chats = state.chats.filter((c) => c.projectId === p.id).length;
+  // As the project's own page counts them: an archived chat is not listed there.
+  const chats = state.chats.filter((c) => c.projectId === p.id && !c.archived).length;
   const panels = state.panels.filter((x) => x.projectId === p.id).length;
   return (
     <button className="record-row" onClick={open}>
@@ -196,7 +197,7 @@ function NewProjectDialog({
   );
 }
 
-type Section = "overview" | "chats" | "panels" | "todos" | "access" | "changes";
+type Section = "overview" | "chats" | "panels" | "todos" | "artifacts" | "access" | "changes";
 
 function ProjectPage({
   state,
@@ -209,7 +210,7 @@ function ProjectPage({
   state: State;
   project: Project;
   back: () => void;
-  openChat: (id: string) => void;
+  openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
   fail: (e: unknown) => void;
 }) {
@@ -240,6 +241,7 @@ function ProjectPage({
     ["chats", "Chats", MessagesSquare, chats.length ? String(chats.length) : ""],
     ["panels", "Panels", LayoutDashboard, panels.length ? String(panels.length) : ""],
     ["todos", "To-do list", ListTodo, open ? String(open) : ""],
+    ...(hasProjectArtifacts(state) ? ([["artifacts", "Artifacts", Paperclip, project.artifacts?.length ? String(project.artifacts.length) : ""]] as [Section, string, typeof Info, string][]) : []),
     ["access", "Access", ShieldCheck, globalAccess(state) ? "All" : allowed + "/" + state.bots.length],
     ...(repo ? ([["changes", "Changes", GitCompareArrows, ""]] as [Section, string, typeof Info, string][]) : []),
   ];
@@ -277,6 +279,7 @@ function ProjectPage({
           {section === "chats" && <ProjectChats state={state} project={project} chats={chats} openChat={openChat} botPage={botPage} />}
           {section === "panels" && <ProjectPanels state={state} panels={panels} />}
           {section === "todos" && <TodoList project={project} fail={fail} />}
+          {section === "artifacts" && <ProjectArtifacts state={state} project={project} openChat={openChat} />}
           {section === "access" && <ProjectAccess state={state} project={project} botPage={botPage} fail={fail} />}
           {section === "changes" && repo && (
             <ProjectChanges key={project.id} state={state} projectId={project.id} close={() => setSection("overview")} />
@@ -463,12 +466,13 @@ function ProjectChats({
   state: State;
   project: Project;
   chats: State["chats"];
-  openChat: (id: string) => void;
+  openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
 }) {
   const [mode, setMode] = useState<ChatMode>("default");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [adding, setAdding] = useState(false);
   const visible = state.bots.filter((b) => !b.hidden || canUseProject(state, b, project));
   async function start(bot: Bot) {
     setBusy(bot.id);
@@ -483,7 +487,15 @@ function ProjectChats({
   }
   return (
     <div className="record-detail">
-      <Card title="Chats" note={chats.length ? plural(chats.length, "chat") : "No chats in this project yet"}>
+      <Card
+        title="Chats"
+        note={chats.length ? plural(chats.length, "chat") : "No chats in this project yet"}
+        action={
+          <button type="button" className="secondary" disabled={!chatsToAdd(state, project).length} onClick={() => setAdding(true)}>
+            <Plus size={14} /> Add existing chat
+          </button>
+        }
+      >
         {chats.length > 0 && (
           <div className="project-chats">
             {chats.map((c) => (
@@ -544,6 +556,7 @@ function ProjectChats({
           </p>
         )}
       </Card>
+      {adding && <AddChatDialog state={state} project={project} close={() => setAdding(false)} />}
     </div>
   );
 }
