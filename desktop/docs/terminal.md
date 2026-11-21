@@ -332,6 +332,7 @@ This setting is off by default. You can also change it from a paired phone. When
 - The service waits until no bot is in a turn. A turn that waits for your approval or your answer is a turn, so the service waits for it too.
 - The service looks again immediately before it asks for the install. The download then takes some minutes. A turn that starts in that time stops at the restart and continues after it.
 - If a release does not stay in operation and the old version comes back, the service does not try that release again by itself. It tries the next release. You can still install that release with `botkins update`.
+- If an install fails before the new version starts, the service tries again at its next check. Examples are a download that stops and a signature check that has no GnuPG. Such a failure tells nothing about the release. The service reports the same cause for the same release only one time.
 
 The setting applies only to an installation from a release that runs as a service. A checkout and a Docker container do not update themselves.
 

@@ -510,7 +510,11 @@ test("how an install ended is kept for the service to read: installed, failed, o
   // A new version that doesn't stay up: the old one is put back, and the record says so in words for a person.
   const dying = { restart: async () => {}, status: async () => ({ active: false }) };
   await assert.rejects(applyUpdate({ ...options, manager: dying }), /was put back/);
-  assert.deepEqual(reports.at(-1), { at: "2026-01-02T03:04:05.000Z", from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." });
+  assert.deepEqual(reports.at(-1), { at: "2026-01-02T03:04:05.000Z", from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back.", back: true });
+  // `back` is the job's own mark that the new version ran and the old one came back. It is kept
+  // only as that: never on an install that went well, and never as anything but true.
+  assert.deepEqual(cleanLastUpdate({ ...reports.at(-1), back: "yes" }).back, undefined);
+  assert.deepEqual(cleanLastUpdate({ ...reports.at(-1), ok: true }).back, undefined);
   assert.deepEqual(readLastUpdate(root), reports.at(-1));
   assert.equal(statSync(lastUpdateFile(root)).mode & 0o777, 0o644, "the service's user reads it; only the installer writes it");
   // A release that can't be reached at all is an install that didn't end well, too.
@@ -652,10 +656,43 @@ test("a host that can install tells how it stands, installs by itself only when 
   assert.ok(lines.some((line) => /Installing Botkins 1\.3\.0 by itself/.test(line)));
   // The install job failed before it could restart the service: the service hears of it and says so in the job's own words.
   rmSync(join(runDir, "update-requested"));
-  assert.equal(writeLastUpdate(installRoot, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back." }), true);
+  // First a failure before the new version ever ran: a download that broke off. It says nothing
+  // against the release, so the next check tries again by itself.
+  const broken = "The release file SHA256SUMS couldn't be downloaded (HTTP 503).";
+  const errors = () => lines.filter((line) => line === "Update: " + broken).length;
+  assert.equal(writeLastUpdate(installRoot, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: broken }), true);
   for (let tries = 0; tries < 100 && updates.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual([updates.status().status, updates.status().message, errors()], ["error", broken, 1]);
+  await updates.check();
+  for (let tries = 0; tries < 100 && !requested(); tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(requested(), true, "tried again by itself at the next check");
+  // The same fault again (it did not go away): one notice for one cause. The service goes back to
+  // "there is a newer release" without saying it a second time, and the record still has the reason.
+  const before = changes;
+  rmSync(join(runDir, "update-requested"));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(writeLastUpdate(installRoot, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: broken }), true);
+  for (let tries = 0; tries < 100 && updates.status().status !== "available"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual([updates.status().status, updates.status().canInstall, updates.status().message, updates.status().last.message, errors()], ["available", true, undefined, broken, 1]);
+  assert.ok(changes > before, "a page that shows the state is told that it changed, and no more");
+  // A person who asks is always answered, the same reason or not.
+  await updates.install();
+  for (let tries = 0; tries < 100 && !requested(); tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  rmSync(join(runDir, "update-requested"));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(writeLastUpdate(installRoot, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: broken }), true);
+  for (let tries = 0; tries < 100 && updates.status().status !== "error"; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual([updates.status().status, errors()], ["error", 2]);
+  // Now the new version runs, doesn't stay up, and is put back: the job says so with its own mark.
+  await updates.check();
+  for (let tries = 0; tries < 100 && !requested(); tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  rmSync(join(runDir, "update-requested"));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(writeLastUpdate(installRoot, { at: new Date().toISOString(), from: "1.2.3", to: "1.3.0", ok: false, message: "The new version didn't stay running. Botkins 1.2.3 was put back.", back: true }), true);
+  for (let tries = 0; tries < 100 && updates.status().message !== "The new version didn't stay running. Botkins 1.2.3 was put back."; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
   const status = updates.status();
   assert.deepEqual([status.status, status.message, status.last.ok, status.last.to], ["error", "The new version didn't stay running. Botkins 1.2.3 was put back.", false, "1.3.0"]);
+  assert.equal("back" in status.last, false, "the mark stays on this computer: a phone is shown what the contract names");
   assert.ok(changes > 0, "a dashboard that waits is told");
   // A release that was tried and put back is not installed by itself again, however often a check finds it.
   // (It can still be installed on purpose, and the next release is a new one.)
