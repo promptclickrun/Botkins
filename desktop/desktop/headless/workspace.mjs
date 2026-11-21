@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { injectorFor } from "../link/input.mjs";
 import { REMOTE_METHODS } from "../link/methods.mjs";
+import { callContext } from "./backend.mjs";
 import { listenWorkspace } from "./transport.mjs";
 
 export function workspaceActions(backend, inject) {
@@ -18,9 +19,11 @@ export function workspaceActions(backend, inject) {
         ...(version !== known && { snapshot: backend.snapshot(), capabilities: backend.capabilities }),
       };
     },
-    call(method, args) {
+    // Who called comes with the call. What arrives on the socket is cut again here: a call with no
+    // person, or with one that cannot be read, is a member's whom no team has, never the owner's.
+    call(method, args, context) {
       if (!REMOTE_METHODS.has(method) || !Array.isArray(args)) throw new Error("Unknown workspace call.");
-      return backend.call(method, args);
+      return backend.call(method, args, callContext(context));
     },
     setLook: (...args) => backend.setLook(...args),
     framePage: (id) => backend.frames.page(id),

@@ -1,6 +1,25 @@
 import { EventEmitter } from "node:events";
 import { REMOTE_METHODS } from "../link/methods.mjs";
 
+/**
+ * A person no team has. A call that names no person, or names one the workspace cannot read, is
+ * this person's: their chat and message are marked as a member's and their turn gets the
+ * narrowest limits. It is never taken for the owner's.
+ */
+export const NOBODY = "nobody";
+
+/**
+ * Who called, as it crosses from the link's container to the workspace's: the link's own words
+ * for a person, and nothing else a caller could add. Both sides cut it the same way.
+ */
+export function callContext(context) {
+  const principal = context?.principal;
+  if (principal?.kind === "owner") return { principal: { kind: "owner" } };
+  if (principal?.kind === "member" && typeof principal.memberId === "string" && principal.memberId)
+    return { principal: { kind: "member", memberId: principal.memberId.slice(0, 200), name: typeof principal.name === "string" ? principal.name.slice(0, 200) : "", ...(typeof principal.groupId === "string" && { groupId: principal.groupId.slice(0, 200) }) } };
+  return { principal: { kind: "member", memberId: NOBODY, name: "" } };
+}
+
 export function headlessBackend(request, version) {
   const changes = new EventEmitter();
   let snapshot = { bots: [], chats: [], runs: [], settings: {} };
@@ -17,9 +36,11 @@ export function headlessBackend(request, version) {
       changes.on("change", listener);
       return () => changes.off("change", listener);
     },
-    async call(method, args) {
+    // `context` says who called ({ principal } from the link). It goes with the call. The
+    // workspace marks a member's chat and message as theirs, and holds their turn to a member's limits.
+    async call(method, args, context) {
       if (!REMOTE_METHODS.has(method)) throw new Error("Unknown workspace call.");
-      const value = await request("call", [method, args]);
+      const value = await request("call", [method, args, callContext(context)]);
       await refresh();
       return value;
     },
