@@ -3,7 +3,9 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { LinkHost } from "../link/index.mjs";
+import { teamPeople } from "../link/team.mjs";
 import { headlessBackend } from "./backend.mjs";
+import { teamCut } from "./team-cut.mjs";
 import { workspaceRequest } from "./transport.mjs";
 
 const socket = process.env.BOTKINS_WORKSPACE_SOCKET || "/run/botkins-workspace/backend.sock";
@@ -21,8 +23,13 @@ const relayUrl = process.env.BOTKINS_RELAY_URL?.trim() || "";
 const relayOwn = !!relayUrl && process.env.BOTKINS_RELAY_OWN === "1";
 // How long a pairing code stays open. A deployment hands its link to a person who may open it later.
 const ttl = Math.min(Math.max(Number(process.env.BOTKINS_PAIR_TTL_MS) || 5 * 60_000, 60_000), 24 * 60 * 60_000);
-const { backend, refresh, screenInput } = headlessBackend((method, args) => workspaceRequest(socket, method, args), version);
-const host = new LinkHost({ dir, backend, screenInput, port, relay: relayUrl ? { url: relayUrl, own: relayOwn } : false, log: (s) => console.error(s) });
+// The workspace container is told a cut of the team, so that a member's turn there is held to the
+// member's role (team-cut.mjs says what the cut holds and what it never does). It is read from the
+// link's own store each time, so a change is told with the next call or the next look.
+let host;
+const team = () => (host ? teamCut(host.store.data.team, teamPeople(host.store.data.team, host.ownerName())) : null);
+const { backend, refresh, screenInput } = headlessBackend((method, args) => workspaceRequest(socket, method, args), version, { team });
+host = new LinkHost({ dir, backend, screenInput, port, relay: relayUrl ? { url: relayUrl, own: relayOwn } : false, log: (s) => console.error(s) });
 const hostName = process.env.BOTKINS_HOST_NAME?.trim();
 if (hostName || !host.store.data.name) host.setName(hostName || "Botkins server");
 mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

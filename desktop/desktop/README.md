@@ -33,6 +33,16 @@ A server in the cloud may have no network that a phone can join: phones reach it
 
 The phone and host message shapes are documented in the [link contract](link/CONTRACT.md).
 
+**What the workspace knows about the team.** The team is in the `host` service's data. Bots run in the `workspace` service, and a turn for a team member must be held to that member's role there. So the host tells the workspace a cut of the team through the socket between them. The workspace is told, it does not ask: data goes one way only, and the workspace gets no new mount or volume.
+
+- The cut holds the team's name, the roles and what each allows, the groups, each member's id, name and group, each person's name, and the people of each chat and each space by id.
+- It holds nothing else about a person: no device, no key, no token, no invite and no notification address. A space's public link, and its key, stay with the host.
+- The workspace keeps the cut in memory only. Bots' tools can read and write the workspace's files, so it is never written there.
+- The host names the cut's revision with each call and each look. A workspace that holds another revision, or has not heard from the host for 15 seconds, uses no cut. A team member then gets the narrowest limits: no skills, no MCP servers, no plugins, and no spaces. A cut that the workspace cannot read is refused whole.
+- The host stays the judge of what a member may call. The workspace uses the cut only for a turn's limits, for whom a member may mention, and for reading spaces.
+
+**Update both services together** (`docker compose --profile display up --build -d` does). The host names who made each call. A host from 0.16.6 or earlier with a newer workspace has every call refused, the owner's too, with "This computer's two Botkins containers are not the same version. Update both." A newer host with an older workspace works for the owner, and a team member gets the narrowest limits until both are the same.
+
 Electron, model tools and their shell processes run in the `workspace` service. That service owns the X11 display and answers capture and input requests on a Unix socket. Only the public host can read the owner pairing file and write the link volume. Docker operators control both services. Keep the Docker socket, host home directory and link volume outside the workspace container.
 
 ### Linux tarball updates
