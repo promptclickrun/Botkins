@@ -11,19 +11,32 @@ import UIKit
 public final class BotkinsFoldModule: Module {
   private var watcher: AnyObject?
 
+  /** The hardware models that fold (iPhone Duo). A simulator says its model in the environment. */
+  private static let foldingModels: Set<String> = ["iPhone19,4"]
+  private static let folds: Bool = {
+    if let simulated = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] { return foldingModels.contains(simulated) }
+    var info = utsname()
+    uname(&info)
+    let model = withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self) }
+    return foldingModels.contains(model)
+  }()
+
   public func definition() -> ModuleDefinition {
     Name("BotkinsFold")
     Events("changed")
 
+    // Only a folding iPhone is watched. On every other iPhone nothing here runs at all: build 14
+    // attached the hinge interaction on all phones with iOS 27.1, which could not be tried on a
+    // real one, and that build lost its connection on real iPhones.
     Function("available") { () -> Bool in
-      if #available(iOS 27.1, *) { return true }
+      if #available(iOS 27.1, *) { return Self.folds }
       return false
     }
 
     AsyncFunction("state") { () -> [String: Any] in
       // Runs on the main queue (runOnQueue below); the windows and the watcher are the main actor's.
       MainActor.assumeIsolated {
-        if #available(iOS 27.1, *) {
+        if #available(iOS 27.1, *), Self.folds {
           return (self.watcher as? FoldWatcher)?.last ?? FoldWatcher.read(FoldWatcher.keyWindow(), hinge: nil)
         }
         return ["hinge": NSNull(), "edge": NSNull(), "fold": NSNull()]
@@ -32,7 +45,7 @@ public final class BotkinsFoldModule: Module {
 
     OnStartObserving {
       Task { @MainActor in
-        guard #available(iOS 27.1, *), self.watcher == nil else { return }
+        guard #available(iOS 27.1, *), Self.folds, self.watcher == nil else { return }
         let watcher = FoldWatcher { [weak self] state in self?.sendEvent("changed", state) }
         self.watcher = watcher
         watcher.start()
