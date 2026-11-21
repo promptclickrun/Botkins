@@ -175,7 +175,9 @@ function openWindow() {
     guest.once("destroyed", () => viewerGuests.delete(guest));
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  // Nothing in this window talks peer to peer; a page a bot wrote (an html block) must not either.
+  // A page a bot wrote (an html block) must not talk peer to peer. This stops UDP for the whole
+  // window. It does not stop TCP, and the window itself needs WebRTC for live voice, so a view's
+  // page has the ways to open such a connection taken away in the page (desktop/view-guard.mjs).
   win.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
   win.webContents.on("will-navigate", (e) => e.preventDefault());
   // The window frames pages of html blocks and nothing else; a frame never goes anywhere.
