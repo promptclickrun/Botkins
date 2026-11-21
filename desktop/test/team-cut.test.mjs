@@ -10,6 +10,7 @@ import { deviceCall } from "../desktop/device-call.mjs";
 import { callContext, headlessBackend } from "../desktop/headless/backend.mjs";
 import { cutRevision, FRESH_MS, HeldCut, normalCut, teamCut, teamFromCut } from "../desktop/headless/team-cut.mjs";
 import { listenWorkspace, workspaceRequest } from "../desktop/headless/transport.mjs";
+import { isSplitHost } from "../desktop/runtime.mjs";
 import { workspaceActions } from "../desktop/headless/workspace.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { Workspace } from "./starter.mjs";
@@ -516,4 +517,34 @@ test("a workspace that refuses the cut, or knows nothing of spaces, is not asked
   for (let times = 0; times < 4; times++) await assert.rejects(backend.spaces.ensure("m_avery"));
   await assert.rejects(backend.spaces.snapshot("s_1"));
   assert.equal(sent.spaces, 1);
+});
+
+test("a member who has just joined gets their four spaces on the two-container path, before the workspace was told anything", async (t) => {
+  const host = await containers(t);
+  // The link asks for a person's built-in spaces the first time their device is sent parts. No
+  // call was made yet and no look: the workspace holds no cut of the team.
+  assert.equal(host.held.current(), null);
+  assert.deepEqual(await host.backend.spaces.ensure("m_avery"), ["today", "feed", "ideas", "goals"]);
+  const theirs = host.ws.state.spaces.filter((space) => space.createdBy === "m_avery");
+  assert.deepEqual(theirs.map((space) => space.builtin), ["today", "feed", "ideas", "goals"]);
+  assert.equal(host.held.current(), null, "making them needs no cut, so a late cut cannot refuse it");
+  // Said again, as the link may: the same four, no more.
+  await host.backend.spaces.ensure("m_avery");
+  assert.equal(host.ws.state.spaces.filter((space) => space.createdBy === "m_avery").length, 4);
+  // Until the workspace is told the team, the member opens none of them (closed when in doubt). The first call tells it, and they are theirs.
+  assert.equal(host.ws.spaces.can(theirs[0], "m_avery"), null);
+  assert.deepEqual(await host.turn(avery), makers);
+  assert.deepEqual(theirs.map((space) => host.ws.spaces.can(space, "m_avery")), ["own", "own", "own", "own"]);
+  assert.deepEqual(theirs.map((space) => host.ws.spaces.can(space, "m_blake")), [null, null, null, null]);
+});
+
+test("only the workspace container of the two-container host takes the team as a cut; everywhere else the link is asked", () => {
+  const socket = { BOTKINS_WORKSPACE_SOCKET: "/run/botkins-workspace/backend.sock" };
+  assert.equal(isSplitHost("linux", socket), true);
+  // The desktop app and `botkins serve`: no socket. The link is in the same process and is asked itself.
+  assert.equal(isSplitHost("linux", {}), false);
+  assert.equal(isSplitHost("linux", { BOTKINS_WORKSPACE_SOCKET: "" }), false);
+  // The socket is only served on Linux (desktop/headless), so the name alone changes nothing elsewhere.
+  assert.equal(isSplitHost("darwin", socket), false);
+  assert.equal(isSplitHost("win32", socket), false);
 });

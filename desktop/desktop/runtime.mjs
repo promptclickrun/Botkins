@@ -118,9 +118,17 @@ export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", 
  * @returns What the program around it uses: `handlers`, `workspace`, `providers`, `link`, `phone`,
  *   `listening` (settles when the link's first start is over), and `begin()` / `stop()`.
  */
+/**
+ * Whether this process is the workspace container of the two-container host: Linux, with the
+ * socket that the link's container reaches it through. Only then is the team a cut that the link
+ * tells (desktop/headless/team-cut.mjs). Everywhere else (the desktop app, `botkins serve`) the
+ * link is in this process and is asked itself.
+ */
+export const isSplitHost = (platform = process.platform, env = process.env) => platform === "linux" && !!env.BOTKINS_WORKSPACE_SOCKET;
+
 export async function createRuntime({ host, dataDir, trial = false, pushed = () => {}, link: linkOptions = {}, copilot: copilotOptions = {} }) {
   // The two-container host: this process is the workspace, and the public link is another container.
-  const splitHost = process.platform === "linux" && !!process.env.BOTKINS_WORKSPACE_SOCKET;
+  const splitHost = isSplitHost();
   let workspace,
     // Signing a provider in without a browser here, and installing its tool: from a phone, or the
     // terminal host's command line (desktop/terminal/signin.mjs). A token pasted there is kept in the vault.
