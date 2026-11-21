@@ -19,8 +19,8 @@ export function workspaceActions(backend, inject) {
         ...(version !== known && { snapshot: backend.snapshot(), capabilities: backend.capabilities }),
       };
     },
-    // Who called comes with the call. What arrives on the socket is cut again here: a call with no
-    // person, or with one that cannot be read, is a member's whom no team has, never the owner's.
+    // Who called comes with the call. What arrives on the socket is cut again here, and a call
+    // with no person, or with one that cannot be read, is refused: it is never taken as the owner's.
     call(method, args, context) {
       if (!REMOTE_METHODS.has(method) || !Array.isArray(args)) throw new Error("Unknown workspace call.");
       return backend.call(method, args, callContext(context));

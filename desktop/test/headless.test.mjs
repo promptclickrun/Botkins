@@ -59,7 +59,7 @@ test("the public link reads workspace changes and loses display availability on 
   workspace.changed();
   await refresh();
   assert.deepEqual(backend.snapshot().bots, [{ id: "pip" }]);
-  const reply = await backend.call("renameChat", ["c", "New name"]);
+  const reply = await backend.call("renameChat", ["c", "New name"], { principal: { kind: "owner" } });
   assert.equal(reply, "ok");
   assert.deepEqual(workspace.calls, [["renameChat", "c", "New name"]]);
   assert.deepEqual((await backend.screen.capture({})).jpeg, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
@@ -328,37 +328,39 @@ async function joined(t, backend) {
 }
 const avery = { kind: "member", memberId: "m_avery", name: "Avery", groupId: "g_makers" };
 
+const NO_PERSON = /two Botkins containers are not the same version\. Update both\./;
+/** Calls that name no person, or one that cannot be read, as the link's side would hand them over. */
+const unreadable = [undefined, null, {}, { principal: null }, { principal: "owner" }, { principal: { kind: "member" } }, { principal: { kind: "member", memberId: "" } }, { principal: { kind: "member", memberId: 7 } }, { principal: { kind: "admin", memberId: "m_avery" } }, { principal: { kind: "Owner" } }, { owner: true }];
+
 test("who called goes with the call to the workspace, and nothing else a caller adds does", async (t) => {
   const workspace = stubWorkspace();
   const { socket, link } = await joined(t, workspace.backend);
   // As the link calls its backend: a member, then the owner.
   await link.call("send", ["c", "Hello"], { principal: { ...avery, deviceId: "d1", secret: "x" }, admin: true });
   await link.call("send", ["c", "Hello"], { principal: { kind: "owner", deviceId: "d2", admin: true } });
-  assert.deepEqual(workspace.contexts, [{ principal: { kind: "member", memberId: "m_avery", name: "Avery", groupId: "g_makers" } }, { principal: { kind: "owner" } }]);
-  // A call that names no one, or someone who cannot be read, is nobody's: a member no team has. It is never the owner's.
-  const nobody = { principal: { kind: "member", memberId: "nobody", name: "" } };
-  for (const context of [undefined, null, {}, { principal: null }, { principal: "owner" }, { principal: { kind: "member" } }, { principal: { kind: "member", memberId: "" } }, { principal: { kind: "member", memberId: 7 } }, { principal: { kind: "admin", memberId: "m_avery" } }, { principal: { kind: "Owner" } }, { owner: true }]) {
-    await link.call("send", ["c", "Hello"], context);
-    assert.deepEqual(workspace.contexts.at(-1), nobody, JSON.stringify(context));
-  }
-  // The workspace's side takes the same care with what arrives on its socket, whoever wrote it there.
-  for (const sent of [["send", ["c", "Hello"]], ["send", ["c", "Hello"], "owner"], ["send", ["c", "Hello"], { principal: { kind: "member", memberId: {} } }], ["send", ["c", "Hello"], [{ kind: "owner" }]]]) {
-    await workspaceRequest(socket, "call", sent);
-    assert.deepEqual(workspace.contexts.at(-1), nobody, JSON.stringify(sent));
-  }
+  const named = [{ principal: { kind: "member", memberId: "m_avery", name: "Avery", groupId: "g_makers" } }, { principal: { kind: "owner" } }];
+  assert.deepEqual(workspace.contexts, named);
+  // A call that names no one, or someone who cannot be read, is refused with a sentence a phone can show. The workspace never hears of it.
+  for (const context of unreadable) await assert.rejects(link.call("send", ["c", "Hello"], context), NO_PERSON, JSON.stringify(context));
+  assert.deepEqual(workspace.contexts, named);
+  // The workspace's side refuses the same, whoever wrote it on its socket.
+  for (const sent of [["send", ["c", "Hello"]], ["send", ["c", "Hello"], "owner"], ["send", ["c", "Hello"], { principal: { kind: "member", memberId: {} } }], ["send", ["c", "Hello"], [{ kind: "owner" }]], ...unreadable.map((context) => ["send", ["c", "Hello"], context])])
+    await assert.rejects(workspaceRequest(socket, "call", sent), NO_PERSON, JSON.stringify(sent));
+  assert.deepEqual([workspace.contexts, workspace.calls.length], [named, 2], "nothing reached the workspace");
+  // A person that can be read is cut to the link's own words for them.
   await workspaceRequest(socket, "call", ["send", ["c", "Hello"], { principal: { kind: "member", memberId: "m_blake", name: 7, more: 1 }, other: 2 }]);
   assert.deepEqual(workspace.contexts.at(-1), { principal: { kind: "member", memberId: "m_blake", name: "" } });
   await workspaceRequest(socket, "call", ["send", ["c", "Hello"], { principal: { kind: "owner", memberId: "m_blake" } }]);
   assert.deepEqual(workspace.contexts.at(-1), { principal: { kind: "owner" } });
 });
 
-test("on the two-container host a member's chat, message and turn are the member's, and a call from no one is never the owner's", async (t) => {
+test("on the two-container host a member's chat, message and turn are the member's, and a call from no one is refused and writes nothing", async (t) => {
   // The workspace container, as it is: a real workspace that knows no team (the team is in the link's container).
   const dir = mkdtempSync(join(tmpdir(), "bk-app-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const ws = new Workspace(dir, fakeClient().client, () => {});
   const handlers = { createChat: (...args) => ws.createChat(...args), send: (...args) => ws.send(...args) };
-  const { link } = await joined(t, { ...stubWorkspace().backend, call: deviceCall({ workspace: ws, handlers, folders: {} }) });
+  const { socket, link } = await joined(t, { ...stubWorkspace().backend, call: deviceCall({ workspace: ws, handlers, folders: {} }) });
   const full = { member: false, skills: true, mcp: true, plugins: true };
   const narrowest = { member: true, skills: false, mcp: false, plugins: false };
   const chatBy = async (context) => {
@@ -366,14 +368,23 @@ test("on the two-container host a member's chat, message and turn are the member
     await link.call("send", [id, "Hello", {}], context);
     const chat = ws.chat(id);
     const said = chat.messages.find((message) => message.role === "user");
-    return { createdBy: chat.createdBy, author: said.author, limits: ws.accessForTurn(chat, { author: said.author }), later: ws.accessForTurn(chat, {}) };
+    return { id, createdBy: chat.createdBy, author: said.author, limits: ws.accessForTurn(chat, { author: said.author }), later: ws.accessForTurn(chat, {}) };
   };
   // The owner: no mark, and the owner's limits.
-  assert.deepEqual(await chatBy({ principal: { kind: "owner" } }), { createdBy: undefined, author: undefined, limits: full, later: full });
+  const { id: owners, ...owner } = await chatBy({ principal: { kind: "owner" } });
+  assert.deepEqual(owner, { createdBy: undefined, author: undefined, limits: full, later: full });
   // A member: the chat and the message are theirs. The workspace here cannot read their role, so
   // the turn gets the narrowest limits, also for a turn that starts later in that chat by itself.
-  assert.deepEqual(await chatBy({ principal: avery }), { createdBy: "m_avery", author: { memberId: "m_avery", name: "Avery" }, limits: narrowest, later: narrowest });
-  // No one, or someone who cannot be read: a member no team has. Marked, narrowest, never the owner's.
-  for (const context of [undefined, {}, { principal: { kind: "member" } }, { principal: { kind: "boss" } }])
-    assert.deepEqual(await chatBy(context), { createdBy: "nobody", author: { memberId: "nobody", name: "" }, limits: narrowest, later: narrowest }, JSON.stringify(context));
+  const { id: averys, ...member } = await chatBy({ principal: avery });
+  assert.deepEqual(member, { createdBy: "m_avery", author: { memberId: "m_avery", name: "Avery" }, limits: narrowest, later: narrowest });
+  // No one, or someone who cannot be read: refused from the link's side and on the socket itself.
+  // No chat is made, and nothing is written in a chat that is there, the owner's or a member's.
+  const before = JSON.stringify(ws.state.chats);
+  for (const context of unreadable) {
+    await assert.rejects(link.call("createChat", ["pip"], context), NO_PERSON, JSON.stringify(context));
+    await assert.rejects(link.call("send", [owners, "As the owner?", {}], context), NO_PERSON, JSON.stringify(context));
+    await assert.rejects(workspaceRequest(socket, "call", ["send", [averys, "As Avery?", {}], context]), NO_PERSON, JSON.stringify(context));
+  }
+  await assert.rejects(workspaceRequest(socket, "call", ["createChat", ["pip"]]), NO_PERSON);
+  assert.equal(JSON.stringify(ws.state.chats), before);
 });
