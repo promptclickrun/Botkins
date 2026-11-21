@@ -6,7 +6,7 @@
 // One talk at a time, app-wide. It ends when the person ends it, when nothing is said twice in a
 // row, when the bot needs an answer on the screen, or when the chat's screen closes.
 import { create } from "zustand";
-import { showToast } from "@/state/store";
+import { showToast, useApp } from "@/state/store";
 import { chatAccess } from "./chatAccess";
 import { canListen, type Handlers, listen, type Session } from "./dictation";
 import { askBot } from "./live/askBot";
@@ -58,6 +58,8 @@ export function skipToListening() {
 }
 
 async function loop(chatId: string, alive: () => boolean) {
+  // The bot reads in its own voice when it has one.
+  const botId = useApp.getState().parts.chats?.find((chat) => chat.id === chatId)?.botId;
   let silent = 0;
   while (alive()) {
     useTalk.setState({ phase: "listening", heard: "", level: 0 });
@@ -79,10 +81,10 @@ async function loop(chatId: string, alive: () => boolean) {
     useTalk.setState({ phase: "speaking" });
     if (reply === LOOK_AT_PHONE) {
       // The bot asked for an approval or an answer: it is on the screen, and the talk stops for it.
-      await say("I need your answer on the screen.", alive);
+      await say("I need your answer on the screen.", alive, botId);
       break;
     }
-    await say(reply === NO_REPLY ? "Done." : reply === STILL_WORKING ? "I'm still working on it. The answer will be in the chat." : reply, alive);
+    await say(reply === NO_REPLY ? "Done." : reply === STILL_WORKING ? "I'm still working on it. The answer will be in the chat." : reply, alive, botId);
   }
   if (alive()) endTalk();
 }
@@ -154,7 +156,7 @@ function hearOnce(alive: () => boolean): Promise<string> {
 }
 
 /** Reads `text` aloud and resolves when it is over (or was stopped). */
-function say(text: string, alive: () => boolean): Promise<void> {
+function say(text: string, alive: () => boolean, botId?: string): Promise<void> {
   return new Promise((resolve) => {
     const id = "talk:" + Date.now();
     let started = false;
@@ -178,7 +180,7 @@ function say(text: string, alive: () => boolean): Promise<void> {
       if (!started) finish();
     }, 6000);
     const limit = setTimeout(finish, 10 * 60_000);
-    speakText(id, text, { quiet: true });
+    speakText(id, text, { quiet: true, botId });
     check();
   });
 }

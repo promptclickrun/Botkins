@@ -25,6 +25,8 @@ export type Bot = {
   access?: BotAccessGrant;
   /** The existing agent this bot was made from (ImportableAgent). The bot is a copy of it. */
   origin?: { provider: string; agent: string; file?: string };
+  /** A voice of this bot's own ("bot-voice-v1"). A field it leaves out is the same as Settings › Voice. */
+  voice?: BotVoice;
 };
 /**
  * An agent the person already has with a model provider (for Copilot, ~/.copilot/agents), as the
@@ -594,7 +596,7 @@ declare global {
             | "summary"
             | "look"
           >
-        >,
+        > & { /** A voice of its own for this bot; null clears it. */ voice?: BotVoice | null },
       ): Promise<void>;
       // Agent management
       setBotFlags(
@@ -928,7 +930,7 @@ declare global {
       /** A recording from the microphone, as text (not for "This computer"). */
       transcribe(bytes: Uint8Array, format: "wav" | "m4a" | "mp3" | "webm", language?: string): Promise<{ text: string }>;
       /** { device: true }: speak it with the page's own voices. Otherwise the audio, in parts. */
-      speak(text: string, options?: { voice?: string; speed?: number }): Promise<{ device: true } | { parts: { audio: Uint8Array; format: "mp3" | "wav" }[] }>;
+      speak(text: string, options?: { voice?: string; speed?: number; botId?: string }): Promise<{ device: true } | { parts: { audio: Uint8Array; format: "mp3" | "wav" }[] }>;
       /** Starts the system's own dictation into the focused field (macOS). started is false where there is none. */
       startDictation(): Promise<{ started: boolean; platform: string }>;
       /** { prepare: true } readies this window for WebRTC, before the offer is made. */
@@ -1760,6 +1762,14 @@ export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
 export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
 export type VoiceKeyProvider = "openai" | "azure" | "elevenlabs" | "gemini" | "custom";
+/**
+ * A voice of a bot's own ("bot-voice-v1"), saved with the bot. Every field is optional: one that is
+ * absent means the same as the shared VoiceSettings. No key is ever in it. `speed` is 0.5 to 2.
+ */
+export type BotVoice = {
+  tts?: { provider?: TtsProvider; model?: string; voice?: string; speed?: number };
+  live?: { provider?: LiveProvider; model?: string; voice?: string };
+};
 export type LocalVoiceModel = { id: string; name: string; kind: "stt" | "tts"; installed: boolean; sizeMB?: number; voices?: { id: string; name: string }[] };
 export type VoiceSettings = {
   /** "device" is the computer's own speech, and the default. */

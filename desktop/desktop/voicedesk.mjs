@@ -3,7 +3,7 @@
 // (desktop/link/voice.mjs, see VOICE.md), so this computer and its paired phones share one set of
 // choices and keys. This file only shapes what the page needs: plain data, never a key.
 import { Failure } from "./link/tools.mjs";
-import { liveInstructions as sharedLiveInstructions, MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
+import { cleanBotVoice, effectiveTts, liveInstructions as sharedLiveInstructions, MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
 
 /** The one tool a live voice has. The voice only talks; the bot does the work, as a normal turn in the chat. */
 export const ASK_BOT = {
@@ -171,18 +171,30 @@ export class VoiceDesk {
    * Text as speech. With "This computer" chosen the page speaks it with the system's voices
    * ({ device: true }); otherwise the audio, in parts of up to 4,000 characters.
    */
-  async speak(text, { voice, speed } = {}) {
+  async speak(text, { voice, speed, botId } = {}) {
     const words = speakable(text);
     if (!words) throw new Failure("There is nothing to read aloud.");
     const settings = this.voice.settings();
-    if (settings.tts.provider === "device") return { device: true };
+    // A bot's own voice ("bot-voice-v1") over the shared one: it may name another provider, or "This computer".
+    const override = this.botVoice(botId)?.tts;
+    if (effectiveTts(settings.tts, override).provider === "device") return { device: true };
     if (words.length > MAX_SPEAK * 10) throw new Failure("That is too long to read aloud.");
     const parts = [];
     for (const part of splitSentences(words, MAX_SPEAK)) {
-      const spoken = await this.voice.speak({ text: part, ...(voice && { voice }), ...(speed != null && { speed }) });
+      const spoken = await this.voice.speak({ text: part, ...(voice && { voice }), ...(speed != null && { speed }), ...(override && { override }) });
       parts.push({ audio: new Uint8Array(spoken.audio), format: spoken.format });
     }
     return { parts };
+  }
+
+  /** A bot's own voice as saved on the bot (checked again here), or null. An unknown bot has none. */
+  botVoice(botId) {
+    if (typeof botId !== "string" || !botId) return null;
+    try {
+      return cleanBotVoice(this.workspaceOf?.()?.state.bots.find((bot) => bot.id === botId)?.voice);
+    } catch {
+      return null;
+    }
   }
 
   /** Starts the system's dictation into the focused text field. { started: false } where there is none. */
@@ -240,7 +252,7 @@ export class VoiceDesk {
       const messages = (chat.messages ?? []).filter((message) => message?.answer?.kind !== "secure");
       const instructions = sharedLiveInstructions({ bot, messages, bots: workspace.state.bots ?? [], notes });
       // `about` reaches the Codex helper, which names the bot to its voice and says whose chat the session is for (noteSession).
-      session = await this.voice.live({ ...(typeof sdp === "string" && sdp && { sdp }), instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name } });
+      session = await this.voice.live({ ...(typeof sdp === "string" && sdp && { sdp }), instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name }, override: cleanBotVoice(bot.voice)?.live });
       this.sessions.set(session.id, { chatId: chat.id, own: true });
     } finally {
       this.starting--;

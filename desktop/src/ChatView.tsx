@@ -485,7 +485,7 @@ export default function ChatView({
   useReadAloud(
     !!state.settings.readAloud,
     chat.id,
-    latestReply && { key: latestIndex + ":" + latestReply.text.length, text: latestReply.text, index: latestIndex },
+    latestReply && { key: latestIndex + ":" + latestReply.text.length, text: latestReply.text, index: latestIndex, botId: latestReply.botId ?? bot.id },
     !busy,
   );
   // Read aloud and Stop on a reply (src/voice.ts): one thing is read at a time, a reply by its chat and place.
@@ -506,7 +506,7 @@ export default function ChatView({
             aria-label={reading.key === readKey(i) ? "Stop reading" : "Read aloud"}
             title={reading.key === readKey(i) ? "Stop" : "Read aloud"}
             aria-pressed={reading.key === readKey(i)}
-            onClick={() => void readAloud(readKey(i), m.text)}
+            onClick={() => void readAloud(readKey(i), m.text, m.botId ?? bot.id)}
           >
             {reading.key === readKey(i) ? <Square size={13} /> : <Volume2 size={14} />}
           </button>
@@ -1129,7 +1129,7 @@ export default function ChatView({
             <Reply size={14} /> Reply
           </button>
           {chat.messages[menu.index].role !== "user" && (
-            <button role="menuitem" onClick={() => void readAloud(readKey(menu.index), chat.messages[menu.index].text)}>
+            <button role="menuitem" onClick={() => void readAloud(readKey(menu.index), chat.messages[menu.index].text, chat.messages[menu.index].botId ?? bot.id)}>
               {reading.key === readKey(menu.index) ? (
                 <>
                   <Square size={13} /> Stop reading

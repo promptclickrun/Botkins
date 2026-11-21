@@ -660,8 +660,8 @@ export default function ChatScreen() {
     if (before === null || before === lastKey) return;
     // A talk by turns reads its replies itself (voice/talk.ts), so they aren't read twice.
     if (useTalk.getState().chatId === chatId) return;
-    if (readAloud && lastMessage?.role === "assistant" && lastMessage.text) speakText(chatId + ":" + lastKey, lastMessage.text, { queue: true, quiet: true });
-  }, [view, lastKey, lastMessage, readAloud, chatId]);
+    if (readAloud && lastMessage?.role === "assistant" && lastMessage.text) speakText(chatId + ":" + lastKey, lastMessage.text, { queue: true, quiet: true, botId: lastMessage.botId ?? chat?.botId });
+  }, [view, lastKey, lastMessage, readAloud, chatId, chat?.botId]);
   // Leaving the chat ends what is being read, and a talk in this chat.
   useEffect(
     () => () => {

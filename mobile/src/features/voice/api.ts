@@ -1,9 +1,10 @@
 // What the rest of the app uses from voice: dictation into a field, reading text aloud, and
 // opening live voice. The chat composer and the messages call these; the screens are in this folder.
 import { router } from "expo-router";
+import { useApp } from "@/state/store";
 import { useDictationImpl } from "./dictation";
 import { canRecognize, canRecord } from "./native";
-import { useSttProvider, useVoiceSettings, useVoiceSupported, voiceSettings, voiceSupported } from "./state";
+import { liveProviderFor, useSttProvider, useVoiceSettings, useVoiceSupported, useBotVoiceSupported, voiceSupported } from "./state";
 import { speakText, stopSpeech, useSpeakingNow } from "./tts";
 import { startTalk } from "./talk";
 
@@ -48,22 +49,24 @@ export function useTalkReady(): boolean {
   return provider === "device" ? canRecognize() : canRecord();
 }
 
-/** Live voice can be opened: the computer supports voice and a live provider is chosen. */
-export function useLiveVoiceReady(): boolean {
+/** Live voice can be opened: the computer supports voice and a live provider is chosen, for this bot or in Settings. */
+export function useLiveVoiceReady(botId?: string): boolean {
   const supported = useVoiceSupported();
   const voice = useVoiceSettings();
-  return supported && !!voice?.live.provider;
+  const own = useApp((state) => (botId ? state.parts.bots?.find((bot) => bot.id === botId)?.voice?.live : undefined));
+  const ownOn = useBotVoiceSupported();
+  return supported && !!voice && !!(ownOn && own?.provider ? own.provider : voice.live.provider);
 }
 
 /** The chat's voice button and the voice shortcut use the same mode. */
 export function startChatVoice(chatId: string, botId: string) {
-  if (voiceSettings()?.live.provider) openLiveVoice(chatId, botId);
+  if (liveProviderFor(botId)) openLiveVoice(chatId, botId);
   else startTalk(chatId);
 }
 
 /** Opens live voice with a bot, in a chat. When it isn't set up yet, opens Settings › Voice instead. */
 export function openLiveVoice(chatId: string, botId: string) {
-  if (!voiceSupported() || !voiceSettings()?.live.provider) {
+  if (!voiceSupported() || !liveProviderFor(botId)) {
     router.push("/settings/voice");
     return;
   }

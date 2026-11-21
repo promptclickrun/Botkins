@@ -7,16 +7,17 @@ import type { TtsProvider } from "@/link/types";
 import { api } from "@/state/link";
 import { showToast } from "@/state/store";
 import { audioModule, fileSystemModule, speechModule } from "./native";
+import { effectiveTts } from "./botVoice";
 import { usePhoneVoice } from "./prefs";
 import { speakable, splitForSpeech } from "./speakable";
-import { ttsProvider, voiceSettings } from "./state";
+import { botVoiceOf, botVoiceSupported, ttsProvider, voiceSettings } from "./state";
 
 export const NEEDS_APP_UPDATE = "This needs the newest Botkins app.";
 
 /** What is being read aloud now, by the id its caller gave, or null. */
 export const useSpeakingNow = create<{ id: string | null }>(() => ({ id: null }));
 
-type Job = { id: string; text: string; provider?: TtsProvider; voice?: string; speed?: number; quiet?: boolean };
+type Job = { id: string; text: string; provider?: TtsProvider; voice?: string; speed?: number; quiet?: boolean; botId?: string };
 type Clip = { uri: string; remove(): void };
 
 class Reading {
@@ -61,8 +62,10 @@ function speakOnPhone(reading: Reading, text: string): Promise<void> {
   const Speech = speechModule();
   if (!Speech || !text) return Promise.resolve();
   const { voice, speed } = usePhoneVoice.getState();
-  const rate = reading.job.provider === "device" && reading.job.speed ? reading.job.speed : speed;
-  const chosen = reading.job.provider === "device" && reading.job.voice ? reading.job.voice : voice;
+  // A bot may read in a system voice of its own on this phone (the choice is saved here: a system voice isn't portable).
+  const own = reading.job.botId ? usePhoneVoice.getState().bots?.[reading.job.botId] : undefined;
+  const rate = reading.job.provider === "device" && reading.job.speed ? reading.job.speed : (own?.speed ?? speed);
+  const chosen = reading.job.provider === "device" && reading.job.voice ? reading.job.voice : (own?.voice ?? voice);
   // Android has a length limit per utterance; the parts are queued by the phone itself.
   const limit = Math.max(200, (Speech.maxSpeechInputLength || 4000) - 100);
   const pieces = text.length > limit ? splitForSpeech(text).flatMap((part) => (part.length > limit ? part.match(new RegExp(".{1," + limit + "}(\\s|$)", "g")) ?? [part] : [part])) : [text];
@@ -137,11 +140,11 @@ const sentence = (error: unknown) => (error instanceof Error && error.message ? 
 
 /** A provider through the computer: parts asked ahead, played in order, the phone's voice if it fails. */
 async function speakThroughComputer(reading: Reading, parts: string[]) {
-  const { voice, speed } = reading.job;
+  const { voice, speed, botId } = reading.job;
   const asked: (Promise<Clip> | undefined)[] = [];
   const ask = (index: number) => {
     if (index >= parts.length || asked[index]) return;
-    const clip = api["link.voice.speak"]({ text: parts[index]!, voice, speed }).then(async ({ audio, format }) => {
+    const clip = api["link.voice.speak"]({ text: parts[index]!, voice, speed, ...(botId && { botId }) }).then(async ({ audio, format }) => {
       const written = await writeClip(index, audio, format);
       if (reading.stopped) written.remove();
       else reading.keep(written);
@@ -202,6 +205,8 @@ export type SpeakOptions = {
   speed?: number;
   /** No toast when this build can't speak at all (reading on its own stays quiet). */
   quiet?: boolean;
+  /** The bot speaking: it may have a voice of its own ("bot-voice-v1"), which the computer applies over the shared one. */
+  botId?: string;
 };
 
 /** Reads `text` (Markdown is cleaned first). Stops what was being read, unless `queue`. */
@@ -211,13 +216,18 @@ export function speakText(id: string, text: string, options: SpeakOptions = {}) 
     return;
   }
   const settings = voiceSettings()?.tts;
+  // A bot with a voice of its own: the computer picks the voice and speed (sent with `botId`), so the shared ones aren't sent over them.
+  const own = !options.provider && options.botId ? botVoiceOf(options.botId)?.tts : undefined;
+  const mine = own && settings ? effectiveTts(settings, own) : undefined;
   const job: Job = {
     id,
     text,
-    provider: options.provider,
-    voice: options.voice ?? (options.provider ? undefined : settings?.voice),
-    speed: options.speed ?? (options.provider ? undefined : settings?.speed),
+    provider: options.provider ?? (own?.provider ? mine?.provider : undefined),
+    // A system voice and speed are this phone's own (above), never the computer's.
+    voice: options.voice ?? (options.provider || own?.provider === "device" ? undefined : (mine ?? settings)?.voice),
+    speed: options.speed ?? (options.provider || own?.provider === "device" ? undefined : (mine ?? settings)?.speed),
     quiet: options.quiet,
+    ...(options.botId && botVoiceSupported() && { botId: options.botId }),
   };
   if (options.queue && current) {
     if (current.job.id !== id && !waiting.some((item) => item.id === id)) waiting.push(job);

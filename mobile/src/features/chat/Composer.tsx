@@ -196,7 +196,7 @@ export function Composer({
   const canListPulls = !!capabilities?.includes("prs-v1");
   // One voice button. Live voice takes it when it is on (Settings › Voice); otherwise it talks by
   // turns: the phone listens, sends what was said, and reads the reply aloud. Neither is for a group chat.
-  const liveReady = useLiveVoiceReady();
+  const liveReady = useLiveVoiceReady(botId);
   const talkReady = useTalkReady();
   const canVoice = !group && !!botId && (liveReady || talkReady);
   const talking = useTalk((talk) => talk.chatId === chatId && talk.phase !== "off");

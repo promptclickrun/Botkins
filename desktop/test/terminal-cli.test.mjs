@@ -383,6 +383,8 @@ test("an id or a value that starts with a dash is given after -- or with =, and 
     [["devices", "set-person", "--", id, "Sam"], ["devices.setPerson", id, "Sam"]],
     [["devices", "remove", "--yes", "--", id], ["devices.remove", id]],
     [["bots", "edit", "--name", "Nova", "--", id], ["bots.edit", id, { name: "Nova" }]],
+    [["bots", "edit", "--reading-voice", "nova", "--reading-speed", "1.25", "--live-provider", "", "--", id], ["bots.edit", id, { voice: { tts: { voice: "nova", speed: 1.25 }, live: { provider: "" } } }]],
+    [["bots", "edit", "--same-voice", "--", id], ["bots.edit", id, { voice: null }]],
     [["bots", "remove", "--yes", "--", id], ["bots.remove", id]],
     [["bots", "tools", "--", id], ["bots.tools", id]],
     [["routines", "run", "--", id], ["routines.run", id]],

@@ -1,6 +1,6 @@
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
+import { AudioLines, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
 import { useMemo } from "react";
 import { Alert, View } from "react-native";
 import { newBotChat, openBotChat } from "@/features/chat/open";
@@ -14,6 +14,8 @@ import { ago, cadenceLabel } from "@/state/time";
 import { BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTheme } from "@/ui";
 import { BotArtifacts } from "@/features/artifacts/ArtifactBits";
 import { sectionOf } from "@/features/home/arrange";
+import { botVoiceSummary } from "@/features/voice/settings/summary";
+import { useBotVoiceSupported, useVoiceSettings } from "@/features/voice/state";
 import { grantSummary } from "./projectAccess";
 import { moveToSection, runSectionChoice, toggleHidden } from "./menus";
 
@@ -58,6 +60,8 @@ function BotDetail({ bot }: { bot: Bot }) {
   const canArrange = useCanArrange();
   const canDelete = useCan("agents", "delete");
   const canSeeToday = useCan("today", "view");
+  const botVoice = useBotVoiceSupported();
+  const sharedVoice = useVoiceSettings();
   const canCreateToday = useCan("today", "create");
   const member = useMember();
 
@@ -129,6 +133,7 @@ function BotDetail({ bot }: { bot: Bot }) {
         />
         {canManage && <Row leading={<IconTile icon={ScrollText} color={colors.info} />} title="Instructions" subtitle={firstLine ?? "None yet"} chevron onPress={() => router.push({ pathname: "/bot/[id]/instructions", params: { id: bot.id } })} />}
         {canManage && <Row leading={<IconTile icon={Palette} color={colors.accent} />} title="Look" chevron onPress={() => router.push({ pathname: "/bot/[id]/look", params: { id: bot.id } })} />}
+        {canManage && <Row leading={<IconTile icon={AudioLines} color={colors.ink2} />} title="Voice" subtitle={botVoice ? botVoiceSummary(bot.voice, sharedVoice) : "Update the app on your computer"} chevron={botVoice} disabled={!botVoice} onPress={botVoice ? () => router.push({ pathname: "/bot/[id]/voice", params: { id: bot.id } }) : undefined} />}
         {!member && <Row leading={<IconTile icon={Wrench} color={colors.success} />} title="Skills & tools" value={capabilities} chevron onPress={() => router.push({ pathname: "/bot/[id]/capabilities", params: { id: bot.id } })} />}
         {!member && <Row leading={<IconTile icon={Brain} color={colors.warning} />} title="Memory" chevron onPress={() => router.push({ pathname: "/bot/[id]/memory", params: { id: bot.id } })} />}
         {/* The route is new: typed routes learn it the next time Metro starts. */}

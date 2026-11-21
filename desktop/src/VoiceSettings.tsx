@@ -84,7 +84,7 @@ function keyNote(s: DeskVoiceSettings, provider: string) {
 }
 
 /** The models and voices a provider offers, read when the choice changes. */
-function useOptions(kind: "stt" | "tts" | "live", provider: string | null, stamp: string) {
+export function useOptions(kind: "stt" | "tts" | "live", provider: string | null, stamp: string) {
   const [options, setOptions] = useState<VoiceOptions>({ models: [], voices: [] });
   const [error, setError] = useState("");
   useEffect(() => {

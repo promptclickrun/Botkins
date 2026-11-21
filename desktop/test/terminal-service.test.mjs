@@ -185,6 +185,13 @@ test("bots are added, changed and removed by name, and a bot answers in a chat a
   assert.deepEqual((await client.call("bots.list")).map((bot) => bot.name), ["Nova", "Pip"], "a bot that couldn't be given its model is not left behind");
   assert.equal((await client.call("bots.edit", "nova", { role: "Copy editor" })).role, "Copy editor");
   assert.equal((await client.call("bots.edit", nova.id, { name: "Nova II", model: "" })).model, undefined);
+  // A voice of its own: what is named changes and the rest stays, "" goes back to Settings, null clears it.
+  const voiced = await client.call("bots.edit", nova.id, { voice: { tts: { provider: "openai", voice: "nova", speed: 1.25 }, live: { provider: "gemini" } } });
+  assert.deepEqual(voiced.voice, { tts: { provider: "openai", voice: "nova", speed: 1.25 }, live: { provider: "gemini" } });
+  assert.deepEqual((await client.call("bots.edit", nova.id, { voice: { tts: { voice: "sage" }, live: { provider: "" } } })).voice, { tts: { provider: "openai", voice: "sage", speed: 1.25 } });
+  assert.deepEqual((await client.call("bots.edit", nova.id, { voice: { tts: { provider: "gemini" } } })).voice, { tts: { provider: "gemini", speed: 1.25 } }, "another provider drops the old voice");
+  await assert.rejects(client.call("bots.edit", nova.id, { voice: { tts: { provider: "nope" } } }), /isn't supported/);
+  assert.equal((await client.call("bots.edit", nova.id, { voice: null })).voice, undefined);
   await assert.rejects(client.call("bots.get", "Nobody"), { code: "NOT_FOUND" });
   await client.call("bots.add", { name: "pip" });
   await assert.rejects(client.call("bots.get", "PIP"), { code: "AMBIGUOUS" });

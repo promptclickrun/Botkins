@@ -171,6 +171,8 @@ The key is derived each time from the phone's pairing key, so the computer store
 
 **Live voice.** `link.voice.live` sets up a session for a chat with a bot. The voice model is told whom it speaks for (the bot's name, role and the start of its instructions) and gets one tool, `ask_bot`; the phone runs that tool by sending the message to the chat and returning the bot's reply. For a provider that uses WebRTC the computer takes the phone's offer to the provider and returns the answer, so no secret reaches the phone. The others return a short-lived secret or signed address for one session.
 
+**A voice of a bot's own.** An app that keeps `voice` on each bot (`bot-voice-v1`, named in `backend.capabilities`) lets a phone give a bot its own reading and live voice. `link.voice.speak` takes a `botId`, `link.voice.live` applies the bot's `live` part, and the bot's choices go over the shared settings (see VOICE.md, "A voice of a bot's own").
+
 **Limits at the link.** A `link.voice.transcribe` call carries at most 5 MiB of audio, and `link.voice.speak` at most 4,000 characters. `voice.mjs` itself limits recordings to 25 MB, answers to 40 MB, requests to 60 seconds, and lists and tokens to 15 seconds (`VOICE.md`, "Errors and limits").
 
 **Not tested for real.** No call to any provider has been made with a real key. Every route was read in documentation and run against a fake provider. `VOICE.md` lists where to try first.
