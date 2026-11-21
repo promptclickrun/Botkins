@@ -300,7 +300,31 @@ botkins chats delete "Fork of Plan" --yes
 
 ### Routines
 
-The commands for this part come in a later change.
+A **routine** is work that a bot does on a schedule, with nobody watching. Each routine has its own chat, where its runs are kept.
+
+```sh
+botkins routines when "0 9 * * 1-5" --timezone Europe/London
+botkins routines add "Morning brief" --bot Nova --cadence weekdays --at 07:30 --timezone Europe/London --file brief.md
+botkins routines show "Morning brief"
+botkins routines edit "Morning brief" --at 08:00
+botkins routines duplicate "Morning brief" --bot Orbit --name "Orbit's brief"
+botkins routines remove "Morning brief"
+botkins routines schedules
+botkins routines schedule "Daily standup" 1 pause
+```
+
+- **A routine is named by its id or its name.** When two routines have a name, the command says which ones (their ids) and you use an id. `routines duplicate` gives the copy the same name unless you give `--name`.
+- **`routines add` and `routines edit` show the whole routine before they save, and ask.** The bot will run it with nobody watching. The text has the bot, the schedule in words, the time zone, the next two times and the whole prompt. It goes to standard error with `--yes` and with `--json` too. With no terminal the command fails and names `--yes`.
+- **A time says its zone.** `--timezone` takes a zone such as `Europe/London`. Without it the zone of the computer that runs Botkins is used, and the commands print it. `--json` gives each time in UTC (`next`) with the zone beside it (`timezone`).
+- **A schedule is a kind with its fields:** `--cadence once` (`--date` and `--at`), `daily` or `weekdays` (`--at`), `weekly` (`--at` and `--days mon,wed`), or a cron line (`--cron "0 9 * * 1-5"`, which means `--cadence custom`). `routines edit` changes only the part you name: `--at 10:00` moves a daily routine and keeps the rest. A new `--cadence` replaces the schedule, so give its fields. A field that the kind does not have is refused.
+- **`routines when` says what a schedule means.** It takes the same options, or a cron line as its one word, and prints the meaning, the zone and the next five times. It saves nothing.
+- **A prompt is a long text.** Give it with `--prompt <text>`, with `--file <path>`, or on standard input with the word `-`. The prompt shown on a screen is made safe: a control character is written as its number. `--json` has the text as it is (`instructions`).
+- **Where the result goes** is `--deliver routine` (the routine's own chat, the usual way), `none`, `chat` (with `--chat <chat>`, else the bot's latest chat), `feed`, `idea` or `goal` (with `--category`). `--quiet` stops the notification when a run ends, and `--notify` turns it back on.
+- `botkins routines show <routine>` shows one routine whole: the bot, the schedule, its next three times and its prompt. `routines pause`, `resume` and `run` are as before.
+- **`routines remove` asks first.** It removes the routine, its chat and every run it kept. With no terminal it needs `--yes`. `routines pause` stops a routine and keeps it.
+- **A chat can schedule a prompt for itself** (`/every` and `/after`). These are not routines. `routines schedules` lists them with a number for each. `routines schedule <chat> <number> pause|resume|delete` changes one, by the chat's id or title. Deleting asks first.
+- The log has one line for each change, by the routine's name (`routines.add Morning brief`). It has no prompt. A change to a chat's schedule names the chat.
+- A bot's own routine tool makes none that runs more often than every 15 minutes (and at most 25 for a bot). These commands do not stop such a schedule: `routines add`, `edit` and `duplicate` show a cost line for it (how often it runs, and that each run uses the model and can cost money) and need `--yes` with no terminal, and the socket calls refuse it unless the call carries `{ fastSchedule: true }`, which the commands send after the yes.
 
 ### Projects, to-dos, tasks and artifacts
 

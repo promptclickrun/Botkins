@@ -102,7 +102,12 @@ export const WORKSPACE = {
   // ── Routines ──
   runRoutine: cmd("routines run"),
   setRoutineEnabled: cmd("routines pause"),
-  ...each("createRoutine updateRoutine deleteRoutine duplicateRoutine previewCadence changeSchedule", owed("d")),
+  createRoutine: cmd("routines add"),
+  updateRoutine: cmd("routines edit"),
+  deleteRoutine: cmd("routines remove"),
+  duplicateRoutine: cmd("routines duplicate"),
+  previewCadence: cmd("routines when"),
+  changeSchedule: cmd("routines schedule"),
   // ── Plugins ──
   "plugins.marketplaces": cmd("plugins marketplaces"),
   "plugins.addMarketplace": cmd("plugins add-marketplace"),
@@ -301,6 +306,14 @@ export const CHANGES = {
   "chats.sections.order": null,
   "chats.sections.set": (args, value) => value?.id,
   // ── Routines (control-routines.mjs) ──
+  // (By the routine's name, which the answer has, whether the caller gave its name or its id. Never the prompt.)
+  // A routine that runs often says so: `Check (each 5 minutes)`, or `(each 5 minutes)` alone when the name cannot be in a line.
+  "routines.add": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0]?.name)),
+  "routines.edit": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
+  "routines.remove": (args, value) => value?.name ?? args?.[0],
+  "routines.duplicate": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
+  // A chat's own schedule (a prompt it set with /every or /after): the chat's title. The line does not say pause or delete.
+  "routines.schedule": (args, value) => value?.chat ?? args?.[0],
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
   // ── The wiki (control-wiki.mjs) ──
   // ── Preferences, usage, the cache and the Mac tools (control-prefs.mjs) ──
@@ -313,7 +326,7 @@ export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.stat
 export const MORE_READS = {
   bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: [],
+  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: [],
   wiki: [],
   prefs: [],
@@ -327,3 +340,8 @@ const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4
 
 /** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. It uses the short list (shown-text.mjs): a bot named with a flag or a family emoji is still in its line, and a name with a control character or a mark that turns text around is not. */
 export const thingForLog = (value) => (typeof value === "string" && value.length >= 1 && value.length <= 80 && !hasUnplain(value) ? value : null);
+/** A routine's name with how often it runs, for a routine that runs often: `Check (each 5 minutes)`. */
+const withRate = (name, minutes) => {
+  const rate = "(each " + (minutes === 1 ? "minute" : minutes + " minutes") + ")";
+  return thingForLog(name) && name.length <= 80 - rate.length - 1 ? name + " " + rate : rate;
+};

@@ -233,7 +233,8 @@ test("the table decides what `call` may reach: a call with a command or a reason
       assert.ok(!/\b(should|don't|doesn't|can't|isn't|won't|cannot't)\b/.test(rule), "plain words: " + rule);
     }
   }
-  assert.ok(open.length > 100, "most of what the app does is still owed and open");
+  // (The count falls as the commands are written: it only says that the walk reaches the calls that are still owed.)
+  assert.ok(open.length > 40, "a good part of what the app does is still owed and open");
   // A held call is an owed call (once it has a command or a reason, the table refuses it), and each reason has its sentence.
   for (const name of Object.keys(HELD)) assert.ok("owed" in WORKSPACE[name], name + " is held, so it must be owed");
   assert.deepEqual(Object.keys(REFUSED_BY_REASON), Object.keys(REASONS));
