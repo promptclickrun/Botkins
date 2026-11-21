@@ -1,6 +1,6 @@
 # Plugins
 
-Open **Settings → Marketplace → Plugins**. Search a marketplace or choose **Installed**. Select a plugin to see its skills, agents, commands, hooks and MCP servers. A hook can run local code every time you send a message. Check the source and the commands before enabling it for your bots.
+Open **Settings → Marketplace → Plugins**. Search a marketplace or choose **Installed**. Three marketplaces are built in: **Botkins** ([promptclickrun/botkins-marketplace](https://github.com/promptclickrun/botkins-marketplace), first-party plugins such as Hevy), **GitHub** (`github/awesome-copilot`) and **Copilot plugins** (`github/copilot-plugins`). Select a plugin to see its skills, agents, commands, hooks and MCP servers. A hook can run local code every time you send a message. Check the source and the commands before enabling it for your bots.
 
 Choose **Add a marketplace** for a GitHub repository, a repository with a `#ref`, an HTTPS marketplace URL or a local marketplace folder. **Add from your computer** imports a plugin folder and leaves it switched off. Updating a plugin reviews a fresh copy. Removing the plugin leaves your original source folder intact.
 
