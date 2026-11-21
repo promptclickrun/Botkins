@@ -23,10 +23,14 @@ import { basename } from "node:path";
 import { safeName } from "./uploads.mjs";
 import { botVoiceField } from "./voice.mjs";
 
-/** The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs. */
+/**
+ * The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs.
+ * "plugins.refresh" ("market-refresh-v1") reads every marketplace again now, for a person who asked.
+ */
 export const PLUGIN_METHODS = [
   "plugins.marketplaces", "plugins.addMarketplace", "plugins.removeMarketplace", "plugins.browse", "plugins.preview",
   "plugins.install", "plugins.addFolder", "plugins.configure", "plugins.setBots", "plugins.setEnabled", "plugins.update", "plugins.uninstall",
+  "plugins.refresh",
 ];
 
 /** Agent templates in a marketplace ("agent-templates-v1", docs/agent-templates.md): reads only. */
@@ -290,6 +294,8 @@ function marketArgs(method, args) {
       if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("That template can't be found.");
       return [first];
     case "composio.catalog":
+      // `{ fresh: true }`: the person asked for the list again, so the computer asks the server now.
+      return plain(first) && first.fresh === true ? [{ fresh: true }] : [];
     case "composio.connected":
       return [];
     case "composio.accounts":
@@ -316,6 +322,7 @@ function pluginArgs(method, args) {
   const second = plain(args[1]) ? args[1] : {};
   switch (method) {
     case "plugins.marketplaces":
+    case "plugins.refresh":
       return [];
     case "plugins.addMarketplace": {
       const source = typeof first === "string" ? first.trim() : "";

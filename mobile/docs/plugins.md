@@ -285,6 +285,7 @@ type InstalledPlugin = PluginListing & {
 | `plugins.setEnabled(id, on, { revision }?)` | `void` | `revision` as for `setBots`. |
 | `plugins.update(id, { revision })` | `InstalledPlugin` | `revision` from a preview of the new version; refused without it. Also the repair for `repair: "update"`. |
 | `plugins.uninstall(id)` | `void` | |
+| `plugins.refresh()` | `PluginMarketplace[]` | `market-refresh-v1` (2026-11-21). Reads every marketplace again now, without waiting for the hour; one read in the last 15 seconds is not read again. One that can't be read keeps its last list and has `error`. Agent templates are read again at their next browse. |
 
 Limits checked by the link (`link-host/methods.mjs`): ids and sources at most 300 characters, a
 query at most 200, at most 32 config values of at most 4,000 characters each, at most 200 bot ids.
@@ -299,6 +300,13 @@ when its description does not carry the computer's mark. An installed plugin's p
 fields are typed once and then show only that they are set; a saved credential can be picked), the
 bots that use it, on and off, Update and Remove. Without `plugins-v1`: "Update the app on your
 computer".
+
+A pull down on each Marketplace view (on the computer, the refresh button at the end of the
+Marketplace tabs) reads the catalogs again: `plugins.refresh` where the computer names
+`market-refresh-v1`, otherwise only `plugins.marketplaces`, then the skills and the list on screen
+(as many pages as were shown). The list shown stays until the new one comes, and stays when a read
+fails. A marketplace that newly can't be read is said once ("Couldn't refresh GitHub"); nothing is
+said when the refresh works. Apps asks the app list's server again with its ETag.
 
 ## Making your own
 

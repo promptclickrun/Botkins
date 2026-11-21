@@ -167,6 +167,16 @@ async function refreshConnected() {
   }
 }
 
+/**
+ * The Marketplace's refresh button: the app list asked for again now (the server answers with only
+ * what changed), then the person's apps. Throws when the list couldn't be read; the one shown stays.
+ */
+export async function refreshApps() {
+  const catalog = await api["composio.catalog"]({ fresh: true });
+  set({ catalog, catalogStatus: "ready" });
+  await refreshConnected();
+}
+
 /** Connects an app's account on Composio's page, in the browser. Resolves true when a new account is active. */
 async function connect(slug: string): Promise<boolean> {
   if (!owner || store.connecting[slug]) return false;

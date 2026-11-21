@@ -17,7 +17,7 @@ export function agentMeta(agent: MarketAgent, more = false): string {
 }
 
 /** Marketplace › Agents: agent templates from the marketplaces. Install opens Create a bot, filled in. */
-export default function MarketAgents({ state, createBot }: { state: State; createBot?: (template: MarketAgentTemplate) => void }) {
+export default function MarketAgents({ state, createBot, refreshed = 0 }: { state: State; createBot?: (template: MarketAgentTemplate) => void; /** Counts the Marketplace's refreshes: each one reads the list again, keeping the one shown. */ refreshed?: number }) {
   const using = state.remote?.using;
   const supported = (!using || using.capabilities.includes(AGENT_TEMPLATES)) && typeof api["agents.browse"] === "function";
   const allowed = teamCan(state, "agents", "create");
@@ -49,7 +49,7 @@ export default function MarketAgents({ state, createBot }: { state: State; creat
       live = false;
       window.clearTimeout(timer);
     };
-  }, [supported, allowed, query, category, revision, using?.id]);
+  }, [supported, allowed, query, category, revision, refreshed, using?.id]);
 
   if (!supported)
     return <Empty icon={<ShieldAlert size={20} />} title="Agents need an update" text="Update the app on your computer to see agent templates here." />;

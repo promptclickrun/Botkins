@@ -83,7 +83,7 @@ const scoped = (r, id) => r.enabled && (r.bots === "all" || r.bots.includes(id))
 // The paired-device router and desktop IPC share the same mutations and credential handling.
 export function pluginHandlers(plugins, credentials) {
   const handlers = {};
-  for (const name of ["marketplaces", "addMarketplace", "removeMarketplace"]) {
+  for (const name of ["marketplaces", "addMarketplace", "removeMarketplace", "refresh"]) {
     handlers["plugins." + name] = (...args) => plugins.catalog[name](...args);
   }
   for (const name of ["browse", "preview", "install", "addFolder", "configure", "setBots", "setEnabled", "update", "uninstall"]) {

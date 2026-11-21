@@ -137,6 +137,15 @@ test("the app list is served from disk at once, and checked again with its ETag 
   assert.deepEqual(calls, [null, '"v1"']);
   assert.equal(JSON.parse(readFileSync(join(dir, "composio-catalog.meta.json"), "utf8")).checkedAt, clock);
 
+  // Asked for fresh (the Marketplace's refresh): the server is asked now, with the ETag, though the copy is new.
+  assert.equal((await second.catalog({ fresh: true })).revision, "r1");
+  assert.deepEqual(calls, [null, '"v1"', '"v1"']);
+  const moved = createComposio({ fetch: async () => new Response(JSON.stringify({ ...catalog, revision: "r2" }), { headers: { etag: '"v2"' } }), dir }, { now: () => clock, catalogUrl: "https://catalog.example/c.json" });
+  assert.equal((await moved.catalog()).revision, "r1", "the saved copy first");
+  assert.equal((await moved.catalog({ fresh: true })).revision, "r2", "a fresh read brings what changed");
+  const down = createComposio({ fetch: async () => new Response("nope", { status: 500 }), dir }, { now: () => clock, catalogUrl: "https://catalog.example/c.json" });
+  await assert.rejects(down.catalog({ fresh: true }), { message: "The app list didn't load." }, "a fresh read that fails says so");
+
   // A copy on disk that is broken is not served: the list is asked for again.
   writeFileSync(join(dir, "composio-catalog.json"), "{");
   const third = createComposio({ fetch: async () => new Response("nope", { status: 500 }), dir }, { now: () => clock });

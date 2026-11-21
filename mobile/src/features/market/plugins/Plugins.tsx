@@ -9,8 +9,8 @@ import { useCan, useCapability, useMember, useOnline } from "@/state/hooks";
 import { attempt } from "@/state/link";
 import { Button, Chip, EmptyState, Group, Loading, Page, space, T } from "@/ui";
 import { SearchField } from "../parts";
-import { addFolderHref, addMarketplaceHref, loadMarketplaces, markTold, pluginCalls, pluginHref, useComputerKey, useInstalledPlugins, usePluginMarketplaces, usePluginsReady, useToldNotices } from "./calls";
-import { byLine, matchInstalled, needsReview, pluginChips, reviewNotice, statusLine } from "./logic";
+import { addFolderHref, addMarketplaceHref, loadMarketplaces, markTold, pluginCalls, pluginHref, refreshCatalogs, useCanRefresh, useComputerKey, useInstalledPlugins, usePluginMarketplaces, usePluginsReady, useToldNotices } from "./calls";
+import { byLine, matchInstalled, needsReview, pluginChips, readPages, reviewNotice, statusLine } from "./logic";
 import { Notice, PluginRow } from "./parts";
 
 /** One search of one marketplace, page by page. */
@@ -33,6 +33,7 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
   const member = useMember();
   const folders = !member && useCapability("folders-v1");
   const canManage = useCan("plugins", "manage");
+  const canRefresh = useCanRefresh();
   const markets = usePluginMarketplaces();
   const installed = useInstalledPlugins();
   // Told one time: the computer switched plugins off, and where to turn them on again.
@@ -86,10 +87,24 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
     }
   };
 
+  // A pull down: the computer reads the catalogs again, then the list on screen is read again as
+  // far as it was shown. The old list stays until the new one comes, and stays when it fails.
   const reload = async () => {
+    if (!online) return;
     setRefreshing(true);
-    await loadMarketplaces();
-    setTries((n) => n + 1);
+    const at = shown;
+    const filter = { ...(current.marketplace && { marketplace: current.marketplace }), ...(asked && { query: asked }) };
+    await attempt(
+      (async () => {
+        let failed: unknown;
+        await refreshCatalogs(canRefresh).catch((error: unknown) => (failed = error));
+        if (at && !at.error) {
+          const page = await readPages((cursor) => pluginCalls.browse({ ...filter, ...(cursor && { cursor }) }), at.plugins.length);
+          setListing((now) => (now?.key === at.key ? { key: at.key, ...page } : now));
+        } else if (browsing) setTries((n) => n + 1);
+        if (failed) throw failed;
+      })(),
+    );
     setRefreshing(false);
   };
 

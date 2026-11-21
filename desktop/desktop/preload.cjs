@@ -53,6 +53,7 @@ for (const name of [
   "plugins.setEnabled",
   "plugins.update",
   "plugins.uninstall",
+  "plugins.refresh",
   // Agent templates in the marketplaces ("agent-templates-v1"), and Marketplace › Apps (Composio)
   "agents.browse",
   "agents.template",

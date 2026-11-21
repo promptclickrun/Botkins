@@ -869,6 +869,14 @@ const DEMO_MARKETPLACES = [
   { id: "copilot-plugins", name: "Copilot plugins", source: "github/copilot-plugins", builtIn: true },
 ];
 const demoPlugin = (marketplace, name, entry) => ({ id: name + "@" + marketplace, name, marketplace, version: "1.0.0", license: "MIT", config: [], ...entry, contents: contents(entry.contents) });
+/** The plugin a refresh of the catalogs finds the first time ("market-refresh-v1"). */
+const FRESH_PLUGIN = demoPlugin("awesome-copilot", "daily-digest", {
+  description: "A skill for a short morning summary of what changed since yesterday.",
+  version: "0.1.0",
+  author: "GitHub",
+  keywords: ["summary", "daily"],
+  contents: { skills: ["daily-digest"] },
+});
 const DEMO_PLUGINS = [
   demoPlugin("awesome-copilot", "keepsake-memory", {
     description: "Long-term memory for your bots: recalls what matters before each message and keeps what was learned after each reply.",
@@ -1208,6 +1216,8 @@ export class MockBackend {
     if (this.pluginsOn) {
       this.capabilities.push("plugins-v1");
       if (this.pluginStarts) this.capabilities.push("plugin-starts-v1");
+      // "market-refresh-v1": the catalogs read again on request. Left out with BOTKINS_DEV_PLUGINS=old.
+      if (this.pluginStarts) this.capabilities.push("market-refresh-v1");
       this.installPlugin("writing-skills@awesome-copilot", { revision: pluginRevision(this.pluginEntry("writing-skills@awesome-copilot")) });
       if (process.env.BOTKINS_DEV_PLUGINS === "held") this.holdPluginsBack();
     }
@@ -2951,6 +2961,13 @@ export class MockBackend {
         for (const [name, description] of [["starter", "A starter skill pack."], ["helper", "A helpful agent."], ["checks", "Checks a bot's work when a reply ends."]])
           this.plugins.catalog.push(demoPlugin(id, id + "-" + name, { description, author: humanize(id), contents: name === "helper" ? { agents: [id + "-helper"] } : name === "checks" ? { hooks: [{ event: "agentStop", command: "sh ${PLUGIN_ROOT}/check.sh" }] } : { skills: [id + "-starter"] } }));
       return { ...market, ...(!market.error && { count: 3 }) };
+    },
+    // "market-refresh-v1": every catalog read again now. The first time, GitHub's has one plugin more,
+    // so a pull down on the phone shows something new.
+    "plugins.refresh"() {
+      for (const market of this.plugins.marketplaces) if (!market.error) market.updatedAt = now();
+      if (!this.plugins.catalog.some((entry) => entry.id === FRESH_PLUGIN.id)) this.plugins.catalog.push(structuredClone(FRESH_PLUGIN));
+      return this.handlers["plugins.marketplaces"].call(this);
     },
     "plugins.removeMarketplace"(id) {
       const market = this.plugins.marketplaces.find((item) => item.id === id);

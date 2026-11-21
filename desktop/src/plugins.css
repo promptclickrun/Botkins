@@ -20,6 +20,30 @@
   color: var(--ink);
   border-bottom-color: var(--accent);
 }
+/* The Marketplace's tabs, with its refresh button at the end of the same line. */
+.plugin-top-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.plugin-top-bar .plugin-top-tabs { flex: 1; min-width: 0; margin: 0; border-bottom: 0; }
+.plugin-refresh {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+.plugin-refresh:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
+.plugin-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.plugin-refresh:disabled { cursor: default; }
 .plugin-toolbar { align-items: center; }
 .plugin-toolbar .int-filter { min-width: 150px; }
 .plugin-market-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }

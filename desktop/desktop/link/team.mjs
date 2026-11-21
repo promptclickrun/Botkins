@@ -196,6 +196,7 @@ const POLICY = {
   "artifacts.resolve": "owner",
   sidePane: ["agents", "chat"],
   "plugins.marketplaces": ["plugins", "view"],
+  "plugins.refresh": ["plugins", "view"],
   "plugins.addMarketplace": ["plugins", "manage"],
   "plugins.removeMarketplace": ["plugins", "manage"],
   "plugins.browse": ["plugins", "view"],

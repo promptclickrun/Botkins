@@ -256,3 +256,40 @@ test("a marketplace's agent templates are read, checked and kept, and a bad one 
   await rm(join(market, "agents", "sorter.json"));
   assert.equal((await new PluginCatalog(join(root, "host-data")).agentTemplate("sorter@agent-market")).name, "Sorter");
 });
+
+test("a refresh reads a marketplace again before the hour, and a new plugin is listed", async (t) => {
+  const { root, market } = await fixture(t);
+  // The built-in catalogs are on GitHub: here they can't be reached, and keep their error.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("offline"); };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const catalog = new PluginCatalog(join(root, "host-data"));
+  await catalog.addMarketplace(market);
+  const names = async () => (await catalog.browse({ marketplace: "test-market" })).plugins.map((item) => item.name);
+  assert.deepEqual(await names(), ["memory"]);
+  const file = join(market, ".github", "plugin", "marketplace.json");
+  const value = JSON.parse(await readFile(file, "utf8"));
+  value.plugins.push({ name: "notes", source: "plugins/memory", description: "Take notes", version: "1.0.0" });
+  await writeFile(file, JSON.stringify(value));
+  assert.deepEqual(await names(), ["memory"], "within the hour the catalog is not read again by itself");
+
+  const record = catalog.marketplacesById.get("test-market");
+  record.updatedAt -= 60_000;
+  const listed = await catalog.refresh();
+  assert.deepEqual(await names(), ["memory", "notes"], "a refresh brings the new plugin");
+  assert.equal(listed.find((item) => item.id === "test-market").count, 2);
+  assert.ok(listed.filter((item) => item.builtIn).every((item) => item.error), "a catalog that can't be read says so");
+
+  // Read a moment ago: a second refresh doesn't read it again.
+  value.plugins.push({ name: "later", source: "plugins/memory" });
+  await writeFile(file, JSON.stringify(value));
+  await catalog.refresh();
+  assert.deepEqual(await names(), ["memory", "notes"]);
+
+  // A marketplace that can't be read keeps what it listed.
+  record.updatedAt -= 60_000;
+  await writeFile(file, "{");
+  const broken = await catalog.refresh();
+  assert.ok(broken.find((item) => item.id === "test-market").error);
+  assert.deepEqual(await names(), ["memory", "notes"], "the plugins listed before stay");
+});
