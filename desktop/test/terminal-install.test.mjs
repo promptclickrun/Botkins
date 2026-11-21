@@ -4,7 +4,8 @@
 // file goes into a folder of the test's own, and every system tool is a stand-in.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -570,6 +571,47 @@ test("how an install ended is kept for the service to read: installed, failed, o
   assert.equal(takeRequest(join(dir, "no-such-folder")), true, "nothing there is nothing to take up");
   // Not root: the work is done as who we are. (As root it is done with the folder owner's rights: test/terminal-root.test.mjs.)
   assert.equal(asOwnerOf(data, () => "done"), "done");
+});
+
+test("an update that dies with an error nobody caught still leaves a record, so a phone hears at once", { skip }, async (t) => {
+  const dir = tempDir(t);
+  const { installRoot, entry } = installed(dir, "1.2.3");
+  const assets = [assetName("1.3.0", "linux", "arm64"), "SHA256SUMS", "SHA256SUMS.asc"];
+  // What Node's own HTTP client throws when a server closes the connection in the middle of a download: outside every promise.
+  const assertion = () => Object.assign(new Error("The expression evaluated to a falsy value:\n\n  assert(!this.paused)\n"), { code: "ERR_ASSERTION" });
+  // With a stand-in for the process: the record is written, the reason is said, and the process is ended.
+  const watched = new EventEmitter();
+  const reports = [];
+  const ended = Promise.withResolvers();
+  const errors = t.mock.method(console, "error", () => {});
+  const never = applyUpdate({ entry, platform: "linux", arch: "arm64", checkOwner: false, latest: async () => ({ version: "1.3.0", assets }), fetcher: () => new Promise(() => void setImmediate(() => watched.emit("uncaughtException", assertion()))), report: (record) => reports.push(record), now: () => new Date("2026-01-02T03:04:05Z"), watched, die: (code) => ended.resolve(code) });
+  never.catch(() => {});
+  assert.equal(await ended.promise, 1);
+  const words = "The update to Botkins 1.3.0 stopped before it was done (ERR_ASSERTION: The expression evaluated to a falsy value:). Ask for it again.";
+  // It names no version it tried: a death like this says nothing against the release, so a host that installs by itself tries again.
+  assert.deepEqual(reports, [{ at: "2026-01-02T03:04:05.000Z", from: "1.2.3", to: "1.2.3", ok: false, message: words }]);
+  assert.deepEqual(errors.mock.calls.map((call) => call.arguments[0]), ["botkins: " + words]);
+  assert.deepEqual(cleanLastUpdate(reports[0]), reports[0], "it is a record the service shows as it is");
+  // An update that ends in the ordinary way listens no longer.
+  const quiet = new EventEmitter();
+  await applyUpdate({ entry, platform: "linux", arch: "arm64", checkOwner: false, latest: async () => ({ version: "1.2.3", assets: [] }), watched: quiet });
+  assert.equal(quiet.listenerCount("uncaughtException"), 0);
+  await assert.rejects(applyUpdate({ entry, platform: "linux", arch: "arm64", checkOwner: false, latest: async () => { throw new Error("GitHub did not say which release is the latest: it could not be reached (ENOTFOUND). Try again later."); }, watched: quiet }), /ENOTFOUND/);
+  assert.equal(quiet.listenerCount("uncaughtException"), 0);
+  // And for real, in a process of its own that dies that way: it ends with status 1, says why, and the record is in the install folder.
+  const script = `
+    import { applyUpdate, writeLastUpdate } from ${JSON.stringify(new URL("../desktop/terminal/update-install.mjs", import.meta.url).href)};
+    const [entry, installRoot] = process.argv.slice(-2);
+    await applyUpdate({ entry, platform: "linux", arch: "arm64", checkOwner: false,
+      latest: async () => ({ version: "1.3.0", assets: ${JSON.stringify(assets)} }),
+      fetcher: () => new Promise(() => void setTimeout(() => { throw Object.assign(new Error("The expression evaluated to a falsy value:"), { code: "ERR_ASSERTION" }); }, 20)),
+      report: (record) => void writeLastUpdate(installRoot, record) });
+  `;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script, entry, installRoot], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /^botkins: The update to Botkins 1\.3\.0 stopped before it was done \(ERR_ASSERTION: The expression evaluated to a falsy value:\)\. Ask for it again\.$/m);
+  const left = readLastUpdate(installRoot);
+  assert.deepEqual([left.ok, left.from, left.to, left.message], [false, "1.2.3", "1.2.3", words]);
 });
 
 test("a host that can install tells how it stands, installs by itself only when asked to, and never during a turn", { skip }, async (t) => {
