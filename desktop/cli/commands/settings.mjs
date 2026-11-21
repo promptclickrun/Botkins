@@ -148,7 +148,7 @@ export const settings = {
       } catch (error) {
         throw new CliError(error.message, EXIT.failed, error.code);
       }
-      context.print(result, result.status === "current" ? "Botkins " + result.current + " is the latest release." : "Botkins " + result.current + " is installed (it was " + result.previous + ")." + (installed ? " The service is running on it." : " Restart `botkins serve` to use it."));
+      context.print(result, result.status === "current" ? "Botkins " + result.current + " is the latest release." : "Botkins " + result.current + " is installed (it was " + result.previous + ")." + (installed ? " The service is running on it." : " Restart `botkins serve` to use it.") + (result.note ? "\n" + result.note : ""));
     },
   },
 };

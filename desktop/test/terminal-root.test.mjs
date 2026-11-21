@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { serviceManager } from "../desktop/terminal/manager.mjs";
 import { asOwnerOf, lastUpdateFile, notRootOwned, readLastUpdate, takeRequest, writeLastUpdate } from "../desktop/terminal/update-install.mjs";
@@ -168,4 +168,80 @@ test("installing the service again follows no link a bot's tool left in the data
   symlinkSync(system, odd + "/var/lib/botkins");
   await assert.rejects(serviceManager({ command: ["/opt/botkins/current/bin/botkins"], platform: "linux", uid: 0, env: {}, run, root: odd }).install({ start: false }), /is not a folder/);
   assert.deepEqual([statSync(system).uid, statSync(system).mode & 0o777], [0, 0o755]);
+});
+
+/** The whole computer's service, really installed as root into a folder that stands in for "/": its data folder is another user's. */
+async function installedIn(root, options = {}) {
+  const calls = [];
+  const run = async (file, args) => (calls.push([file, ...args].join(" ")), { code: 0, stdout: file === "id" ? USER + "\n" : file === "systemctl" && args[0] === "is-enabled" ? "enabled\n" : "", stderr: "" });
+  const manager = serviceManager({ command: ["/opt/botkins/current/bin/botkins"], platform: "linux", env: {}, run, root, pause: async () => {} });
+  await manager.install({ start: false, ...options });
+  calls.length = 0;
+  return { manager, calls };
+}
+const UNITS = "/etc/systemd/system/";
+/** Every name in a folder with what it is, to see afterwards that nothing in it changed. */
+const listing = (dir) => readdirSync(dir).sort().map((name) => { const at = lstatSync(join(dir, name)); return [name, at.uid, at.mode, at.isSymbolicLink() ? "link" : at.isDirectory() ? "folder" : "file", at.mtimeMs].join(" "); });
+
+test("an update's new service files are root's own, and writing them touches nothing in the data folder", { skip }, async (t) => {
+  const root = tempDir(t);
+  const { manager, calls } = await installedIn(root, { allowPaths: ["/srv/projects"] });
+  const data = root + "/var/lib/botkins";
+  assert.equal(statSync(data).uid, USER);
+  // What a bot's tool could have left in the data folder: links under the service files' names, to a file only root may write.
+  const secret = join(root, "root-only.conf");
+  writeFileSync(secret, "root's own\n", { mode: 0o600 });
+  for (const name of ["botkins.service", "botkins-update.path", "install.json", "etc"]) symlinkSync(secret, join(data, name));
+  const before = listing(data);
+  // The files as an earlier version wrote them.
+  const unit = root + UNITS + "botkins.service";
+  const fresh = readFileSync(unit, "utf8");
+  writeFileSync(unit, fresh.replace("\nProtectClock=true\n", "\n"));
+  writeFileSync(root + UNITS + "botkins-update.service", readFileSync(root + UNITS + "botkins-update.service", "utf8").replace("UMask=0022\n", ""));
+  const saved = manager.snapshot();
+  const result = await manager.refresh();
+  assert.deepEqual(result.changed, [UNITS + "botkins.service", UNITS + "botkins-update.service"]);
+  assert.equal(readFileSync(unit, "utf8"), fresh);
+  assert.match(fresh, /^User=botkins$/m);
+  assert.match(fresh, /^ReadWritePaths=\/var\/lib\/botkins \/srv\/projects$/m);
+  // Each new file, and the copy of what it replaced, is root's own; and nothing is left of the writing.
+  for (const path of result.changed.flatMap((path) => [path, path + ".bak"])) assert.deepEqual([lstatSync(root + path).isFile(), statSync(root + path).uid, statSync(root + path).mode & 0o777], [true, 0, 0o644], path);
+  assert.deepEqual(readdirSync(root + UNITS).sort(), ["botkins-update.path", "botkins-update.service", "botkins-update.service.bak", "botkins.service", "botkins.service.bak"]);
+  assert.deepEqual(listing(data), before, "nothing in the data folder was made, changed or removed");
+  assert.equal(readFileSync(secret, "utf8"), "root's own\n");
+  assert.ok(!calls.some((call) => call.includes(data) || /restart botkins|stop/.test(call)), calls.join("; "));
+  // And putting them back, as an update that is undone does.
+  assert.equal(await manager.restore(saved), true);
+  assert.equal(readFileSync(unit, "utf8"), fresh.replace("\nProtectClock=true\n", "\n"));
+  assert.deepEqual([statSync(unit).uid, statSync(unit).mode & 0o777], [0, 0o644]);
+  assert.deepEqual(listing(data), before);
+  assert.equal(readFileSync(secret, "utf8"), "root's own\n");
+});
+
+test("a link under a service file's name is not written through, by the new files or by putting the old ones back", { skip }, async (t) => {
+  const root = tempDir(t);
+  const { manager } = await installedIn(root);
+  const victim = join(root, "victim.conf");
+  writeFileSync(victim, "the system's own file\n", { mode: 0o600 });
+  // The update watch, masked or replaced by a link: it is not the service's file any more.
+  const watch = root + UNITS + "botkins-update.path";
+  const saved = manager.snapshot();
+  assert.ok(UNITS + "botkins-update.path" in saved.files);
+  rmSync(watch);
+  symlinkSync(victim, watch);
+  const unit = root + UNITS + "botkins.service";
+  writeFileSync(unit, readFileSync(unit, "utf8").replace("\nProtectClock=true\n", "\n"));
+  // A link under the name of the copy that is kept, too: it is replaced, and what it pointed at is left alone.
+  symlinkSync(victim, unit + ".bak");
+  assert.deepEqual((await manager.refresh()).changed, [UNITS + "botkins.service"]);
+  assert.equal(lstatSync(unit + ".bak").isFile(), true);
+  assert.equal(lstatSync(watch).isSymbolicLink(), true);
+  assert.equal(readFileSync(victim, "utf8"), "the system's own file\n");
+  assert.deepEqual([statSync(victim).uid, statSync(victim).mode & 0o777], [0, 0o600]);
+  assert.ok(!(UNITS + "botkins-update.path" in manager.snapshot().files), "a link is no file of the service's");
+  // Putting back what was there before the link: the link itself is replaced, and what it pointed at is left alone.
+  await manager.restore(saved);
+  assert.equal(lstatSync(watch).isFile(), true);
+  assert.equal(readFileSync(victim, "utf8"), "the system's own file\n");
+  assert.deepEqual([statSync(victim).uid, statSync(victim).mode & 0o777], [0, 0o600]);
 });

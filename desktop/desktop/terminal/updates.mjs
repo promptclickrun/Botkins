@@ -114,7 +114,8 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
       const watch = setInterval(() => {
         const record = last();
         if (record && record.at !== before) {
-          if (record.ok) return void clearInterval(watch);
+          // An install that went well may still have something to say (service files that could not be written).
+          if (record.ok) return void (clearInterval(watch), record.message && service.log.info("Update: " + record.message));
           return giveUp(record.message ?? "The update could not be installed.");
         }
         const waited = Date.now() - started;
@@ -129,5 +130,9 @@ export function terminalUpdates(service, { entry = ENTRY, platform = process.pla
       watch.unref?.();
     },
   });
+  // What the install that brought this version had to say, for whoever reads the log: the phone
+  // is shown the same record (`last`), and `botkins status` shows it too.
+  const brought = updates.lastInstall();
+  if (brought?.ok && brought.message) service.log.info("The update to Botkins " + brought.to + " went well, with this to know: " + brought.message);
   return updates;
 }

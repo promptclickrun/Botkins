@@ -1,0 +1,27 @@
+# Written by `botkins service install --user`. Change it with `systemctl --user edit botkins.service`.
+[Unit]
+Description=Botkins terminal host
+Documentation=https://github.com/promptclickrun/Botkins/blob/main/desktop/docs/terminal.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=BOTKINS_DATA_DIR=/home/sam/.local/share/botkins
+Environment=BOTKINS_KEY_FILE=/home/sam/.config/botkins/host.key
+Environment=NODE_ENV=production
+Environment=PATH=/home/sam/.local/bin:/usr/bin
+ExecStart=/usr/bin/node /home/sam/botkins/cli/botkins.mjs serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

@@ -76,7 +76,10 @@ test("the system unit runs as its own user, writes only its data folder and gets
   assert.ok(grouped.includes("Environment=BOTKINS_KEY_SOURCE=file\nEnvironment=BOTKINS_KEY_FILE=/etc/botkins/host.key") && !grouped.includes("LoadCredential"));
   // A checkout is started with Node and its own file; a value systemd would expand is escaped.
   assert.match(systemUnit({ command: ["/usr/bin/node", "/srv/my botkins/cli/botkins.mjs"], dataDir: "/var/lib/botkins" }), /^ExecStart=\/usr\/bin\/node "\/srv\/my botkins\/cli\/botkins\.mjs" serve$/m);
-  assert.match(systemUnit({ command, dataDir: "/var/lib/botkins", env: { NOTE: "100% $HOME" } }), /^Environment="NOTE=100%% \$\$HOME"$/m);
+  // As systemd reads them: "%" starts a specifier everywhere, so one that is meant is doubled; "$"
+  // starts a variable only in a command line, and is doubled only there.
+  assert.match(systemUnit({ command, dataDir: "/var/lib/botkins", env: { NOTE: "100% $HOME" } }), /^Environment="NOTE=100%% \$HOME"$/m);
+  assert.match(systemUnit({ command: ["/opt/a $b/100%/botkins"], dataDir: "/var/lib/botkins" }), /^ExecStart="\/opt\/a \$\$b\/100%%\/botkins" serve$/m);
   for (const bad of [{ command, dataDir: "relative" }, { command, dataDir: "/var/lib/../etc" }, { command, dataDir: "/var/lib/botkins", user: "root; rm -rf /" }, { command, dataDir: "/var/lib/botkins", allowPaths: ["/srv\nExecStartPre=/bin/sh"] }]) assert.throws(() => systemUnit(bad), /path in a service file|isn't a user's name/);
 });
 

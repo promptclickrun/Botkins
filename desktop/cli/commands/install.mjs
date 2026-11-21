@@ -83,6 +83,23 @@ export const install = {
           context.print(removed, "The service is removed. The data folder (" + context.paths.root + ") and the host key are still there.");
         },
       },
+      refresh: {
+        summary: "Bring the service's files up to date with this version of Botkins",
+        usage: "botkins service refresh [--check] [--no-restart]",
+        options: {
+          check: { type: "boolean", about: "Only say whether the files are up to date, and change nothing" },
+          "no-restart": { type: "boolean", about: "Write the files without restarting the service" },
+        },
+        details: "A release can change what the service's file says. An update writes the new version's files by itself, so this is for the times it couldn't: `botkins doctor` says when. Everything chosen when the service was installed is kept (the user it runs as, the data folder, the folders named with --allow-path, where the host key comes from), and so is every environment variable you added: they are read from the installed file. A file with any other change of yours is left as it is. A file that is replaced is kept once more beside it, as <name>.bak. On macOS a changed job is loaded again, which starts it.",
+        async run(context) {
+          const { options } = context;
+          const result = await manager(context).refresh({ write: options.check !== true, restart: options["no-restart"] !== true }).catch(fail);
+          // A file with a setting of the person's own that a new text would lose is not replaced.
+          const kept = result.kept.length ? "\nLeft as " + (result.kept.length === 1 ? "it is" : "they are") + ", because of settings that `botkins service install` did not write:\n" + result.kept.map((entry) => "  " + entry.file + ": " + entry.lines.slice(0, 3).join("; ") + (entry.lines.length > 3 ? "; and " + (entry.lines.length - 3) + " more" : "")).join("\n") : "";
+          context.print(result, (!result.changed.length ? (result.kept.length ? "No other file of the service needs writing for Botkins " + context.version + "." : "The service's files are up to date with Botkins " + context.version + ".") : options.check ? "Not up to date with Botkins " + context.version + ":\n" + result.changed.map((path) => "  " + path).join("\n") + "\nWrite them with `" + (result.scope === "system" ? "sudo " : "") + "botkins service refresh`." : "Written for Botkins " + context.version + " (what was there is beside each, as <name>.bak):\n" + result.changed.map((path) => "  " + path).join("\n") + (options["no-restart"] && result.kind === "systemd" ? "\nRestart the service to run it with them: `botkins service restart`." : "")) + kept);
+          return options.check && result.changed.length ? EXIT.failed : EXIT.ok;
+        },
+      },
       start: act("start", { summary: "Start the service", said: "Botkins is starting. `botkins status` shows it." }),
       stop: act("stop", { summary: "Stop the service", said: "Botkins is stopped." }),
       restart: act("restart", { summary: "Restart the service", said: "Botkins is restarting. `botkins status` shows it." }),

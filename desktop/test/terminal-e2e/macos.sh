@@ -114,6 +114,27 @@ run service start
 for _ in $(seq 1 30); do bk status >/dev/null 2>&1 && break; sleep 1; done
 bk status --json | grep -o '"running":true'
 
+step "A job file from an earlier version: doctor says so, and refresh loads this version's, on the same folder and PATH"
+cp "$plist" "$work/job-fresh.plist"
+# One setting of today's is taken out, as if a version before it had written the file.
+sed '/<key>ThrottleInterval<\/key>/{N;d;}' "$plist" > "$work/job-older.plist"
+if cmp -s "$work/job-fresh.plist" "$work/job-older.plist"; then fail "The older job file is not different."; fi
+cp "$work/job-older.plist" "$plist"
+bk doctor | grep -A1 "Service files" | tee "$work/stale.txt" || true
+grep -q "^FAIL .*Service files" "$work/stale.txt" || fail "Doctor did not say that the job file is stale."
+if bk service refresh --check >/dev/null; then fail "refresh --check did not say that the job file is stale."; fi
+before=$(pid_of)
+run service refresh
+cmp "$plist" "$work/job-fresh.plist" || fail "refresh did not write this version's job file."
+for _ in $(seq 1 30); do now=$(pid_of); [ -n "$now" ] && [ "$now" != "$before" ] && break; sleep 1; done
+echo "pid $before → ${now:-not running}"
+[ -n "$now" ] && [ "$now" != "$before" ] || fail "launchd did not load the job again."
+launchctl print "gui/$(id -u)/app.botkins.terminal" | grep -E "^\s*(state|pid) =" | sed 's/^[[:space:]]*/  /'
+bk doctor | grep "Service files"
+run service refresh
+phone --pairing "$work/pairing-lan.json" --via lan --bot Nova --message "Still there after the job was loaded again?" | tee "$work/after-refresh.json"
+[ "$(json .chat.status < "$work/after-refresh.json")" = Completed ] || fail "The phone could not chat after the job was loaded again."
+
 step "Idle memory, a minute later"
 sleep 60
 pid=$(pid_of)
