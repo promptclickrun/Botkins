@@ -220,6 +220,8 @@ jobs:
       - run: npm ci
       # The script changes two things of the runner's user and puts both back: the launchd job
       # app.botkins.terminal and the keychain item "Botkins Terminal Host". Its last line is
-      # MACOS END TO END: PASSED.
+      # MACOS END TO END: PASSED. It runs with --no-relay: a check on each pull request does not
+      # take a place at the public relay. (The first run of this job was with the relay step,
+      # and it passed; run the script by hand with no option for that step.)
       - name: Install as a launchd job, pair a stand-in phone, restart, kill, stop and refresh
-        run: bash test/terminal-e2e/macos.sh
+        run: bash test/terminal-e2e/macos.sh --no-relay
