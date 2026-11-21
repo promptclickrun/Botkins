@@ -56,6 +56,8 @@ export type SpacePanelFields = {
   stateRev?: number;
   notes?: PanelNote[];
   last?: PanelLast;
+  /** Things worth asking the panel's bot next, in the bot's own words (see `asksOf`). */
+  asks?: string[];
 };
 /**
  * A panel as `spaces.read` answers it. A member gets it without its project, without its chats
@@ -150,8 +152,32 @@ export function lastLine(last: PanelLast, now = Date.now(), locale?: string) {
   return firstName(last.name) + " " + what + " · " + ago(last.at, now, locale);
 }
 
-/** Whether a panel changed since the person last opened its space. */
-export const panelChanged = (panel: Pick<Panel, "updatedAt">, seenAt: number | undefined) => !!seenAt && panel.updatedAt > seenAt;
+/**
+ * Whether a panel changed for this person since they last opened its space. A person's own tick or
+ * note is not news to them: `last` is theirs and is the panel's newest change (the computer stamps
+ * the two times together; the phone allows the same two seconds between them).
+ */
+export const panelChanged = (panel: Pick<Panel, "updatedAt"> & { last?: Pick<PanelLast, "by" | "at"> }, seenAt: number | undefined, me?: string) =>
+  !!seenAt && panel.updatedAt > seenAt && !(!!me && panel.last?.by === me && panel.last.at >= panel.updatedAt - 2000);
+
+/** How many of a space's panels changed for this person, for "2 panels changed since yesterday". A hidden panel is not counted. */
+export const changedPanels = (panels: readonly (Pick<Panel, "updatedAt" | "hidden"> & { last?: Pick<PanelLast, "by" | "at"> })[], seenAt: number | undefined, me?: string) =>
+  panels.filter((panel) => !panel.hidden && panelChanged(panel, seenAt, me)).length;
+
+export const ASKS_MAX = 3;
+export const ASK_LENGTH = 60;
+/**
+ * What a panel's bot says is worth asking next, for the chips under an opened panel: the bot's own
+ * words, each on one line, at most three of at most 60 characters. Empty when the bot gave none:
+ * the app never makes any up.
+ */
+export function asksOf(panel: { asks?: unknown } | undefined): string[] {
+  if (!Array.isArray(panel?.asks)) return [];
+  return panel.asks
+    .flatMap((ask: unknown) => (typeof ask === "string" ? [ask.replace(/\s+/g, " ").trim().slice(0, ASK_LENGTH).trim()] : []))
+    .filter(Boolean)
+    .slice(0, ASKS_MAX);
+}
 
 /** The icon a space wears in the menu. A built-in keeps its own, also when shared. */
 export function spaceIcon(space: Pick<SpaceSummary, "builtin" | "access">): SpaceBuiltin | "shared" | "grid" {

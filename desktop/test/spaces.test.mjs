@@ -11,7 +11,11 @@ import {
   askBot,
   attachable,
   canRemoveNote,
+  ASK_LENGTH,
+  ASKS_MAX,
+  asksOf,
   changedLine,
+  changedPanels,
   deleteQuestion,
   hasSpaces,
   lastLine,
@@ -93,6 +97,32 @@ test("a panel's last line, and whether it changed", () => {
   assert.equal(panelChanged({ updatedAt: 10 }, 5), true);
   assert.equal(panelChanged({ updatedAt: 10 }, 20), false);
   assert.equal(panelChanged({ updatedAt: 10 }, 0), false, "never opened: nothing is marked");
+});
+
+test("a person's own tick or note is not news to them", () => {
+  const seen = 1_000_000;
+  const mine = { updatedAt: seen + 60_000, last: { by: "owner", at: seen + 60_000 } };
+  assert.equal(panelChanged(mine, seen, "owner"), false);
+  assert.equal(panelChanged(mine, seen, "m_maya"), true, "it is news to everyone else");
+  assert.equal(panelChanged(mine, seen), true, "with no person known, as before");
+  // The bot changed the panel after the person's tick: that is news again.
+  assert.equal(panelChanged({ updatedAt: seen + 120_000, last: { by: "owner", at: seen + 60_000 } }, seen, "owner"), true);
+  // The two times are stamped together; up to two seconds between them still counts as the same change.
+  assert.equal(panelChanged({ updatedAt: seen + 61_500, last: { by: "owner", at: seen + 60_000 } }, seen, "owner"), false);
+  // The line counts the same panels as the dots, and never a hidden one.
+  const panels = [mine, { updatedAt: seen + 5, last: { by: "m_maya", at: seen + 5 } }, { updatedAt: seen + 9 }, { updatedAt: seen + 9, hidden: true }, { updatedAt: seen - 9 }];
+  assert.equal(changedPanels(panels, seen, "owner"), 2);
+  assert.equal(changedPanels(panels, seen, "m_maya"), 2);
+  assert.equal(changedPanels(panels, 0, "owner"), 0);
+});
+
+test("a panel's asks are the bot's own words, cleaned: at most three, one line, 60 characters", () => {
+  assert.deepEqual(asksOf({ asks: ["Add a team discount", "Compare with last quarter"] }), ["Add a team discount", "Compare with last quarter"]);
+  assert.deepEqual(asksOf({ asks: ["  Add a\n team   discount ", "", "   ", 42, null, "x".repeat(80), "Third", "Fourth"] }), ["Add a team discount", "x".repeat(60), "Third"]);
+  // None are ever made up.
+  for (const none of [undefined, {}, { asks: [] }, { asks: "Add a row" }, { asks: null }]) assert.deepEqual(asksOf(none), []);
+  assert.equal(ASKS_MAX, 3);
+  assert.equal(ASK_LENGTH, 60);
 });
 
 test("times on a panel and a row", () => {
