@@ -21,7 +21,8 @@
     "package:linux": "npm run build && node scripts/package-linux.mjs",
     "package:terminal": "node scripts/package-terminal.mjs --sums",
     "test:today": "node test/today-smoke.mjs",
-    "test:controls": "node test/controls-smoke.mjs"
+    "test:controls": "node test/controls-smoke.mjs",
+    "test:runtime": "node test/hook-changed-args-live.mjs && node test/skill-allowed-tools-live.mjs"
   },
   "build": {
     "appId": "app.botkins.desktop",
