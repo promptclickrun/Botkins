@@ -138,8 +138,9 @@ test("preferences: a fixed list of keys, a value that fits, and a log line with 
 });
 
 test("preferences harnesses: the choices, the one that is set, and whether a harness program is installed", { skip }, async (t) => {
-  const { botkins, client } = await service(t);
-  // (The test service has a stand-in for Pi, a harness that is a program of its own.)
+  const { botkins, client, running } = await service(t);
+  // A stand-in for Pi, a harness that is a program of its own: the answer must not depend on what this computer has installed.
+  running.runtime.handlers.harnesses = async () => [{ id: "pi", name: "Pi", harness: true, installed: true, version: "1.0.0", connected: true }];
   const shown = await botkins(["preferences", "harnesses"]);
   assert.equal(shown.exit, 0, shown.err);
   assert.match(shown.out, /^CHOICE +CHOSEN +WHAT IT IS\ncopilot +yes +One harness runs every chat/m);
