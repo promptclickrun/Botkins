@@ -284,6 +284,24 @@ test("a provider signs in from the terminal: its own sign-in is followed, and a 
   await assert.rejects(client.call("providers.login", "nope", {}), /Unknown model provider/);
 });
 
+test("a paired phone has its spaces on the terminal host: the built-in four, one it makes, names, reads and deletes", { skip }, async (t) => {
+  const { client, dir, env } = await service(t);
+  await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });
+  const pairing = await client.call("pair.start");
+  const link = new URL(pairing.url);
+  link.searchParams.set("h", "127.0.0.1:" + (await client.call("status")).link.port);
+  const { stdout } = await run(process.execPath, [phone, "--link", link.href, "--via", "lan", "--save", join(dir, "pairing.json"), "--space", "Launch"], { env, timeout: 60_000 });
+  const { spaces } = JSON.parse(stdout);
+  assert.deepEqual(spaces, {
+    capability: true,
+    builtin: ["Today", "Feed", "Ideas", "Goals"],
+    made: { sameId: true, can: "own", access: "private", pinned: true },
+    read: { sameId: true, panels: 0, cards: 0, seenAt: "number" },
+    refused: "Today can't be renamed.",
+    left: 0,
+  });
+});
+
 test("a phone pairs from the terminal's code, chats with a bot and is listed, renamed and removed", { skip }, async (t) => {
   const { client, dir, env } = await service(t);
   await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });

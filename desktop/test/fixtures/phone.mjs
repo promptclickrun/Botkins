@@ -8,16 +8,19 @@
 //   phone.mjs --link 'botkins://pair?…' [--via lan|relay] [--save pairing.json]
 //             [--bot <name>] [--message <text>] [--name <device name>]
 //   phone.mjs --pairing pairing.json [--via lan|relay] --bot <name> --message <text>
+//   phone.mjs --pairing pairing.json --space <name>
 //
 // It prints one JSON document: { device, route, bots, chat: { id, pieces, reply, status } }.
 // `pieces` is how many times the reply grew while it was being written: more than one means the
 // phone saw it stream. A pairing file holds this device's key: it is the test's own to keep safe.
+// With --space it also makes a space of that name, renames it, reads it and deletes it, and
+// prints `spaces`: what the host said of itself and of the space at each step.
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { LinkClient, pair, parsePairingUrl, relayFetch } from "../../desktop/remote/link-client.mjs";
 
 const { values } = parseArgs({
-  options: { link: { type: "string" }, pairing: { type: "string" }, via: { type: "string" }, save: { type: "string" }, bot: { type: "string" }, message: { type: "string" }, name: { type: "string" }, timeout: { type: "string" } },
+  options: { link: { type: "string" }, pairing: { type: "string" }, via: { type: "string" }, save: { type: "string" }, bot: { type: "string" }, message: { type: "string" }, name: { type: "string" }, timeout: { type: "string" }, space: { type: "string" } },
 });
 const fail = (message) => {
   process.stderr.write("phone: " + message + "\n");
@@ -112,6 +115,25 @@ try {
       return reply && !working ? { reply: reply.text, status: run?.status ?? "Completed" } : null;
     }, "the bot's reply");
     result.chat = { id: chatId, pieces: seen.size, ...done };
+  }
+  if (values.space) {
+    const listed = () => (Array.isArray(parts.spaces) ? parts.spaces : []);
+    const named = (name) => listed().find((space) => space.name === name);
+    // The person's own built-in spaces are there before anything is made.
+    await until(() => listed().some((space) => space.builtin === "today"), "the person's spaces");
+    const spaces = { capability: (parts.meta?.capabilities ?? []).includes("spaces-v1"), builtin: listed().filter((space) => space.builtin).map((space) => space.name) };
+    const id = await client.call("spaces.create", { name: values.space });
+    const made = await until(() => named(values.space), "the new space in the list");
+    spaces.made = { sameId: made.id === id, can: made.can, access: made.access, pinned: made.pinned };
+    await client.call("spaces.rename", id, values.space + " 2");
+    await until(() => named(values.space + " 2"), "the new name in the list");
+    const read = await client.call("spaces.read", id);
+    spaces.read = { sameId: read.id === id, panels: read.panels.length, cards: read.cards.length, seenAt: typeof read.seenAt };
+    spaces.refused = await client.call("spaces.rename", listed().find((space) => space.builtin === "today").id, "Tomorrow").then(() => null, (error) => error.message);
+    await client.call("spaces.remove", id);
+    await until(() => !listed().some((space) => space.id === id), "the space gone from the list");
+    spaces.left = listed().filter((space) => !space.builtin).length;
+    result.spaces = spaces;
   }
   process.stdout.write(JSON.stringify(result) + "\n");
 } catch (error) {
