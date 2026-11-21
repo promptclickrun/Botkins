@@ -14,10 +14,10 @@ Status: agreed with the desktop thread on 2026-11-19, with the changes in "Agree
 - **Catalogs.** Both read anonymously (235 and 18 plugins). `awesome-copilot` is GitHub's current
   default; `copilot-plugins` is an additional catalog Botkins adds.
 - **IDs are opaque.** A client never parses a plugin id; it shows `name` and `marketplace`.
-- **Reviewed bytes.** `plugins.preview(id)` returns `revision?: string`, which identifies the bytes
-  that were reviewed. `plugins.install(id, { bots?, config?, revision? })` and
-  `plugins.update(id, options?: { revision?: string })` send it. On a mismatch the computer refuses,
-  and the client shows a fresh preview before the person can go on.
+- **Reviewed bytes.** `plugins.preview(id)` returns `revision`, which identifies the bytes that were
+  reviewed. `plugins.install(id, { bots?, config?, revision })` and `plugins.update(id, { revision })`
+  send it, and since `plugin-starts-v1` the computer refuses either without it. On a mismatch the
+  computer refuses, and the client shows a fresh preview before the person can go on.
 - **Saved credentials** (`{ $credential: id }`) are allowed ONLY in `install`'s `config` values and in
   `configure`'s values, filled in by the link (`credentials.resolve`). Anywhere else in a `plugins.*`
   call they are refused.
@@ -36,6 +36,83 @@ Status: agreed with the desktop thread on 2026-11-19, with the changes in "Agree
   today; other parts need explicit support in each adapter, and `limits` says so.
 - **Hindsight.** Its CLI integration is retired upstream in favor of the Coding Agents plugin. v1
   proves a Hindsight-like fixture, not every upstream installer.
+
+## What a plugin starts, shown whole (`plugin-starts-v1`, 2026-11-21)
+
+A fault was found in the app, in a released version too: a plugin's description and the code that
+starts its tools and hooks read its files in two ways, so a plugin could show "runs nothing",
+install with no question, and run code. The app now has one reading for both
+(`desktop/docs/PLUGINS.md` has its rules). This section is the client's half; where it and an
+earlier section differ, this one holds.
+
+- **The mark.** A description made by the one reading carries `starts: 1`, on a preview and on an
+  installed plugin. Every command the computer starts is in it, whole. **A client decides about one
+  description from that description's own mark**: with it, it asks first when the plugin runs
+  something on the computer; without it, it asks first always, also for a plugin that shows nothing
+  to run. The capability `plugin-starts-v1` (the app's) is only for the sentence that says the app
+  on the computer is older.
+- **What a client shows, in full**, as text made safe to read (below):
+  1. A local tool: the whole line (`command` and each word of `args`), the folder when `cwd` is
+     there, each `env` name with its value, and each `envNotSet` name with the computer's reason.
+  2. A hook: its event, the whole `command` (up to 4,000 characters, never cut without saying so),
+     its time limit, each `env` name with its value, and each `envNotSet` name with its reason.
+  3. A remote tool: the address, that it is a stream when `type` is `"sse"`, each header's name with
+     its written value, and that it signs in, with the client id when there is one.
+  4. A setting: where its value goes (`sentTo`), and its `default` when it is not a secret.
+  5. What is not run: each row of `notRun` with its reason, and "and N more".
+  6. The other files: how many and how large, and the rows with `config: true`.
+- **No secret is in a description.** A value is the text as the plugin wrote it. A secret comes only
+  from a setting, and the text then has `${NAME}`. A setting's value goes only into an environment
+  value (a local tool's, a hook's) and a header's value, never into a command, an argument, an
+  address or a folder, so `sentTo` names every place.
+- **Text shown for a decision** goes through one rule (the computer's `desktop/desktop/shown-text.mjs`,
+  the phone's `src/ui/shownText.ts`): each control character, format character (the marks that turn
+  text around, the ones with no width), line and paragraph separator, variation selector, Hangul
+  filler and tag character is written as its number (`\u{202e}`). It is for a command, an argument,
+  a folder, an address, a header, an environment value, and a name beside a question. It is not for
+  a chat's or a bot's name.
+- **A revision with every decision.** An install and an update without `revision` are refused
+  ("Look at the plugin first. An install or an update names the revision that was looked at.").
+  `plugins.setEnabled(id, on, { revision })` and `plugins.setBots(id, bots, { revision })` send the
+  installed plugin's `revision` as it was on the screen when the person chose; the computer refuses
+  when it is another one by then ("This plugin is not the one that was looked at: its revision is
+  another one now. Look at it again."). The link passes that third argument only as nothing or
+  `{ revision }` with 64 hex characters.
+- **A plugin the computer switched off** has `enabled: false` and a `detail` sentence, with any
+  `status`. It does so one time after the app's update for a plugin whose description has anything
+  the old one did not show, for a hook that did not run before and runs now, for a folder that was
+  linked for its skills, and when the installed files could not be read. The client shows the
+  sentence whole, then everything the plugin runs, then "Turn on".
+- **`repair: "update"`** on an installed plugin: its copy is not the reviewed files, or could not be
+  read. A client offers Update also when the source did not change, reads the preview and sends its
+  revision as for any update; the update writes the files again and keeps the settings.
+- **A plugin folder is never linked as a folder of skills.** `addSkillFolderAt` with a plugin folder
+  installs it as a plugin, switched off, and answers `{ kind: "plugin", name, id, enabled: false }`.
+  An old link that could not be copied is an installed entry in error whose `id` starts with
+  `linked-`; only `plugins.uninstall` works on it.
+- **An approval card** for a bot's own plugin request holds the plugin's whole description in its
+  `detail`. A member is never sent an approval and never answers one (`filterParts` and `authorize`
+  in `link-host/team.mjs`; the app's `desktop/test/plugin-card-member.test.mjs` holds those lines).
+
+**The phone's words** (final for the phone, 2026-11-21; the window says "this computer" or the
+computer's name where the phone says "your computer"):
+
+- A plugin the computer switched off: **Off · Needs review**. One notice on Marketplace › Plugins,
+  shown one time and closed with **OK**: **Botkins switched off 3 plugins** / "Botkins now shows
+  everything a plugin runs on your computer. Review each one, then turn it on."
+- One notice in Settings › Skills for each such plugin that has skills: **Skills from <name> are
+  off** / "They are part of a plugin that is switched off. Review it, then turn it on." / **Open
+  plugin**, **OK**.
+- What a plugin runs: **Runs**, **In folder**, **Environment** (`NAME = value`), **Not set by
+  Botkins**, **Connects to** (with "(stream)"), **Sends headers** (`Name = value`), **Signs in on
+  your computer**, **Client id**, **Time limit** ("10 seconds"), sections **Not run** ("and 12
+  more") and **Other files** ("214 files · 3.2 MB", **Files that tools read by themselves**).
+- A setting: "Sent to the tool <tool> as <NAME>", "Sent to the tool <tool> at <url> in the header
+  <Header>", "Sent to the hook (<event in words>) as <NAME>", **Default**.
+- Without the mark: "Update the app on your computer to see everything a plugin runs." (an older
+  app) or "Your computer could not show everything this plugin runs.", and the question **This
+  plugin may run commands on your computer** with **Cancel** and **Install anyway**, **Update
+  anyway** or **Turn on anyway**.
 
 ## What was found (2026-11-19)
 
@@ -136,13 +213,20 @@ type PluginHookEvent = "sessionStart" | "userPromptSubmitted" | "preToolUse" | "
   | "postToolUseFailure" | "agentStop" | "subagentStart" | "subagentStop" | "sessionEnd"
   | "errorOccurred" | "preCompact" | "notification" | "permissionRequest";
 
+// With "plugin-starts-v1". `kind` is what the computer does with the tool. An older app sends only
+// `name`, `kind`, `command` or `url`, `oauth` and `serverId`, and a hook's command cut at 300 characters.
 type PluginContents = {
-  skills: string[];
+  skills: string[];        // exactly the files that go to the runtime, as `agents` and `commands` are
   agents: string[];
   commands: string[];
-  mcpServers: { name: string; kind: "local" | "remote"; command?: string; url?: string; oauth?: true; serverId?: string }[];   // serverId on installed entries: sign in with signInMcpServer
-  hooks: { event: PluginHookEvent | string; command: string }[];   // command as written, at most 300 chars
+  mcpServers: (
+    | { name: string; kind: "local"; command: string; args: string[]; env: { name: string; value: string }[]; envNotSet?: { name: string; why: string }[]; cwd?: string }
+    | { name: string; kind: "remote"; type: "http" | "sse"; url: string; headers: { name: string; value: string }[]; oauth?: true; oauthClientId?: string; serverId?: string }   // serverId on installed entries: sign in with signInMcpServer
+  )[];
+  hooks: { event: PluginHookEvent | string; command: string; env: { name: string; value: string }[]; envNotSet?: { name: string; why: string }[]; timeoutSec: number }[];   // the whole command, up to 4,000 characters
   lspServers?: string[];
+  notRun?: { count: number; items: { what: "hook" | "tool"; name: string; why: string }[] };   // there only when count > 0; the first 40
+  otherFiles: { count: number; bytes: number; files: { path: string; bytes: number; config?: true; files?: number }[] };   // at most 40 rows
 };
 
 type PluginField = {
@@ -152,14 +236,16 @@ type PluginField = {
   secret: boolean;
   required: boolean;       // userConfig's `required`; a placeholder is required
   default?: string;        // never for a secret
+  sentTo?: ({ tool: string; env: string } | { tool: string; header: string; url: string } | { hook: string; env: string })[];   // each place that gets the value; `hook` is its event
 };
 
 type PluginPreview = PluginListing & {
   contents: PluginContents;
   config: PluginField[];
   postInstallMessage?: string;
-  revision?: string;       // the reviewed bytes; sent back with install and update
-  warnings?: string[];     // sentences: "Runs a command on your computer at each prompt."
+  revision?: string;       // the reviewed bytes (64 hex characters); sent back with install and update, which are refused without it
+  warnings?: string[];     // the computer's sentences: "Runs a command on your computer through plugin hooks."
+  starts?: 1;              // the mark to trust: this description says everything the plugin starts
 };
 
 type InstalledPlugin = PluginListing & {
@@ -169,11 +255,15 @@ type InstalledPlugin = PluginListing & {
   contents: PluginContents;
   config: (PluginField & { set: boolean; value?: string })[];   // `value` only for non-secret fields
   status: "ready" | "needs-config" | "needs-sign-in" | "error";
-  detail?: string;                   // a sentence for needs-sign-in and error
+  detail?: string;                   // a sentence for needs-sign-in and error, and for a plugin the computer switched off (enabled: false)
   limits?: string;                   // "Hooks run only for bots on the Copilot SDK."
   updateAvailable?: true;
   folder?: string;                   // for a folder plugin: its path on the computer, to show
   installedAt: number;
+  revision?: string;                 // the installed copy's; sent with setEnabled and setBots
+  starts?: 1;                        // as on a preview; read from the installed copy each time
+  repair?: "update";                 // an update is the repair
+  warnings?: string[];
 };
 ```
 
@@ -188,12 +278,12 @@ type InstalledPlugin = PluginListing & {
 | `plugins.removeMarketplace(id)` | `void` | Not a built-in one. Installed plugins stay. |
 | `plugins.browse({ marketplace?, query?, cursor? })` | `{ plugins: PluginListing[]; cursor?: string }` | 50 a page, by name. `query` matches name, description and keywords. |
 | `plugins.preview(id)` | `PluginPreview` | Reads the plugin's manifest and files before install. |
-| `plugins.install(id, { bots?, config?, revision? })` | `InstalledPlugin` | `bots` is `"all"` (the default) or bot ids. `config` as in `configure`. `revision` from the preview. |
+| `plugins.install(id, { bots?, config?, revision })` | `InstalledPlugin` | `bots` is `"all"` (the default) or bot ids. `config` as in `configure`. `revision` from the preview; refused without it. |
 | `plugins.addFolder(path)` | `InstalledPlugin` | A folder on the computer (`folders-v1` for choosing it). May be left disabled until reviewed. |
 | `plugins.configure(id, values)` | `void` | `values`: `{ [key]: string \| { $credential: id } \| null }`; `null` clears. A secret is stored in the vault. |
-| `plugins.setBots(id, bots)` | `void` | `"all"` or bot ids. |
-| `plugins.setEnabled(id, on)` | `void` | |
-| `plugins.update(id, { revision? }?)` | `InstalledPlugin` | `revision` from a preview of the new version. |
+| `plugins.setBots(id, bots, { revision }?)` | `void` | `"all"` or bot ids. `revision`: the installed plugin's, as the person saw it. |
+| `plugins.setEnabled(id, on, { revision }?)` | `void` | `revision` as for `setBots`. |
+| `plugins.update(id, { revision })` | `InstalledPlugin` | `revision` from a preview of the new version; refused without it. Also the repair for `repair: "update"`. |
 | `plugins.uninstall(id)` | `void` | |
 
 Limits checked by the link (`link-host/methods.mjs`): ids and sources at most 300 characters, a
@@ -203,8 +293,9 @@ query at most 200, at most 32 config values of at most 4,000 characters each, at
 
 The Marketplace tab has Apps and Plugins. Plugins lists the catalogs' plugins with search and a chip
 per marketplace, and Installed. A plugin's page says what it adds and what runs on the computer
-(hooks by event, local commands, remote tools), then Install. Installing asks once more when the
-plugin runs commands on the computer. An installed plugin's page has its status, its settings (secret
+(hooks by event, local commands, remote tools, each whole: see "What a plugin starts, shown whole"),
+then Install. Installing asks once more when the plugin runs commands on the computer, and always
+when its description does not carry the computer's mark. An installed plugin's page has its status, its settings (secret
 fields are typed once and then show only that they are set; a saved credential can be picked), the
 bots that use it, on and off, Update and Remove. Without `plugins-v1`: "Update the app on your
 computer".

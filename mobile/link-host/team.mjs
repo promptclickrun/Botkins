@@ -819,6 +819,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
     }
   }
   const request = method === "respond" ? lookup("request", args[0], lookups) : null;
+  // An approval can hold what a member is not sent (a plugin's whole description: each command and written value), so only the
+  // owner answers one. The app's own test holds this line and the cut in filterParts (desktop/test/plugin-card-member.test.mjs).
   if (request && (request.kind === "permission" || request.kind === "secure")) return "The owner needs to approve that request.";
   if (method === "setBotFlags" && Object.keys(sharedBotFlags(args[1])).length && !hasAction(role.perms, "agents", "manage")) return "Your team role can't do that.";
   // With spaces ("spaces-v1": the app's snapshot has them), a call also needs the space of what it names.
@@ -959,6 +961,7 @@ export function filterParts(parts, principal, team, extra = {}) {
     speakers: byChat(live.speakers),
     queued: byChat(live.queued),
     ...(live.steerable && { steerable: byChat(live.steerable) }),
+    // No approval and no secure input reaches a member's device: see `authorize` ("The owner needs to approve that request.").
     requests: (live.requests ?? []).filter((request) => ownChats.has(request.chatId) && request.kind !== "permission" && request.kind !== "secure"),
     active: (live.active ?? []).filter((id) => ownChats.has(id)),
   };

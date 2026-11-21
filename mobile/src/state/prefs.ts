@@ -29,8 +29,10 @@ export type Prefs = {
   foldedProviders: string[];
   /** What the Marketplace tab showed last: apps (Composio) or plugins. */
   marketView: "apps" | "plugins";
+  /** Notices shown one time and closed (a plugin the computer switched off): one key for each computer, plugin and place. */
+  toldNotices: string[];
 };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [], marketView: "apps" };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [], marketView: "apps", toldNotices: [] };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -62,6 +64,7 @@ function read(saved: Record<string, unknown>): Prefs {
     haptics: typeof saved.haptics === "boolean" ? saved.haptics : defaults.haptics,
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
     marketView: saved.marketView === "plugins" ? "plugins" : "apps",
+    toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,
     foldedProviders: Array.isArray(saved.foldedProviders) ? saved.foldedProviders.filter((id): id is string => typeof id === "string" && id.length <= 100).slice(0, 100) : defaults.foldedProviders,
   };
 }

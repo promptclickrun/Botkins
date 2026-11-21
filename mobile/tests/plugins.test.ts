@@ -12,9 +12,10 @@ import { test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { PLUGIN_METHODS, REMOTE_METHODS, remoteArgs } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { botsLine, byLine, configValues, consent, fieldState, groupHooks, hookWords, hostOf, isMarketplaceSource, matchInstalled, missingFields, pluginChips, runsOnComputer, safeLink, statusLine, toolLine } from "../src/features/market/plugins/logic";
+import { botsLine, byLine, configValues, consent, fieldState, groupHooks, hookFacts, hookWords, hostOf, isMarketplaceSource, matchInstalled, missingFields, needsReview, noticeKey, notRunRows, otherFilesRows, pluginChips, reviewNotice, runLine, runsOnComputer, safeLink, sentToLines, showsAll, shownWord, skillsNotices, statusLine, timeLimit, toolFacts, toolLine } from "../src/features/market/plugins/logic";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { InstalledPlugin, PluginContents, PluginField, PluginListing, PluginMarketplace, PluginPreview } from "../src/link/types";
+import { addedSkillsNote } from "../src/state/fileText";
 
 const said = (fn: () => unknown) => {
   try {
@@ -41,19 +42,134 @@ test("hook events read as the agreed words, in the order a turn meets them", () 
     { event: "sessionStart", command: "brief" },
     { event: "agentStop", command: "tidy" },
   ]);
-  assert.deepEqual(groups.map((group) => [group.label, group.commands]), [["When a chat starts", ["brief"]], ["When a reply ends", ["retain", "tidy"]], ["File changed", ["watch"]]]);
+  assert.deepEqual(groups.map((group) => [group.label, group.hooks.map((hook) => hook.command)]), [["When a chat starts", ["brief"]], ["When a reply ends", ["retain", "tidy"]], ["File changed", ["watch"]]]);
 });
 
-test("a tool reads as its command or its host, and the alert asks only when something runs on the computer", () => {
-  assert.equal(toolLine({ name: "db", kind: "local", command: "npx -y db-mcp" }), "Runs on your computer: npx -y db-mcp");
+test("the alert asks from a description with the computer's mark, and always from one without it", () => {
+  assert.equal(toolLine({ name: "db", kind: "local", command: "npx", args: ["-y", "db-mcp"] }), "Runs on your computer");
   assert.equal(toolLine({ name: "mem", kind: "remote", url: "https://user@Memory.Example.com:8443/mcp/x/" }), "Remote · memory.example.com");
   assert.equal(hostOf("not a url"), "");
-  assert.equal(consent({ ...empty, skills: ["a"], mcpServers: [{ name: "r", kind: "remote", url: "https://x.example" }] }), null);
+  const whole = (contents: PluginContents) => ({ contents, starts: 1 as const });
+  // With the mark: nothing to ask when nothing runs on the computer.
+  assert.equal(consent(whole({ ...empty, skills: ["a"], mcpServers: [{ name: "r", kind: "remote", url: "https://x.example" }] })), null);
   assert.equal(runsOnComputer({ ...empty, mcpServers: [{ name: "db", kind: "local" }] }), true);
-  const ask = consent({ ...empty, hooks: [{ event: "userPromptSubmitted", command: "a" }, { event: "agentStop", command: "b" }], mcpServers: [{ name: "db", kind: "local" }] });
+  const ask = consent(whole({ ...empty, hooks: [{ event: "userPromptSubmitted", command: "a" }, { event: "agentStop", command: "b" }], mcpServers: [{ name: "db", kind: "local" }] }));
   assert.equal(ask?.title, "This plugin runs commands on your computer");
   assert.equal(ask?.message, "It runs 2 commands (each message you send and when a reply ends) and 1 tool (db), with your access. Install it only if you trust where it comes from.");
-  assert.equal(consent({ ...empty, hooks: [{ event: "sessionStart", command: "a" }] }, "turn on")?.action, "Turn on");
+  assert.equal(consent(whole({ ...empty, hooks: [{ event: "sessionStart", command: "a" }] }), "turn on")?.action, "Turn on");
+  assert.equal(consent(whole({ ...empty, hooks: [{ event: "sessionStart", command: "a" }] }), "turn on")?.message, "It runs 1 command (when a chat starts), with your access. Turn it on only if you trust where it comes from.");
+  // Without the mark the description may not show everything: ask first, also for a plugin that shows nothing to run.
+  assert.ok(showsAll({ starts: 1 }) && !showsAll({}) && !showsAll({ starts: true }) && !showsAll(undefined));
+  const harmless = { contents: { ...empty, skills: ["a"] } };
+  const older = consent(harmless, "install", true);
+  assert.equal(older?.title, "This plugin may run commands on your computer");
+  assert.equal(older?.message, "The app on your computer is older and may not show everything a plugin runs. Update it first, or go on only if you trust where the plugin comes from.");
+  assert.deepEqual([consent(harmless, "install", true)?.action, consent(harmless, "update", true)?.action, consent(harmless, "turn on", true)?.action], ["Install anyway", "Update anyway", "Turn on anyway"]);
+  // The same on a computer that names the capability (a copy that could not be read): no word about an older app.
+  assert.equal(consent(harmless, "turn on")?.message, "Your computer could not show everything this plugin runs. Go on only if you trust where the plugin comes from.");
+});
+
+test("everything a tool and a hook start is shown whole, each word apart, as text", () => {
+  // A local tool: the whole line with each word of its arguments, its folder, each name with its value, and what is not set.
+  const local = toolFacts({
+    name: "db",
+    kind: "local",
+    command: "npx",
+    args: ["-y", "@scope/pkg", "--name", "two words", "", 'say "hi"'],
+    cwd: "server/bin",
+    env: [{ name: "GIT_SSH_COMMAND", value: "ssh -i ${KEY_FILE}" }, { name: "EMPTY", value: "" }],
+    envNotSet: [{ name: "NODE_OPTIONS", why: "Botkins sets no name that makes a program load more." }],
+  });
+  assert.deepEqual(local, [
+    { label: "Runs", text: 'npx -y @scope/pkg --name "two words" "" "say \\"hi\\""' },
+    { label: "In folder", text: "server/bin" },
+    { label: "Environment", lines: ["GIT_SSH_COMMAND = ssh -i ${KEY_FILE}", 'EMPTY = ""'] },
+    { label: "Not set by Botkins", notes: [{ name: "NODE_OPTIONS", why: "Botkins sets no name that makes a program load more." }] },
+  ]);
+  // Not "npx": a person sees what it starts.
+  assert.equal(runLine({ command: "npx", args: ["-y", "@scope/pkg"] }), "npx -y @scope/pkg");
+  // A computer from before the arguments sends the command alone, as written.
+  assert.equal(runLine({ command: "npx -y db-mcp" }), "npx -y db-mcp");
+  assert.deepEqual(toolFacts({ name: "old", kind: "local", command: "npx -y db-mcp" }), [{ label: "Runs", text: "npx -y db-mcp" }]);
+  // A word that would hide something shows what it holds, and can't join the next word.
+  assert.equal(shownWord("a\u202eb"), "a\\u{202e}b");
+  assert.equal(shownWord("one\ntwo"), '"one\\u{a}two"');
+  assert.equal(runLine({ command: "sh", args: ["-c", "echo ok\u200b; rm -rf ~"] }), 'sh -c "echo ok\\u{200b}; rm -rf ~"');
+
+  // A remote tool: the address (a stream when it is one), each header with its written value, and the sign-in.
+  assert.deepEqual(toolFacts({ name: "mem", kind: "remote", type: "sse", url: "https://memory.example.com/mcp", headers: [{ name: "Authorization", value: "Bearer ${MEMORY_API_KEY}" }], oauth: true, oauthClientId: "client-7" }), [
+    { label: "Connects to", text: "https://memory.example.com/mcp (stream)" },
+    { label: "Sends headers", lines: ["Authorization = Bearer ${MEMORY_API_KEY}"] },
+    { label: "Signs in on your computer" },
+    { label: "Client id", text: "client-7" },
+  ]);
+  assert.deepEqual(toolFacts({ name: "plain", kind: "remote", type: "http", url: "https://x.example/mcp" }), [{ label: "Connects to", text: "https://x.example/mcp" }]);
+
+  // A hook: the whole command with its lines kept, the time limit, the environment.
+  const long = "node run.mjs " + "x".repeat(3900);
+  assert.deepEqual(hookFacts({ event: "sessionStart", command: "set -e\nnode brief.mjs\t--fast", timeoutSec: 10, env: [{ name: "BANK", value: "${MEMORY_BANK_ID}" }] }), [
+    { label: "Runs", text: "set -e\nnode brief.mjs\\u{9}--fast" },
+    { label: "Time limit", text: "10 seconds" },
+    { label: "Environment", lines: ["BANK = ${MEMORY_BANK_ID}"] },
+  ]);
+  assert.equal(hookFacts({ event: "agentStop", command: long })[0].text, long, "never cut");
+  assert.deepEqual([timeLimit(1), timeLimit(0.25), timeLimit(30), timeLimit(undefined), timeLimit(0)], ["1 second", "0.25 seconds", "30 seconds", undefined, undefined]);
+});
+
+test("where a setting goes, what is not run, and the other files", () => {
+  assert.deepEqual(
+    sentToLines({ sentTo: [{ tool: "keepsake", env: "MEMORY_API_KEY" }, { tool: "keepsake", header: "Authorization", url: "https://memory.example.com/mcp" }, { hook: "userPromptSubmitted", env: "BANK" }] }),
+    ["Sent to the tool keepsake as MEMORY_API_KEY", "Sent to the tool keepsake at https://memory.example.com/mcp in the header Authorization", "Sent to the hook (each message you send) as BANK"],
+  );
+  assert.deepEqual(sentToLines({}), []);
+  // What the computer does not run, with its reasons, and how many more.
+  assert.deepEqual(notRunRows({ notRun: { count: 14, items: [{ what: "hook", name: "preCompact", why: "Botkins does not know this event." }, { what: "tool", name: "db", why: "A secret's value is in its line." }] } }), {
+    rows: [{ name: "preCompact", why: "Botkins does not know this event." }, { name: "db", why: "A secret's value is in its line." }],
+    more: 12,
+  });
+  assert.deepEqual(notRunRows({}), { rows: [], more: 0 });
+  // The other files: how many and how large, and the ones that tools read by themselves.
+  assert.deepEqual(
+    otherFilesRows({ otherFiles: { count: 214, bytes: 3.2 * 1024 * 1024, files: [{ path: "package.json", bytes: 2048, config: true }, { path: "node_modules/", bytes: 3_000_000, files: 180, config: true }, { path: "README.md", bytes: 900 }] } }),
+    { line: "214 files · 3.2 MB", config: ["package.json · 2 KB", "node_modules/ · 180 files"] },
+  );
+  assert.equal(otherFilesRows({}), undefined);
+  assert.equal(otherFilesRows({ otherFiles: { count: 0, bytes: 0, files: [] } }), undefined);
+});
+
+test("a plugin the computer switched off reads \"Needs review\", and each notice is shown one time", () => {
+  const plugin = (more: Partial<InstalledPlugin>): InstalledPlugin => ({ id: "p", name: "keepsake", marketplace: "m", installed: true, enabled: true, bots: "all", contents: { ...empty, skills: ["memory"] }, config: [], status: "ready", installedAt: 1, ...more });
+  const held = "Botkins switched this plugin off. An earlier version did not show all that it starts.";
+  assert.equal(statusLine(plugin({ enabled: false, detail: held })), "Off · Needs review");
+  assert.equal(statusLine(plugin({ enabled: false, detail: held, status: "needs-config" })), "Off · Needs review");
+  assert.equal(statusLine(plugin({ enabled: false })), "Off", "a plugin a person switched off");
+  // An error keeps the computer's sentence in a list; on the plugin's page the sentence is shown whole under the name.
+  assert.equal(statusLine(plugin({ enabled: false, status: "error", detail: "The installed files of this plugin are not the files that were reviewed." })), "The installed files of this plugin are not the files that were reviewed.");
+  assert.equal(statusLine(plugin({ status: "error", detail: "x" }), { page: true }), "Something is wrong with this plugin.");
+  assert.ok(needsReview(plugin({ enabled: false, detail: held })) && !needsReview(plugin({ enabled: false })) && !needsReview(plugin({ detail: "Sign in." })));
+  // An entry in error that no update repairs (a linked folder that could not be copied) has nothing to review: it is not counted, and can only be removed.
+  const stuck = plugin({ id: "linked-1", enabled: false, status: "error", detail: "The folder could not be read." });
+  assert.equal(needsReview(stuck), false);
+  assert.equal(reviewNotice([stuck], "mac-1", []), undefined);
+  assert.deepEqual(skillsNotices([stuck], "mac-1", []), []);
+  // One an update repairs is looked at: Update first, then "Turn on".
+  assert.ok(needsReview(plugin({ enabled: false, status: "error", repair: "update", detail: "Its installed files could not be read." })));
+
+  const list = [plugin({ id: "a", enabled: false, detail: held }), plugin({ id: "b", name: "team-skills", enabled: false, detail: held }), plugin({ id: "c", enabled: false, detail: held, contents: empty }), plugin({ id: "d" })];
+  const notice = reviewNotice(list, "mac-1", []);
+  assert.equal(notice?.title, "Botkins switched off 3 plugins");
+  assert.equal(notice?.text, "Botkins now shows everything a plugin runs on your computer. Review each one, then turn it on.");
+  // Once told, not again; a plugin switched off later is told about by itself, and another computer is another matter.
+  assert.equal(reviewNotice(list, "mac-1", notice!.keys), undefined);
+  assert.equal(reviewNotice(list, "mac-1", notice!.keys.slice(0, 2))?.title, "Botkins switched off 1 plugin");
+  assert.equal(reviewNotice(list, "mac-2", notice!.keys)?.title, "Botkins switched off 3 plugins");
+  assert.equal(reviewNotice([plugin({})], "mac-1", []), undefined);
+  // In Skills: one for each such plugin that has skills.
+  const skills = skillsNotices(list, "mac-1", []);
+  assert.deepEqual(skills.map((one) => [one.id, one.title]), [["a", "Skills from keepsake are off"], ["b", "Skills from team-skills are off"]]);
+  assert.equal(skills[0].text, "They are part of a plugin that is switched off. Review it, then turn it on.");
+  assert.deepEqual(skillsNotices(list, "mac-1", [skills[0].key]).map((one) => one.id), ["b"]);
+  assert.notEqual(noticeKey("mac-1", "a", "plugins"), noticeKey("mac-1", "a", "skills"));
 });
 
 test("chips, the line under a name, the status and the settings' states", () => {
@@ -121,6 +237,17 @@ test("a phone may make the twelve plugin calls, each cut to its shape", () => {
   assert.deepEqual(remoteArgs("plugins.setBots", ["a", "all"]), ["a", "all"]);
   assert.deepEqual(remoteArgs("plugins.setEnabled", ["a", false]), ["a", false]);
   assert.equal(said(() => remoteArgs("plugins.setEnabled", ["a", "yes"])), "Choose on or off.");
+  // A switch-on and a choice of bots may name the revision that was looked at (64 hex characters), and nothing else.
+  const looked = "ab".repeat(32);
+  assert.deepEqual(remoteArgs("plugins.setEnabled", ["a", true, { revision: looked }]), ["a", true, { revision: looked }]);
+  assert.deepEqual(remoteArgs("plugins.setBots", ["a", ["b1"], { revision: looked }]), ["a", ["b1"], { revision: looked }]);
+  assert.deepEqual(remoteArgs("plugins.setEnabled", ["a", true, {}]), ["a", true]);
+  assert.deepEqual(remoteArgs("plugins.setEnabled", ["a", true, null]), ["a", true]);
+  for (const third of [{ revision: "r1" }, { revision: looked.toUpperCase() }, { revision: looked, force: true }, { force: true }, "x", [looked], { revision: 7 }]) {
+    assert.equal(said(() => remoteArgs("plugins.setEnabled", ["a", true, third])), "Check the plugin request.", JSON.stringify(third));
+    assert.equal(said(() => remoteArgs("plugins.setBots", ["a", "all", third])), "Check the plugin request.", JSON.stringify(third));
+  }
+  assert.equal(said(() => remoteArgs("plugins.setEnabled", ["a", true, { revision: { $credential: "c1" } }])), "A credential can't be used there.");
   assert.deepEqual(remoteArgs("plugins.update", ["a", { revision: "r2", force: true }]), ["a", { revision: "r2" }]);
   assert.deepEqual(remoteArgs("plugins.update", ["a"]), ["a", {}]);
   assert.deepEqual(remoteArgs("plugins.addFolder", ["/Users/demo/team-skills"]), ["/Users/demo/team-skills"]);
@@ -212,6 +339,20 @@ async function paired(options: { pluginPage?: number } = {}) {
 }
 
 const MEMORY = "keepsake-memory@awesome-copilot";
+/** Looks at a plugin, then installs what was looked at: an install names its revision. */
+const install = async (client: LinkClient, id: string, more: Record<string, unknown> = {}) => {
+  const preview = await client.call<PluginPreview>("plugins.preview", id);
+  return client.call<InstalledPlugin>("plugins.install", id, { ...more, revision: preview.revision });
+};
+/** Runs with the demo computer in one of its plugin modes (BOTKINS_DEV_PLUGINS). */
+const inMode = async (mode: string, work: () => Promise<void>) => {
+  process.env.BOTKINS_DEV_PLUGINS = mode;
+  try {
+    await work();
+  } finally {
+    delete process.env.BOTKINS_DEV_PLUGINS;
+  }
+};
 
 test("the demo computer names plugins-v1, and leaves it out with BOTKINS_DEV_PLUGINS=off", () => {
   assert.ok(new MockBackend({ speed: 0.05 }).capabilities.includes("plugins-v1"));
@@ -254,7 +395,7 @@ test("browse, preview and install a plugin with bots and settings; its secret la
     assert.deepEqual(preview.contents.hooks.map((hook) => hook.event), ["sessionStart", "userPromptSubmitted", "agentStop"]);
     assert.equal(preview.contents.mcpServers[0].kind, "remote");
     assert.deepEqual(preview.config.map((field) => [field.key, field.secret, field.required]), [["MEMORY_API_KEY", true, true], ["MEMORY_BANK_ID", false, true]]);
-    assert.ok(preview.warnings?.includes("Runs a command on your computer at each message you send."));
+    assert.ok(preview.warnings?.includes("Runs a command on your computer through plugin hooks."));
     assert.ok(preview.postInstallMessage && preview.revision);
 
     // A stale revision is refused, and nothing is installed.
@@ -333,21 +474,21 @@ test("an OAuth tool needs a sign-in on the computer, a local tool has a default,
   const setup = await paired();
   const { link, client, until, plugin, parts } = setup;
   try {
-    await client.call("plugins.install", "tracker@awesome-copilot", {});
+    await install(client, "tracker@awesome-copilot");
     await until(() => plugin("tracker@awesome-copilot")?.status === "needs-sign-in", "needs a sign-in");
     const serverId = plugin("tracker@awesome-copilot")!.contents.mcpServers[0].serverId!;
     assert.ok((parts.mcp as { id: string }[]).some((server) => server.id === serverId), "a tool server to sign in");
     await client.call("signInMcpServer", serverId);
     await until(() => plugin("tracker@awesome-copilot")?.status === "ready", "signed in");
 
-    await client.call("plugins.install", "sqlite-explorer@awesome-copilot", {});
+    await install(client, "sqlite-explorer@awesome-copilot");
     await until(() => !!plugin("sqlite-explorer@awesome-copilot"), "sqlite");
     const sqlite = plugin("sqlite-explorer@awesome-copilot")!;
     assert.equal(sqlite.status, "ready");
     assert.equal(sqlite.contents.mcpServers[0].kind, "local");
     assert.equal(sqlite.config[0].value, "~/Documents/data.db");
 
-    await client.call("plugins.install", "legacy-formatter@awesome-copilot", {});
+    await install(client, "legacy-formatter@awesome-copilot");
     await until(() => plugin("legacy-formatter@awesome-copilot")?.status === "error", "the error");
     assert.match(plugin("legacy-formatter@awesome-copilot")!.detail ?? "", /couldn't be read/);
 
@@ -396,7 +537,7 @@ test("a marketplace is added and removed; GitHub's can't be, and installed plugi
     assert.equal(await setup.refusal(client.call("plugins.addMarketplace", "acme/team-plugins")), "That marketplace is already added.");
     const page = await client.call<{ plugins: PluginListing[] }>("plugins.browse", { marketplace: "team-plugins" });
     assert.equal(page.plugins.length, 3);
-    await client.call("plugins.install", page.plugins[0].id, {});
+    await install(client, page.plugins[0].id);
     await until(() => !!plugin(page.plugins[0].id), "installed from it");
     const broken = await client.call<PluginMarketplace>("plugins.addMarketplace", "acme/broken-catalog");
     assert.match(broken.error ?? "", /couldn't be read/);
@@ -406,6 +547,176 @@ test("a marketplace is added and removed; GitHub's can't be, and installed plugi
     assert.equal(left.some((item) => item.id === "team-plugins"), false);
     assert.ok(plugin(page.plugins[0].id), "the installed plugin stays");
     assert.equal(await setup.refusal(client.call("plugins.browse", { marketplace: "team-plugins" })), "That marketplace isn't added any more.");
+  } finally {
+    client.stop();
+    await link.stop();
+  }
+});
+
+// ── What a plugin starts, shown whole ("plugin-starts-v1") ──────────────────────────────────────
+
+test("a description says everything a plugin starts, and carries the computer's mark", async () => {
+  const setup = await paired();
+  const { link, client, backend } = setup;
+  try {
+    assert.ok(backend.capabilities.includes("plugin-starts-v1"));
+    const sqlite = await client.call<PluginPreview>("plugins.preview", "sqlite-explorer@awesome-copilot");
+    assert.equal(sqlite.starts, 1);
+    const tool = sqlite.contents.mcpServers[0];
+    assert.deepEqual([tool.kind, tool.command, tool.args, tool.cwd], ["local", "npx", ["-y", "@example/sqlite-mcp", "--read-only", "--label", "My databases"], "server"]);
+    assert.deepEqual(tool.env, [{ name: "DATABASE_PATH", value: "${DATABASE_PATH}" }, { name: "SQLITE_TIMEOUT", value: "5000" }]);
+    assert.equal(tool.envNotSet?.[0].name, "NODE_OPTIONS");
+    assert.ok(tool.envNotSet?.[0].why);
+    // The phone shows all of it: the whole line, the folder, each name with its value, what is not set.
+    assert.deepEqual(toolFacts(tool).map((fact) => fact.label), ["Runs", "In folder", "Environment", "Not set by Botkins"]);
+    assert.equal(toolFacts(tool)[0].text, 'npx -y @example/sqlite-mcp --read-only --label "My databases"');
+    assert.deepEqual(sqlite.config[0].sentTo, [{ tool: "sqlite", env: "DATABASE_PATH" }]);
+    assert.deepEqual(otherFilesRows(sqlite.contents), { line: "214 files · 3.2 MB", config: ["package.json · 1.8 KB", ".npmrc · 62 bytes", "node_modules/ · 180 files"] });
+    assert.ok(sqlite.warnings?.includes("Botkins does not set some environment names that this plugin asks for. Its tools or hooks may not work."));
+
+    // A remote tool's headers come with their written values; a secret is only ever a setting's name.
+    const memory = await client.call<PluginPreview>("plugins.preview", MEMORY);
+    assert.deepEqual(memory.contents.mcpServers[0].headers, [{ name: "Authorization", value: "Bearer ${MEMORY_API_KEY}" }, { name: "X-Memory-Bank", value: "${MEMORY_BANK_ID}" }]);
+    assert.deepEqual(sentToLines(memory.config[0]), [
+      "Sent to the tool keepsake at https://memory.example.com/mcp in the header Authorization",
+      "Sent to the hook (when a chat starts) as MEMORY_API_KEY",
+      "Sent to the hook (each message you send) as MEMORY_API_KEY",
+      "Sent to the hook (when a reply ends) as MEMORY_API_KEY",
+    ]);
+    assert.deepEqual(memory.contents.hooks.map((hook) => hook.timeoutSec), [10, 5, 30]);
+    const tracker = await client.call<PluginPreview>("plugins.preview", "tracker@awesome-copilot");
+    assert.deepEqual(toolFacts(tracker.contents.mcpServers[0]), [{ label: "Connects to", text: "https://mcp.tracker.example.com/mcp (stream)" }, { label: "Signs in on your computer" }, { label: "Client id", text: "botkins-demo" }]);
+
+    // What is not run is said, with the reason.
+    const notify = await client.call<PluginPreview>("plugins.preview", "notify-me@awesome-copilot");
+    assert.deepEqual(notRunRows(notify.contents), { rows: [{ name: "notification", why: "Botkins does not know the event notification, so this hook does not run." }], more: 0 });
+    assert.ok(notify.warnings?.includes("Botkins does not run some hooks or tools of this plugin."));
+
+    // An install names the revision that was looked at: none is refused, and nothing is installed.
+    assert.equal(await setup.refusal(client.call("plugins.install", MEMORY, {})), "Look at the plugin first. An install or an update names the revision that was looked at.");
+    assert.equal(await setup.refusal(client.call("plugins.update", "writing-skills@awesome-copilot", {})), "Look at the plugin first. An install or an update names the revision that was looked at.");
+    assert.equal(setup.plugin(MEMORY), undefined);
+  } finally {
+    client.stop();
+    await link.stop();
+  }
+});
+
+test("a switch-on and a choice of bots name the revision the person looked at", async () => {
+  const setup = await paired();
+  const { link, client, until, plugin, parts } = setup;
+  const id = "git-guard@awesome-copilot";
+  try {
+    await install(client, id);
+    await until(() => !!plugin(id), "installed");
+    const looked = plugin(id)!.revision!;
+    assert.match(looked, /^[a-f0-9]{64}$/);
+    assert.equal(plugin(id)!.starts, 1);
+    await client.call("plugins.setEnabled", id, false, { revision: looked });
+    await until(() => plugin(id)?.enabled === false, "off");
+    // Another revision than the installed one is refused; the plugin stays as it was.
+    const other = "0".repeat(64);
+    assert.equal(await setup.refusal(client.call("plugins.setEnabled", id, true, { revision: other })), "This plugin is not the one that was looked at: its revision is another one now. Look at it again.");
+    assert.equal(await setup.refusal(client.call("plugins.setBots", id, "all", { revision: other })), "This plugin is not the one that was looked at: its revision is another one now. Look at it again.");
+    assert.equal(plugin(id)!.enabled, false);
+    // Anything but a revision in that place does not pass the link.
+    assert.equal(await setup.refusal(client.call("plugins.setEnabled", id, true, { revision: looked, force: true })), "Check the plugin request.");
+    await client.call("plugins.setEnabled", id, true, { revision: looked });
+    await until(() => plugin(id)?.enabled === true, "on");
+    const bot = (parts.bots as { id: string }[])[0].id;
+    await client.call("plugins.setBots", id, [bot], { revision: looked });
+    await until(() => Array.isArray(plugin(id)?.bots), "its bots");
+    // A phone from before sends none, and the demo takes it, as the app does today.
+    await client.call("plugins.setBots", id, "all");
+    await until(() => plugin(id)?.bots === "all", "all bots");
+  } finally {
+    client.stop();
+    await link.stop();
+  }
+});
+
+test("plugins the computer switched off: a linked folder, one not shown whole before, and a copy that needs an update", async () => {
+  await inMode("held", async () => {
+    const setup = await paired();
+    const { link, client, until, plugin, plugins, parts } = setup;
+    try {
+      await until(() => plugins().length === 4, "the installed plugins");
+      // The folder that was linked for its skills is a plugin now, off, with the computer's sentence and its path.
+      const linked = plugin("code-review@folder")!;
+      assert.deepEqual([linked.enabled, linked.folder, linked.status], [false, "/Users/demo/.plugins/code-review", "ready"]);
+      assert.match(linked.detail ?? "", /^This plugin folder was linked for its skills\./);
+      assert.equal((parts.skills as { plugins: { path: string }[] }).plugins.some((item) => item.path === linked.folder), false, "no longer a linked folder");
+      // One an earlier version did not show whole.
+      const guard = plugin("git-guard@awesome-copilot")!;
+      assert.equal(guard.enabled, false);
+      assert.match(guard.detail ?? "", /^Botkins switched this plugin off\./);
+      // The phone's words for the moment, one time.
+      assert.deepEqual([statusLine(linked), statusLine(guard)], ["Off · Needs review", "Off · Needs review"]);
+      const notice = reviewNotice(plugins(), "mac", [])!;
+      assert.equal(notice.title, "Botkins switched off 2 plugins");
+      assert.deepEqual(skillsNotices(plugins(), "mac", []).map((one) => one.title), ["Skills from code-review are off"]);
+
+      // The person looks and turns it on: the reason is gone, and it reads as any plugin that is on.
+      await client.call("plugins.setEnabled", guard.id, true, { revision: guard.revision });
+      await until(() => plugin(guard.id)?.enabled === true, "turned on");
+      assert.equal(plugin(guard.id)!.detail, undefined);
+      assert.equal(reviewNotice(plugins(), "mac", [])?.title, "Botkins switched off 1 plugin");
+
+      // A copy that is not the reviewed files: an error with the mark "an update is the repair", and no mark of a whole description.
+      const runner = plugin("test-runner@awesome-copilot")!;
+      assert.deepEqual([runner.status, runner.repair, runner.starts], ["error", "update", undefined]);
+      assert.match(runner.detail ?? "", /^The installed files of this plugin are not the files that were reviewed\. Update the plugin/);
+      assert.equal(consent(runner, "turn on")?.title, "This plugin may run commands on your computer");
+      assert.match((await setup.refusal(client.call("plugins.setEnabled", runner.id, true, { revision: runner.revision }))) ?? "", /are not the files that were reviewed/);
+      // The update writes the files again: the mark for a repair is gone, and the description is whole again.
+      const fresh = await client.call<PluginPreview>("plugins.preview", runner.id);
+      await client.call("plugins.update", runner.id, { revision: fresh.revision });
+      await until(() => plugin(runner.id)?.status === "ready", "repaired");
+      assert.deepEqual([plugin(runner.id)!.repair, plugin(runner.id)!.starts, plugin(runner.id)!.detail], [undefined, 1, undefined]);
+    } finally {
+      client.stop();
+      await link.stop();
+    }
+  });
+});
+
+test("a computer from before plugin-starts-v1: no mark, so the phone asks first for every plugin", async () => {
+  await inMode("old", async () => {
+    const setup = await paired();
+    const { link, client, until, plugin, backend } = setup;
+    try {
+      assert.ok(backend.capabilities.includes("plugins-v1") && !backend.capabilities.includes("plugin-starts-v1"));
+      const sqlite = await client.call<PluginPreview>("plugins.preview", "sqlite-explorer@awesome-copilot");
+      assert.equal(sqlite.starts, undefined);
+      // The old shape: a tool by one line, no arguments apart, no environment.
+      assert.deepEqual(sqlite.contents.mcpServers[0], { name: "sqlite", kind: "local", command: 'npx -y @example/sqlite-mcp --read-only --label My databases' });
+      assert.deepEqual(toolFacts(sqlite.contents.mcpServers[0]), [{ label: "Runs", text: "npx -y @example/sqlite-mcp --read-only --label My databases" }]);
+      // A plugin that shows nothing to run is asked about too: the description may not be whole.
+      const skills = await client.call<PluginPreview>("plugins.preview", "code-review@awesome-copilot");
+      assert.equal(runsOnComputer(skills.contents), false);
+      assert.equal(consent(skills, "install", true)?.action, "Install anyway");
+      // Such a computer takes an install with no revision, and its installed plugins name none.
+      await client.call("plugins.install", "code-review@awesome-copilot", {});
+      await until(() => !!plugin("code-review@awesome-copilot"), "installed");
+      assert.deepEqual([plugin("code-review@awesome-copilot")!.revision, plugin("code-review@awesome-copilot")!.starts], [undefined, undefined]);
+    } finally {
+      client.stop();
+      await link.stop();
+    }
+  });
+});
+
+test("a plugin folder picked under Skills is installed as a plugin, switched off, and never linked", async () => {
+  const setup = await paired();
+  const { link, client, until, plugin, parts } = setup;
+  try {
+    const added = await client.call<{ kind: string; name: string; id?: string; enabled?: boolean }>("addSkillFolderAt", "/Users/demo/Code/review-kit");
+    assert.deepEqual(added, { kind: "plugin", name: "review-kit", id: "review-kit@folder", enabled: false });
+    await until(() => plugin("review-kit@folder")?.enabled === false, "the plugin, off");
+    assert.deepEqual(plugin("review-kit@folder")!.contents.hooks.map((hook) => [hook.event, hook.command, hook.timeoutSec]), [["preToolUse", "sh ${PLUGIN_ROOT}/check.sh", 5]]);
+    assert.equal((parts.skills as { folders: { path: string }[] }).folders.some((folder) => folder.path === "/Users/demo/Code/review-kit"), false);
+    assert.equal(addedSkillsNote({ kind: "plugin", name: "review-kit", id: "review-kit@folder", enabled: false }), "Added the plugin review-kit. It is off until you turn it on.");
+    assert.equal(addedSkillsNote({ kind: "plugin", name: "old-kit" }), "Added the plugin old-kit.");
   } finally {
     client.stop();
     await link.stop();

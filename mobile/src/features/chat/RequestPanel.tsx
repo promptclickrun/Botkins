@@ -17,6 +17,7 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import type { AgentRequest, Bot, CredentialRef, FormField } from "@/link/types";
 import { api, attempt } from "@/state/link";
 import { BotAvatar, Button, Field, haptic, lift, radius, space, switchColors, T, Tap, useTheme } from "@/ui";
+import { shownText } from "@/ui/shownText";
 import {
   answerOf,
   choicesOf,
@@ -61,14 +62,16 @@ function useRespond(request: AgentRequest) {
 
 /** The title, and the label under it when there is one. Both can be selected and copied. */
 function Head({ request }: { request: AgentRequest }) {
+  // An approval is a decision: its words are shown made safe to read (a mark that turns text around can't make one command read as another).
+  const safe = request.kind === "permission";
   return (
     <View style={{ gap: space.xs }}>
       <T variant="headline" selectable>
-        {request.title}
+        {safe ? shownText(request.title) : request.title}
       </T>
       {!!request.label && (
         <T variant="subhead" color="muted" selectable>
-          {request.label}
+          {safe ? shownText(request.label, { lines: true }) : request.label}
         </T>
       )}
     </View>
@@ -79,13 +82,15 @@ function Head({ request }: { request: AgentRequest }) {
 function Detail({ request }: { request: AgentRequest }) {
   const mode = detailMode(request);
   if (mode === "none" || !request.detail) return null;
+  // An approval's full request is read for a decision too (a plugin's whole description can be in it): its lines stay, nothing else hides.
+  const detail = request.kind === "permission" ? shownText(request.detail, { lines: true }) : request.detail;
   if (mode === "folded")
     return (
       <Disclosure title="Full request">
-        <Code>{request.detail}</Code>
+        <Code>{detail}</Code>
       </Disclosure>
     );
-  return <Code>{request.detail}</Code>;
+  return <Code>{detail}</Code>;
 }
 
 // --- The kinds ---------------------------------------------------------------------------------
@@ -132,7 +137,7 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
       }
     >
       <Head request={request} />
-      {!!request.preview && <Code danger={danger}>{request.preview}</Code>}
+      {!!request.preview && <Code danger={danger}>{shownText(request.preview, { lines: true })}</Code>}
       <Detail request={request} />
       {!!request.url && <LinkLine url={request.url} />}
       {!!request.remember && (

@@ -1025,16 +1025,55 @@ export type PluginHookEvent =
   | "notification"
   | "permissionRequest";
 
-/** What a plugin adds. A hook's command is as written, at most 300 characters. */
+/** A name and its value as the plugin wrote it. Never a secret: a secret comes from a setting, and the text then has `${NAME}`. */
+export type PluginValue = { name: string; value: string };
+/** A name the plugin asked for that the computer does not set, with the computer's sentence for why. */
+export type PluginNotSet = { name: string; why: string };
+
+/**
+ * A tool (MCP server) of a plugin. `kind` is what the computer does with it: "local" starts
+ * `command` with `args`, in `cwd` (a path that is not a full path is a folder in the plugin's own
+ * copy; without one, the plugin's own folder), with the environment in `env`. "remote" connects to
+ * `url` (`type` "sse" is a stream) and sends `headers`. A computer from before "plugin-starts-v1"
+ * sends only `name`, `kind`, `command` or `url`, `oauth` and `serverId`.
+ */
+export type PluginTool = {
+  name: string;
+  kind: "local" | "remote";
+  command?: string;
+  args?: string[];
+  env?: PluginValue[];
+  envNotSet?: PluginNotSet[];
+  cwd?: string;
+  type?: "http" | "sse";
+  url?: string;
+  headers?: PluginValue[];
+  oauth?: true;
+  /** The client id the plugin names for the sign-in. */
+  oauthClientId?: string;
+  /** An installed plugin's tool with OAuth: the tool server to sign in with "signInMcpServer". */
+  serverId?: string;
+};
+
+/** A hook: the whole command (up to 4,000 characters), its environment and how long it may run. */
+export type PluginHook = { event: PluginHookEvent | (string & {}); command: string; env?: PluginValue[]; envNotSet?: PluginNotSet[]; timeoutSec?: number };
+
+/** What a plugin adds, and with "plugin-starts-v1" everything it starts on the computer, whole. */
 export type PluginContents = {
   skills: string[];
   agents: string[];
   commands: string[];
-  /** `serverId` (an installed plugin's tool with OAuth): the tool server to sign in with "signInMcpServer". */
-  mcpServers: { name: string; kind: "local" | "remote"; command?: string; url?: string; oauth?: true; serverId?: string }[];
-  hooks: { event: PluginHookEvent | (string & {}); command: string }[];
+  mcpServers: PluginTool[];
+  hooks: PluginHook[];
   lspServers?: string[];
+  /** Hooks and tools the plugin has that the computer does not run, the first 40 with the reason. There only when `count` is more than zero. */
+  notRun?: { count: number; items: { what: "hook" | "tool"; name: string; why: string }[] };
+  /** The plugin's files that are not a skill, an agent or a command. `config`: a file tools read by themselves. A folder of dependencies is one row whose `path` ends with "/". */
+  otherFiles?: { count: number; bytes: number; files: { path: string; bytes: number; config?: true; files?: number }[] };
 };
+
+/** Where a setting's value goes: an environment name of a tool or a hook (`hook` is its event), or a header at an address. */
+export type PluginSentTo = { tool: string; env: string } | { tool: string; header: string; url: string } | { hook: string; env: string };
 
 /** One of a plugin's settings: a `userConfig` entry, or a `${NAME}` in its tool and hook files. */
 export type PluginField = {
@@ -1048,6 +1087,8 @@ export type PluginField = {
   required: boolean;
   /** Never for a secret. */
   default?: string;
+  /** Each place that gets the value ("plugin-starts-v1"). */
+  sentTo?: PluginSentTo[];
 };
 
 /** A plugin read before install: what it adds, its settings, and what it runs, in sentences. */
@@ -1059,6 +1100,12 @@ export type PluginPreview = PluginListing & {
   warnings?: string[];
   /** What was read, as an opaque tag. Install and update send it back; the computer refuses when the plugin changed since. */
   revision?: string;
+  /**
+   * The mark to trust ("plugin-starts-v1"): this description was made by the computer's one reading,
+   * so every command it starts is in it, whole. Decide about one description from this mark. A
+   * description without it asks first, always.
+   */
+  starts?: 1;
 };
 
 /** A plugin installed on the computer, as the part `plugins` holds it. */
@@ -1072,7 +1119,7 @@ export type InstalledPlugin = PluginListing & {
   /** `value` only for a field that is not secret. */
   config: (PluginField & { set: boolean; value?: string })[];
   status: "ready" | "needs-config" | "needs-sign-in" | "error";
-  /** A sentence for needs-sign-in and error. */
+  /** A sentence for needs-sign-in and error, and for a plugin the computer switched off (`enabled: false`, with any status). */
   detail?: string;
   /** "Hooks run only for bots on the Copilot SDK." */
   limits?: string;
@@ -1080,6 +1127,14 @@ export type InstalledPlugin = PluginListing & {
   /** A folder plugin's path on the computer, to show. */
   folder?: string;
   installedAt: number;
+  /** The installed copy's revision: sent with a switch-on and a choice of bots, as the person saw it. */
+  revision?: string;
+  /** See `PluginPreview.starts`. Not there when the installed copy could not be read or is not the reviewed files. */
+  starts?: 1;
+  /** An update is the repair (the copy is not the reviewed files, or could not be read): offer Update also when the source did not change. */
+  repair?: "update";
+  /** What it runs, in the computer's sentences. */
+  warnings?: string[];
 };
 
 /** A plugin setting's value as a phone sends it: text, a saved credential the computer fills in, or null to clear it. */
@@ -1345,7 +1400,8 @@ export type Calls = {
   /** Stops using a linked skills folder or plugin (the folder itself is left alone). */
   removeSkillFolder(id: string): void;
   /** Adds a skill, a plugin or a folder of skills from a folder chosen in the folder browser. Needs "folders-v1". */
-  addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number };
+  /** A plugin folder is never linked: it is installed as a plugin, switched off (`id`, `enabled: false`; "plugin-starts-v1"). */
+  addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean };
   renameProject(id: string, name: string): void;
   /** What changed in a project's folder, one file's changes as text, and committing all of it. */
   projectChanges(id: string): ProjectChanges;
@@ -1389,8 +1445,9 @@ export type Calls = {
   "plugins.addFolder"(path: string): InstalledPlugin;
   /** `null` clears a value. A secret is kept in the computer's vault. */
   "plugins.configure"(id: string, values: Record<string, PluginConfigValue>): void;
-  "plugins.setBots"(id: string, bots: "all" | string[]): void;
-  "plugins.setEnabled"(id: string, on: boolean): void;
+  /** `revision` (both calls): the installed plugin's, as the person saw it. The computer refuses when it is another one now. */
+  "plugins.setBots"(id: string, bots: "all" | string[], options?: { revision?: string }): void;
+  "plugins.setEnabled"(id: string, on: boolean, options?: { revision?: string }): void;
   /** `revision` is the preview's the person reviewed; the computer refuses another. */
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;

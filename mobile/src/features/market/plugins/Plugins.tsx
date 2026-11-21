@@ -9,9 +9,9 @@ import { useCan, useCapability, useMember, useOnline } from "@/state/hooks";
 import { attempt } from "@/state/link";
 import { Button, Chip, EmptyState, Group, Loading, Page, space, T } from "@/ui";
 import { SearchField } from "../parts";
-import { addFolderHref, addMarketplaceHref, loadMarketplaces, pluginCalls, pluginHref, useInstalledPlugins, usePluginMarketplaces, usePluginsReady } from "./calls";
-import { byLine, matchInstalled, pluginChips } from "./logic";
-import { PluginRow } from "./parts";
+import { addFolderHref, addMarketplaceHref, loadMarketplaces, markTold, pluginCalls, pluginHref, useComputerKey, useInstalledPlugins, usePluginMarketplaces, usePluginsReady, useToldNotices } from "./calls";
+import { byLine, matchInstalled, needsReview, pluginChips, reviewNotice, statusLine } from "./logic";
+import { Notice, PluginRow } from "./parts";
 
 /** One search of one marketplace, page by page. */
 type Listing = { key: string; plugins: PluginListing[]; cursor?: string; error?: string; more?: boolean };
@@ -35,6 +35,8 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
   const canManage = useCan("plugins", "manage");
   const markets = usePluginMarketplaces();
   const installed = useInstalledPlugins();
+  // Told one time: the computer switched plugins off, and where to turn them on again.
+  const notice = reviewNotice(installed, useComputerKey(), useToldNotices());
   const [chip, setChip] = useState("all");
   const [query, setQuery] = useState("");
   const [asked, setAsked] = useState("");
@@ -107,10 +109,12 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
     ]);
   };
 
+  // A plugin the computer switched off says so in its line, wherever it is listed.
+  const held = useMemo(() => new Map((installed ?? []).filter(needsReview).map((plugin) => [plugin.id, statusLine(plugin)])), [installed]);
   const rows = (items: PluginListing[]) => (
     <Group flat>
       {items.map((item) => (
-        <PluginRow key={item.id} listing={item} by={byLine(item, markets.list)} installed={installedIds.has(item.id) || !!item.installed} onPress={() => router.push(pluginHref(item.id))} />
+        <PluginRow key={item.id} listing={item} by={held.get(item.id) ?? byLine(item, markets.list)} installed={installedIds.has(item.id) || !!item.installed} onPress={() => router.push(pluginHref(item.id))} />
       ))}
     </Group>
   );
@@ -143,6 +147,16 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
   return (
     <Page tab title="Marketplace" onRefresh={reload} refreshing={refreshing}>
       {switcher}
+      {!!notice && (
+        <Notice
+          title={notice.title}
+          text={notice.text}
+          onClose={() => {
+            markTold(notice.keys);
+            setChip("installed");
+          }}
+        />
+      )}
       <SearchField value={query} onChange={setQuery} label="Search plugins" />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl, marginTop: -space.sm }} contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: 2, gap: space.sm }}>
         {chips.map((item) => (
