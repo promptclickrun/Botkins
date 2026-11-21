@@ -116,14 +116,14 @@ test("`botkins help --json` names every command with its usage, its arguments an
   // One area or one command, by its words.
   out = "";
   assert.equal(await main(["help", "bots", "--json"], io), 0);
-  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu"]]]);
+  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu", "bots duplicate", "bots order", "bots primary", "bots flags", "bots memory", "bots sections list", "bots sections add", "bots sections rename", "bots sections remove", "bots import"]]]);
   out = "";
   assert.equal(await main(["help", "bots", "edit", "--json"], io), 0);
   const [edit] = JSON.parse(out).areas[0].commands;
   assert.deepEqual(edit.arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(edit.options.find((option) => option.name === "--instructions-file"), { name: "--instructions-file", takes: "path", about: edit.options.find((option) => option.name === "--instructions-file").about });
   // A command that asks a person first says which flag answers it, for a caller with no terminal.
-  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["bots remove --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "relay reset --yes", "service uninstall --yes", "skills remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes"]);
+  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["bots import --yes", "bots memory --yes", "bots remove --yes", "bots sections remove --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "relay reset --yes", "service uninstall --yes", "skills remove --yes", "templates export --yes", "templates import --yes", "templates remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes"]);
   out = "";
   const asked = { ...io, stdin: { isTTY: false }, stderr: { write: (text) => void (out += text) }, client: { call: async () => ({ id: "nova", name: "Nova" }) } };
   assert.equal(await main(["bots", "remove", "Nova"], asked), 2);

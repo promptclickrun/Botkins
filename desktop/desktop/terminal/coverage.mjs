@@ -50,8 +50,20 @@ export const WORKSPACE = {
   addBot: cmd("bots add"),
   updateBot: cmd("bots edit"),
   deleteBot: cmd("bots remove"),
-  ...each("duplicateBot reorderBots makePrimary setBotFlags botMemory setBotMemory addSection renameSection deleteSection importableAgents importAgents", owed("d")),
-  ...each("saveTemplate renameTemplate deleteTemplate exportTemplateText importTemplateText", owed("d")),
+  duplicateBot: cmd("bots duplicate"),
+  reorderBots: cmd("bots order"),
+  makePrimary: cmd("bots primary"),
+  setBotFlags: cmd("bots flags"),
+  ...each("botMemory setBotMemory", cmd("bots memory")),
+  ...each("addSection", cmd("bots sections add")),
+  renameSection: cmd("bots sections rename"),
+  deleteSection: cmd("bots sections remove"),
+  ...each("importableAgents importAgents", cmd("bots import")),
+  saveTemplate: cmd("templates save"),
+  renameTemplate: cmd("templates rename"),
+  deleteTemplate: cmd("templates remove"),
+  exportTemplateText: cmd("templates export"),
+  importTemplateText: cmd("templates import"),
   setBotIntegrations: cmd("bots tools"),
   setBotAccess: cmd("bots access"),
   catalog: cmd("bots menu"),
@@ -233,9 +245,45 @@ export const CHANGES = {
   "skills.removeFolder": (args, value) => value?.path ?? args?.[0],
   "bots.tools.set": 0,
   "bots.access.set": 0,
+  // ── More of a bot, and templates (control-bots.mjs) ──
+  // (By the name of the bot, the section or the template, as the answer has it. The text of a memory, an agent's instructions and a template's words are never in a line.)
+  "bots.duplicate": (args, value) => value?.name ?? args?.[0],
+  "bots.order": null,
+  "bots.primary": (args, value) => value?.name ?? args?.[0],
+  "bots.flags.set": (args, value) => value?.name ?? args?.[0],
+  "bots.memory.set": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.add": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.remove": (args, value) => value?.name ?? args?.[0],
+  "bots.import": (args, value) => some(value?.added?.map((bot) => bot.name)),
+  "templates.save": (args, value) => value?.name ?? args?.[0],
+  "templates.rename": (args, value) => value?.name ?? args?.[0],
+  "templates.remove": (args, value) => value?.name ?? args?.[0],
+  // An export also keeps a copy of the file among the bot's files: it is a change, by the file's name.
+  "templates.export": (args, value) => value?.name,
+  "templates.import": (args, value) => value?.name,
+  // ── Chats (control-chats.mjs) ──
+  // ── Routines (control-routines.mjs) ──
+  // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
+  // ── The wiki (control-wiki.mjs) ──
+  // ── Preferences, usage, the cache and the Mac tools (control-prefs.mjs) ──
+  // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
+  // ── Voice (control-voice.mjs) ──
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
 export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+// The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
+export const MORE_READS = {
+  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
+  chats: [],
+  routines: [],
+  projects: [],
+  wiki: [],
+  prefs: [],
+  credentials: [],
+  voice: [],
+};
+READS.push(...Object.values(MORE_READS).flat());
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);

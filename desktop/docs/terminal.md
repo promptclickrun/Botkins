@@ -233,6 +233,68 @@ botkins plugins bots memory --bot Nova
 - **A command that Botkins prints for you to run** has each word quoted for a shell when it needs it. An id that has a character that cannot be shown is not printed as a command: take it from `botkins plugins list --json`.
 - Only the text of a plugin gets this care. A name that you gave (a bot's name in an error, or in the log) is printed as it is, with its emoji and its joiners. Only a control character and a mark that turns text around are written as a number.
 
+## The rest of the workspace
+
+Each thing that the app's window manages has commands too. Each command has `--help`, works with `--json`, and asks no question when there is no terminal.
+
+### More of a bot, and templates
+
+A bot has a place in the list, flags, a memory and, if you like, a section. A **template** is a bot's setup without its history: its name, role, about text, instructions and look. An **agent** is a helper that a model provider already has (for Copilot, a file in `~/.copilot/agents`) and that can become a bot.
+
+```sh
+botkins bots duplicate Nova
+botkins bots order Orbit Nova
+botkins bots primary Orbit
+botkins bots flags Nova --pin --no-teamwork --section Work
+botkins bots sections add Work
+botkins bots memory Nova
+botkins bots memory Nova --file memory.md --yes
+botkins bots import
+botkins bots import Reviewer
+botkins templates save Nova --name "Research starter"
+botkins templates export "Research starter" --file starter.json
+botkins templates import starter.json
+```
+
+- **`bots duplicate <bot>`** makes a copy named `<name> copy`. It has the same role, instructions and model. It has no chats and no memory yet.
+- **`bots order`** lists the bots in their order. `bots order <bot>…` puts the bots that you name first, in the order that you give them. The other bots follow in the order they have. The first bot is the primary bot. `bots primary <bot>` makes one bot the first. The primary bot is never hidden.
+- **`bots flags <bot>`** shows the flags. `--pin` and `--unpin`, `--hide` and `--show`, `--teamwork` and `--no-teamwork` (whether other bots may ask this bot for help), `--section <section>` and `--no-section` change them. Only what you name changes. `bots sections list`, `add`, `rename` and `remove` keep the sections. `sections remove` asks first. Its bots stay, in no section.
+- **A long text comes from a file or standard input.** `bots memory <bot>` prints a bot's memory. `--json` gives the text as it is. `--file <path>` replaces the memory with the text of a file, and `--file -` reads standard input. `--clear` clears it. A memory that has text is gone after a replace, so the command asks first. With no terminal, and when the text comes from standard input, it needs `--yes`. The log names the bot and never the text.
+- **`bots import` lists the agents** of the providers that are on, and whether each one is a bot already. `bots import <agent>…` makes a bot of each agent that you name, by name, by the start of a name or by its key (`copilot:Reviewer`). An agent that is a bot already is left out. The bot is a copy: later changes to the agent do not reach it.
+- **Words from elsewhere are shown first.** An agent's instructions, and a template file, steer a bot. So `bots import <agent>` and `templates import <file>` print the whole text first: the name, the role, the model, the file the agent comes from, and the instructions. Then they ask. With no terminal they fail and name `--yes`. The text is printed on standard error with `--yes` and with `--json` too. A template that is imported is saved as a template only. No bot is made.
+- **A text that is shown has each character that hides or turns text written as its number**, as `\u{202e}`. This holds for memory, instructions and templates in the text form. `--json` has them as they are, and so has a file that `templates export --file` writes.
+- **`templates`** keeps the templates. `save <bot>` saves a bot's setup (`--name` gives another name). `list`, `show`, `rename` and `remove` work as their names say. `export <template>` or `export --bot <bot>` prints the file, or writes it with `--file <path>`. An existing file is replaced only after a yes. The file holds the name, role, about text, instructions and look, and nothing of the bot's folders, chats or credentials. The app keeps a copy of an export among the bot's files, as it does for a phone.
+- **A removal needs the whole name or the id.** `sections remove` and `templates remove` ask first, and with no terminal they need `--yes`. They do not take the start of a name, so a short word does not remove something else. The other commands take the start of a name when only one thing has it, and name the matches when more than one does.
+- The log has one line for each change, by the name of the bot, the section or the template (`bots.order` has no name): `bots.duplicate`, `bots.order`, `bots.primary`, `bots.flags.set`, `bots.memory.set`, `bots.sections.add`, `bots.sections.rename`, `bots.sections.remove`, `bots.import`, `templates.save`, `templates.rename`, `templates.remove`, `templates.export` and `templates.import`.
+
+### Chats
+
+The commands for this part come in a later change.
+
+### Routines
+
+The commands for this part come in a later change.
+
+### Projects, to-dos, tasks and artifacts
+
+The commands for this part come in a later change.
+
+### The wiki
+
+The commands for this part come in a later change.
+
+### Preferences, usage, the cache, voice and the Mac tools
+
+The commands for this part come in a later change.
+
+### Credentials, the vault, password managers and the rest of a provider
+
+The commands for this part come in a later change.
+
+### Voice
+
+The commands for this part come in a later change.
+
 ## Pair a phone
 
 ```sh

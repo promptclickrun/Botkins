@@ -8,12 +8,33 @@ import { install } from "./install.mjs";
 import { tui } from "./tui.mjs";
 import { botTools, tools } from "./tools.mjs";
 import { pluginCommands } from "./plugins.mjs";
+import { botsCommands } from "./bots.mjs";
+import { chatsCommands } from "./chats.mjs";
+import { routinesCommands } from "./routines.mjs";
+import { projectsCommands } from "./projects.mjs";
+import { wikiCommands } from "./wiki.mjs";
+import { prefsCommands } from "./prefs.mjs";
+import { credentialsCommands } from "./credentials.mjs";
+import { voiceCommands } from "./voice.mjs";
 
 export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings };
 // What one bot has of the tools and skills is said under the bot: `botkins bots tools <bot>`.
 Object.assign(COMMANDS.bots.commands, botTools);
 // Plugins: to install, update and switch one on is to look at it first (cli/commands/plugins.mjs).
 Object.assign(COMMANDS.plugins.commands, pluginCommands);
+// The rest of the workspace, one file for each area. A group that is there already gets the new commands; a command's name is never taken twice.
+for (const area of [botsCommands, chatsCommands, routinesCommands, projectsCommands, wikiCommands, prefsCommands, credentialsCommands, voiceCommands]) {
+  for (const [word, group] of Object.entries(area)) {
+    if (!COMMANDS[word]) COMMANDS[word] = group;
+    else {
+      if (!COMMANDS[word].commands || !group.commands) throw new Error("Two commands have the name " + word + ".");
+      for (const [name, command] of Object.entries(group.commands)) {
+        if (COMMANDS[word].commands[name]) throw new Error("Two commands have the name " + word + " " + name + ".");
+        COMMANDS[word].commands[name] = command;
+      }
+    }
+  }
+}
 
 /** The command the leading words name, and those words: { command, path }, or null. */
 export function find(words) {

@@ -18,7 +18,7 @@ version=$2
 
 # One word for each area the image's command line must have. A pull request that adds an area
 # to the command line adds its word here.
-areas="bots chat config devices folders models pair plugins providers relay routines service skills status tools update"
+areas="bots chat config devices folders models pair plugins providers relay routines service skills status templates tools update"
 
 name=botkins-check-$$
 status=$(mktemp)

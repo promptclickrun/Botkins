@@ -16,6 +16,14 @@ import { DESKTOP_ONLY } from "../host/headless.mjs";
 import { CHANGES, thingForLog, WORKSPACE } from "./coverage.mjs";
 import { toolsApi } from "./control-tools.mjs";
 import { pluginsApi } from "./control-plugins.mjs";
+import { botsApi } from "./control-bots.mjs";
+import { chatsApi } from "./control-chats.mjs";
+import { routinesApi } from "./control-routines.mjs";
+import { projectsApi } from "./control-projects.mjs";
+import { wikiApi } from "./control-wiki.mjs";
+import { prefsApi } from "./control-prefs.mjs";
+import { credentialsApi } from "./control-credentials.mjs";
+import { voiceApi } from "./control-voice.mjs";
 
 const WAIT_MS = 25_000;
 export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // The owner's choice (asked 2026-11-21, not answered yet): false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them.
@@ -517,6 +525,13 @@ export function controlApi(service) {
   Object.assign(api, toolsApi({ workspace, handlers, bot }));
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
   Object.assign(api, pluginsApi({ workspace, handlers, bot }));
+  // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
+  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi]) {
+    for (const [name, call] of Object.entries(area({ workspace, handlers, bot }))) {
+      if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
+      api[name] = call;
+    }
+  }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
   for (const name of Object.keys(handlers)) if (name.startsWith("plugins.") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   // A reference to a saved credential is refused by the named call too, before its own work starts.
