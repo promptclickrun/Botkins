@@ -129,5 +129,5 @@ try {
   console.log("Timeline renderer smoke: single and group turns retain order, speaker identity, and folded activity.");
 } finally {
   if (app) await app.close().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

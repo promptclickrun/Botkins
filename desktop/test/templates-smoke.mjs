@@ -97,5 +97,5 @@ try {
   console.log("Templates: save from a bot, export a file, import a shared file with a review note, create a bot from it, built-ins and delete passed.");
 } finally {
   await app.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

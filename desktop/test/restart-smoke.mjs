@@ -96,5 +96,5 @@ try {
   console.log("Killed Electron during a turn. The relaunched app completed the same run and chat.");
 } finally {
   await app?.close().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

@@ -153,5 +153,5 @@ try {
   console.log("desktop parity smoke: ok" + (qa ? ". Screenshots in " + qa : ""));
 } finally {
   await app?.close().catch(() => {});
-  rmSync(data, { recursive: true, force: true });
+  rmSync(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

@@ -351,5 +351,5 @@ try {
   console.log("Mentions smoke passed. No renderer exceptions." + (shots ? " Screenshots in " + shots : ""));
 } finally {
   if (app) await app.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

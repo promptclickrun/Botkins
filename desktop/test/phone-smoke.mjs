@@ -166,5 +166,5 @@ try {
   console.log("phone smoke: ok");
 } finally {
   await app?.close().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

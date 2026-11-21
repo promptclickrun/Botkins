@@ -559,5 +559,5 @@ try {
 } finally {
   if (app) await app.close();
   await oauth.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

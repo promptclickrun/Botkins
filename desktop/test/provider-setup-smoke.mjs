@@ -81,5 +81,5 @@ try {
   console.log("Provider Settings passed cancellation, install failure, retry, output, sign-in handoff and masked token submission.");
 } finally {
   await app?.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

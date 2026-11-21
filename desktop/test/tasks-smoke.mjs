@@ -84,5 +84,5 @@ try {
   console.log("Tasks board: add, edit, move between lanes and the Working rule passed.");
 } finally {
   await app.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

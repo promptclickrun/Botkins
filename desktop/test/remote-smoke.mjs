@@ -156,4 +156,4 @@ try {
   await a.shot("failed-a.png").catch(() => {});
   console.error(error);
   process.exitCode = 1;
-} finally { for (const each of [a, b]) { await each.app.close().catch(() => {}); try { process.kill(each.pid, 0); process.kill(each.pid); } catch {} rmSync(each.dir, { recursive: true, force: true }); } }
+} finally { for (const each of [a, b]) { await each.app.close().catch(() => {}); try { process.kill(each.pid, 0); process.kill(each.pid); } catch {} rmSync(each.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } }
