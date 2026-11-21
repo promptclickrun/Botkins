@@ -10,6 +10,7 @@ import { after, test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { cleanSpaceEvent, digestAlert, eventAlert, SPACE_ALERTS, spaceName } from "../link-host/space-alerts.mjs";
+import { OWNER, spaceNews } from "../link-host/team.mjs";
 import { spaceRoute } from "../src/features/spaces/logic";
 import { checkJoin, type FetchLike, LinkClient, pair, type Pairing, startJoin } from "../src/link/client";
 import { agree, fromUtf8, hkdf, open, unb64u, utf8 } from "../src/link/crypto";
@@ -49,6 +50,29 @@ test("the words of a note, a change and the once-a-day alert", () => {
   assert.deepEqual(digestAlert([{ space: launch, titles: ["Signups"], total: 1 }], false), { t: "Launch", m: "1 panel changed overnight." });
   assert.deepEqual(digestAlert([{ space: launch, titles: ["a"] }, { space: money, titles: ["b"] }], false), { t: "Spaces", m: "2 spaces changed overnight." });
   assert.equal(digestAlert([]), null);
+});
+
+test("the day's news for a person: what changed since they last looked or since the last alert, never their own change", () => {
+  const role = { id: "r", name: "R", perms: { agents: ["view", "chat"], today: ["view", "use", "create", "manage", "delete"], skills: [], mcp: [], plugins: [], settings: [] }, bots: ["mira"] };
+  const made = (views: Record<string, unknown> = {}) => ({ roles: [role], groups: [{ id: "g", name: "G", roleId: "r" }], members: [{ id: "m_a", name: "Ana", groupId: "g" }], chats: {}, views, spaces: { s_launch: { access: "team", teamCan: "edit" }, s_money: { access: "team", teamCan: "view" } }, linkSharing: false });
+  const records = [
+    { id: "s_launch", name: "Launch", createdAt: 1, updatedAt: 1, rev: 1, items: [{ id: "p1", botId: "mira", updatedAt: 500 }, { id: "p2", botId: "mira", updatedAt: 900, by: "m_a" }, { id: "p3", botId: "patch", updatedAt: 950 }, { id: "p4", botId: "mira", updatedAt: 100 }] },
+    { id: "s_money", name: "Money", createdAt: 2, updatedAt: 2, rev: 1, items: [{ id: "p5", botId: "mira", updatedAt: 800 }] },
+  ];
+  const context = { role, names: new Map([[OWNER, "Alex"], ["m_a", "Ana"]]) };
+  const news = (views: Record<string, unknown>, since: number, person = "m_a") => (spaceNews(made(views), records, person, person === OWNER ? { names: context.names } : context, since) as { space: { id: string }; items: string[] }[]).map((one) => [one.space.id, one.items]);
+  const notify = { s_launch: "daily", s_money: "all" };
+  // Since the last alert (300): what changed after it, but her own change (p2) and a bot her role can't see (p3).
+  assert.deepEqual(news({ m_a: { spaces: { notify } } }, 300), [["s_launch", ["p1"]], ["s_money", ["p5"]]]);
+  // She opened Launch at 600, after p1 changed: it is no news to her.
+  assert.deepEqual(news({ m_a: { spaces: { notify, seen: { s_launch: 600 } } } }, 300), [["s_money", ["p5"]]]);
+  // Nothing changed since the last alert at 950.
+  assert.deepEqual(news({ m_a: { spaces: { notify } } }, 950), []);
+  // A space shared with all members is Off for her until she chooses: nothing about it.
+  assert.deepEqual(news({}, 0), []);
+  assert.deepEqual(news({ m_a: { spaces: { notify: { s_money: "daily" } } } }, 0), [["s_money", ["p5"]]]);
+  // The owner made both: "Once a day" by default, every bot, and Ana's change is news to the owner.
+  assert.deepEqual(news({}, 300, OWNER), [["s_launch", ["p1", "p2", "p3"]], ["s_money", ["p5"]]]);
 });
 
 test("what the app may say happened is cut to its shape", () => {
@@ -230,52 +254,65 @@ test("a note and a change reach the people who want to hear of them, sealed, and
 test("once a day, between 8:00 and noon, each person is told what changed since they last looked", async () => {
   const { link, owner, join, settle, stop } = await team();
   try {
+    const ana = await join("Ana");
     const ben = await join("Ben");
     await owner.until(() => owner.space("Launch"), "the owner's spaces");
     const launchId = owner.space("Launch")!.id;
-    const benId = link.store.data.team.members.find((member: any) => member.name === "Ben").id;
-    await owner.call("link.spaces.share", launchId, { access: "members", grants: [{ id: benId, can: "view" }] });
+    const idOf = (name: string) => link.store.data.team.members.find((member: any) => member.name === name).id;
+    await owner.call("link.spaces.share", launchId, { access: "members", grants: [{ id: idOf("Ana"), can: "edit" }, { id: idOf("Ben"), can: "view" }] });
+    await ana.until(() => ana.space("Launch"), "Ana is sent Launch");
     await ben.until(() => ben.space("Launch"), "Ben is sent Launch");
-    await settle();
-    owner.alerts();
-    ben.alerts();
-    const at = (hour: number, day = 0) => {
+    // The days are tomorrow and after: a time earlier today could be before what the test does, whatever
+    // the hour and the time zone it runs in.
+    const at = (hour: number, day = 1) => {
       const time = new Date();
       time.setDate(time.getDate() + day);
       time.setHours(hour, 30, 0, 0);
       return time.getTime();
     };
 
-    // Before 8:00 and after noon nothing is sent, and the day stays open.
-    link.spaceAlerts.now = () => at(7);
-    assert.equal(link.spaceAlerts.daily(), 0);
-    link.spaceAlerts.now = () => at(13);
-    assert.equal(link.spaceAlerts.daily(), 0);
-    assert.equal(link.store.data.team.spaceDigest, undefined);
-
-    // At 8:30: Ben, picked for Launch, never opened it. One space, so its name and what changed.
-    link.spaceAlerts.now = () => at(8);
-    assert.ok(link.spaceAlerts.daily() >= 2);
+    // (The owner's phone was told of the two requests to join; those are not about spaces.)
     await settle();
-    const bens = ben.alerts();
-    assert.equal(bens.length, 1);
-    assert.deepEqual([bens[0].t, bens[0].k, bens[0].s], ["Launch", "space", launchId]);
-    assert.match(bens[0].m, /^2 panels changed overnight: (Launch checklist and Signups|Signups and Launch checklist)\.$/);
-    // The owner never opened any of the demo's spaces: several changed, so their names, and a tap opens the list.
-    const owners = owner.alerts();
-    assert.equal(owners.length, 1);
-    assert.deepEqual([owners[0].t, owners[0].s], ["Spaces", undefined]);
-    assert.match(owners[0].m, /^.+, .+ and \d+ more changed overnight\.$/);
+    owner.alerts();
+    // The first look, as the computer started, only noted the time: nobody is told that everything they
+    // never opened "changed overnight". What changed before that look is never news.
+    assert.equal(link.store.data.team.spaceDigest.day, "");
+    assert.ok(link.store.data.team.spaceDigest.at <= Date.now());
+    assert.deepEqual([owner.alerts(), ana.alerts(), ben.alerts()], [[], [], []]);
+
+    // Ana ticks an item. Nobody chose "Every change", so nothing is sent right away.
+    const checklist = (await ana.call<SpaceContent>("spaces.read", launchId)).panels[0];
+    await ana.call("spaces.patchState", checklist.id, { ticked: { "Status page": true } }, "Ticked Status page");
+    await settle();
+    assert.deepEqual([owner.alerts(), ben.alerts()], [[], []]);
+
+    // The next day, before 8:00 and after noon, nothing is sent and the day stays open.
+    link.spaceAlerts.now = () => at(7, 2);
+    assert.equal(link.spaceAlerts.daily(), 0);
+    link.spaceAlerts.now = () => at(13, 2);
+    assert.equal(link.spaceAlerts.daily(), 0);
+
+    // At 8:30 the owner and Ben are each told once: the space's name, and what changed. Ana is not told of her own change.
+    link.spaceAlerts.now = () => at(8, 2);
+    assert.equal(link.spaceAlerts.daily(), 2);
+    await settle();
+    for (const phone of [owner, ben]) {
+      const got = phone.alerts();
+      assert.deepEqual(got.map((one) => [one.t, one.m, one.k, one.s, one.p]), [["Launch", "1 panel changed overnight: " + checklist.title + ".", "space", launchId, undefined]]);
+      assert.equal(got[0].shown, "A space changed");
+    }
+    assert.deepEqual(ana.alerts(), []);
 
     // Once for each day, also after a restart (the day is kept with the team).
     assert.equal(link.spaceAlerts.daily(), 0);
     assert.match(link.store.data.team.spaceDigest.day, /^\d{4}-\d{2}-\d{2}$/);
 
-    // The next day tells only of what changed since: nothing did, so nobody is told.
-    link.spaceAlerts.now = () => at(9, 1);
+    // The day after tells only of what changed since: nothing did, so nobody is told.
+    link.spaceAlerts.now = () => at(9, 3);
     assert.equal(link.spaceAlerts.daily(), 0);
     await settle();
     assert.deepEqual([owner.alerts(), ben.alerts()], [[], []]);
+
   } finally {
     await stop();
   }

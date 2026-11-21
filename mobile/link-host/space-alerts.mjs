@@ -161,11 +161,17 @@ export class SpaceAlerts {
     const { day, hour } = localDay(now);
     const team = this.team();
     const before = team.spaceDigest;
-    if (hour < SPACE_ALERTS.hour || hour >= SPACE_ALERTS.until || before?.day === day) return 0;
+    // The first look only notes the time. Without it, the first morning would tell everyone that
+    // every space they never opened "changed overnight".
+    if (!before) {
+      this.setTeam({ ...team, spaceDigest: { day: "", at: now } });
+      return 0;
+    }
+    if (hour < SPACE_ALERTS.hour || hour >= SPACE_ALERTS.until || before.day === day) return 0;
     const records = this.records();
     if (!records) return 0;
     const titleOf = this.titles();
-    const since = Number(before?.at) || 0;
+    const since = Number(before.at) || 0;
     const here = this.spaces.here();
     const byPerson = new Map();
     let sent = 0;
