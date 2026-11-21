@@ -34,7 +34,6 @@ export const REASONS = {
 
 /** The parts of the work that still owe commands, in the order they are built. When all are done, `owed` is no longer accepted. */
 export const PARTS = {
-  i: "a tool's sign-in from a terminal, with no browser on this computer",
   d: "projects, routines, tasks, the wiki, chats, preferences, credentials, usage, and the rest of a bot",
   e: "Spaces, panels and the team",
 };
@@ -128,11 +127,12 @@ export const WORKSPACE = {
   testMcpServer: cmd("tools test"),
   importMcpServers: cmd("tools import"),
   signOutMcpServer: cmd("tools sign-out"),
-  // A tool's sign-in from a terminal is owed (part i): the address is handed to the person, who
-  // signs in on another device and gives back where they were sent. Until then a paired phone
-  // signs a tool in and hands the sign-in over. (`tools sign-out` covers the tools a person added;
-  // `plugins sign-out` covers the tools of a plugin, whose ids start with "plugin-".)
-  ...each("signInMcpServer cancelMcpSignIn", owed("i")),
+  // A tool's sign-in from a terminal: the page is handed to the person, who signs in on another
+  // device and gives back the address the browser was sent to (`tools sign-in`). The tools of a
+  // plugin, whose ids start with "plugin-", sign in with `plugins sign-in` (the same calls of the
+  // window, by the plugin's name and the tool's); `tools sign-out` forgets the tools a person added
+  // and `plugins sign-out` those of a plugin.
+  ...each("signInMcpServer cancelMcpSignIn", cmd("tools sign-in")),
   importMcpServerFile: no("window"), // a file dialog; `tools import <file>` reads the file itself
   skills: cmd("skills list"),
   readSkill: cmd("skills show"),
@@ -388,8 +388,8 @@ export const CHANGES = {
   // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
   // ── Voice (control-voice.mjs) ──
 };
-/** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
-export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+/** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
+export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
@@ -402,6 +402,15 @@ export const MORE_READS = {
   voice: [],
 };
 READS.push(...Object.values(MORE_READS).flat());
+
+/**
+ * The calls of a tool's sign-in. They are in neither list above: the dispatcher writes no line for them, not when they start,
+ * not when an address is turned away, not for a cancel and not for a time-out. The sign-in writes its own line once, when it
+ * is done (`startToolSignIn` in control-tools.mjs): "Changed from the command line: tools.signIn <name> (signed in)", or
+ * "(signed in again)" when it replaces one. The name is the service's own record of the tool, never a word the caller typed
+ * (so a code in the place of a name is nowhere in the log), and the page, the pasted address and its code are never there.
+ */
+export const LOGS_ITSELF = ["tools.signIn", "tools.signIn.answer", "tools.signIn.end", "plugins.signIn", "plugins.signIn.answer", "plugins.signIn.end"];
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);

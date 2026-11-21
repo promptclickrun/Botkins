@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { CliError, EXIT, usage } from "../output.mjs";
 import { ask, confirm, readAll } from "./input.mjs";
 import { hasUnshown } from "../../desktop/shown-text.mjs";
-import { safe, shellWord, shown } from "./tools.mjs";
+import { safe, shellWord, shown, SIGN_IN_DETAILS, SIGN_IN_OPTIONS, signInCommand } from "./tools.mjs";
 
 const YES = { yes: { type: "boolean", about: "Don't ask first. For a plugin that runs commands on this computer it needs --revision too" } };
 const REVISION = { revision: { type: "string", value: "revision", about: "The revision that you looked at (`botkins plugins show` prints it). The plugin is refused when it is another one now" } };
@@ -492,10 +492,28 @@ export const pluginCommands = {
       context.print(plugin, (now) => described(now) + "\nAdded, and switched off. Switch it on with `botkins plugins enable -- " + idWord(now.id) + "`." + idNote(now.id));
     },
   },
+  "sign-in": {
+    summary: "Sign in a tool of a plugin that signs in, with a browser on any device",
+    usage: "botkins plugins sign-in <id> [--tool <name>] [--start | --finish | --cancel] [--no-input]",
+    options: { tool: { type: "string", value: "name", about: "Which tool, when the plugin has more than one that signs in (the tool's name in `botkins plugins show`)" }, ...SIGN_IN_OPTIONS },
+    arguments: [{ name: "id", required: true }],
+    details: "A plugin with one tool that signs in needs no --tool. With several, the command refuses and lists their names.\n\n" + SIGN_IN_DETAILS,
+    async run(context) {
+      const ref = one(context, "Name the plugin (its id or name).");
+      const tool = context.options.tool;
+      return signInCommand(context, {
+        calls: "plugins.signIn",
+        // (The tool is always the second word of the call, so that what follows it is the address and nothing else.)
+        target: [ref, tool ?? null],
+        // The plugin's id and the tool's name are the plugin's own words: each is written for a shell, or is a placeholder.
+        next: (started) => "botkins plugins sign-in --finish " + shellWord("--tool=" + started.tool, "--tool=<the tool>") + " -- " + idWord(started.plugin),
+      });
+    },
+  },
   "sign-out": {
     summary: "Forget the sign-ins of a plugin's tools",
     usage: "botkins plugins sign-out <id>",
-    details: "A tool on the web signs in through a browser. Sign it in from a paired phone or from the app's window.",
+    details: "A tool on the web signs in through a browser. Forget its sign-in here, and sign it in again with `botkins plugins sign-in`.",
     async run(context) {
       context.print(await context.client.call("plugins.signOut", one(context, "Name the plugin (its id or name).")), (done) =>
         !done.tools ? called(done) + " has no tool that signs in." : done.signedOut ? called(done) + " is signed out (" + done.signedOut + " of its " + done.tools + " tool" + (done.tools === 1 ? "" : "s") + " that sign in " + (done.signedOut === 1 ? "was" : "were") + " signed in)." : called(done) + " was not signed in.",

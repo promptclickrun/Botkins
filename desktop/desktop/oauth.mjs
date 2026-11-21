@@ -6,16 +6,25 @@
 //
 // Nothing here is specific to one model provider. The app's page never sees a token: it asks to
 // sign in or out and reads `status()`.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { approvedClient } from "./oauth-clients.mjs";
 
 /** Where the browser hands the sign-in back. A fixed port, so it can be registered by hand too. */
 export const REDIRECT_PORT = 47823;
 const redirectUri = (port) => "http://127.0.0.1:" + port + "/callback";
+/** The port in a return address that Botkins made (`redirectUri`), or 0 for any other address. */
+const keptPort = (address) => {
+  const port = Number(/^http:\/\/127\.0\.0\.1:(\d{1,5})\/callback$/.exec(String(address))?.[1]);
+  return port > 0 && port < 65536 && redirectUri(port) === address ? port : 0;
+};
 const TIMEOUT = 15000;
 const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
 const EARLY = 60 * 1000; // a token this close to its end is renewed first
+
+/** What a sign-in says when a sign-in to a tool that cannot use another port ended it to take its port. */
+export const ENDED_FOR_PORT = "This sign-in was ended: a sign-in to another tool needed its port. Start it again.";
+const PORT_FREE_MS = 5000; // how long a sign-in waits for the port of one that it ended
 
 const MAX_ANSWER = 1_000_000; // bytes read from any one answer of a sign-in server
 
@@ -80,6 +89,28 @@ async function capped(response) {
     chunks.push(Buffer.from(value));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+/** An error with a code, for a caller that tells one refusal from another (a terminal host). */
+const coded = (message, code) => Object.assign(new Error(message), { code });
+/**
+ * The account that the sign-in server says the person signed in as: the `email` claim of the
+ * `id_token` of the token answer (a JWT), trimmed and cut to 120 characters. No other claim is used:
+ * a name or a user name is chosen by the person who owns the account, so it can say anything,
+ * even the name of somebody else. The payload is read and not verified: it is the server's own word,
+ * shown as that. Nothing is asked of any server for it, and the id token is never kept. Null when the
+ * answer has no email.
+ */
+export function accountOf(reply) {
+  const token = reply?.id_token;
+  if (typeof token !== "string" || token.length > 20_000) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const email = claims?.email;
+    if (typeof email === "string" && email.trim()) return email.trim().slice(0, 120);
+  } catch {}
+  return null;
 }
 const sameAddress = (a, b) => String(a).replace(/\/+$/, "") === String(b).replace(/\/+$/, "");
 /** The value of one parameter in a WWW-Authenticate header. */
@@ -277,13 +308,48 @@ export class McpOAuth {
       resource: aboutThis(resource?.resource) ? String(resource.resource) : own,
     };
   }
-  /** Listens on this computer for the browser's answer. Resolves { port, wait(state), close }. */
-  listen(port, callback) {
+  /**
+   * Listens on this computer for the browser's answer. Resolves { port, wait(state), take(address,
+   * redirect), cancel, close }. `take` is for a browser on another device (a terminal host): the
+   * person pastes the address the browser was sent back to, and it is judged by the same rules.
+   */
+  listen(port, callback, timeout = SIGN_IN_TIMEOUT) {
     return new Promise((resolve, reject) => {
       let settle;
-      const answer = new Promise((done, fail) => (settle = { done, fail }));
+      let answered = false;
+      const answer = new Promise((done, fail) =>
+        (settle = {
+          done: (value) => ((answered = true), done(value)),
+          fail: (error) => ((answered = true), fail(error)),
+        }),
+      );
       answer.catch(() => {});
       let expected = null;
+      /** The mark of the answer is compared in constant time: a different length, or none, is not it. */
+      const marked = (state) => {
+        if (!expected || typeof state !== "string") return false;
+        const given = Buffer.from(state);
+        const wanted = Buffer.from(expected);
+        return given.length === wanted.length && timingSafeEqual(given, wanted);
+      };
+      /**
+       * What an answer's values mean, for one the browser brought here and for one the person
+       * pasted: `done` or `fail` ends the sign-in, anything else is turned away and the sign-in
+       * stays open. `said` is the refusal for a terminal.
+       */
+      const judge = (params) => {
+        if (!marked(params.get("state")))
+          return { status: 400, title: "Sign-in didn't match", body: "This answer doesn't belong to the sign-in Botkins started. Start again from Botkins.", said: "That address is not the answer to this sign-in. Open the page this sign-in gave you, sign in there, and copy the address the browser goes to then." };
+        if (params.get("error"))
+          return {
+            status: 200,
+            title: "Sign-in wasn't completed",
+            body: "You can close this tab and return to Botkins.",
+            fail: new Error(params.get("error") === "access_denied" ? "Sign-in was cancelled." : "Sign-in failed: " + (params.get("error_description") || params.get("error")).slice(0, 300)),
+          };
+        if (!params.get("code")) return { status: 400, title: "Sign-in didn't finish", body: "The answer had no code. Start again from Botkins.", said: "That address has no code in it. Copy the whole address, to its end." };
+        return { status: 200, title: "Signed in", body: "You can close this tab and return to Botkins.", done: { code: params.get("code"), iss: params.get("iss") } };
+      };
       const server = createServer((request, response) => {
         const html = (status, title, body) => {
           response.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'" });
@@ -299,25 +365,38 @@ export class McpOAuth {
         const host = String(request.headers.host ?? "");
         if (callback ? host !== callback.host : !/^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host)) return html(400, "Not found", "This address only finishes a Botkins sign-in.");
         if (request.method !== "GET" || url.pathname !== (callback?.pathname ?? "/callback")) return html(404, "Not found", "This address only finishes a Botkins sign-in.");
-        const params = url.searchParams;
-        if (!expected || params.get("state") !== expected) return html(400, "Sign-in didn't match", "This answer doesn't belong to the sign-in Botkins started. Start again from Botkins.");
-        if (params.get("error")) {
-          html(200, "Sign-in wasn't completed", "You can close this tab and return to Botkins.");
-          return settle.fail(new Error(params.get("error") === "access_denied" ? "Sign-in was cancelled." : "Sign-in failed: " + (params.get("error_description") || params.get("error")).slice(0, 300)));
-        }
-        if (!params.get("code")) return html(400, "Sign-in didn't finish", "The answer had no code. Start again from Botkins.");
-        html(200, "Signed in", "You can close this tab and return to Botkins.");
-        settle.done({ code: params.get("code"), iss: params.get("iss") });
+        const verdict = judge(url.searchParams);
+        html(verdict.status, verdict.title, verdict.body);
+        if (verdict.fail) settle.fail(verdict.fail);
+        if (verdict.done) settle.done(verdict.done);
       });
       server.once("error", reject);
       server.on("clientError", (_error, socket) => socket.destroy());
       server.listen(port, callback?.hostname === "[::1]" ? "::1" : "127.0.0.1", () => {
-        const timer = setTimeout(() => settle.fail(new Error("Sign-in timed out. Try again.")), SIGN_IN_TIMEOUT);
+        const timer = setTimeout(() => settle.fail(new Error("Sign-in timed out. Try again.")), timeout);
         resolve({
           port: server.address().port,
           wait: (state) => {
             expected = state;
             return answer;
+          },
+          take: (address, redirect) => {
+            // The first answer ends the sign-in. A second one is not "taken": it would say yes and do nothing.
+            if (answered) throw coded("This sign-in has its answer already.", "ANSWERED");
+            const text = String(address ?? "").trim();
+            let url = null;
+            if (text.length <= 8000)
+              try {
+                url = new URL(text);
+              } catch {}
+            if (!url) throw new Error("That is not a web address. Copy the whole address from the browser's address bar.");
+            // Only the address this sign-in told the server to send the browser back to: the same place, to the letter.
+            const back = new URL(redirect);
+            if (url.origin !== back.origin || url.pathname !== back.pathname) throw new Error("That is not the address this sign-in sends the browser back to. That address starts with " + redirect + ".");
+            const verdict = judge(url.searchParams);
+            if (verdict.fail) return void settle.fail(verdict.fail);
+            if (!verdict.done) throw new Error(verdict.said);
+            settle.done(verdict.done);
           },
           cancel: () => settle.fail(new Error("Sign-in was cancelled.")),
           close: () => {
@@ -361,10 +440,44 @@ export class McpOAuth {
   /**
    * Signs the person in through their browser. `client` is { clientId, clientSecret? } when the
    * person entered an app registration by hand, and `hint` what the server said it needs.
+   * A terminal host has no browser: it passes its own `open(address, { redirect })`, which shows
+   * the address to the person, and gives the answer with `answer()`. `patience` is how long the
+   * answer may take, in milliseconds. `finished({ account, again })` is called once the tokens
+   * are written: `again` is true when a sign-in was there before and is replaced, and `account` is
+   * the email that the sign-in server says the account has (accountOf), or null.
+   *
+   * The answer comes back to one port. When another sign-in of this app holds it, a tool that can use
+   * another port does (the port of a registration kept for this server, else one from the system). A
+   * tool that cannot (an approved client, a client the person typed in, a server with no registration)
+   * ends the holder when `followed()` of the holder says that nobody follows it, and is refused, with
+   * the holder named, while somebody does. `followed` is a function that says whether a person follows
+   * this sign-in at this moment; with none the answer is yes (the window's sign-in has a person in front of its browser).
+   *
+   * A cancel (`cancel()`) ends the sign-in in any state: before the page, while it waits, after
+   * the address was taken and while the token request is out. Nothing is written after it.
    */
-  async signIn(server, { client, scope, hint } = {}) {
+  async signIn(server, { client, scope, hint, open = this.open, patience, finished, followed = () => true } = {}) {
     if (this.flows.has(server.id)) throw new Error("A sign-in for " + server.name + " is already open in your browser.");
-    const flow = { cancelled: false, cancel: () => {} };
+    const flow = {
+      id: server.id,
+      cancelled: false,
+      reason: null,
+      cancel: () => {},
+      abort: () => {},
+      name: server.name,
+      port: null,
+      // (A function that throws is a person who follows: ending a sign-in is the thing to be careful with.)
+      followed: () => {
+        try {
+          return followed() !== false;
+        } catch {
+          return true;
+        }
+      },
+    };
+    // Rejects when the sign-in is cancelled: a request that is out is not waited for then.
+    const aborted = new Promise((_resolve, reject) => (flow.abort = () => reject(new Error("Sign-in was cancelled."))));
+    aborted.catch(() => {});
     this.flows.set(server.id, flow);
     this.changed();
     let listener;
@@ -377,14 +490,44 @@ export class McpOAuth {
       const port = approved ? Number(approved.callback.port || 80) : this.port;
       const missingClient = () => new Error("Ask your administrator or the server operator to configure an approved OAuth client for " + server.name + ". You can also enter a client ID in this server's advanced sign-in settings.");
       if (!approved && !client && !meta.registration_endpoint && !saved.registered) throw missingClient();
-      // The answer comes back to a fixed port. When something else holds it, a registration made
-      // for another port can be made again; one typed in by hand can't.
-      try {
-        listener = await this.listen(port, approved?.callback);
-      } catch (error) {
-        if (approved || client || !meta.registration_endpoint) throw new Error("Botkins couldn't listen for the sign-in on port " + port + ". Close what is using it and try again.");
-        listener = await this.listen(0);
+      // The answer comes back to one port. When another sign-in of this app holds it, a tool that can use another port does.
+      // A tool that cannot (its return address is fixed) ends a holder that nobody follows, and is refused while somebody does.
+      const canMove = !approved && !client && !!meta.registration_endpoint;
+      const holder = () => (port ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
+      const held = (other) => new Error("Another sign-in (to " + other.name + ") is open on this computer and holds the port. Finish it or cancel it, then try again.");
+      if (holder() && !canMove) {
+        const other = holder();
+        if (other.followed()) throw held(other);
+        this.cancel(other.id, ENDED_FOR_PORT);
+        // Its end frees its port: that is waited for, not for ever.
+        for (let waited = 0; holder() && waited < PORT_FREE_MS; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
+        if (holder()) throw held(holder());
       }
+      if (!holder()) {
+        flow.port = port || null;
+        try {
+          listener = await this.listen(port, approved?.callback, patience);
+        } catch (error) {
+          flow.port = null;
+          if (holder() && !canMove) throw held(holder());
+          if (!canMove) throw new Error("Botkins couldn't listen for the sign-in on port " + port + ". Close what is using it and try again.");
+        }
+      }
+      if (!listener) {
+        // Another port: first that of a registration kept for this server (it is used again, so none is made), then one from the system.
+        const kept = [saved.registered && saved, saved.registration]
+          .filter((entry) => entry?.clientId && entry.issuer === found.issuer && entry.tokenEndpoint === meta.token_endpoint)
+          .map((entry) => keptPort(entry.redirectUri))
+          .filter((other) => other && other !== port);
+        for (const other of kept) {
+          try {
+            listener = await this.listen(other, undefined, patience);
+            break;
+          } catch {}
+        }
+        listener ??= await this.listen(0, undefined, patience);
+      }
+      flow.port = listener.port;
       flow.cancel = listener.cancel;
       if (flow.cancelled) throw new Error("Sign-in was cancelled.");
       const redirect = approved?.redirectUri ?? redirectUri(listener.port);
@@ -395,9 +538,11 @@ export class McpOAuth {
         throw new Error(
           server.name + " now signs in at " + new URL(meta.token_endpoint).host + ", not where its client secret was first used. If that is right, enter the client secret again in this server's sign-in settings.",
         );
-      // A registration Botkins made is reused only with the very sign-in server it was made at.
-      if (!app && saved.registered && saved.clientId && saved.redirectUri === redirect && saved.issuer === found.issuer && saved.tokenEndpoint === meta.token_endpoint)
-        app = { clientId: saved.clientId, clientSecret: saved.clientSecret, registered: true };
+      // A registration Botkins made is reused only with the very sign-in server it was made at, and for the
+      // same return address. One of a sign-in that was done is in the saved sign-in itself; one of a sign-in
+      // that was cancelled or ran out of time is `registration` (below). Neither holds a token.
+      const reusable = [saved.registered && saved, saved.registration].find((kept) => kept?.clientId && kept.redirectUri === redirect && kept.issuer === found.issuer && kept.tokenEndpoint === meta.token_endpoint);
+      if (!app && reusable) app = { clientId: reusable.clientId, clientSecret: reusable.clientSecret, registered: true };
       if (!app) {
         if (!meta.registration_endpoint) throw missingClient();
         const reply = await this.json(meta.registration_endpoint, {
@@ -416,6 +561,9 @@ export class McpOAuth {
         if (!reply.ok || !reply.body?.client_id)
           throw new Error(server.name + " didn't accept Botkins' registration" + (reply.body?.error_description ? ": " + String(reply.body.error_description).slice(0, 200) : "."));
         app = { clientId: String(reply.body.client_id), ...(reply.body.client_secret && { clientSecret: String(reply.body.client_secret) }), registered: true };
+        // Kept now, in the same place as the sign-in and with the same care, so that a start that is cancelled or
+        // runs out of time does not make a new client at the next start. An earlier sign-in's own values stay as they are.
+        this.write(server, { ...(this.read(server) ?? {}), registration: { clientId: app.clientId, ...(app.clientSecret && { clientSecret: app.clientSecret }), redirectUri: redirect, issuer: found.issuer, tokenEndpoint: meta.token_endpoint } });
       }
       const verifier = b64(randomBytes(48));
       const state = b64(randomBytes(24));
@@ -432,19 +580,29 @@ export class McpOAuth {
       }))
         authorize.searchParams.set(key, value);
       const answered = listener.wait(state);
-      await this.open(authorize.href);
+      flow.take = (address) => listener.take(address, redirect);
+      await open(authorize.href, { redirect });
       const { code, iss } = await answered;
+      // A cancel after the address was taken ends the sign-in too: the token request is not sent.
+      if (flow.cancelled) throw new Error("Sign-in was cancelled.");
       // When the server names itself in the answer it must be the one that was asked (RFC 9207),
       // and a server that says it names itself must do so.
       if ((iss && !sameAddress(iss, found.issuer)) || (!iss && meta.authorization_response_iss_parameter_supported === true))
-        throw new Error("The sign-in answer came from a different server than the one asked.");
-      const reply = await this.tokenRequest(meta, app, {
+        throw new Error("The sign-in answer came from a different server than the one asked. The sign-in is over. Start it again.");
+      const request = this.tokenRequest(meta, app, {
         grant_type: "authorization_code",
         code,
         redirect_uri: redirect,
         code_verifier: verifier,
         resource: found.resource,
       });
+      request.catch(() => {});
+      // A cancel while the request is out ends the sign-in at once; what the request brings is dropped.
+      const reply = await Promise.race([request, aborted]);
+      // Nothing between this look and the write waits: a cancel is either before it, and nothing is written, or after it.
+      if (flow.cancelled) throw new Error("Sign-in was cancelled.");
+      const again = !!this.read(server)?.accessToken;
+      const account = accountOf(reply);
       this.write(server, {
         issuer: found.issuer,
         tokenEndpoint: meta.token_endpoint,
@@ -458,7 +616,11 @@ export class McpOAuth {
         ...(app.registered && { registered: true, ...(app.clientSecret && { clientSecret: app.clientSecret }) }),
         ...this.tokens(reply, { scope: wanted }),
       });
+      finished?.({ account, again });
       return this.status(server);
+    } catch (error) {
+      // A sign-in that was ended for a reason says that reason, whichever step it was in.
+      throw flow.cancelled && flow.reason ? new Error(flow.reason) : error;
     } finally {
       listener?.close();
       this.flows.delete(server.id);
@@ -510,11 +672,25 @@ export class McpOAuth {
     this.changed();
     return this.status(server);
   }
-  cancel(serverId) {
+  /**
+   * The answer to an open sign-in, as the address the browser was sent back to, pasted by the
+   * person when the browser is on another device. It is judged as the browser's own answer is:
+   * `state` must be this sign-in's, and `signIn` then checks `iss`. Throws why an address is
+   * turned away; the sign-in stays open for the right one.
+   */
+  answer(serverId, address) {
+    const flow = this.flows.get(serverId);
+    if (!flow?.take) throw coded("No sign-in is waiting for that address. Start the sign-in again.", "NO_SIGN_IN");
+    flow.take(address);
+  }
+  cancel(serverId, reason) {
     const flow = this.flows.get(serverId);
     if (!flow) return false;
+    if (reason) flow.reason = reason;
+    // Whatever state the sign-in is in: before the page, waiting, after the address was taken, with the token request out.
     flow.cancelled = true;
     flow.cancel();
+    flow.abort();
     return true;
   }
   /** Forgets a server's tokens, telling the sign-in server when it offers a way to. */

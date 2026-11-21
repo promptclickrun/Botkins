@@ -3,10 +3,11 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as listening } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import { Workspace } from "./starter.mjs";
-import { challengeParam, REDIRECT_PORT, scheme } from "../desktop/oauth.mjs";
+import { accountOf, challengeParam, REDIRECT_PORT, scheme } from "../desktop/oauth.mjs";
 import { serversWithTokens } from "../desktop/providers/sessions.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
@@ -558,4 +559,380 @@ test("a session puts the sign-in token on an http server, and on no other", asyn
   // With no sign-in to give, nothing changes.
   const none = await serversWithTokens({ mcpServers: servers, mcpAuth: async () => null });
   for (const name of Object.keys(servers)) assert.equal(none[name], servers[name], name);
+});
+
+// ---- A sign-in whose browser is on another device (a terminal host): the person copies the address
+// the browser was sent back to and gives it to `answer()`. It is judged as the browser's own answer is.
+
+/**
+ * Starts a sign-in with an `open` of its own that visits nothing, and plays the person's browser on
+ * another device: it fetches the sign-in page itself and keeps the address the browser would be sent
+ * back to. `done` is the sign-in; `back` is that address.
+ */
+async function otherDevice(t, serverOptions, signInOptions = {}) {
+  const env = await setup(t, serverOptions);
+  let shown;
+  const page = new Promise((resolve) => (shown = resolve));
+  const done = env.ws.integrations.signIn(env.id, { open: async (address, { redirect }) => shown({ address, redirect }), ...signInOptions });
+  done.catch(() => {});
+  const { address, redirect } = await page;
+  const first = await fetch(address, { redirect: "manual" });
+  const back = first.headers.get("location");
+  assert.ok(back, "the sign-in server sent the browser back");
+  const params = new URL(back).searchParams;
+  return { ...env, done, address, redirect, back, code: params.get("code"), state: params.get("state"), answer: (text) => env.ws.integrations.answerSignIn(env.id, text), open: () => env.ws.integrations.oauth.flows.has(env.id) };
+}
+/** The pasted address with one change. */
+const changed = (back, change) => {
+  const url = new URL(back);
+  change(url);
+  return url.href;
+};
+
+test("a pasted address is taken only when it is the address this sign-in named, and every other one leaves the sign-in open", async (t) => {
+  const { remote, ws, id, view, done, back, redirect, code, state, answer, open, opened, files } = await otherDevice(t);
+  assert.equal(opened.length, 0, "no browser was opened on this computer");
+  assert.equal(redirect, new URL(back).origin + new URL(back).pathname, "the address that the browser was sent to is the one the sign-in named");
+  const refusals = [];
+  const refused = (text, said) => {
+    // An address that is turned away has no code of its own: the sign-in is open still, and the caller says so.
+    assert.throws(() => answer(text), (error) => (refusals.push(error.message), said.test(error.message) && error.code === undefined), String(text).slice(0, 60));
+    assert.equal(open(), true, "the sign-in is open still");
+  };
+  // Another place: another port or host, another path, another scheme.
+  refused(changed(back, (url) => (url.port = String(Number(url.port) + 1))), /not the address this sign-in sends the browser back to/);
+  refused(changed(back, (url) => (url.hostname = "localhost")), /not the address this sign-in sends the browser back to/);
+  refused(changed(back, (url) => (url.pathname = "/elsewhere")), /not the address this sign-in sends the browser back to/);
+  refused(changed(back, (url) => (url.protocol = "https:")), /not the address this sign-in sends the browser back to/);
+  // The mark is compared as a whole: one of the same length that differs, and one that is the start of the right one.
+  refused(changed(back, (url) => url.searchParams.set("state", "x".repeat(state.length))), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.set("state", state.slice(0, -1))), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.set("state", state + "x")), /not the answer to this sign-in/);
+  // The right place with the mark of another sign-in, with none, and with no code.
+  refused(changed(back, (url) => url.searchParams.set("state", "from-another-sign-in")), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.delete("state")), /not the answer to this sign-in/);
+  refused(changed(back, (url) => url.searchParams.delete("code")), /no code in it/);
+  // Not an address at all, nothing, and far too much.
+  refused("this is not an address", /not a web address/);
+  refused("", /not a web address/);
+  refused("http://127.0.0.1:1/callback?" + "x".repeat(9000), /not a web address/);
+  // What was said about each refusal never has the code or the mark of this sign-in.
+  for (const said of refusals) for (const secret of [code, state]) assert.equal(said.includes(secret), false, said);
+  assert.equal(remote.state.log.some((r) => r.path === "/token"), false, "nothing went to the token address for an address that was turned away");
+  // With spaces around it, as a copy from a terminal has it, the right one finishes the sign-in.
+  answer("  " + back + "\n");
+  // The first answer ends the sign-in: another one now is not taken, and says so (its own code, not "turned away").
+  assert.throws(() => answer(back), (error) => error.code === "ANSWERED" && /has its answer already/.test(error.message));
+  const auth = await done;
+  assert.equal(auth.signedIn, true);
+  assert.equal(view().auth.signedIn, true);
+  assert.deepEqual(ws.vault.list().map((entry) => [entry.label, entry.kind]), [["words sign-in", "oauth"]]);
+  assert.equal(open(), false, "the sign-in is over");
+  // The code was used with the secret this computer made for this sign-in, once.
+  const exchange = new URLSearchParams(remote.state.log.find((r) => r.path === "/token").body);
+  assert.equal(exchange.get("code"), code);
+  assert.ok(exchange.get("code_verifier").length >= 43);
+  assert.equal(remote.state.log.filter((r) => r.path === "/token").length, 1);
+  assert.equal(files().includes(code) || files().includes(state), false, "neither the code nor the mark is kept");
+  // Nothing is waiting any more.
+  assert.throws(() => answer(back), (error) => error.code === "NO_SIGN_IN" && /No sign-in is waiting/.test(error.message));
+});
+
+test("an address that says access was denied ends the sign-in as cancelled, and one with nothing open is turned away", async (t) => {
+  const { ws, id, view, done, back, answer, open } = await otherDevice(t);
+  answer(changed(back, (url) => (url.searchParams.delete("code"), url.searchParams.set("error", "access_denied"))));
+  await assert.rejects(done, /Sign-in was cancelled\./);
+  assert.ok(!view().auth.signedIn);
+  assert.equal(open(), false);
+  assert.throws(() => answer(back), /No sign-in is waiting for that address/);
+  // The same for a sign-in that was never started, and for a server that is not there.
+  assert.throws(() => ws.integrations.answerSignIn(id, back), (error) => error.code === "NO_SIGN_IN");
+  assert.throws(() => ws.integrations.answerSignIn("nobody", back));
+  // Another kind of error says what the server said, in a few words.
+  const second = await otherDevice(t);
+  second.answer(changed(second.back, (url) => (url.searchParams.delete("code"), url.searchParams.set("error", "server_error"), url.searchParams.set("error_description", "The server broke"))));
+  await assert.rejects(second.done, /Sign-in failed: The server broke/);
+  // An error with another sign-in's mark is not an answer to this one: it ends nothing.
+  const third = await otherDevice(t);
+  assert.throws(() => third.answer(changed(third.back, (url) => (url.searchParams.delete("code"), url.searchParams.set("error", "access_denied"), url.searchParams.set("state", "other")))), /not the answer to this sign-in/);
+  assert.equal(third.open(), true);
+  third.ws.integrations.cancelSignIn(third.id);
+  await assert.rejects(third.done, /Sign-in was cancelled/);
+});
+
+test("the sign-in server's name in a pasted address is checked as in the browser's own answer", async (t) => {
+  const supported = { tweak: { server: (doc) => ({ ...doc, authorization_response_iss_parameter_supported: true }) } };
+  // A server that says it names itself, and an address with no name.
+  const none = await otherDevice(t, supported);
+  none.answer(none.back);
+  await assert.rejects(none.done, /came from a different server than the one asked/);
+  assert.ok(!none.view().auth.signedIn);
+  // An address with another server's name.
+  const other = await otherDevice(t, supported);
+  other.answer(changed(other.back, (url) => url.searchParams.set("iss", "https://someone-else.example")));
+  await assert.rejects(other.done, /came from a different server than the one asked/);
+  assert.equal(other.remote.state.log.some((r) => r.path === "/token"), false, "a code from another server is not sent anywhere");
+  // With the right name it finishes.
+  const right = await otherDevice(t, supported);
+  right.answer(changed(right.back, (url) => url.searchParams.set("iss", right.remote.origin)));
+  assert.equal((await right.done).signedIn, true);
+});
+
+test("a sign-in in a terminal host waits as long as it was given, and no longer", async (t) => {
+  const { ws, id, view } = await setup(t);
+  const started = Date.now();
+  // Nobody answers: the wait is the one given (50 ms), not the five minutes of the window's own sign-in.
+  await assert.rejects(ws.integrations.signIn(id, { open: async () => {}, patience: 50 }), /Sign-in timed out\. Try again\./);
+  assert.ok(Date.now() - started < 5000);
+  assert.equal(ws.integrations.oauth.flows.has(id), false, "the sign-in is over and its port is free");
+  assert.ok(!view().auth.signedIn);
+  // Without a patience the window's own wait stays (no browser opens here: it is answered through the stand-in).
+  assert.equal((await ws.integrations.signIn(id)).signedIn, true);
+});
+
+// ---- Which account, a sign-in that replaces one, a cancel at any time, the one port, and a kept registration.
+
+/** A port the system gives (never a fixed number): it is free when this returns. */
+const freePort = () =>
+  new Promise((resolve) => {
+    const server = listening();
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+const until = async (check, what) => {
+  for (let waited = 0; waited < 5000; waited += 10) {
+    if (check()) return;
+    await tick(10);
+  }
+  throw new Error("never saw: " + what);
+};
+const jwt = (claims) => "e30." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".c2ln";
+/**
+ * A sign-in that shows its page and waits, for a test that plays the person. `go()` fetches the page (as a browser on
+ * another device) and gives the address the browser is sent back to.
+ */
+function waits(ws, id, extra = {}) {
+  let shown;
+  const page = new Promise((resolve) => (shown = resolve));
+  const done = ws.integrations.signIn(id, { open: async (address, { redirect }) => shown({ address, redirect }), ...extra });
+  done.catch(() => {});
+  return { done, page, go: async () => (await fetch((await page).address, { redirect: "manual" })).headers.get("location") };
+}
+
+test("the account is the email that the sign-in server says in its id token, and no other word, and the token is not kept", () => {
+  assert.equal(accountOf({ id_token: jwt({ email: "sam@example.com", preferred_username: "sam", name: "Sam" }) }), "sam@example.com");
+  assert.equal(accountOf({ id_token: jwt({ email: "  sam@example.com  " }) }), "sam@example.com");
+  assert.equal(accountOf({ id_token: jwt({ email: "x".repeat(300) }) }).length, 120);
+  // A name and a user name are chosen by whoever owns the account: they can say anything, even the name of somebody else. They are no account.
+  assert.equal(accountOf({ id_token: jwt({ preferred_username: "sam", name: "Sam" }) }), null);
+  assert.equal(accountOf({ id_token: jwt({ name: "Sam Example" }) }), null);
+  // The server's own word is taken as text only: a number, a list and an empty word are no account.
+  assert.equal(accountOf({ id_token: jwt({ email: 5, name: ["x"], preferred_username: "  " }) }), null);
+  assert.equal(accountOf({ id_token: jwt({ email: "   " }) }), null);
+  for (const bad of [undefined, {}, { id_token: 5 }, { id_token: "not.a.jwt" }, { id_token: "a.b" }, { id_token: "e30.!!!.c2ln" }, { id_token: jwt(null) }, { id_token: jwt([1]) }]) assert.equal(accountOf(bad), null);
+});
+
+test("a sign-in says the account that the server names, and whether it replaced one, and keeps no id token", async (t) => {
+  const claims = { email: "sam@example.com", name: "Sam Example", sub: "subject-1" };
+  const { ws, id, files } = await setup(t, { idToken: claims });
+  const seen = [];
+  await ws.integrations.signIn(id, { finished: (outcome) => seen.push(outcome) });
+  await ws.integrations.signIn(id, { finished: (outcome) => seen.push(outcome) });
+  assert.deepEqual(seen, [{ account: "sam@example.com", again: false }, { account: "sam@example.com", again: true }]);
+  const saved = JSON.stringify(ws.integrations.oauth.read(ws.integrations.server(id)));
+  for (const kept of [saved, files()]) for (const secret of [jwt(claims).split(".")[1], "sam@example.com", "subject-1", "id_token"]) assert.equal(kept.includes(secret), false, "the id token is kept: " + secret);
+  // A server that sends none: no account, and the sign-in is as before.
+  const none = await setup(t);
+  const outcome = [];
+  assert.equal((await none.ws.integrations.signIn(none.id, { finished: (value) => outcome.push(value) })).signedIn, true);
+  assert.deepEqual(outcome, [{ account: null, again: false }]);
+});
+
+test("a sign-in that is cancelled once the address was taken writes nothing and leaves an earlier sign-in as it was", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  await ws.integrations.signIn(id);
+  const server = ws.integrations.server(id);
+  const earlier = ws.integrations.oauth.read(server).accessToken;
+  const tokenRequests = () => remote.state.log.filter((entry) => entry.path === "/token").length;
+  // (1) The cancel comes right after the address was given, before the token request is made: none is made.
+  const first = waits(ws, id);
+  ws.integrations.answerSignIn(id, await first.go());
+  assert.equal(ws.integrations.cancelSignIn(id), true);
+  await assert.rejects(first.done, /Sign-in was cancelled\./);
+  assert.equal(tokenRequests(), 1, "no token was asked for");
+  // (2) The cancel comes while the sign-in server holds its answer: the sign-in ends at once, and the answer, when it comes, is dropped.
+  let release;
+  remote.state.tokenGate = new Promise((resolve) => (release = resolve));
+  const second = waits(ws, id);
+  ws.integrations.answerSignIn(id, await second.go());
+  await until(() => tokenRequests() === 2, "the token request");
+  assert.equal(ws.integrations.cancelSignIn(id), true);
+  await assert.rejects(second.done, /Sign-in was cancelled\./);
+  release();
+  await tick(100);
+  assert.equal(ws.integrations.oauth.read(server).accessToken, earlier, "the earlier sign-in is still there");
+  assert.equal(ws.integrations.oauth.flows.size, 0);
+  assert.equal(ws.integrations.oauth.status(server).signedIn, true);
+});
+
+const ENDED = "This sign-in was ended: a sign-in to another tool needed its port. Start it again.";
+/** The port of the return address that a registration at the stand-in server named. */
+const registeredPort = (remote, n = 0) => Number(new URL(JSON.parse(remote.state.log.filter((entry) => entry.path === "/register")[n].body).redirect_uris[0]).port);
+
+test("a sign-in that is followed holds the port: a tool that cannot use another port is refused with the holder named, and one that can goes on", async (t) => {
+  const { ws, id } = await setup(t);
+  const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
+  t.after(() => own.close());
+  const client = ws.integrations.saveServer({ name: "client", type: "http", url: own.url, oauth: { clientId: "mine" } });
+  ws.integrations.oauth.port = await freePort();
+  const held = waits(ws, id);
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  // The window's own sign-in has a person in front of its browser: it is followed, whatever the other asks.
+  await assert.rejects(ws.integrations.signIn(client, { open: async () => {} }), { message: "Another sign-in (to words) is open on this computer and holds the port. Finish it or cancel it, then try again." });
+  assert.equal(ws.integrations.oauth.flows.size, 1, "the holder was not touched");
+  // The first one finishes, and the port is free for the next.
+  ws.integrations.answerSignIn(id, await held.go());
+  assert.equal((await held.done).signedIn, true);
+  const next = waits(ws, client);
+  ws.integrations.answerSignIn(client, await next.go());
+  assert.equal((await next.done).signedIn, true);
+});
+
+test("a held sign-in does not hold back another tool: it goes to a free port, and the held one stays open and can be finished", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  const second = await oauthMcpServer();
+  t.after(() => second.close());
+  const other = ws.integrations.saveServer({ name: "other", type: "http", url: second.url });
+  const fixed = await freePort();
+  ws.integrations.oauth.port = fixed;
+  // A sign-in that nobody follows (a `--start`, say) holds the fixed port.
+  const held = waits(ws, id, { followed: () => false });
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  // The window's own sign-in for another tool, through the default `open`, works, on another port.
+  assert.equal((await ws.integrations.signIn(other)).signedIn, true);
+  assert.notEqual(registeredPort(second), fixed);
+  // (The stand-in browser of this test is the first server's: it follows any page to the address it is sent back to.)
+  assert.equal(new URL(remote.state.lastCallback).port, String(registeredPort(second)));
+  // The held one was not touched: it is open and finishes.
+  assert.equal(ws.integrations.oauth.flows.has(id), true);
+  assert.equal(ws.integrations.oauth.flows.get(id).port, fixed);
+  ws.integrations.answerSignIn(id, await held.go());
+  assert.equal((await held.done).signedIn, true);
+});
+
+test("the same tool again after a cancel uses the registration that was kept, and its port: no new client is made", async (t) => {
+  const { ws, id } = await setup(t);
+  const second = await oauthMcpServer();
+  t.after(() => second.close());
+  const other = ws.integrations.saveServer({ name: "other", type: "http", url: second.url });
+  ws.integrations.oauth.port = await freePort();
+  const held = waits(ws, id, { followed: () => false });
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  const registrations = () => second.state.log.filter((entry) => entry.path === "/register").length;
+  // The first start registers, and is cancelled.
+  const first = waits(ws, other);
+  await first.page;
+  assert.equal(registrations(), 1);
+  const port = registeredPort(second);
+  ws.integrations.cancelSignIn(other);
+  await assert.rejects(first.done, /Sign-in was cancelled\./);
+  // The next one, with the fixed port held again, uses that client and that port.
+  const again = waits(ws, other);
+  const back = await again.go();
+  assert.equal(registrations(), 1, "no new registration was sent");
+  assert.equal(new URL(back).port, String(port));
+  assert.equal(new URL((await again.page).address).searchParams.get("client_id"), ws.integrations.oauth.read(ws.integrations.server(other)).registration.clientId);
+  ws.integrations.cancelSignIn(other);
+  await assert.rejects(again.done, /Sign-in was cancelled\./);
+  // When the kept port is taken by a program, a port from the system is used, with a new registration.
+  const taken = createServer(() => {});
+  await new Promise((resolve, reject) => taken.once("error", reject).listen(port, "127.0.0.1", resolve));
+  t.after(() => taken.close());
+  const moved = waits(ws, other);
+  await moved.page;
+  assert.equal(registrations(), 2);
+  assert.notEqual(registeredPort(second, 1), port);
+  ws.integrations.cancelSignIn(other);
+  await assert.rejects(moved.done, /Sign-in was cancelled\./);
+});
+
+test("a tool that cannot use another port ends a held sign-in that nobody follows, and goes on", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
+  t.after(() => own.close());
+  const client = ws.integrations.saveServer({ name: "client", type: "http", url: own.url, oauth: { clientId: "mine" } });
+  const fixed = await freePort();
+  ws.integrations.oauth.port = fixed;
+  const held = waits(ws, id, { followed: () => false });
+  await held.page;
+  // The window's sign-in for a tool with a client of its own (the default `open` answers through the stand-in).
+  assert.equal((await ws.integrations.signIn(client)).signedIn, true);
+  await assert.rejects(held.done, { message: ENDED });
+  assert.equal(ws.integrations.oauth.flows.size, 0);
+  assert.equal(ws.integrations.oauth.status(ws.integrations.server(id)).signedIn, false);
+  assert.equal(new URL(remote.state.lastCallback).port, String(fixed), "it used the port that it needed");
+  // A sign-in that is ended in this way says why, and asked about a second time it works again.
+  assert.equal((await ws.integrations.signIn(id)).signedIn, true);
+});
+
+test("a holder whose answer to \"is it followed\" fails is taken as followed, and is not ended", async (t) => {
+  const { ws, id } = await setup(t);
+  const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
+  t.after(() => own.close());
+  const client = ws.integrations.saveServer({ name: "client", type: "http", url: own.url, oauth: { clientId: "mine" } });
+  ws.integrations.oauth.port = await freePort();
+  const held = waits(ws, id, {
+    followed: () => {
+      throw new Error("broken");
+    },
+  });
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  await assert.rejects(ws.integrations.signIn(client, { open: async () => {} }), /Another sign-in \(to words\) is open on this computer and holds the port\./);
+  assert.equal(ws.integrations.oauth.flows.has(id), true);
+});
+
+test("a registration made for a sign-in that was cancelled or timed out is used again, and holds no token", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  ws.integrations.oauth.port = await freePort();
+  const server = ws.integrations.server(id);
+  const registrations = () => remote.state.log.filter((entry) => entry.path === "/register").length;
+  // A start that is cancelled.
+  const first = waits(ws, id);
+  await first.page;
+  ws.integrations.cancelSignIn(id);
+  await assert.rejects(first.done, /Sign-in was cancelled\./);
+  assert.equal(registrations(), 1);
+  const kept = ws.integrations.oauth.read(server);
+  assert.ok(kept.registration.clientId, "the registration is kept with the sign-in's own entry");
+  assert.equal(kept.accessToken, undefined);
+  assert.equal(kept.refreshToken, undefined);
+  assert.equal(ws.integrations.oauth.status(server).signedIn, false);
+  // A start that runs out of time uses it again, with the same client.
+  await assert.rejects(ws.integrations.signIn(id, { open: async () => {}, patience: 50 }), /Sign-in timed out/);
+  assert.equal(registrations(), 1, "the client was used again");
+  // So does the sign-in that is done, and it then holds the client as a sign-in does.
+  const third = waits(ws, id);
+  const back = await third.go();
+  assert.equal(new URL((await third.page).address).searchParams.get("client_id"), kept.registration.clientId);
+  ws.integrations.answerSignIn(id, back);
+  assert.equal((await third.done).signedIn, true);
+  assert.equal(registrations(), 1);
+  const saved = ws.integrations.oauth.read(server);
+  assert.equal(saved.registered, true);
+  assert.equal(saved.clientId, kept.registration.clientId);
+  assert.equal(saved.registration, undefined);
+  // A registration for another return address is not used: the port is another one now.
+  await ws.integrations.signOut(id);
+  ws.integrations.oauth.port = await freePort();
+  const fourth = waits(ws, id);
+  await fourth.page;
+  ws.integrations.cancelSignIn(id);
+  await assert.rejects(fourth.done, /Sign-in was cancelled\./);
+  assert.equal(registrations(), 2);
 });

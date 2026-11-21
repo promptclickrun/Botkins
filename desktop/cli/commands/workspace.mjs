@@ -92,45 +92,123 @@ async function turn(context, chatId, message, { live }) {
   }
 }
 
-/** Follows a sign-in the service runs, passing what it says to the terminal and what is typed back. */
-async function followSignIn(context, session) {
+/**
+ * Follows a sign-in the service runs, passing what it says to the terminal and what is typed back.
+ * `calls` names the service's calls for it: a provider's, or a tool's (`tools.signIn`). What it
+ * says can be a sign-in server's own words, so each is written as `shownText` writes it. A line
+ * that holds a code (a prompt with `secret`) is asked for without showing it.
+ * `intro` is a line that says what the sign-in is for, before the page is shown (safe text), or a function of the
+ * page's event that gives it (a tool's line names the page's host).
+ * A line that the service turns away is explained and the same question is asked again.
+ * Ctrl-C, a hang-up and the close of the terminal's input end the sign-in.
+ *
+ * While a question is open the session is still read. The sign-in can end another way (the
+ * browser was on this computer and answered by itself, or it was ended from elsewhere): the
+ * question is then closed, what was typed so far is dropped, and the command ends with the
+ * session's own result.
+ */
+export async function followSignIn(context, session, calls = "providers.login", { intro } = {}) {
   const { client, color } = context;
-  const cancel = () => void client.call("providers.login.cancel", session).catch(() => {});
+  const cancel = () => void client.call(calls + ".cancel", session).catch(() => {});
   process.once("SIGINT", cancel);
+  // A hang-up of the terminal ends the sign-in as Ctrl-C does: it is not left to wait for nobody. So does the
+  // close of the terminal's own input.
+  process.once("SIGHUP", cancel);
+  const closed = context.stdin.isTTY && typeof context.stdin.once === "function";
+  if (closed) context.stdin.once("close", cancel);
   // Standard input, a line at a time, for a run with no terminal.
   let lines = null;
+  let reader = null;
   const piped = async () => {
-    lines ??= createInterface({ input: context.stdin })[Symbol.asyncIterator]();
+    if (!lines) {
+      reader = createInterface({ input: context.stdin });
+      lines = reader[Symbol.asyncIterator]();
+    }
     const next = await lines.next();
     return next.done ? null : next.value;
   };
+  // One read of the session is out at a time: what it brings is never lost, whoever waits for it.
+  let after = 0;
+  let reading = null;
+  const poll = () =>
+    (reading ??= client.call(calls + ".read", session, after).then(
+      (view) => {
+        reading = null;
+        // (An event is shown once, whatever the service sends.)
+        const events = view.events.filter((event) => !(event.n <= after));
+        after = Math.max(after, view.next ?? 0);
+        return { ...view, events };
+      },
+      (error) => {
+        reading = null;
+        throw error;
+      },
+    ));
+  const show = (event) => {
+    if (context.json) context.stdout.write(JSON.stringify(event) + "\n");
+    else if (event.type === "code") context.stdout.write("\nOpen this page on any device:\n\n    " + color.bold(shownText(event.url)) + "\n\nand enter the code:\n\n    " + color.bold(shownText(event.code)) + "\n\nWaiting for you to finish there…\n");
+    else if (event.type === "open") context.stdout.write("\n" + (intro ? (typeof intro === "function" ? intro(event) : intro) + "\n" : "") + "Open this page on any device to sign in:\n\n    " + color.bold(shownText(event.url)) + "\n\n");
+    else if (event.type === "output") context.stdout.write(color.dim("  " + shownText(event.text)) + "\n");
+  };
   try {
-    for (let after = 0; ; ) {
-      const view = await client.call("providers.login.read", session, after);
-      after = view.next;
-      for (const event of view.events) {
-        if (context.json) context.stdout.write(JSON.stringify(event) + "\n");
-        else if (event.type === "code") context.stdout.write("\nOpen this page on any device:\n\n    " + color.bold(event.url) + "\n\nand enter the code:\n\n    " + color.bold(event.code) + "\n\nWaiting for you to finish there…\n");
-        else if (event.type === "open") context.stdout.write("\nOpen this page on any device to sign in:\n\n    " + color.bold(event.url) + "\n\n");
-        else if (event.type === "output") context.stdout.write(color.dim("  " + event.text) + "\n");
-        if (event.type === "prompt") {
-          // At a terminal the person is asked. In a script the next line of standard input is the
-          // answer, and a script with no more lines can't finish this sign-in.
-          const line = context.stdin.isTTY && !context.json ? await ask(context, (event.text ? event.text + "\n" : "") + "> ") : await piped();
-          if (line === null) {
-            cancel();
-            throw new CliError("This sign-in asks for something to be typed, and there is nothing more on standard input. Run it at a terminal, or sign in with --token.", EXIT.failed, "NEEDS_INPUT");
+    let view = await poll();
+    for (;;) {
+      const queue = [...view.events];
+      let ended = view.done ? view : null;
+      while (queue.length) {
+        const event = queue.shift();
+        show(event);
+        // (A question of a sign-in that is over is not asked.)
+        if (event.type !== "prompt" || ended) continue;
+        // At a terminal the person is asked. In a script the next line of standard input is the
+        // answer, and a script with no more lines can't finish this sign-in.
+        const closing = new AbortController();
+        const typed = (context.stdin.isTTY && !context.json ? ask(context, (event.text ? shownText(event.text) + "\n" : "") + "> ", { hidden: event.secret === true, signal: closing.signal }) : piped()).then((line) => ({ line }));
+        let line;
+        let answered = false;
+        // The question is open, and the session is read at the same time.
+        while (!answered && !ended) {
+          const got = await Promise.race([typed, poll().then((now) => ({ now }))]);
+          if (!got.now) {
+            answered = true;
+            line = got.line;
+            continue;
           }
-          await client.call("providers.login.input", session, line).catch((error) => context.note(error.message));
+          for (const more of got.now.events) {
+            if (more.type === "prompt") queue.push(more);
+            else show(more);
+          }
+          // Nothing new, and not over: the service waits for the next event, and so does this (the question gets its turn).
+          if (!got.now.events.length && !got.now.done) await new Promise((resolve) => setImmediate(resolve));
+          if (got.now.done) {
+            ended = got.now;
+            closing.abort();
+          }
         }
+        if (ended) continue;
+        if (line === null) {
+          cancel();
+          throw new CliError("This sign-in asks for something to be typed, and there is nothing more on standard input. Run it at a terminal, or sign in with --token.", EXIT.failed, "NEEDS_INPUT");
+        }
+        // A line that is turned away is explained, and the same question is asked again: nothing else would ask it.
+        const refused = await client.call(calls + ".input", session, line).then(() => false, (error) => (context.note(shownText(error.message)), true));
+        if (refused) queue.unshift(event);
       }
-      if (view.done) {
-        if (view.error) throw new CliError(view.error, EXIT.failed, "SIGN_IN_FAILED");
-        return view.result;
+      if (ended) {
+        if (ended.error) throw new CliError(shownText(ended.error), EXIT.failed, "SIGN_IN_FAILED");
+        return ended.result;
       }
+      view = await poll();
     }
+  } catch (error) {
+    // A person who stops at a question (Ctrl-C) ends the sign-in too: it is not left open with nobody to answer it.
+    if (error?.code === "CANCELLED") cancel();
+    throw error;
   } finally {
     process.off("SIGINT", cancel);
+    process.off("SIGHUP", cancel);
+    if (closed) context.stdin.off("close", cancel);
+    reader?.close();
   }
 }
 
