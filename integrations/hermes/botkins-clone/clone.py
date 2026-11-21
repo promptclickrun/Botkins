@@ -128,7 +128,19 @@ def _read(path: Path) -> str:
 
 def _profile_text(profile: Profile, file: str) -> str:
     """A profile file from its home, or from memories/ where Hermes keeps USER.md."""
-    return _read(profile.home / file) or _read(profile.home / "memories" / file)
+    return _unescape(_read(profile.home / file) or _read(profile.home / "memories" / file))
+
+
+_CODE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]*`)", re.S)
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+def _unescape(text: str) -> str:
+    """Drops Markdown backslash escapes ("work\\." -> "work.") that some editors add to every
+    punctuation mark. Botkins shows text as written, so the backslashes would reach the bot.
+    Code spans and fences keep theirs."""
+    parts = _CODE.split(text)
+    return "".join(part if i % 2 else _ESCAPE.sub(r"\1", part) for i, part in enumerate(parts))
 
 
 def _entries(text: str) -> list[str]:
@@ -176,11 +188,12 @@ def _description(soul: str, name: str) -> str:
 
 
 def _clean(value: str, limit: int) -> str:
-    return " ".join(value.replace('"', "'").split())[:limit].strip()
+    # Front matter values are quoted and Botkins reads no escapes, so a backslash would show as one.
+    return " ".join(value.replace('"', "'").replace("\\", "").split())[:limit].strip()
 
 
 def _soul(profile: Profile) -> str:
-    soul = _read(profile.home / "SOUL.md")
+    soul = _unescape(_read(profile.home / "SOUL.md"))
     if not soul:
         raise ValueError(f"Profile '{profile.name}' has no SOUL.md to clone.")
     return soul
@@ -258,7 +271,7 @@ def condense(soul: str, complete: Complete | None) -> tuple[str, list[str]]:
 
 def memory_text(profile: Profile) -> str:
     """memories/MEMORY.md entries as Botkins memory: one "- fact" line each."""
-    lines = ["- " + " ".join(e.split())[:ENTRY_MAX] for e in _entries(_read(profile.home / "memories" / "MEMORY.md"))]
+    lines = ["- " + " ".join(e.split())[:ENTRY_MAX] for e in _entries(_unescape(_read(profile.home / "memories" / "MEMORY.md")))]
     text = "\n".join(lines)
     if len(text) > MEMORY_MAX:
         raise ValueError(f"Profile '{profile.name}' has {len(text):,} characters of memory; "
