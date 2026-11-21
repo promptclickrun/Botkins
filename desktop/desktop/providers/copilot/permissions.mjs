@@ -43,6 +43,17 @@ function describe(req) {
       return { label: req.toolName, preview: displayValue(req.args, Infinity) };
     case "url":
       return { label: "Open URL", preview: req.url };
+    case "hook": {
+      // A plugin's hook answered "ask" for a tool call. The person agrees to the tool call itself, so the first line is
+      // the command (or, for a tool with no command, its arguments, as for other tools), and the hook's own words are the
+      // label. Without this the card had an empty first line, and the command was only inside the detail.
+      const args = req.toolArgs;
+      const command = args && typeof args === "object" && typeof args.command === "string" ? args.command : null;
+      return {
+        label: typeof req.hookMessage === "string" && req.hookMessage.trim() ? req.hookMessage.trim().slice(0, 300) : "A plugin's hook asks you first",
+        preview: command ?? (args === undefined ? "" : displayValue(args, Infinity)),
+      };
+    }
     default:
       return { label: req.kind, preview: "" };
   }
@@ -57,7 +68,8 @@ export function describeRequest(req, invocation = {}) {
   return {
     kind: req.kind,
     toolName: req.toolName,
-    title: req.intention || req.toolTitle || "Approve " + (req.toolName || req.kind) + "?",
+    // (For a hook's question the title says who asks: a plugin, not the bot.)
+    title: req.kind === "hook" ? "A plugin asks before " + (req.toolName || "a tool") + " runs" : req.intention || req.toolTitle || "Approve " + (req.toolName || req.kind) + "?",
     ...describe(req),
     detail: displayValue(req, Infinity),
     remember,
