@@ -97,7 +97,6 @@ export const HELD = {
   // Choices that are no address run.
   setVoice: (args, name) => (setsVoiceAddress(args[0]) ? "`" + name + "` with a provider's web address says where that provider's key goes. Set an address in the app's window or on a paired phone, where it is shown. A command for it comes. Choices that are no address run here." : null),
   // The mode yolo gives each request of a chat a yes with no question. The others run.
-  setChatProject: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
   startProjectChat: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
   // The level of approval: telling a looser one needs the present value, so any change is held.
   setPreferences: (args, name) => (isPlain(args[0]) && (Object.hasOwn(args[0], "approval") || Object.hasOwn(args[0], "access")) ? "`" + name + "` with an approval level or an access changes what the bots may do without a question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks." : null),

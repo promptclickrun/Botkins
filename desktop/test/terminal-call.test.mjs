@@ -81,7 +81,8 @@ test("a call that takes a secret, removes saved secrets, sets an address or loos
     ["setVoice", [json({ providers: { azure: { endpoint: ADDRESS } } })], ADDRESS, "with a provider's web address says where"],
     ["setVoice", [json({ providers: { azure: { region: "evil-4711" } } })], "evil-4711", "with a provider's web address says where"],
     ["setVoice", [json({ providers: { custom: { baseUrl: ADDRESS } } })], ADDRESS, "with a provider's web address says where"],
-    ["setChatProject", [json("chat-4711"), json("project-4711"), json("yolo")], "chat-4711", YOLO],
+    // (`setChatProject` has its command now, `botkins chats project`: the refusal names it, for every mode.)
+    ["setChatProject", [json("chat-4711"), json("project-4711"), json("yolo")], "chat-4711", "is done by `botkins chats project`\\. Run that command: it shows what it changes and leaves a line in the log\\."],
     ["startProjectChat", [json(["bot-4711"]), json("project-4711"), json("yolo")], "bot-4711", YOLO],
     ["setPreferences", [json({ approval: "all", clarificationInstructions: "NOTE-4711" })], "NOTE-4711", "with an approval level or an access changes what the bots may do without a question\\. Set it in the app's window or on a paired phone\\. A command for it comes, and it shows this and asks\\."],
     ["setPreferences", [json({ approval: "ask", clarificationInstructions: "NOTE-4711" })], "NOTE-4711", "with an approval level or an access changes"],
@@ -122,17 +123,16 @@ test("a call that is held for some of its arguments runs with the others", { ski
   assert.equal(voiced.exit, 0, voiced.err);
   assert.equal((await handlers.voiceSettings()).tts.speed, 1.5);
   assert.equal((await botkins(["call", "setVoice", json({ providers: { openai: {}, azure: {}, custom: {}, elevenlabs: { agentId: "agent_4711" } } })])).exit, 0);
-  // The mode default (and plan) of a chat runs; yolo is held.
+  // A chat's project and mode are done by `botkins chats project`: through `call` every mode is refused, and the command is named.
   const bot = (await client.call("bots.add", { name: "Nova" })).id;
   const chat = (await client.call("chat.open", "Nova")).chatId;
-  assert.equal((await botkins(["call", "setChatProject", json(chat), "null", json("plan")])).exit, 0);
-  assert.equal(workspace.chat(chat).mode, "plan");
-  assert.equal((await botkins(["call", "setChatProject", json(chat), "null", json("default")])).exit, 0);
-  assert.equal(workspace.chat(chat).mode, "default");
-  const yolo = await botkins(["call", "setChatProject", json(chat), "null", json("yolo")]);
-  assert.equal(yolo.exit, 1);
-  assert.match(yolo.err, /`setChatProject` with the mode yolo gives each request of the chat a yes/);
-  assert.equal(workspace.chat(chat).mode, "default", "the mode did not change");
+  const startMode = workspace.chat(chat).mode;
+  for (const mode of ["plan", "default", "yolo"]) {
+    const refused = await botkins(["call", "setChatProject", json(chat), "null", json(mode)]);
+    assert.equal(refused.exit, 1, mode);
+    assert.equal(said(refused.err), COVERED_BY_COMMAND("setChatProject", "chats project"), mode);
+    assert.equal(workspace.chat(chat).mode, startMode, "the mode " + mode + " was not set through `call`");
+  }
   // A new chat in a project: the mode is no reason to refuse it, except yolo. (There is no such project: the app says so.)
   for (const args of [[json("default")], [json("plan")], []]) {
     const started = await botkins(["call", "startProjectChat", json([bot]), json("no-such-project"), ...args]);
@@ -152,8 +152,8 @@ test("a call that is held for some of its arguments runs with the others", { ski
   assert.equal(callRule("connectProviderService", ["opencode", "a-service", { method: "oauth" }]), null);
   assert.equal(callRule("connectProviderService", ["opencode", "a-service"]), null);
   assert.equal(callRule("setPreferences", []), null);
-  assert.equal(callRule("setChatProject", ["c", null, "default"]), null);
-  assert.equal(callRule("setChatProject", ["c"]), null);
+  assert.equal(callRule("setChatProject", ["c", null, "default"]), COVERED_BY_COMMAND("setChatProject", "chats project"));
+  assert.equal(callRule("setChatProject", ["c"]), COVERED_BY_COMMAND("setChatProject", "chats project"));
   assert.equal(callRule("startProjectChat", [["b"], "p", "plan"]), null);
 });
 

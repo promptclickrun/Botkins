@@ -81,8 +81,24 @@ export const WORKSPACE = {
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
-  ...each("renameChat deleteChat forkChat compact setChatFlags setChatProject createGroupChat retry unqueue sendNow mentionables sideQuestion", owed("d")),
-  ...each("link.chats.addSection link.chats.renameSection link.chats.deleteSection link.chats.orderSections link.chats.setSection", owed("d")), // sections on the Chats page, by the link's names
+  renameChat: cmd("chats rename"),
+  deleteChat: cmd("chats delete"),
+  forkChat: cmd("chats fork"),
+  compact: cmd("chats compact"),
+  setChatFlags: cmd("chats flags"),
+  setChatProject: cmd("chats project"),
+  createGroupChat: cmd("chats group"),
+  retry: cmd("chats retry"),
+  unqueue: cmd("chats unqueue"),
+  sendNow: cmd("chats send-now"),
+  mentionables: cmd("chats mentions"),
+  sideQuestion: cmd("chats aside"),
+  // Sections on the Chats page, by the link's names: the window's own calls, made as the owner. The link keeps them.
+  "link.chats.addSection": cmd("chats sections add"),
+  "link.chats.renameSection": cmd("chats sections rename"),
+  "link.chats.deleteSection": cmd("chats sections delete"),
+  "link.chats.orderSections": cmd("chats sections order"),
+  "link.chats.setSection": cmd("chats sections set"),
   // ── Routines ──
   runRoutine: cmd("routines run"),
   setRoutineEnabled: cmd("routines pause"),
@@ -177,7 +193,11 @@ export const LINK = {
   ...each("link.team.get link.team.rename link.team.saveRole link.team.deleteRole link.team.saveGroup link.team.deleteGroup link.team.createInvite link.team.revokeInvite link.team.approve link.team.deny link.team.moveMember link.team.removeMember link.team.inviteToChat link.team.removeFromChat link.team.setLinkSharing", owed("e")),
   ...each("link.spaces.share link.spaces.newLink link.spaces.arrange link.spaces.seen link.spaces.notify link.spaces.here", owed("e")),
   // Sections on the Chats screen ("chat-sections-v1"): a person's own way to group their chats.
-  ...each("link.chats.addSection link.chats.renameSection link.chats.deleteSection link.chats.orderSections link.chats.setSection", owed("d")),
+  "link.chats.addSection": cmd("chats sections add"),
+  "link.chats.renameSection": cmd("chats sections rename"),
+  "link.chats.deleteSection": cmd("chats sections delete"),
+  "link.chats.orderSections": cmd("chats sections order"),
+  "link.chats.setSection": cmd("chats sections set"),
   // Admin mode is each owner device's own way of looking: the command line shows everything, as an owner with it on.
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal uses the app's own calls for them (part d).
@@ -263,6 +283,23 @@ export const CHANGES = {
   "templates.export": (args, value) => value?.name,
   "templates.import": (args, value) => value?.name,
   // ── Chats (control-chats.mjs) ──
+  // A chat is named by its id: a title is a text that a person (or a model) wrote, so it is not in the log. A section is by its id too, and a new one by its name.
+  "chats.rename": (args, value) => value?.id,
+  "chats.delete": (args, value) => value?.id,
+  "chats.fork": (args, value) => value?.from,
+  "chats.compact": (args, value) => value?.id,
+  "chats.flags": (args, value) => value?.id,
+  // By the chat's id and the mode that it has now ("<id> (yolo)"), so that a log line shows a chat that was given yolo.
+  "chats.project": (args, value) => (value?.id ? value.id + " (" + (value.mode ?? "default") + ")" : null),
+  "chats.group": (args, value) => value?.id,
+  "chats.retry": (args, value) => value?.id,
+  "chats.unqueue": (args, value) => value?.id,
+  "chats.sendNow": (args, value) => value?.id,
+  "chats.sections.add": (args, value) => value?.name,
+  "chats.sections.rename": (args, value) => value?.id,
+  "chats.sections.delete": (args, value) => value?.id,
+  "chats.sections.order": null,
+  "chats.sections.set": (args, value) => value?.id,
   // ── Routines (control-routines.mjs) ──
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
   // ── The wiki (control-wiki.mjs) ──
@@ -275,7 +312,7 @@ export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.stat
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
-  chats: [],
+  chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: [],
   projects: [],
   wiki: [],

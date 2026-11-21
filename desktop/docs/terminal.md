@@ -269,7 +269,34 @@ botkins templates import starter.json
 
 ### Chats
 
-The commands for this part come in a later change.
+`botkins chat <bot>` talks to a bot. `botkins chats` keeps the chats that the Chats page of the window shows.
+
+```sh
+botkins chats list
+botkins chats rename "Quarterly plan" "Plan for the third quarter"
+botkins chats flags "Plan for" --pin
+botkins chats fork "Plan for" --at 4
+botkins chats group Nova Orbit --title "Launch team"
+botkins chats project "Launch team" Website --mode plan
+botkins chats queue "Plan for"
+botkins chats send-now "Plan for" 1
+botkins chats aside "Plan for" "What did we decide about the budget?"
+botkins chats sections add Work
+botkins chats sections set "Plan for" Work
+botkins chats delete "Fork of Plan" --yes
+```
+
+- **A chat is named by its id or by its title.** The title can be all of it or the start of it, when only one chat starts so. When more than one chat matches, the command lists them with their ids. `botkins chats list` shows ids and titles, and `--json` gives each chat's flags, project, mode and section too. A title is text that someone wrote, so in text form it is made safe before it is printed.
+- **Delete cannot be undone, so it asks first.** `botkins chats delete <chat>` shows the chat and asks. With no terminal it fails and names `--yes`. A chat that is working is refused: stop it first. Deleting a section is asked the same way, but it keeps its chats.
+- **Three commands start a turn of a model.** `chats retry` sends the message of a stopped or failed turn again, `chats compact` asks the model to summarize the conversation, and `chats aside` asks a side question, as `/btw` does on the phone. Each uses the chat's provider and counts against its plan. `chats aside` does not add the question or the answer to the chat. `chats send-now` can start one too, when the chat is free. `chats retry <chat>` sends the chat's latest turn again (`botkins chats show <chat> --json` names it in `latestTurn`), and refuses a chat that is working.
+- **A long question comes from `--file <path>` or from standard input.** `botkins chats aside <chat> -` reads the question from standard input.
+- **`--mode yolo` gives a chat a yes to each request, so it asks.** `botkins chats project <chat> <project> --mode yolo` makes each request of the bot in that chat get a yes with no question, but for a request that leaves the sandbox. The command first shows the chat (title and id), the project and its folder, and that sentence, on standard error. Then it asks. With no terminal it fails and names `--yes`. The text is shown with `--yes` and with `--json` too. A chat that asks the person first shows this very command on its card before it runs. The same holds for a chat that is in `yolo` and moves to another project. `--mode default` and `--mode plan` ask nothing, and so does taking a chat out of `yolo`. Without a project and without `--none`, only the mode changes. A project with no folder takes no mode.
+- **Pin, archive and unread give no yes.** `chats flags` sets only those three flags, and none of them removes a question from a chat.
+- **`chats fork --at <number>` counts messages from 0.** Without it, the new chat holds the whole conversation. A group chat cannot be forked.
+- **A group chat has 2 to 6 bots**, each named once. Talk in it with `botkins chat <bot> --chat <id>`.
+- **A waiting message is named by its number or its id.** `botkins chats queue <chat>` lists the messages that wait for the chat to be free. `chats unqueue` takes one out of the line. `chats send-now` moves one to the front and sends it.
+- **The sections are yours.** They are kept by the phone link, and a paired phone shows the same ones. They change nothing about a chat. `chats sections order` puts the named sections first, in that order. If the link is not ready (it is still opening), the commands say so: try again in a moment.
+- **The log names a chat by its id**, never by its title. A new section is in the log by its name. The line of `chats.project` has the mode that the chat has now after the id, for example `chats.project <id> (yolo)`.
 
 ### Routines
 
@@ -555,7 +582,7 @@ What a person can do in the app's window, a person or an agent can do from a ter
 - one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), it is a phone's own (its notifications, the screen it is shown), or it needs a person at the app (a call that reaches a secret which the terminal cannot read by itself, or sends one somewhere), or
 - the part of the work that still owes its command. This third kind goes away when the last part is done.
 
-The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, `setChatProject` and `startProjectChat` with the mode `yolo`, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
+The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, `startProjectChat` with the mode `yolo`, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
 
 `test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason. The test's output says how many calls each part still owes.
 
