@@ -9,18 +9,24 @@
 //             [--bot <name>] [--message <text>] [--name <device name>]
 //   phone.mjs --pairing pairing.json [--via lan|relay] --bot <name> --message <text>
 //   phone.mjs --pairing pairing.json --space <name>
+//   phone.mjs --pairing pairing.json --call '[["link.team.get"], ["spaces.read", "s_…"]]'
+//   phone.mjs --join 'botkins://join?…' --host <address> --server <server id> [--save pairing.json] …
 //
 // It prints one JSON document: { device, route, bots, chat: { id, pieces, reply, status } }.
 // `pieces` is how many times the reply grew while it was being written: more than one means the
 // phone saw it stream. A pairing file holds this device's key: it is the test's own to keep safe.
 // With --space it also makes a space of that name, renames it, reads it and deletes it, and
 // prints `spaces`: what the host said of itself and of the space at each step.
+// With --join it joins the host's team by an invite, as a team member's phone does: it asks, waits
+// until the owner approves (stderr says "phone: waiting" once, with the request), and goes on as
+// that member. With --call it makes each call in turn and prints `calls`: each answer, or
+// { error } with the host's sentence. The calls come last, after --message and --space.
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { LinkClient, pair, parsePairingUrl, relayFetch } from "../../desktop/remote/link-client.mjs";
+import { checkJoin, LinkClient, pair, parseJoinUrl, parsePairingUrl, relayFetch, startJoin } from "../../desktop/remote/link-client.mjs";
 
 const { values } = parseArgs({
-  options: { link: { type: "string" }, pairing: { type: "string" }, via: { type: "string" }, save: { type: "string" }, bot: { type: "string" }, message: { type: "string" }, name: { type: "string" }, timeout: { type: "string" }, space: { type: "string" } },
+  options: { link: { type: "string" }, pairing: { type: "string" }, via: { type: "string" }, save: { type: "string" }, bot: { type: "string" }, message: { type: "string" }, name: { type: "string" }, timeout: { type: "string" }, space: { type: "string" }, call: { type: "string" }, join: { type: "string" }, host: { type: "string" }, server: { type: "string" } },
 });
 const fail = (message) => {
   process.stderr.write("phone: " + message + "\n");
@@ -37,7 +43,23 @@ const chosen = (hosts) => {
 
 let pairing;
 if (values.pairing) pairing = JSON.parse(readFileSync(values.pairing, "utf8"));
-else {
+else if (values.join) {
+  // A team member's phone: it asks to join with the invite, and the owner approves it elsewhere.
+  const invite = parseJoinUrl(values.join);
+  if (!invite || !values.host || !values.server) fail("Give the invite with --join, the host's address with --host and its id with --server.");
+  const started = await startJoin(transport, { hosts: [values.host], code: invite.code, serverId: values.server, serverKey: invite.serverKey, name: "the team" }, { name: values.name ?? "Fixture member phone", platform: "ios", kind: "phone" });
+  let result = started.result;
+  const until = Date.now() + limit;
+  if (result?.status === "pending") process.stderr.write("phone: waiting " + (result.requestId ?? "") + "\n");
+  while (result?.status === "pending") {
+    if (Date.now() > until) fail("The owner did not approve the request in time.");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    result = await checkJoin(transport, started.attempt);
+  }
+  if (result?.status !== "approved" || !result.pairing) fail("The request to join was not approved: " + (result?.status ?? "no answer"));
+  pairing = result.pairing;
+  if (values.save) writeFileSync(values.save, JSON.stringify(pairing), { mode: 0o600 });
+} else {
   const target = parsePairingUrl(values.link ?? "");
   if (!target) fail("Give a pairing link with --link, or a saved pairing with --pairing.");
   pairing = await pair(transport, { ...target, hosts: chosen(target.hosts) }, { name: values.name ?? "Fixture phone", platform: "ios" });
@@ -95,7 +117,8 @@ try {
   await until(() => Array.isArray(parts.bots), "the host's bots");
   result.route = route;
   result.bots = parts.bots.map((bot) => bot.name);
-  result.host = (await client.call("appInfo")).host ?? "desktop";
+  // (A team member's role may not let them ask what the host is.)
+  result.host = await client.call("appInfo").then((info) => info.host ?? "desktop", () => null);
   if (values.message) {
     const bot = parts.bots.find((entry) => entry.name === (values.bot ?? entry.name));
     if (!bot) throw new Error("The host has no bot called " + values.bot + ".");
@@ -121,7 +144,7 @@ try {
     const named = (name) => listed().find((space) => space.name === name);
     // The person's own built-in spaces are there before anything is made.
     await until(() => listed().some((space) => space.builtin === "today"), "the person's spaces");
-    const spaces = { capability: (parts.meta?.capabilities ?? []).includes("spaces-v1"), builtin: listed().filter((space) => space.builtin).map((space) => space.name) };
+    const spaces = { capability: (parts.meta?.capabilities ?? []).includes("spaces-v1"), builtin: listed().filter((space) => space.builtin).map((space) => space.name), others: listed().filter((space) => !space.builtin).map((space) => space.name) };
     const id = await client.call("spaces.create", { name: values.space });
     const made = await until(() => named(values.space), "the new space in the list");
     spaces.made = { sameId: made.id === id, can: made.can, access: made.access, pinned: made.pinned };
@@ -135,6 +158,11 @@ try {
     spaces.left = listed().filter((space) => !space.builtin).length;
     result.spaces = spaces;
   }
+  if (values.call) {
+    result.calls = [];
+    for (const [method, ...args] of JSON.parse(values.call)) result.calls.push(await client.call(method, ...args).then((answer) => answer ?? null, (error) => ({ error: error.message })));
+  }
+  if (parts.meta?.you) result.you = parts.meta.you;
   process.stdout.write(JSON.stringify(result) + "\n");
 } catch (error) {
   fail(error.message);
