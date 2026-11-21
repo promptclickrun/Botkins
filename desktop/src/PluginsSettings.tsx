@@ -1,17 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ChevronRight,
   ExternalLink,
   FolderPlus,
   Globe,
-  KeyRound,
   Loader2,
   Plus,
   Search,
   ShieldAlert,
   Store,
-  Terminal,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -20,7 +18,6 @@ import type {
   CredentialRef,
   InstalledPlugin,
   PluginConfigValue,
-  PluginContents,
   PluginField,
   PluginListing,
   PluginMarketplace,
@@ -31,6 +28,8 @@ import { CredentialChoice, useSavedCredentials, type Picked } from "./Credential
 import { useAsk } from "./Pages";
 import { Group, Sheet, errorText } from "./SettingsRows";
 import { stopCancel } from "./SkillsSettings";
+import { PluginContentsView } from "./PluginRuns";
+import { PLUGIN_STARTS, decisionText, heldBack, linkedError, onOffLabel, readTold, sentToLines, startQuestion, switchedOffNotice, writeTold, type Step, type Where } from "./pluginStarts";
 import "./plugins.css";
 
 const api = window.botkins;
@@ -40,31 +39,19 @@ type Selection = { kind: "listing" | "installed"; id: string };
 type FolderBrowser = { path?: string };
 type UpdateReview = { plugin: InstalledPlugin; preview: PluginPreview };
 
-const hookLabels: Record<string, string> = {
-  sessionStart: "When a chat starts", userPromptSubmitted: "Each message you send", preToolUse: "Before a tool runs",
-  postToolUse: "After a tool runs", postToolUseFailure: "After a tool fails", agentStop: "When a reply ends",
-  subagentStart: "When a helper starts", subagentStop: "When a helper ends", sessionEnd: "When a chat ends",
-  errorOccurred: "When an error occurs", preCompact: "Before chat history is compacted", notification: "When a notification is sent",
-  permissionRequest: "When a permission is requested",
-};
-
 function marketplaceLabel(markets: PluginMarketplace[], id: string) {
   return markets.find((market) => market.id === id)?.name ?? id;
 }
 function statusLabel(plugin: InstalledPlugin) {
   return plugin.status === "ready" ? "Ready" : plugin.status === "needs-config" ? "Needs settings" : plugin.status === "needs-sign-in" ? "Needs sign-in" : "Couldn't load";
 }
-function warningForContents(contents: PluginContents) {
-  const warnings: string[] = [];
-  if (contents.hooks.length) warnings.push("Runs a command on your computer through chat hooks.");
-  if (contents.mcpServers.some((server) => server.kind === "local")) warnings.push("Runs a local tool on your computer.");
-  return warnings;
-}
+/** Where the window keeps which switched-off plugins the person was told about. */
+const TOLD = "botkins.plugins.switchedOffTold";
 
 /** Settings › Marketplace: catalog browsing, trusted installs and installed plugin controls. */
-export default function PluginsSettings({ state, bots }: { state: State; bots: Bot[] }) {
+export default function PluginsSettings({ state, bots, open }: { state: State; bots: Bot[]; /** An installed plugin to show at once (from Settings › Skills). */ open?: string }) {
   const [view, setView] = useState<View>("plugins");
-  const [mode, setMode] = useState<PluginMode>("browse");
+  const [mode, setMode] = useState<PluginMode>(open ? "installed" : "browse");
   const [markets, setMarkets] = useState<PluginMarketplace[]>([]);
   const [marketplace, setMarketplace] = useState("");
   const [query, setQuery] = useState("");
@@ -74,7 +61,8 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
   const [marketLoading, setMarketLoading] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const [selection, setSelection] = useState<Selection>();
+  const [selection, setSelection] = useState<Selection | undefined>(open ? { kind: "installed", id: open } : undefined);
+  const [told, setTold] = useState(() => readTold(TOLD));
   const [preview, setPreview] = useState<PluginPreview>();
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
@@ -88,6 +76,11 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
   const dialogs = useAsk();
   const capability = state.remote?.using?.capabilities;
   const supported = (!capability || capability.includes("plugins-v1")) && typeof api["plugins.browse"] === "function";
+  // The computer in use, for the words of a question. A computer that does not name the rule can
+  // leave out a command that runs. The name is that computer's own, never this one's.
+  const using = state.remote?.using;
+  const where: Where = { ...(using && { name: using.name }), starts: !using || using.capabilities.includes(PLUGIN_STARTS) };
+  const hostId = using?.id ?? "";
   const installed = localInstalled;
   const selectedInstalled = selection?.kind === "installed" ? installed.find((plugin) => plugin.id === selection.id) : undefined;
 
@@ -124,7 +117,7 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
     setFolderBrowser(undefined); setBusy(true); setError("");
     try {
       const plugin = await api["plugins.addFolder"](path); upsertPlugin(plugin); setSelection({ kind: "installed", id: plugin.id }); setMode("installed");
-      setNote(plugin.enabled ? "Added " + plugin.name + ". Review its contents below." : "Added " + plugin.name + " disabled. Review its contents before enabling it.");
+      setNote(plugin.enabled ? "Added " + plugin.name + ". Review its contents below." : "Added " + plugin.name + ", switched off. Review what it runs, then turn it on.");
     } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function addFolder() {
@@ -141,10 +134,10 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
     if (!ok) return;
     try { await api["plugins.removeMarketplace"](market.id); await loadMarkets(); if (marketplace === market.id) setMarketplace(""); setNote("Removed " + market.name + "."); } catch (e) { setError(errorText(e)); }
   }
-  async function confirmExecutable(name: string, warnings: string[]) {
-    if (!warnings.length) return true;
-    const answer = await dialogs.ask({ title: "Allow " + name + " to run on this computer?", body: "This plugin can run code on your computer.\n\n" + warnings.join("\n") + "\n\nOnly continue if you trust this plugin.", confirm: "Allow and continue" });
-    return !!answer;
+  /** Asks before a step when the description calls for it. A description without the mark is asked about always. */
+  async function agreed(plugin: Pick<PluginPreview | InstalledPlugin, "contents" | "starts" | "warnings">, step: Step) {
+    const asked = startQuestion(plugin, step, where);
+    return !asked || !!(await dialogs.ask(asked));
   }
   async function install(values: { bots: "all" | string[]; config: Record<string, PluginConfigValue> }) {
     if (!preview) return;
@@ -156,20 +149,26 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
   }
   async function startInstall() {
     if (!preview) return;
-    if (await confirmExecutable(preview.name, preview.warnings ?? warningForContents(preview.contents))) setInstallOpen(true);
+    if (await agreed(preview, "install")) setInstallOpen(true);
   }
   async function configure(id: string, values: Record<string, PluginConfigValue>) {
     setBusy(true); setError("");
     try { await api["plugins.configure"](id, values); setConfigPlugin(undefined); setNote("Saved plugin settings."); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function setEnabled(plugin: InstalledPlugin, enabled: boolean) {
-    if (enabled && !(await confirmExecutable(plugin.name, warningForContents(plugin.contents)))) return;
+    if (enabled && !(await agreed(plugin, "on"))) return;
     setBusy(true); setError("");
-    try { await api["plugins.setEnabled"](plugin.id, enabled); setLocalInstalled((all) => all.map((item) => item.id === plugin.id ? { ...item, enabled } : item)); setNote(enabled ? plugin.name + " is on." : plugin.name + " is off."); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
+    try {
+      // A switch-on names the revision of the description that was looked at: the computer refuses a plugin that is another one by then.
+      await api["plugins.setEnabled"](plugin.id, enabled, ...(enabled && plugin.revision ? [{ revision: plugin.revision }] : []));
+      // Switched on by the person, a plugin no longer has the computer's reason for being off.
+      setLocalInstalled((all) => all.map((item) => item.id === plugin.id ? { ...item, enabled, ...(enabled && heldBack(item) && item.status !== "error" && { detail: undefined }) } : item));
+      setNote(enabled ? plugin.name + " is on." : plugin.name + " is off.");
+    } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function setBots(plugin: InstalledPlugin, botsForPlugin: "all" | string[]) {
     setBusy(true); setError("");
-    try { await api["plugins.setBots"](plugin.id, botsForPlugin); setLocalInstalled((all) => all.map((item) => item.id === plugin.id ? { ...item, bots: botsForPlugin } : item)); setNote("Updated which bots use " + plugin.name + "."); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
+    try { await api["plugins.setBots"](plugin.id, botsForPlugin, ...(plugin.revision ? [{ revision: plugin.revision }] : [])); setLocalInstalled((all) => all.map((item) => item.id === plugin.id ? { ...item, bots: botsForPlugin } : item)); setNote("Updated which bots use " + plugin.name + "."); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function openUpdateReview(plugin: InstalledPlugin) {
     setBusy(true); setError(""); setUpdateReview(undefined);
@@ -179,8 +178,7 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
     } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function update(review: UpdateReview) {
-    const warnings = review.preview.warnings ?? warningForContents(review.preview.contents);
-    if (!(await confirmExecutable(review.plugin.name, warnings))) return;
+    if (!(await agreed(review.preview, "update"))) return;
     setBusy(true); setError("");
     try {
       const next = await api["plugins.update"](review.plugin.id, { ...(review.preview.revision && { revision: review.preview.revision }) });
@@ -205,11 +203,16 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
     try { await api.signInMcpServer(serverId); setNote("Signed in for " + pluginName + "."); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
 
+  // Plugins that Botkins switched off: said one time, at the top of the page.
+  const switchedOff = switchedOffNotice(installed, told, where, hostId);
+  function toldNow(keys: string[]) { const next = [...told, ...keys]; setTold(next); writeTold(TOLD, next); }
+
   if (!supported) return <div className="int-section plugin-settings" {...stopCancel}><Group><div className="int-empty plugin-unavailable"><span className="int-empty-icon" aria-hidden="true"><ShieldAlert size={20} /></span><strong>Marketplace needs an update</strong><p>Update the app on your computer to use Marketplace plugins here.</p></div></Group></div>;
-  const detail = selection && <PluginDetail selection={selection} preview={preview} previewLoading={previewLoading} installed={selectedInstalled} markets={markets} bots={bots} busy={busy} note={note} error={error} onBack={() => { setSelection(undefined); setPreview(undefined); setError(""); }} onInstall={() => void startInstall()} onConfigure={(plugin) => setConfigPlugin(plugin)} onEnabled={(plugin, enabled) => void setEnabled(plugin, enabled)} onBots={(plugin, selectedBots) => void setBots(plugin, selectedBots)} onUpdate={(plugin) => void openUpdateReview(plugin)} onRemove={(plugin) => void uninstall(plugin)} onSignIn={(serverId, name) => void signIn(serverId, name)} onRetry={() => setPreviewRevision((value) => value + 1)} />;
+  const detail = selection && <PluginDetail selection={selection} preview={preview} previewLoading={previewLoading} installed={selectedInstalled} where={where} markets={markets} bots={bots} busy={busy} note={note} error={error} onBack={() => { setSelection(undefined); setPreview(undefined); setError(""); }} onInstall={() => void startInstall()} onConfigure={(plugin) => setConfigPlugin(plugin)} onEnabled={(plugin, enabled) => void setEnabled(plugin, enabled)} onBots={(plugin, selectedBots) => void setBots(plugin, selectedBots)} onUpdate={(plugin) => void openUpdateReview(plugin)} onRemove={(plugin) => void uninstall(plugin)} onSignIn={(serverId, name) => void signIn(serverId, name)} onRetry={() => setPreviewRevision((value) => value + 1)} />;
   return <div className="int-section plugin-settings" {...stopCancel}>
     <div className="plugin-top-tabs" role="tablist" aria-label="Marketplace"><button type="button" role="tab" aria-selected={view === "apps"} onClick={() => { setView("apps"); setSelection(undefined); }}>Apps</button><button type="button" role="tab" aria-selected={view === "plugins"} onClick={() => { setView("plugins"); setSelection(undefined); }}>Plugins</button></div>
     {note && !selection && <p className="set-status" role="status">{note}</p>}
+    {switchedOff && !selection && view === "plugins" && <div className="plugin-notice" role="status" aria-label={switchedOff.title}><ShieldAlert size={16} aria-hidden="true" /><div><strong>{switchedOff.title}</strong><p>{switchedOff.text}</p></div><button type="button" className="set-button" onClick={() => { toldNow(switchedOff.keys); setMode("installed"); }}>OK</button></div>}
     {selection ? detail : view === "apps" ? <Group><div className="int-empty"><span className="int-empty-icon" aria-hidden="true"><Store size={20} /></span><strong>Apps are coming soon</strong><p>Plugins are available now for skills, tools, hooks, agents and commands.</p><button type="button" className="set-button primary" onClick={() => setView("plugins")}>Browse plugins</button></div></Group> : <><div className="plugin-mode-tabs" role="tablist" aria-label="Plugins"><button type="button" role="tab" aria-selected={mode === "browse"} onClick={() => setMode("browse")}>Browse</button><button type="button" role="tab" aria-selected={mode === "installed"} onClick={() => setMode("installed")}>Installed ({installed.length})</button></div>{mode === "browse" ? <>
       <div className="set-toolbar int-toolbar plugin-toolbar"><label className="int-filter"><Search size={14} aria-hidden="true" /><input type="search" aria-label="Search plugins" placeholder="Search plugins" value={query} onChange={(e) => setQuery(e.target.value)} /></label><button type="button" className="set-button" onClick={() => void addFolder()} disabled={busy}><FolderPlus size={14} /> Add from computer</button><button type="button" className="set-button" onClick={() => setAddMarketplaceOpen(true)}><Plus size={14} /> Add marketplace</button></div>
       <div className="plugin-market-chips" role="group" aria-label="Plugin marketplaces"><button type="button" className={marketplace ? "" : "selected"} aria-pressed={!marketplace} onClick={() => setMarketplace("")}>All</button>{markets.map((market) => <button type="button" key={market.id} className={marketplace === market.id ? "selected" : ""} aria-pressed={marketplace === market.id} onClick={() => setMarketplace(market.id)}>{market.name}</button>)}</div>
@@ -219,7 +222,7 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
     {dialogs.node}
     {addMarketplaceOpen && <AddMarketplaceSheet close={() => setAddMarketplaceOpen(false)} saved={(market) => { setAddMarketplaceOpen(false); setMarkets((all) => [...all.filter((item) => item.id !== market.id), market]); setMarketplace(market.id); setNote("Added " + market.name + "."); void loadBrowse(); }} />}
     {folderBrowser && <FolderBrowserSheet close={() => setFolderBrowser(undefined)} choose={(path) => void addFolderPath(path)} />}
-    {updateReview && <PluginUpdateReviewSheet review={updateReview} busy={busy} close={() => setUpdateReview(undefined)} submit={() => void update(updateReview)} />}
+    {updateReview && <PluginUpdateReviewSheet review={updateReview} where={where} busy={busy} close={() => setUpdateReview(undefined)} submit={() => void update(updateReview)} />}
     {installOpen && preview && <PluginConfigSheet key={preview.id + ":install"} title="Install plugin" fields={preview.config} bots={bots} initialBots="all" submit={(values, selectedBots) => void install({ config: values, bots: selectedBots ?? "all" })} close={() => setInstallOpen(false)} busy={busy} />}
     {configPlugin && <PluginConfigSheet key={configPlugin.id + ":configure"} title={"Settings · " + configPlugin.name} fields={configPlugin.config} bots={[]} submit={(values) => void configure(configPlugin.id, values)} close={() => setConfigPlugin(undefined)} busy={busy} existing />}
   </div>;
@@ -227,7 +230,7 @@ export default function PluginsSettings({ state, bots }: { state: State; bots: B
 
 function ErrorNotice({ message, retry }: { message: string; retry: () => void }) { return <p className="set-status error-text plugin-error" role="alert"><span>{message}</span><button type="button" className="set-link" onClick={retry}>Retry</button></p>; }
 function PluginListingRow({ plugin, marketplace, onClick }: { plugin: PluginListing; marketplace: string; onClick: () => void }) { return <button type="button" className="plugin-listing" onClick={onClick}><span className="plugin-listing-icon" aria-hidden="true"><Wrench size={16} /></span><span className="plugin-listing-copy"><strong>{plugin.name}</strong><small>{plugin.description || "Adds capabilities to your bots."}</small><em>{marketplace}{plugin.version ? " · v" + plugin.version : ""}</em></span><ChevronRight size={16} aria-hidden="true" /></button>; }
-function InstalledGroup({ plugins, markets, onOpen, onAdd }: { plugins: InstalledPlugin[]; markets: PluginMarketplace[]; onOpen: (plugin: InstalledPlugin) => void; onAdd: () => void }) { return plugins.length ? <Group title="Installed" footer="Installed plugins stay on this computer until you remove them.">{plugins.map((plugin) => <button type="button" className="plugin-listing" key={plugin.id} onClick={() => onOpen(plugin)}><span className="plugin-listing-icon" aria-hidden="true"><Wrench size={16} /></span><span className="plugin-listing-copy"><strong>{plugin.name}</strong><small>{plugin.detail || statusLabel(plugin)}</small><em>{plugin.enabled ? "On" : "Off"} · {plugin.bots === "all" ? "All bots" : plugin.bots.length + " bot" + (plugin.bots.length === 1 ? "" : "s")}{plugin.marketplace !== "folder" ? " · " + marketplaceLabel(markets, plugin.marketplace) : " · Computer"}</em></span><ChevronRight size={16} aria-hidden="true" /></button>)}</Group> : <Group><div className="int-empty"><span className="int-empty-icon" aria-hidden="true"><Wrench size={20} /></span><strong>No installed plugins</strong><p>Browse a catalog or add a plugin folder from this computer.</p><button type="button" className="set-button primary" onClick={onAdd}>Browse plugins</button></div></Group>; }
+function InstalledGroup({ plugins, markets, onOpen, onAdd }: { plugins: InstalledPlugin[]; markets: PluginMarketplace[]; onOpen: (plugin: InstalledPlugin) => void; onAdd: () => void }) { return plugins.length ? <Group title="Installed" footer="Installed plugins stay on this computer until you remove them.">{plugins.map((plugin) => <button type="button" className="plugin-listing" key={plugin.id} onClick={() => onOpen(plugin)}><span className="plugin-listing-icon" aria-hidden="true"><Wrench size={16} /></span><span className="plugin-listing-copy"><strong>{plugin.name}</strong><small>{plugin.detail || statusLabel(plugin)}</small><em>{onOffLabel(plugin)} · {plugin.bots === "all" ? "All bots" : plugin.bots.length + " bot" + (plugin.bots.length === 1 ? "" : "s")}{plugin.marketplace !== "folder" ? " · " + marketplaceLabel(markets, plugin.marketplace) : " · Computer"}</em></span><ChevronRight size={16} aria-hidden="true" /></button>)}</Group> : <Group><div className="int-empty"><span className="int-empty-icon" aria-hidden="true"><Wrench size={20} /></span><strong>No installed plugins</strong><p>Browse a catalog or add a plugin folder from this computer.</p><button type="button" className="set-button primary" onClick={onAdd}>Browse plugins</button></div></Group>; }
 
 function MarketplacesGroup({ markets, loading, onAdd, onRemove, onRetry }: { markets: PluginMarketplace[]; loading: boolean; onAdd: () => void; onRemove: (market: PluginMarketplace) => void; onRetry: () => void }) {
   return <Group title="Marketplaces" footer="Catalogs are read by the computer. Plugins already installed stay when a catalog is removed." actions={<button type="button" className="set-button" onClick={onAdd}><Plus size={14} /> Add marketplace</button>}>
@@ -236,23 +239,78 @@ function MarketplacesGroup({ markets, loading, onAdd, onRemove, onRetry }: { mar
   </Group>;
 }
 
-function PluginDetail({ selection, preview, previewLoading, installed, markets, bots, busy, note, error, onBack, onInstall, onConfigure, onEnabled, onBots, onUpdate, onRemove, onSignIn, onRetry }: {
-  selection: { kind: "listing" | "installed"; id: string }; preview?: PluginPreview; previewLoading: boolean; installed?: InstalledPlugin; markets: PluginMarketplace[]; bots: Bot[]; busy: boolean; note: string; error: string;
+function PluginDetail({ selection, preview, previewLoading, installed, where, markets, bots, busy, note, error, onBack, onInstall, onConfigure, onEnabled, onBots, onUpdate, onRemove, onSignIn, onRetry }: {
+  selection: { kind: "listing" | "installed"; id: string }; preview?: PluginPreview; previewLoading: boolean; installed?: InstalledPlugin; where: Where; markets: PluginMarketplace[]; bots: Bot[]; busy: boolean; note: string; error: string;
   onBack: () => void; onInstall: () => void; onConfigure: (plugin: InstalledPlugin) => void; onEnabled: (plugin: InstalledPlugin, enabled: boolean) => void; onBots: (plugin: InstalledPlugin, bots: "all" | string[]) => void; onUpdate: (plugin: InstalledPlugin) => void; onRemove: (plugin: InstalledPlugin) => void; onSignIn: (serverId: string, name: string) => void; onRetry: () => void;
 }) {
   const item = installed ?? preview;
-  return <div className="plugin-detail"><button type="button" className="set-link plugin-back" onClick={onBack}><ArrowLeft size={14} /> Back to plugins</button>{!item ? (previewLoading ? <p className="set-status">Reading plugin contents…</p> : <Group><ErrorNotice message={error || "This plugin could not be read."} retry={onRetry} /></Group>) : <>
-    <div className="plugin-detail-head"><div><h3>{item.name}</h3><p>{item.description || "A plugin for your bots."}</p><small>{marketplaceLabel(markets, item.marketplace)}{item.version ? " · v" + item.version : ""}{item.author ? " · " + item.author : ""}</small></div>{"homepage" in item && item.homepage && <a href={item.homepage} target="_blank" rel="noreferrer" className="set-link" onClick={(e) => { e.preventDefault(); void api.openLink(item.homepage!); }}>Homepage <ExternalLink size={13} /></a>}</div>
-    {installed ? <><Group title="Status"><div className="set-row"><div className="set-label"><span className="set-name">{statusLabel(installed)}</span>{installed.detail && <small>{installed.detail}</small>}{installed.limits && <small>{installed.limits}</small>}</div><div className="set-control"><input type="checkbox" role="switch" className="switch set-switch" aria-label={installed.name + " enabled"} checked={installed.enabled} disabled={busy} onChange={(e) => onEnabled(installed, e.target.checked)} /></div></div>{installed.status === "error" && <div className="set-row"><small className="int-note bad"><i aria-hidden="true" />{installed.detail || "Plugin failed to load."} <button type="button" className="set-link int-more" onClick={onRetry}>Retry</button></small></div>}</Group><Group title="Bots" footer="Choose which bots get this plugin's skills and tools."><PluginBots bots={bots} value={installed.bots} disabled={busy} onChange={(value) => onBots(installed, value)} /></Group>{installed.config.length > 0 && <Group title="Settings" footer="Secret values are encrypted on this computer and never shown here."><div className="set-row"><div className="set-label"><span className="set-name">Plugin settings</span><small>{installed.config.filter((field) => field.set).length} of {installed.config.length} set</small></div><div className="set-control"><button type="button" className="set-button" onClick={() => onConfigure(installed)}>Edit settings</button></div></div></Group>}<PluginContentsView contents={installed.contents} onSignIn={(serverId) => onSignIn(serverId, installed.name)} /><div className="plugin-detail-actions"><button type="button" className="set-button" disabled={busy} onClick={() => onUpdate(installed)}>Update</button><button type="button" className="set-button danger" disabled={busy} onClick={() => onRemove(installed)}><Trash2 size={14} /> Remove</button></div></> : <><PluginContentsView contents={preview!.contents} warnings={preview!.warnings} />{preview!.postInstallMessage && <p className="plugin-postinstall">{preview!.postInstallMessage}</p>}<div className="plugin-detail-actions"><button type="button" className="set-button primary" disabled={busy} onClick={onInstall}>{busy ? "Installing…" : "Install plugin"}</button></div></>}
+  if (!item)
+    return (
+      <div className="plugin-detail">
+        <button type="button" className="set-link plugin-back" onClick={onBack}><ArrowLeft size={14} /> Back to plugins</button>
+        {previewLoading || selection.kind === "installed" ? <p className="set-status">Reading plugin contents…</p> : <Group><ErrorNotice message={error || "This plugin could not be read."} retry={onRetry} /></Group>}
+      </div>
+    );
+  const head = (
+    <div className="plugin-detail-head">
+      <div>
+        <h3>{decisionText(item.name)}</h3>
+        <p>{item.description || "A plugin for your bots."}</p>
+        <small>{item.marketplace === "folder" ? "Computer" : marketplaceLabel(markets, item.marketplace)}{item.version ? " · v" + item.version : ""}{item.author ? " · " + item.author : ""}</small>
+      </div>
+      {"homepage" in item && item.homepage && <a href={item.homepage} target="_blank" rel="noreferrer" className="set-link" onClick={(e) => { e.preventDefault(); void api.openLink(item.homepage!); }}>Homepage <ExternalLink size={13} /></a>}
+    </div>
+  );
+  const remove = installed && <button type="button" className="set-button danger" disabled={busy} onClick={() => onRemove(installed)}><Trash2 size={14} /> Remove</button>;
+  let body: ReactNode;
+  if (!installed) {
+    body = <>
+      <PluginContentsView plugin={preview!} where={where} />
+      {preview!.postInstallMessage && <p className="plugin-postinstall">{preview!.postInstallMessage}</p>}
+      <div className="plugin-detail-actions"><button type="button" className="set-button primary" disabled={busy} onClick={onInstall}>{busy ? "Installing…" : "Install plugin"}</button></div>
+    </>;
+  } else if (linkedError(installed)) {
+    // A folder that was linked and could not be copied: nothing of it is used, and it can only be removed.
+    body = <>
+      <Group title="Status">
+        <div className="set-row"><div className="set-label"><span className="set-name">Couldn’t load</span>{installed.detail && <small>{installed.detail}</small>}{installed.folder && <small className="int-mono">{decisionText(installed.folder)}</small>}</div></div>
+      </Group>
+      <div className="plugin-detail-actions">{remove}</div>
+    </>;
+  } else {
+    const held = heldBack(installed);
+    const repair = installed.repair === "update";
+    body = <>
+      {/* The computer's reason comes first, as it is: Botkins switched this plugin off, or an update is the way back. */}
+      {held && <p className="plugin-held" role="status"><ShieldAlert size={15} aria-hidden="true" /><span>{installed.detail}</span></p>}
+      <Group title="Status">
+        <div className="set-row">
+          <div className="set-label">
+            <span className="set-name">{held ? "Off · Needs review" : statusLabel(installed)}</span>
+            {installed.detail && !held && installed.status !== "error" && <small>{installed.detail}</small>}
+            {repair && <small>Update this plugin first. Then you can turn it on.</small>}
+            {installed.limits && <small>{installed.limits}</small>}
+          </div>
+          <div className="set-control">
+            {repair && <button type="button" className="set-button primary" disabled={busy} onClick={() => onUpdate(installed)}>Update</button>}
+            <input type="checkbox" role="switch" className="switch set-switch" aria-label={installed.name + " enabled"} checked={installed.enabled} disabled={busy || (repair && !installed.enabled)} onChange={(e) => onEnabled(installed, e.target.checked)} />
+          </div>
+        </div>
+        {installed.status === "error" && !held && <div className="set-row"><small className="int-note bad"><i aria-hidden="true" />{installed.detail || "Plugin failed to load."} <button type="button" className="set-link int-more" onClick={onRetry}>Retry</button></small></div>}
+      </Group>
+      <Group title="Bots" footer="Choose which bots get this plugin's skills and tools."><PluginBots bots={bots} value={installed.bots} disabled={busy} onChange={(value) => onBots(installed, value)} /></Group>
+      {installed.config.length > 0 && <Group title="Settings" footer="Secret values are encrypted on this computer and never shown here."><div className="set-row"><div className="set-label"><span className="set-name">Plugin settings</span><small>{installed.config.filter((field) => field.set).length} of {installed.config.length} set</small></div><div className="set-control"><button type="button" className="set-button" onClick={() => onConfigure(installed)}>Edit settings</button></div></div></Group>}
+      <PluginContentsView plugin={installed} where={where} onSignIn={(serverId) => onSignIn(serverId, installed.name)} />
+      <div className="plugin-detail-actions">{!repair && <button type="button" className="set-button" disabled={busy} onClick={() => onUpdate(installed)}>Update</button>}{remove}</div>
+    </>;
+  }
+  return <div className="plugin-detail">
+    <button type="button" className="set-link plugin-back" onClick={onBack}><ArrowLeft size={14} /> Back to plugins</button>
+    {head}
+    {body}
     {note && <p className="set-status" role="status">{note}</p>}{error && <ErrorNotice message={error} retry={onRetry} />}
-  </>}</div>;
+  </div>;
 }
-
-function PluginContentsView({ contents, warnings, onSignIn }: { contents: PluginContents; warnings?: string[]; onSignIn?: (serverId: string) => void }) {
-  const warningsShown = warnings ?? warningForContents(contents);
-  return <Group title="What this plugin adds" footer="Review commands and tools before enabling a plugin.">{warningsShown.map((warning) => <div className="set-row plugin-warning" key={warning}><ShieldAlert size={15} aria-hidden="true" /><small>{warning}</small></div>)}{contents.skills.length > 0 && <PluginContentRow label="Skills" values={contents.skills} />}{contents.agents.length > 0 && <PluginContentRow label="Agents" values={contents.agents} />}{contents.commands.length > 0 && <PluginContentRow label="Commands" values={contents.commands} />}{contents.lspServers?.length ? <PluginContentRow label="Language servers" values={contents.lspServers} /> : null}{contents.mcpServers.length > 0 && <div className="set-row stacked plugin-content-list"><strong>Tools</strong>{contents.mcpServers.map((server) => <div className="plugin-tool" key={server.name}><span><span className="plugin-tool-icon" aria-hidden="true">{server.kind === "local" ? <Terminal size={14} /> : <Globe size={14} />}</span><b>{server.name}</b><small>{server.kind === "local" ? server.command || "Local command" : server.url || "Remote MCP server"}{server.oauth ? " · OAuth" : ""}</small></span>{server.oauth && server.serverId && onSignIn && <button type="button" className="set-link" onClick={() => onSignIn(server.serverId!)}><KeyRound size={13} /> Sign in</button>}</div>)}</div>}{contents.hooks.length > 0 && <div className="set-row stacked plugin-content-list"><strong>Hooks</strong>{contents.hooks.map((hook, index) => <div className="plugin-hook" key={hook.event + ":" + index}><span>{hookLabels[hook.event] ?? hook.event}</span><code title={hook.command}>{hook.command}</code></div>)}</div>}</Group>;
-}
-function PluginContentRow({ label, values }: { label: string; values: string[] }) { return <div className="set-row stacked plugin-content-list"><strong>{label}</strong><ul>{values.map((value) => <li key={value}>{value}</li>)}</ul></div>; }
 
 function PluginBots({ bots, value, disabled, onChange }: { bots: Bot[]; value: "all" | string[]; disabled?: boolean; onChange: (value: "all" | string[]) => void }) {
   const [draft, setDraft] = useState<"all" | string[]>(value);
@@ -275,11 +333,10 @@ function PluginBots({ bots, value, disabled, onChange }: { bots: Bot[]; value: "
   return <div className="plugin-bots"><label><span>Use for</span><select aria-label="Use for" value={all ? "all" : "selected"} disabled={disabled} onChange={(e) => chooseScope(e.target.value as "all" | "selected")}><option value="all">All bots</option><option value="selected">Selected bots</option></select></label>{!all && <div className="plugin-bot-checks">{bots.map((bot) => <label key={bot.id}><input type="checkbox" aria-label={bot.name} checked={draft.includes(bot.id)} disabled={disabled} onChange={(e) => chooseBot(bot.id, e.target.checked)} />{bot.name}</label>)}</div>}</div>;
 }
 
-function PluginUpdateReviewSheet({ review, busy, close, submit }: { review: UpdateReview; busy: boolean; close: () => void; submit: () => void }) {
-  const warnings = review.preview.warnings ?? warningForContents(review.preview.contents);
+function PluginUpdateReviewSheet({ review, where, busy, close, submit }: { review: UpdateReview; where: Where; busy: boolean; close: () => void; submit: () => void }) {
   return <Sheet title={"Review update · " + review.plugin.name} wide close={close} submit={submit} footer={<><span className="int-sheet-error" role="alert" /> <button type="button" className="set-button" onClick={close}>Cancel</button><button className="set-button primary" disabled={busy}>{busy ? "Updating…" : "Approve update"}</button></>}>
-    <p className="plugin-form-intro">Review the new version before it replaces the installed plugin. The exact commands and tool URLs below are for this revision.</p>
-    <PluginContentsView contents={review.preview.contents} warnings={warnings} />
+    <p className="plugin-form-intro">Review the new version before it replaces the installed plugin. Everything it runs is below, for this revision.</p>
+    <PluginContentsView plugin={review.preview} where={where} />
     {review.preview.postInstallMessage && <p className="plugin-postinstall">{review.preview.postInstallMessage}</p>}
     <p className="plugin-form-intro">Your saved settings and bot scope stay unchanged.</p>
   </Sheet>;
@@ -313,7 +370,7 @@ function PluginConfigSheet({ title, fields, bots, initialBots, existing, close, 
   }
   return <Sheet title={title} wide close={close} submit={save} footer={<><span className="int-sheet-error" role="alert">{problem}</span><button type="button" className="set-button" onClick={close}>Cancel</button><button className="set-button primary" disabled={busy}>{busy ? "Saving…" : existing ? "Save settings" : "Install"}</button></>}>
     <p className="plugin-form-intro">{existing ? "Values are kept on this computer. Secret fields show only whether they are set." : "Choose which bots use this plugin and provide any settings it needs."}</p>
-    {fields.length === 0 ? <p className="set-status">This plugin has no settings.</p> : fields.map((field) => <div className="plugin-field" key={field.key}><label htmlFor={"plugin-field-" + field.key}>{field.label}{field.required && " *"}</label>{field.description && <small>{field.description}</small>}<input id={"plugin-field-" + field.key} type={field.secret ? "password" : "text"} value={text[field.key] ?? ""} placeholder={field.secret && existing && field.set ? "Saved securely" : field.default ?? ""} autoComplete="off" onChange={(e) => { setText((all) => ({ ...all, [field.key]: e.target.value })); setPicked((all) => ({ ...all, [field.key]: undefined })); setClear((all) => ({ ...all, [field.key]: false })); setTouched((all) => ({ ...all, [field.key]: true })); }} />{field.secret && <CredentialChoice label={field.label} saved={saved} picked={picked[field.key]} pick={(next) => { setPicked((all) => ({ ...all, [field.key]: next })); setText((all) => ({ ...all, [field.key]: "" })); setClear((all) => ({ ...all, [field.key]: false })); setTouched((all) => ({ ...all, [field.key]: true })); }} disabled={busy} />}{existing && field.set && <label className="plugin-clear"><input type="checkbox" checked={!!clear[field.key]} onChange={(e) => { setClear((all) => ({ ...all, [field.key]: e.target.checked })); setTouched((all) => ({ ...all, [field.key]: true })); }} /> Clear saved value</label>}</div>)}
+    {fields.length === 0 ? <p className="set-status">This plugin has no settings.</p> : fields.map((field) => <div className="plugin-field" key={field.key}><label htmlFor={"plugin-field-" + field.key}>{field.label}{field.required && " *"}</label>{field.description && <small>{field.description}</small>}{sentToLines(field).map((line) => <small className="plugin-sent" key={line}>{line}</small>)}{!field.secret && !!field.default && <small className="plugin-sent">{"Default: " + decisionText(field.default)}</small>}<input id={"plugin-field-" + field.key} type={field.secret ? "password" : "text"} value={text[field.key] ?? ""} placeholder={field.secret && existing && field.set ? "Saved securely" : field.default ?? ""} autoComplete="off" onChange={(e) => { setText((all) => ({ ...all, [field.key]: e.target.value })); setPicked((all) => ({ ...all, [field.key]: undefined })); setClear((all) => ({ ...all, [field.key]: false })); setTouched((all) => ({ ...all, [field.key]: true })); }} />{field.secret && <CredentialChoice label={field.label} saved={saved} picked={picked[field.key]} pick={(next) => { setPicked((all) => ({ ...all, [field.key]: next })); setText((all) => ({ ...all, [field.key]: "" })); setClear((all) => ({ ...all, [field.key]: false })); setTouched((all) => ({ ...all, [field.key]: true })); }} disabled={busy} />}{existing && field.set && <label className="plugin-clear"><input type="checkbox" checked={!!clear[field.key]} onChange={(e) => { setClear((all) => ({ ...all, [field.key]: e.target.checked })); setTouched((all) => ({ ...all, [field.key]: true })); }} /> Clear saved value</label>}</div>)}
     {initialBots !== undefined && <div className="plugin-form-bots"><strong>Bots</strong><PluginBots bots={bots} value={selectedBots} disabled={busy} onChange={setSelectedBots} /></div>}
   </Sheet>;
 }

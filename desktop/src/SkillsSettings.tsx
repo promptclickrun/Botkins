@@ -1,9 +1,11 @@
 import { useEffect, useState, type HTMLAttributes, type SyntheticEvent } from "react";
-import { FolderOpen, FolderPlus, Pencil, Plus, Search, Sparkles, Trash2 } from "lucide-react";
-import type { SkillFolders, SkillInfo } from "./types";
+import { FolderOpen, FolderPlus, Pencil, Plus, Search, ShieldAlert, Sparkles, Trash2, X } from "lucide-react";
+import type { InstalledPlugin, SkillFolders, SkillInfo } from "./types";
+import { decisionText, readTold, skillsOff, toldKey, writeTold } from "./pluginStarts";
 import { useAsk } from "./Pages";
 import { Group, Sheet, errorText } from "./SettingsRows";
 import "./integrations.css";
+import "./plugins.css";
 
 const api = window.botkins;
 /** React bubbles a nested dialog's cancel (Escape) through the component tree; this stops it at a wrapper. */
@@ -40,12 +42,38 @@ export function skillOrigin(skill: SkillInfo, list?: SkillList) {
 }
 
 /** Settings › Skills: every skill for every bot, with New skill, Add from folder…, linked folders and plugins. */
-export default function SkillsSettings({ stamp }: { stamp: string }) {
+/** Where the window keeps which "skills are off" notices the person closed. */
+const TOLD = "botkins.plugins.skillsOffTold";
+
+export default function SkillsSettings({
+  stamp,
+  plugins = [],
+  hostId = "",
+  openPlugin,
+}: {
+  stamp: string;
+  /** The installed plugins, for the skills that are off with their plugin. */
+  plugins?: InstalledPlugin[];
+  /** The computer in use, when it is another one: what was told is kept for each computer. */
+  hostId?: string;
+  /** Opens an installed plugin's page in Settings › Marketplace. */
+  openPlugin?: (id: string) => void;
+}) {
   const { list, error: loadError, reload } = useSkills(stamp);
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<{ name?: string } | null>(null);
+  const [told, setTold] = useState(() => readTold(TOLD));
+  /** A plugin folder that "Add from folder…" installed as a plugin just now. */
+  const [installed, setInstalled] = useState<{ id: string; name: string }>();
+  // Skills that are off because Botkins switched their plugin off: said here, where they are missed, one time.
+  const missed = skillsOff(plugins, told, hostId);
+  function close(plugin: InstalledPlugin) {
+    const next = [...told, toldKey(plugin, hostId)];
+    setTold(next);
+    writeTold(TOLD, next);
+  }
   const [platform, setPlatform] = useState("darwin");
   const dialogs = useAsk();
   useEffect(() => {
@@ -72,6 +100,12 @@ export default function SkillsSettings({ stamp }: { stamp: string }) {
     try {
       const r = await api.addSkillFolder();
       if (!r) return;
+      // A plugin folder is never linked for its skills: the computer installs it as a plugin, switched off.
+      if (r.kind === "plugin" && r.id) {
+        setInstalled({ id: r.id, name: r.name });
+        await reload();
+        return;
+      }
       setNote(
         r.kind === "skill"
           ? "Added the skill " + r.name + "."
@@ -128,6 +162,47 @@ export default function SkillsSettings({ stamp }: { stamp: string }) {
           {actions}
         </div>
       )}
+      {installed && (
+        <div className="plugin-notice" role="status" aria-label={decisionText(installed.name) + " was installed as a plugin"}>
+          <ShieldAlert size={16} aria-hidden="true" />
+          <div>
+            <strong>{decisionText(installed.name)} was installed as a plugin</strong>
+            <p>It is switched off, so its skills are off. Review what it runs, then turn it on.</p>
+          </div>
+          {openPlugin && (
+            <button type="button" className="set-button" onClick={() => openPlugin(installed.id)}>
+              Open plugin
+            </button>
+          )}
+          <button type="button" className="plugin-notice-close" aria-label="Close" onClick={() => setInstalled(undefined)}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
+      {missed.map((plugin) => (
+        <div className="plugin-notice" role="status" aria-label={"Skills from " + decisionText(plugin.name) + " are off"} key={plugin.id}>
+          <ShieldAlert size={16} aria-hidden="true" />
+          <div>
+            <strong>Skills from {decisionText(plugin.name)} are off</strong>
+            <p>They are part of a plugin that is switched off. Review it, then turn it on.</p>
+          </div>
+          {openPlugin && (
+            <button
+              type="button"
+              className="set-button"
+              onClick={() => {
+                close(plugin);
+                openPlugin(plugin.id);
+              }}
+            >
+              Open plugin
+            </button>
+          )}
+          <button type="button" className="plugin-notice-close" aria-label={"Close the notice about " + decisionText(plugin.name)} onClick={() => close(plugin)}>
+            <X size={15} />
+          </button>
+        </div>
+      ))}
       {note && (
         <p className="set-status" role="status">
           {note}

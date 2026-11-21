@@ -167,6 +167,8 @@ export default function Settings({
   });
   const [id, setId] = useState(initialBot || bots[0]?.id || ""),
     [section, setSection] = useState<SectionId>(start.section),
+    // The installed plugin that Skills asked to show: Marketplace opens on its page.
+    [pluginToOpen, setPluginToOpen] = useState<string>(),
     [view, setView] = useState<BotView>(start.view ?? "model");
   const teamView = start.teamView ?? "requests";
   const member = memberTeam(state);
@@ -444,8 +446,18 @@ export default function Settings({
               )}
             </>
           )}
-          {section === "skills" && <SkillsSettings stamp={JSON.stringify(state.skills ?? null)} />}
-          {section === "marketplace" && <PluginsSettings state={state} bots={bots} />}
+          {section === "skills" && (
+            <SkillsSettings
+              stamp={JSON.stringify(state.skills ?? null)}
+              plugins={state.plugins}
+              hostId={state.remote?.using?.id}
+              openPlugin={(id) => {
+                setPluginToOpen(id);
+                setSection("marketplace");
+              }}
+            />
+          )}
+          {section === "marketplace" && <PluginsSettings key={pluginToOpen ?? ""} state={state} bots={bots} open={pluginToOpen} />}
           {section === "mcp" && <McpSettings state={state} credentials={() => setSection("credentials")} />}
           {section === "credentials" && <CredentialsSettings state={state} mcp={() => setSection("mcp")} />}
           {section === "teamwork" && (

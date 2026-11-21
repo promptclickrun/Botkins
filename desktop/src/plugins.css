@@ -65,18 +65,46 @@
 .plugin-detail-head > a { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .plugin-warning { align-items: flex-start; gap: 8px; color: var(--warning); }
 .plugin-warning svg { flex: none; margin-top: 2px; }
+.plugin-warning small { flex: 1; min-width: 0; text-align: left; }
 .plugin-content-list { align-items: stretch; gap: 8px; }
 .plugin-content-list > strong { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
 .plugin-content-list ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--ink); font-size: calc(13px * var(--text-scale)); }
-.plugin-tool, .plugin-hook { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.plugin-tool > span { display: grid; min-width: 0; gap: 2px; }
-.plugin-tool b { display: flex; align-items: center; gap: 6px; font-size: calc(13px * var(--text-scale)); font-weight: 600; }
-.plugin-tool small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--font-mono); font-size: calc(11px * var(--text-scale)); }
 .plugin-tool-icon { display: inline-flex; color: var(--muted); }
-.plugin-tool button { display: inline-flex; align-items: center; gap: 4px; flex: none; }
-.plugin-hook { align-items: baseline; gap: 10px; }
-.plugin-hook span { flex: none; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
-.plugin-hook code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: calc(11px * var(--text-scale)); }
+
+/* What a plugin runs: one block for each tool and hook. Nothing here is cut: a word wraps inside
+   itself, and a command of many lines scrolls in its own box. */
+.plugin-run { display: grid; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.plugin-run-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.plugin-run-head b { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: calc(13px * var(--text-scale)); font-weight: 600; }
+.plugin-run-head button { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.plugin-facts { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); gap: 6px 12px; margin: 0; }
+.plugin-facts dt { padding-top: 2px; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.plugin-facts dd { display: grid; gap: 4px; min-width: 0; margin: 0; }
+.plugin-facts code, .plugin-command, .plugin-reason code, .plugin-content-list li code { font-family: var(--font-mono); font-size: calc(12px * var(--text-scale)); color: var(--ink); }
+.plugin-value { display: block; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+/* The line a tool is started with: each word in a box of its own, so a word with spaces in it still reads as one word. */
+.plugin-words { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; user-select: text; }
+.plugin-words span { min-width: 0; padding: 1px 6px; border-radius: 5px; background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; }
+.plugin-words span.empty { color: var(--muted); }
+.plugin-command { min-width: 0; max-height: 260px; margin: 0; padding: 7px 9px; overflow: auto; border-radius: 6px; background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.plugin-plain { color: var(--ink); font-size: calc(13px * var(--text-scale)); }
+.plugin-reason { display: grid; gap: 1px; min-width: 0; }
+.plugin-reason code { overflow-wrap: anywhere; }
+.plugin-reason small, .plugin-more { color: var(--muted); font-size: calc(12px * var(--text-scale)); line-height: 1.4; }
+.plugin-content-list li { overflow-wrap: anywhere; }
+.plugin-sent { display: block; color: var(--muted); font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
+
+/* Said one time: plugins that Botkins switched off, and skills that are off with their plugin. */
+.plugin-notice { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warning) 9%, var(--surface)); }
+.plugin-notice > svg { flex: none; margin-top: 2px; color: var(--warning); }
+.plugin-notice > div { flex: 1; min-width: 0; }
+.plugin-notice strong { display: block; font-size: calc(13px * var(--text-scale)); font-weight: 600; overflow-wrap: anywhere; }
+.plugin-notice p { margin: 2px 0 0; color: var(--ink-2); font-size: calc(12.5px * var(--text-scale)); line-height: 1.4; }
+.plugin-notice > .set-button { flex: none; }
+.plugin-notice-close { flex: none; padding: 4px; border-radius: 6px; color: var(--muted); }
+.plugin-notice-close:is(:hover, :focus-visible) { background: var(--hover); color: var(--ink); }
+.plugin-held { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warning) 9%, var(--surface)); color: var(--ink); font-size: calc(13px * var(--text-scale)); line-height: 1.45; }
+.plugin-held svg { flex: none; margin-top: 2px; color: var(--warning); }
 .plugin-postinstall { margin: -10px 0 17px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--ink); font-size: calc(12px * var(--text-scale)); line-height: 1.45; }
 .plugin-detail-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 0 0 20px; }
 .plugin-detail-actions .set-button { display: inline-flex; align-items: center; gap: 5px; }
@@ -110,5 +138,6 @@
   .plugin-toolbar .int-filter { max-width: none; flex-basis: 100%; }
   .plugin-detail-head { display: block; }
   .plugin-detail-head > a { margin-top: 8px; }
-  .plugin-hook { display: grid; gap: 3px; }
+  .plugin-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .plugin-facts dd { margin-bottom: 6px; }
 }

@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import { MessageCircleQuestion, ShieldCheck } from "lucide-react";
+import { decisionText } from "./pluginStarts";
 import type { AgentRequest, FormField } from "./types";
 import { CredentialChoice, isSecretField, looksSecret, useSavedCredentials, type Picked } from "./CredentialPicker";
 
@@ -115,6 +116,7 @@ export default function RequestPanel({
   const secretQuestion = req.kind === "question" && looksSecret(req.title, req.label);
   const secretFields = req.kind === "form" ? fields.filter(([name, field]) => isSecretField(name, field)).map(([name]) => name) : [];
   const secure = req.kind === "secure";
+  const shown = (text: string) => (req.kind === "permission" ? decisionText(text) : text);
   const saved = useSavedCredentials(secure || secretQuestion || secretFields.length > 0);
   const [picked, setPicked] = useState<Record<string, Picked>>({});
   const pick = (key: string, next: Picked | undefined) =>
@@ -216,9 +218,11 @@ export default function RequestPanel({
           tabIndex={0}
           aria-label="Request details"
         >
-          <p className="request-title">{req.title}</p>
-          {req.label && <small className="request-label">{req.label}</small>}
-          {req.preview && <pre>{req.preview}</pre>}
+          {/* An approval is a decision: what it shows goes through the rule for such text, so a
+              command or a plugin's own message cannot look like another one (src/pluginStarts.ts). */}
+          <p className="request-title">{shown(req.title)}</p>
+          {req.label && <small className="request-label">{shown(req.label)}</small>}
+          {req.preview && <pre>{shown(req.preview)}</pre>}
           {secure && <p className="secure-destination">{req.detail}</p>}
           {req.detail && !secure && (
             <details
@@ -226,7 +230,7 @@ export default function RequestPanel({
               open={req.preview ? undefined : true}
             >
               <summary>Full request</summary>
-              <pre>{req.detail}</pre>
+              <pre>{shown(req.detail)}</pre>
             </details>
           )}
           {req.remember && (
