@@ -155,5 +155,5 @@ try {
   console.log("Plugins renderer smoke: marketplace browse/preview/install approval, write-only settings, bot scope, enablement, stale/fresh revision update, folder snapshot refresh and remove passed.");
 } finally {
   await app.close().catch(() => {});
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

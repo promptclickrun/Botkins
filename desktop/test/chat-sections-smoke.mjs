@@ -291,5 +291,5 @@ try {
   console.log("Chat sections smoke passed. The sections are there after a restart; no renderer exceptions.");
 } finally {
   if (app) await app.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

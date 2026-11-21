@@ -441,5 +441,5 @@ try {
   console.log("look smoke: ok." + (shots ? " Screenshots in " + shots : ""));
 } finally {
   await app?.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

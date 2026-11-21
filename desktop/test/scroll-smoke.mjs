@@ -19,7 +19,7 @@ if (shots) mkdirSync(shots, { recursive: true });
 const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
 seedApp(dir);
 // The folder goes when the smoke ends, passed or not.
-process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+process.on("exit", () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 delete env.ELECTRON_RUN_AS_NODE;
 const launch = () => _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env, timeout: 300000 });
 const long = { timeout: 120000 };

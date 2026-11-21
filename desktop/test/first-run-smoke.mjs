@@ -191,5 +191,5 @@ try {
   console.log("first-run smoke: ok" + (model ? " (model " + model.id + " carried over)" : " (no model list; model carry-over not checked)"));
 } finally {
   await app?.close().catch(() => {});
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

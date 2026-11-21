@@ -282,5 +282,5 @@ try {
 } finally {
   await app?.close().catch(() => {});
   server.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

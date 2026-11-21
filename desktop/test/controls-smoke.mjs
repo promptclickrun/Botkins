@@ -320,5 +320,5 @@ try {
     await probe.deleteSession(session.sessionId).catch(() => {});
   }
   await probe.stop().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

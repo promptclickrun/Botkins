@@ -164,5 +164,5 @@ try {
   console.log("The stream followed the bottom. The hydrated reply landed", top, "CSS pixels from the top and stayed there through a later update.");
 } finally {
   await app?.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

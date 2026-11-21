@@ -266,5 +266,5 @@ try {
 } finally {
   await app.close();
   // Conversations' Copilot state lives in the test's data folder and goes with it.
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

@@ -17,7 +17,7 @@ const shots = process.env.SIDEPANE_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
 const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
 seedApp(dir);
-process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+process.on("exit", () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 delete env.ELECTRON_RUN_AS_NODE;
 const launch = () => _electron.launch({ args: ["."], env, timeout: 300000 });
 const long = { timeout: 120000 };

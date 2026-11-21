@@ -80,5 +80,5 @@ try {
   console.log("Passed: routine delivery preserved the last visited chat across restart, and a routine saved with no output.");
 } finally {
   await app?.close().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

@@ -77,5 +77,5 @@ try {
   console.log("Reply avatars and the context details popup passed.");
 } finally {
   await app.close();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

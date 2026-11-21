@@ -156,5 +156,5 @@ try {
   assert.deepEqual(errors, []);
 } finally {
   if (app) await app.close();
-  rmSync(scratch, { recursive: true, force: true });
+  rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

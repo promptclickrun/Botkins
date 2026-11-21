@@ -294,5 +294,5 @@ try {
   console.log("sidebar smoke: ok" + (shots ? ". Screenshots in " + shots : ""));
 } finally {
   await app?.close().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

@@ -191,5 +191,5 @@ try {
   console.log("Artifacts Electron smoke passed: list, preview pane, verified path link, open IPC and MEDIA: attachments drawn in a reply.");
 } finally {
   await app?.close().catch(() => {});
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
