@@ -28,6 +28,15 @@ export const PLUGIN_METHODS = [
   "plugins.install", "plugins.addFolder", "plugins.configure", "plugins.setBots", "plugins.setEnabled", "plugins.update", "plugins.uninstall",
 ];
 
+/** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
+export const SPACE_METHODS = [
+  "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
+  "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote",
+];
+/** How a new panel may start, and the limits of what people write into a space. */
+export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", "app"];
+export const SPACE_SIZES = { name: 40, prompt: 4000, note: 2000, label: 80, state: 64 * 1024, stateKeys: 200 };
+
 export const REMOTE_METHODS = new Set([
   // Preferences
   "setPreferences", "appInfo",
@@ -56,6 +65,8 @@ export const REMOTE_METHODS = new Set([
   "saveTask", "moveTask", "startTask", "deleteTask",
   // Today
   "refreshPanel", "changePanel", "routine", "boardAct",
+  // Spaces ("spaces-v1", docs/spaces.md): pages of panels, private or shared. Each is cut to its shape (spaceArgs).
+  ...SPACE_METHODS,
   // Skills and MCP servers
   "skills", "readSkill", "saveSkill", "removeSkill", "setSkillEnabled", "removeSkillFolder",
   "saveMcpServer", "setMcpServerEnabled", "removeMcpServer", "testMcpServer", "signInMcpServer",
@@ -306,7 +317,70 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+}
+
+/**
+ * The space calls ("spaces-v1"), cut to their shape: ids as short strings, names and sentences of a
+ * bounded length, an app panel's state as a small plain object. Null for any other call.
+ */
+function spaceArgs(method, args) {
+  if (!SPACE_METHODS.includes(method)) return null;
+  const id = (value, what) => (typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("\0") ? value : refuse("This " + what + " no longer exists."));
+  const optional = (value, what) => (value == null ? null : id(value, what));
+  const words = (value, limit, sentence) => (typeof value === "string" && value.trim() && value.trim().length <= limit ? value.trim() : refuse(sentence));
+  const object = args[0] !== null && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
+  switch (method) {
+    case "spaces.read":
+    case "spaces.remove":
+      return [id(args[0], "space")];
+    case "spaces.create":
+      return [{ name: words(object.name, SPACE_SIZES.name, "Give the space a name of up to 40 characters.") }];
+    case "spaces.rename":
+      return [id(args[0], "space"), words(args[1], SPACE_SIZES.name, "Give the space a name of up to 40 characters.")];
+    case "spaces.setProject":
+      return [id(args[0], "space"), optional(args[1], "project")];
+    case "spaces.setPanelProject":
+      return [id(args[0], "panel"), optional(args[1], "project")];
+    case "spaces.newPanel": {
+      const refresh = object.refresh;
+      if (object.start !== undefined && !PANEL_STARTS.includes(object.start)) refuse("Choose what the panel starts from.");
+      if (refresh !== undefined && !(refresh && typeof refresh === "object" && typeof refresh.cron === "string" && refresh.cron.trim().split(/\s+/).length === 5 && refresh.cron.length <= 160 && typeof refresh.timezone === "string" && refresh.timezone.length <= 80)) refuse("That refresh schedule can't be used.");
+      return [{
+        spaceId: id(object.spaceId, "space"),
+        botId: id(object.botId, "bot"),
+        prompt: words(object.prompt, SPACE_SIZES.prompt, "Say what the panel should show."),
+        ...(object.start !== undefined && { start: object.start }),
+        ...(refresh !== undefined && { refresh: { cron: refresh.cron.trim(), timezone: refresh.timezone } }),
+      }];
+    }
+    case "spaces.ask":
+      return [{ spaceId: id(object.spaceId, "space"), botId: id(object.botId, "bot"), text: words(object.text, SPACE_SIZES.prompt, "Write what you want to ask."), ...(object.panelId !== undefined && { panelId: id(object.panelId, "panel") }) }];
+    case "spaces.movePanel": {
+      const to = args[1] !== null && typeof args[1] === "object" && !Array.isArray(args[1]) ? args[1] : {};
+      return [id(args[0], "panel"), { spaceId: id(to.spaceId, "space"), before: optional(to.before, "panel") }];
+    }
+    case "spaces.patchState": {
+      const patch = args[1];
+      if (patch === null || typeof patch !== "object" || Array.isArray(patch)) refuse("That change can't be saved.");
+      const keys = Object.keys(patch);
+      let size = 0;
+      try {
+        size = JSON.stringify(patch).length;
+      } catch {
+        refuse("That change can't be saved.");
+      }
+      if (keys.length > SPACE_SIZES.stateKeys || size > SPACE_SIZES.state || keys.some((key) => key === "__proto__" || key.length > 200)) refuse("That change is too large to save.");
+      const label = typeof args[2] === "string" && args[2].trim() ? args[2].trim().replace(/\s+/g, " ").slice(0, SPACE_SIZES.label) : undefined;
+      return [id(args[0], "panel"), JSON.parse(JSON.stringify(patch)), ...(label ? [label] : [])];
+    }
+    case "spaces.note":
+      return [id(args[0], "panel"), words(args[1], SPACE_SIZES.note, "A note has up to 2,000 characters.")];
+    case "spaces.removeNote":
+      return [id(args[0], "panel"), id(args[1], "note")];
+    default:
+      return null;
+  }
 }
 
 /**

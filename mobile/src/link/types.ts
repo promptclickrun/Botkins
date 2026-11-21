@@ -192,9 +192,10 @@ export type JoinRequest = { id: string; name: string; person?: string; platform:
 /** Someone a chat can be shared with ("team-people-v1"): the owner (id "owner", named after the computer) or a member. */
 export type Person = { id: string; name: string };
 export type TeamPart =
-  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[]; people?: Person[] }
+  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[]; people?: Person[]; /** "Members may share by link" ("spaces-v1"). */ linkSharing?: boolean }
   | {
       people?: Person[];
+      linkSharing?: boolean;
       me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] } };
       team: { name: string };
     };
@@ -580,7 +581,66 @@ export type Panel = {
   projectId?: string;
   /** The chat that holds the panel's refreshes (its "refresh history"), once it has refreshed. */
   refreshChatId?: string;
+  /** The space it is in ("spaces-v1"). */
+  spaceId?: string;
+  /** The member who asked for it. Missing: the owner. */
+  createdBy?: string;
+  /** An app panel's saved state (`botkins.state`), and how many times it changed. */
+  state?: Record<string, unknown>;
+  stateRev?: number;
+  /** Short notes people wrote on it. */
+  notes?: PanelNote[];
+  /** The last change a person made: "Maya ticked Press kit". `label` is the page's own words. */
+  last?: { by: string; name: string; label?: string; at: number };
 };
+export type PanelNote = { id: string; by: string; name: string; text: string; at: number };
+/**
+ * A panel as a device is sent it ("spaces-v1"). A member gets it without its project, without its
+ * chats unless they are in them, and without its routine's prompt unless they may change the space.
+ */
+export type PanelView = Omit<Panel, "chatId" | "routine"> & {
+  chatId?: string;
+  routine: (Omit<NonNullable<Panel["routine"]>, "prompt"> & { prompt?: string; setBy?: string }) | null;
+};
+/** Who can open a space: only its maker, members the maker picked, all members, or anyone with the link. */
+export type SpaceAccess = "private" | "members" | "team" | "link";
+/** What a person may do with a space. A member's role narrows what each allows (`team.me.role`). */
+export type SpaceCan = "own" | "edit" | "view";
+export type SpaceNotify = "off" | "daily" | "all";
+/** A space as one person is sent it in the `spaces` part ("spaces-v1"; docs/spaces.md): the spaces they can open, pinned first. */
+export type SpaceSummary = {
+  id: string;
+  name: string;
+  /** One of the four every person has. Another person's is shown with its maker: "Maya's Today". */
+  builtin?: "today" | "feed" | "ideas" | "goals";
+  /** Who made it. */
+  by: Person;
+  mine: boolean;
+  access: SpaceAccess;
+  can: SpaceCan;
+  /** With access "members": the people picked. */
+  people?: (Person & { can: "view" | "edit" })[];
+  /** With access "team" or "link": what every member may do. */
+  teamCan?: "view" | "edit";
+  /** The link, for its maker and the owner. */
+  link?: string;
+  /** Owner devices only. */
+  projectId?: string;
+  /** Panels and open cards the person is sent. */
+  count: number;
+  /** Of those, changed since the person last opened it (99 at most). */
+  changed: number;
+  pinned: boolean;
+  notify: SpaceNotify;
+  /** Other people looking at it now. */
+  here: (Person & { panelId?: string })[];
+  rev: number;
+  updatedAt: number;
+};
+/** A space's content, asked for with `spaces.read`. Read again when the `rev` in the `spaces` part passes this one. */
+export type SpaceContent = { id: string; rev: number; /** When the person last opened it before this read. */ seenAt: number; panels: PanelView[]; cards: BoardItem[] };
+export type PanelStart = "checklist" | "tracker" | "chart" | "table" | "notes" | "app";
+export type SpaceShareInput = { access: SpaceAccess; grants?: { id: string; can: "view" | "edit" }[]; teamCan?: "view" | "edit" };
 export type BoardItem = {
   id: string;
   botId: string;
@@ -830,6 +890,8 @@ export type UsageReport = {
  * "provider-signin-v1" (the app's: a model provider signed in from a phone with no browser on the
  * computer, by its own page and code, its own questions, or a pasted token; and a provider's
  * command-line tool installed from a phone).
+ * "spaces-v1" (pages of panels, private or shared: the `spaces` part, `spaces.*` and `link.spaces.*`;
+ * the contract is docs/spaces.md).
  * "team-people-v1" (the people in a chat: `ChatSummary.invited`, `link.team.inviteToChat` and
  * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
  * view of bots and chats, kept by the computer for them).
@@ -865,6 +927,8 @@ export type Parts = {
   runs: RunSummary[];
   panels: Panel[];
   board: BoardItem[];
+  /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
+  spaces?: SpaceSummary[];
   tasks: BotTask[];
   projects: Project[];
   mcp: McpServer[];
@@ -1311,6 +1375,37 @@ export type Calls = {
   /** `revision` is the preview's the person reviewed; the computer refuses another. */
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;
+  // Spaces ("spaces-v1"; docs/spaces.md). The app's calls, then the link's own.
+  "spaces.read"(id: string): SpaceContent;
+  /** A new private space, pinned for its maker. Answers its id. */
+  "spaces.create"(input: { name: string }): string;
+  "spaces.rename"(id: string, name: string): void;
+  /** The space, its panels, their routines, refresh chats and views. Not a built-in. */
+  "spaces.remove"(id: string): void;
+  /** Owner only. */
+  "spaces.setProject"(id: string, projectId: string | null): void;
+  "spaces.setPanelProject"(panelId: string, projectId: string | null): void;
+  /** Starts a chat with the bot in that space and sends the sentence; the app opens the chat. */
+  "spaces.newPanel"(input: { spaceId: string; botId: string; prompt: string; start?: PanelStart; refresh?: { cron: string; timezone: string } }): { chatId: string };
+  "spaces.ask"(input: { spaceId: string; botId: string; text: string; panelId?: string }): { chatId: string };
+  /** `before`: a panel id, or null for the end. */
+  "spaces.movePanel"(panelId: string, to: { spaceId: string; before: string | null }): void;
+  /** An app panel's state: a shallow merge of top-level keys; null removes a key. `label` says what the person did. */
+  "spaces.patchState"(panelId: string, patch: Record<string, unknown>, label?: string): { rev: number };
+  "spaces.note"(panelId: string, text: string): string;
+  "spaces.removeNote"(panelId: string, noteId: string): void;
+  /** Who can open a space. "link" makes a link when there is none. */
+  "link.spaces.share"(id: string, input: SpaceShareInput): { link?: string };
+  /** A fresh link; the old one stops working. */
+  "link.spaces.newLink"(id: string): { link: string };
+  /** The caller's own order and pins. */
+  "link.spaces.arrange"(input: { order: string[]; pinned: string[] }): null;
+  "link.spaces.seen"(id: string): null;
+  "link.spaces.notify"(id: string, mode: SpaceNotify): null;
+  /** The caller is looking at this space (and panel) now; null on leaving. Sent every 30 seconds while it stays in view. */
+  "link.spaces.here"(id: string | null, panelId?: string): null;
+  /** Owner only: whether members may share by link. */
+  "link.team.setLinkSharing"(on: boolean): boolean;
   /** Invites a person ("owner" or a member's id) to a chat, or takes them out ("team-people-v1"). Each answers who is invited afterwards. The chat's starter or the owner invites; someone invited may take themselves out. */
   "link.team.inviteToChat"(chatId: string, personId: string): string[];
   "link.team.removeFromChat"(chatId: string, personId: string): string[];

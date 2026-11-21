@@ -106,6 +106,27 @@ const POLICY = {
   changePanel: ["today", "manage"],
   routine: ["today", "manage"],
   boardAct: ["today", "use"],
+  // Spaces ("spaces-v1", docs/spaces.md). The scope key stays `today`. Each also needs the space (spaceRule below).
+  "spaces.read": ["today", "view"],
+  "spaces.create": ["today", "create"],
+  "spaces.rename": ["today", "manage"],
+  "spaces.remove": ["today", "delete"],
+  "spaces.setProject": "owner",
+  "spaces.setPanelProject": "owner",
+  "spaces.newPanel": ["today", "create"],
+  "spaces.ask": ["today", "use"],
+  "spaces.movePanel": ["today", "manage"],
+  "spaces.patchState": ["today", "use"],
+  "spaces.note": ["today", "use"],
+  "spaces.removeNote": ["today", "use"],
+  // A maker can always take sharing back, so sharing needs only to see spaces; widening is checked in spaceRule.
+  "link.spaces.share": ["today", "view"],
+  "link.spaces.newLink": ["today", "manage"],
+  "link.spaces.arrange": ["today", "view"],
+  "link.spaces.seen": ["today", "view"],
+  "link.spaces.notify": ["today", "view"],
+  "link.spaces.here": ["today", "view"],
+  "link.team.setLinkSharing": "owner",
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
   saveSkill: ["skills", "create"],
@@ -318,6 +339,10 @@ export function defaultTeam() {
     requests: [],
     chats: {},
     views: {},
+    // "spaces-v1": how each space is shared, copies still to delete from a relay, and the owner's switch for links.
+    spaces: {},
+    spaceCopies: [],
+    linkSharing: false,
   };
 }
 
@@ -365,7 +390,214 @@ export const MAX_CHAT_PEOPLE = 20;
  */
 export function viewOf(team, memberId) {
   const view = team?.views?.[memberId];
-  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {} };
+  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }) };
+}
+
+// ── Spaces ("spaces-v1"; docs/spaces.md) ────────────────────────────────────────────────────
+// A space is a named page of panels. Its content is the app's; who may open it and each person's
+// own view of the list are kept here, in the team. A space with no entry is private.
+
+export const SPACE_ACCESS = ["private", "members", "team", "link"];
+export const SPACE_LIMITS = { grants: 60, spaces: 60 };
+const BUILTINS = ["today", "feed", "ideas", "goals"];
+const GONE_SPACE = "This space no longer exists.";
+const GONE_PANEL = "This panel no longer exists.";
+const GONE_CARD = "This item no longer exists.";
+const LOOK_ONLY = "You can look at this space, not change it.";
+const MAKER_ONLY = "Only the person who made this space can do that.";
+
+/** Who made a space: the member named on it, else the owner. */
+export const makerOf = (space) => space?.createdBy || OWNER;
+
+/** How a space is shared, with nothing missing: private unless the team says otherwise. */
+export function spaceShare(team, spaceId) {
+  const entry = team?.spaces && Object.hasOwn(team.spaces, spaceId) ? team.spaces[spaceId] : null;
+  const access = SPACE_ACCESS.includes(entry?.access) ? entry.access : "private";
+  const grants = (Array.isArray(entry?.grants) ? entry.grants : []).filter((grant) => typeof grant?.id === "string").map((grant) => ({ id: grant.id, can: grant.can === "edit" ? "edit" : "view" }));
+  return { access, grants: access === "members" ? grants : [], teamCan: entry?.teamCan === "edit" ? "edit" : "view", ...(entry?.share && { share: entry.share }) };
+}
+
+/**
+ * What a person may do with a space: "own" (its maker, and the host's owner for every space),
+ * "edit", "view", or null when the space does not exist for them. A member's role applies on top
+ * (spaceRule). This one function decides for the link host, the window and the app.
+ */
+export function spaceCan(team, space, person) {
+  if (!space || typeof person !== "string" || !person) return null;
+  if (person === OWNER || makerOf(space) === person) return "own";
+  const share = spaceShare(team, space.id);
+  if (share.access === "members") return share.grants.find((grant) => grant.id === person)?.can ?? null;
+  if (share.access === "team" || share.access === "link") return share.teamCan;
+  return null;
+}
+const acts = (can) => can === "own" || can === "edit";
+const rank = { view: 1, edit: 2 };
+/** Whether going from one sharing to another lets anyone open or change more than before. Narrowing never does. */
+export function widensShare(before, after) {
+  if (after.access === "link" && before.access !== "link") return true;
+  const everyone = (share) => (share.access === "team" || share.access === "link" ? rank[share.teamCan] : 0);
+  const of = (share, id) => Math.max(everyone(share), share.access === "members" ? (rank[share.grants.find((grant) => grant.id === id)?.can] ?? 0) : 0);
+  if (everyone(after) > everyone(before)) return true;
+  return after.grants.some((grant) => of(after, grant.id) > of(before, grant.id));
+}
+
+/** A person's own view of the list of spaces: order, pins, when they last opened each, and "Notify me". */
+export function spacesViewOf(team, person) {
+  const held = team?.views?.[person]?.spaces;
+  const strings = (value) => (Array.isArray(value) ? value.filter((id) => typeof id === "string") : null);
+  const map = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+  return { order: strings(held?.order) ?? [], pinned: strings(held?.pinned), seen: map(held?.seen), notify: map(held?.notify) };
+}
+
+/**
+ * The `spaces` part for one person: the spaces they can open, pinned first, as `SpaceSummary[]`.
+ * `records` is the app's list (`SpaceRecord & { items }`), which is never sent as it is.
+ * `context`: `role` (a member's; none for the owner), `names` (person id → name), `here`
+ * (space id → people looking now) and `linkOf(share)` (a link's address).
+ */
+export function spaceView(team, records, person, context = {}) {
+  const role = person === OWNER ? null : context.role;
+  if (person !== OWNER && !hasAction(role?.perms, "today", "view")) return [];
+  const view = spacesViewOf(team, person);
+  const nameOf = (id) => context.names?.get?.(id) ?? (id === OWNER ? "Owner" : "");
+  const sees = (botId) => person === OWNER || !botId || visible(role, botId);
+  const open = (Array.isArray(records) ? records : []).filter((space) => space && typeof space.id === "string").map((space) => ({ space, can: spaceCan(team, space, person) })).filter((entry) => entry.can);
+  // A person who never arranged their list starts with their own four built-in spaces pinned.
+  const pinned = view.pinned ?? BUILTINS.flatMap((kind) => open.find(({ space }) => space.builtin === kind && makerOf(space) === person)?.space.id ?? []);
+  const place = new Map([...pinned, ...view.order].map((id, index) => [id, index]).reverse());
+  const summaries = open.map(({ space, can }) => {
+    const share = spaceShare(team, space.id);
+    const maker = makerOf(space);
+    const mine = maker === person;
+    const items = (Array.isArray(space.items) ? space.items : []).filter((item) => sees(item.botId));
+    const seen = Number(view.seen[space.id]) || 0;
+    const picked = share.access === "members" && share.grants.some((grant) => grant.id === person);
+    // "Once a day" for a space the person made or was picked for; off for one shared with everyone, and for a member's as the owner sees it.
+    const notify = ["off", "daily", "all"].includes(view.notify[space.id]) ? view.notify[space.id] : mine || picked ? "daily" : "off";
+    return {
+      id: space.id,
+      name: space.name,
+      ...(BUILTINS.includes(space.builtin) && { builtin: space.builtin }),
+      by: { id: maker, name: nameOf(maker) },
+      mine,
+      access: share.access,
+      can,
+      ...(share.access === "members" && { people: share.grants.map((grant) => ({ id: grant.id, name: nameOf(grant.id), can: grant.can })) }),
+      ...((share.access === "team" || share.access === "link") && { teamCan: share.teamCan }),
+      ...(can === "own" && share.access === "link" && share.share && context.linkOf && { link: context.linkOf(share.share) }),
+      ...(person === OWNER && space.projectId && { projectId: space.projectId }),
+      count: items.length,
+      changed: Math.min(99, items.filter((item) => (Number(item.updatedAt) || 0) > seen).length),
+      pinned: pinned.includes(space.id),
+      notify,
+      here: (context.here?.get?.(space.id) ?? []).filter((one) => one.id !== person).map((one) => ({ id: one.id, name: nameOf(one.id), ...(one.panelId && { panelId: one.panelId }) })),
+      rev: Number(space.rev) || 0,
+      updatedAt: Number(space.updatedAt) || 0,
+    };
+  });
+  const at = (summary) => place.get(summary.id) ?? Infinity;
+  return summaries.sort((a, b) => Number(b.pinned) - Number(a.pinned) || at(a) - at(b));
+}
+
+/**
+ * A panel as a device is sent it (`PanelView`): never who wrote it last on the host. For a member
+ * also without its project; without its chats unless they are in them; and without its routine's
+ * prompt unless they may change the space.
+ */
+export function panelView(panel, { member = false, inChat = () => false, mayChange = false } = {}) {
+  const { lastWriter: _writer, ...rest } = panel;
+  if (!member) return rest;
+  const { projectId: _project, chatId, refreshChatId, routine, ...shown } = rest;
+  return {
+    ...shown,
+    ...(chatId && inChat(chatId) && { chatId }),
+    ...(refreshChatId && inChat(refreshChatId) && { refreshChatId }),
+    routine: routine && !mayChange ? (({ prompt: _prompt, ...kept }) => kept)(routine) : (routine ?? null),
+  };
+}
+
+/** The panel a custom view belongs to: the one with an `html` block of that frame. Blocks only: never a search of what people wrote. */
+export const panelOfFrame = (panels, frame) => (Array.isArray(panels) ? panels : []).find((panel) => Array.isArray(panel?.blocks) && panel.blocks.some((block) => block?.type === "html" && block.frame === frame));
+
+/**
+ * What the space of a call lets a member do, on top of their role (docs/spaces.md, "Who can do
+ * what"). A space, panel or card the member cannot open answers as an unknown id does.
+ */
+function spaceRule(principal, team, role, method, args, lookups) {
+  const me = principal.memberId;
+  const may = (action) => hasAction(role.perms, "today", action);
+  const canIn = (space) => spaceCan(team, space, me);
+  const spaceOf = (id) => (typeof id === "string" ? lookup("space", id, lookups) : null);
+  const panelOf = (id) => {
+    const panel = typeof id === "string" ? lookup("panel", id, lookups) : null;
+    return panel && visible(role, panel.botId) ? panel : null;
+  };
+  const change = (space, gone) => {
+    const can = canIn(space);
+    return !can ? gone : acts(can) ? "" : LOOK_ONLY;
+  };
+  const own = (space) => {
+    const can = canIn(space);
+    return !can ? GONE_SPACE : can === "own" ? "" : MAKER_ONLY;
+  };
+  switch (method) {
+    case "spaces.read":
+    case "link.spaces.seen":
+    case "link.spaces.notify":
+      return canIn(spaceOf(args[0])) ? "" : GONE_SPACE;
+    case "link.spaces.here":
+      return args[0] == null || canIn(spaceOf(args[0])) ? "" : GONE_SPACE;
+    case "spaces.rename":
+    case "spaces.remove":
+      return own(spaceOf(args[0]));
+    case "spaces.newPanel": {
+      if (!hasAction(role.perms, "agents", "chat")) return "Your team role can't do that.";
+      if (args[0]?.refresh && !may("manage")) return "Your team role can't do that.";
+      return change(spaceOf(args[0]?.spaceId), GONE_SPACE);
+    }
+    case "spaces.ask": {
+      if (!hasAction(role.perms, "agents", "chat")) return "Your team role can't do that.";
+      const space = spaceOf(args[0]?.spaceId);
+      if (args[0]?.panelId !== undefined && panelOf(args[0].panelId)?.spaceId !== space?.id) return GONE_PANEL;
+      return change(space, GONE_SPACE);
+    }
+    case "spaces.movePanel": {
+      const panel = panelOf(args[0]);
+      const from = panel ? spaceOf(panel.spaceId) : null;
+      const leaving = canIn(from);
+      if (!leaving) return GONE_PANEL;
+      if (leaving !== "own" && panel.createdBy !== me) return MAKER_ONLY;
+      return change(spaceOf(args[1]?.spaceId), GONE_SPACE);
+    }
+    case "spaces.patchState":
+    case "spaces.note":
+    case "spaces.removeNote":
+    case "changePanel":
+    case "routine":
+    case "refreshPanel": {
+      const panel = panelOf(args[0]);
+      return panel ? change(spaceOf(panel.spaceId), GONE_PANEL) : GONE_PANEL;
+    }
+    case "boardAct": {
+      const card = typeof args[0] === "string" ? lookup("card", args[0], lookups) : null;
+      return card && visible(role, card.botId) ? change(spaceOf(card.spaceId), GONE_CARD) : GONE_CARD;
+    }
+    case "link.spaces.share": {
+      const space = spaceOf(args[0]);
+      const refusal = own(space);
+      if (refusal) return refusal;
+      const after = spaceShare({ spaces: { [space.id]: args[1] } }, space.id);
+      if (!widensShare(spaceShare(team, space.id), after)) return "";
+      if (!may("manage")) return "Your team role can't do that.";
+      return after.access === "link" && team?.linkSharing !== true ? "The owner hasn't turned on sharing by link for members." : "";
+    }
+    case "link.spaces.newLink": {
+      const refusal = own(spaceOf(args[0]));
+      return refusal || (team?.linkSharing === true ? "" : "The owner hasn't turned on sharing by link for members.");
+    }
+    default:
+      return "";
+  }
 }
 const flag = (value) => (value === true ? true : value === false ? false : undefined);
 /** A member's view after `setBotFlags(id, flags)`: only `hidden` and `pinned` are theirs. */
@@ -403,6 +635,8 @@ export function sharedBotFlags(flags) {
 }
 const READ_REQUEST_METHODS = new Set(["respond"]);
 
+/** A member's role, by their id. */
+export const roleOfMember = (team, memberId) => roleFor({ kind: "member", memberId }, team);
 function roleFor(principal, team) {
   if (principal?.kind !== "member") return null;
   const member = team?.members?.find((item) => item.id === principal.memberId);
@@ -426,6 +660,7 @@ function botIdOf(method, args) {
     return typeof args[0] === "string" ? args[0] : args[0]?.botId;
   }
   if (method === "createChat") return args[0];
+  if (method === "spaces.newPanel" || method === "spaces.ask") return typeof args[0]?.botId === "string" ? args[0].botId : "";
   if (method === "catalog") return args[0];
   if (method === "createGroupChat") return args[0];
   if (method === "createRoutine") return args[0]?.botId;
@@ -484,6 +719,11 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   const request = method === "respond" ? lookup("request", args[0], lookups) : null;
   if (request && (request.kind === "permission" || request.kind === "secure")) return "The owner needs to approve that request.";
   if (method === "setBotFlags" && Object.keys(sharedBotFlags(args[1])).length && !hasAction(role.perms, "agents", "manage")) return "Your team role can't do that.";
+  // With spaces ("spaces-v1": the app's snapshot has them), a call also needs the space of what it names.
+  if (lookups.space) {
+    const refusal = spaceRule(principal, team, role, method, args, lookups);
+    if (refusal) return refusal;
+  }
   // A routine is its chat: only the member who made it may change, run or delete it, once the app
   // says who made each one ("routine-owner-v1", `lookups.routineOwners`).
   if (ROUTINE_METHODS.has(method) && lookups.routineOwners) {
@@ -538,6 +778,8 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerNam
   if (forOwner) {
     return {
       people: teamPeople(team, ownerName),
+      // "Members may share by link" (spaces-v1). Off at first.
+      linkSharing: team?.linkSharing === true,
       name: team?.name ?? "",
       roles: team?.roles ?? [],
       groups: team?.groups ?? [],
@@ -555,11 +797,12 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerNam
     me: { memberId: principal.memberId, name: principal.name, group: { id: group?.id ?? principal.groupId, name: group?.name ?? "Everyone" }, role: { name: role?.name ?? "", perms: role?.perms ?? {}, bots: role?.bots ?? [] } },
     team: { name: team?.name ?? "" },
     people: teamPeople(team, ownerName),
+    linkSharing: team?.linkSharing === true,
   };
 }
 
 /** A copy of the named parts with everything outside a member's role and ownership removed. */
-export function filterParts(parts, principal, team) {
+export function filterParts(parts, principal, team, extra = {}) {
   if (principal?.kind === "owner") return parts;
   const role = roleFor(principal, team);
   const me = principal.memberId;
@@ -621,8 +864,22 @@ export function filterParts(parts, principal, team) {
     if (run && !ownChats.has(run[1])) out[name] = null;
   }
   // Today's panels and board items name a bot (and a chat): only those of bots the role may see.
-  out.panels = can("today") ? (parts.panels ?? []).filter((panel) => !panel.botId || botIds.has(panel.botId)) : [];
-  out.board = can("today") ? (parts.board ?? []).filter((item) => !item.botId || botIds.has(item.botId)) : [];
+  // Spaces ("spaces-v1"): `extra.spaces` is the app's own list, which is never sent. A member gets
+  // their view of it, and the panels and cards only of spaces they can open (`panels` and `board`
+  // stay for an app that doesn't know spaces: every Today's panels, every Feed's, Ideas' and Goals' cards).
+  const records = Array.isArray(extra.spaces) ? extra.spaces : null;
+  delete out.spaces;
+  if (records) {
+    const byId = new Map(records.map((space) => [space.id, space]));
+    const canOpen = (id) => spaceCan(team, byId.get(id), me);
+    const cut = (panel) => panelView(panel, { member: true, inChat: (chatId) => ownChats.has(chatId), mayChange: acts(canOpen(panel.spaceId)) && can("today", "manage") });
+    out.spaces = spaceView(team, records, me, { role, names: extra.names, here: extra.here, linkOf: extra.linkOf });
+    out.panels = can("today") ? (parts.panels ?? []).filter((panel) => botIds.has(panel.botId) && byId.get(panel.spaceId)?.builtin === "today" && canOpen(panel.spaceId)).map(cut) : [];
+    out.board = can("today") ? (parts.board ?? []).filter((item) => botIds.has(item.botId) && BUILTINS.includes(byId.get(item.spaceId)?.builtin) && canOpen(item.spaceId)) : [];
+  } else {
+    out.panels = can("today") ? (parts.panels ?? []).filter((panel) => !panel.botId || botIds.has(panel.botId)) : [];
+    out.board = can("today") ? (parts.board ?? []).filter((item) => !item.botId || botIds.has(item.botId)) : [];
+  }
   out.skills = can("skills") ? scrub(parts.skills ?? emptySkills) : emptySkills;
   out.mcp = can("mcp") ? scrub(parts.mcp ?? []) : [];
   out.plugins = can("plugins") ? scrub(parts.plugins ?? []) : [];
