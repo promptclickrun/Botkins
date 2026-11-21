@@ -13,7 +13,7 @@ import { LinkHost } from "../link-host/index.mjs";
 import { cleanEvents, xdotoolCommands } from "../link-host/input.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { Screen } from "../link-host/screen.mjs";
-import { LinkStore } from "../link-host/store.mjs";
+import { LinkStore, newId } from "../link-host/store.mjs";
 import { Gate, runTool, toolGate } from "../link-host/tools.mjs";
 import { safeName, Uploads } from "../link-host/uploads.mjs";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
@@ -1117,6 +1117,21 @@ test("a phone's settings file that can't be read is left alone, and only a missi
   assert.equal(created.data.locked, undefined);
   created.set({ name: "mine" });
   assert.equal(new LinkStore(fresh).data.serverId, created.data.serverId);
+});
+
+test("a new device or server id never starts with a dash, which a command line would read as an option", () => {
+  // 0xfb… is "-" first in base64url: such a draw is thrown away and the next one is used.
+  const draws = [Buffer.alloc(9, 0xfb), Buffer.alloc(9, 0xf8), Buffer.alloc(9, 1)];
+  const id = newId(9, () => draws.shift()!);
+  assert.equal(Buffer.alloc(9, 0xfb).toString("base64url")[0], "-");
+  assert.equal(id, Buffer.alloc(9, 1).toString("base64url"));
+  assert.equal(draws.length, 0);
+  // The same sizes as before: 9 bytes for a device, 12 for a server.
+  assert.equal(newId(9).length, 12);
+  assert.equal(newId(12).length, 16);
+  for (let i = 0; i < 2000; i++) assert.notEqual(newId(9)[0], "-");
+  const store = new LinkStore(scratch("ids"));
+  assert.notEqual(store.data.serverId[0], "-");
 });
 
 test("Bitwarden unlock tries are limited, and a .cmd shim is said to be unsupported", async () => {
