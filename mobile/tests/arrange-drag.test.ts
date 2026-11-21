@@ -27,16 +27,23 @@ const sample = () => [
   bot("r2"),
 ];
 
-test("the list's items: headings where a group has bots, every heading while dragging, folded sections closed", () => {
+test("the list's items: no pinned bots, headings where a group has bots, every heading while dragging, folded sections closed", () => {
   const arranged = arrangeBots(sample(), sections);
   assert.deepEqual(keys(boardItems(arranged, [], false)), [
     "bot:first",
-    "head:pinned", "bot:p1", "bot:p2",
     "head:section:work", "bot:w1", "bot:w2",
     "head:section:home", "bot:h1",
     "head:rest", "bot:r1", "bot:g", "bot:r2",
   ]);
-  assert.deepEqual(keys(boardItems(arranged, ["work"], false)).slice(4, 6), ["head:section:work", "head:section:home"]);
+  assert.deepEqual(keys(boardItems(arranged, ["work"], false)).slice(1, 3), ["head:section:work", "head:section:home"]);
+  // While dragging, Pinned is a heading to drop onto, with no rows: its bots sit in the top row.
+  assert.deepEqual(keys(boardItems(arranged, [], true)).slice(0, 3), ["bot:first", "head:pinned", "head:section:work"]);
+  // A pinned primary bot is up top too, not in the list.
+  const pinnedFirst = arrangeBots([bot("first", { pinned: true }), bot("a"), bot("b")], []);
+  assert.deepEqual(keys(boardItems(pinnedFirst, [], false)), ["bot:a", "bot:b"]);
+  // Pinned bots and nothing else: no headings at all.
+  const onlyPinned = arrangeBots([bot("first"), bot("a", { pinned: true }), bot("b")], []);
+  assert.deepEqual(keys(boardItems(onlyPinned, [], false)), ["bot:first", "bot:b"]);
   // Nothing pinned and no sections: no headings until a drag shows Pinned and the rest.
   const plain = arrangeBots([bot("first"), bot("a"), bot("b")], []);
   assert.deepEqual(keys(boardItems(plain, [], false)), ["bot:first", "bot:a", "bot:b"]);
@@ -78,10 +85,11 @@ test("a dragged bot lands at the nearest slot, and the rows between make room", 
 
 test("a drop sends the flags that change and the whole order, every bot once", () => {
   const bots = sample();
-  // Into Pinned, at the top.
+  // Into Pinned: at the end of the pinned bots, whatever the index (Pinned has no rows in the list).
   const pin = dropPlan(bots, sections, "r1", "pinned", 0);
   assert.deepEqual(pin?.flags, { pinned: true });
-  assert.deepEqual(pin?.order, ["first", "w1", "r1", "p1", "x", "w2", "p2", "h1", "g", "r2"]);
+  assert.deepEqual(pin?.order, ["first", "w1", "p1", "x", "w2", "p2", "r1", "h1", "g", "r2"]);
+  assert.deepEqual(dropPlan(bots, sections, "h1", "pinned", 0), { flags: { pinned: true } }, "already after the last pinned bot: only the flag");
   // Out of Pinned into Home: unpinned and moved; p2 keeps nothing of Work.
   const home = dropPlan(bots, sections, "p2", "section:home", 1);
   assert.deepEqual(home?.flags, { pinned: false, sectionId: "home" });
@@ -116,7 +124,8 @@ test("every drop lands where it was dropped, and the primary and hidden bots kee
       assert.equal(after[0].id, "first");
       const again = arrangeBots(after, sections);
       const group: Record<Zone, Bot[]> = { pinned: again.pinned, rest: again.rest, "section:work": again.sections[0].bots, "section:home": again.sections[1].bots };
-      assert.equal(group[slot.zone][slot.index]?.id, item.botId, `${item.botId} → ${slot.zone} #${slot.index}`);
+      const at = slot.zone === "pinned" ? group.pinned.length - 1 : slot.index;
+      assert.equal(group[slot.zone][at]?.id, item.botId, `${item.botId} → ${slot.zone} #${at}`);
       // Nothing else changed group.
       for (const other of bots.filter((entry) => entry.id !== item.botId)) {
         const before = after.find((entry) => entry.id === other.id);
@@ -131,10 +140,10 @@ test("every drop lands where it was dropped, and the primary and hidden bots kee
 
 test("Move up and Move down step one place, across groups, and stop at the ends", () => {
   const items = boardItems(arrangeBots(sample(), sections), [], true);
-  assert.deepEqual(stepSlot(items, "w2", -1), { after: 4, zone: "section:work", index: 0 });
-  assert.deepEqual(stepSlot(items, "w1", -1), { after: 3, zone: "pinned", index: 2 });
-  assert.deepEqual(stepSlot(items, "p2", 1), { after: 4, zone: "section:work", index: 0 });
-  assert.equal(stepSlot(items, "p1", -1), undefined, "nothing above the top of Pinned");
+  assert.deepEqual(stepSlot(items, "w2", -1), { after: 2, zone: "section:work", index: 0 });
+  // Up from the top of the first section: into Pinned, which pins it (it joins the end of the top row).
+  assert.deepEqual(stepSlot(items, "w1", -1), { after: 1, zone: "pinned", index: 0 });
+  assert.equal(stepSlot(items, "p1", 1), undefined, "a pinned bot is up top, not in the list");
   assert.equal(stepSlot(items, "r2", 1), undefined);
   assert.equal(stepSlot(items, "first", 1), undefined, "the primary bot stays");
 });

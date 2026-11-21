@@ -1,6 +1,7 @@
-// Home: the computer it talks to, the bots up top, then every bot as a flat list: the primary bot,
-// pinned bots, each section, then the rest. Filters show pinned or hidden bots. Under "All" a bot can
-// be dragged to another place or group (BotBoard.tsx); a still hold opens its menu.
+// Home: the computer it talks to, the pinned bots up top as big avatars, then every other bot as a
+// flat list: the primary bot, each section, then the rest. A pinned bot shows only up top, never in
+// the list too. Filters show pinned or hidden bots. Under "All" a bot can be dragged to another place
+// or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
 import { type Href, router } from "expo-router";
 import { ChevronDown, ChevronUp, Plus, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
@@ -25,19 +26,20 @@ import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard"
 import { runComputerChoice } from "./computers";
 import { applyPlan, DRAG, dropPlan, type Zone } from "./drag";
 
-const TOP = 4;
+/** The big avatars at the top: every pinned bot, four to a row, and bigger when there are three or fewer. */
+const TOP = { perRow: 4, width: "25%", size: 80, fewSize: 96 } as const;
 
 /** A big bare avatar with its name under it, for the row at the top. */
-function TopBot({ bot, size }: { bot: Bot; size: number }) {
+function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${number}%` }) {
   const state = useBotActivity(bot.id);
   const status = activityLabel(state);
   const canChat = useCan("agents", "chat");
   return (
-    <View style={{ flex: 1, alignItems: "center" }}>
+    <View style={width ? { width, alignItems: "center" } : { flex: 1, alignItems: "center" }}>
       <BotMenu bot={bot}>
         <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
           <BotAvatar bot={bot} state={state} size={size} />
-          <T variant="caption" color="ink2" numberOfLines={1} center>
+          <T variant="footnote" weight="600" color="ink2" numberOfLines={1} center>
             {bot.name}
           </T>
         </Tap>
@@ -221,10 +223,12 @@ export default function Home() {
   const canSeeToday = useCan("today", "view");
 
   const shown = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)), [bots]);
+  // Every pinned bot sits up top (the list below leaves them out); with none pinned, the first three.
   const top = useMemo(() => {
     const pinned = shown.filter((bot) => bot.pinned);
-    return (pinned.length > 0 ? pinned : shown).slice(0, pinned.length > 0 ? TOP : 3);
+    return pinned.length > 0 ? pinned : shown.slice(0, 3);
   }, [shown]);
+  const full = top.length >= TOP.perRow;
   // Each bot's latest one-to-one chat, and whether any of its chats is unread.
   const latest = useMemo(() => {
     const out = new Map<string, { chat?: ChatSummary; unread: boolean }>();
@@ -306,9 +310,9 @@ export default function Home() {
         <EmptyState art={<Mascot size={104} state="completed" />} title={canCreate ? "Make your first bot" : "No bots are available yet"} action={canCreate ? "Create a bot" : undefined} onAction={canCreate ? () => router.push("/bot/new") : undefined} />
       ) : (
         <Animated.View entering={FadeIn.duration(240)} style={{ gap: space.lg }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-evenly" }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: full ? "center" : "space-evenly", rowGap: space.lg }}>
             {top.map((bot) => (
-              <TopBot key={bot.id} bot={bot} size={top.length > 3 ? 64 : 76} />
+              <TopBot key={bot.id} bot={bot} size={full ? TOP.size : TOP.fewSize} width={full ? TOP.width : undefined} />
             ))}
           </View>
           {showFilters && (

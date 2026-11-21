@@ -41,22 +41,22 @@ const rowKey = (id: string) => "bot:" + id;
 const headKey = (zone: Zone) => "head:" + zone;
 
 /**
- * The list under the "All" filter, top to bottom. Pinned has a heading when it has bots, a section
- * always, the rest when something above it has one. While a bot is dragged (`dragging`), Pinned and
- * the rest show their heading even when empty, so a bot can be dropped into them. A folded section
- * shows its heading only.
+ * The list under the "All" filter, top to bottom. Pinned bots are not in it: they sit in the row of
+ * big avatars above it (the primary bot too, when it is pinned), so no bot shows twice. A section
+ * has a heading always, the rest when a section is above it. While a bot is dragged (`dragging`),
+ * Pinned and the rest show their heading even when empty, so a bot can be dropped into them; Pinned
+ * has no rows of its own. A folded section shows its heading only.
  */
 export function boardItems(arranged: Pick<Arranged, "primary" | "pinned" | "sections" | "rest">, folded: readonly string[], dragging: boolean): BoardItem[] {
   const items: BoardItem[] = [];
-  if (arranged.primary) items.push({ key: rowKey(arranged.primary.id), kind: "primary", botId: arranged.primary.id });
+  if (arranged.primary && !arranged.primary.pinned) items.push({ key: rowKey(arranged.primary.id), kind: "primary", botId: arranged.primary.id });
   const zone = (z: Zone, bots: Bot[], head: boolean, open = true) => {
     if (head) items.push({ key: headKey(z), kind: "head", zone: z });
     if (open) for (const bot of bots) items.push({ key: rowKey(bot.id), kind: "row", botId: bot.id, zone: z });
   };
-  zone("pinned", arranged.pinned, dragging || arranged.pinned.length > 0);
+  zone("pinned", [], dragging);
   for (const { section, bots } of arranged.sections) zone(zoneOfSection(section.id), bots, true, !folded.includes(section.id));
-  const above = arranged.pinned.length > 0 || arranged.sections.length > 0;
-  zone("rest", arranged.rest, dragging || (above && arranged.rest.length > 0));
+  zone("rest", arranged.rest, dragging || (arranged.sections.length > 0 && arranged.rest.length > 0));
   return items;
 }
 
@@ -137,7 +137,9 @@ const botsOf = (zone: Zone, arranged: Arranged) =>
  * What dropping bot `id` into `zone`, at `index` among that group's other bots, asks of the computer.
  * `bots` is the computer's whole order (hidden bots too): `reorderBots` takes every bot once, and the
  * first is the primary, which never moves. Only the dropped bot moves in it: it goes just before the
- * group's bot at `index`, or just after the group's last. Undefined when nothing changes.
+ * group's bot at `index`, or just after the group's last. Pinned has no rows in the list, so a bot
+ * dropped there joins the end of the pinned bots (the last of the big avatars), whatever `index` says.
+ * Undefined when nothing changes.
  */
 export function dropPlan(bots: Bot[], sections: Section[] | undefined, id: string, zone: Zone, index: number): Plan | undefined {
   const arranged = arrangeBots(bots, sections);
@@ -154,6 +156,7 @@ export function dropPlan(bots: Bot[], sections: Section[] | undefined, id: strin
     if (sectionId ? bot.sectionId !== sectionId : from !== "rest" && bot.sectionId != null) flags.sectionId = sectionId;
   }
   const others = botsOf(zone, arranged).filter((entry) => entry !== bot);
+  if (zone === "pinned") index = others.length;
   const without = bots.filter((entry) => entry !== bot);
   let order = bots.map((entry) => entry.id);
   // Already between its new neighbours in the computer's order: it stays where it is.
