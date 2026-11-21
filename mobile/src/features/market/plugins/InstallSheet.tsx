@@ -9,8 +9,10 @@ import { CredentialPicker, PickedCredential } from "@/features/credentials/Crede
 import { useBots, useOnline } from "@/state/hooks";
 import { showToast } from "@/state/store";
 import { BotAvatar, EmptyState, Field, Group, Label, Loading, Row, Sheet, space, useTheme } from "@/ui";
+import { shownText } from "@/ui/shownText";
 import { loadPreview, pluginCalls, usePreview } from "./calls";
 import { configValues, type FieldDraft, missingFields } from "./logic";
+import { WhereItGoes } from "./PluginPage";
 
 export default function InstallSheet() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -55,7 +57,7 @@ export default function InstallSheet() {
   };
 
   return (
-    <Sheet title={"Install " + preview.name} action="Install" onAction={() => void install()} actionDisabled={!ready} actionLoading={busy}>
+    <Sheet title={"Install " + shownText(preview.name)} action="Install" onAction={() => void install()} actionDisabled={!ready} actionLoading={busy}>
       {bots.length > 0 && (
         <View>
           <Label>Bots</Label>
@@ -91,6 +93,7 @@ export default function InstallSheet() {
                 <View key={field.key} style={{ gap: space.xs }}>
                   <Label style={{ marginBottom: 0 }}>{label}</Label>
                   <PickedCredential name={value.credential.name} onClear={() => change(field.key, { text: "" })} disabled={busy} />
+                  <WhereItGoes field={field} />
                 </View>
               );
             return (
@@ -107,6 +110,7 @@ export default function InstallSheet() {
                   editable={!busy}
                   accessibilityLabel={field.label}
                 />
+                <WhereItGoes field={field} />
                 {field.secret && <CredentialPicker disabled={busy} onPick={(ref, name) => change(field.key, { text: "", credential: { id: ref.$credential, name } })} />}
               </View>
             );

@@ -1,5 +1,7 @@
-// A plugin's page: what it is, what it adds and what it runs on the computer, then Install. Once
-// installed: its status, on and off, its settings, the bots that use it, Update and Remove.
+// A plugin's page: what it is, what it adds and everything it runs on the computer, then Install.
+// Once installed: its status, the computer's own sentence when it switched the plugin off or
+// something is wrong, on and off, its settings (with where each value goes), the bots that use it,
+// Update and Remove. A switch-on and a choice of bots send the revision that was on the screen.
 import { router, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { Check, ExternalLink, Puzzle } from "lucide-react-native";
@@ -7,17 +9,22 @@ import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import { CredentialPicker } from "@/features/credentials/CredentialPicker";
 import type { InstalledPlugin, PluginContents } from "@/link/types";
+import { shownText } from "@/ui/shownText";
 import { useBots, useCan, useOnline } from "@/state/hooks";
 import { attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { BotAvatar, Button, EmptyState, Field, Group, IconTile, Label, Loading, Page, Row, space, T, useTheme } from "@/ui";
-import { installHref, loadPreview, pluginCalls, updateHref, useInstalledPlugin, usePluginMarketplaces, usePluginsReady, usePreview } from "./calls";
-import { botsLine, byLine, consent, fieldState, hostOf, safeLink, statusLine } from "./logic";
-import { WhatItAdds, Warnings } from "./parts";
+import { installHref, loadPreview, pluginCalls, updateHref, useInstalledPlugin, useOlderComputer, usePluginMarketplaces, usePluginsReady, usePreview } from "./calls";
+import { botsLine, byLine, consent, fieldState, hostOf, needsReview, safeLink, sentToLines, statusLine } from "./logic";
+import { Said, WhatItAdds, Warnings } from "./parts";
 
-/** Asks first when a plugin runs commands on the computer; otherwise goes straight on. */
-export function askToRun(contents: PluginContents, verb: "install" | "update" | "turn on", go: () => void) {
-  const ask = consent(contents, verb);
+/**
+ * Asks first when a plugin runs commands on the computer, and always when its description does not
+ * carry the computer's mark (it may not show everything); otherwise goes straight on. `older`: the
+ * computer's app is from before the mark.
+ */
+export function askToRun(about: { contents: PluginContents; starts?: unknown }, verb: "install" | "update" | "turn on", go: () => void, older = false) {
+  const ask = consent(about, verb, older);
   if (!ask) return go();
   Alert.alert(ask.title, ask.message, [
     { text: "Cancel", style: "cancel" },
@@ -31,6 +38,7 @@ export default function PluginPage() {
   const online = useOnline();
   const canView = useCan("plugins", "view");
   const canInstall = useCan("plugins", "install");
+  const older = useOlderComputer();
   const installed = useInstalledPlugin(id);
   const loaded = usePreview(id);
   const markets = usePluginMarketplaces((state) => state.list);
@@ -57,23 +65,31 @@ export default function PluginPage() {
     { label: "Repository", url: safeLink(about.repository) },
   ].filter((link): link is { label: string; url: string } => !!link.url);
 
+  // What is shown is what is decided about: the installed plugin's own description, else the preview's.
+  const shown = installed ?? preview!;
+  // The computer's sentence, whole: why it switched the plugin off, or what is wrong.
+  const review = !!installed && needsReview(installed);
+  const said = installed && (review || installed.status === "error") ? installed.detail : undefined;
   return (
-    <Page title={about.name} caption={installed ? statusLine(installed) : by}>
+    <Page title={shownText(about.name)} caption={installed ? statusLine(installed, { page: true }) : by}>
       {!!installed && !!by && (
         <T variant="footnote" color="muted" style={{ marginTop: -space.lg }}>
           {by}
         </T>
       )}
+      {!!said && <Said text={said} />}
       {!!about.description && <T variant="body">{about.description}</T>}
-      <Warnings lines={preview?.warnings} />
+      <Warnings lines={installed?.warnings ?? preview?.warnings} />
 
+      {/* A plugin the computer switched off is looked at first: its reason, all that it runs, then "Turn on". */}
+      {review && <WhatItAdds about={shown} installed older={older} />}
       {installed ? (
-        <Installed plugin={installed} />
+        <Installed plugin={installed} older={older} />
       ) : (
-        canInstall ? <Button title="Install" wide disabled={!online || !preview} onPress={() => preview && askToRun(preview.contents, "install", () => router.push(installHref(id)))} /> : null
+        canInstall ? <Button title="Install" wide disabled={!online || !preview} onPress={() => preview && askToRun(preview, "install", () => router.push(installHref(id)), older)} /> : null
       )}
 
-      <WhatItAdds contents={installed?.contents ?? preview!.contents} installed={!!installed} />
+      {!review && <WhatItAdds about={shown} installed={!!installed} older={older} />}
 
       {links.length > 0 && (
         <Group>
@@ -94,30 +110,38 @@ export default function PluginPage() {
 }
 
 /** What an installed plugin's page adds: on and off, Update, settings, bots, limits. */
-function Installed({ plugin }: { plugin: InstalledPlugin }) {
+function Installed({ plugin, older }: { plugin: InstalledPlugin; older: boolean }) {
   const online = useOnline();
   const canManage = useCan("plugins", "manage");
   const names = Object.fromEntries(useBots().map((bot) => [bot.id, bot.name]));
   const [busy, setBusy] = useState(false);
   const turn = (on: boolean) => {
+    // The revision that is on the screen as the person decides: the computer refuses when the plugin is another one by then.
+    const looked = plugin.revision;
     const go = async () => {
       setBusy(true);
-      await attempt(pluginCalls.setEnabled(plugin.id, on), on ? "Turned on" : undefined);
+      await attempt(pluginCalls.setEnabled(plugin.id, on, looked), on ? "Turned on" : undefined);
       setBusy(false);
     };
-    if (on) askToRun(plugin.contents, "turn on", () => void go());
+    if (on) askToRun(plugin, "turn on", () => void go(), older);
     else void go();
   };
+  // An update is the repair (the copy is not the reviewed files, or could not be read): Update comes first, and "Turn on" after it.
+  const repair = plugin.repair === "update";
+  // A plugin in error that no update repairs (a linked folder that could not be copied) can only be removed.
+  const canTurnOn = !repair && plugin.status !== "error";
+  const update = plugin.updateAvailable || !!plugin.folder || repair;
   return (
     <>
+      {canManage && repair && <Button title="Update" wide disabled={!online} onPress={() => router.push(updateHref(plugin.id))} />}
       {canManage && (plugin.enabled ? (
         <Group>
           <Row title="On" subtitle={botsLine(plugin.bots, names)} toggled disabled={!online || busy} onToggle={turn} />
         </Group>
-      ) : (
+      ) : canTurnOn ? (
         <Button title="Turn on" wide loading={busy} disabled={!online} onPress={() => turn(true)} />
-      ))}
-      {canManage && (plugin.updateAvailable || !!plugin.folder) && <Button title={plugin.folder ? "Update from folder" : "Update"} variant="secondary" wide disabled={!online} onPress={() => router.push(updateHref(plugin.id))} />}
+      ) : null)}
+      {canManage && update && !repair && <Button title={plugin.folder ? "Update from folder" : "Update"} variant="secondary" wide disabled={!online} onPress={() => router.push(updateHref(plugin.id))} />}
       {!!plugin.folder && (
         <View style={{ gap: 2, paddingHorizontal: space.xs }}>
           <T variant="footnote" color="muted">
@@ -151,7 +175,7 @@ function Settings({ plugin }: { plugin: InstalledPlugin }) {
           open === field.key ? (
             <FieldEditor key={field.key} pluginId={plugin.id} field={field} onDone={() => setOpen(undefined)} />
           ) : (
-            <Row key={field.key} title={field.label + (field.required ? "" : " (optional)")} subtitle={field.description} value={fieldState(field)} chevron onPress={() => setOpen(field.key)} />
+            <Row key={field.key} title={field.label + (field.required ? "" : " (optional)")} subtitle={[field.description, ...sentToLines(field)].filter(Boolean).join("\n")} subtitleLines={8} value={fieldState(field)} chevron onPress={() => setOpen(field.key)} />
           ),
         )}
       </Group>
@@ -190,12 +214,28 @@ function FieldEditor({ pluginId, field, onDone }: { pluginId: string; field: Ins
         editable={!busy}
         accessibilityLabel={field.label}
       />
+      <WhereItGoes field={field} />
       {field.secret && <CredentialPicker disabled={busy || !online} onPick={(ref, name) => void send({ $credential: ref.$credential }, "Uses " + name)} />}
       <View style={{ flexDirection: "row", gap: space.sm, justifyContent: "flex-end" }}>
         {field.set && <Button title="Clear" variant="ghost" size="sm" disabled={busy || !online} onPress={() => void send(null, "Cleared")} />}
         <Button title="Cancel" variant="ghost" size="sm" disabled={busy} onPress={onDone} />
         <Button title="Save" size="sm" loading={busy} disabled={!typed || !online} onPress={() => void send(field.secret ? text : text.trim(), "Saved")} />
       </View>
+    </View>
+  );
+}
+
+/** Under a setting's field, where its value is asked for: where the value goes, and its default when it is not a secret. */
+export function WhereItGoes({ field }: { field: Pick<InstalledPlugin["config"][number], "sentTo" | "default" | "secret"> }) {
+  const lines = [...sentToLines(field), ...(!field.secret && field.default ? ["Default: " + shownText(field.default)] : [])];
+  if (!lines.length) return null;
+  return (
+    <View style={{ gap: 1, paddingHorizontal: space.xs }}>
+      {lines.map((line, index) => (
+        <T key={index} variant="footnote" color="muted">
+          {line}
+        </T>
+      ))}
     </View>
   );
 }
@@ -207,7 +247,7 @@ function Bots({ plugin }: { plugin: InstalledPlugin }) {
   const bots = useBots();
   const all = plugin.bots === "all";
   const chosen = new Set(all ? [] : plugin.bots);
-  const set = (next: "all" | string[]) => void attempt(pluginCalls.setBots(plugin.id, next));
+  const set = (next: "all" | string[]) => void attempt(pluginCalls.setBots(plugin.id, next, plugin.revision));
   const flip = (id: string) => {
     const next = chosen.has(id) ? [...chosen].filter((item) => item !== id) : [...chosen, id];
     if (!next.length) return showToast("Choose at least one bot, or turn the plugin off.", "info");
@@ -241,7 +281,7 @@ function RemoveRow({ plugin }: { plugin: InstalledPlugin }) {
   const canRemove = useCan("plugins", "uninstall");
   if (!canRemove) return null;
   const remove = () =>
-    Alert.alert("Remove " + plugin.name + "?", "Your bots stop using it. Its settings are removed from your computer.", [
+    Alert.alert("Remove " + shownText(plugin.name) + "?", "Your bots stop using it. Its settings are removed from your computer.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",

@@ -5,6 +5,9 @@ import { Alert, View } from "react-native";
 import type { SkillInfo } from "@/link/types";
 import { refresh, useCan, useCapability, useMember, useOnline, usePart, useSkills } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { markTold, pluginHref, useComputerKey, useInstalledPlugins, useToldNotices } from "@/features/market/plugins/calls";
+import { skillsNotices } from "@/features/market/plugins/logic";
+import { Notice } from "@/features/market/plugins/parts";
 import { brand, Button, EmptyState, Field, Group, IconButton, IconTile, Label, Loading, Page, Row, space, T } from "@/ui";
 import { FILTER_FROM, filterSkills, folderName, isBuiltIn, readableName, skillOrigin, skillsIn } from "./shared";
 
@@ -23,6 +26,8 @@ export default function Skills() {
   const off = part?.disabled;
   const folders = part?.folders ?? [];
   const plugins = part?.plugins ?? [];
+  // Told one time, where the person looks for the missing skills: a plugin that has skills is switched off.
+  const notices = skillsNotices(useInstalledPlugins(), useComputerKey(), useToldNotices());
   const [query, setQuery] = useState("");
   // A switch holds its new place until the list comes back from the computer.
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -89,6 +94,19 @@ export default function Skills() {
         <Loading />
       ) : (
         <>
+          {notices.map((notice) => (
+            <Notice
+              key={notice.key}
+              title={notice.title}
+              text={notice.text}
+              action="Open plugin"
+              onAction={() => {
+                markTold([notice.key]);
+                router.push(pluginHref(notice.id));
+              }}
+              onClose={() => markTold([notice.key])}
+            />
+          ))}
           {skills.length > FILTER_FROM && <Field placeholder="Filter skills" accessibilityLabel="Filter skills" value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} clearButtonMode="while-editing" returnKeyType="search" />}
           {(!filtering || yours.length > 0) && (
             <View>

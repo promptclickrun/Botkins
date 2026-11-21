@@ -654,7 +654,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 // The folders a phone can browse on the demo computer: a home folder and one plugged-in disk. All
 // made up: the demo never reads a real disk.
 const DEMO_PLACES = [
-  { name: "Home", path: "/Users/demo", folders: { "": ["Code", "Desktop", "Documents", "team-skills"], "/Code": ["mobile", "relay", "website"], "/Code/website": ["content", "src"], "/Documents": ["Notes", "Plans"] } },
+  { name: "Home", path: "/Users/demo", folders: { "": ["Code", "Desktop", "Documents", "team-skills"], "/Code": ["mobile", "relay", "review-kit", "website"], "/Code/website": ["content", "src"], "/Documents": ["Notes", "Plans"] } },
   { name: "Backup", path: "/Volumes/Backup", folders: { "": ["Archive", "Projects"], "/Projects": ["old-site"] } },
 ];
 const OUTSIDE = "Only folders in your home folder or on a plugged-in disk can be chosen from here. Choose another folder, or choose this one on the computer itself.";
@@ -839,10 +839,24 @@ function delivery(value) {
 // ── Plugins ("plugins-v1", docs/plugins.md) ──────────────────────────────────────────────────────
 // Two made-up catalogs in GitHub's shape, read from nowhere: the demo never fetches GitHub. A plugin's
 // `revision` is a hash of what it holds, so a phone that reviewed one version can't install another.
-// BOTKINS_DEV_PLUGINS=off leaves the capability out, as an older computer would.
+// BOTKINS_DEV_PLUGINS=off leaves the capability out, as an older computer would. "old" keeps
+// "plugins-v1" and leaves "plugin-starts-v1" out: descriptions in the old shape, with no mark.
+// "held" starts with plugins the computer switched off: one whose folder was linked for its skills,
+// one an earlier version did not show whole, and one whose copy is not the reviewed files.
 const PLUGIN_PAGE = 50;
 const pluginField = (key, label, { secret = false, required = true, ...rest } = {}) => ({ key, label, secret, required, ...rest });
-const contents = ({ skills = [], agents = [], commands = [], mcpServers = [], hooks = [], lspServers } = {}) => ({ skills, agents, commands, mcpServers, hooks, ...(lspServers && { lspServers }) });
+const contents = ({ skills = [], agents = [], commands = [], mcpServers = [], hooks = [], lspServers, notRun, otherFiles } = {}) => ({
+  skills,
+  agents,
+  commands,
+  // As the app's one reading gives them: a local tool with its words apart, a remote one with its headers, a hook with its limit.
+  mcpServers: mcpServers.map((server) => (server.kind === "local" ? { args: [], env: [], ...server } : { type: "http", headers: [], ...server })),
+  hooks: hooks.map((hook) => ({ env: [], timeoutSec: 10, ...hook })),
+  ...(lspServers && { lspServers }),
+  ...(notRun && { notRun }),
+  otherFiles: otherFiles ?? { count: 0, bytes: 0, files: [] },
+});
+const setting = (name) => ({ name, value: "${" + name + "}" });
 const DEMO_MARKETPLACES = [
   { id: "awesome-copilot", name: "GitHub", source: "github/awesome-copilot", builtIn: true },
   { id: "copilot-plugins", name: "Copilot plugins", source: "github/copilot-plugins", builtIn: true },
@@ -858,12 +872,13 @@ const DEMO_PLUGINS = [
     keywords: ["memory", "recall", "context"],
     contents: {
       skills: ["memory-hygiene"],
-      mcpServers: [{ name: "keepsake", kind: "remote", url: "https://memory.example.com/mcp/${MEMORY_BANK_ID}/" }],
+      mcpServers: [{ name: "keepsake", kind: "remote", url: "https://memory.example.com/mcp", headers: [{ name: "Authorization", value: "Bearer ${MEMORY_API_KEY}" }, { name: "X-Memory-Bank", value: "${MEMORY_BANK_ID}" }] }],
       hooks: [
-        { event: "sessionStart", command: 'node "${PLUGIN_ROOT}/hooks/brief.mjs"' },
-        { event: "userPromptSubmitted", command: 'node "${PLUGIN_ROOT}/hooks/recall.mjs"' },
-        { event: "agentStop", command: 'node "${PLUGIN_ROOT}/hooks/retain.mjs"' },
+        { event: "sessionStart", command: 'node "${PLUGIN_ROOT}/hooks/brief.mjs"', env: [setting("MEMORY_API_KEY"), setting("MEMORY_BANK_ID")] },
+        { event: "userPromptSubmitted", command: 'node "${PLUGIN_ROOT}/hooks/recall.mjs"', env: [setting("MEMORY_API_KEY"), setting("MEMORY_BANK_ID")], timeoutSec: 5 },
+        { event: "agentStop", command: 'node "${PLUGIN_ROOT}/hooks/retain.mjs"', env: [setting("MEMORY_API_KEY"), setting("MEMORY_BANK_ID"), { name: "RETAIN_MODE", value: "summary" }], timeoutSec: 30 },
       ],
+      otherFiles: { count: 9, bytes: 48_200, files: [{ path: "package.json", bytes: 640, config: true }, { path: "hooks/brief.mjs", bytes: 3_100 }, { path: "hooks/recall.mjs", bytes: 5_400 }, { path: "hooks/retain.mjs", bytes: 6_900 }] },
     },
     config: [
       pluginField("MEMORY_API_KEY", "Memory API key", { secret: true, description: "From your Keepsake account." }),
@@ -886,7 +901,7 @@ const DEMO_PLUGINS = [
     author: "Tracker Inc.",
     homepage: "https://tracker.example.com",
     keywords: ["issues", "project management"],
-    contents: { mcpServers: [{ name: "tracker", kind: "remote", url: "https://mcp.tracker.example.com/mcp", oauth: true }], commands: ["triage"] },
+    contents: { mcpServers: [{ name: "tracker", kind: "remote", type: "sse", url: "https://mcp.tracker.example.com/mcp", oauth: true, oauthClientId: "botkins-demo" }], commands: ["triage"] },
   }),
   demoPlugin("awesome-copilot", "sqlite-explorer", {
     description: "Look inside SQLite databases on your computer and ask questions of them.",
@@ -894,7 +909,21 @@ const DEMO_PLUGINS = [
     author: "Data Folks",
     repository: "https://github.com/example/sqlite-explorer",
     keywords: ["database", "sql"],
-    contents: { mcpServers: [{ name: "sqlite", kind: "local", command: "npx -y @example/sqlite-mcp ${DATABASE_PATH}" }], skills: ["sql-help"] },
+    contents: {
+      mcpServers: [
+        {
+          name: "sqlite",
+          kind: "local",
+          command: "npx",
+          args: ["-y", "@example/sqlite-mcp", "--read-only", "--label", "My databases"],
+          cwd: "server",
+          env: [setting("DATABASE_PATH"), { name: "SQLITE_TIMEOUT", value: "5000" }],
+          envNotSet: [{ name: "NODE_OPTIONS", why: "Botkins does not set NODE_OPTIONS. Such a name can make a program load or start more than its command says." }],
+        },
+      ],
+      skills: ["sql-help"],
+      otherFiles: { count: 214, bytes: 3_355_443, files: [{ path: "package.json", bytes: 1_840, config: true }, { path: ".npmrc", bytes: 62, config: true }, { path: "node_modules/", bytes: 3_100_000, files: 180, config: true }, { path: "README.md", bytes: 2_100 }] },
+    },
     config: [pluginField("DATABASE_PATH", "Database path", { default: "~/Documents/data.db" })],
   }),
   demoPlugin("awesome-copilot", "legacy-formatter", {
@@ -945,7 +974,11 @@ const DEMO_PLUGINS = [
     description: "Sends a note to your chat app when a long turn ends.",
     author: "Ping",
     keywords: ["notifications", "slack"],
-    contents: { hooks: [{ event: "sessionEnd", command: "curl -s -X POST ${WEBHOOK_URL}" }, { event: "notification", command: "curl -s -X POST ${WEBHOOK_URL}" }] },
+    contents: {
+      hooks: [{ event: "sessionEnd", command: 'curl -s -X POST "$WEBHOOK_URL"', env: [setting("WEBHOOK_URL"), { name: "SLACK_TOKEN", value: "${SLACK_TOKEN}" }] }],
+      // A hook for an event the app does not know is not run, and is said so.
+      notRun: { count: 1, items: [{ what: "hook", name: "notification", why: "Botkins does not know the event notification, so this hook does not run." }] },
+    },
     config: [pluginField("WEBHOOK_URL", "Webhook URL"), pluginField("SLACK_TOKEN", "Slack token", { secret: true, required: false })],
   }),
   demoPlugin("copilot-plugins", "actions-helper", {
@@ -970,8 +1003,46 @@ const DEMO_PLUGINS = [
 /** What a folder on the demo computer holds as a plugin. Any other made-up folder holds one skill. */
 const DEMO_FOLDER_PLUGINS = {
   "/Users/demo/team-skills": { description: "Our team's own skills.", contents: { skills: ["release-checklist", "standup-summary"], hooks: [{ event: "sessionStart", command: 'node "${PLUGIN_ROOT}/hooks/today.mjs"' }] } },
+  // A plugin folder: picked under Skills it is installed as a plugin, switched off, never linked.
+  "/Users/demo/Code/review-kit": { description: "Review skills, and a check that runs before a tool does.", contents: { skills: ["review-a-change"], hooks: [{ event: "preToolUse", command: "sh ${PLUGIN_ROOT}/check.sh", timeoutSec: 5 }] } },
+  "/Users/demo/.plugins/code-review": { description: "Skills to review a change.", contents: { skills: ["review-checklist", "security-pass"], hooks: [{ event: "agentStop", command: 'node "${PLUGIN_ROOT}/hooks/notes.mjs"' }] } },
 };
-const pluginRevision = (entry) => hash(JSON.stringify({ version: entry.version, contents: entry.contents, config: entry.config }));
+/** A revision is the hash of what was looked at: 64 hex characters, as the app's. */
+const revisionOf = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const pluginRevision = (entry) => revisionOf({ version: entry.version, contents: entry.contents, config: entry.config });
+/** The app's own sentences (desktop/docs/PLUGINS.md), so a phone meets the words it will meet. */
+const HELD_BACK = {
+  unseen: "Botkins switched this plugin off. An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts, and switch it on again if you agree.",
+  linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
+};
+const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
+const NO_REVISION = "Look at the plugin first. An install or an update names the revision that was looked at.";
+const OTHER_REVISION = "This plugin is not the one that was looked at: its revision is another one now. Look at it again.";
+const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const BUILT_IN_VALUES = ["PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA", "BOTKINS_DIR", "BOTKINS_CHAT_ID", "BOTKINS_BOT_ID"];
+/** Where each setting's value goes: only into an environment value (a local tool's, a hook's) and a header's value. */
+function sentTo(shown) {
+  const places = new Map();
+  const goes = (value, where) => {
+    for (const [, key] of String(value).matchAll(PLACEHOLDER)) if (!BUILT_IN_VALUES.includes(key)) places.set(key, [...(places.get(key) ?? []), where]);
+  };
+  for (const server of shown.mcpServers) {
+    if (server.kind === "local") for (const { name, value } of server.env ?? []) goes(value, { tool: server.name, env: name });
+    else for (const { name, value } of server.headers ?? []) goes(value, { tool: server.name, header: name, url: server.url });
+  }
+  for (const hook of shown.hooks) for (const { name, value } of hook.env ?? []) goes(value, { hook: hook.event, env: name });
+  return places;
+}
+const withSentTo = (config, shown) => {
+  const places = sentTo(shown);
+  return structuredClone(config).map((field) => (places.has(field.key) ? { ...field, sentTo: places.get(field.key) } : field));
+};
+/** A description as a computer from before "plugin-starts-v1" sends it: a tool by one line, a hook's command cut at 300 characters, no settings' places. */
+const oldContents = ({ notRun: _notRun, otherFiles: _files, ...shown }) => ({
+  ...structuredClone(shown),
+  mcpServers: shown.mcpServers.map((server) => ({ name: server.name, kind: server.kind, ...(server.kind === "local" ? { command: [server.command, ...(server.args ?? [])].join(" ") } : { url: server.url }), ...(server.oauth && { oauth: true }) })),
+  hooks: shown.hooks.map((hook) => ({ event: hook.event, command: hook.command.slice(0, 300) })),
+});
 const STALE_INSTALL = "This plugin changed since you looked at it. Look at it again before you install it.";
 const STALE_UPDATE = "This plugin changed since you looked at it. Look at it again before you update it.";
 const LISTING_KEYS = ["id", "name", "marketplace", "description", "version", "author", "homepage", "repository", "license", "keywords"];
@@ -986,12 +1057,24 @@ const HOOK_SENTENCES = {
   sessionEnd: "when a chat ends",
   notification: "when a bot sends a notification",
 };
-/** What a plugin runs on the computer, in sentences. */
-function pluginWarnings(entry) {
-  const out = [];
-  for (const event of [...new Set(entry.contents.hooks.map((hook) => hook.event))]) out.push("Runs a command on your computer " + (HOOK_SENTENCES[event] ?? "at " + event) + ".");
-  for (const server of entry.contents.mcpServers) if (server.kind === "local") out.push("Starts " + server.name + " on your computer.");
-  return out;
+/** What a plugin runs on the computer, in the app's sentences. `old`: the sentences of an app from before "plugin-starts-v1". */
+function pluginWarnings(entry, old = false) {
+  const { hooks, mcpServers, notRun } = entry.contents;
+  if (old) {
+    const out = [];
+    for (const event of [...new Set(hooks.map((hook) => hook.event))]) out.push("Runs a command on your computer " + (HOOK_SENTENCES[event] ?? "at " + event) + ".");
+    for (const server of mcpServers) if (server.kind === "local") out.push("Starts " + server.name + " on your computer.");
+    return out;
+  }
+  const local = mcpServers.some((server) => server.kind === "local");
+  return [
+    ...(hooks.length ? ["Runs a command on your computer through plugin hooks."] : []),
+    ...(local ? ["Runs a local MCP server on your computer."] : []),
+    ...(hooks.length || local ? ["A command runs with the plugin's own files. Botkins shows each command it starts, and cannot show all that those files make it do. Install a plugin only from a source you trust."] : []),
+    ...(mcpServers.some((server) => server.kind === "remote") ? ["Connects to a remote MCP server."] : []),
+    ...([...mcpServers, ...hooks].some((item) => item.envNotSet?.length) ? ["Botkins does not set some environment names that this plugin asks for. Its tools or hooks may not work."] : []),
+    ...(notRun?.count ? ["Botkins does not run some hooks or tools of this plugin."] : []),
+  ];
 }
 
 export class MockBackend {
@@ -1031,9 +1114,13 @@ export class MockBackend {
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
     this.plugins = { marketplaces: DEMO_MARKETPLACES.map((market) => ({ ...market, updatedAt: now() - 20 * MIN })), catalog: structuredClone(DEMO_PLUGINS), installed: [] };
+    // "plugin-starts-v1": what a description says a plugin starts is what starts, whole. Left out with BOTKINS_DEV_PLUGINS=old.
+    this.pluginStarts = this.pluginsOn && process.env.BOTKINS_DEV_PLUGINS !== "old";
     if (this.pluginsOn) {
       this.capabilities.push("plugins-v1");
-      this.installPlugin("writing-skills@awesome-copilot");
+      if (this.pluginStarts) this.capabilities.push("plugin-starts-v1");
+      this.installPlugin("writing-skills@awesome-copilot", { revision: pluginRevision(this.pluginEntry("writing-skills@awesome-copilot")) });
+      if (process.env.BOTKINS_DEV_PLUGINS === "held") this.holdPluginsBack();
     }
     this.cache = { bytes: 48_340_992, catalogs: 6 };
     this.callContexts = [];
@@ -1104,12 +1191,42 @@ export class MockBackend {
     if (!entry) throw new Error("That plugin isn't in any marketplace any more.");
     return entry;
   }
+  /**
+   * What the update to the app left behind (BOTKINS_DEV_PLUGINS=held): a folder that was linked for
+   * its skills is now a plugin that is off; a plugin an earlier version did not show whole is off;
+   * and one plugin's copy is not the reviewed files, so an update is its repair.
+   */
+  holdPluginsBack() {
+    const linked = "/Users/demo/.plugins/code-review";
+    this.state.skills = { ...this.state.skills, plugins: this.state.skills.plugins.filter((plugin) => plugin.path !== linked) };
+    this.addPluginFolder(linked).heldBack = "linked";
+    for (const [id, more] of [["git-guard@awesome-copilot", { enabled: false, heldBack: "unseen" }], ["test-runner@awesome-copilot", { changed: true }]]) {
+      this.installPlugin(id, { revision: pluginRevision(this.pluginEntry(id)) });
+      Object.assign(this.installedPlugin(id), more);
+    }
+  }
+  /** A folder as an installed plugin, switched off: a copy of what the folder holds now. */
+  addPluginFolder(path) {
+    if (this.plugins.installed.some((record) => record.folder === path)) throw new Error("That folder is already added.");
+    const name = posix.basename(path);
+    const made = DEMO_FOLDER_PLUGINS[path] ?? { contents: { skills: [slug(name) || "skill"] } };
+    const record = { id: name + "@folder", listing: { id: name + "@folder", name, marketplace: "folder", ...(made.description && { description: made.description }) }, contents: contents(made.contents), config: [], values: {}, enabled: false, bots: "all", installedAt: now(), folder: path };
+    record.revision = revisionOf(record.contents);
+    if (this.plugins.installed.some((item) => item.id === record.id)) throw new Error("A plugin called " + name + " is already installed.");
+    this.plugins.installed.push(record);
+    return record;
+  }
+  /** A description as this computer sends it: whole and marked, or in the old shape with no mark. */
+  described(shown, config) {
+    const warnings = pluginWarnings({ contents: shown }, !this.pluginStarts);
+    if (!this.pluginStarts) return { contents: oldContents(shown), config: structuredClone(config), ...(warnings.length && { warnings }) };
+    return { contents: structuredClone(shown), config: withSentTo(config, shown), ...(warnings.length && { warnings }), starts: 1 };
+  }
   /** What a folder plugin's folder holds now, as a preview with its revision. */
   folderPreview(record) {
     const made = DEMO_FOLDER_PLUGINS[record.folder] ?? { contents: { skills: [slug(posix.basename(record.folder)) || "skill"] } };
     const now = contents(made.contents);
-    const warnings = pluginWarnings({ contents: now });
-    return { ...record.listing, installed: true, contents: now, config: structuredClone(record.config), revision: hash(JSON.stringify(now)), ...(warnings.length && { warnings }) };
+    return { ...record.listing, installed: true, ...this.described(now, record.config), revision: revisionOf(now) };
   }
   installedPlugin(id) {
     const record = this.plugins.installed.find((item) => item.id === id);
@@ -1145,16 +1262,22 @@ export class MockBackend {
   }
   pluginView(record) {
     const entry = record.folder ? null : this.plugins.catalog.find((item) => item.id === record.id);
-    const mcpServers = record.contents.mcpServers.map((server) => (record.serverIds?.[server.name] ? { ...server, serverId: record.serverIds[server.name] } : { ...server }));
-    const config = record.config.map((field) => ({ ...field, set: !!record.values[field.key]?.set, ...(!field.secret && record.values[field.key]?.value !== undefined && { value: record.values[field.key].value }) }));
+    // A copy that is not the reviewed files is not read: its description is the kept one, with no mark.
+    const shown = record.changed ? { contents: structuredClone(record.contents), config: structuredClone(record.config) } : this.described(record.contents, record.config);
+    const mcpServers = shown.contents.mcpServers.map((server) => (record.serverIds?.[server.name] ? { ...server, serverId: record.serverIds[server.name] } : { ...server }));
+    const config = shown.config.map((field) => ({ ...field, set: !!record.values[field.key]?.set, ...(!field.secret && record.values[field.key]?.value !== undefined && { value: record.values[field.key].value }) }));
     const signIn = mcpServers.find((server) => server.serverId && !this.state.mcpServers.find((item) => item.id === server.serverId)?.auth?.signedIn);
-    const [status, detail] = record.readError
-      ? ["error", record.readError]
-      : config.some((field) => field.required && !field.set)
-        ? ["needs-config"]
-        : signIn
-          ? ["needs-sign-in", "Sign in to " + signIn.name + " on your computer."]
-          : ["ready"];
+    const [status, said] = record.changed
+      ? ["error", CHANGED_COPY]
+      : record.readError
+        ? ["error", record.readError]
+        : config.some((field) => field.required && !field.set)
+          ? ["needs-config"]
+          : signIn
+            ? ["needs-sign-in", "Sign in to " + signIn.name + " on your computer."]
+            : ["ready"];
+    // A plugin the app itself switched off says why, with any status but an error's own sentence.
+    const detail = status === "error" ? said : record.heldBack && !record.enabled ? HELD_BACK[record.heldBack] : said;
     const { skills, ...rest } = record.contents;
     const more = Object.values(rest).some((list) => Array.isArray(list) && list.length > 0);
     return {
@@ -1162,19 +1285,32 @@ export class MockBackend {
       installed: true,
       enabled: record.enabled,
       bots: record.bots === "all" ? "all" : [...record.bots],
-      contents: { ...structuredClone(record.contents), mcpServers },
+      contents: { ...shown.contents, mcpServers },
       config,
+      ...(shown.warnings && { warnings: shown.warnings }),
+      ...(shown.starts && { starts: shown.starts }),
       status,
       ...(detail && { detail }),
+      ...(record.changed && this.pluginStarts && { repair: "update" }),
       ...(more && skills && { limits: "Bots on Claude, Codex, OpenCode or ACP get only this plugin's skills." }),
       ...(entry && pluginRevision(entry) !== record.revision && { updateAvailable: true }),
       ...(record.folder && { folder: record.folder }),
       installedAt: record.installedAt,
+      ...(this.pluginStarts && { revision: record.revision }),
     };
+  }
+  /** An install and an update name the revision that was looked at; an app from before the rule took one with none. */
+  lookedAt(revision) {
+    if (this.pluginStarts && typeof revision !== "string") throw new Error(NO_REVISION);
+  }
+  /** A switch-on or a choice of bots that names a revision is for that one: another one now is refused. */
+  sameRevision(record, options) {
+    if (options?.revision !== undefined && options.revision !== record.revision) throw new Error(OTHER_REVISION);
   }
   installPlugin(id, { bots, config, revision } = {}) {
     const entry = this.pluginEntry(id);
     if (this.plugins.installed.some((item) => item.id === id)) throw new Error("That plugin is already installed.");
+    this.lookedAt(revision);
     if (revision !== undefined && revision !== pluginRevision(entry)) throw new Error(STALE_INSTALL);
     const record = { id, listing: listingOf(entry), contents: structuredClone(entry.contents), config: structuredClone(entry.config), values: {}, enabled: true, bots: this.pluginBots(bots), installedAt: now(), revision: pluginRevision(entry), ...(entry.readError && { readError: entry.readError }) };
     for (const field of record.config) if (!field.secret && field.default !== undefined) record.values[field.key] = { set: true, value: field.default };
@@ -2450,6 +2586,11 @@ export class MockBackend {
     // "Add from folder…" with a folder chosen in the folder browser. It stays where it is and is read from there.
     addSkillFolderAt(path) {
       chosenFolder(path);
+      // A plugin folder is never linked as a folder of skills: it is installed as a plugin, switched off.
+      if (this.pluginStarts && DEMO_FOLDER_PLUGINS[path] && path !== "/Users/demo/team-skills") {
+        const record = this.addPluginFolder(path);
+        return { kind: "plugin", name: record.listing.name, id: record.id, enabled: false };
+      }
       const { folders } = this.state.skills;
       if (folders.some((folder) => folder.path === path)) throw new Error("That folder is already added.");
       this.state.skills = { ...this.state.skills, folders: [...folders, { id: "folder-" + randomUUID().slice(0, 6), path }] };
@@ -2727,8 +2868,7 @@ export class MockBackend {
       const record = this.plugins.installed.find((item) => item.id === id);
       if (record?.folder) return this.folderPreview(record);
       const entry = this.pluginEntry(id);
-      const warnings = pluginWarnings(entry);
-      return { ...listingOf(entry), ...(record && { installed: true }), contents: structuredClone(entry.contents), config: structuredClone(entry.config), ...(entry.postInstallMessage && { postInstallMessage: entry.postInstallMessage }), ...(warnings.length && { warnings }), revision: pluginRevision(entry) };
+      return { ...listingOf(entry), ...(record && { installed: true }), ...this.described(entry.contents, entry.config), ...(entry.postInstallMessage && { postInstallMessage: entry.postInstallMessage }), revision: pluginRevision(entry) };
     },
     "plugins.install"(id, options) {
       return this.installPlugin(id, options ?? {});
@@ -2736,33 +2876,40 @@ export class MockBackend {
     // A folder plugin is added turned off: the person looks at what it runs and turns it on.
     "plugins.addFolder"(path) {
       chosenFolder(path);
-      if (this.plugins.installed.some((record) => record.folder === path)) throw new Error("That folder is already added.");
-      const name = posix.basename(path);
-      const made = DEMO_FOLDER_PLUGINS[path] ?? { contents: { skills: [slug(name) || "skill"] } };
-      const record = { id: name + "@folder", listing: { id: name + "@folder", name, marketplace: "folder", ...(made.description && { description: made.description }) }, contents: contents(made.contents), config: [], values: {}, enabled: false, bots: "all", installedAt: now(), folder: path };
-      record.revision = hash(JSON.stringify(record.contents));
-      if (this.plugins.installed.some((item) => item.id === record.id)) throw new Error("A plugin called " + name + " is already installed.");
-      this.plugins.installed.push(record);
-      return this.pluginView(record);
+      return this.pluginView(this.addPluginFolder(path));
     },
     "plugins.configure"(id, values) {
       this.applyPluginValues(this.installedPlugin(id), values);
     },
-    "plugins.setBots"(id, bots) {
+    "plugins.setBots"(id, bots, options) {
       const record = this.installedPlugin(id);
+      this.sameRevision(record, options);
       record.bots = this.pluginBots(bots);
     },
-    "plugins.setEnabled"(id, on) {
-      this.installedPlugin(id).enabled = on === true;
+    "plugins.setEnabled"(id, on, options) {
+      const record = this.installedPlugin(id);
+      this.sameRevision(record, options);
+      // A copy that is not the reviewed files is not switched on: the way back is an update.
+      if (on === true && record.changed) throw new Error(CHANGED_COPY);
+      record.enabled = on === true;
+      // The person looked and said yes: the app's reason for holding it back is over.
+      if (record.enabled) delete record.heldBack;
     },
     "plugins.update"(id, { revision } = {}) {
       const record = this.installedPlugin(id);
+      this.lookedAt(revision);
+      // An update writes the reviewed files again and keeps the settings: the repair for a changed copy.
+      const repaired = () => {
+        delete record.changed;
+      };
       // A folder plugin is a copy of the folder taken when it was added (the folder itself can change): an
       // update takes a fresh copy, the one the person looked at.
       if (record.folder) {
         const now = this.folderPreview(record);
         if (revision !== undefined && revision !== now.revision) throw new Error(STALE_UPDATE);
-        Object.assign(record, { contents: structuredClone(now.contents), revision: now.revision });
+        const made = DEMO_FOLDER_PLUGINS[record.folder] ?? { contents: { skills: [slug(posix.basename(record.folder)) || "skill"] } };
+        Object.assign(record, { contents: contents(made.contents), revision: now.revision });
+        repaired();
         return this.pluginView(record);
       }
       const entry = this.pluginEntry(id);
@@ -2771,6 +2918,7 @@ export class MockBackend {
       Object.assign(record, { listing: listingOf(entry), contents: structuredClone(entry.contents), config: structuredClone(entry.config), revision: pluginRevision(entry) });
       for (const key of Object.keys(record.values)) if (!kept.has(key)) delete record.values[key];
       this.pluginServers(record);
+      repaired();
       return this.pluginView(record);
     },
     "plugins.uninstall"(id) {

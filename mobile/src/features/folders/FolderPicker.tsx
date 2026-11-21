@@ -81,6 +81,12 @@ export default function FolderPicker() {
       if (added) {
         showToast(addedSkillsNote(added), "success");
         void refresh("skills");
+        // A plugin folder is never linked: it is installed as a plugin, switched off. Its page shows what it runs, with "Turn on".
+        if (added.kind === "plugin" && added.id) {
+          setBusy(false);
+          router.replace(pluginHref(added.id));
+          return;
+        }
         done = true;
       }
     } else if (params.id) {

@@ -215,6 +215,18 @@ const revisionOf = (value) => {
   if (!pluginText(value, PLUGIN_LIMITS.id)) refuse("That plugin can't be found.");
   return value;
 };
+/**
+ * What a switch-on or a choice of bots may carry beside its value: nothing, or the revision of the
+ * description the person looked at (the installed copy's hash, 64 hex characters), which the app
+ * compares with the installed one. Nothing else passes.
+ */
+function revisionOption(value) {
+  if (value === undefined || value === null) return [];
+  if (!plain(value) || Object.keys(value).some((key) => key !== "revision")) refuse("Check the plugin request.");
+  if (value.revision === undefined) return [];
+  if (typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision)) refuse("Check the plugin request.");
+  return [{ revision: value.revision }];
+}
 /** "all", or bot ids: at least one, at most 200, each once. */
 function pluginBots(value) {
   if (value === "all") return "all";
@@ -291,10 +303,10 @@ function pluginArgs(method, args) {
     case "plugins.configure":
       return [pluginId(first), pluginValues(args[1])];
     case "plugins.setBots":
-      return [pluginId(first), pluginBots(args[1])];
+      return [pluginId(first), pluginBots(args[1]), ...revisionOption(args[2])];
     case "plugins.setEnabled":
       if (typeof args[1] !== "boolean") refuse("Choose on or off.");
-      return [pluginId(first), args[1]];
+      return [pluginId(first), args[1], ...revisionOption(args[2])];
     default:
       return null;
   }
