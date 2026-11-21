@@ -331,6 +331,7 @@ export function ToolTrail({
         </span>
         {count > 0 && <span className="work-count">{count + plural}</span>}
       </button>
+      {expanded && <RunLead agents={run.agents} todos={run.todos} />}
       {expanded &&
         (steps.length ? (
           <StepList steps={visibleSteps} />
@@ -373,18 +374,24 @@ export function TaskChip({
   );
 }
 
+function TodoItems({ todos }: { todos: Todo[] }) {
+  return (
+    <ol>
+      {todos.map((t) => (
+        <li key={t.id} className={"todo " + t.status}>
+          <TodoGlyph status={t.status} />
+          <span>{t.title}</span>
+          {t.status === "blocked" && <em>Blocked</em>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function TaskDrawer({ todos }: { todos: Todo[] }) {
   return (
     <section className="canvas-drawer" id="task-drawer" aria-label="Tasks">
-      <ol>
-        {todos.map((t) => (
-          <li key={t.id} className={"todo " + t.status}>
-            <TodoGlyph status={t.status} />
-            <span>{t.title}</span>
-            {t.status === "blocked" && <em>Blocked</em>}
-          </li>
-        ))}
-      </ol>
+      <TodoItems todos={todos} />
     </section>
   );
 }
@@ -408,33 +415,64 @@ export function HelperChip({
   );
 }
 
-export function HelperDrawer({ agents }: { agents: Subagent[] }) {
+function HelperItems({ agents }: { agents: Subagent[] }) {
   const now = useNow(agents.some((a) => a.status === "Running"));
   return (
+    <ol>
+      {agents.map((a) => (
+        <li key={a.id} className={"helper " + a.status.toLowerCase()}>
+          {a.status === "Running" ? (
+            <LoaderCircle size={14} className="spin" />
+          ) : a.status === "Done" ? (
+            <Check size={14} />
+          ) : a.status === "Stopped" ? (
+            <Ban size={14} />
+          ) : (
+            <CircleAlert size={14} />
+          )}
+          <span>
+            <strong>{a.name}</strong>
+            {(a.detail || a.description) && <small>{a.detail || a.description}</small>}
+          </span>
+          <em>
+            {a.status === "Running" ? "Running" : a.status} · {duration((a.finished ?? now) - a.started)}
+          </em>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export function HelperDrawer({ agents }: { agents: Subagent[] }) {
+  return (
     <section className="canvas-drawer" id="helper-drawer" aria-label="Background helpers">
-      <ol>
-        {agents.map((a) => (
-          <li key={a.id} className={"helper " + a.status.toLowerCase()}>
-            {a.status === "Running" ? (
-              <LoaderCircle size={14} className="spin" />
-            ) : a.status === "Done" ? (
-              <Check size={14} />
-            ) : a.status === "Stopped" ? (
-              <Ban size={14} />
-            ) : (
-              <CircleAlert size={14} />
-            )}
-            <span>
-              <strong>{a.name}</strong>
-              {(a.detail || a.description) && <small>{a.detail || a.description}</small>}
-            </span>
-            <em>
-              {a.status === "Running" ? "Running" : a.status} · {duration((a.finished ?? now) - a.started)}
-            </em>
-          </li>
-        ))}
-      </ol>
+      <HelperItems agents={agents} />
     </section>
+  );
+}
+
+/**
+ * What a turn's work list starts with: its helpers, then its to-do list, and after them the steps
+ * and everything else (the owner's order, 2026-11-20; the phone's Activity sheet has the same).
+ * Nothing when the turn had neither.
+ */
+export function RunLead({ agents, todos }: { agents?: Subagent[]; todos?: Todo[] }) {
+  if (!agents?.length && !todos?.length) return null;
+  return (
+    <>
+      {!!agents?.length && (
+        <section className="run-lead" aria-label="Helpers">
+          <h4>Helpers</h4>
+          <HelperItems agents={agents} />
+        </section>
+      )}
+      {!!todos?.length && (
+        <section className="run-lead" aria-label="To do">
+          <h4>To do</h4>
+          <TodoItems todos={todos} />
+        </section>
+      )}
+    </>
   );
 }
 
