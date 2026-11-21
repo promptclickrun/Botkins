@@ -229,6 +229,7 @@ export function PanelCard({
   fail,
   readOnly,
   badges,
+  tools,
   foot,
   side,
   when = stamp,
@@ -246,6 +247,8 @@ export function PanelCard({
   readOnly?: boolean;
   /** Shown after the bot's name (a space's App badge and changed dot). */
   badges?: ReactNode;
+  /** Buttons at the right of the header, before Manage (a space's Open for an app panel). */
+  tools?: ReactNode;
   /** More quiet lines in the footer (a space's last line). */
   foot?: ReactNode;
   /** Beside Refresh (a space's note count). */
@@ -274,6 +277,7 @@ export function PanelCard({
             {state.projects.find((x) => x.id === p.projectId)!.name}
           </span>
         )}
+        {tools}
         {manage && (
           <button aria-label={"Manage " + p.title} onClick={manage}>
             <Ellipsis size={17} />
