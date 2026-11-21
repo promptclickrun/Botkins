@@ -439,6 +439,10 @@ test("the demo: an owner and two members make, share, open and change spaces, ea
     assert.deepEqual(link.spacesFor(OWNER).map((space: SpaceSummary) => space.id), (owner.parts.spaces as SpaceSummary[]).map((space) => space.id));
     assert.equal(link.spaceCan(tripId, benId), null);
     assert.equal(link.spaceCan(launch.id, benId), "view");
+    // The app may ask with its own record of a space as well as with an id.
+    assert.equal(link.spaceCan({ id: "s_new", createdBy: benId }, benId), "own");
+    assert.equal(link.spaceCan({ id: "s_new", createdBy: benId }, OWNER), "own");
+    assert.equal(link.spaceCan({ id: "s_new" }, benId), null);
     // Deleting a space takes its sharing along.
     await owner.call("spaces.remove", launch.id);
     assert.equal(link.store.data.team.spaces[launch.id], undefined);

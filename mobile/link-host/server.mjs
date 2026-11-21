@@ -1141,8 +1141,9 @@ export class LinkHost extends EventEmitter {
   spacesFor(person) {
     return this.spaces.for(person);
   }
-  spaceCan(spaceId, person) {
-    return this.spaces.can(spaceId, person);
+  /** "own", "edit", "view" or null. `space` is a space's id, or the app's own record of it (`SpaceRecord`). */
+  spaceCan(space, person) {
+    return this.spaces.can(space, person);
   }
   shareSpace(person, id, input) {
     return this.spaces.share(person, id, input);

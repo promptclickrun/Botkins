@@ -52,8 +52,9 @@ export class Spaces {
   for(person) {
     return this.on ? spaceView(this.team(), this.records(), person, this.context(person)) : [];
   }
-  can(spaceId, person) {
-    return spaceCan(this.team(), this.record(spaceId), person);
+  /** What a person may do with a space. `space` is its id, or the app's own record of it. */
+  can(space, person) {
+    return spaceCan(this.team(), typeof space === "string" ? this.record(space) : space, person);
   }
   /** The space, for someone who owns it; else it fails as the link's own check does. */
   owned(person, id) {
