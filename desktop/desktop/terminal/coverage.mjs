@@ -28,7 +28,7 @@ export const REASONS = {
   window: "needs a window", // a file dialog, the clipboard, a folder opened in the file manager, a notification, a microphone
   "window's own": "the window's own", // what only the window uses to draw itself: a pane, a preview, a thumbnail
   "phone's own": "a phone's own", // what only a paired phone uses: its notifications, the screen it is shown, its uploads
-  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The owner agreed to it on 2026-11-21.
+  // A new reason is a decision (test/terminal-coverage.test.mjs). This one is for the password managers and what is like them. Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone."
   person: "needs a person at the app: the window, or a phone with its owner check", // a call that reaches a secret which a caller of the socket cannot read by itself, or sends one somewhere: the socket cannot know that a person is there
 };
 

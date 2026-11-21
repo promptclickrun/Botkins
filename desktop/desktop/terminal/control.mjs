@@ -53,7 +53,11 @@ const refuseReferences = (name, args) => {
  * there: the window, or a phone with its owner check. Everything else the window can do, the
  * socket does, with what it starts shown and a line in the log.
  * (Decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side. The
- * owner agreed to it on 2026-11-21.)
+ * owner agreed to this on 2026-11-21, in these words: "nothing that reaches a saved secret runs from
+ * the command line, so unlocking a password manager and using a saved credential by reference stay
+ * in the window and on the phone." Two things follow from that sentence and are its working-out, not
+ * his words: a saved credential gets no new label from the socket, and `voice set` takes no address
+ * without its key.)
  */
 export const REFUSED_BY_REASON = {
   window: (name) => "`" + name + "` needs the app's window (a dialog, the clipboard, a notification, a microphone or a permission on the screen). It is done there, not from a terminal.",
