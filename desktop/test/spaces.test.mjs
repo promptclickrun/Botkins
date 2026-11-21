@@ -237,3 +237,36 @@ test("Attach offers the person's own spaces and those already attached", () => {
   ];
   assert.deepEqual(attachable(list, "p1").map((s) => s.id), ["launch", "money", "maya"]);
 });
+
+test("a view's save goes out only soon after a real click or key press, and not too often", async () => {
+  const { GESTURE_MS, SET_GAP_MS, cleanLabel, cleanPatch, saveGate } = await import("../src/frameState.ts");
+  let now = 1_000_000;
+  const gate = saveGate(() => now);
+  assert.equal(gate.allow(), false, "a page that was only opened cannot save");
+  gate.gesture();
+  assert.equal(gate.allow(), true);
+  assert.equal(gate.allow(), false, "at most one a second");
+  now += SET_GAP_MS - 1;
+  assert.equal(gate.allow(), false);
+  now += 1;
+  assert.equal(gate.allow(), true, "a second later, still within 3 seconds of the click");
+  now += SET_GAP_MS;
+  assert.equal(gate.allow(), true);
+  now += SET_GAP_MS + 1;
+  assert.equal(gate.allow(), false, "more than 3 seconds after the click, the page is on its own again");
+  gate.gesture();
+  now += GESTURE_MS;
+  assert.equal(gate.allow(), true, "exactly 3 seconds still counts");
+  gate.gesture();
+  now += GESTURE_MS + 1;
+  assert.equal(gate.allow(), false);
+  // A refused save does not count as one: the next allowed one is not pushed back.
+  gate.gesture();
+  assert.equal(gate.allow(), true);
+  // What a page hands over is cut to what the computer takes.
+  assert.deepEqual(cleanPatch({ a: 1, b: null }), { a: 1, b: null });
+  for (const bad of [null, undefined, "x", 3, ["a"]]) assert.equal(cleanPatch(bad), null, String(bad));
+  assert.equal(cleanLabel("  Ticked Press kit\n"), "Ticked Press kit");
+  assert.equal(cleanLabel("x".repeat(200)).length, 80);
+  for (const none of ["", "   ", 5, null, undefined, {}]) assert.equal(cleanLabel(none), undefined);
+});

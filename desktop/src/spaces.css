@@ -827,3 +827,28 @@ button.space-tag:hover {
   color: var(--faint);
   flex: none;
 }
+
+/* The panel an ask is about, in the ask bar: its title, and a way back to asking about the whole space. */
+.space-ask-about {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 40%;
+  padding: 3px 4px 3px 10px;
+  border-radius: 99px;
+  background: var(--sunken);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.space-ask-about button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--muted);
+}

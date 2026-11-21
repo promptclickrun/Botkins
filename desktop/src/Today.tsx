@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { RichText } from "./RichText";
 import HtmlFrame from "./HtmlFrame";
+import type { FrameStore } from "./frameState";
 import "./blocks.css";
 import "./board.css";
 import { BotAvatar } from "./Avatar";
@@ -28,10 +29,10 @@ const stamp = (n: number) =>
     hour: "numeric",
     minute: "2-digit",
   });
-export function Block({ block, title }: { block: PanelBlock; title?: string }) {
+export function Block({ block, title, store }: { block: PanelBlock; title?: string; /** The panel's saved state, for its custom views. */ store?: FrameStore }) {
   switch (block.type) {
     case "html":
-      return <HtmlFrame frame={block.frame} height={block.height} title={title} />;
+      return <HtmlFrame frame={block.frame} height={block.height} title={title} store={store} />;
     case "markdown":
       return (
         <div className="panel-prose">
@@ -234,9 +235,12 @@ export function PanelCard({
   outer,
   top,
   after,
+  store,
 }: {
   state: State;
   panel: ShownPanel;
+  /** The panel's saved state, for its custom views (a space's app panel). */
+  store?: FrameStore;
   manage?: () => void;
   fail: (e: unknown) => void;
   readOnly?: boolean;
@@ -279,7 +283,7 @@ export function PanelCard({
       <h2>{p.title}</h2>
       <div className="panel-blocks">
         {p.blocks.map((b, i) => (
-          <Block key={b.type === "html" ? b.frame : i} block={b} title={p.title} />
+          <Block key={b.type === "html" ? b.frame : i} block={b} title={p.title} store={store} />
         ))}
       </div>
       <footer>

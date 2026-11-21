@@ -346,10 +346,13 @@ export function SpacePage({
   openProject,
   boardChat,
   removed,
+  about,
   fail,
 }: {
   state: State;
   space: SpaceSummary;
+  /** A view in one of this space's panels handed over text: it waits in the ask bar, about that panel, not sent. */
+  about?: { panelId: string; text: string; n: number };
   open: (chatId: string) => void;
   /** Opens a chat the computer just made. */
   openNew: (chatId: string) => void;
@@ -369,6 +372,14 @@ export function SpacePage({
   const [hidden, showHidden] = useState(false);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
+  /** The panel the ask is about ("Ask Pip to change it"), or "" for the whole space. */
+  const [aboutPanel, setAboutPanel] = useState("");
+  useEffect(() => {
+    if (!about) return;
+    setAboutPanel(about.panelId);
+    // The answer joins whatever is already typed, so nothing the person wrote is lost.
+    setText((typed) => (typed.trim() ? typed + "\n\n" + about.text : about.text));
+  }, [about?.n]);
   const menu = useMenu();
   const dialogs = useAsk();
   const name = spaceName(space);
@@ -413,7 +424,9 @@ export function SpacePage({
   });
   const addAllowed = !view && teamCan(state, "today", "create") && teamCan(state, "agents", "chat");
   const askAllowed = !view && teamCan(state, "today", "use") && teamCan(state, "agents", "chat") && state.bots.length > 0;
-  const bot = askBot(state.bots, panels);
+  const asked = panels.find((p) => p.id === aboutPanel);
+  // An ask about a panel goes to that panel's bot.
+  const bot = (asked && state.bots.find((b) => b.id === asked.botId)) || askBot(state.bots, panels);
 
   // The content is asked for, and asked again when the space's rev passes the one held.
   useEffect(() => {
@@ -511,8 +524,9 @@ export function SpacePage({
     if (!said || asking || !bot) return;
     setAsking(true);
     try {
-      const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: bot.id, text: said });
+      const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: bot.id, text: said, ...(asked && { panelId: asked.id }) });
       setText("");
+      setAboutPanel("");
       openNew(chatId);
     } catch (e) {
       fail(e);
@@ -548,6 +562,8 @@ export function SpacePage({
               after={arrange && resize.corner(p)}
               fail={fail}
               readOnly={view}
+              // An app panel keeps what people change in it. A person who may only look reads it.
+              store={{ state: p.state ?? {}, rev: p.stateRev ?? 0, ...(canNote && { set: (patch, label) => api["spaces.patchState"](p.id, patch, label).then((answer) => answer.rev) }) }}
               manage={view ? undefined : () => manager.manage(p.id)}
               when={(t) => spaceWhen(t)}
               badges={
@@ -654,9 +670,17 @@ export function SpacePage({
           }}
         >
           <BotAvatar bot={bot} size={26} />
+          {asked && (
+            <span className="space-ask-about">
+              {asked.title}
+              <button type="button" aria-label={"Ask about the whole space instead of " + asked.title} onClick={() => setAboutPanel("")}>
+                <X size={13} />
+              </button>
+            </span>
+          )}
           <input
-            aria-label="Ask about this space, or describe a new panel"
-            placeholder="Ask about this space, or describe a new panel"
+            aria-label={asked ? "Ask " + bot.name + " to change it" : "Ask about this space, or describe a new panel"}
+            placeholder={asked ? "Ask " + bot.name + " to change it" : "Ask about this space, or describe a new panel"}
             value={text}
             maxLength={8000}
             onChange={(e) => setText(e.target.value)}
