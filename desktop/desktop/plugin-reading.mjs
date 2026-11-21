@@ -527,6 +527,18 @@ export function startWarnings(mcpServers, hooks, others = [], notRun = []) {
 }
 
 /**
+ * What of a plugin runs on this computer: each hook's command, and each tool that is a local
+ * program, with every word of its line, its folder and each environment value as written. A
+ * plugin with any of these is shown to the person before it is installed, updated or turned on
+ * (mobile/AGENTS.md: "A plugin that runs commands on the computer asks first").
+ * It is made from the plugin's description and from nothing else. The description is what the
+ * app starts (desktop/plugin-reading.mjs), so this list is too.
+ */
+export const pluginRuns = (contents) => [
+  ...(contents?.hooks ?? []).map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [], ...(hook.envNotSet?.length && { envNotSet: hook.envNotSet }), ...(hook.timeoutSec !== undefined && { timeoutSec: hook.timeoutSec }) })),
+  ...(contents?.mcpServers ?? []).filter((server) => server.kind === "local").map((server) => ({ what: "tool", name: server.name, command: server.command, args: server.args ?? [], env: server.env ?? [], ...(server.envNotSet?.length && { envNotSet: server.envNotSet }), ...(server.cwd && { cwd: server.cwd }) })),
+];
+/**
  * The mark of a description that this reading made: every command that Botkins starts is in it,
  * whole. An older app cannot make it, so a description without it is not to be trusted to say
  * all that a plugin starts.

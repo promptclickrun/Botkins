@@ -9,6 +9,9 @@ import { PLUGIN_STARTS } from "../desktop/plugins.mjs";
 import { botSteps, ownNote } from "../desktop/workspace.mjs";
 import { CAPABILITIES } from "../desktop/runtime.mjs";
 
+/** A switch-on as a client makes it after a look: it names the revision of the installed copy. A plugin that runs commands is not switched on without it. */
+const switchOn = (plugins, id) => plugins.setEnabled(id, true, { revision: plugins.list().find((p) => p.id === id).revision });
+
 test("a copied folder needs activation and its settings survive restart behind the vault", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "botkins-plugin-settings-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -177,7 +180,7 @@ test("an installed copy that was changed on disk is not used, the app says why, 
   const folder = source("mine", { "plugin.json": { name: "copy-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
   const ws = open();
   const added = await ws.plugins.addFolder(folder);
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const bot = ws.bot("pip");
   const session = () => ws.plugins.session(bot, { id: "chat-1" });
   assert.equal(typeof (await session()).hooks.handlers.onSessionStart, "function");
@@ -199,7 +202,7 @@ test("an installed copy that was changed on disk is not used, the app says why, 
   // Remove and add: the reviewed files are written again, and the planted file is gone.
   await again.plugins.uninstall(added.id);
   const back = await again.plugins.addFolder(folder);
-  await again.plugins.setEnabled(back.id, true);
+  await switchOn(again.plugins, back.id);
   assert.equal(again.plugins.list()[0].status, "ready");
   assert.deepEqual(Object.keys((await again.plugins.session(again.bot("pip"), { id: "chat-1" })).hooks.handlers), ["onSessionStart"]);
 });
@@ -223,7 +226,7 @@ test("a plugin installed by an earlier version that starts anything its descript
     plugin("gone", { "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }),
   ];
   const ws = open();
-  for (const folder of folders) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  for (const folder of folders) await switchOn(ws.plugins, (await ws.plugins.addFolder(folder)).id);
   const goneCopy = ws.plugins.records.find((row) => row.preview.name === "gone-fixture").folder;
   rmSync(goneCopy, { recursive: true, force: true });
   // The file as the earlier version kept it: no mark of the reading, and the description that version made.
@@ -263,7 +266,7 @@ test("a plugin installed by an earlier version that starts anything its descript
   // It cannot be switched on while it cannot be read.
   await assert.rejects(after.plugins.setEnabled(byName("gone").id, true), /Its installed files could not be read/);
   // The reviewing is done once for what was read. The second open changes nothing more, and the one that was not read is tried again.
-  await after.plugins.setEnabled(byName("args").id, true);
+  await switchOn(after.plugins, byName("args").id);
   const before = JSON.stringify(stored());
   const third = open();
   assert.equal(JSON.stringify(stored()), before);
@@ -275,7 +278,7 @@ test("a plugin installed by an earlier version that starts anything its descript
   await third.plugins.update(named("gone").id, { revision: stored().find((row) => row.preview.name === "gone-fixture").revision });
   // After the update it is off with no reason and no mark: the next thing is the person's "Turn on".
   assert.deepEqual([named("gone").enabled, named("gone").repair, named("gone").detail], [false, undefined, undefined]);
-  await third.plugins.setEnabled(named("gone").id, true);
+  await switchOn(third.plugins, named("gone").id);
   assert.deepEqual([named("gone").enabled, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").heldBack], [true, undefined, 3, undefined]);
 });
 
@@ -290,7 +293,7 @@ test("a changed copy is put right by an update, which writes the reviewed files 
   const ws = open();
   const added = await ws.plugins.addFolder(folder);
   await ws.plugins.configure(added.id, { token: "secret-value" });
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const isSet = () => ws.plugins.list()[0].config.find((field) => field.key === "token").set;
   assert.equal(isSet(), true);
   const [row] = ws.plugins.records;
@@ -375,7 +378,7 @@ test("a copy that is not the reviewed files is checked before an old description
   const folder = source("mine", { "plugin.json": { name: "old-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
   const ws = open();
   const added = await ws.plugins.addFolder(folder);
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   // The file as an earlier version kept it, and a hook planted into the copy before the app is opened again.
   writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8")).map(({ reading: _mark, ...row }) => row)));
   const copy = ws.plugins.records[0].folder;
@@ -403,7 +406,7 @@ test("a check of the copy that could not be done is not kept, is not called a ch
   const { open, source } = managed(t);
   const ws = open();
   const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "unsure-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const [row] = ws.plugins.records;
   // The check cannot read a file of the copy (no right to read it): that says nothing about the copy.
   const { chmodSync } = await import("node:fs");
@@ -492,7 +495,7 @@ test("switching on a row the one reading has not read stores what the copy start
   const [row] = ws.plugins.records;
   row.reading = undefined;
   row.preview = { ...row.preview, contents: { ...row.preview.contents, hooks: [] }, warnings: [] };
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const [stored] = JSON.parse(readFileSync(file, "utf8"));
   assert.equal(stored.reading, 3);
   assert.deepEqual(stored.preview.contents.hooks.map((hook) => hook.command), ["echo stored-command-77"]);
@@ -522,7 +525,7 @@ test("a hook of an open session does not run once the copy was changed, with no 
   const marker = join(dir, "hook-ran");
   const ws = open();
   const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "touch-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "touch " + JSON.stringify(marker) }] } } }));
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const session = await ws.plugins.session(ws.bot("pip"), { id: "chat-1" });
   await session.hooks.handlers.onSessionStart({});
   assert.equal(existsSync(marker), true);
@@ -568,6 +571,7 @@ test("the app names the capability that says its description of a plugin is what
   assert.ok(CAPABILITIES.includes(PLUGIN_STARTS));
 });
 
+const RUNS = { message: "This plugin runs commands on this computer. Look at what it starts before you switch it on. If the app does not show you that, update the app." };
 const ANOTHER = /This plugin is not the one that was looked at: its revision is another one now\. Look at it again\./;
 
 test("a switch-on and a choice of bots can name the revision that was looked at, and the app compares it", async (t) => {
@@ -590,12 +594,90 @@ test("a switch-on and a choice of bots can name the revision that was looked at,
   await ws.plugins.setBots(added.id, ["pip"], { revision });
   await ws.plugins.setEnabled(added.id, true, { revision });
   assert.deepEqual([ws.plugins.list()[0].enabled, ws.plugins.list()[0].bots], [true, ["pip"]]);
-  // None: as before (nothing, null and an object with no revision).
+  // None: a switch-off needs none, and for the bots too. (A switch-on of this plugin, which has a hook, is refused with none:
+  // nothing, null and an object with no revision. The tests on the sentence are below.)
   await ws.plugins.setEnabled(added.id, false);
-  await ws.plugins.setEnabled(added.id, true, null);
+  for (const none of [undefined, null, {}]) await assert.rejects(ws.plugins.setEnabled(added.id, true, none), RUNS);
+  assert.equal(ws.plugins.list()[0].enabled, false);
+  await ws.plugins.setEnabled(added.id, true, { revision });
   await ws.plugins.setBots(added.id, "all", {});
   await ws.plugins.setBots(added.id, ["pip"]);
   assert.deepEqual([ws.plugins.list()[0].enabled, ws.plugins.list()[0].bots], [true, ["pip"]]);
+});
+
+test("the app refuses a switch-on with no revision of a plugin that runs commands, whoever asks, and keeps nothing", async (t) => {
+  const { open, source, file } = managed(t);
+  const ws = open();
+  const hook = await ws.plugins.addFolder(source("hook", { "plugin.json": { name: "hook-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const tool = await ws.plugins.addFolder(source("tool", { "plugin.json": { name: "tool-fixture", version: "1.0.0" }, ".mcp.json": { mcpServers: { files: { command: "node", args: ["x.js"] } } } }));
+  const skills = await ws.plugins.addFolder(source("skills", { "plugin.json": { name: "skills-fixture", version: "1.0.0" }, "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\nA." }));
+  const revisionOf = (id) => ws.plugins.list().find((row) => row.id === id).revision;
+  const enabled = (id) => ws.plugins.list().find((row) => row.id === id).enabled;
+  const stored = () => readFileSync(file, "utf8");
+  const before = stored();
+  // (a) No revision: refused with the sentence, for a hook and for a tool that is a program, and the plugin stays off.
+  for (const id of [hook.id, tool.id]) {
+    await assert.rejects(ws.plugins.setEnabled(id, true), RUNS);
+    assert.equal(enabled(id), false);
+  }
+  assert.equal(stored(), before);
+  // (c) Another revision: the refusal for a plugin that is not the one that was looked at.
+  await assert.rejects(ws.plugins.setEnabled(hook.id, true, { revision: "0".repeat(64) }), ANOTHER);
+  assert.equal(enabled(hook.id), false);
+  // (b) The right revision: it works.
+  for (const id of [hook.id, tool.id]) {
+    await ws.plugins.setEnabled(id, true, { revision: revisionOf(id) });
+    assert.equal(enabled(id), true);
+  }
+  // A plugin that is on already and is switched on again: nothing changes, so nothing is refused.
+  await ws.plugins.setEnabled(hook.id, true);
+  assert.equal(enabled(hook.id), true);
+  // (e) A switch-off needs none.
+  await ws.plugins.setEnabled(hook.id, false);
+  assert.equal(enabled(hook.id), false);
+  // (d) A plugin that runs nothing needs none.
+  await ws.plugins.setEnabled(skills.id, true);
+  assert.equal(enabled(skills.id), true);
+});
+
+test("a switch-on with no revision comes after the refusals for a copy that was changed or cannot be read", async (t) => {
+  const { open, source } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "order-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const copy = ws.plugins.records[0].folder;
+  mkdirSync(join(copy, "hooks"));
+  writeFileSync(join(copy, "hooks", "hooks.json"), JSON.stringify({ hooks: { sessionEnd: [{ command: "touch /tmp/planted" }] } }));
+  await assert.rejects(ws.plugins.setEnabled(added.id, true), /are not the files that were reviewed/);
+  await assert.rejects(ws.plugins.setEnabled(added.id, true, { revision: ws.plugins.list()[0].revision }), /are not the files that were reviewed/);
+});
+
+test("the bot's tool names the revision of its card for a switch-on, and the app refuses a card that is not the installed plugin", async (t) => {
+  const { pluginTools } = await import("../desktop/plugin-tools.mjs");
+  const { open, source } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "card-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const bot = ws.bot("pip");
+  const chat = ws.chat(ws.createChat(bot.id));
+  const task = {};
+  ws.active.set(chat.id, task);
+  const propose = (action) => pluginTools(ws, bot, chat, { id: "fixture" }, task).find((tool) => tool.name === "propose_plugin").handler({ id: added.id, action });
+  const yes = async (action) => {
+    const pending = propose(action);
+    const [request] = ws.interactions.snapshot();
+    ws.interactions.respond(request.id, { action: "approve" });
+    return pending;
+  };
+  const enabled = () => ws.plugins.list()[0].enabled;
+  // The card shows the revision of the installed copy, and the yes switches on that one.
+  assert.equal(await yes("enable"), "Plugin change saved.");
+  assert.equal(enabled(), true);
+  assert.equal(await yes("disable"), "Plugin change saved.");
+  assert.equal(enabled(), false);
+  // A card that shows another revision than the installed one (the list is as it was before the plugin changed): refused, and the plugin stays off.
+  const list = ws.plugins.list.bind(ws.plugins);
+  ws.plugins.list = () => list().map((row) => ({ ...row, revision: "0".repeat(64) }));
+  await assert.rejects(yes("enable"), ANOTHER);
+  assert.equal(enabled(), false);
 });
 
 test("an update that is under way finishes before a yes is compared, so an old yes does not switch on the new version", async (t) => {
@@ -628,7 +710,7 @@ test("a hook that earlier versions never ran and runs now switches the plugin of
   const alias = source("alias", { "plugin.json": { name: "alias-fixture", version: "1.0.0" }, "hooks.json": { hooks: { UserPromptSubmit: [{ command: "echo hi" }] } } });
   const same = source("same", { "plugin.json": { name: "same-fixture", version: "1.0.0" }, "hooks.json": { hooks: { userPromptSubmitted: [{ command: "echo hi" }] } } });
   const ws = open();
-  for (const folder of [alias, same]) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  for (const folder of [alias, same]) await switchOn(ws.plugins, (await ws.plugins.addFolder(folder)).id);
   // The file as an earlier version kept it: no mark of the reading, a hook by its event and command.
   writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8")).map(({ reading: _mark, ...row }) => ({ ...row, preview: { ...row.preview, contents: { ...row.preview.contents, hooks: row.preview.contents.hooks.map(({ event, command }) => ({ event, command })) } } }))));
   const stored = () => JSON.parse(readFileSync(file, "utf8"));
@@ -639,7 +721,7 @@ test("a hook that earlier versions never ran and runs now switches the plugin of
   assert.equal(byName(after, "same").enabled, true);
   assert.equal(byName(after, "same").detail, undefined);
   // The person looks, and switches it on: it stays on at the next open.
-  await after.plugins.setEnabled(byName(after, "alias").id, true);
+  await switchOn(after.plugins, byName(after, "alias").id);
   assert.equal(stored().find((row) => row.preview.name === "alias-fixture").heldBack, undefined);
   const third = open();
   assert.deepEqual([byName(third, "alias").enabled, byName(third, "alias").detail, byName(third, "same").enabled], [true, undefined, true]);
@@ -677,7 +759,7 @@ test("the mark starts is never written to plugins.json, and an older file that h
   assert.equal(updated.starts, 1);
   assert.ok(!stored().includes('"starts"'), "update");
   // Switching on stores a fresh description: no mark in it either.
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   assert.ok(!stored().includes('"starts"'), "setEnabled");
   // A file as an earlier build of this change wrote it: the mark in the description, and in its contents.
   writeFileSync(file, JSON.stringify(JSON.parse(stored()).map((row) => ({ ...row, preview: { ...row.preview, starts: 1, contents: { ...row.preview.contents, starts: 1 } } }))));
@@ -700,7 +782,7 @@ test("a row marked 2 is looked at once for a hook that runs now, and not for wha
     // A tool with arguments: the old rule would switch a row with no mark off, a row marked 2 was shown them.
     plugin("tool", { ".mcp.json": { mcpServers: { files: { command: "sh", args: ["-c", "true"] } } } }),
   ];
-  for (const folder of folders) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  for (const folder of folders) await switchOn(ws.plugins, (await ws.plugins.addFolder(folder)).id);
   const stored = () => JSON.parse(readFileSync(file, "utf8"));
   const rowOf = (name) => stored().find((row) => row.preview.name === name + "-fixture");
   // The file as the earlier build of this change kept it: marked 2, on.
@@ -715,7 +797,7 @@ test("a row marked 2 is looked at once for a hook that runs now, and not for wha
   for (const name of ["plain", "tool"]) assert.deepEqual([byName(after, name).enabled, byName(after, name).detail], [true, undefined], name);
   assert.deepEqual(["prompt", "every", "plain", "tool"].map((name) => rowOf(name).reading), [3, 3, 3, 3]);
   // The person looks and switches it on: it stays so at the second open, and at a third.
-  await after.plugins.setEnabled(byName(after, "prompt").id, true);
+  await switchOn(after.plugins, byName(after, "prompt").id);
   const second = open();
   assert.deepEqual([byName(second, "prompt").enabled, byName(second, "prompt").detail], [true, undefined]);
   assert.equal(byName(second, "every").enabled, false, "what the person has not switched on stays off");
@@ -793,7 +875,7 @@ test("when Botkins stops a plugin's hook from keeping a turn going, the turn tha
   const folder = source("loops", { "plugin.json": { name: "loop-fixture", version: "1.0.0" }, "hooks.json": { hooks: { agentStop: [{ command: "echo '{\"decision\":\"block\",\"reason\":\"go on\"}'" }] } } });
   const ws = open();
   const added = await ws.plugins.addFolder(folder);
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const session = await ws.plugins.session(ws.bot("pip"), { id: "chat-1" });
   // A turn runs in the chat: its steps are the turn's activity.
   const run = { id: "run-1", steps: [] };
@@ -814,7 +896,7 @@ test("a session opened again in the middle of a turn goes on with the count, and
   const { open, source } = managed(t);
   const ws = open();
   const added = await ws.plugins.addFolder(source("loops", BLOCKING));
-  await ws.plugins.setEnabled(added.id, true);
+  await switchOn(ws.plugins, added.id);
   const notes = [];
   ws.pluginNote = (chatId, line) => notes.push([chatId, line]);
   const chat = { id: "chat-1" };
