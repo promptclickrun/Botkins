@@ -103,7 +103,7 @@ test("pages: add, show as it is, search, save with a revision, history, restore,
   assert.equal((await client.call("wiki.tree")).pages.some((item) => item.title === "Lost"), false, "a refused add leaves no page");
 
   // A page for a project starts from the project's record; the title comes from the project.
-  // (The project is made by its own call: `call` refuses `createProject`, which `projects add` covers.)
+  // (The project is made by the socket's own call.)
   await client.call("projects.add", { name: "Website", description: "The new site" });
   const forProject = await botkins(["wiki", "add", "--for", "Website"]);
   assert.match(forProject.out, /^Added projects\/website\.md \(Website\)/);

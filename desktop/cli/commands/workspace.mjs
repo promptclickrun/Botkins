@@ -538,25 +538,4 @@ export const workspace = {
       },
     },
   },
-  call: {
-    summary: "Make one of the workspace's own calls by name (for scripts)",
-    usage: "botkins call <name> [<json argument>…]",
-    hidden: true,
-    details: "Only a call that has no command yet runs here (`botkins call --list` names every call of the app, with the ones that a command does). A call that a command covers is refused, and the sentence names the command. A secret is never an argument. Each argument is JSON: `botkins call renameChat '\"<chat id>\"' '\"New title\"'`.",
-    options: { list: { type: "boolean", about: "List the calls" } },
-    async run(context) {
-      if (context.options.list) return void context.print(await context.client.call("methods"), (all) => all.workspace.join("\n"));
-      if (!context.args.length) throw usage("Name the call.");
-      const [name, ...raw] = context.args;
-      const args = raw.map((value) => {
-        try {
-          return JSON.parse(value);
-        } catch {
-          throw usage("Each argument is JSON. This one isn't: " + value);
-        }
-      });
-      const value = await context.client.call("call", name, args);
-      context.print(value, JSON.stringify(value, null, 2));
-    },
-  },
 };

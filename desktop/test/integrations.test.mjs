@@ -12,7 +12,11 @@ import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 function setup(t, reply) {
   const dir = tempDir(t);
   const fake = fakeClient(reply);
-  const open = () => new Workspace(join(dir, "data"), fake.client, () => {});
+  const open = () => {
+    const ws = new Workspace(join(dir, "data"), fake.client, () => {});
+    ws.integrations.reachable = () => true; // The `botkins` command is not what these tests are about; a developer's shell must not change them.
+    return ws;
+  };
   return { dir, open, ws: open(), ...fake };
 }
 const skillFolder = (root, name, description = "Does " + name) => {

@@ -171,7 +171,7 @@ Other commands for bots:
 - `botkins routines list`, `run`, `pause` and `resume` operate the routines of your bots.
 - `botkins plugins` installs and manages plugins. See "Plugins" below.
 
-A paired phone does everything else for now: tasks, the wiki, projects and credentials.
+Every other part of the workspace has commands too: chats, routines, projects, tasks, the wiki, preferences, credentials, voice, spaces, sharing and the team. See "The rest of the workspace" below. A paired phone does the same things. Only a few steps need a person at the app: see "What stays in the desktop app".
 
 ## Tools and skills
 
@@ -396,15 +396,160 @@ botkins wiki export --format zip --output ~/Documents
 
 ### Preferences, usage, the cache and the Mac tools
 
-The commands for this part come in a later change.
+```sh
+botkins preferences show
+botkins preferences set appearance.theme dark
+botkins preferences set clarificationInstructions --file ask-first.txt
+botkins preferences set teamwork on --yes
+botkins usage show --days 7
+botkins usage export --days 90 --output usage.csv
+botkins cache clear --yes
+botkins mac-tools status
+botkins mac-tools set mail read --yes
+```
+
+- **`preferences` is the app's Preferences page. `config` is the host.** `botkins preferences` changes what the app's window changes: the theme, the approval level, the notifications, the side menu. `botkins config` changes the settings of this host, the service: its link port, its relay and its updates.
+- **A preference is one of a fixed list.** `botkins help preferences set` lists each key, what it takes, and what it is. A key that is not in the list is refused, and the refusal lists the keys. A switch takes `on` or `off`. A longer text (`clarificationInstructions`) comes from `--file <path>`, or from standard input with `-` as the value. The `background.*` keys are for the desktop app's window: this host stores them and does nothing with them.
+- **A switch that gives bots more room is shown first.** Three keys do this: `approval` to a looser level (`ask`, then `read`, then `assisted`, then `all`), `access.allBots` switched on (every bot can use every project, and the grant of each bot no longer limits it), and `teamwork` switched on (a bot can bring other bots into a chat). `preferences set` shows what the new value gives, and needs your yes. With no terminal it fails and names `--yes`. What the value gives is printed on standard error also with `--yes` and with `--json`, so a person who reads the output sees it. A change that gives nothing more needs no yes: a tighter level, or one of these switches turned off. The iMessage and Mail tools are not a preference: they have their own command, `mac-tools`.
+- **The call of the service has the same rule.** `preferences.set` refuses each of those changes unless the call carries `{ "agreed": true }` after the value, the mark of a caller that showed the person what it gives and got a yes. The command line gives it after your yes. A caller that is not the command line gives it only for the person.
+- **`usage show` has the totals and the rows by model and by bot.** `--days` is 7, 30 or 90, and 30 is the usual. With `--json` it also has the numbers for each day. `usage export` writes one CSV row for each turn to standard output, or to the file of `--output`. A new file can be read by you only. A file that is there already is replaced only after your yes (`--yes` with no terminal). The plans and limits of the model providers are `botkins providers`.
+- **`cache show` and `cache clear`.** The cache holds the bot menus that a chat offers when you type `/`, and the window's cache. This host has no window, so its cache is 0 bytes. `cache clear` asks first, and needs `--yes` with no terminal. The menus are built again at their next use.
+- **`mac-tools` lets bots use iMessage and Mail, on a Mac only.** `botkins mac-tools status` shows the level of each tool (`off`, `read` or `interact`), whether the `imsg` program is installed, and which permissions macOS has given. `botkins mac-tools set <tool> <level>` changes one level. `on` is the same as `read`. A level that gives bots more than the one now shows what it gives first, on standard error also with `--yes` and with `--json` (the tools that bots get, and the program that Botkins runs: `imsg` for iMessage, `/usr/bin/osascript` for Mail), and needs your yes. With no terminal it fails and names `--yes`. The call `macTools.set` refuses such a level unless it carries `{ "agreed": true }` after the level, as `preferences.set` does. Off, and a lower level, need no yes. On a computer that is not a Mac the app's own answer is passed on as it is: `status` says that the tools work on a Mac only, and a level above `off` is refused with that sentence, with no question first.
+- **`preferences harnesses` shows what can run a bot's turn.** The choice is the preference `harness`: `copilot` (one harness for every plan, the usual choice), `provider` (each provider's own tool) or `pi` (the Pi program). The command shows each choice and which one is set, and for each program that is a harness of its own (Pi) whether it is installed. Change the choice with `botkins preferences set harness <choice>`; `botkins providers install pi` installs the program.
+- The log has `preferences.set` with the key, `cache.clear`, and `macTools.set` with the tool. Some lines also say the new value, because it says how many questions bots ask or how much room they have: `preferences.set approval to all`, `preferences.set access.allBots to on`, `preferences.set teamwork to on`, and `macTools.set mail to read`. No other line has a value.
 
 ### Credentials, the vault, password managers and the rest of a provider
 
-The commands for this part come in a later change.
+Botkins keeps three kinds of secret on this computer. These commands show that each exists, and never its value.
+
+- **Saved credentials** (`botkins credentials`): a key, a login or a note that you saved. A phone keeps the same list.
+- **The vault** (`botkins vault`): the keys, header values and sign-ins of your tools, and the token that `providers login --token` kept.
+- **Password managers** (`botkins password-managers`): 1Password, Bitwarden and Proton Pass, which a saved credential can be read from.
+
+```sh
+printf '%s' "$GITHUB_TOKEN" | botkins credentials save "GitHub token" --website github.com
+botkins credentials list
+botkins credentials check "GitHub token"
+printf '%s' "$NEW_TOKEN" | botkins credentials edit "GitHub token" --yes
+botkins credentials remove "GitHub token" --yes
+botkins vault list
+botkins vault remove "files · API_KEY" --yes
+botkins password-managers list
+botkins providers usage
+botkins providers install codex
+botkins providers disconnect opencode anthropic --yes
+```
+
+- **A value is never a word on the command line.** `credentials save` and `credentials edit` read the value from a hidden question at a terminal, or from standard input. A command line shows in the process list and in the shell's history. A value as a word, as an option, or in an environment variable is not taken. The command refuses it and does not repeat it.
+- **No command, and no call of the service, gives a value back.** A list has the name, the kind, where it is read from, the website and the time. It does not have the value, the user name or the notes. `--json` has the same. The log does not have a value either: it has the call and the name (`credentials.save GitHub token`).
+- **The socket cannot know that a person is there.** Whoever connects is the owner, and that is also a bot's shell. So a call that reaches a secret which the caller cannot read by itself, or that sends such a secret somewhere, is not for the socket. It stays where a person is known to be there: the window, or a phone with its owner check.
+- **A saved credential gets a new value from here, and nothing else.** `credentials edit <credential>` asks first (`--yes` with no terminal), then takes the new value from a hidden question or from standard input. It has no option for a name, a website, a kind, a user name or a note, and the service refuses each of those fields for a credential that exists. A new label on a real secret could make a person pick it by mistake later. Another name, website or kind is set in the app's window or on a paired phone. From here, remove the credential and save it again. `credentials save` of a new credential, with a name that is not taken, keeps its fields.
+- **A reference is refused.** A caller on the socket gives a value that it has. It cannot send a saved credential to a place that it chooses, so a `{ "$credential": … }` anywhere in these calls is refused. You choose a saved credential in the window or on a phone.
+- **A name or an id.** A saved credential, a vault entry, a password manager and a model service are named by id, or by name when only one has it. When more than one has the name, the command lists the ids. A name is a name: `credentials save` refuses a name that is taken, so that a name always means one credential.
+- **`credentials check` reads a value on this computer and drops it.** It says whether the value can be read now. A credential that is read from a password manager asks that manager's command-line tool for it. The exit code is 1 when it cannot be read.
+- **Removing shows what goes, and asks first.** `credentials remove` and `vault remove` write to standard error, also with `--yes` and with `--json`, the name of what goes, its kind and where it is used (never a value). `credentials remove`, `vault remove` and `providers disconnect` ask, and with no terminal they need `--yes`. Each leaves a line in the log with its name. `credentials remove` of a credential that is read from a password manager takes away the link only. The value stays in the manager.
+- **The socket's own calls need the mark.** `credentials.edit`, `credentials.remove`, `credentials.vaultRemove`, `credentials.vaultReset` and `providers.disconnectService` refuse unless they carry `{ "agreed": true }` as the last argument. The commands give it after the yes. A caller that is not the command line gives it only for the person. `voice.key` needs it to replace or remove a key that is saved.
+- **The reset of the vault needs one more flag.** Only a vault that this computer cannot open can be reset (for example, its key is on another computer, or the file is damaged). Every key and sign-in in it is then lost to Botkins and has to be entered again. The command first shows that, with how many there are of each kind. Saved credentials are kept apart and stay. The old file is set aside, renamed `vault.unreadable-<time>.json`, and not deleted. `botkins vault reset` says this and asks at a terminal. With no terminal it needs `--yes --erase-all-saved-secrets`, and `--yes` alone is refused. A vault that opens needs no reset, and the command says so. The log line says that the vault was reset.
+- **A provider's tool is installed with its own command.** `botkins providers install <provider>` shows the exact command (`npm install -g @openai/codex`, for example) and asks. It runs in a shell on this computer, as the user that runs Botkins. With no terminal it needs `--yes`. The command comes from the provider: a caller cannot give another, and the service refuses a command other than the one it showed. What the command prints is shown as it runs, and `--json` gives it in `output`. It is for macOS and Linux.
+- **What is covered by other commands.** `botkins providers login` signs a provider in with its own sign-in, with a pasted token (`--token`, from a hidden question or standard input), or, for OpenCode, with a model service's key or sign-in (`--service`, `--method`). `botkins providers logout` signs it out. `botkins providers usage [<provider>]` shows each connected provider's plan and what is left of its limits. It has no token, email or account id.
+- **Not in the command line: unlocking a password manager, and what is in one.** The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone." So the master password of a manager, its vaults, its items and its fields, and the linking of a field to a saved credential stay in the window and on a paired phone. After an unlock, every caller of the socket (a bot's shell too) would be able to list what is in the manager, and a caller could save a field of it as a credential with a name that it chose. `botkins password-managers list` shows each manager's state, and `lock` locks one. Two more rules follow from that sentence. They are its working-out, not his words: a saved credential gets no new label from the socket, and `voice set` takes no address without its key.
 
 ### Voice
 
-The commands for this part come in a later change.
+```sh
+botkins voice show
+botkins voice options tts elevenlabs
+botkins voice set --tts openai --tts-voice alloy
+botkins voice set custom --address https://speech.example.com/v1
+echo "$OPENAI_KEY" | botkins voice key openai
+```
+
+- **A voice key is a secret.** `botkins voice key <provider>` takes the key from a hidden question at a terminal, or from standard input. It is never a word on the command line, never printed, and never in the log: the log names the provider only. `botkins voice show` says which providers have a key, never the key. Replacing or removing a saved key needs your yes (`--yes` with no terminal). The providers are `openai`, `azure`, `elevenlabs`, `gemini` and `custom`.
+- **`voice set` changes the choices.** It sets the provider, model, voice, language and speed of speech to text (`--stt`), text to speech (`--tts`) and live voice (`--live`).
+- **`voice set <provider> --address <url>` sets the address of a provider, and takes its key with it.** The providers that have an address are `openai`, `azure` (its endpoint) and `custom`. A key is for the address that it was given for, so the app removes the key that is saved for a provider whenever its address is set, changed or taken away (`--address ""`). The command shows that first, on standard error also with `--yes` and with `--json`: "The key that is saved for <provider> is removed. A key is for the address that it was given for. The command asks for the key for the new address next." It asks (`--yes` with no terminal). It sets the address, and then takes the key for it from a hidden question at a terminal, or from standard input. With no terminal and no key on standard input, the address is set, the provider has no key, and the command says so and names `botkins voice key <provider>`. An address is set on its own, not with the other options.
+- **The call of the service has the same rule.** `voice.set` takes `providers` (the address of a provider) only when the call carries `{ "agreed": true }` after the choices, the mark of a caller that showed the person that the key goes and got a yes. Any other field that is, or could be, an address (`baseUrl`, `endpoint`, `host`, `region`) is refused. A caller with no mark could choose where the next key goes.
+- **`voice options <kind> <provider>` can start a request with the saved key.** The kind is `stt`, `tts` or `live`. The lists of `openai`, `gemini`, `device` and (for speech to text) `elevenlabs` are built in, and no request is made. For the others this computer asks the provider, with the key that is saved for it: `elevenlabs` at `api.elevenlabs.io` (its voices, and for `tts` its models), `azure` with Speech at the endpoint or region that the app saved, and `custom` at the server address that the app saved. For `live codex` the Codex program on this computer lists its voices. The caller gives no address: it is always the one that the app saved.
+- The log has `voice.set` with the names of the sections that changed (`stt`, `tts`, `live`) and the provider of an address that changed (`openai address`), and `voice.key` with the provider. It never has a choice, an address or a key. `voice options` and `voice show` leave no line.
+
+### Spaces and panels
+
+A **space** is a named page of panels and cards on this computer. Every person has four: Today, Feed, Ideas and Goals. A **panel** is a page that a bot publishes in a space and refreshes: text, numbers, lists, tables, bars, or a custom view. An app panel also keeps a saved state and notes that people write. A **card** is a post of a bot in Feed, Ideas or Goals. From a terminal you are the owner: you see and change every space on this computer, also one that a team member made.
+
+```sh
+botkins spaces list
+botkins spaces add "Reading"
+botkins spaces show Reading
+botkins panels new --space Reading --bot Nova --start checklist --refresh weekdays --at 07:30 "Books I want to read this month"
+botkins panels list --space Reading
+botkins panels show "Books I want to read"
+botkins panels routine set "Books I want to read" --cadence weekly --days mon --at 09:00 --file refresh.md
+botkins panels refresh "Books I want to read"
+botkins panels move "Books I want to read" Today --before "Weather"
+botkins panels set-state "Books I want to read" done '["Dune"]' --label "finished a book"
+botkins panels note "Books I want to read" "Ask Sam for the next one"
+botkins spaces ask Reading --bot Nova --panel "Books I want to read" "What is new in this panel?"
+botkins cards list --kind idea
+botkins cards act "Learn to bake" yes
+botkins spaces remove Reading
+```
+
+- **A space is named by its name or its id.** A name is looked for among your own spaces first (every person has a Today), and another person's space is found by its id (`spaces list` shows it). A panel is named by its title or its id, and `--space` narrows a title that two spaces share. A card is named by its title or its id. When more than one matches, the error says which.
+- **`spaces remove` shows what goes, and asks.** It deletes the space, each panel in it with its routine, its custom views and its notes, the chat of updates of each panel, and its cards. With no terminal it needs `--yes`. `panels remove`, `panels routine remove`, `panels remove-note` and `cards act <card> delete` ask in the same way. Today, Feed, Ideas and Goals cannot be renamed or deleted.
+- **Four commands start a turn of a bot's model, which can cost money:** `panels new`, `spaces ask`, `panels ask` and `panels refresh`. None of them waits. Each prints the chat's id, and the work goes on in that chat (`botkins chats show <chat>`). A panel appears in the space when its bot publishes it.
+- **A panel's routine runs its bot on a schedule, with nobody watching.** `panels routine set` and `panels new --refresh` show the routine as it will be (the bot, the schedule in words, the time zone, the next two times, and the prompt) and ask. The text goes to standard error with `--yes` and with `--json` too. With no terminal the command fails and names `--yes`. A schedule that runs more often than every 15 minutes (the limit of a bot's own routine tool) has one more line, the cost: each run uses one model turn. The socket refuses such a schedule unless the call carries `{ fastSchedule: true }`. `panels routine resume` asks in the same way for a schedule like that. `panels routine pause` stops a routine and keeps it. `panels routine remove` removes the prompt too, so it asks.
+- **A schedule is a kind with its fields:** `daily` or `weekdays` (`--at`), `weekly` (`--at` and `--days mon,wed`), or a cron line. `panels routine set` takes `--cadence` or `--cron`; `panels new` takes `--refresh daily` or `--refresh "0 9 * * 1-5"`. A panel's routine repeats, so there is no one-time kind. `--timezone` is as for routines. The prompt of `panels routine set` is a long text: `--prompt`, `--file`, or `-`.
+- **`panels set-state` is your own change to an app panel's saved state:** a key and a value (JSON when it is JSON, text when it is not, and `null` or `--remove` takes the key away), or a JSON object of keys with `--file`. It shows as the panel's last line, with `--label` if you give one. The host allows ten changes at once, then one a second. **`panels note`** writes a note (2,000 characters at most, 50 on a panel; five at once, then one every five seconds). `panels remove-note` takes a note by its id or its number in `panels show`; the owner can remove any note. It cannot be got back, so it shows the note and asks (`--yes` with no terminal).
+- **A card answer is what the card's buttons do:** `cards act <card> read`, `done`, `clear`, `yes` (an idea: Let's do it), `goal <category>` (an idea becomes a goal), `notToday` (a goal), `up`, `down <reason>`, `delete`. The bot reads the answers to learn what helps.
+- **What others wrote is made safe on a screen:** a space's or a panel's name, a panel's content, a note, a card. A control character is written as its number. `--json` has the text as it is, with each panel's blocks as the bot published them.
+- The log has one line for each change: the space's name for a space, and the id for a panel or a card, never a title (a title is the bot's text). It never has a note, a value of a state, a routine's prompt or a message. A fast routine says so (`<id> (each 5 minutes)`). Sharing a space and the team have their own parts below.
+
+### Sharing a space
+
+A **space** is a page of panels. It is private until its maker shares it: with people the maker picks, with all members, or with anyone who has a **link**. These commands are the owner's own view, so `sharing list` shows every space of this computer, the spaces of members too. A space is named by its name or its id.
+
+```sh
+botkins sharing list
+botkins sharing show Launch
+botkins sharing set Launch --view Avery --edit Blake
+botkins sharing set Launch --all-members --can view
+botkins sharing link Launch
+botkins sharing link Launch --off
+botkins sharing links on
+botkins sharing order Goals Launch
+botkins sharing notify Launch daily
+```
+
+- **A link is a secret that is made to be handed on.** Anyone who has it can see everything on the space, with no sign-in. They can't change it. `sharing link` makes it and prints it on standard output, and nothing else does: `sharing list`, `sharing show` and `--json` say that a space has a link, and not what it is. The log names the space and `(link)`, never the link. `botkins sharing link <space> | pbcopy` keeps it off the screen. A space that has a link prints the one it has. `--new` makes another and the old one stops working. `--off` makes the space private, and the link stops working. A link needs the relay to be on (`botkins relay on`).
+- **Three changes make a space visible to more people, and each asks first:** a link (and `--new`), a space shared with all members (`sharing set --all-members`), and the team's switch that lets members make links (`sharing links on`). Each prints what it opens, and to whom, then asks. With no terminal it needs `--yes`, and the refusal names the flag. The block goes to standard error also with `--yes` and `--json`. The service's own call refuses these three unless the caller says that it agreed, so a program on the socket cannot go round the question. Narrower changes (private, people you pick, `links off`) ask nothing.
+- **`sharing set --view` and `--edit` name every person who can open the space.** The list replaces the one the space had. The maker needs no mention. The app refuses a member whose role cannot open spaces. A space that was shared by link and gets another level loses its link.
+- **`sharing links off` leaves the links that exist.** Members can not make new ones. Take one away with `sharing link <space> --off`. This copy of Botkins can set the switch and cannot read it, so `botkins sharing links` with no word says that it can only set it, with `on` or `off`.
+- **The order, the pins and Notify me are the owner's own.** `sharing order` puts the spaces you name first, in your order. `sharing pin` and `sharing unpin` change the pins. `sharing notify` is off, daily or all.
+- **No command says that you opened a space or look at it now.** Those are what the window and the phone send as a space comes into view. A terminal is no device.
+
+### The team
+
+A **team** is the people who use this computer's Botkins with you. A person joins with an **invite** and you approve them. A **member** is in one **group**, and a group has one **role**. A role says which rights its members have (`agents`, `today`, `skills`, `mcp`, `plugins`, `settings`, each with actions such as `view`, `chat`, `manage`) and which bots they see. The phone link keeps the team; the window's Team page and these commands change the same thing.
+
+```sh
+botkins team show
+botkins team roles save --name Reviewer --from Guest --allow today.use --all-bots
+botkins team groups save --name Reviewers --role Reviewer
+botkins team invite --group Reviewers --days 7 --uses 1
+botkins team requests list
+botkins team requests approve Sam
+botkins team members move Sam Admins
+botkins team members remove Sam
+botkins team chat invite "Launch plan" Sam
+```
+
+- **`team invite` prints the code and the link once, and nothing else does.** An invite's code is like a secret that is made to be handed on: whoever has it can ask to join. The command prints it in its answer (`--json` has `code` and `link`). `team show`, `team invites list` and the other lists give the invite's id, group, status, uses and end time, never the code or the link. The log names the invite by its id. To end an invite, `team invites revoke`. With the relay off, a typed code cannot find this computer: the answer says so, and the link works only where this computer can be reached.
+- **An approval is always needed.** A code only lets a person ask. `team requests list` shows who waits, and `team requests approve` lets them in, in the group of the invite or the group named with `--group`. It shows who asks, the group, the role's rights and the bots they see, and asks (`--yes` with no terminal). `team requests deny` asks too.
+- **A role that gives more room asks.** `team roles save` shows the role as it will be, and what changes against the role as it is, on standard error. A role that gets more rights or more bots, and a new role that has any, asks (`--yes` with no terminal). A change that only takes away asks nothing. Name a right as `<scope>.<action>`, such as `agents.chat`; `<scope>.all` and `all` give more; `--deny` of the first right of a scope (`view`, `read`) takes the whole scope, because the other rights need it. `--file` takes the same as JSON: `{ "name": …, "perms": { "agents": ["view", "chat"] }, "allow": […], "deny": […], "bots": "all" }`. `help team roles save` lists the rights.
+- **A group or a member that moves to more room asks too.** `team groups save --role`, `team members move` and `team groups remove --move-to` show what is added when the new role has more than the old one. A move to less asks nothing.
+- **Removes ask, and a remove takes a whole name or an id.** `team members remove` says what the member loses: their devices and their sessions at once, their place in chats, and that they need a new invite and an approval to come back. `team roles remove`, `team groups remove` and `team invites revoke` ask too. A role that a group has cannot be removed. The group Everyone cannot be removed. Other names are found as in the other commands: id, exact name, then the start of a name when only one has it.
+- **The socket's own call needs the mark.** `team.saveRole`, `team.saveGroup`, `team.moveMember`, `team.removeGroup` (when the move gives more), `team.approve`, `team.deny`, `team.revokeInvite`, `team.removeRole`, `team.removeMember` and `team.inviteToChat` refuse unless they carry `agreed: true`, which the commands give after the yes.
+- **The people in a chat.** `team chat list <chat>` shows who started a chat and who was invited. `team chat invite` and `team chat remove` change it. An invite makes the whole chat visible to one more person, so it shows who and which chat and asks (`--yes` with no terminal), and `team.inviteToChat` needs `agreed: true`. A person whose role cannot use the chat's bot cannot be invited: the link says so. The log names the chat's id and the person's id.
+- **The log has ids, never names.** A member's name is what a person typed when they asked to join, so a log line has the member's, role's, group's, invite's or request's id.
 
 ## Pair a phone
 
@@ -498,7 +643,36 @@ To encrypt the host key to this machine, add `--encrypted-key`. systemd then use
 botkins tui
 ```
 
-The dashboard shows the service, the paired devices, the bots, the recent chats and runs, the routines and the log. Use the keyboard for everything. Press `?` to see the keys and `q` to quit.
+The dashboard shows the service, the paired devices, the bots, the recent chats and runs, the routines and the log. Use the keyboard for everything. Press `?` to see the keys and `q` to quit. It needs a terminal of 80 columns and 24 lines or more. It uses no mouse, and it draws no color when `NO_COLOR` is set (a `>` marks the selected row, and `[ ]` marks the open list). With no terminal, or with `--json`, `botkins tui` refuses and says to use the other commands.
+
+The six tabs (`1` to `6`) are the first screens of the dashboard. Each has a few one-key edits, listed at the bottom of the screen. The tabs show the service, devices, bots, chats, routines and log as they are now.
+
+### Every command, from the dashboard
+
+Press `:` on any tab to open the commands screen. This screen is a way in to the commands. It is not a second copy of them: the commands keep every rule.
+
+```text
+:            open the commands screen
+enter        open the area, then the commands of the area, then one command
+tab          in an area: switch between its state and its commands
+r            in an area: read its state again
+esc          back one step
+```
+
+- **The areas.** The first screen lists the words of the command line, each with its summary. The dashboard reads them from the command tree, the same tree that `botkins help --json` prints. A new command shows here with no change in the dashboard. The screen leaves out `tui` (this screen) and `serve` (it runs the service in the foreground and never ends).
+- **The state of an area.** For an area with a list command (`bots list`, `chats list`, `routines list`, `projects list`, `plugins list`, `tools list`, `skills list`, `devices list`, `providers list`, `templates list`, `wiki tree`, and the same command of each other area that has one), the dashboard runs that command with `--json` and draws the rows. The text is made safe before it is drawn. The dashboard has no second reading of the workspace: what the list command says is what you see. The list reloads when something changes.
+- **A change runs the named command.** Pick a command in an area. The screen shows its usage and options, and a line with the command written out, ready to change. If you picked a row in the state list first, the line has its name in the place of the first word (`bots remove Scout`). You write the options yourself. Press `enter` to run the line.
+- **What happens when it runs.** The dashboard leaves its screen. The command runs in the same terminal, as if you had typed it in the shell, and it has the terminal as its terminal: a command that asks, asks; a hidden question stays hidden; what a command shows before a yes is shown. The dashboard shows the exit code when the command ends, and a key brings the dashboard back with the state read again.
+- **The dashboard never answers for you.** It never adds `--yes` or any other flag, and it never answers a question of a command. If a command asks, you answer at the terminal, and a "no" changes nothing. If you write `--yes` in the line, that is your own yes.
+- **Words in the line.** The line is split into words like a shell does for quotes: single quotes keep everything, double quotes keep everything but `\"` and `\\`, and a backslash makes the next character plain. Nothing is expanded: there is no `$VARIABLE`, no `~` and no wildcard. A leading `botkins` is dropped.
+
+Left out on purpose:
+
+- **Editors for long texts** (a bot's memory, a wiki page, a prompt, instructions). Use the command with `--file <path>` or standard input, or use the app window.
+- **Screens of its own for a plugin's review.** `botkins plugins install`, `update` and `enable` show what a plugin will run, and ask. They do this the same way when the dashboard runs them.
+- **Charts of usage.**
+
+The one-key edits of the tabs (rename a device, add a bot, run a routine and the others) are older than the commands screen. They ask the service directly and ask their own yes. The commands screen is the way to every other change.
 
 ## Update
 
@@ -658,6 +832,10 @@ A caller that takes an id from a `--json` answer does both always, and then no i
 
 **A change leaves a line in the log.** Each call that changes something writes one line when it is done: `Changed from the command line: bots.edit Nova`. The line names the call and the thing. It never has a value. Thus a person can see afterwards (`botkins logs`) what an agent changed.
 
+**A bot of this host has a skill for this.** The built-in skill `use-botkins` (`desktop/desktop/skills/use-botkins/SKILL.md`) teaches a bot this part of the guide: how to find a command, the rule for a yes, the rule for secrets, and what is done in the app's window. A bot is offered it only where its shell can run `botkins` (`reachable()` in `desktop/desktop/terminal/reach.mjs`). Where it cannot, the skill is off for every bot, and the list of skills (`botkins skills list --json`) gives it an `unavailable` field that says it needs the command line on this host. The rule for a yes, in one sentence: the bot runs the command with no `--yes`, shows its person the block as it is, and gives `--yes` (and the revision that was shown) only after they agree.
+
+**Where a bot finds the command.** A bot's shell gets the environment of the process that runs it, and nothing else. When the host starts its control socket, it also makes a launcher, `<data folder>/run/bin/botkins`, and puts that folder at the front of `PATH` for every shell it starts. It sets `BOTKINS_SOCKET` to its own socket, so that the command talks to this host and no other. The launcher runs this installation's own command line with its own Node.js, and works whatever `PATH` the service's unit or job gave. The terminal host (`botkins serve`) does this, and so does the desktop app: its socket is `<the app's data folder>/run/botkins.sock`, mode 0600, with the same calls and the same refusals. It leaves out what only a service has: `stop`, the `config` calls, `relay on` and `relay off`, and `update` (an install). A trial run of the app has no socket, except the workspace container of the two-container host. If the socket cannot start, the app starts without it and writes one line to its log; a bot then has no `botkins` command. `botkins doctor` runs `command -v botkins && botkins status --json` in a shell of its own, as a bot's shell would, and says "A bot's shell: Finds `botkins` at …, and it reaches this service". When a shell lacks the command, or reaches another Botkins, that line fails and says what is missing.
+
 **What an agent can do here.** A program that runs as the service's user is the owner already (see the security model below). These commands give it nothing that it could not do. They make it easy and they put it on record.
 
 ### The rule that keeps the command line complete
@@ -665,12 +843,11 @@ A caller that takes an id from a `--json` answer does both always, and then no i
 What a person can do in the app's window, a person or an agent can do from a terminal, unless it needs the window itself. One table holds this: `desktop/desktop/terminal/coverage.mjs`. Each call that the window can make, and each call of the phone link, has one entry there:
 
 - the command that does it, or
-- one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), it is a phone's own (its notifications, the screen it is shown), or it needs a person at the app (a call that reaches a secret which the terminal cannot read by itself, or sends one somewhere), or
-- the part of the work that still owes its command. This third kind goes away when the last part is done.
+- one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), it is a phone's own (its notifications, the screen it is shown), or it needs a person at the app (a call that reaches a secret which the terminal cannot read by itself, or sends one somewhere).
 
-The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
+Nothing is owed. A new call of the app comes with its command, or with one of these reasons, in the same piece of work. There is no hidden `botkins call <name>`: it went when the last command was written, because nothing was left that a command did not reach. A call that a command covers is done by that command, which shows what it changes and leaves a line in the log. The service has no method `call`, and a request for one gets "The service has no call named call."
 
-`test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason. The test's output says how many calls each part still owes.
+`test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason.
 
 ## Security model
 
@@ -704,12 +881,12 @@ This does not protect against a person who is root on the computer while it runs
 The terminal host has no window and no screen. These features report "… is not available on this host." A phone and the terminal get that sentence, and nothing else fails.
 
 - Viewing and controlling the screen from a phone.
-- Unlocking a password manager, choosing one of its items, and linking a saved credential to a field of it. These are done in the app's window or on a paired phone, because the terminal host's socket cannot know that a person is there.
+- Unlocking a password manager, choosing one of its items, linking a saved credential to a field of it, and using a saved credential by reference. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone." These need a person at the app, because the terminal host's socket cannot know that a person is there.
 - The window of the app: side panes drawn in the app, HTML apps in their own window, the website viewer, and typing a saved credential into a page. A phone still draws side panes itself.
 - File and folder dialogs, opening a file or a link on the computer, and the clipboard. A phone uses the calls that need no dialog.
 - Desktop notifications. A paired phone still gets its notifications.
 - Dictation and live voice in the window of the app. Voice on a phone still works.
-- The iMessage and Mail tools for bots.
+- The iMessage and Mail tools work on a Mac only. `botkins mac-tools status` on another computer says so.
 - Exporting the wiki as a PDF. The zip and HTML exports work.
 - Picture thumbnails of files.
 - Using the Botkins of a different computer from this one.

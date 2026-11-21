@@ -135,6 +135,17 @@ try {
     await assert.rejects(phoneDoes(["--pairing", members, "--call", JSON.stringify([["spaces.read", LAUNCH]])], 8), /revoked|removed|not paired|Timed out/);
   });
 
+  await check("a bot's shell in the workspace container finds the botkins command, and it reaches the workspace", async () => {
+    // What a bot's shell gets (desktop/terminal/reach.mjs): the launcher in the workspace's own folder and its socket. `botkins doctor` asks the workspace for this line.
+    const root = "/var/lib/botkins-workspace";
+    const line = await until("the workspace's control socket", 120, async () => {
+      const { stdout } = await compose("exec", "-T", "-e", "BOTKINS_SOCKET=" + root + "/run/botkins.sock", "workspace", "sh", "-c", root + "/run/bin/botkins doctor --json || true");
+      const found = JSON.parse(stdout).checks.find((entry) => entry.name === "A bot's shell");
+      return found?.ok === true ? found : null;
+    });
+    assert.match(line.detail, /reaches this service/);
+  });
+
   await check("the workspace container keeps nothing of who a space is shared with on disk", async () => {
     // The space was shared three ways above, and the workspace was told each time. None of that is in a file there.
     // (A member's name is: on the note they wrote, as on a message they send. That is the content's own.)

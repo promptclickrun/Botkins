@@ -421,3 +421,23 @@ test("help --json lists the chats commands with usage and options, and a command
   assert.deepEqual(by("aside").arguments.map((argument) => argument.name), ["chat", "question"]);
   for (const command of area.commands) assert.match(command.usage, /^botkins chats /);
 });
+
+test("an answer to a request that waits in a chat leaves a line: the chat, the kind of request, yes or no, and nothing of the text", { skip }, async (t) => {
+  const { client, chatWith, workspace } = await service(t);
+  await client.call("bots.add", { name: "Nova" });
+  const chatId = await chatWith("Nova", "Notes");
+  const chat = workspace.chat(chatId);
+  const ask = (view) => {
+    const pending = workspace.interactions.request(chat, {}, view);
+    const [{ id }] = workspace.interactions.snapshot().slice(-1);
+    return { id, pending };
+  };
+  const permission = ask({ kind: "permission", label: "Run", title: "PRIVATE-TITLE run a command", preview: "PRIVATE-PREVIEW" });
+  assert.deepEqual(await client.call("chat.respond", permission.id, { action: "approve" }), { chatId, kind: "permission", answered: "yes" });
+  assert.deepEqual(await permission.pending, { action: "approve" });
+  const question = ask({ kind: "question", title: "PRIVATE-QUESTION", choices: [], freeform: true });
+  await client.call("chat.respond", question.id, { action: "cancel" });
+  const lines = (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("chat.respond"));
+  assert.deepEqual(lines.map((text) => text.split("Changed from the command line: ")[1]), ["chat.respond " + chatId + " permission yes", "chat.respond " + chatId + " question no"]);
+  assert.equal(lines.join("\n").includes("PRIVATE"), false);
+});

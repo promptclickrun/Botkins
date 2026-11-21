@@ -273,7 +273,7 @@ test("the card names the files that go on to the runtime, and the language serve
     { bots: "Pip", action: "install", id: "files" },
   );
   assert.deepEqual(lines.slice(2, 13), [
-    "Holds: 4 skills, 1 agent, 1 command.",
+    "Holds: 2 skills, 1 agent, 1 command.",
     "Skills:",
     "  recall",
     "  deep/nested",

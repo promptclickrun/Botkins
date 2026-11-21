@@ -2,7 +2,9 @@
 // Nothing here reads a key or writes to a terminal (cli/tui/app.mjs does), so the tests draw a
 // screen of any size from a state of their own and read it.
 import { stripVTControlCharacters } from "node:util";
+import { shownText } from "../../desktop/shown-text.mjs";
 import { ago, duration } from "../output.mjs";
+import { argsOf, cellOf } from "./menu.mjs";
 
 export const TABS = ["Overview", "Devices", "Bots", "Chats", "Routines", "Logs"];
 /** What each tab's keys do, for the line at the bottom and the help. */
@@ -15,11 +17,20 @@ export const KEYS = {
   Logs: [["f", "follow on/off"], ["↑↓ PgUp PgDn", "scroll"]],
 };
 export const GLOBAL_KEYS = [["←→ or 1-6", "tabs"], ["↑↓", "select"], ["?", "help"], ["q", "quit"]];
+/** The keys of the commands screen, for each of its levels. */
+export const MENU_KEYS = {
+  areas: [["enter", "open"], ["↑↓", "select"], ["esc", "back"], ["q", "quit"]],
+  state: [["enter", "commands"], ["↑↓", "select"], ["r", "reload"], ["tab", "commands"], ["esc", "back"], ["q", "quit"]],
+  commands: [["enter", "pick"], ["↑↓", "select"], ["tab", "state"], ["esc", "back"], ["q", "quit"]],
+  command: [["enter", "run"], ["←→", "move"], ["^U", "clear"], ["esc", "back"]],
+};
+/** The key list of the commands screen as it is now. */
+export const menuKeys = (menu) => MENU_KEYS[menu.level === "area" ? (menu.view === "commands" ? "commands" : "state") : menu.level];
 
 const ESC = "\u001b[";
 const style = (code) => (text, on = true) => (on ? ESC + code + "m" + text + ESC + "0m" : String(text));
-export const paint = { bold: style("1"), dim: style("2"), invert: style("7"), green: style("32"), red: style("31"), yellow: style("33"), cyan: style("36") };
-const plain = (colors) => (colors ? paint : Object.fromEntries(Object.keys(paint).map((name) => [name, (text) => String(text)])));
+export const paint = { on: true, bold: style("1"), dim: style("2"), invert: style("7"), green: style("32"), red: style("31"), yellow: style("33"), cyan: style("36") };
+const plain = (colors) => (colors ? paint : { on: false, ...Object.fromEntries(Object.keys(paint).filter((name) => name !== "on").map((name) => [name, (text) => String(text)])) });
 
 /** How many columns a text takes, without its colors. */
 export const width = (text) => stripVTControlCharacters(String(text)).length;
@@ -32,8 +43,11 @@ export function fit(text, columns) {
   return bare.slice(0, Math.max(0, columns - 1)) + "…";
 }
 /** Rows as columns that share the width: the last column takes what is left. */
-function columns(rows, total, { head, selected = -1, c }) {
+function columns(rows, total, { head, selected = -1, c, height }) {
   if (!rows.length && !head) return [];
+  // Without colors the selected row cannot be inverted, so a mark in a gutter shows it.
+  const gutter = !c.on && selected >= 0 ? 2 : 0;
+  total -= gutter;
   const all = head ? [head, ...rows] : rows;
   const count = Math.max(...all.map((row) => row.length));
   const widths = [];
@@ -44,10 +58,16 @@ function columns(rows, total, { head, selected = -1, c }) {
     widths.push(Math.max(0, given));
     left -= widths[column];
   }
-  const line = (row) => row.map((cell, column) => fit(cell ?? "", widths[column])).join("");
+  // A cell that is cut leaves two columns of room before the next one.
+  const line = (row) => row.map((cell, column) => (column < count - 1 && width(cell ?? "") > widths[column] - 2 && widths[column] > 3 ? fit(fit(cell, widths[column] - 2), widths[column]) : fit(cell ?? "", widths[column]))).join("");
   const out = [];
-  if (head) out.push(c.dim(line(head)));
-  rows.forEach((row, index) => out.push(index === selected ? c.invert(line(row)) : line(row)));
+  if (head) out.push(c.dim(" ".repeat(gutter) + line(head)));
+  // With a height, a long list shows the part that holds the selected row.
+  const room = height ? Math.max(1, height - out.length) : rows.length;
+  const start = Math.max(0, Math.min(rows.length - room, selected - Math.floor(room / 2)));
+  rows.forEach((row, index) => {
+    if (index >= start && index < start + room) out.push(index === selected ? c.invert((gutter ? "> " : "") + line(row)) : " ".repeat(gutter) + line(row));
+  });
   return out;
 }
 
@@ -121,6 +141,61 @@ const tabLines = {
 };
 const runStatus = (status, c) => (status === "Completed" ? c.green(status) : status === "Working" ? c.cyan(status) : status === "Stopped" ? c.dim(status) : c.red(status));
 const logLine = (entry, total, c) => fit(c.dim(String(entry.time).slice(11, 19)) + " " + (entry.level === "error" ? c.red("error ") : "") + entry.text, total);
+/** The commands screen: the areas of the command line, one area with its state and its commands, one command with its line. */
+function menuLines(menu, room, c, now) {
+  if (menu.level === "areas") return [c.bold("Commands") + c.dim("  each area of the command line; enter opens one"), ...columns(menu.areas.map((area) => [area.word, area.summary]), room.width, { selected: menu.selected, c, height: room.height - 1 })];
+  const area = menu.areas.find((entry) => entry.word === menu.word);
+  const head = c.bold(area.word) + "  " + area.summary;
+  if (menu.level === "area") {
+    const views = [["State" + (menu.list ? " (botkins " + menu.list.path.join(" ") + ")" : ""), "state"], ["Commands", "commands"]].map(([name, view]) => (menu.view === view ? c.invert(c.on ? " " + name + " " : "[" + name + "]") : " " + name + " ")).join("");
+    const top = [head, views];
+    const height = room.height - top.length;
+    if (menu.view === "commands") return [...top, ...columns(menu.leaves.map((leaf) => [leaf.name, leaf.summary]), room.width, { selected: menu.picked, c, height })];
+    const { data } = menu;
+    if (!menu.list) return [...top, c.dim("This area has no list of its own. Press tab to see its commands.")];
+    if (!data || data.loading) return [...top, c.dim("Asking the service…")];
+    if (data.error) return [...top, c.red(shownText(data.error))];
+    const extras = data.extras.map(([key, text]) => c.dim(key ? key + "  " : "") + text);
+    if (!data.rows.length) return [...top, ...extras, c.dim("Nothing is here yet.")];
+    // As many columns as fit: each is as wide as its longest cell, up to 28, and the last takes the rest.
+    const shown = [];
+    let used = 0;
+    for (const key of data.keys) {
+      const wide = Math.min(28, Math.max(key.length, ...data.rows.map((row) => cellOf(key, row[key], now).length))) + 2;
+      if (shown.length && used + wide > room.width - 2) break;
+      shown.push(key);
+      used += wide;
+    }
+    return [...top, ...extras, ...columns(data.rows.map((row) => shown.map((key) => cellOf(key, row[key], now))), room.width, { head: shown.map((key) => key.toUpperCase()), selected: menu.row, c, height: height - extras.length })];
+  }
+  // One command: what it is, then the line to run, with the cursor in it.
+  const { leaf, line } = menu;
+  const { command } = leaf;
+  const info = [c.bold("botkins " + leaf.path.join(" ")) + "  " + command.summary, "", ...wrap("Usage: " + (command.usage ?? "botkins " + leaf.path.join(" ")), room.width)];
+  const asks = command.asks ?? (command.options?.yes ? "--yes" : "");
+  if (asks) info.push("", c.yellow("It asks first. Its question comes on this terminal, and you answer it."));
+  const options = Object.entries(command.options ?? {});
+  if (options.length) {
+    info.push("", c.bold("Options"));
+    for (const [name, spec] of options) info.push(...wrap("  --" + name + (spec.type === "string" ? " <" + (spec.value ?? "value") + ">" : "") + "  " + (spec.about ?? ""), room.width));
+  }
+  if (command.details) info.push("", ...String(command.details).split("\n").flatMap((part) => wrap(part, room.width)));
+  const rows = room.height - 3;
+  const out = info.length > rows ? [...info.slice(0, rows - 1), c.dim("… more with `botkins help " + leaf.path.join(" ") + "`")] : info;
+  while (out.length < rows) out.push("");
+  out.push(menu.last ? c.dim("Last run: " + shownText(menu.last.words) + " ended with exit code " + menu.last.exit + ".") : "");
+  const prefix = "botkins ";
+  const space = Math.max(5, room.width - prefix.length - 1);
+  // The part of the line that holds the cursor, when the line is longer than the screen.
+  const from = Math.max(0, Math.min(line.cursor - space + 1, line.text.length - space + 1));
+  const text = shownText(line.text.slice(from, from + space));
+  const at = line.cursor - from;
+  // With no colors, a bar marks the cursor.
+  const typed = c.on ? text.slice(0, at) + c.invert(text[at] ?? " ") + text.slice(at + 1) : text.slice(0, at) + "|" + text.slice(at);
+  out.push(c.bold(prefix) + typed);
+  return out;
+}
+
 /** A long line as several, cut at spaces where it can be. */
 export function wrap(line, total) {
   if (width(line) <= total || total < 8) return [line];
@@ -149,18 +224,19 @@ export function render(state, size, { colors = true } = {}) {
   const rows = Math.max(8, size.height);
   const { status } = state;
   const title = status ? c.bold("Botkins " + status.version) + "  " + status.link.name + "  " + c.green("running") + " " + duration(status.uptimeSeconds) + "  " + status.memory.rssMb + " MB" : state.offline ? c.bold("Botkins") + "  " + c.red("not running") : c.bold("Botkins");
-  const tabs = TABS.map((name, index) => (name === state.tab ? c.invert(" " + (index + 1) + " " + name + " ") : " " + (index + 1) + " " + name + " ")).join("");
+  const tabs = TABS.map((name, index) => (name === state.tab && !state.menu ? c.invert(" " + (index + 1) + " " + name + " ") : " " + (index + 1) + " " + name + " ")).join("") + (state.menu ? c.invert(" : Commands ") : c.dim("  : commands"));
   const top = [fit(title, columnsWide), fit(tabs, columnsWide), c.dim("─".repeat(columnsWide))];
   // The bottom: a question being answered, else what just happened, and the keys.
-  const keys = [...(KEYS[state.tab] ?? []), ...GLOBAL_KEYS].map(([key, what]) => c.bold(key) + " " + what).join("  ");
+  const keys = (state.menu ? menuKeys(state.menu) : [...(KEYS[state.tab] ?? []), ...GLOBAL_KEYS]).map(([key, what]) => c.bold(key) + " " + what).join("  ");
   const note = state.prompt ? c.bold(state.prompt.question + " ") + state.prompt.value + c.invert(" ") : state.error ? c.red(state.error) : state.message ? c.green(state.message) : "";
   const bottom = [c.dim("─".repeat(columnsWide)), fit(note, columnsWide), fit(keys, columnsWide)];
   const room = { width: columnsWide, height: rows - top.length - bottom.length };
   let body;
-  if (state.offline) body = ["", "Botkins is not running on this data folder.", "", "Start it with `botkins service start`, or `botkins serve` in another terminal.", c.dim("This screen comes back by itself when the service answers.")];
+  if (state.menu && !state.help) body = menuLines(state.menu, room, c, state.now);
+  else if (state.offline) body = ["", "Botkins is not running on this data folder.", "", "Start it with `botkins service start`, or `botkins serve` in another terminal.", c.dim("This screen comes back by itself when the service answers.")];
   else if (state.help)
     // One line for each tab, so the whole list fits a small terminal.
-    body = [c.bold("Keys"), "", ...Object.entries(KEYS).map(([tab, list]) => fit(tab, 11) + list.map(([key, what]) => c.bold(key) + " " + what).join("   ")), "", fit("Everywhere", 11) + [...GLOBAL_KEYS, ["esc", "close this, or cancel a question"]].map(([key, what]) => c.bold(key) + " " + what).join("   ")].flatMap((line) => wrap(line, columnsWide));
+    body = [c.bold("Keys"), "", ...Object.entries(KEYS).map(([tab, list]) => fit(tab, 11) + list.map(([key, what]) => c.bold(key) + " " + what).join("   ")), "", fit("Everywhere", 11) + [...GLOBAL_KEYS, [":", "commands: every command of the command line"], ["esc", "back, or cancel a question"]].map(([key, what]) => c.bold(key) + " " + what).join("   ")].flatMap((line) => wrap(line, columnsWide));
   else if (state.overlay) body = state.overlay.lines;
   else body = tabLines[state.tab](state, room, c);
   const shown = body.slice(0, room.height).map((line) => fit(line, columnsWide));

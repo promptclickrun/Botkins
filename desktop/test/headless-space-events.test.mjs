@@ -64,7 +64,7 @@ test("the answer of `state` carries the events once, and only when there are som
   actions.unsubscribe();
 });
 
-test("the link's side hands each event to its listener once, in order, and drops what it must", async () => {
+test("the link's side hands each event to its listener once, in order, and takes at most 20 at a look", async () => {
   const heard = [];
   const { queue, refresh, actions } = sides({ spaceEvent: (one) => void heard.push(one) });
   await refresh();
@@ -74,14 +74,20 @@ test("the link's side hands each event to its listener once, in order, and drops
   assert.deepEqual(heard.splice(0), [event(0), event(1), event(2)], "in order");
   await refresh();
   assert.deepEqual(heard, [], "once");
-  // More than the queue holds (50) and more than one look takes (20): the newest 50 wait, the first 20 of those are handed over, the rest are dropped.
+  // More than the queue holds (50) and more than one look takes (20): the newest 50 wait, one look takes the first 20 of those, and the next looks take the rest.
   for (let n = 0; n < QUEUE_LIMIT + 5; n++) queue.add(event(n));
   await refresh();
   assert.equal(heard.length, LOOK_LIMIT);
   assert.deepEqual([heard[0].label, heard.at(-1).label], ["Change 5", "Change " + (4 + LOOK_LIMIT)]);
   heard.length = 0;
   await refresh();
-  assert.deepEqual(heard, [], "what was dropped is not told on the next look");
+  assert.deepEqual([heard.length, heard[0].label, heard.at(-1).label], [LOOK_LIMIT, "Change " + (5 + LOOK_LIMIT), "Change " + (4 + 2 * LOOK_LIMIT)], "the next look takes the next 20");
+  heard.length = 0;
+  await refresh();
+  assert.deepEqual([heard.length, heard[0].label, heard.at(-1).label], [QUEUE_LIMIT - 2 * LOOK_LIMIT, "Change " + (5 + 2 * LOOK_LIMIT), "Change " + (QUEUE_LIMIT + 4)], "then the rest");
+  heard.length = 0;
+  await refresh();
+  assert.deepEqual(heard, [], "told once");
   actions.unsubscribe();
 });
 

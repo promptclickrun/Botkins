@@ -1,7 +1,7 @@
 // The command line stays complete by a test, not by memory (desktop/desktop/terminal/coverage.mjs).
-// Every call the app's window can make, and every call of the phone link, has a command, one
-// reason from a short fixed list, or a part of the work that still owes its command. A new call
-// with none of these fails here. So does a named command that no longer exists.
+// Every call the app's window can make, and every call of the phone link, has a command or one
+// reason from a short fixed list. Nothing is owed, and there is no hidden `call` to reach a call by name.
+// A new call with neither an entry nor a reason fails here. So does a named command that no longer exists.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../cli/main.mjs";
 import { argumentsOf, COMMANDS, describe, find } from "../cli/commands/index.mjs";
-import { CHANGES, LINK, LOGS_ITSELF, PARTS, READS, REASONS, thingForLog, WORKSPACE } from "../desktop/terminal/coverage.mjs";
+import { CHANGES, LINK, LOGS_ITSELF, READS, REASONS, thingForLog, WORKSPACE } from "../desktop/terminal/coverage.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -42,18 +42,17 @@ const command = (words) => {
   const found = find(words.split(" "));
   return found && found.path.join(" ") === words && typeof found.command.run === "function" ? found.command : null;
 };
-/** One entry of the table is exactly one of: a command that exists, a reason from the list, a part that owes it. */
+/** One entry of the table is exactly one of: a command that exists, or a reason from the list. */
 function checkEntry(name, entry) {
-  assert.equal(Object.keys(entry).length, 1, name + " has one of `command`, `reason`, `owed`");
+  assert.equal(Object.keys(entry).length, 1, name + " has one of `command` or `reason` (nothing is owed)");
   if ("command" in entry) assert.ok(command(entry.command), name + " names the command `botkins " + entry.command + "`, which does not exist");
-  else if ("reason" in entry) assert.ok(Object.hasOwn(REASONS, entry.reason), name + " gives a reason that is not in the list: " + entry.reason);
-  else assert.ok(Object.hasOwn(PARTS, entry.owed), name + " is owed by a part that is not in the list: " + entry.owed);
+  else assert.ok("reason" in entry && Object.hasOwn(REASONS, entry.reason), name + " gives a reason that is not in the list: " + entry.reason);
 }
 const missing = (names, table) => names.filter((name) => !Object.hasOwn(table, name));
 const gone = (names, table) => Object.keys(table).filter((name) => !names.includes(name));
 const ADD = "Give it an entry in desktop/desktop/terminal/coverage.mjs: the command that does it, or one of the reasons there.";
 
-test("every call the app's window can make has a command, a reason from the list, or a part that owes it", { skip }, async (t) => {
+test("every call the app's window can make has a command or a reason from the list", { skip }, async (t) => {
   const { client } = await service(t);
   const { workspace, control } = await client.call("methods");
   assert.ok(workspace.length > 200, "the service says what it can do");
@@ -62,18 +61,17 @@ test("every call the app's window can make has a command, a reason from the list
   for (const [name, entry] of Object.entries(WORKSPACE)) checkEntry(name, entry);
   // The service's own calls: each one either changes something, and then leaves a line in the log, or only reads.
   // (A sign-in's calls write their own line when a sign-in is done: LOGS_ITSELF, and test/terminal-signin.test.mjs holds them to it.)
-  const known = [...Object.keys(CHANGES), ...READS, ...LOGS_ITSELF, "call"];
+  const known = [...Object.keys(CHANGES), ...READS, ...LOGS_ITSELF];
   assert.deepEqual(control.filter((name) => !known.includes(name)), [], "These calls of the service are in neither CHANGES nor READS (coverage.mjs). Say which: a change leaves a line in the log.");
   assert.deepEqual(known.filter((name) => !control.includes(name)), [], "CHANGES or READS name calls that the service no longer has.");
   assert.deepEqual(Object.keys(CHANGES).filter((name) => READS.includes(name)), []);
   assert.deepEqual(LOGS_ITSELF.filter((name) => name in CHANGES || READS.includes(name)), [], "a call is in one list only");
-  // The debt, said where a person reads the test's output.
-  const owed = Object.entries({ ...WORKSPACE, ...LINK }).filter(([, entry]) => "owed" in entry);
-  for (const part of Object.keys(PARTS)) t.diagnostic("Part " + part + " owes commands for " + owed.filter(([, entry]) => entry.owed === part).length + " calls: " + PARTS[part] + ".");
-  t.diagnostic("Covered by a command: " + Object.values({ ...WORKSPACE, ...LINK }).filter((entry) => "command" in entry).length + ". With a reason: " + Object.values({ ...WORKSPACE, ...LINK }).filter((entry) => "reason" in entry).length + ". Owed: " + owed.length + ".");
+  // Nothing is owed: an entry says a command or a reason, and `call` is not a method of the service.
+  assert.equal(control.includes("call"), false, "the hidden way to any call by name is gone");
+  t.diagnostic("Covered by a command: " + Object.values({ ...WORKSPACE, ...LINK }).filter((entry) => "command" in entry).length + ". With a reason: " + Object.values({ ...WORKSPACE, ...LINK }).filter((entry) => "reason" in entry).length + ".");
 });
 
-test("every call of the phone link has a command, a reason from the list, or a part that owes it", () => {
+test("every call of the phone link has a command or a reason from the list", () => {
   // The link's own calls, by the names a device makes them with (desktop/link/server.mjs).
   const source = readFileSync(new URL("../desktop/link/server.mjs", import.meta.url), "utf8");
   const names = [...new Set([...source.matchAll(/^\s*"(link\.[A-Za-z.]+)":\s/gm)].map((match) => match[1]))].sort();
@@ -81,7 +79,7 @@ test("every call of the phone link has a command, a reason from the list, or a p
   assert.deepEqual(missing(names, LINK), [], "These calls of the phone link have no entry. " + ADD);
   assert.deepEqual(gone(names, LINK), [], "These entries name calls that the phone link no longer has. Take them out.");
   for (const [name, entry] of Object.entries(LINK)) checkEntry(name, entry);
-  // The fourth, "person", was decided on 2026-11-21 in the thread 'Keep Headless and Desktop in Sync', as the safe side, and the owner agreed to it on 2026-11-21: a call that reaches a secret which a caller of the socket cannot read, or sends one somewhere, stays where a person is known to be there.
+  // The fourth, "person", is for a call that reaches a secret which a caller of the socket cannot read, or sends one somewhere. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone."
   assert.deepEqual(Object.keys(REASONS), ["window", "window's own", "phone's own", "person"], "the reasons are a fixed list: a new one is a decision");
 });
 
@@ -98,7 +96,8 @@ test("`botkins help --json` names every command with its usage, its arguments an
   const walk = (group, path) => Object.entries(group).filter(([, entry]) => !entry.hidden).flatMap(([name, entry]) => (entry.commands ? walk(entry.commands, [...path, name]) : [[...path, name].join(" ")]));
   const listed = all.areas.flatMap((area) => area.commands.map((entry) => entry.command));
   assert.deepEqual(listed, walk(COMMANDS, []));
-  assert.equal(listed.includes("call"), false, "the hidden way to any call is not offered");
+  assert.equal(listed.includes("call"), false, "there is no command that reaches a call by name");
+  assert.equal(find(["call"]), null);
   for (const area of all.areas) {
     assert.ok(area.summary, area.name);
     for (const entry of area.commands) {
@@ -125,7 +124,7 @@ test("`botkins help --json` names every command with its usage, its arguments an
   assert.deepEqual(edit.arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(edit.options.find((option) => option.name === "--instructions-file"), { name: "--instructions-file", takes: "path", about: edit.options.find((option) => option.name === "--instructions-file").about });
   // A command that asks a person first says which flag answers it, for a caller with no terminal.
-  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["artifacts read --yes", "bots import --yes", "bots memory --yes", "bots remove --yes", "bots sections remove --yes", "chats delete --yes", "chats project --yes", "chats sections delete --yes", "devices remove --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "projects chat --yes", "projects commit --yes", "projects remove --yes", "relay reset --yes", "routines add --yes", "routines duplicate --yes", "routines edit --yes", "routines remove --yes", "routines schedule --yes", "service uninstall --yes", "skills remove --yes", "tasks remove --yes", "templates export --yes", "templates import --yes", "templates remove --yes", "todos remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes", "wiki export --yes", "wiki remove --yes", "wiki restore --yes"]);
+  assert.deepEqual(all.areas.flatMap((area) => area.commands).filter((entry) => entry.asks).map((entry) => entry.command + " " + entry.asks).sort(), ["artifacts read --yes", "bots import --yes", "bots memory --yes", "bots remove --yes", "bots sections remove --yes", "cache clear --yes", "cards act --yes", "chats delete --yes", "chats project --yes", "chats sections delete --yes", "credentials edit --yes", "credentials remove --yes", "devices remove --yes", "mac-tools set --yes", "panels new --yes", "panels remove --yes", "panels remove-note --yes", "panels routine remove --yes", "panels routine resume --yes", "panels routine set --yes", "plugins bots --yes --revision", "plugins configure --settings --yes --revision", "plugins enable --yes --revision", "plugins install --yes --revision", "plugins uninstall --yes", "plugins update --yes --revision", "preferences set --yes", "projects chat --yes", "projects commit --yes", "projects remove --yes", "providers disconnect --yes", "providers install --yes", "relay reset --yes", "routines add --yes", "routines duplicate --yes", "routines edit --yes", "routines remove --yes", "routines schedule --yes", "service uninstall --yes", "sharing link --yes", "sharing links --yes", "sharing set --yes", "skills remove --yes", "spaces remove --yes", "tasks remove --yes", "team chat invite --yes", "team groups remove --yes", "team groups save --yes", "team invites revoke --yes", "team members move --yes", "team members remove --yes", "team requests approve --yes", "team requests deny --yes", "team roles remove --yes", "team roles save --yes", "templates export --yes", "templates import --yes", "templates remove --yes", "todos remove --yes", "tools add --yes", "tools edit --yes", "tools enable --yes", "tools import --yes", "tools remove --yes", "tools test --yes", "usage export --yes", "vault remove --yes", "vault reset --yes --erase-all-saved-secrets", "voice key --yes", "voice set --yes", "wiki export --yes", "wiki remove --yes", "wiki restore --yes"]);
   out = "";
   const asked = { ...io, stdin: { isTTY: false }, stderr: { write: (text) => void (out += text) }, client: { call: async () => ({ id: "nova", name: "Nova" }) } };
   assert.equal(await main(["bots", "remove", "Nova"], asked), 2);
@@ -133,7 +132,7 @@ test("`botkins help --json` names every command with its usage, its arguments an
   // How the words after a command are read from its usage line.
   assert.deepEqual(argumentsOf("botkins providers services <provider> [<search>]", ["providers", "services"]), [{ name: "provider", required: true }, { name: "search", required: false }]);
   assert.deepEqual(argumentsOf("botkins chat <bot> [-m <message>] [--chat <id>]", ["chat"]), [{ name: "bot", required: true }]);
-  assert.deepEqual(argumentsOf("botkins call <name> [<json argument>…]", ["call"]), [{ name: "name", required: true }, { name: "json argument", required: false, many: true }]);
+  assert.deepEqual(argumentsOf("botkins example <name> [<more word>…]", ["example"]), [{ name: "name", required: true }, { name: "more word", required: false, many: true }]);
   assert.deepEqual(argumentsOf("botkins service install [--system | --user] [--run-as <user>] [--allow-path <dir>]… [--no-start]", ["service", "install"]), []);
   assert.deepEqual(describe("1.2.3").botkins, "1.2.3");
 });
@@ -151,7 +150,7 @@ test("a change made through the socket leaves a line in the log: which call, whi
   await client.call("bots.add", { name: "Orbit" });
   await client.call("bots.edit", "Nova", { role: "SECRET-ROLE" });
   await client.call("config.set", "name", "SECRET-NAME");
-  await client.call("call", "setPreferences", [{ appearance: { theme: "dark" } }]);
+  await client.call("preferences.set", "appearance.theme", "dark");
   await client.call("bots.remove", "Nova");
   const said = await lines();
   assert.deepEqual(said.map((text) => text.slice(text.indexOf("Changed"))), [
@@ -159,10 +158,10 @@ test("a change made through the socket leaves a line in the log: which call, whi
     "Changed from the command line: bots.add Orbit",
     "Changed from the command line: bots.edit Nova",
     "Changed from the command line: config.set name",
-    "Changed from the command line: call setPreferences",
+    "Changed from the command line: preferences.set appearance.theme",
     "Changed from the command line: bots.remove Nova",
   ]);
-  for (const secret of ["SECRET", "dark", "appearance"]) assert.equal(said.join("\n").includes(secret), false, secret);
+  for (const secret of ["SECRET", "dark"]) assert.equal(said.join("\n").includes(secret), false, secret);
   // A change that failed changed nothing, and says nothing.
   await assert.rejects(client.call("bots.remove", "Nobody"));
   assert.equal((await lines()).length, 6);

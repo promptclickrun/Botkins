@@ -19,12 +19,15 @@
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
 import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
+import { reachable } from "./terminal/reach.mjs";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const bundledSkills = fileURLToPath(new URL("./skills/", import.meta.url));
+// The built-in skill that teaches a bot the `botkins` command. It is only offered where a bot's shell can run that command.
+const COMMAND_SKILL = "use-botkins";
 const MAX_SERVERS = 50;
 const MAX_SKILL_TEXT = 60000;
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
@@ -261,6 +264,8 @@ export class Integrations {
   constructor(ws) {
     this.ws = ws;
     this.skillsDir = join(ws.dir, "skills");
+    // Can a bot's shell of this process run `botkins`? A test replaces this with its own answer.
+    this.reachable = () => reachable();
     const state = ws.state;
     state.mcpServers ??= [];
     state.skills = {
@@ -659,7 +664,9 @@ export class Integrations {
     add(skillsIn(this.skillsDir, "botkins"), { editable: true });
     for (const folder of this.skillState.folders) add(skillsIn(folder.path, "folder"), { folderId: folder.id });
     add(skillsIn(bundledSkills, "built-in"));
-    return out.sort((a, b) => a.name.localeCompare(b.name));
+    // The command-line skill stays in the list on a host with no command, with the reason. Its switch is still the person's own.
+    const noCommand = this.reachable() ? null : "Needs the botkins command line on this host.";
+    return out.map((s) => (noCommand && s.name === COMMAND_SKILL && s.origin === "built-in" ? { ...s, unavailable: noCommand } : s)).sort((a, b) => a.name.localeCompare(b.name));
   }
   folders() {
     const view = (f) => ({ id: f.id, path: f.path, missing: !existsSync(f.path) });
@@ -771,7 +778,8 @@ export class Integrations {
     return {
       // A linked folder that has become a plugin since it was linked is not handed on, as a plugin can start commands. It stays linked, and is looked at again at each call.
       directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
-      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? [])])],
+      // The command-line skill goes last, and only a host where a bot's shell finds the command offers it.
+      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...(this.reachable() ? [] : [COMMAND_SKILL])])],
     };
   }
 }
