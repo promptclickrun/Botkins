@@ -2,7 +2,7 @@
 // words are the contract's "Words on screen" (docs/spaces.md), final for both apps.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changedLine, changedSince, holds, initials, lastLine, linkNote, names, panelRows, pickRows, rowLine, shareChoices, since, spaceSections, spaceTitle, whoCanOpen, withMove, withPick, withPin } from "../src/features/spaces/logic";
+import { asksOf, changedLine, changedSince, holds, initials, lastLine, linkNote, names, panelProject, panelRows, pickRows, rowLine, shareChoices, since, spaceSections, spaceTitle, whoCanOpen, withMove, withPick, withPin } from "../src/features/spaces/logic";
 import type { SpaceSummary } from "../src/link/types";
 
 const space = (more: Partial<SpaceSummary> = {}): SpaceSummary => ({ id: "s", name: "Launch", by: { id: "owner", name: "Alex Kim" }, mine: true, access: "private", can: "own", count: 5, changed: 0, pinned: false, notify: "daily", here: [], rev: 1, updatedAt: 1, ...more });
@@ -111,6 +111,26 @@ test("the Share sheet: four choices with their lines, who can be picked, and wha
   assert.equal(linkNote(space({ linkState: "leaving" })), "Taking the link back…");
   assert.equal(linkNote(space({ linkState: "off" })), "Links are off while the relay is off.");
   assert.equal(linkNote(space()), undefined);
+});
+
+test("a panel's asks are its bot's own words, and a new panel's project starts on its space's", () => {
+  // At most three, each on one line and at most 60 characters; anything that is not text is dropped.
+  assert.deepEqual(asksOf({ asks: ["  Add a team   discount ", "", 7, "Compare with\nlast quarter", "x".repeat(80), "a fourth"] }), ["Add a team discount", "Compare with last quarter", "x".repeat(60)]);
+  // Never made up: a panel without asks has no chips.
+  assert.deepEqual(asksOf({}), []);
+  assert.deepEqual(asksOf({ asks: [] }), []);
+  assert.deepEqual(asksOf({ asks: "Add a column" }), []);
+  assert.deepEqual(asksOf(undefined), []);
+
+  const projects = [{ id: "p1" }, { id: "p2" }];
+  // Until the person picks, the row follows the space's own project; "None" (null) stays None.
+  assert.equal(panelProject(undefined, { projectId: "p1" }, projects), "p1");
+  assert.equal(panelProject(undefined, {}, projects), undefined);
+  assert.equal(panelProject("p2", { projectId: "p1" }, projects), "p2");
+  assert.equal(panelProject(null, { projectId: "p1" }, projects), undefined);
+  // A project that is gone is none.
+  assert.equal(panelProject(undefined, { projectId: "gone" }, projects), undefined);
+  assert.equal(panelProject("p1", {}, undefined), undefined);
 });
 
 test("a panel's last line, and panels laid out for a phone", () => {

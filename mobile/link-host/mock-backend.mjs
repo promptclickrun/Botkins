@@ -1078,7 +1078,7 @@ export class MockBackend {
       this.state.spaces = this.spaceRecords.map((space) => ({
         ...space,
         items: [
-          ...this.state.panels.filter((panel) => panel.spaceId === space.id && !panel.hidden).map((panel) => ({ id: panel.id, botId: panel.botId, updatedAt: panel.updatedAt })),
+          ...this.state.panels.filter((panel) => panel.spaceId === space.id && !panel.hidden).map((panel) => ({ id: panel.id, botId: panel.botId, updatedAt: panel.updatedAt, ...(panel.last && panel.last.at >= panel.updatedAt && { by: panel.last.by }) })),
           ...this.state.board.filter((item) => item.spaceId === space.id && item.status === "open").map((item) => ({ id: item.id, botId: item.botId, updatedAt: item.updatedAt })),
         ],
       }));
@@ -1306,7 +1306,7 @@ export class MockBackend {
         notes: [{ id: "n1", by: "owner", name: OWNER_NAME, text: "Changelog needs one more pass before Thursday.", at: t - 3 * HOUR }],
         last: { by: "owner", name: OWNER_NAME, label: "Ticked Press kit", at: t - 2 * MIN },
       },
-      { id: "panel-signups", spaceId: launch.id, key: "signups", botId: this.state.bots[2]?.id ?? bot.id, chatId: this.state.chats[0]?.id ?? "", title: "Signups", hidden: false, size: "small", revision: 9, updatedAt: t - 50 * MIN, routine: { cron: "0 8 * * *", timezone: "America/Chicago", prompt: "Refresh the signup count", nextAt: t + 14 * HOUR, enabled: true }, blocks: [{ type: "metric", label: "This week", value: "1,284", note: "+12% on last week" }, { type: "line", label: "Daily", labels: ["Mon", "Tue", "Wed", "Thu", "Fri"], series: [{ name: "Signups", values: [180, 210, 260, 290, 344] }] }] },
+      { id: "panel-signups", spaceId: launch.id, key: "signups", botId: this.state.bots[2]?.id ?? bot.id, chatId: this.state.chats[0]?.id ?? "", title: "Signups", hidden: false, size: "small", revision: 9, updatedAt: t - 50 * MIN, routine: { cron: "0 8 * * *", timezone: "America/Chicago", prompt: "Refresh the signup count", nextAt: t + 14 * HOUR, enabled: true }, blocks: [{ type: "metric", label: "This week", value: "1,284", note: "+12% on last week" }, { type: "line", label: "Daily", labels: ["Mon", "Tue", "Wed", "Thu", "Fri"], series: [{ name: "Signups", values: [180, 210, 260, 290, 344] }] }], asks: ["Compare with last month", "Split signups by source"] },
     );
     const money = this.newSpace("Money", { createdAt: t - 80 * HOUR, updatedAt: t - 26 * HOUR, rev: 3, ...(this.state.projects[0] && { projectId: this.state.projects[0].id }) });
     this.state.panels.push({ id: "panel-runway", spaceId: money.id, key: "runway", botId: this.state.bots[2]?.id ?? bot.id, chatId: this.state.chats[0]?.id ?? "", title: "Runway", hidden: false, size: "wide", revision: 2, updatedAt: t - 26 * HOUR, routine: null, blocks: [{ type: "bars", label: "Months of runway", items: [{ label: "Now", value: 14 }, { label: "With hire", value: 11 }] }] });
@@ -1935,7 +1935,7 @@ export class MockBackend {
         const what = asked[1].trim();
         const spaceId = this.spacesOn ? (chat.spaceId ?? this.builtin(chat.createdBy || "owner", "today")?.id) : undefined;
         if (spaceId) this.touch(spaceId);
-        this.state.panels.push({ ...(spaceId && { spaceId }), ...(chat.createdBy && { createdBy: chat.createdBy }), id: "panel-" + randomUUID().slice(0, 8), key: randomUUID().slice(0, 8), botId: chat.botId, chatId: id, title: clip(what.split("\n")[0], 40), hidden: false, size: "small", revision: 1, updatedAt: now(), routine: null, blocks: [{ type: "markdown", text: "A made-up panel for: " + what }] });
+        this.state.panels.push({ ...(spaceId && { spaceId }), ...(chat.createdBy && { createdBy: chat.createdBy }), id: "panel-" + randomUUID().slice(0, 8), key: randomUUID().slice(0, 8), botId: chat.botId, chatId: id, title: clip(what.split("\n")[0], 40), hidden: false, size: "small", revision: 1, updatedAt: now(), routine: null, blocks: [{ type: "markdown", text: "A made-up panel for: " + what }], asks: ["Add last week's numbers", "Make it a chart"] });
       }
       this.turn(chat, run, prompt).catch((error) => console.error(error));
     },
@@ -2276,8 +2276,9 @@ export class MockBackend {
       this.touch(panel.spaceId);
     },
     // A new panel: a chat with the bot, in that space, and the person's sentence as "/today-panel" sends it.
-    "spaces.newPanel"({ spaceId, botId, prompt, start, refresh }) {
+    "spaces.newPanel"({ spaceId, botId, prompt, start, refresh, projectId }) {
       this.spaceOf(spaceId);
+      if (projectId && !this.state.projects.some((project) => project.id === projectId)) throw new Error("This project no longer exists.");
       if (this.state.panels.filter((panel) => panel.spaceId === spaceId).length >= SPACE_LIMIT.panels) throw new Error("A space holds up to " + SPACE_LIMIT.panels + " panels. Remove one first.");
       const chatId = this.handlers.createChat.call(this, botId);
       const chat = this.chat(chatId);
@@ -2286,6 +2287,8 @@ export class MockBackend {
       const starts = { checklist: "Make it a checklist.", tracker: "Make it a tracker.", chart: "Make it a chart.", table: "Make it a table.", notes: "Make it notes.", app: "Make it an app." };
       this.handlers.send.call(this, chatId, "/today-panel " + prompt + (start ? "\n" + starts[start] : ""));
       const panel = this.state.panels.at(-1);
+      // Its project, as the owner's sheet said: set when the bot first publishes from that chat (here, at once).
+      if (projectId && panel?.chatId === chatId) panel.projectId = projectId;
       if (refresh && panel?.chatId === chatId) panel.routine = { cron: refresh.cron, timezone: refresh.timezone, prompt, enabled: true, nextAt: now() + 16 * HOUR, ...(this.caller.id !== "owner" && { setBy: this.caller.id }) };
       return { chatId };
     },

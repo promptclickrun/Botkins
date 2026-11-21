@@ -594,6 +594,8 @@ export type Panel = {
   notes?: PanelNote[];
   /** The last change a person made: "Maya ticked Press kit". `label` is the page's own words. */
   last?: { by: string; name: string; label?: string; at: number };
+  /** Up to 3 things worth asking its bot next, in the bot's own words: plain text, at most 60 characters each. Never made up by an app. */
+  asks?: string[];
 };
 export type PanelNote = { id: string; by: string; name: string; text: string; at: number };
 /**
@@ -940,6 +942,8 @@ export type Parts = {
   live: Live;
   runs: RunSummary[];
   panels: Panel[];
+  /** Owner devices, "spaces-v1": every panel that has a project, in whichever space it is. A project's "Spaces and panels" is drawn from it. */
+  projectPanels?: PanelView[];
   board: BoardItem[];
   /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
   spaces?: SpaceSummary[];
@@ -1400,7 +1404,7 @@ export type Calls = {
   "spaces.setProject"(id: string, projectId: string | null): void;
   "spaces.setPanelProject"(panelId: string, projectId: string | null): void;
   /** Starts a chat with the bot in that space and sends the sentence; the app opens the chat. */
-  "spaces.newPanel"(input: { spaceId: string; botId: string; prompt: string; start?: PanelStart; refresh?: { cron: string; timezone: string } }): { chatId: string };
+  "spaces.newPanel"(input: { spaceId: string; botId: string; prompt: string; start?: PanelStart; refresh?: { cron: string; timezone: string }; /** The new panel's project. Owner only. */ projectId?: string }): { chatId: string };
   "spaces.ask"(input: { spaceId: string; botId: string; text: string; panelId?: string }): { chatId: string };
   /** `before`: a panel id, or null for the end. */
   "spaces.movePanel"(panelId: string, to: { spaceId: string; before: string | null }): void;

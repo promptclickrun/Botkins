@@ -533,7 +533,8 @@ export function spaceView(team, records, person, context = {}) {
       ...(can === "own" && linkFields(share, context, space.id)),
       ...(person === OWNER && space.projectId && { projectId: space.projectId }),
       count: items.length,
-      changed: Math.min(99, items.filter((item) => (Number(item.updatedAt) || 0) > seen).length),
+      // A person's own tick or note is not news to them (`by`: who made the item's newest change, when a person did).
+      changed: Math.min(99, items.filter((item) => (Number(item.updatedAt) || 0) > seen && item.by !== person).length),
       pinned: pinned.includes(space.id),
       notify,
       here: (context.here?.get?.(space.id) ?? []).filter((one) => one.id !== person).map((one) => ({ id: one.id, name: nameOf(one.id), ...(one.panelId && { panelId: one.panelId }) })),
@@ -597,6 +598,8 @@ function spaceRule(principal, team, role, method, args, lookups) {
     case "spaces.remove":
       return own(spaceOf(args[0]));
     case "spaces.newPanel": {
+      // Projects are the owner's, a new panel's project too.
+      if (args[0]?.projectId != null) return "Only the owner can do that.";
       if (!hasAction(role.perms, "agents", "chat")) return "Your team role can't do that.";
       if (args[0]?.refresh && !may("manage")) return "Your team role can't do that.";
       return change(spaceOf(args[0]?.spaceId), GONE_SPACE);
@@ -689,7 +692,7 @@ const READ_REQUEST_METHODS = new Set(["respond"]);
  * - `chats`, and `live`, `runs`, `chat:<id>` and `run:<id>` with them: chats the owner started or
  *   was invited to. A chat with a request only the owner can answer (an approval, a secure input)
  *   is listed while that request waits, so it can be answered where it is.
- * - `spaces`, `panels`, `board`: by the same rule for spaces (`extra.spaces` is the app's list).
+ * - `spaces`, `panels`, `projectPanels`, `board`: by the same rule for spaces (`extra.spaces` is the app's list).
  * - `bots`: without a bot a member made (`createdBy`), unless something listed uses it.
  * Everything that is the owner's alone stays: settings, credentials, the team, projects, tasks, devices.
  */
@@ -725,6 +728,7 @@ export function ownerParts(parts, team, extra = {}) {
     out.spaces = spaceView(team, records, OWNER, { names: extra.names, here: extra.here, linkOf: extra.linkOf, leaving: extra.leaving, partOnly: true });
     const mine = new Set(out.spaces.map((space) => space.id));
     out.panels = (parts.panels ?? []).filter((panel) => !panel.spaceId || mine.has(panel.spaceId));
+    if (Array.isArray(parts.projectPanels)) out.projectPanels = parts.projectPanels.filter((panel) => !panel.spaceId || mine.has(panel.spaceId));
     out.board = (parts.board ?? []).filter((item) => !item.spaceId || mine.has(item.spaceId));
     for (const space of records) if (mine.has(space.id)) for (const item of space.items ?? []) used.add(item.botId);
   }
@@ -911,7 +915,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   const can = (scope, action = SCOPE_ACTIONS[scope][0]) => hasAction(role?.perms, scope, action);
   const out = { ...parts };
   // `sections` are the owner's arrangement of Home; a member arranges their own view (below).
-  for (const name of ["credentials", "phones", "asks", "voice", "host", "projects", "tasks", "templates", "sections"]) delete out[name];
+  for (const name of ["credentials", "phones", "asks", "voice", "host", "projects", "projectPanels", "tasks", "templates", "sections"]) delete out[name];
   // A bot as a member sees it: without what the owner wrote for it or where it came from, and with
   // the member's own hidden and pinned marks and order. The owner's marks are the owner's.
   const mayManage = can("agents", "manage");
