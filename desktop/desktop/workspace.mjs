@@ -83,6 +83,11 @@ function textFieldOptional(text) {
   return text.trim();
 }
 
+/** A step that Botkins wrote itself about a plugin (`pluginNote`). It is Botkins' word to the person, not work of the bot. */
+export const ownNote = (step) => String(step?.id).startsWith("plugin-note-");
+/** The steps of a turn that are the bot's work: what is left when Botkins' own notes are taken out. */
+export const botSteps = (steps) => (steps ?? []).filter((step) => !ownNote(step));
+
 /**
  * Adds a piece of a reply to a turn's live text. A turn can hold several messages (a line before
  * a tool call, another after it), and the Copilot runtime sends each message's pieces under that
@@ -704,6 +709,9 @@ export class Workspace {
     };
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
     if (isGroup(chat)) task.speaker = responders(chat, this.state.bots, prompt)[0]?.id;
+    // A new turn counts the plugins' blocks again from none. A recovery or a retry of the same turn comes through here
+    // too (recovering is true), and it goes on with the count it had.
+    if (!recovering) this.plugins.turnStarted?.(chatId);
     this.active.set(chatId, task);
     this.save();
     task.done = this.turn(chat, bot, prompt, run, task);
@@ -1437,7 +1445,8 @@ export class Workspace {
       if (saved != null) { task.stream = ""; return { text: saved }; }
       task.showingDraft = !run.noOutput;
       task.stream = run.noOutput ? "" : checkpoint.draft ?? "";
-      const progress = (run.steps ?? []).filter((step) => !step.botId || step.botId === bot.id)
+      // (Botkins' own notes about a plugin are not the bot's work: the model is not told of them.)
+      const progress = botSteps(run.steps).filter((step) => !step.botId || step.botId === bot.id)
         .slice(-12).map((step) => step.status + ": " + step.label + (step.output ? " — " + step.output.slice(-300) : ""));
       const followups = this.chat(run.chatId).messages.filter(m => m.steeredRunId === run.id);
       const context = [
@@ -1660,7 +1669,7 @@ export class Workspace {
       });
       const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots) });
       if (task.stopped) return "";
-      if (!text && !run.steps?.length && !task.stream?.trim()) throw new Error(bot.name + " finished without a reply.");
+      if (!text && !botSteps(run.steps).length && !task.stream?.trim()) throw new Error(bot.name + " finished without a reply.");
       return text;
     } catch (error) {
       failed = true;
@@ -1763,7 +1772,7 @@ export class Workspace {
           run.noOutput = true;
           noOutput = true;
         }
-        if (empty && !run.cards?.length && !run.steps?.length && !task.stream?.trim() && !routine)
+        if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine)
           throw new Error(bot.name + " finished without a reply.");
         if (!noOutput) finishReply(chat, run, task, text || task.stream);
       } else {

@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { PluginCatalog, snapshotStamp, verifySnapshot } from "./plugin-catalog.mjs";
 import { describeStarts, folderReader, lineOf, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
-import { pluginSession, pluginOAuthServers } from "./plugin-runtime.mjs";
+import { MIN_SECRET_LENGTH, newStops, pluginSession, pluginOAuthServers, secretField } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
 /**
@@ -43,10 +43,10 @@ const CHANGED_COPY = "The installed files of this plugin are not the files that 
 const UNREADABLE_COPY = "Botkins could not read the installed files of this plugin to check them. Try again. If it stays so, update the plugin: Botkins writes its files again and keeps your settings.";
 /** The catalog's refusal for a revision that is not the source's now. Here the right step is to look again, not to remove the plugin. */
 const REVISION_CHANGED = /was reviewed; preview it again/;
+/** How long a failed read (of the vault, or of a copy's files) waits before it is tried again. */
+const RETRY_MS = 30_000;
 /** Why a tool that the files describe as starting is not started. */
 const SECRET_IN_LINE = "A word of this tool's command holds the value of a secret setting, so Botkins does not start it.";
-/** The runtime does not start a tool for a secret that is shorter than this (plugin-runtime.mjs). */
-const MIN_SECRET_LENGTH = 4;
 /**
  * The mark `starts` is put on an answer only (public()). It is never kept: an older Botkins that is put
  * back over the same data would answer a kept mark as it is, for a description its own code made.
@@ -94,6 +94,8 @@ export function pluginHandlers(plugins, credentials) {
 export class Plugins {
   constructor(ws) {
     this.ws = ws;
+    // The clock. A test replaces it, to move the time of the waits below.
+    this.now = () => Date.now();
     this.vault = ws.vault;
     this.catalog = new PluginCatalog(join(ws.dir, "plugin-marketplace"));
     this.file = join(ws.dir, "plugins.json");
@@ -116,6 +118,8 @@ export class Plugins {
     this.checked = new Map(); // folder → { stamp, ok }: the last check of the copy against its revision
     this.unreadable = new Map(); // folder → { since, times }: the last check could not be done (a read error), and how often in a row
     this.stopped = new Map(); // folder + refs → names of the tools that a secret's value keeps from starting
+    this.stoppedFailed = new Map(); // the same key → the time until which a read of the vault that threw is not tried again
+    this.stops = new Map(); // chat id → the count of blocks of the turn that runs there (see turnStarted)
     this.unadopted = new Map(); // linked plugin folder → why Botkins could not copy it
     // The one-time look at rows from an older version is made here, before the first answer: nothing of a copy that was
     // not checked may be shown or stored. It hashes the copy of each such row. A row that is already at READING is passed
@@ -159,7 +163,7 @@ export class Plugins {
       // check could not be done is kept, so a copy that can never be read is shown as an error, not as ready.
       this.checked.delete(row.folder);
       const was = this.unreadable.get(row.folder);
-      this.unreadable.set(row.folder, { since: was?.since ?? Date.now(), times: (was?.times ?? 0) + 1 });
+      this.unreadable.set(row.folder, { since: was?.since ?? this.now(), times: (was?.times ?? 0) + 1, last: this.now() });
       console.warn("Botkins could not check the installed files of the plugin " + row.preview.id + " this time, so it does not use it now. It tries again at the next look.");
       return false;
     }
@@ -179,16 +183,20 @@ export class Plugins {
     if (!this.stopped.has(key)) {
       // (Public answers are made for every state message: the vault is not opened for each one. A locked vault is asked again later.)
       if (this.vault.locked) return [];
+      // A read that threw is not tried again for 30 seconds, so a broken vault is not opened for each state message.
+      if (this.now() < (this.stoppedFailed.get(key) ?? 0)) return [];
       const secrets = [];
       try {
         for (const field of row.preview.config) {
-          if (field.secret !== true || !row.refs[field.key]) continue;
+          if (!secretField(field) || !row.refs[field.key]) continue;
           const value = this.vault.get(row.refs[field.key]);
           if (typeof value === "string" && value.length >= MIN_SECRET_LENGTH) secrets.push(value);
         }
       } catch {
+        this.stoppedFailed.set(key, this.now() + RETRY_MS);
         return [];
       }
+      this.stoppedFailed.delete(key);
       // (`lineOf` is the line the runtime checks: the command and each argument.)
       const names = secrets.length ? fresh.mcpServers.filter((server) => server.kind === "local" && lineOf(server).some((word) => secrets.some((secret) => String(word).includes(secret)))).map((server) => server.name) : [];
       this.stopped.set(key, names);
@@ -196,7 +204,7 @@ export class Plugins {
     return this.stopped.get(key);
   }
   forgetStopped(folder) {
-    for (const key of [...this.stopped.keys()]) if (key.startsWith(folder + "\0")) this.stopped.delete(key);
+    for (const map of [this.stopped, this.stoppedFailed]) for (const key of [...map.keys()]) if (key.startsWith(folder + "\0")) map.delete(key);
   }
   /** Writes the rows to the file, with no mark `starts` in any description. Returns the rows as written. */
   persist(rows) {
@@ -260,7 +268,10 @@ export class Plugins {
     if (!changed) return;
     try {
       this.records = this.persist(this.records);
-    } catch {}
+    } catch {
+      // (The rows keep what the look found for this run. The file is not changed, so the next start looks again.)
+      console.warn("Botkins could not write the plugins file " + basename(this.file) + ", so it looks at the older plugins again at the next start.");
+    }
   }
   /** A kept description with what the copy starts, as the one reading shows it: tools, hooks, what is not run, and the warnings made from them. */
   refreshed(preview, fresh) {
@@ -468,7 +479,13 @@ export class Plugins {
       },
     };
   }
+  /** A copy whose last check could not be done is checked again here, not more than once in 30 seconds for a folder, and the error goes when the check works. */
+  recheck(row) {
+    const was = this.unreadable.get(row.folder);
+    if (was && this.now() - (was.last ?? was.since) >= RETRY_MS) this.intact(row);
+  }
   list() {
+    for (const row of this.records) this.recheck(row);
     return [
       ...this.records.map((r) => this.public(r)),
       ...this.linkedErrors().map(({ link, id, reason }) => ({
@@ -674,6 +691,21 @@ export class Plugins {
     }
     return null;
   }
+  /** The count of blocks of the chat's turn, made when there is none. At most 500 chats are kept: the one used longest ago is dropped. */
+  stopsFor(chatId) {
+    const stops = this.stops.get(chatId) ?? newStops();
+    this.stops.delete(chatId);
+    this.stops.set(chatId, stops);
+    if (this.stops.size > 500) this.stops.delete(this.stops.keys().next().value);
+    return stops;
+  }
+  /** A new turn starts in this chat (not a retry of one that runs): the plugins' blocks are counted again from none. */
+  turnStarted(chatId) {
+    const stops = this.stops.get(chatId);
+    if (!stops) return;
+    stops.plugins.clear();
+    Object.assign(stops, { total: 0, toldTotal: false });
+  }
   async session(bot, chat, { skillsOnly = false } = {}) {
     // A copy that is no longer the reviewed bytes is not used, and the app shows why.
     const scopedRows = this.records.filter((r) => scoped(r, bot.id));
@@ -683,6 +715,6 @@ export class Plugins {
     const rows = sound.filter((r) => this.public(r).status === "ready");
     if (!rows.length) return { directories: [], mcpServers: {}, hooks: undefined };
     const plugins = rows.map((row) => (skillsOnly ? { id: row.preview.id, folder: row.folder } : this.runtimeRecord(row)));
-    return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line) });
+    return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line), stops: this.stopsFor(chat.id) });
   }
 }

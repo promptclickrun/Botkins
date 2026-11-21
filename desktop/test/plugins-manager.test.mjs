@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { PLUGIN_STARTS } from "../desktop/plugins.mjs";
+import { botSteps, ownNote } from "../desktop/workspace.mjs";
 import { CAPABILITIES } from "../desktop/runtime.mjs";
 
 test("a copied folder needs activation and its settings survive restart behind the vault", async (t) => {
@@ -805,4 +806,214 @@ test("when Botkins stops a plugin's hook from keeping a turn going, the turn tha
   assert.deepEqual(run.steps.map((step) => [step.name, step.label, step.status]), [["Botkins", "The plugin " + added.id + " kept this turn going 3 times. Botkins did not let it do that again.", "Done"]]);
   // An installed plugin's answer names the revision that a switch-on is compared with: the row's own.
   assert.equal(ws.plugins.list()[0].revision, ws.plugins.records[0].revision);
+});
+
+const BLOCKING = { "plugin.json": { name: "loop-fixture", version: "1.0.0" }, "hooks.json": { hooks: { agentStop: [{ command: "echo '{\"decision\":\"block\",\"reason\":\"go on\"}'" }] } } };
+
+test("a session opened again in the middle of a turn goes on with the count, and the next turn starts it again, also when the runtime says nothing", { skip: process.platform === "win32" }, async (t) => {
+  const { open, source } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("loops", BLOCKING));
+  await ws.plugins.setEnabled(added.id, true);
+  const notes = [];
+  ws.pluginNote = (chatId, line) => notes.push([chatId, line]);
+  const chat = { id: "chat-1" };
+  const first = (await ws.plugins.session(ws.bot("pip"), chat)).hooks.handlers.onAgentStop;
+  const blocks = async (stop, input) => (await stop(input))?.decision === "block";
+  assert.equal(await blocks(first, { stopHookActive: false }), true);
+  assert.equal(await blocks(first, { stopHookActive: true }), true);
+  // The session is opened again (a retry after a stall, a change of model). The count is not started again.
+  const again = (await ws.plugins.session(ws.bot("pip"), chat)).hooks.handlers.onAgentStop;
+  assert.equal(await blocks(again, { stopHookActive: true }), true);
+  assert.equal(await blocks(again, { stopHookActive: true }), false);
+  assert.equal(notes.length, 1);
+  // Another chat has a count of its own.
+  const other = (await ws.plugins.session(ws.bot("pip"), { id: "chat-2" })).hooks.handlers.onAgentStop;
+  assert.equal(await blocks(other, { stopHookActive: true }), true);
+  // A runtime that says nothing: the limit holds for the turn, and the app's start of the next turn gives three more.
+  const quiet = (await ws.plugins.session(ws.bot("pip"), { id: "chat-3" })).hooks.handlers.onAgentStop;
+  const run = [];
+  for (let turn = 0; turn < 4; turn++) run.push(await blocks(quiet, {}));
+  assert.deepEqual(run, [true, true, true, false]);
+  ws.plugins.turnStarted("chat-3");
+  const next = [];
+  for (let turn = 0; turn < 4; turn++) next.push(await blocks(quiet, {}));
+  assert.deepEqual(next, [true, true, true, false]);
+  assert.equal(notes.filter(([chatId]) => chatId === "chat-3").length, 2);
+  // A chat that never had a session is no error. Chat-1's count is not touched by another chat's new turn.
+  ws.plugins.turnStarted("no-such-chat");
+  assert.equal(await blocks(again, { stopHookActive: true }), false);
+  ws.plugins.turnStarted("chat-1");
+  assert.equal(await blocks(again, { stopHookActive: true }), true);
+});
+
+test("the counts of blocks are kept for at most 500 chats", async (t) => {
+  const { open } = managed(t);
+  const ws = open();
+  const first = ws.plugins.stopsFor("chat-0");
+  for (let index = 1; index <= 500; index++) ws.plugins.stopsFor("chat-" + index);
+  assert.equal(ws.plugins.stops.size, 500);
+  assert.equal(ws.plugins.stops.has("chat-0"), false);
+  assert.notEqual(ws.plugins.stopsFor("chat-0"), first);
+  // A chat in use stays: asking for it again makes it the newest.
+  ws.plugins.stopsFor("chat-2");
+  ws.plugins.stopsFor("chat-new");
+  assert.equal(ws.plugins.stops.has("chat-2"), true);
+  assert.equal(ws.plugins.stops.has("chat-3"), false);
+});
+
+test("a new turn of a person starts the count, a recovery or a retry of the same turn does not", async (t) => {
+  const { open } = managed(t);
+  const ws = open();
+  const started = [];
+  ws.plugins.turnStarted = (chatId) => started.push(chatId);
+  const id = ws.createChat("pip");
+  await ws.send(id, "Hello");
+  assert.deepEqual(started, [id]);
+  // (The same turn's recovery goes through startTurn with recovering: true.)
+  const chat = ws.chat(id);
+  const run = ws.state.runs[0];
+  ws.startTurn(chat, ws.bot("pip"), chat.messages.at(-1), run, true);
+  await ws.active.get(id)?.done;
+  assert.deepEqual(started, [id]);
+});
+
+test("a setting named like a password, with no secret mark, is a secret for the manager as for the runtime", async (t) => {
+  const { open, source } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("mine", {
+    "plugin.json": { name: "passwd-fixture", version: "1.0.0", userConfig: { DB_PASSWD: { title: "Password" } } },
+    ".mcp.json": { mcpServers: { holds: { command: "node", args: ["--pass", "s3cret-value"] }, clean: { command: "node", args: ["server.js"] } } },
+  }));
+  await ws.plugins.configure(added.id, { DB_PASSWD: "s3cret-value" });
+  const row = ws.plugins.records[0];
+  assert.ok(!row.preview.config.find((field) => field.key === "DB_PASSWD").secret, "the catalog set no secret mark");
+  const { notRun } = ws.plugins.list()[0].contents;
+  assert.deepEqual((Array.isArray(notRun) ? notRun : notRun.items).map((item) => item.name), ["holds"]);
+});
+
+test("a read of the vault that threw is not kept: it is tried again after 30 seconds, and not before", async (t) => {
+  const { open, source } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("mine", {
+    "plugin.json": { name: "vault-fixture", version: "1.0.0", userConfig: { KEY: { title: "Key", sensitive: true } } },
+    ".mcp.json": { mcpServers: { holds: { command: "node", args: ["--key", "s3cret-value"] } } },
+  }));
+  await ws.plugins.configure(added.id, { KEY: "s3cret-value" });
+  let clock = 1_000_000;
+  ws.plugins.now = () => clock;
+  ws.plugins.stopped.clear();
+  let broken = true;
+  const real = ws.plugins.vault.get.bind(ws.plugins.vault);
+  const get = t.mock.method(ws.plugins.vault, "get", (ref) => {
+    if (broken) throw new Error("the vault could not be read");
+    return real(ref);
+  });
+  const held = () => {
+    const { notRun } = ws.plugins.list()[0].contents;
+    return notRun === undefined ? [] : (Array.isArray(notRun) ? notRun : notRun.items).map((item) => item.name);
+  };
+  // The read throws: nothing is said as stopped meanwhile, and the vault is asked once.
+  assert.deepEqual(held(), []);
+  assert.deepEqual(held(), []);
+  assert.equal(get.mock.callCount(), 1);
+  clock += 29_000;
+  assert.deepEqual(held(), []);
+  assert.equal(get.mock.callCount(), 1);
+  // After 30 seconds it asks again. Still broken: once more, and the wait starts again.
+  clock += 1_000;
+  assert.deepEqual(held(), []);
+  assert.equal(get.mock.callCount(), 2);
+  assert.deepEqual(held(), []);
+  assert.equal(get.mock.callCount(), 2);
+  // Mended: the next try, after the wait, gives the answer, and it is kept.
+  broken = false;
+  clock += 30_000;
+  assert.deepEqual(held(), ["holds"]);
+  const calls = get.mock.callCount();
+  assert.deepEqual(held(), ["holds"]);
+  assert.equal(get.mock.callCount(), calls);
+});
+
+test("a copy whose check could not be done is checked again when the list is asked for, at most every 30 seconds, and the error goes when the check works", async (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("file rights are not enforced here");
+  const { chmodSync } = await import("node:fs");
+  const { open, source } = managed(t);
+  const ws = open();
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "recheck-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const [row] = ws.plugins.records;
+  assert.equal(row.enabled, false, "the plugin is off");
+  t.mock.method(console, "warn", () => {});
+  let clock = 5_000_000;
+  ws.plugins.now = () => clock;
+  const hooks = join(row.folder, "hooks.json");
+  chmodSync(hooks, 0o000);
+  t.after(() => {
+    try {
+      chmodSync(hooks, 0o644);
+    } catch {}
+  });
+  assert.equal(ws.plugins.intact(row), false);
+  assert.equal(ws.plugins.list()[0].status, "error");
+  const times = () => ws.plugins.unreadable.get(row.folder)?.times;
+  assert.equal(times(), 1);
+  // The files can be read again, but a list in a loop does not hash in a loop: within 30 seconds nothing is checked.
+  chmodSync(hooks, 0o644);
+  for (let index = 0; index < 5; index++) assert.equal(ws.plugins.list()[0].status, "error");
+  clock += 29_000;
+  assert.equal(ws.plugins.list()[0].status, "error");
+  assert.equal(times(), 1);
+  // After 30 seconds the list checks again, and the state clears when the check works.
+  clock += 1_000;
+  const [listed] = ws.plugins.list();
+  assert.deepEqual([listed.id, listed.status, listed.detail, listed.repair], [added.id, "ready", undefined, undefined]);
+  assert.equal(ws.plugins.unreadable.has(row.folder), false);
+  assert.equal(ws.plugins.checked.get(row.folder).ok, true);
+  // A check that still cannot be done waits another 30 seconds.
+  chmodSync(hooks, 0o000);
+  ws.plugins.checked.delete(row.folder);
+  assert.equal(ws.plugins.intact(row), false);
+  clock += 10_000;
+  ws.plugins.list();
+  assert.equal(times(), 1);
+  clock += 20_000;
+  ws.plugins.list();
+  assert.equal(times(), 2);
+});
+
+test("a write of the plugins file that fails in the one-time look is said in one line, with the file's name only", async (t) => {
+  const { open, source, dir, file } = managed(t);
+  const ws = open();
+  const old = await ws.plugins.addFolder(source("old", { "plugin.json": { name: "old-fixture", version: "1.0.0" } }));
+  writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8")).map(({ reading, ...row }) => row)));
+  // The temporary file's name is a folder: the write fails.
+  mkdirSync(file + ".tmp");
+  const warn = t.mock.method(console, "warn", () => {});
+  const again = open();
+  assert.ok(old);
+  const lines = warn.mock.calls.map((call) => call.arguments.join(" ")).filter((line) => /plugins file/.test(line));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /could not write the plugins file plugins\.json, so it looks at the older plugins again at the next start/);
+  assert.ok(!lines[0].includes(dir));
+  // The rows are as the look made them for this run, and the file is as it was: the next start looks again.
+  assert.equal(again.plugins.records[0].reading, 3);
+  assert.equal("reading" in JSON.parse(readFileSync(file, "utf8"))[0], false);
+});
+
+test("a note that Botkins wrote in a turn's activity is not the bot's work", async (t) => {
+  const { open } = managed(t);
+  const ws = open();
+  const run = { id: "run-1", steps: [] };
+  ws.active.set("chat-1", { run });
+  ws.pluginNote("chat-1", "The plugin x kept this turn going 3 times. Botkins did not let it do that again.");
+  ws.active.delete("chat-1");
+  assert.equal(run.steps.length, 1);
+  assert.equal(ownNote(run.steps[0]), true);
+  // So a turn with only that note is still "finished without a reply" (both places ask botSteps), and a recovery does not show it to the model.
+  assert.deepEqual(botSteps(run.steps), []);
+  const work = { id: "call-1", label: "Run tests", status: "Done" };
+  assert.deepEqual(botSteps([...run.steps, work]), [work]);
+  assert.deepEqual(botSteps(undefined), []);
+  assert.equal(ownNote({ id: "toolu_1" }), false);
+  assert.equal(ownNote({}), false);
 });

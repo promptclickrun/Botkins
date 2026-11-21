@@ -20,6 +20,8 @@ export const PROMISES = ["plugin-starts-v1"];
 const TRANSPORT_TIMEOUT = "The workspace did not answer.";
 // What the workspace says to an action that it does not know, which only an older workspace does for an action this link asks for (desktop/headless/workspace.mjs).
 const UNKNOWN_ACTION = "Unknown workspace action.";
+// The two actions for which a current workspace can say that too, with no cut or no spaces (see `request`).
+const ANSWERED_BY_CURRENT = new Set(["team", "spaces"]);
 
 /**
  * True when the workspace could not be reached, false when it answered, also with an error.
@@ -158,12 +160,19 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
   /**
    * A request to the workspace. When it cannot be reached, or it does not know an action that this
    * link asks for (an older workspace), the promise is dropped and the same error goes on. No other refusal does that.
+   * Two actions are left out of the second rule: `team` and `spaces`. A current workspace says
+   * "Unknown workspace action." to them too (desktop/headless/workspace.mjs: `team` when it has no
+   * team cut, `spaces` when it has no spaces or is asked for a call it does not have). Those two are
+   * the only actions that throw it for a reason other than "this action does not exist": `dispatch`
+   * throws it for a name it has no entry for, which every current workspace has for the rest. `tell`
+   * and `spaces` read the refusal themselves (`deaf`, `noSpaces`).
    */
   async function request(...args) {
     try {
       return await rawRequest(...args);
     } catch (error) {
-      if ((unreached(error) || error?.message === UNKNOWN_ACTION) && dropPromises()) changes.emit("change");
+      const olderWorkspace = error?.message === UNKNOWN_ACTION && !ANSWERED_BY_CURRENT.has(args[0]);
+      if ((unreached(error) || olderWorkspace) && dropPromises()) changes.emit("change");
       throw error;
     }
   }
