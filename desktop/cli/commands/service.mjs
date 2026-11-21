@@ -22,7 +22,7 @@ function tailFile(file, count) {
   });
 }
 
-/** True when nothing listens on the port. */
+/** True when nothing listens on the port. It finds out by listening there for a moment itself. */
 const portFree = (port) =>
   new Promise((resolve) => {
     const probe = createServer();
@@ -34,8 +34,13 @@ const portFree = (port) =>
 const check = (name, ok, detail, fix) => ({ name, ok, detail, ...(fix && { fix }) });
 const mode = (path) => statSync(path).mode & 0o777;
 
-/** Everything `botkins doctor` looks at. Works with the service stopped; says more when it runs. */
-export async function examine({ paths, client, env, fetcher = fetch, node = process.versions.node, uid = process.getuid?.(), installFolder, units }) {
+/**
+ * Everything `botkins doctor` looks at. Works with the service stopped; says more when it runs.
+ * @param options.freePort  (port) → true when nothing listens there. The real look listens on the
+ *   port for a moment, so a test hands in its own answer: two tests that looked at the same real
+ *   port at the same moment would each find it taken by the other.
+ */
+export async function examine({ paths, client, env, fetcher = fetch, node = process.versions.node, uid = process.getuid?.(), installFolder, units, freePort = portFree }) {
   const checks = [];
   const [major, minor] = node.split(".").map(Number);
   const enough = major > MIN_NODE[0] || (major === MIN_NODE[0] && minor >= MIN_NODE[1]);
@@ -89,7 +94,7 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
     }
     if (!seen.providers.some((provider) => provider.enabled && provider.connected)) checks.push(check("Model providers", false, "No provider is signed in, so no bot can answer.", "Sign one in with `botkins providers login <provider>`."));
   } else if (config) {
-    const free = await portFree(config.link.port);
+    const free = await freePort(config.link.port);
     checks.push(check("Phone link port", free ? true : null, "Port " + config.link.port + (free ? " is free." : " is in use by another program.") , free ? undefined : "Choose another with `botkins config set link.port`."));
   }
   // The install folder of the whole computer's service: root's own, all the way up, or no update is installed into it.
