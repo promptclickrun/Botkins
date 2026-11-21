@@ -334,7 +334,7 @@ function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run
  */
 const HEADER_KEYS = {
   agent: ["name", "description", "model", "tools", "disable-model-invocation", "user-invocable", "infer"],
-  skill: ["name", "description", "disable-model-invocation", "user-invocable"],
+  skill: ["name", "description", "argument-hint", "disable-model-invocation", "user-invocable"],
   command: ["name", "description", "argument-hint", "disable-model-invocation"],
 };
 /** The keys that hold a thing back, each with the value that holds it back most. */
@@ -360,12 +360,14 @@ export function plainHeaderFile(source, kind) {
     if (/^'[\s\S]*'$/.test(word)) return word.slice(1, -1).replaceAll("''", "'");
     return word.replace(/[ \t]+#.*$/, "");
   };
-  const keyLine = new RegExp("^(" + allowed.join("|") + ")[ \\t]*:[ \\t]*(.*)$");
+  // The key is matched in any letter case, as `parseSkill` (desktop/integrations.mjs) reads it: a header `Name: x` gives the name "x" there, so it must here too. The key that is written is the plain lower-case one.
+  const keyLine = new RegExp("^(" + allowed.join("|") + ")[ \\t]*:[ \\t]*(.*)$", "i");
   const fields = {};
   for (let index = 0; index < lines.length; index++) {
     const found = keyLine.exec(lines[index]);
-    if (!found || Object.hasOwn(fields, found[1])) continue;
-    const [, key, rest] = found;
+    if (!found || Object.hasOwn(fields, found[1].toLowerCase())) continue;
+    const key = found[1].toLowerCase();
+    const rest = found[2];
     const more = [];
     while (index + 1 < lines.length && /^(?:[ \t]|-[ \t]|[ \t]*$)/.test(lines[index + 1])) more.push(lines[++index].trim());
     const below = more.filter(Boolean);

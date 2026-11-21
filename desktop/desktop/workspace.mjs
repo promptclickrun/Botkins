@@ -14,6 +14,7 @@ import { Panels, textField } from "./panels.mjs";
 import { Providers } from "./providers/index.mjs";
 import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
+import { sweepSkillCopies } from "./skill-copies.mjs";
 import { Plugins } from "./plugins.mjs";
 import { pluginTools } from "./plugin-tools.mjs";
 import { SecureInputs } from "./secure-input.mjs";
@@ -259,6 +260,10 @@ export class Workspace {
     // Panels a bot shows beside a chat (desktop/sidepane.mjs).
     this.sidepane = new SidePane(this, options?.sidePane);
     this.templates = new Templates(this);
+    // The skill copies of chats that are gone are taken away once at the start (desktop/skill-copies.mjs).
+    try {
+      sweepSkillCopies(dir, this.state.chats.map((c) => c.id));
+    } catch {}
     for (const run of this.state.runs) {
       if (run.status === "Working") {
         for (const step of run.steps ?? [])
@@ -1205,7 +1210,7 @@ export class Workspace {
       context: this.memory.context(bot),
       tools: this.sessionTools(bot, chat, run, task),
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
-      skills: access.skills ? this.integrations.skillsFor(bot) : { directories: [], disabled: [] },
+      skills: access.skills ? this.integrations.skillsForSession(bot, chat) : { directories: [], disabled: [] },
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
       mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),

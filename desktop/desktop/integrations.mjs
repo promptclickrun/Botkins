@@ -19,6 +19,7 @@
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
 import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
+import { sessionSkills } from "./skill-copies.mjs";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -768,5 +769,13 @@ export class Integrations {
       directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
       disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? [])])],
     };
+  }
+  /** What a session gets: Botkins' own shipped skills as they are, and every other skills folder as this chat's own copy with each header written again (desktop/skill-copies.mjs). */
+  skillsForSession(bot, chat) {
+    const { directories, disabled } = this.skillsFor(bot);
+    // The shipped folder is first. Were it not, nothing is trusted: every folder is copied.
+    const own = directories[0] === bundledSkills;
+    const copies = sessionSkills({ dir: this.ws.dir, chatId: String(chat?.id ?? "chat"), sources: own ? directories.slice(1) : directories });
+    return { directories: [...(own ? [bundledSkills] : []), ...copies.directories], disabled, revision: copies.revision };
   }
 }

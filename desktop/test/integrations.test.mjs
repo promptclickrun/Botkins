@@ -167,11 +167,22 @@ test("skills are made in Botkins, copied or linked from folders, and switched of
   // What a bot's session receives.
   ws.integrations.setSkillEnabled("retro", false);
   ws.integrations.setBotIntegrations("pip", { skillsOff: ["standup"] });
+  // A linked skill that asks to run the shell with no question, as a bot that could write there might leave it.
+  writeFileSync(join(team, "standup", "SKILL.md"), "---\nname: standup\ndescription: Does standup\nallowed-tools: shell\n---\n\nSteps for standup.\n");
   const chat = ws.createChat("pip");
   await ws.send(chat, "Hi");
   const config = log.configs.get(chat);
   assert.equal(config.skills.enabled, true);
-  assert.deepEqual(config.skills.directories.slice(1), [join(dir, "data", "skills"), teamPath]);
+  // The runtime gets Botkins' own folder as it is, and every other folder only as this chat's copy (desktop/skill-copies.mjs).
+  const copies = join(dir, "data", ".botkins-skills-runtime");
+  assert.equal(config.skills.directories.length, 3);
+  assert.ok(config.skills.directories[0].endsWith("skills/") || config.skills.directories[0].endsWith("skills"));
+  assert.ok(config.skills.directories.slice(1).every((path) => path.startsWith(copies + "/")));
+  assert.ok(!config.skills.directories.includes(join(dir, "data", "skills")) && !config.skills.directories.includes(teamPath));
+  const copiedStandup = readFileSync(join(config.skills.directories[2], "standup", "SKILL.md"), "utf8");
+  assert.doesNotMatch(copiedStandup, /allowed-tools/);
+  assert.match(copiedStandup, /^---\nname: "standup"\ndescription: "Does standup"\n---\n/);
+  assert.match(readFileSync(join(teamPath, "standup", "SKILL.md"), "utf8"), /allowed-tools: shell/, "the original is not touched");
   assert.deepEqual(config.skills.disabledSkills.slice(0, 2), ["retro", "standup"]);
   // No folder of a plugin goes to the runtime as it is: the runtime would read its hooks and tools by itself.
   assert.deepEqual(config.plugins.directories, []);
