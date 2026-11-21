@@ -73,7 +73,12 @@ export function normalCut(value) {
     };
   }));
   const groups = byId(list(value.groups, 500, "groups").map((group) => (only(group, ["id", "name", "roleId"], [], "group"), { id: id(group.id, "group id"), name: text(group.name, 200, "group name"), roleId: id(group.roleId, "role id") })));
-  const members = byId(list(value.members, 5000, "members").map((member) => (only(member, ["id", "name", "groupId"], [], "member"), { id: id(member.id, "member id"), name: text(member.name, 200, "member name"), groupId: id(member.groupId, "group id") })));
+  const members = byId(list(value.members, 5000, "members").map((member) => {
+    only(member, ["id", "name", "groupId"], [], "member");
+    // No member is called "owner": the rules that read a person's id would take them for the owner.
+    if (member.id === "owner") throw new Error("bad member id");
+    return { id: id(member.id, "member id"), name: text(member.name, 200, "member name"), groupId: id(member.groupId, "group id") };
+  }));
   const people = byId(list(value.people, 5001, "people").map((person) => (only(person, ["id", "name"], [], "person"), { id: id(person.id, "person id"), name: text(person.name, 200, "person name") })));
   const chatsIn = record(value.chats, "chats");
   const chats = Object.fromEntries(sortedKeys(chatsIn).map((chatId) => [id(chatId, "chat id"), list(chatsIn[chatId], 100, "chat people").map((person) => id(person, "person id"))]));
@@ -123,7 +128,8 @@ export function teamCut(team, people = []) {
  * or a look. `current` is the cut to use now, or null: closed when in doubt.
  */
 export class HeldCut {
-  constructor({ now = () => Date.now(), freshFor = FRESH_MS } = {}) {
+  /** `now` is a clock that only goes forward: setting the computer's clock back must not keep a cut in use. */
+  constructor({ now = () => performance.now(), freshFor = FRESH_MS } = {}) {
     Object.assign(this, { now, freshFor, cut: null, rev: null, heardAt: 0 });
   }
   /** Takes a whole cut, or refuses it whole. What was held before goes either way: the link has moved on from it. */

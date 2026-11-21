@@ -7,7 +7,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deviceCall } from "../desktop/device-call.mjs";
-import { headlessBackend } from "../desktop/headless/backend.mjs";
+import { callContext, headlessBackend } from "../desktop/headless/backend.mjs";
 import { cutRevision, FRESH_MS, HeldCut, normalCut, teamCut, teamFromCut } from "../desktop/headless/team-cut.mjs";
 import { listenWorkspace, workspaceRequest } from "../desktop/headless/transport.mjs";
 import { workspaceActions } from "../desktop/headless/workspace.mjs";
@@ -132,7 +132,9 @@ async function containers(t, { clock = { now: Date.now() } } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "bk-team-"));
   const socket = join(dir, "workspace.sock");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const link = { team: stored(), sent: 0 };
+  // `sent` counts the cuts that were sent and `revs` names them in order. `hold[method]` is a
+  // promise that a request of that kind waits for before it goes on the socket (a slow moment).
+  const link = { team: stored(), sent: 0, revs: [], logs: [], hold: {} };
   let ws;
   const startWorkspace = async () => {
     const held = new HeldCut({ now: () => clock.now });
@@ -159,12 +161,16 @@ async function containers(t, { clock = { now: Date.now() } } = {}) {
   };
   const startLink = () =>
     headlessBackend(
-      (method, args) => {
-        if (method === "team") link.sent++;
+      async (method, args) => {
+        if (link.hold[method]) await link.hold[method];
+        if (method === "team") {
+          link.sent++;
+          link.revs.push(args[1]);
+        }
         return workspaceRequest(socket, method, args);
       },
       "test",
-      { team: () => teamCut(link.team, people) },
+      { team: () => teamCut(link.team, people), log: (line) => link.logs.push(line), clock: () => clock.now },
     );
   let workspace = await startWorkspace();
   let host = startLink();
@@ -181,6 +187,7 @@ async function containers(t, { clock = { now: Date.now() } } = {}) {
     dir, socket, link, clock, turn, chats,
     get ws() { return workspace.ws; },
     get held() { return workspace.held; },
+    get backend() { return host.backend; },
     look: () => host.refresh(),
     async restartWorkspace() { workspace.stop(); workspace = await startWorkspace(); },
     restartLink() { host = startLink(); },
@@ -342,4 +349,171 @@ test("a workspace from before this takes no cut: the link stops asking, calls st
   await refresh();
   assert.deepEqual(turns, [narrowest]);
   assert.equal(sent, 1, "asked once, and not again while that workspace runs");
+});
+
+/** A wait that the test ends when it chooses. */
+const gate = () => {
+  let open;
+  const promise = new Promise((resolve) => (open = resolve));
+  return { promise, open };
+};
+const demote = (host) => void (host.link.team.members.find((member) => member.id === "m_avery").groupId = "g_guests");
+
+test("an old cut is never sent after a newer one: a look that was slow does not bring a removed role back", async (t) => {
+  const host = await containers(t);
+  assert.deepEqual(await host.turn(avery), makers);
+  const before = teamCut(host.link.team, people).rev;
+  // A look starts and names the revision of that moment. It is slow to reach the workspace.
+  const slow = gate();
+  host.link.hold.state = slow.promise;
+  const looking = host.look();
+  await new Promise((resolve) => setImmediate(resolve));
+  // Meanwhile the member is moved to a smaller role, and a message of theirs arrives: it brings the new cut with it.
+  demote(host);
+  const after = teamCut(host.link.team, people).rev;
+  host.link.hold.state = null;
+  const chat = host.chats.m_avery;
+  // (The look that follows each call joins the slow one, so the call is not waited for here.)
+  const sending = host.backend.call("send", [chat, "Hello", {}], { principal: avery });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(host.ws.accessForTurn(host.ws.chat(chat), { author: { memberId: "m_avery", name: "Avery" } }), narrowest, "the turn of that message is under the new role");
+  // Now the slow look arrives, with the old revision. The workspace drops what it holds; it is not given the old cut again.
+  slow.open();
+  await looking;
+  await sending;
+  await host.look();
+  assert.equal(host.link.revs.lastIndexOf(before) < host.link.revs.indexOf(after), true, "the old cut was not sent after the new one: " + host.link.revs.map((rev) => (rev === before ? "old" : "new")).join(", "));
+  assert.deepEqual(host.held.current(), teamCut(host.link.team, people).cut);
+  assert.deepEqual(await host.turn(avery), narrowest);
+});
+
+test("an old cut is never sent after a newer one: a cut that was on its way when the team changed is followed by the new one", async (t) => {
+  const host = await containers(t);
+  const before = teamCut(host.link.team, people).rev;
+  // The first cut is on its way, and slow.
+  const slow = gate();
+  host.link.hold.team = slow.promise;
+  const first = host.backend.call("createChat", ["pip"], { principal: avery });
+  await new Promise((resolve) => setImmediate(resolve));
+  // The team changes, and a message arrives. It waits for the cut that is on its way, reads the team again, and sends the new cut before it runs.
+  demote(host);
+  host.link.team.roles.find((role) => role.id === "r_guest").perms.skills = ["use"];
+  const after = teamCut(host.link.team, people).rev;
+  const owners = host.backend.call("createChat", ["pip"], { principal: owner });
+  await new Promise((resolve) => setImmediate(resolve));
+  host.link.hold.team = null;
+  slow.open();
+  host.chats.m_avery = await first;
+  await owners;
+  assert.deepEqual(host.link.revs.filter((rev, at, all) => rev !== all[at - 1]), [before, after]);
+  // The member's turn has the role of now (the guests' role, which allows skills here), not the makers' of before.
+  assert.deepEqual(await host.turn(avery), { member: true, skills: true, mcp: false, plugins: false });
+});
+
+test("a team that cannot be cut stops no call: the owner goes on, a member gets the narrowest limits, and the log says why once", async (t) => {
+  const host = await containers(t);
+  assert.deepEqual(await host.turn(avery), makers);
+  // An id past its limit: there is no cut of this team.
+  host.link.team.groups.push({ id: "g_" + "x".repeat(300), name: "Too long", roleId: "r_guest" });
+  assert.throws(() => teamCut(host.link.team, people), /bad group id/);
+  assert.deepEqual(await host.turn(owner), full);
+  assert.deepEqual(await host.turn(avery), narrowest);
+  await host.look();
+  await host.look();
+  assert.equal(host.held.current(), null);
+  assert.deepEqual(host.link.logs.length, 1);
+  assert.match(host.link.logs[0], /told nothing about the team \(bad group id\)\. Team members get the narrowest limits/);
+  // Put right: the role applies again.
+  host.link.team.groups.pop();
+  assert.deepEqual(await host.turn(avery), makers);
+});
+
+test("no member is called owner, and ids that are also names of an object's own parts are only ids", async (t) => {
+  // A member with the owner's id is refused on both ways in: in a cut, and as the person of a call.
+  const { cut } = teamCut(stored(), people);
+  assert.throws(() => normalCut({ ...cut, members: [{ id: "owner", name: "Mallory", groupId: "g_makers" }] }), /bad member id/);
+  assert.throws(() => new HeldCut().take({ ...cut, members: [{ id: "owner", name: "Mallory", groupId: "g_makers" }] }, cutRevision(cut)), REFUSED);
+  assert.throws(() => callContext({ principal: { kind: "member", memberId: "owner", name: "Mallory" } }), /not the same version/);
+  assert.deepEqual(callContext({ principal: { kind: "owner" } }), { principal: { kind: "owner" } });
+  // `__proto__`, `constructor` and the like as a chat's, a space's, a role's or a member's id.
+  const odd = stored();
+  odd.chats = JSON.parse('{"__proto__":["m_avery"],"constructor":["m_blake"],"chat-1":["m_avery"]}');
+  odd.spaces = JSON.parse('{"__proto__":{"access":"team","grants":[],"teamCan":"edit"},"toString":{"access":"members","grants":[{"id":"constructor","can":"edit"}],"teamCan":"view"}}');
+  odd.members.push({ id: "constructor", name: "Connie", groupId: "__proto__" });
+  odd.groups.push({ id: "__proto__", name: "Odd", roleId: "hasOwnProperty" });
+  odd.roles.push({ id: "hasOwnProperty", name: "Odd", perms: JSON.parse('{"__proto__":["use"],"skills":["use"]}'), bots: ["__proto__"] });
+  const told = teamCut(odd, people);
+  // As it crosses the socket, as text.
+  const held = new HeldCut();
+  assert.equal(held.take(JSON.parse(JSON.stringify(told.cut)), told.rev), told.rev);
+  const rules = teamFromCut(held, (id) => ({ id }));
+  assert.deepEqual(rules.people("__proto__"), { createdBy: "owner", invited: ["m_avery"] });
+  assert.deepEqual(rules.people("constructor"), { createdBy: "owner", invited: ["m_blake"] });
+  assert.deepEqual(rules.people("valueOf"), { createdBy: "owner", invited: [] }, "a chat the cut does not name has its creator only");
+  assert.deepEqual(["__proto__", "toString", "valueOf", "hasOwnProperty"].map((id) => rules.spaceCan({ id }, "m_avery")), ["edit", null, null, null]);
+  assert.equal(rules.spaceCan({ id: "toString" }, "constructor"), "edit");
+  assert.equal(rules.spaceCan({ id: "toString" }, "toString"), null, "someone who is not a member");
+  // Nothing of it reached what every object shares.
+  assert.deepEqual([{}.polluted, Object.keys(Object.prototype), typeof {}.constructor, typeof {}.toString], [undefined, [], "function", "function"]);
+  // The 15 seconds are counted on a clock that only goes forward, not on the time of day.
+  assert.ok(Math.abs(new HeldCut().now() - Date.now()) > 1e9);
+});
+
+test("a member who was removed while the workspace could not be reached is said again until it is heard", async (t) => {
+  const host = await containers(t);
+  await host.turn(avery);
+  const theirs = host.ws.spaces.create({ name: "Avery's" }, "m_avery");
+  host.ws.save();
+  // The workspace is down when the member is removed: the link's call fails.
+  await host.restartWorkspace();
+  const down = gate();
+  host.link.hold.spaces = Promise.reject(new Error("The workspace can't be reached.")).catch((error) => down.promise.then(() => { throw error; }));
+  const released = host.backend.spaces.release("m_avery");
+  down.open();
+  await assert.rejects(released, /can't be reached/);
+  assert.equal(host.ws.spaces.get(theirs).createdBy, "m_avery");
+  // It is back at the next look: what the member made passes to the owner then.
+  host.link.hold.spaces = null;
+  await host.look();
+  assert.equal(host.ws.spaces.get(theirs).createdBy, undefined);
+  // Said once more it changes nothing, and it is not said for ever.
+  let asked = 0;
+  host.link.hold.spaces = { then: (go) => (asked++, go()) };
+  await host.look();
+  await host.look();
+  assert.equal(asked, 0);
+});
+
+test("a workspace that refuses the cut, or knows nothing of spaces, is not asked again at every look", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-refuse-"));
+  const socket = join(dir, "workspace.sock");
+  // A workspace that refuses every cut (as for one it cannot read), and that is from before spaces.
+  const actions = workspaceActions({ snapshot: () => ({}), capabilities: [], subscribe: () => () => {}, screen: { displays: async () => [] }, call: async () => "ok", teamCut: { take: () => { throw new Error("The team as this computer's link sent it can't be read."); }, heard: () => null } }, () => {});
+  const close = await listenWorkspace(socket, actions.dispatch);
+  t.after(() => { close(); actions.unsubscribe(); rmSync(dir, { recursive: true, force: true }); });
+  const sent = { team: 0, spaces: 0 };
+  let now = 0;
+  const { backend, refresh } = headlessBackend((method, args) => (method in sent && sent[method]++, workspaceRequest(socket, method, args)), "test", { team: () => teamCut(stored(), people), clock: () => now, log: () => {} });
+  await refresh();
+  assert.equal(sent.team, 1);
+  for (let looks = 0; looks < 5; looks++) await refresh();
+  assert.equal(await backend.call("renameChat", ["c", "x"], { principal: owner }), "ok", "calls go on");
+  assert.equal(sent.team, 1, "not again at once");
+  // Later each time: after 1.5 seconds, then 3, then 6, and never less often than once a minute.
+  const again = [];
+  for (const wait of [1499, 2, 2999, 2, 5999, 2]) {
+    now += wait;
+    await refresh();
+    again.push(sent.team);
+  }
+  assert.deepEqual(again, [1, 2, 2, 3, 3, 4]);
+  now += 10 * 60_000;
+  await refresh();
+  now += 60_001;
+  await refresh();
+  assert.equal(sent.team, 6);
+  // The app's half of Spaces: asked once, then answered here without a request.
+  for (let times = 0; times < 4; times++) await assert.rejects(backend.spaces.ensure("m_avery"));
+  await assert.rejects(backend.spaces.snapshot("s_1"));
+  assert.equal(sent.spaces, 1);
 });
