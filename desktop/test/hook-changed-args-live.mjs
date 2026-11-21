@@ -21,12 +21,20 @@
 //   F  Botkins' limit (STOP_BLOCKS) on a plugin's agentStop hook: a plugin folder whose Stop hook is a
 //      real shell command that always answers block, run through Botkins' own pluginSession() handler
 //
+// What the real runtime sent as `stopHookActive` in case F (SDK 2.0.1, run of 2026-11-21): `false` at
+// the first end of the turn, then `true` at each end that followed a block (false, true, true, true).
+// Botkins' count starts again only at `false`, so it ran 1, 2, 3 and dropped the block at the fourth
+// end: 4 model requests, and the turn ended by itself. The line of case F prints the values of each run.
+//
+// The temporary folders are made in the system's own temporary folder (TMPDIR, else os.tmpdir()).
+//
 
 // Environment: BOTKINS_PROBE_LIMIT_MS (whole run, default 900000), BOTKINS_PROBE_CASE_MS (one
 // session, default 90000), QUICK=1 (a short run: A, B, D deny, E twice, F), BOTKINS_PROBE_DEBUG=1
 // (print the raw permission requests and hook inputs).
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -37,7 +45,7 @@ const LIMIT_MS = Number(process.env.BOTKINS_PROBE_LIMIT_MS) || (QUICK ? 360_000 
 const CASE_MS = Number(process.env.BOTKINS_PROBE_CASE_MS) || (QUICK ? 45_000 : 90_000);
 
 if (process.argv[2] !== "--isolated") {
-  const home = mkdtempSync(join(process.env.TMPDIR || "/private/tmp", "botkins-hook-args-live-"));
+  const home = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "botkins-hook-args-live-"));
   try {
     const env = {
       HOME: home,
@@ -59,7 +67,7 @@ if (process.argv[2] !== "--isolated") {
     rmSync(home, { recursive: true, force: true });
   }
 } else {
-  const root = mkdtempSync(join(process.env.TMPDIR || "/private/tmp", "botkins-hook-args-live-inner-"));
+  const root = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "botkins-hook-args-live-inner-"));
   const DEBUG = !!process.env.BOTKINS_PROBE_DEBUG;
   const isShellTool = (name) => /^(bash|shell|powershell)$/i.test(name ?? "");
   const t0 = performance.now();

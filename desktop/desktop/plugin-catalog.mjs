@@ -298,10 +298,24 @@ function normalizeMetadata(entry) {
   return metadata;
 }
 
+/**
+ * A plugin's name, or null. A name is one word of letters, digits, dots, dashes and underscores, with
+ * a letter or a digit first. The id (`name@marketplace`) is printed inside commands that a person or an
+ * agent is told to run; a name with a space, a quote, a semicolon, a `$` or a leading dash would be more
+ * than a name once it is pasted into a shell. The text is trimmed first, as the manifest's name always was.
+ */
+function pluginName(value) {
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  return name.length >= 1 && name.length <= 200 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) ? name : null;
+}
+
+const NAME_REFUSED = "This plugin's name is not one word of letters, digits, dots, dashes and underscores, so Botkins does not install it.";
+
 function listingFromEntry(entry, marketplace) {
   if (!entry || typeof entry !== "object") return null;
-  const name = typeof entry.name === "string" ? entry.name.trim() : "";
-  if (!name || name.length > 200 || !entry.source) return null;
+  const name = pluginName(entry.name);
+  if (!name || !entry.source) return null;
   return {
     id: `${name}@${marketplace.id}`,
     name,
@@ -405,8 +419,10 @@ function parsePluginFiles(files, folder = undefined) {
   if (!starts.manifestPath) fail("Plugin has no supported plugin.json manifest.");
   const { manifest } = starts;
   if (!manifest) fail(`The plugin's manifest (${starts.manifestPath}) is not a JSON object.`);
-  const name = typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : undefined;
-  if (!name) fail("Plugin manifest is missing a name.");
+  const named = typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : undefined;
+  if (!named) fail("Plugin manifest is missing a name.");
+  const name = pluginName(named);
+  if (!name) fail(NAME_REFUSED);
   // What is shown is shown whole. A plugin with a command too long to show is not installed.
   if (starts.refused.length) fail(`This plugin cannot be shown whole, so Botkins does not install it. ${starts.refused[0].why}`);
   const { mcpServers, hooks, sentTo, notRun } = describeStarts(starts);
@@ -893,6 +909,8 @@ export class PluginCatalog {
     const temporary = { id: sha256(source).slice(0, 16), name: source, source, builtIn: false };
     const loaded = await this._readMarketplace(temporary, sourceInfo);
     const id = loaded.id;
+    // The marketplace's id goes after the @ in every plugin id, so it is one word too.
+    if (!pluginName(id)) fail("This marketplace's name is not one word of letters, digits, dots, dashes and underscores, so Botkins does not add it.");
     const existing = this.marketplacesById.get(id);
     if (existing && (existing.builtIn || existing.source !== source)) fail(`Marketplace id ${id} is already registered from another source.`);
     const record = {
@@ -990,7 +1008,9 @@ export class PluginCatalog {
     const marketplace = this.marketplacesById.get(marketplaceId);
     if (!marketplace) fail(`Unknown marketplace: ${marketplaceId}`);
     await this._ensureMarketplace(marketplace);
-    const entry = (marketplace._entries || []).find((candidate) => candidate?.name === id.slice(0, at));
+    // The same reading as the listing: an entry that the listing leaves out cannot be resolved.
+    const wanted = id.slice(0, at);
+    const entry = (marketplace._entries || []).find((candidate) => listingFromEntry(candidate, marketplace)?.name === wanted);
     if (!entry) fail(`Unknown plugin: ${id}`);
     const listing = listingFromEntry(entry, marketplace);
     const source = normalizeGithubSource(entry.source, marketplace._sourceInfo || await this._marketplaceSource(marketplace.source));

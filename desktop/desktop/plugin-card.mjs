@@ -6,6 +6,13 @@
 // Every piece of text that comes from the plugin goes through shownText (shown-text.mjs): a
 // character that hides or turns text is written as its number, so a line cannot look like
 // another line.
+//
+// Nothing that decides what a plugin does is ever shortened: a command, an argument, a folder, an
+// address, a value, a default and every name are shown whole. Only free text that decides nothing
+// (a "why" sentence, a warning) is cut, and the cut is marked outside any quotes. When the card
+// still cannot show the whole description (it would need more lines than the limit, or the
+// description itself holds less than it counts), `whole` is false and the caller must not offer
+// a yes on it.
 import { shownText } from "./shown-text.mjs";
 
 const LINE_LIMIT = 4200;
@@ -17,15 +24,20 @@ const MORE_LINE = "and more: look at the plugin in Settings";
 const list = (value) => (Array.isArray(value) ? value : []);
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
 
-// Text from the plugin, made safe and cut at the limit. The cut never leaves half of a written
-// number, and it never splits a pair of surrogates.
-const safe = (value, limit = TEXT_LIMIT) => {
+// Text from the plugin, made safe and never cut.
+const safe = (value) => shownText(value ?? "");
+
+// Text from the plugin, made safe and cut at the limit, for text that decides nothing or that is
+// shown outside the card. The cut never leaves half of a written number, and it never splits a
+// pair of surrogates. `mark` is false for a name, which a person sees whole in the card.
+export const shownCut = (value, limit, mark = true) => {
   const text = shownText(value ?? "");
   if (text.length <= limit) return text;
   let cut = text.slice(0, limit).replace(/\\(?:u(?:\{[0-9a-f]*)?)?$/, "");
   if (/[\ud800-\udbff]$/.test(cut)) cut = cut.slice(0, -1);
-  return cut + " …";
+  return mark ? cut + " …" : cut;
 };
+const free = (value) => shownCut(value, TEXT_LIMIT);
 
 // A command, an argument, an address or a folder is never cut: a person must see all of it. The
 // host bounds them already, and a line that is still too long is carried on in the next line.
@@ -52,7 +64,7 @@ const environment = (rows, notSet) => [
   ),
   ...list(notSet).map((row) =>
     row && typeof row === "object" && row.why != null
-      ? "      not set by Botkins: " + safe(row.name) + " (" + safe(row.why) + ")"
+      ? "      not set by Botkins: " + safe(row.name) + " (" + free(row.why) + ")"
       : "      not set by Botkins: " + safe(nameOf(row)),
   ),
 ];
@@ -89,10 +101,11 @@ const wrapped = (line) => {
 };
 
 /**
- * The lines of the card, built only from the description. `bots` is the text for the bots line,
- * `action` is the bot's request, `id` is the plugin's id when the description does not hold it.
+ * The card, built only from the description: its lines, and whether they are the whole of it.
+ * `bots` is the text for the bots line, `action` is the bot's request, `id` is the plugin's id
+ * when the description does not hold it.
  */
-export function pluginCardLines(plugin, { bots, action, id } = {}) {
+export function pluginCard(plugin, { bots, action, id } = {}) {
   const card = plugin ?? {};
   const contents = card.contents ?? {};
   const hooks = list(contents.hooks);
@@ -100,6 +113,7 @@ export function pluginCardLines(plugin, { bots, action, id } = {}) {
   const local = servers.filter((s) => !isRemote(s));
   const remote = servers.filter(isRemote);
   const lines = [];
+  let complete = true;
 
   if (action === "update") lines.push("After this update:");
   lines.push("Plugin: " + [safe(card.name), card.version != null ? safe(card.version) : null].filter((x) => x != null && x !== "").join(" ") + " (" + safe(id ?? card.id) + ")");
@@ -155,28 +169,37 @@ export function pluginCardLines(plugin, { bots, action, id } = {}) {
     for (const field of config) lines.push(setting(field));
   }
 
-  const notRun = card.notRun;
+  // The host puts these two under contents; a bare description may hold them at the top.
+  const notRun = contents.notRun ?? card.notRun;
   const rows = list(Array.isArray(notRun) ? notRun : notRun?.items);
   const notRunCount = Array.isArray(notRun) ? rows.length : Math.max(Number(notRun?.count) || 0, rows.length);
   if (notRunCount > 0) {
     lines.push("Not run by Botkins:");
-    for (const row of rows) lines.push("  " + safe(row.what) + " " + safe(row.name) + ": " + safe(row.why));
-    if (notRunCount > rows.length) lines.push("  and " + (notRunCount - rows.length) + " more");
+    for (const row of rows) lines.push("  " + safe(row.what) + " " + safe(row.name) + ": " + free(row.why));
+    if (notRunCount > rows.length) {
+      lines.push("  and " + (notRunCount - rows.length) + " more");
+      complete = false;
+    }
   }
 
-  const other = card.otherFiles;
+  const other = contents.otherFiles ?? card.otherFiles;
   if (other && Number(other.count) > 0) {
     lines.push("Other files of the plugin: " + plural(Number(other.count), "file", "files") + ", " + plural(Number(other.bytes) || 0, "byte", "bytes") + ".");
     const marked = list(other.files).filter((f) => f && f.config);
     const shown = marked.slice(0, CONFIG_ROWS);
+    if (marked.length > shown.length) complete = false;
     for (const file of shown) lines.push("  " + safe(file.path) + (file.files != null ? " (" + plural(Number(file.files) || 0, "file", "files") + ")" : ""));
     const covered = shown.reduce((sum, f) => sum + (f.files != null ? Number(f.files) || 0 : 1), 0);
     if (shown.length && Number(other.count) > covered) lines.push("  and " + (Number(other.count) - covered) + " more");
     if (hooks.length || local.length) lines.push("A command runs with these files, and Botkins cannot show all that they make it do.");
   }
 
-  for (const note of list(card.warnings)) lines.push("Note: " + safe(note));
+  for (const note of list(card.warnings)) lines.push("Note: " + free(note));
 
   const out = lines.flatMap(wrapped);
-  return out.length > LINES_LIMIT ? [...out.slice(0, LINES_LIMIT - 1), MORE_LINE] : out;
+  if (out.length <= LINES_LIMIT) return { lines: out, whole: complete };
+  return { lines: [...out.slice(0, LINES_LIMIT - 1), MORE_LINE], whole: false };
 }
+
+/** The lines of the card, for a caller that does not ask whether they are the whole. */
+export const pluginCardLines = (plugin, options) => pluginCard(plugin, options).lines;

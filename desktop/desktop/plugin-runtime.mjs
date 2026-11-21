@@ -220,6 +220,11 @@ function runHook(command, input, options) {
     });
     child.on("error", () => finish(null));
     child.on("close", (code) => finish(code === 0 ? output : null));
+    // A hook need not read what it is sent. One that ends first closes its input, and the write then fails (EPIPE).
+    // That is no fault of the hook: its answer still counts. With no listener here, that failure would stop the app.
+    child.stdin.on("error", () => {});
+    // What a hook writes to its error output is not kept, but it is read, so that a hook that writes much there is not held up.
+    child.stderr.resume();
     try {
       child.stdin.end(JSON.stringify(input));
     } catch {
@@ -228,7 +233,6 @@ function runHook(command, input, options) {
   });
 }
 
-/** The handlers for a plugin's hooks. `hooks` is the reading's list: what is in it runs, in that order, and nothing else. */
 /**
  * How many times in a row one plugin's hook may stop a turn from ending. A hook for the end of a
  * turn (`agentStop`) can answer "block", and the runtime then starts one more turn of the model,
@@ -240,6 +244,7 @@ function runHook(command, input, options) {
  */
 export const STOP_BLOCKS = 3;
 
+/** The handlers for a plugin's hooks. `hooks` is the reading's list: what is in it runs, in that order, and nothing else. */
 function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run) {
   const handlers = {};
   // The blocks of this plugin's hook in the chain that is open now, and whether the person was told.

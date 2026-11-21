@@ -445,3 +445,22 @@ test("one plugin's hook keeps a turn going three times in a row and no more, and
   for (let turn = 0; turn < 6; turn++) unsaid.push((await quiet({}))?.decision);
   assert.deepEqual(unsaid, ["block", "block", "block", undefined, undefined, undefined]);
 });
+
+test("a hook that does not read what it is sent does not stop the app, and its answer counts", { skip: process.platform === "win32" }, async () => {
+  const dir = temp();
+  const plugin = join(dir, "does-not-read");
+  mkdirSync(plugin, { recursive: true });
+  // The hook answers and ends at once. It never reads its input, which is larger than a pipe holds.
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "does-not-read", hooks: { hooks: { userPromptSubmitted: [{ command: "echo '{\"additionalContext\":\"said\"}'" }], sessionEnd: [{ command: "true" }] } } }));
+  const session = pluginSession([{ id: "does-not-read@folder", folder: plugin, config: [] }], { dir, chatId: "chat-1", botId: "bot-1" });
+  const large = "x".repeat(2_000_000);
+  // Without a listener for the failed write, this is an error that nobody takes, and the test process ends.
+  for (let round = 0; round < 5; round++) {
+    assert.deepEqual(await session.hooks.handlers.onUserPromptSubmitted({ prompt: large }), { additionalContext: "said" });
+    assert.equal(await session.hooks.handlers.onSessionEnd({ prompt: large }), undefined);
+  }
+  // A hook that writes much to its error output is not held up by it.
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "does-not-read", hooks: { hooks: { sessionStart: [{ command: "head -c 300000 /dev/zero >&2; echo '{\"additionalContext\":\"after\"}'", timeoutSec: 5 }] } } }));
+  const loud = pluginSession([{ id: "does-not-read@folder", folder: plugin, config: [] }], { dir, chatId: "chat-2", botId: "bot-1" });
+  assert.deepEqual(await loud.hooks.handlers.onSessionStart({}), { additionalContext: "after" });
+});

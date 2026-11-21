@@ -2,7 +2,7 @@
 // from the whole description, and every text from the plugin goes through shownText.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pluginCardLines } from "../desktop/plugin-card.mjs";
+import { pluginCard, pluginCardLines } from "../desktop/plugin-card.mjs";
 import { hasUnshown } from "../desktop/shown-text.mjs";
 
 const full = {
@@ -188,4 +188,68 @@ test("a long command is carried on, not cut; other text is cut; the card is boun
   );
   assert.equal(many.length, 400);
   assert.equal(many[399], "and more: look at the plugin in Settings");
+});
+
+test("a card that is cut, or that holds less than the description counts, is not whole", () => {
+  const many = pluginCard(
+    { name: "many", contents: { hooks: Array.from({ length: 500 }, (_, i) => ({ event: "e" + i, command: "run", env: [] })) } },
+    { bots: "b", action: "install", id: "many" },
+  );
+  assert.equal(many.whole, false);
+  assert.equal(many.lines.length, 400);
+  assert.equal(many.lines.at(-1), "and more: look at the plugin in Settings");
+
+  const rows = [{ what: "hook", name: "x", why: "no" }];
+  const notRun = (contents, top) => pluginCard({ name: "n", contents, ...top }, { bots: "b", action: "install", id: "n" });
+  assert.equal(notRun({ notRun: { count: 5, items: rows } }).whole, false);
+  assert.equal(notRun({}, { notRun: { count: 5, items: rows } }).whole, false);
+  assert.equal(notRun({ notRun: { count: 1, items: rows } }).whole, true);
+  assert.equal(notRun({ notRun: rows }).whole, true);
+  // The host puts the not-run rows under contents, and they are shown from there.
+  assert.ok(notRun({ notRun: { count: 1, items: rows } }).lines.includes("  hook x: no"));
+
+  const files = (n) => Array.from({ length: n }, (_, i) => ({ path: "c" + i, bytes: 1, config: true }));
+  assert.equal(notRun({ otherFiles: { count: 13, bytes: 13, files: files(13) } }).whole, false);
+  assert.equal(notRun({ otherFiles: { count: 12, bytes: 12, files: files(12) } }).whole, true);
+  assert.equal(pluginCard(full, { bots: "Pip", action: "install", id: "cal@market" }).whole, false);
+  assert.equal(notRun({ hooks: [{ event: "e", command: "run" }] }).whole, true);
+});
+
+test("an environment value, a header's value and a default are never shortened", () => {
+  const value = (n) => "v".repeat(n);
+  const card = pluginCard(
+    {
+      name: "values",
+      contents: {
+        hooks: [{ event: "e", command: "run", env: [{ name: "SHORT", value: value(1001) }, { name: "LONG", value: value(4000) }] }],
+        mcpServers: [{ name: "r", kind: "remote", url: "https://r.example", headers: [{ name: "H", value: value(4000) }] }],
+      },
+      config: [{ key: "K", secret: false, required: false, default: value(1500), sentTo: [] }],
+    },
+    { bots: "b", action: "install", id: "values" },
+  );
+  assert.equal(card.whole, true);
+  const joined = card.lines.join("\n").replace(/\n {6}\(continued\) /g, "");
+  assert.ok(joined.includes('SHORT="' + value(1001) + '"'));
+  assert.ok(joined.includes('LONG="' + value(4000) + '"'));
+  assert.ok(joined.includes('H="' + value(4000) + '"'));
+  assert.ok(joined.includes('default "' + value(1500) + '"'));
+  assert.ok(!joined.includes(" …"));
+});
+
+test("a name that decides something is never shortened, free text is, outside any quotes", () => {
+  const name = "n".repeat(3000);
+  const card = pluginCard(
+    {
+      name: "names",
+      contents: { hooks: [{ event: "e", command: "run", env: [], envNotSet: [{ name, why: "w".repeat(2000) }] }] },
+      notRun: { count: 1, items: [{ what: "tool", name, why: "y".repeat(2000) }] },
+    },
+    { bots: "b", action: "install", id: "names" },
+  );
+  const joined = card.lines.join("\n").replace(/\n {6}\(continued\) /g, "");
+  assert.equal(joined.split(name).length, 3);
+  assert.ok(joined.includes("w".repeat(1000) + " …)"));
+  assert.ok(!joined.includes("w".repeat(1001)));
+  assert.ok(joined.includes("y".repeat(1000) + " …"));
 });
