@@ -10,8 +10,8 @@ const full = {
   version: "1.2.0",
   revision: "rev-1",
   contents: {
-    skills: ["a", "b"],
-    agents: ["c"],
+    skills: ["skills/a/SKILL.md", "skills/b/SKILL.md"],
+    agents: ["agents/c.md"],
     commands: [],
     hooks: [
       {
@@ -61,6 +61,11 @@ test("the card shows the whole description", () => {
     "Bots: Pip",
     "Revision: rev-1",
     "Holds: 2 skills, 1 agent, 0 commands.",
+    "Skills:",
+    "  a",
+    "  b",
+    "Agents:",
+    "  c.md",
     "Runs on this computer:",
     "  at SessionStart: node start.js --quiet",
     "      for at most 30 seconds",
@@ -252,4 +257,69 @@ test("a name that decides something is never shortened, free text is, outside an
   assert.ok(joined.includes("w".repeat(1000) + " …)"));
   assert.ok(!joined.includes("w".repeat(1001)));
   assert.ok(joined.includes("y".repeat(1000) + " …"));
+});
+
+test("the card names the files that go on to the runtime, and the language servers", () => {
+  const lines = pluginCardLines(
+    {
+      name: "files",
+      contents: {
+        skills: ["skills/recall/SKILL.md", "skills/recall/run.sh", "skills/recall/paper.pdf", "skills/deep/nested/SKILL.md"],
+        agents: ["agents/review.agent.md"],
+        commands: ["commands/deploy.md"],
+        lspServers: ["tsserver", "gopls"],
+      },
+    },
+    { bots: "Pip", action: "install", id: "files" },
+  );
+  assert.deepEqual(lines.slice(2, 13), [
+    "Holds: 4 skills, 1 agent, 1 command.",
+    "Skills:",
+    "  recall",
+    "  deep/nested",
+    "  and 2 other files of these skills",
+    "Agents:",
+    "  review.agent.md",
+    "Commands:",
+    "  deploy.md",
+    "Language servers (Botkins starts none of them): tsserver, gopls",
+    "Runs nothing on this computer.",
+  ]);
+  // A kind with no files gets no heading, and a plugin without language servers has no such line.
+  const none = pluginCardLines({ name: "n", contents: { skills: [] } }, { bots: "b", action: "install", id: "n" });
+  assert.ok(!none.some((line) => /^(Skills|Agents|Commands|Language servers)/.test(line)));
+});
+
+test("a long list of names is cut at 30 and the card is still whole", () => {
+  const card = pluginCard(
+    {
+      name: "many",
+      contents: {
+        skills: Array.from({ length: 40 }, (_, i) => "skills/s" + i + "/SKILL.md"),
+        lspServers: Array.from({ length: 25 }, (_, i) => "ls" + i),
+      },
+    },
+    { bots: "b", action: "install", id: "many" },
+  );
+  const at = card.lines.indexOf("Skills:");
+  assert.equal(card.lines[at + 1], "  s0");
+  assert.equal(card.lines[at + 30], "  s29");
+  assert.equal(card.lines[at + 31], "  and 10 more");
+  assert.ok(!card.lines.includes("  s30"));
+  const servers = card.lines.find((line) => line.startsWith("Language servers"));
+  assert.ok(servers.endsWith("ls19, and 5 more"));
+  assert.ok(!servers.includes("ls20"));
+  assert.equal(card.whole, true);
+});
+
+test("a character that hides or turns text in a file name is written as its number", () => {
+  const lines = pluginCardLines(
+    { name: "n", contents: { skills: ["skills/a‮b/SKILL.md"], agents: ["agents/x‮y.md"], commands: ["commands/c​d.md"], lspServers: ["l‮s"] } },
+    { bots: "b", action: "install", id: "n" },
+  );
+  for (const line of lines) assert.equal(hasUnshown(line), false, line);
+  assert.ok(lines.includes("  a\\u{202e}b"));
+  assert.ok(lines.includes("  x\\u{202e}y.md"));
+  assert.ok(lines.includes("  c\\u{200b}d.md"));
+  assert.ok(lines.includes("Language servers (Botkins starts none of them): l\\u{202e}s"));
 });

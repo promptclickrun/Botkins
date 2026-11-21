@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pluginOAuthServers, pluginServerName, pluginSession, plainAgentFile, plainHeaderFile } from "../desktop/plugin-runtime.mjs";
+import { MIN_SECRET_LENGTH, newStops, pluginOAuthServers, pluginServerName, pluginSession, plainAgentFile, plainHeaderFile, secretField, STOP_BLOCKS, TURN_STOP_BLOCKS } from "../desktop/plugin-runtime.mjs";
 
 const temp = () => mkdtempSync(join(tmpdir(), "botkins-plugin-runtime-"));
 
@@ -463,4 +463,107 @@ test("a hook that does not read what it is sent does not stop the app, and its a
   writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "does-not-read", hooks: { hooks: { sessionStart: [{ command: "head -c 300000 /dev/zero >&2; echo '{\"additionalContext\":\"after\"}'", timeoutSec: 5 }] } } }));
   const loud = pluginSession([{ id: "does-not-read@folder", folder: plugin, config: [] }], { dir, chatId: "chat-2", botId: "bot-1" });
   assert.deepEqual(await loud.hooks.handlers.onSessionStart({}), { additionalContext: "after" });
+});
+
+/** Plugins whose only hook is the end of a turn. `blockers` is the set of hook commands that answer "block" now. */
+function stoppers(ids, { stops, notes = [] } = {}) {
+  const dir = temp();
+  const blockers = new Set();
+  const plugins = ids.map((id) => {
+    const folder = join(dir, id);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "plugin.json"), JSON.stringify({ name: id, hooks: { hooks: { Stop: [{ hooks: [{ type: "command", command: id }] }] } } }));
+    return { id, folder, config: [] };
+  });
+  const run = async (command) => (blockers.has(command) ? JSON.stringify({ decision: "block", reason: "go on" }) : "{}");
+  const open = (chatId = "chat-1") => pluginSession(plugins, { dir, chatId, botId: "bot-1", note: (line) => notes.push(line), ...(stops && { stops }) }, { run }).hooks.handlers.onAgentStop;
+  // One end of a turn at which only `id` answers "block". Returns whether the block got through.
+  const endWith = async (stop, id, input) => {
+    blockers.clear();
+    blockers.add(id);
+    return (await stop(input))?.decision === "block";
+  };
+  return { open, endWith, notes };
+}
+
+const OWN = (id) => "The plugin " + id + " kept this turn going 3 times. Botkins did not let it do that again.";
+const TURN = "Plugins kept this turn going 6 times. Botkins did not let them do that again.";
+
+test("two plugins that block in turn keep a turn going three times each, and each is told its own line", async () => {
+  assert.equal(TURN_STOP_BLOCKS, 6);
+  assert.equal(TURN_STOP_BLOCKS, 2 * STOP_BLOCKS);
+  const { open, endWith, notes } = stoppers(["a", "b"]);
+  const stop = open();
+  const got = [];
+  // (Only the very first end of the turn says false: every handler sees every end, so a false later would start both counts again.)
+  for (let round = 0; round < 4; round++) for (const id of ["a", "b"]) got.push(await endWith(stop, id, { stopHookActive: round + (id === "a" ? 0 : 1) > 0 }));
+  // Three each (six together), then nothing from either. The turn's limit is not what stopped them: each plugin's own was first.
+  assert.deepEqual(got, [true, true, true, true, true, true, false, false]);
+  assert.deepEqual(notes, [OWN("a"), OWN("b")]);
+  // No new line for the same plugin.
+  assert.equal(await endWith(stop, "a", { stopHookActive: true }), false);
+  assert.equal(notes.length, 2);
+});
+
+test("all plugins together keep a turn going six times: the turn's limit stops a plugin that is still within its own, with one line", async () => {
+  const { open, endWith, notes } = stoppers(["a", "b", "c"]);
+  const stop = open();
+  const got = [];
+  for (const id of ["a", "a", "a", "b", "b", "b", "c", "c"]) got.push(await endWith(stop, id, { stopHookActive: true }));
+  assert.deepEqual(got, [true, true, true, true, true, true, false, false]);
+  assert.deepEqual(notes, [TURN]);
+});
+
+test("a session opened again in the middle of a turn goes on with the count, with the count that the caller keeps", async () => {
+  const stops = newStops();
+  const { open, endWith, notes } = stoppers(["a"], { stops });
+  const first = open();
+  assert.equal(await endWith(first, "a", { stopHookActive: false }), true);
+  assert.equal(await endWith(first, "a", { stopHookActive: true }), true);
+  // A retry after a stall, or a change of model: the session is opened again, and its handlers are new.
+  const again = open();
+  assert.equal(await endWith(again, "a", { stopHookActive: true }), true);
+  assert.equal(await endWith(again, "a", { stopHookActive: true }), false);
+  assert.equal(await endWith(first, "a", { stopHookActive: true }), false);
+  assert.deepEqual(notes, [OWN("a")]);
+  assert.equal(stops.total, 3);
+  // Without an object from the caller a session has its own, so a count never leaks from one session into another.
+  const alone = stoppers(["a"]);
+  assert.equal(await alone.endWith(alone.open(), "a", { stopHookActive: true }), true);
+});
+
+test("the word stopHookActive: false starts the count of one plugin again, and the turn's limit still holds", async () => {
+  const { open, endWith, notes } = stoppers(["a"]);
+  const stop = open();
+  const got = [];
+  // Chains of two blocks, each started by a first end of a turn.
+  for (const active of [false, true, false, true, false, true, false, true]) got.push(await endWith(stop, "a", { stopHookActive: active }));
+  assert.deepEqual(got, [true, true, true, true, true, true, false, false]);
+  assert.deepEqual(notes, [TURN]);
+});
+
+test("the caller's object is what the count is, so a new turn that clears it starts the counts again", async () => {
+  const stops = newStops();
+  const { open, endWith, notes } = stoppers(["a", "b", "c"], { stops });
+  const stop = open();
+  for (const id of ["a", "a", "a", "b", "b", "b"]) assert.equal(await endWith(stop, id, {}), true);
+  assert.equal(await endWith(stop, "c", {}), false);
+  assert.deepEqual(notes, [TURN]);
+  // (What the manager's turnStarted does.) The same handler, with no word from the runtime, may block again.
+  stops.plugins.clear();
+  Object.assign(stops, { total: 0, toldTotal: false });
+  assert.equal(await endWith(stop, "c", {}), true);
+  assert.equal(await endWith(stop, "a", {}), true);
+});
+
+test("one rule says that a setting is secret, and the length that a secret has to have is one constant", () => {
+  assert.equal(MIN_SECRET_LENGTH, 4);
+  for (const field of [{ key: "X", secret: true }, { key: "X", sensitive: true }, { key: "DB_PASSWD" }, { key: "my_credential" }, { key: "API_KEY" }, { key: "Token" }]) assert.equal(secretField(field), true, JSON.stringify(field));
+  for (const field of [{ key: "PORT" }, { key: "VERBOSE", secret: false }, { key: "HOST", sensitive: "yes" }, {}]) assert.equal(secretField(field), false, JSON.stringify(field));
+});
+
+test("a tool is held back for the value of a setting named like a password, with no secret mark", () => {
+  const name = pluginServerName("tool", "local");
+  assert.equal(toolPlugin(["server.js", "synthetic-secret"], [{ key: "DB_PASSWD" }], { DB_PASSWD: "synthetic-secret" }).mcpServers[name], undefined);
+  assert.equal(toolPlugin(["server.js", "synthetic-secret"], [{ key: "MY_CREDENTIAL" }], { MY_CREDENTIAL: "synthetic-secret" }).mcpServers[name], undefined);
 });

@@ -18,8 +18,11 @@ import { shownText } from "./shown-text.mjs";
 const MAX_HOOK_OUTPUT = 256_000;
 const MAX_CONTEXT = 12_000;
 const MAX_PROMPT = 100_000;
-const MIN_SECRET_LENGTH = 4;
+/** A secret shorter than this would match a word of a command by accident, so it is not looked for there. */
+export const MIN_SECRET_LENGTH = 4;
 const SECRET_NAME = /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL)/i;
+/** The one rule for "this setting is secret": the catalog says so, or its name sounds like one. The runtime and the manager both ask here. */
+export const secretField = (field) => field?.secret === true || field?.sensitive === true || SECRET_NAME.test(String(field?.key ?? ""));
 const MCP_LAUNCHER = fileURLToPath(new URL("./plugin-mcp-launcher.mjs", import.meta.url));
 
 const text = (value, max) => (typeof value === "string" && value.length <= max && !value.includes("\0") ? value : null);
@@ -77,7 +80,7 @@ function approvedSettings(plugin, manifest) {
     const key = field.key;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || RESERVED.has(key)) continue;
     if (field.set === false || field.approved === false || field.enabled === false || field.configured === false) continue;
-    const secret = field.secret === true || field.sensitive === true || SECRET_NAME.test(key);
+    const secret = secretField(field);
     let value = values[key];
     if (typeof value !== "string" && !secret && typeof field.value === "string") value = field.value;
     if (typeof value !== "string" && !secret && typeof field.default === "string") value = field.default;
@@ -244,11 +247,28 @@ function runHook(command, input, options) {
  */
 export const STOP_BLOCKS = 3;
 
+/**
+ * How many times in a row all plugins together may stop one turn from ending. Two plugins that
+ * each use their three are six; more than that is a turn that does not end, at the person's
+ * cost. It is counted for the whole turn: only the app's start of the next turn resets it
+ * (`turnStarted` of the manager), not the runtime's word `stopHookActive`.
+ */
+export const TURN_STOP_BLOCKS = 6;
+
+/** The count of blocks of one chat's turn. The caller keeps it, so a session that is opened again in the middle of a turn goes on with it. */
+export const newStops = () => ({ plugins: new Map(), total: 0, toldTotal: false });
+
 /** The handlers for a plugin's hooks. `hooks` is the reading's list: what is in it runs, in that order, and nothing else. */
 function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run) {
   const handlers = {};
-  // The blocks of this plugin's hook in the chain that is open now, and whether the person was told.
-  const stop = { blocks: 0, told: false };
+  // The blocks of this plugin's hook in the chain that is open now, and whether the person was told. They are kept
+  // in the object of the turn (`context.stops`), not here: this function runs again when the session is opened again.
+  // (The count is looked up at each end of a turn: the app clears it when a new turn starts, and a warm session goes on.)
+  const stops = context.stops;
+  const own = () => {
+    if (!stops.plugins.has(plugin.id)) stops.plugins.set(plugin.id, { blocks: 0, told: false });
+    return stops.plugins.get(plugin.id);
+  };
   const byEvent = new Map();
   for (const hook of hooks) byEvent.set(hook.event, [...(byEvent.get(hook.event) ?? []), hook]);
   for (const [event, entries] of byEvent) {
@@ -271,16 +291,26 @@ function makeHandlers(plugin, context, hooks, { builtins, expand }, secrets, run
         if (parsed?.modifiedArgs) currentInput = { ...currentInput, toolArgs: parsed.modifiedArgs, arguments: parsed.modifiedArgs };
       }
       if (event === "agentStop") {
+        const stop = own();
         // The runtime says whether this end of a turn follows a block (`stopHookActive`). A first end starts a new
-        // count. Without that word from the runtime the count is never started again: the limit holds for the session.
+        // count for this plugin. Without that word the count of the plugin goes on until the app starts the next turn.
+        // (The count for the turn as a whole is never started again here.)
         if (input?.stopHookActive === false) Object.assign(stop, { blocks: 0, told: false });
         if (combined.decision === "block") {
-          if (stop.blocks < STOP_BLOCKS) stop.blocks++;
-          else {
+          // The plugin's own limit is asked first: it names the plugin. The turn's limit stops a plugin that is still within its own.
+          if (stop.blocks >= STOP_BLOCKS) {
             delete combined.decision;
             delete combined.reason;
             if (!stop.told) context.note?.("The plugin " + shownText(String(plugin.id)).slice(0, 80) + " kept this turn going " + STOP_BLOCKS + " times. Botkins did not let it do that again.");
             stop.told = true;
+          } else if (stops.total >= TURN_STOP_BLOCKS) {
+            delete combined.decision;
+            delete combined.reason;
+            if (!stops.toldTotal) context.note?.("Plugins kept this turn going " + TURN_STOP_BLOCKS + " times. Botkins did not let them do that again.");
+            stops.toldTotal = true;
+          } else {
+            stop.blocks++;
+            stops.total++;
           }
         }
       }
@@ -507,6 +537,8 @@ export function pluginSession(plugins, context = {}, { run = runHook } = {}) {
     botId: text(String(context.botId ?? ""), 200) ?? "",
     // One line for the turn's activity, when Botkins itself stops something of a plugin.
     note: typeof context.note === "function" ? context.note : null,
+    // The count of blocks of this chat's turn. The manager keeps one for each chat; with none, this session has its own.
+    stops: context.stops?.plugins instanceof Map && Number.isFinite(context.stops.total) ? context.stops : newStops(),
   };
   const directories = [];
   const mcpServers = {};

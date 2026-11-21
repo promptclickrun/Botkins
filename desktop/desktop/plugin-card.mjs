@@ -100,6 +100,29 @@ const wrapped = (line) => {
   return out;
 };
 
+const NAMES_LIMIT = 30;
+const SERVERS_LIMIT = 20;
+
+// The name a person knows a file of the plugin by: a skill is its folder, an agent or a command is
+// its file. `null` is a file that is not the named kind (a script or a paper of a skill).
+const skillName = (path) => (/(?:^|\/)SKILL\.md$/.test(path) ? path.replace(/^skills\//, "").replace(/\/?SKILL\.md$/, "") || null : null);
+const markdownName = (folder) => (path) => (/\.md$/.test(path) ? path.replace(new RegExp("^" + folder + "/"), "") : null);
+
+// The names of one kind of file, and a count of the files that are not named. These lines only
+// tell a person what the files are called: a name decides nothing that the plugin starts (that is
+// in the lines about hooks and tools). So a cut list does not make the card not whole.
+const nameLines = (title, kind, paths, pick) => {
+  const files = paths.map((path) => String(path ?? ""));
+  const names = files.map(pick).filter((name) => name != null);
+  const others = files.length - names.length;
+  if (!names.length && !others) return [];
+  const out = [title + ":"];
+  for (const name of names.slice(0, NAMES_LIMIT)) out.push("  " + safe(name));
+  if (names.length > NAMES_LIMIT) out.push("  and " + (names.length - NAMES_LIMIT) + " more");
+  if (others) out.push("  and " + plural(others, "other file", "other files") + " of these " + kind);
+  return out;
+};
+
 /**
  * The card, built only from the description: its lines, and whether they are the whole of it.
  * `bots` is the text for the bots line, `action` is the bot's request, `id` is the plugin's id
@@ -128,6 +151,16 @@ export function pluginCard(plugin, { bots, action, id } = {}) {
       ].join(", ") +
       ".",
   );
+  lines.push(...nameLines("Skills", "skills", list(contents.skills), skillName));
+  lines.push(...nameLines("Agents", "agents", list(contents.agents), markdownName("agents")));
+  lines.push(...nameLines("Commands", "commands", list(contents.commands), markdownName("commands")));
+
+  // Botkins starts nothing from these, so a cut list loses nothing that runs.
+  const lsp = list(contents.lspServers);
+  if (lsp.length) {
+    const shown = lsp.slice(0, SERVERS_LIMIT).map((name) => safe(nameOf(name)));
+    lines.push("Language servers (Botkins starts none of them): " + shown.join(", ") + (lsp.length > SERVERS_LIMIT ? ", and " + (lsp.length - SERVERS_LIMIT) + " more" : ""));
+  }
 
   if (hooks.length || local.length) {
     lines.push("Runs on this computer:");
