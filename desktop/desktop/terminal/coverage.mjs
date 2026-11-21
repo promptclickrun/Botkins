@@ -15,6 +15,8 @@
 // or an agent can do from a terminal, unless it needs the window itself.
 
 /** Why a call has no command. The list is fixed: a new reason is a decision, not an entry. */
+import { hasUnplain } from "../shown-text.mjs";
+
 export const REASONS = {
   window: "needs a window", // a file dialog, the clipboard, a folder opened in the file manager, a notification, a microphone
   "window's own": "the window's own", // what only the window uses to draw itself: a pane, a preview, a thumbnail
@@ -24,7 +26,6 @@ export const REASONS = {
 /** The parts of the work that still owe commands, in the order they are built. When all are done, `owed` is no longer accepted. */
 export const PARTS = {
   i: "a tool's sign-in from a terminal, with no browser on this computer",
-  c: "plugins: the reviewed revision, settings, chosen bots, a folder plugin, sign-in",
   d: "projects, routines, tasks, the wiki, chats, preferences, credentials, usage, and the rest of a bot",
   e: "Spaces, panels and the team",
 };
@@ -73,7 +74,10 @@ export const WORKSPACE = {
   "plugins.update": cmd("plugins update"),
   "plugins.setEnabled": cmd("plugins enable"),
   "plugins.uninstall": cmd("plugins uninstall"),
-  ...each("plugins.preview plugins.configure plugins.setBots plugins.addFolder", owed("c")),
+  "plugins.preview": cmd("plugins show"),
+  "plugins.configure": cmd("plugins configure"),
+  "plugins.setBots": cmd("plugins bots"),
+  "plugins.addFolder": cmd("plugins add-folder"),
   // ── Tools (MCP servers) and skills ──
   saveMcpServer: cmd("tools add"),
   setMcpServerEnabled: cmd("tools enable"),
@@ -84,7 +88,7 @@ export const WORKSPACE = {
   // A tool's sign-in from a terminal is owed (part i): the address is handed to the person, who
   // signs in on another device and gives back where they were sent. Until then a paired phone
   // signs a tool in and hands the sign-in over. (`tools sign-out` covers the tools a person added;
-  // the tools of a plugin, whose ids start with "plugin-", get theirs with the plugin commands.)
+  // `plugins sign-out` covers the tools of a plugin, whose ids start with "plugin-".)
   ...each("signInMcpServer cancelMcpSignIn", owed("i")),
   importMcpServerFile: no("window"), // a file dialog; `tools import <file>` reads the file itself
   skills: cmd("skills list"),
@@ -191,6 +195,7 @@ export const CHANGES = {
   "plugins.configure": 0,
   "plugins.addFolder": null,
   "plugins.uninstall": 0,
+  "plugins.signOut": 0,
   "config.set": 0,
   "config.replace": null,
   "relay.set": null,
@@ -215,10 +220,10 @@ export const CHANGES = {
   "bots.access.set": 0,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
-export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);
 
-/** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. */
-export const thingForLog = (value) => (typeof value === "string" && /^[^\u0000-\u001f\u007f]{1,80}$/.test(value) ? value : null);
+/** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. It uses the short list (shown-text.mjs): a bot named with a flag or a family emoji is still in its line, and a name with a control character or a mark that turns text around is not. */
+export const thingForLog = (value) => (typeof value === "string" && value.length >= 1 && value.length <= 80 && !hasUnplain(value) ? value : null);

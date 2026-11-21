@@ -7,10 +7,13 @@ import { settings } from "./settings.mjs";
 import { install } from "./install.mjs";
 import { tui } from "./tui.mjs";
 import { botTools, tools } from "./tools.mjs";
+import { pluginCommands } from "./plugins.mjs";
 
 export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings };
 // What one bot has of the tools and skills is said under the bot: `botkins bots tools <bot>`.
 Object.assign(COMMANDS.bots.commands, botTools);
+// Plugins: to install, update and switch one on is to look at it first (cli/commands/plugins.mjs).
+Object.assign(COMMANDS.plugins.commands, pluginCommands);
 
 /** The command the leading words name, and those words: { command, path }, or null. */
 export function find(words) {
@@ -97,7 +100,7 @@ export function describe(version, global = {}) {
     usage: command.usage ?? "botkins " + path.join(" "),
     arguments: command.arguments ?? argumentsOf(command.usage, path),
     options: Object.entries(command.options ?? {}).map(option),
-    // A command with --yes asks a person first. With no terminal it fails and names that flag.
+    // A command with --yes asks a person first. With no terminal it fails and names that flag. A command whose yes must name what was looked at has `asks: "--yes --revision"`.
     ...((command.asks || command.options?.yes) && { asks: command.asks ?? "--yes" }),
     ...(command.details && { details: command.details }),
   });

@@ -412,3 +412,21 @@ test("an id or a value that starts with a dash is given after -- or with =, and 
   // A real mistake still reads as one, with the same help.
   assert.match((await botkins(["devices", "list", "--nope"], { service })).err, /Unknown option '--nope'\./);
 });
+
+test("an error line keeps a name as it was given, and a plugin's text is written with every hidden character as a number", async () => {
+  const family = "Team \u{1f469}‍\u{1f469}‍\u{1f467} ❤️";
+  // A bots command quotes the caller's own word: the emoji stays, and a mark that turns text around is a number.
+  const bots = fakeService({ "bots.remove": (ref) => { throw new ControlError("There is no bot called " + ref + ". See `botkins bots list`.", "NOT_FOUND"); } });
+  const known = await botkins(["bots", "remove", "--yes", "--", family], { service: bots });
+  assert.equal(known.exit, EXIT.failed);
+  assert.equal(known.err, "botkins: There is no bot called " + family + ". See `botkins bots list`.\n");
+  const turned = await botkins(["bots", "remove", "--yes", "--", "Nova‮\u001b"], { service: bots });
+  assert.equal(turned.err, "botkins: There is no bot called Nova\\u{202e}\\u{1b}. See `botkins bots list`.\n");
+  // A plugins command can quote a plugin's text: the wide list, so a zero-width space is a number too.
+  const plugins = fakeService({ "plugins.list": () => { throw new ControlError("The plugin a​b‍ failed.", "FAILED"); } });
+  const quoted = await botkins(["plugins", "list"], { service: plugins });
+  assert.equal(quoted.exit, EXIT.failed);
+  assert.equal(quoted.err, "botkins: The plugin a\\u{200b}b\\u{200d} failed.\n");
+  // The --json document keeps the message as it is.
+  assert.equal((await botkins(["plugins", "list", "--json"], { service: plugins })).json().error.message, "The plugin a​b‍ failed.");
+});

@@ -14,8 +14,25 @@ import { ControlError } from "./socket.mjs";
 import { DESKTOP_ONLY } from "../host/headless.mjs";
 import { CHANGES, thingForLog } from "./coverage.mjs";
 import { toolsApi } from "./control-tools.mjs";
+import { pluginsApi } from "./control-plugins.mjs";
 
 const WAIT_MS = 25_000;
+export const CREDENTIAL_REFERENCES_ON_THE_SOCKET = false; // The owner's choice (asked 2026-11-21, not answered yet): false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them.
+/**
+ * A reference to a saved credential, { "$credential": id }, is resolved by the app to the saved
+ * secret. A caller on the socket cannot read a saved credential, but it could send one to an
+ * address that it chose (a plugin it wrote, a secure request that a bot made). So, while the
+ * owner has not chosen, these calls refuse a reference anywhere in what they are given.
+ */
+const WITHOUT_REFERENCES = ["plugins.install", "plugins.configure", "chat.respond", "respond"];
+// The sentence names what the call at hand has: only a plugin's install and configure take --settings.
+const CHOSEN_IN_THE_APP = "A saved credential is chosen in the app's window or on a paired phone. From the command line, give the value itself";
+const NO_REFERENCES = (name) => CHOSEN_IN_THE_APP + (name.startsWith("plugins.") ? " (`--settings`, or the hidden question)." : ".");
+const holdsReference = (value, depth = 0) => depth <= 8 && value !== null && typeof value === "object" && (Object.hasOwn(value, "$credential") || Object.values(value).some((inner) => holdsReference(inner, depth + 1)));
+/** Refuses the arguments of a call that may not hold a reference to a saved credential (see above). */
+const refuseReferences = (name, args) => {
+  if (!CREDENTIAL_REFERENCES_ON_THE_SOCKET && WITHOUT_REFERENCES.includes(name) && holdsReference(args)) throw new ControlError(NO_REFERENCES(name), "BAD_ARGUMENT");
+};
 const text = (value, max, what) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new ControlError("Give " + what + ".", "BAD_ARGUMENT");
   return value.trim();
@@ -359,7 +376,6 @@ export function controlApi(service) {
     },
 
     // ── Plugins ──────────────────────────────────────────────────────────────────────────────
-    "plugins.list": () => workspace.plugins.list(),
 
     // ── Settings of the host ─────────────────────────────────────────────────────────────────
     "config.get": ([key]) => {
@@ -405,17 +421,34 @@ export function controlApi(service) {
 
     // ── Everything else the workspace can do ─────────────────────────────────────────────────
     /** One of the workspace's own calls, by name (the ones the desktop app's window makes). */
-    call([name, args = []]) {
+    call([name, args = []], context) {
       if (typeof name !== "string" || !Object.hasOwn(handlers, name)) throw new ControlError("The workspace has no call named " + name + ".", "UNKNOWN_METHOD");
       if (!Array.isArray(args)) throw new ControlError("A call's arguments are a list.", "BAD_ARGUMENT");
+      refuseReferences(name, args);
+      // A plugin call that this service has its own version of ("plugins.setEnabled", …) runs that
+      // one, not the app's raw call. The rules are in the service's call: the revision that was
+      // looked at, and the log line. So `call` cannot be a way round them. (Only plugin calls:
+      // "stop" and "models" are other things here than in the app.)
+      if (name.startsWith("plugins.") && Object.hasOwn(api, name)) return api[name](args, context);
       return handlers[name](...args);
     },
     methods: () => ({ control: Object.keys(api).sort(), workspace: Object.keys(handlers).sort() }),
   };
   // Tools (MCP servers), skills, and a bot's tools, skills and access (desktop/terminal/control-tools.mjs).
   Object.assign(api, toolsApi({ workspace, handlers, bot }));
-  // The plugin calls go by their own names ("plugins.install", …), as a phone makes them.
+  // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
+  Object.assign(api, pluginsApi({ workspace, handlers, bot }));
+  // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
   for (const name of Object.keys(handlers)) if (name.startsWith("plugins.") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
+  // A reference to a saved credential is refused by the named call too, before its own work starts.
+  for (const name of WITHOUT_REFERENCES) {
+    if (!Object.hasOwn(api, name)) continue;
+    const own = api[name];
+    api[name] = (args, context) => {
+      refuseReferences(name, args);
+      return own(args, context);
+    };
+  }
   return api;
 }
 
@@ -437,7 +470,16 @@ export function dispatcher(api, { log } = {}) {
   };
   return async (method, args, context) => {
     if (!Object.hasOwn(api, method)) throw new ControlError("The service has no call named " + method + ". Is the command line newer than the service? Run `botkins status`.", "UNKNOWN_METHOD");
-    const value = await api[method](args, context);
+    let value;
+    try {
+      value = await api[method](args, context);
+    } catch (error) {
+      // A change that fails can still have done a part of its work (a plugin's files written, then
+      // an error). So it leaves a line too, with other first words: no value, and no error text.
+      const tried = log && said(method, args, undefined);
+      if (tried) log("Tried from the command line: " + tried.trim() + " (it failed)");
+      throw error;
+    }
     const line = log && said(method, args, value);
     if (line) log("Changed from the command line: " + line.trim());
     return value;

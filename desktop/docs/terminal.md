@@ -169,7 +169,7 @@ Other commands for bots:
 - `botkins bots edit <bot>` opens the bot in your editor. With `--name`, `--role`, `--instructions`, `--instructions-file` or `--model`, it changes that field directly.
 - `botkins bots remove <bot>` removes a bot and its chats.
 - `botkins routines list`, `run`, `pause` and `resume` operate the routines of your bots.
-- `botkins plugins list`, `browse`, `install` and `uninstall` operate plugins.
+- `botkins plugins` installs and manages plugins. See "Plugins" below.
 
 A paired phone does everything else for now: tasks, the wiki, projects and credentials.
 
@@ -199,6 +199,38 @@ botkins bots skills Nova --off weekly-report
 - `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills. The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk; `botkins folders` lists what you can choose, and on a server you copy the folder there first. A plugin folder is not taken as a folder of skills, because a plugin can run commands.
 - `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers; like each turn of the bot, it starts the bot's tools that are programs and are on.
 - `botkins tools forget-approvals` forgets the approvals that were given to tools "for this chat".
+
+## Plugins
+
+A plugin adds skills, agents, commands, tools and hooks to bots. A hook, and a tool that is a local program, run commands on this computer. Thus a plugin is looked at before it is installed, updated or switched on.
+
+```sh
+botkins plugins browse memory
+botkins plugins show memory@some-market
+botkins plugins install memory@some-market --settings settings.json
+botkins plugins install --yes --revision=<revision> -- memory@some-market
+botkins plugins configure memory
+botkins plugins bots memory --bot Nova
+```
+
+- **`botkins plugins show <id>` is the look.** It prints what the plugin holds and all that it runs on this computer: each hook's whole command, and each program with every word of its line, its folder and the names of its environment values. It prints a hook's time limit. It prints the web addresses that the plugin reaches, with each header as the plugin wrote it, the kind of the tool (`as a stream (sse)`) and the sign-in with its client id. It prints each setting with the place that its value goes to, and its default (never for a secret setting, because a default goes into the values that are sent). It prints what Botkins does not run, with the reason, and the other files of the plugin: how many, how large, and the names of the configuration files (twelve at most, then "and N more"). A command runs with these files, and Botkins cannot show all that they make it do: the look says so. It prints the revision, which names the plugin's source exactly as it is at that moment.
+- **The bots are shown.** An installed plugin has a line `Bots:` with the names of the bots that have it, or `every bot`. `plugins install` gives a plugin to every bot unless `--bot` is given, and before the question (and in the block on standard error with `--yes`) it says `For: every bot` or `For: <the bots>`. `plugins bots` says `Now: … After: …` before it asks.
+- **A plugin that runs commands needs your yes.** At a terminal, with no `--yes`, the command shows the plugin and asks. `--yes` is the word of a caller that looked, so it must name what was looked at: `--yes --revision=<revision>`. `--yes` alone is refused for such a plugin, also at a terminal. The computer refuses the plugin when it is another one than that revision, so what you looked at is what is installed.
+- The same rule holds for `plugins install`, `plugins update`, `plugins enable`, and for `plugins bots` when more bots get a plugin that is on. A plugin that runs nothing needs no yes. Its revision still goes with the install.
+- **The service keeps the rule too.** It takes no install and no update that names no revision, from any caller.
+- **An installed plugin has two revisions.** `plugins show` prints the one of the installed copy and the one of the source as it is now. `plugins enable --revision` takes the first. `plugins update --revision` takes the second.
+- **`botkins plugins update <id>` says what changes** before it asks: the commands and the web addresses that are new, changed or gone, and the settings. It compares the two whole descriptions: also a hook's time limit and the order of the hooks, a tool's type, a header as written, a client id, a setting's default, what is not run, and the other files. It asks also when nothing runs on this computer, if the plugin reaches a new address, a tool on the web has another type, header or client id, or a setting that you gave goes to another place or has another default. Your saved settings stay with the plugin.
+- `botkins plugins disable <id>` asks nothing.
+- **Settings**: `botkins plugins configure <id>` asks for each setting at a terminal, says where its value goes, and does not show a secret one. From a script, give `--settings <file>`, a JSON file of `{ "KEY": "value" }`, or `--settings -` for standard input. A saved credential is chosen in the app's window or on a paired phone, not by reference from the command line: give the value itself. `plugins install --settings` for a plugin that runs nothing says where the values go; a secret that goes to an address on the web needs the yes (`--yes --revision`) as a plugin that runs commands does. No command prints a setting's value. `plugins show` marks the settings that have one.
+- `botkins plugins bots <id> --all`, or `--bot <bot>` for each bot, says which bots have the plugin. It does not switch a plugin on.
+- `botkins plugins add-folder <path>` adds a plugin from a folder of this computer. Botkins copies the folder and adds the plugin switched off, so nothing of it runs, and what it would run is shown. Switch it on with `plugins enable`. It is the only way to add a plugin folder.
+- `botkins plugins sign-out <id>` forgets the sign-ins of a plugin's tools.
+- **For a caller that reads `--json`:** what must be seen is on standard error. Show it to your person before you give `--yes`. Use the form that works for every id: `botkins plugins install --yes --revision=<revision> -- <id>`.
+- A change that the computer refuses is in the log too, as "Tried from the command line: … (it failed)".
+- A plugin's own words (its name, a command, an address) are printed with each character that hides or turns text written as its number, as `\u{202e}`.
+- **A value that goes into a header.** `plugins configure --settings` and `plugins install --settings` ask before a value goes into a header to an address, whatever the plugin calls the setting. `--yes` then needs `--revision`, as for a plugin that runs commands.
+- **A command that Botkins prints for you to run** has each word quoted for a shell when it needs it. An id that has a character that cannot be shown is not printed as a command: take it from `botkins plugins list --json`.
+- Only the text of a plugin gets this care. A name that you gave (a bot's name in an error, or in the log) is printed as it is, with its emoji and its joiners. Only a control character and a mark that turns text around are written as a number.
 
 ## Pair a phone
 
@@ -430,10 +462,14 @@ The command line has two readers: a person, and an agent that changes Botkins be
 ```
 
 - An option with `"takes": null` is a switch. An argument with `"many": true` can be given more than one time.
-- A command with `asks` puts a question to a person at a terminal. With no terminal it does not ask: it fails with exit code 2 and one sentence that names the flag that answers the question (`--yes`).
+- A command with `asks` puts a question to a person at a terminal. With no terminal it does not ask: it fails with exit code 2 and one sentence that names the flag that answers the question (`--yes`). Where `asks` is `--yes --revision` (`plugins install`, `update`, `enable` and `bots`), `--yes` alone is refused: give the revision that you looked at too. The sentence prints the whole command that works, with the `--all` or `--bot` that you gave.
 - The shape is kept. Fields are added to it; a field is not renamed or removed.
 
 **Use each command with no terminal.** Add `--json`: the answer is one JSON document on standard output, and a failure is `{"error": {"message": "…", "code": "…"}}` with a non-zero exit code. A long value comes from a file (`--instructions-file <path>`). Name a thing by its id when you have one; a name works when only one thing has it.
+
+**A plugin's settings.** A caller on the socket or the command line gives values that it has (`--settings` or the hidden question). It cannot use a saved credential by reference: that is chosen in the app's window or on a paired phone, and the service refuses a `$credential` value for `plugins.install` and `plugins.configure`.
+
+**A form field named `$credential`.** On `botkins chat respond`, a form field that is itself named `$credential` cannot be answered from the command line. That name is the mark of a reference to a saved credential, and the command line does not take one. Answer that question in the app's window or on a paired phone.
 
 **An id or a value that starts with a dash.** Some ids are random text, and about one in 64 starts with `-` (a device's id, for example). The command line reads a word that starts with a dash as an option. One rule covers each command:
 

@@ -2,7 +2,10 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { CliError, EXIT, table, usage } from "../output.mjs";
+import { shownText } from "../../desktop/shown-text.mjs";
 import { ask, confirm, edit, secret } from "./input.mjs";
+// (A word of a command that is printed for someone to run is quoted for a shell.)
+import { shellWord } from "./tools.mjs";
 
 const modelOf = (bot) => (bot.model ? (bot.model.provider ? bot.model.provider + "/" : "") + bot.model.model : "default");
 const fileText = (path) => {
@@ -148,7 +151,7 @@ export const workspace = {
         options: BOT_OPTIONS,
         async run(context) {
           if (context.args.length !== 1) throw usage("Give the bot a name.");
-          context.print(await context.client.call("bots.add", { name: context.args[0], ...botFields(context.options) }), (bot) => "Added " + bot.name + " (" + bot.role + "). Talk to it with `botkins chat " + JSON.stringify(bot.name) + "`.");
+          context.print(await context.client.call("bots.add", { name: context.args[0], ...botFields(context.options) }), (bot) => "Added " + bot.name + " (" + bot.role + "). Talk to it with `botkins chat " + shellWord(bot.name, "<the bot>") + "`.");
         },
       },
       edit: {
@@ -377,14 +380,14 @@ export const workspace = {
         summary: "List the installed plugins",
         usage: "botkins plugins list",
         async run(context) {
-          context.print(await context.client.call("plugins.list"), (list) => (list.length ? table(["NAME", "VERSION", "STATE", "BOTS", "ID"], list.map((entry) => [entry.name ?? entry.id, entry.version ?? "", entry.enabled === false ? "off" : "on", entry.bots === "all" ? "all" : (entry.bots ?? []).length, entry.id])) : "No plugin is installed. See `botkins plugins browse`."));
+          context.print(await context.client.call("plugins.list"), (list) => (list.length ? table(["NAME", "VERSION", "STATE", "BOTS", "ID"], list.map((entry) => [shownText(entry.name ?? entry.id), shownText(entry.version ?? ""), entry.enabled === false ? "off" : "on", entry.bots === "all" ? "all" : (entry.bots ?? []).length, shownText(entry.id)])) : "No plugin is installed. See `botkins plugins browse`."));
         },
       },
       marketplaces: {
         summary: "List the marketplaces plugins come from",
         usage: "botkins plugins marketplaces",
         async run(context) {
-          context.print(await context.client.call("plugins.marketplaces"), (list) => (list.length ? table(["NAME", "SOURCE", "ID"], list.map((entry) => [entry.name ?? entry.id, entry.source ?? entry.url ?? "", entry.id])) : "There are no marketplaces. Add one with `botkins plugins add-marketplace <owner/repo>`."));
+          context.print(await context.client.call("plugins.marketplaces"), (list) => (list.length ? table(["NAME", "SOURCE", "ID"], list.map((entry) => [shownText(entry.name ?? entry.id), shownText(entry.source ?? entry.url ?? ""), shownText(entry.id)])) : "There are no marketplaces. Add one with `botkins plugins add-marketplace <owner/repo>`."));
         },
       },
       "add-marketplace": {
@@ -409,7 +412,8 @@ export const workspace = {
         async run(context) {
           const found = await context.client.call("plugins.browse", context.args[0] ? { query: context.args[0] } : {});
           const list = Array.isArray(found) ? found : found?.plugins ?? [];
-          context.print(found, list.length ? table(["NAME", "ABOUT", "ID"], list.map((entry) => [entry.name ?? entry.id, String(entry.description ?? "").slice(0, 70), entry.id])) : "Nothing matches.");
+          context.print(found, list.length ? table(["NAME", "ABOUT", "ID"], // (A marketplace's words are from outside, as a plugin's are.)
+          list.map((entry) => [shownText(entry.name ?? entry.id), shownText(String(entry.description ?? "").slice(0, 70)), shownText(entry.id)])) : "Nothing matches.");
         },
       },
       install: {

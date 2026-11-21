@@ -3,6 +3,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { parseArgs } from "node:util";
+import { plainText, shownText } from "../desktop/shown-text.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { controlClient, ControlError } from "../desktop/terminal/socket.mjs";
 import { CliError, EXIT, paint, usage } from "./output.mjs";
@@ -55,11 +56,14 @@ export async function main(argv, io = {}) {
   // never Botkins' own: --json, --help and --version are looked for only before it.
   const own = argv.includes("--") ? argv.slice(0, argv.indexOf("--")) : argv;
   const json = own.includes("--json");
+  // Set once the command is known: an error under `plugins` can quote a plugin's own text.
+  let pluginsCommand = false;
   const fail = (error) => {
     const exit = error instanceof CliError ? error.exit : error instanceof ControlError ? (error.code === "NOT_RUNNING" ? EXIT.notRunning : error.code === "DENIED" ? EXIT.denied : EXIT.failed) : EXIT.failed;
     const message = String(error?.message ?? error);
     if (json) stdout.write(JSON.stringify({ error: { message, ...(error?.code && { code: error.code }), ...(error?.problems && { problems: error.problems }) } }) + "\n");
-    stderr.write("botkins: " + message + "\n");
+    // An error under `plugins` can quote a plugin's own text (a snippet of its JSON, a file name), so it gets the wide list, as text shown for a decision. Any other error quotes the caller's own words (a bot's name), and the short list leaves an emoji or a script with joiners as it is. The --json document keeps the message as it is.
+    stderr.write("botkins: " + (pluginsCommand ? shownText(message) : plainText(message)) + "\n");
     if (exit === EXIT.usage && !json) stderr.write("Run `botkins help` to see every command.\n");
     return exit;
   };
@@ -99,6 +103,7 @@ export async function main(argv, io = {}) {
     }
     const found = find(words);
     if (!found) throw usage("There is no command `botkins " + words[0] + "`.");
+    pluginsCommand = found.path[0] === "plugins";
     if (!found.command.run) {
       // A group: with --help, or with nothing after it, what it holds; with a word it doesn't know, a mistake.
       if (own.includes("--help") || own.includes("-h") || words.length === found.path.length) {

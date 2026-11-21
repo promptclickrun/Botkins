@@ -13,14 +13,31 @@ import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { LEGACY_NAME } from "../../desktop/home.mjs";
-import { shownText } from "../../desktop/shown-text.mjs";
+import { hasUnshown, shownText } from "../../desktop/shown-text.mjs";
 import { ask, confirm, readAll } from "./input.mjs";
 
 // No short form: a program's own "-y" (`npx -y …`) must never be read as this yes.
 const YES = { yes: { type: "boolean", about: "Don't ask first" } };
 // A word as it can be shown: a character that would move or hide the text around it is written as its number (desktop/shown-text.mjs).
-const safe = shownText;
-const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(safe(word)))).join(" ");
+export const safe = shownText;
+export const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(safe(word)))).join(" ");
+/**
+ * One word of a command that Botkins prints for someone to run (the sentence "run this next"), written so that a shell
+ * reads it as that one word: a word of plain characters is as it is, any other word is in single
+ * quotes with each ' written as '\'' (a single quote is the one quoting that a shell does not
+ * look inside: `;`, `$(` and a backtick do nothing there, which they do in double quotes and in JSON).
+ * An empty word is ''.
+ * A suggested command must be exactly what should be run. A word with a control character or a
+ * character that turns or hides text (the characters of `safe`) cannot be shown as it is, and
+ * writing it as its number would make a command that runs something else. So for such a word NO
+ * runnable form is printed: `placeholder` is, such as <its id>, and the sentence around it says
+ * where to take the real word from.
+ */
+export const shellWord = (word, placeholder = "<the word>") => {
+  const text = String(word);
+  if (hasUnshown(text)) return placeholder;
+  return /^[A-Za-z0-9_@.+=:,/-]+$/.test(text) ? text : "'" + text.replaceAll("'", "'\\''") + "'";
+};
 const one = (context, what) => {
   if (context.args.length !== 1) throw usage(what);
   return context.args[0];
@@ -171,7 +188,7 @@ export const tools = {
             const signIn = o["client-id"] !== undefined || o.scope !== undefined;
             data = { name, type: o.sse ? "sse" : "http", url: o.url, headers: values.headers, ...(signIn && { oauth: { clientId: o["client-id"], scope: o.scope, ...(values.clientSecret && { clientSecret: values.clientSecret }) } }) };
           }
-          context.print(await context.client.call("tools.add", data), (tool) => "Added " + safe(tool.name) + ". Every bot has it now; `botkins bots tools <bot> --off " + tool.name + "` takes it from one. Try it with `botkins tools test " + tool.name + "`.");
+          context.print(await context.client.call("tools.add", data), (tool) => "Added " + safe(tool.name) + ". Every bot has it now; `botkins bots tools <bot> --off " + shellWord(tool.name, "<the tool>") + "` takes it from one. Try it with `botkins tools test " + shellWord(tool.name, "<the tool>") + "`." + (hasUnshown(tool.name) ? " Take the tool's name from `botkins tools list --json`: it has a character that cannot be written in a command." : ""));
         },
       },
       edit: {
@@ -356,7 +373,7 @@ export const tools = {
           if (o.description === undefined) throw usage("Give --description: one line that says when a bot should use the skill.");
           if ((o.instructions === undefined) === (o["instructions-file"] === undefined)) throw usage("Give --instructions or --instructions-file, one of them.");
           const instructions = o.instructions ?? (await textFrom(context, o["instructions-file"], "file"));
-          context.print(await skillResult(context, "skills.save", { name, description: o.description, instructions }), (skill) => "Added " + skill.name + ". Every bot has it now; `botkins bots skills <bot> --off " + skill.name + "` takes it from one.");
+          context.print(await skillResult(context, "skills.save", { name, description: o.description, instructions }), (skill) => "Added " + safe(skill.name) + ". Every bot has it now; `botkins bots skills <bot> --off " + shellWord(skill.name, "<the skill>") + "` takes it from one." + (hasUnshown(skill.name) ? " Take the skill's name from `botkins skills list --json`: it has a character that cannot be written in a command." : ""));
         },
       },
       edit: {
