@@ -20,6 +20,7 @@ const PHONE = "botkins.phone.v1";
 const MiB = 1024 * 1024;
 const MAX_PHONE = 6 * MiB + 64 * 1024; // a phone's largest message
 const MAX_INVITE_LIFE = 30 * 24 * 60 * 60 * 1000;
+const SPACE_BYTES_MAX = 12 * MiB;
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 // ---- wrangler dev ----------------------------------------------------------------------------
@@ -79,9 +80,11 @@ async function startDev() {
       "--show-interactive-dev-session=false",
       // Every socket of a test run comes from one address, so the per-network limits are off here.
       "--var=RATE_LIMITS:off",
+      // All copies of shared spaces together: 12 MiB here, so a test can fill it.
+      `--var=SPACE_BYTES_MAX:${SPACE_BYTES_MAX}`,
     ];
   // The Node relay trusts the address header only when told to, as it does behind its proxy.
-  if (NODE_RELAY) Object.assign(env, { PORT: String(port), HOST: "127.0.0.1", RATE_LIMITS: "off", CLIENT_IP_HEADER: "cf-connecting-ip", DATA_DIR: stateDir, PUSH_UPSTREAM: "off" });
+  if (NODE_RELAY) Object.assign(env, { PORT: String(port), HOST: "127.0.0.1", RATE_LIMITS: "off", CLIENT_IP_HEADER: "cf-connecting-ip", DATA_DIR: stateDir, PUSH_UPSTREAM: "off", SPACE_BYTES_MAX: String(SPACE_BYTES_MAX) });
   child = spawn(process.execPath, args, { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
@@ -142,6 +145,36 @@ function inviteProof(r, lookup, { card, expiresAt, seconds = nowSeconds(), signe
   secrets.add(signature);
   return { "x-botkins-key": r.key, "x-botkins-time": String(seconds), "x-botkins-sig": signature };
 }
+
+// ---- spaces shared by link ---------------------------------------------------------------------
+
+const MAX_SPACE_LIFE = 7 * 24 * 60 * 60 * 1000;
+/** A link's id belongs to the computer's key and a salt. */
+const shareIdOf = (key, salt) => createHash("sha256").update("botkins-space-id-v1:" + key + ":" + salt).digest().subarray(0, 16).toString("base64url");
+const newShare = (r) => {
+  const salt = randomBytes(16).toString("base64url");
+  const id = shareIdOf(r.key, salt);
+  secrets.add(id).add(salt);
+  return { id, salt };
+};
+/** A sealed copy as the relay sees it: bytes it cannot read. */
+const sealedCopy = (size = 300) => randomBytes(size);
+/** The headers a computer signs when it puts out or takes back a space's copy. */
+function spaceProof(r, share, { body, expiresAt, seconds = nowSeconds(), signer = r.privateKey, salt = share.salt, signedBody = body, signedExpiresAt = expiresAt, action = "put" } = {}) {
+  const message =
+    action === "put"
+      ? `botkins-relay-space-v1:${r.room}:${share.id}:${signedExpiresAt}:${createHash("sha256").update(signedBody).digest("base64url")}:${seconds}`
+      : `botkins-relay-space-del-v1:${r.room}:${share.id}:${seconds}`;
+  const signature = sign(null, Buffer.from(message), signer).toString("base64url");
+  secrets.add(signature);
+  return { "x-botkins-key": r.key, "x-botkins-time": String(seconds), "x-botkins-sig": signature, "x-botkins-salt": salt, ...(action === "put" && { "x-botkins-expires": String(expiresAt) }) };
+}
+const putSpace = (r, share, body, options = {}) => {
+  const expiresAt = options.expiresAt ?? Date.now() + 60 * 60 * 1000;
+  return fetch(base + `/v1/spaces/${share.id}`, { method: "PUT", headers: spaceProof(r, share, { ...options, body, expiresAt }), body });
+};
+const deleteSpace = (r, share, options = {}) => fetch(base + `/v1/spaces/${share.id}`, { method: "DELETE", headers: spaceProof(r, share, { ...options, action: "delete" }) });
+const readSpace = (share) => fetch(base + `/v1/spaces/${share.id}`);
 
 const putInvite = (r, lookup, body, options) =>
   fetch(base + `/v1/invites/${lookup}`, {
@@ -1051,6 +1084,164 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     await replacement.silent(150);
     p.send(request(24));
     assert.equal((await replacement.next()).readUInt32BE(17), 24);
+  });
+
+  it("keeps a space's sealed copy for its computer, hands it to anyone with the id, and replaces it only with a newer one", async () => {
+    const r = newRoom();
+    const share = newShare(r);
+    assert.equal((await readSpace(share)).status, 404);
+    const t = nowSeconds();
+    // Larger than one piece of the store, so it is kept in several.
+    const first = sealedCopy(700 * 1024);
+    assert.equal((await putSpace(r, share, first, { seconds: t - 2 })).status, 204);
+    const read = await readSpace(share);
+    assert.equal(read.status, 200);
+    assert.equal(read.headers.get("cache-control"), "no-store");
+    assert.match(read.headers.get("content-type"), /^application\/octet-stream/);
+    assert.deepEqual(Buffer.from(await read.arrayBuffer()), first);
+    // A smaller, newer copy replaces it whole.
+    const second = sealedCopy(300);
+    assert.equal((await putSpace(r, share, second, { seconds: t - 1 })).status, 204);
+    assert.deepEqual(Buffer.from(await (await readSpace(share)).arrayBuffer()), second);
+    // One signed at the same time, or earlier, does not.
+    assert.equal((await putSpace(r, share, sealedCopy(), { seconds: t - 1 })).status, 409);
+    assert.equal((await putSpace(r, share, sealedCopy(), { seconds: t - 2 })).status, 409);
+    assert.deepEqual(Buffer.from(await (await readSpace(share)).arrayBuffer()), second);
+  });
+
+  it("refuses a copy that is not that computer's, is not signed, lives too long or is too large", async () => {
+    const r = newRoom();
+    const other = newRoom();
+    const share = newShare(r);
+    const body = sealedCopy();
+    const expiresAt = Date.now() + 60_000;
+    const send = (headers, bytes = body, id = share.id) => fetch(base + `/v1/spaces/${id}`, { method: "PUT", headers, body: bytes });
+    const good = () => spaceProof(r, share, { body, expiresAt });
+    // The id must come from the key and the salt.
+    assert.equal((await send(spaceProof(other, share, { body, expiresAt }))).status, 403, "another computer's key");
+    assert.equal((await send(spaceProof(r, share, { body, expiresAt, salt: randomBytes(16).toString("base64url") }))).status, 403, "another salt");
+    assert.equal((await send({ ...good(), "x-botkins-salt": "short" })).status, 400);
+    // The signature covers the body, the id, when it ends and when it was signed.
+    assert.equal((await send(spaceProof(r, share, { body, expiresAt, signer: other.privateKey }))).status, 401, "another key signed");
+    assert.equal((await send(spaceProof(r, share, { body, expiresAt, signedBody: sealedCopy() }))).status, 401, "another body");
+    assert.equal((await send(spaceProof(r, share, { body, expiresAt, signedExpiresAt: expiresAt + 1 }))).status, 401, "another end");
+    assert.equal((await send(spaceProof(r, share, { body, expiresAt, seconds: nowSeconds() - 302 }))).status, 401, "signed too long ago");
+    const { "x-botkins-sig": _sig, ...unsigned } = good();
+    assert.equal((await send(unsigned)).status, 401);
+    // Seven days at most, and not already over.
+    assert.equal((await putSpace(r, share, body, { expiresAt: Date.now() + MAX_SPACE_LIFE + 60_000 })).status, 400);
+    assert.equal((await putSpace(r, share, body, { expiresAt: Date.now() - 1 })).status, 400);
+    // 4 MiB at most, and at least a nonce and a tag.
+    assert.equal((await putSpace(r, share, sealedCopy(4 * MiB + 1))).status, 413);
+    assert.equal((await putSpace(r, share, sealedCopy(27))).status, 400);
+    assert.equal((await readSpace(share)).status, 404, "nothing was kept");
+    assert.equal((await putSpace(r, share, sealedCopy(4 * MiB))).status, 204, "the largest copy");
+    assert.equal((await (await readSpace(share)).arrayBuffer()).byteLength, 4 * MiB);
+    // An id of another shape is no space, and no other method is answered.
+    assert.equal((await fetch(base + "/v1/spaces/short")).status, 404);
+    assert.equal((await fetch(base + `/v1/spaces/${share.id}`, { method: "POST" })).status, 404);
+  });
+
+  it("takes a space's copy back, and a copy signed before that cannot put it out again", async () => {
+    const r = newRoom();
+    const other = newRoom();
+    const share = newShare(r);
+    const t = nowSeconds();
+    assert.equal((await putSpace(r, share, sealedCopy(), { seconds: t - 10 })).status, 204);
+    // Only its computer takes it back, and only with a later time than the copy's.
+    assert.equal((await deleteSpace(other, share)).status, 403);
+    assert.equal((await deleteSpace(r, share, { signer: other.privateKey })).status, 401);
+    assert.equal((await deleteSpace(r, share, { seconds: t - 10 })).status, 409);
+    assert.equal((await readSpace(share)).status, 200);
+    assert.equal((await deleteSpace(r, share, { seconds: t - 5 })).status, 204);
+    assert.equal((await readSpace(share)).status, 404);
+    assert.equal((await deleteSpace(r, share, { seconds: t - 4 })).status, 404, "nothing left to take back");
+    // A PUT that was on its way when the DELETE arrived was signed earlier: it is refused.
+    assert.equal((await putSpace(r, share, sealedCopy(), { seconds: t - 6 })).status, 409);
+    assert.equal((await putSpace(r, share, sealedCopy(), { seconds: t - 4 })).status, 409);
+    assert.equal((await readSpace(share)).status, 404);
+    // Shared again later, it is put out again.
+    const again = sealedCopy();
+    assert.equal((await putSpace(r, share, again, { seconds: t })).status, 204);
+    assert.deepEqual(Buffer.from(await (await readSpace(share)).arrayBuffer()), again);
+    // A DELETE for a copy that was never put is remembered too.
+    const never = newShare(r);
+    assert.equal((await deleteSpace(r, never, { seconds: t - 1 })).status, 404);
+    assert.equal((await putSpace(r, never, sealedCopy(), { seconds: t - 1 })).status, 409);
+  });
+
+  it("lets one computer put a copy 30 times a minute", async () => {
+    const r = newRoom();
+    const share = newShare(r);
+    const t = nowSeconds() - 100;
+    const answers = [];
+    for (let n = 0; n < 31; n++) answers.push((await putSpace(r, share, sealedCopy(64), { seconds: t + n })).status);
+    assert.deepEqual(answers, [...Array(30).fill(204), 429]);
+    // Another computer is not held back by it.
+    const other = newRoom();
+    assert.equal((await putSpace(other, newShare(other), sealedCopy(64))).status, 204);
+  });
+
+  it("holds only so much of all computers' copies together, and makes room when one is taken back", async () => {
+    // This relay holds 12 MiB (1 GiB when deployed). Computers put 4 MiB copies until it is full.
+    const made = [];
+    let full = null;
+    for (let n = 0; n < 4 && !full; n++) {
+      const r = newRoom();
+      const share = newShare(r);
+      const status = (await putSpace(r, share, sealedCopy(4 * MiB), { seconds: nowSeconds() - 20 })).status;
+      if (status === 507) full = { r, share };
+      else {
+        assert.equal(status, 204);
+        made.push({ r, share });
+      }
+    }
+    assert.ok(full, "a copy is refused once all copies together are over what the relay holds");
+    assert.equal((await readSpace(full.share)).status, 404);
+    // A computer that holds a copy may still replace it with a smaller one.
+    assert.equal((await putSpace(made[0].r, made[0].share, sealedCopy(1000), { seconds: nowSeconds() - 10 })).status, 204);
+    // And a copy taken back makes room for another.
+    assert.equal((await putSpace(full.r, full.share, sealedCopy(4 * MiB), { seconds: nowSeconds() - 9 })).status, 204);
+    for (const one of [...made, full]) assert.equal((await deleteSpace(one.r, one.share)).status, 204);
+    const after = newRoom();
+    assert.equal((await putSpace(after, newShare(after), sealedCopy(4 * MiB))).status, 204, "taken back: there is room again");
+  });
+
+  it("serves the same page for every shared space, and an empty frame for a panel's own page", async () => {
+    const id = randomBytes(16).toString("base64url");
+    const page = await rawGet(`/s/${id}`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers["content-type"], /^text\/html/);
+    assert.equal(page.headers["cache-control"], "no-store");
+    assert.equal(page.headers["referrer-policy"], "no-referrer");
+    const csp = page.headers["content-security-policy"];
+    for (const part of ["default-src 'none'", "img-src 'self' data:", "connect-src 'self'", "frame-src 'self'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"]) assert.ok(csp.includes(part), part);
+    const nonce = /script-src 'nonce-([0-9a-f]{32})'/.exec(csp)?.[1];
+    assert.ok(nonce && page.body.includes(`<script nonce="${nonce}">`) && page.body.includes(`<style nonce="${nonce}">`));
+    assert.ok(!csp.includes("unsafe"), "the page runs only its own script");
+    // The page holds nothing of any space: not the id it was asked for.
+    assert.ok(!page.body.includes(id));
+    assert.ok(page.body.includes("Made with Botkins"));
+    assert.notEqual(/'nonce-([0-9a-f]{32})'/.exec((await rawGet(`/s/${id}`)).headers["content-security-policy"])[1], nonce, "a new nonce each time");
+    for (const bad of ["/s/short", `/s/${"a".repeat(23)}`, `/s/${"a".repeat(21)}!`, `/s/${id}/more`]) assert.equal((await rawGet(bad)).status, 404, bad);
+
+    const frame = await rawGet("/s/frame");
+    assert.equal(frame.status, 200);
+    const policy = frame.headers["content-security-policy"];
+    for (const part of ["default-src 'none'", "connect-src 'none'", "frame-src 'none'", "form-action 'none'", "sandbox allow-scripts", "frame-ancestors 'self'"]) assert.ok(policy.includes(part), part);
+    assert.ok(!/allow-same-origin|allow-top-navigation|allow-popups|allow-forms/.test(policy));
+    assert.equal(frame.headers["cache-control"], "no-store");
+  });
+
+  it("serves a Botkin's picture for the page, and nothing else from that folder", async () => {
+    const picture = await fetch(base + "/s/botkin/beacon-original.webp");
+    assert.equal(picture.status, 200);
+    assert.match(picture.headers.get("content-type"), /^image\/webp/);
+    assert.equal(Buffer.from(await picture.arrayBuffer()).subarray(8, 12).toString("latin1"), "WEBP");
+    for (const p of ["/s/botkin/layers/beacon-accent.webp", "/s/botkin/nobody-original.webp", "/s/botkin/.assetsignore", "/s/botkin/"]) {
+      const answer = await rawGet(p);
+      assert.ok(answer.status === 404 || !/^image\//.test(answer.headers["content-type"] ?? ""), p);
+    }
   });
 
   it("never logs an invite lookup, card, key, signature, room name, conn or from tag", () => {

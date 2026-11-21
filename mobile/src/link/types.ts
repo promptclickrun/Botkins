@@ -622,8 +622,14 @@ export type SpaceSummary = {
   people?: (Person & { can: "view" | "edit" })[];
   /** With access "team" or "link": what every member may do. */
   teamCan?: "view" | "edit";
-  /** The link, for its maker and the owner. */
+  /** The link, for its maker and the owner. Absent while links are off. */
   link?: string;
+  /**
+   * For its maker and the owner: "leaving" while an earlier link's copy is still being taken back
+   * from the relay ("Taking the link back…"); "off" while it is shared by link and the relay is off
+   * ("Links are off while the relay is off.").
+   */
+  linkState?: "leaving" | "off";
   /** Owner devices only. */
   projectId?: string;
   /** Panels and open cards the person is sent. */

@@ -16,6 +16,22 @@ export const INVITE_ROUTE = /^\/v1\/invites\/([^/]+)$/;
 export const MAX_INVITE_CARD = 4096;
 export const MAX_INVITE_BODY = 16 * 1024;
 export const MAX_INVITE_LIFE = 30 * 24 * 60 * 60 * 1000;
+// A space shared by link: a sealed copy the computer puts out (mobile/docs/spaces.md, "Share by link").
+export const SPACE_ROUTE = /^\/v1\/spaces\/([^/]+)$/;
+export const SPACE_PAGE_ROUTE = /^\/s\/([^/]+)$/;
+export const BASE64URL_22 = /^[A-Za-z0-9_-]{22}$/;
+export const MAX_SPACE_BODY = 4 * 1024 * 1024;
+/** A sealed copy is at least its nonce and its tag. */
+export const MIN_SPACE_BODY = 12 + 16;
+export const MAX_SPACE_LIFE = 7 * 24 * 60 * 60 * 1000;
+export const MAX_SPACES_PER_KEY = 100;
+export const SPACE_PUTS_PER_MINUTE = 30;
+/** All of one computer's live copies together. */
+export const MAX_SPACE_BYTES_PER_KEY = 64 * 1024 * 1024;
+/** All live copies on this relay together, so shared spaces can never fill the storage the rest of the relay needs. */
+export const MAX_SPACE_BYTES_ALL = 1024 * 1024 * 1024;
+/** A copy is kept in pieces of this size, under the store's limit for one value. */
+export const SPACE_PIECE = 256 * 1024;
 
 export const MAX_V3_HOSTS = 2; // one active and one standby for a single authenticated runtime group
 export const V3_RECONNECT_WINDOW = 15_000;
@@ -69,11 +85,11 @@ function decodeBase64url(value: string): Uint8Array | null {
   }
 }
 
-/** The body as UTF-8 text, or null when it is over `max` bytes or not UTF-8. It stops reading at the limit. */
-export async function readCappedText(request: Request, max: number): Promise<string | null> {
+/** The body as bytes, or null when it is over `max` bytes. It stops reading at the limit. */
+export async function readCappedBytes(request: Request, max: number): Promise<Uint8Array | null> {
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > max) return null;
-  if (!request.body) return "";
+  if (!request.body) return new Uint8Array(0);
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -93,6 +109,13 @@ export async function readCappedText(request: Request, max: number): Promise<str
     all.set(chunk, at);
     at += chunk.length;
   }
+  return all;
+}
+
+/** The body as UTF-8 text, or null when it is over `max` bytes or not UTF-8. It stops reading at the limit. */
+export async function readCappedText(request: Request, max: number): Promise<string | null> {
+  const all = await readCappedBytes(request, max);
+  if (all === null) return null;
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(all);
   } catch {
@@ -157,6 +180,77 @@ export async function checkInviteDelete(request: Request, lookup: string): Promi
   if (!(await verifyEd25519(proof.key, proof.sig, message))) return plain("Unauthorized", 401);
   return { owner: proof.key };
 }
+
+/** A link's id: it belongs to the computer's relay key and a salt, so nobody else can put a copy under it. */
+export async function shareIdOf(publicKey: string, salt: string): Promise<string> {
+  return base64url((await sha256("botkins-space-id-v1:" + publicKey + ":" + salt)).subarray(0, 16));
+}
+
+/** The key, time and salt of a space request, when the id in the address is that key's and salt's. */
+async function spaceProof(request: Request, shareId: string, nowMs: number): Promise<InviteProof | Response> {
+  const proof = await inviteProof(request, nowMs);
+  if (!proof) return plain("Unauthorized", 401);
+  const salt = request.headers.get("x-botkins-salt");
+  if (!salt || !BASE64URL_22.test(salt)) return plain("Bad request", 400);
+  if ((await shareIdOf(proof.key, salt)) !== shareId) return plain("Forbidden", 403);
+  return proof;
+}
+
+export type SpacePut = { owner: string; body: Uint8Array; expiresAt: number; time: number };
+
+/** A checked PUT of a space's copy: what to keep, or the answer that refuses it. Nothing of the body is read before the id is known to be the key's. */
+export async function checkSpacePut(request: Request, shareId: string): Promise<SpacePut | Response> {
+  const nowMs = Date.now();
+  const proof = await spaceProof(request, shareId, nowMs);
+  if (proof instanceof Response) return proof;
+  const expires = request.headers.get("x-botkins-expires") ?? "";
+  const expiresAt = /^\d{1,16}$/.test(expires) ? Number(expires) : NaN;
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= nowMs || expiresAt > nowMs + MAX_SPACE_LIFE) return plain("Bad request", 400);
+  const body = await readCappedBytes(request, MAX_SPACE_BODY);
+  if (body === null) return plain("Too large", 413);
+  if (body.length < MIN_SPACE_BODY) return plain("Bad request", 400);
+  const hash = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", body)));
+  const message = `botkins-relay-space-v1:${proof.room}:${shareId}:${expiresAt}:${hash}:${proof.time}`;
+  if (!(await verifyEd25519(proof.key, proof.sig, message))) return plain("Unauthorized", 401);
+  return { owner: proof.key, body, expiresAt, time: Number(proof.time) };
+}
+
+/** A checked DELETE of a space's copy: the owner's key and the signed time, or the answer that refuses it. */
+export async function checkSpaceDelete(request: Request, shareId: string): Promise<{ owner: string; time: number } | Response> {
+  const proof = await spaceProof(request, shareId, Date.now());
+  if (proof instanceof Response) return proof;
+  const message = `botkins-relay-space-del-v1:${proof.room}:${shareId}:${proof.time}`;
+  if (!(await verifyEd25519(proof.key, proof.sig, message))) return plain("Unauthorized", 401);
+  return { owner: proof.key, time: Number(proof.time) };
+}
+
+/**
+ * Whether a copy signed at `time` (seconds) may replace what is held. It must be later than the copy
+ * held, and later than the last time the copy was taken back: a PUT that was on its way when its
+ * DELETE arrived must not put the space out again.
+ */
+export const spacePutAllowed = (heldTime: number | null, goneTime: number | null, time: number) => time > Math.max(heldTime ?? 0, goneTime ?? 0);
+
+/** How long (milliseconds since 1970) a taken-back time must be remembered: until no PUT that old can still be signed. */
+export const spaceGoneUntil = (goneTime: number) => (goneTime + 2 * MAX_SKEW) * 1000;
+
+/**
+ * One computer's copies: how many it may hold, how large they may be together, and how often it may
+ * put one. `live` is share id → when it ends and its size, `puts` the current minute's count.
+ * Answers what to keep, or null when it is refused.
+ */
+export type SpaceOwnerState = { live: Record<string, { until: number; size: number }>; puts: { start: number; count: number } };
+export function admitSpace(state: SpaceOwnerState | null, shareId: string, expiresAt: number, size: number, nowMs: number): SpaceOwnerState | null {
+  const live = Object.fromEntries(Object.entries(state?.live ?? {}).filter(([, copy]) => copy && copy.until > nowMs));
+  const window = state?.puts && nowMs - state.puts.start < 60_000 ? state.puts : { start: nowMs, count: 0 };
+  if (window.count >= SPACE_PUTS_PER_MINUTE) return null;
+  if (!Object.hasOwn(live, shareId) && Object.keys(live).length >= MAX_SPACES_PER_KEY) return null;
+  live[shareId] = { until: expiresAt, size };
+  if (spaceBytes(live) > MAX_SPACE_BYTES_PER_KEY) return null;
+  return { live, puts: { start: window.start, count: window.count + 1 } };
+}
+/** The bytes of a computer's live copies together. */
+export const spaceBytes = (live: SpaceOwnerState["live"]) => Object.values(live).reduce((sum, copy) => sum + copy.size, 0);
 
 /** A self-contained page: one nonce for its style and script, no outside assets, no referrer, no cache. */
 export function securePage(title: string, css: string, body: string, script: string): Response {
