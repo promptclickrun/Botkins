@@ -119,7 +119,11 @@ export async function main(argv, io = {}) {
     try {
       parsed = parseArgs({ args: rest, options: { ...GLOBAL, ...command.options }, allowPositionals: true, strict: true });
     } catch (error) {
-      throw usage(error.message.replace(/\. To specify.*$/s, "."));
+      // An id or a value can start with a dash (a device's id is random text). The parser then
+      // takes it for an option. The one rule of this command line is said with the refusal, so a
+      // caller that got the id from a --json answer knows what to do.
+      const dash = /ambiguous|Unknown option|argument missing/i.test(error.message);
+      throw usage(error.message.replace(/\.?\s*(Did you forget|To specify)[\s\S]*$/, ".") + (dash ? " If that word is an id or a value that starts with a dash: give an option's value as --option=value, and put a word that is not an option after `--` (botkins devices remove --yes -- <id>)." : ""));
     }
     const paths = terminalPaths({ root: parsed.values["data-dir"], socket: parsed.values.socket, env });
     if (!io.client) asOwner(paths, path, parsed.values, env);
