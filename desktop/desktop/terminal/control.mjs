@@ -122,6 +122,34 @@ const text = (value, max, what) => {
 };
 
 /**
+ * A bot's voice of its own with a change put into it (`botkins bots edit --reading-voice …`). A field
+ * that is named changes; "" or null takes it back to Settings › Voice; the rest stays. Another
+ * provider for a part drops the model and voice it had, which wouldn't fit it (the speed stays).
+ * The app checks the result (desktop/link/voice.mjs, botVoiceField).
+ */
+function mergeVoice(current, change) {
+  if (change === null || typeof change !== "object" || Array.isArray(change)) throw new ControlError("Give the bot's voice as reading and live choices.", "BAD_ARGUMENT");
+  const next = {};
+  for (const section of ["tts", "live"]) {
+    const had = current?.[section] ?? {};
+    const given = change[section];
+    if (given === undefined) {
+      if (Object.keys(had).length) next[section] = { ...had };
+      continue;
+    }
+    if (given === null || typeof given !== "object" || Array.isArray(given)) throw new ControlError("Give the bot's voice as reading and live choices.", "BAD_ARGUMENT");
+    const moved = given.provider !== undefined && (given.provider || undefined) !== had.provider;
+    const part = moved ? { ...(section === "tts" && had.speed !== undefined && { speed: had.speed }) } : { ...had };
+    for (const [key, value] of Object.entries(given)) {
+      if (value === "" || value === null) delete part[key];
+      else part[key] = value;
+    }
+    if (Object.keys(part).length) next[section] = part;
+  }
+  return Object.keys(next).length ? next : null;
+}
+
+/**
  * @param service  What desktop/terminal/serve.mjs built: { runtime, config(), setConfig(next),
  *   log, signIns, paths, version, started, keys(), stop(reason), revision(), waitForChange() }.
  * @returns { [method]: (args, { signal }) → value }
@@ -149,6 +177,7 @@ export function controlApi(service) {
     role: entry.role,
     instructions: entry.instructions,
     ...(entry.model && { model: entry.model }),
+    ...(entry.voice && { voice: entry.voice }),
     ...(entry.primary && { primary: true }),
     chats: state().chats.filter((chat) => chat.botId === entry.id && !chat.temporary).length,
     working: state().chats.some((chat) => chat.botId === entry.id && workspace.active.has(chat.id)),
@@ -356,6 +385,8 @@ export function controlApi(service) {
       const found = bot(ref);
       const fields = {};
       for (const key of ["name", "role", "instructions"]) if (patch[key] !== undefined) fields[key] = patch[key];
+      // A voice of its own: what is named changes and the rest stays; "" goes back to Settings › Voice; null clears it all.
+      if (patch.voice !== undefined) fields.voice = patch.voice === null ? null : mergeVoice(found.voice, patch.voice);
       if (Object.keys(fields).length) handlers.updateBot(found.id, fields);
       if (patch.model !== undefined) await workspace.setModel("bot", found.id, patch.model === null || patch.model === "" ? null : await selection(patch.model));
       return botView(bot(found.id));

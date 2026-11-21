@@ -183,6 +183,75 @@ const LANGUAGE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,199}$/;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
+// ── A voice of a bot's own ──────────────────────────────────────────────────────────────────────
+// A bot may keep a voice of its own (`bot.voice`, saved with the bot by the app; "bot-voice-v1"):
+//   { tts?: { provider?, model?, voice?, speed? }, live?: { provider?, model?, voice? } }
+// Every field is optional and an absent one means "the same as Settings › Voice". No key is ever in
+// it: keys stay per provider and shared.
+
+/** What a bot's `voice` field may hold, or the reason it can't be saved. `voice` is null when nothing is set. */
+export function checkBotVoice(value) {
+  if (value === null || value === undefined) return { voice: null };
+  const bad = (error) => ({ error });
+  if (!isPlain(value) || Object.keys(value).some((key) => key !== "tts" && key !== "live")) return bad("That voice can't be saved.");
+  const voice = {};
+  for (const section of ["tts", "live"]) {
+    const given = value[section];
+    if (given === undefined || given === null) continue;
+    const label = section === "tts" ? "reading aloud" : "live voice";
+    const allowed = section === "tts" ? ["provider", "model", "voice", "speed"] : ["provider", "model", "voice"];
+    if (!isPlain(given) || Object.keys(given).some((key) => !allowed.includes(key))) return bad("That " + label + " voice can't be saved.");
+    const next = {};
+    for (const key of ["provider", "model", "voice"]) {
+      const item = given[key];
+      if (item === undefined || item === null || item === "") continue;
+      if (key === "provider") {
+        if (typeof item !== "string" || !(section === "tts" ? TTS_PROVIDERS : LIVE_PROVIDERS).includes(item)) return bad("That " + label + " choice isn't supported.");
+        next.provider = item;
+      } else {
+        if (typeof item !== "string" || !NAME.test(item.trim())) return bad("Use up to 200 plain characters for the " + key + ".");
+        next[key] = item.trim();
+      }
+    }
+    if (section === "tts" && given.speed !== undefined && given.speed !== null) {
+      if (typeof given.speed !== "number" || !Number.isFinite(given.speed) || given.speed < 0.5 || given.speed > 2) return bad("Speed is between 0.5 and 2.");
+      next.speed = Math.round(given.speed * 100) / 100;
+    }
+    if (Object.keys(next).length) voice[section] = next;
+  }
+  return { voice: Object.keys(voice).length ? voice : null };
+}
+
+/** A bot's voice as it may be saved (null clears it). Throws a plain sentence for anything else. */
+export function botVoiceField(value) {
+  const { voice, error } = checkBotVoice(value);
+  if (error) throw new Failure(error);
+  return voice;
+}
+
+/** A bot's voice as saved, or null. A voice that fails the check is not used at all. */
+export const cleanBotVoice = (value) => checkBotVoice(value).voice ?? null;
+
+/**
+ * The reading voice a bot gets: its own choices over the shared ones. The shared model and voice
+ * belong to the shared provider, so they are used only while the provider is the same.
+ */
+export function effectiveTts(shared, override) {
+  const own = override ?? {};
+  const provider = own.provider ?? shared.provider;
+  const same = provider === shared.provider;
+  return { provider, model: own.model ?? (same ? shared.model : undefined), voice: own.voice ?? (same ? shared.voice : undefined), speed: own.speed ?? shared.speed };
+}
+
+/** The same for live voice. `asked` is a provider a caller names itself; the bot's choices count only for a provider they fit. */
+export function effectiveLive(shared, override, asked) {
+  const own = override ?? {};
+  const provider = asked ?? own.provider ?? shared.provider;
+  const mine = own.provider === undefined || own.provider === provider;
+  const same = shared.provider === provider;
+  return { provider, model: (mine ? own.model : undefined) ?? (same ? shared.model : undefined), voice: (mine ? own.voice : undefined) ?? (same ? shared.voice : undefined) };
+}
+
 // ── The class ───────────────────────────────────────────────────────────────────────────────────
 
 export class Voice {
@@ -617,8 +686,9 @@ export class Voice {
   // ── Text to speech ──────────────────────────────────────────────────────────────────────────
 
   /** Returns { audio: Buffer, format: "mp3" | "wav" }. Callers split long replies by sentence. */
-  async speak({ text: input, voice, speed } = {}) {
-    const { provider, model, voice: chosenVoice, speed: chosenSpeed } = this.data.tts;
+  async speak({ text: input, voice, speed, override } = {}) {
+    // `override` is a bot's own reading voice (cleanBotVoice(bot.voice)?.tts): the shared settings fill in what it leaves out.
+    const { provider, model, voice: chosenVoice, speed: chosenSpeed } = effectiveTts(this.data.tts, override);
     if (provider === "device") throw new Failure(DEVICE);
     if (typeof input !== "string" || !input.trim()) throw new Failure("There is nothing to read.");
     if (input.length > MAX_SPEAK) throw new Failure("That is too long to read at once. Use up to " + MAX_SPEAK.toLocaleString("en-US") + " characters.");
@@ -818,8 +888,10 @@ export class Voice {
    * `about` ({ chatId?, botId?, botName? }) says whom the voice speaks for. It is handed to the Codex
    * helper, which answers the voice's tool call itself (the call arrives at the app, not at the caller).
    */
-  async live({ provider, sdp, instructions, voice, tools, firstMessage, about } = {}) {
-    const choice = provider ?? this.data.live.provider;
+  async live({ provider, sdp, instructions, voice, tools, firstMessage, about, override } = {}) {
+    // `override` is a bot's own live voice (cleanBotVoice(bot.voice)?.live); a provider named by the caller comes first.
+    const resolved = effectiveLive(this.data.live, override, provider);
+    const choice = resolved.provider;
     if (!choice) throw new Failure("Pick a live voice in Settings › Voice first.");
     if (!LIVE_PROVIDERS.includes(choice)) throw new Failure("That provider doesn't do live voice.");
     if (instructions != null && (typeof instructions !== "string" || instructions.length > 20_000)) throw new Failure("The instructions are up to 20,000 characters.");
@@ -827,10 +899,8 @@ export class Voice {
     if (voice != null && (typeof voice !== "string" || !NAME.test(voice))) throw new Failure("That voice isn't valid.");
     if (sdp != null && (typeof sdp !== "string" || sdp.length > 100_000 || !sdp.startsWith("v=0"))) throw new Failure("That connection offer isn't valid.");
     const list = this.tools(tools);
-    const settings = this.data.live;
-    const same = settings.provider === choice;
-    const model = same ? settings.model : undefined;
-    const who = voice ?? (same ? settings.voice : undefined);
+    const model = resolved.model;
+    const who = voice ?? resolved.voice;
     const prompt = instructions ?? "";
     let session;
     if (choice === "codex") session = await this.liveCodex({ sdp, voice: who, instructions: prompt, tools: list, about });

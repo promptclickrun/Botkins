@@ -21,7 +21,8 @@ import type { Connect, InputMode, SocketLike } from "./live/types";
 import { readLocation } from "./location";
 import { audioModule, duplexAudio, keepAwakeModule, webrtcModule } from "./native";
 import { loadPhoneVoice, usePhoneVoice } from "./prefs";
-import { UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
+import { botVoiceOf, UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
+import { effectiveLive } from "./botVoice";
 import { stopSpeech } from "./tts";
 
 const UPDATE_APP = "Update the app to use this live voice.";
@@ -62,7 +63,8 @@ function LiveScreen() {
   const bot = useBot(botId);
   const supported = useVoiceSupported();
   const voice = useVoiceSettings();
-  const provider = voice?.live.provider ?? null;
+  // This bot's own live voice, when it has one, over the shared choice (the computer applies it to the call).
+  const provider = voice ? effectiveLive(voice.live, botVoiceOf(botId)?.live).provider : null;
   const request = useApp((state) => state.parts.live?.requests.find((item) => item.chatId === chatId));
   useWatchedChat(chatId);
 

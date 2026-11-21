@@ -8,6 +8,7 @@ import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
+import { botVoiceField } from "./voice.mjs";
 
 const now = () => Date.now();
 /** The demo computer's owner, as a person. */
@@ -1096,6 +1097,9 @@ export class MockBackend {
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
+    // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
+    this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
+    if (this.botVoice) this.capabilities.push("bot-voice-v1");
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
     if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
@@ -1889,7 +1893,16 @@ export class MockBackend {
       return bot.id;
     },
     updateBot(id, patch) {
-      Object.assign(this.bot(id), patch);
+      const bot = this.bot(id);
+      // A bot's own voice ("bot-voice-v1"): checked as the desktop app checks it, and null clears it.
+      const { voice, ...rest } = patch;
+      if (voice !== undefined && !this.botVoice) throw new Error("This computer doesn't keep a voice for each bot.");
+      Object.assign(bot, rest);
+      if (voice !== undefined) {
+        const next = botVoiceField(voice);
+        if (next) bot.voice = next;
+        else delete bot.voice;
+      }
     },
     setBotFlags(id, flags) {
       Object.assign(this.bot(id), flags);

@@ -64,7 +64,7 @@ export function toggleSpeech(text: string) {
 }
 
 /** Reads each new reply aloud, once it is finished, while the setting is on and this chat is open. */
-export function useReadAloud(enabled: boolean, chatId: string, latest?: { key: string; text: string; index?: number }, finished = true) {
+export function useReadAloud(enabled: boolean, chatId: string, latest?: { key: string; text: string; index?: number; botId?: string }, finished = true) {
   const last = useRef<string | undefined>(undefined);
   useEffect(() => {
     last.current = latest?.key;
@@ -73,6 +73,6 @@ export function useReadAloud(enabled: boolean, chatId: string, latest?: { key: s
   useEffect(() => {
     if (!latest || latest.key === last.current || !finished) return;
     last.current = latest.key;
-    if (enabled && latest.text && !liveOn()) void readAloud(latest.index != null ? chatId + ":" + latest.index : latest.key, latest.text);
+    if (enabled && latest.text && !liveOn()) void readAloud(latest.index != null ? chatId + ":" + latest.index : latest.key, latest.text, latest.botId);
   }, [latest?.key, enabled, finished]);
 }

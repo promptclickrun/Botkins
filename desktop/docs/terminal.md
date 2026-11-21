@@ -166,7 +166,7 @@ botkins chat Nova -m "Summarize the notes in the wiki." --json
 
 Other commands for bots:
 
-- `botkins bots edit <bot>` opens the bot in your editor. With `--name`, `--role`, `--instructions`, `--instructions-file` or `--model`, it changes that field directly.
+- `botkins bots edit <bot>` opens the bot in your editor. With `--name`, `--role`, `--instructions`, `--instructions-file` or `--model`, it changes that field directly. `--reading-provider`, `--reading-model`, `--reading-voice`, `--reading-speed`, `--live-provider`, `--live-model` and `--live-voice` give the bot a voice of its own over Settings › Voice (only what you name changes; an empty value goes back to Settings), and `--same-voice` takes it away. Keys stay in Settings › Voice.
 - `botkins bots remove <bot>` removes a bot and its chats.
 - `botkins routines list`, `run`, `pause` and `resume` operate the routines of your bots.
 - `botkins plugins` installs and manages plugins. See "Plugins" below.

@@ -15,15 +15,40 @@ const fileText = (path) => {
     throw new CliError("The file " + path + " can't be read: " + error.message);
   }
 };
-/** A bot's fields from --name, --role, --instructions, --instructions-file and --model. */
+/** The words of --reading-provider and --live-provider. */
+const VOICE_SECTIONS = { reading: "tts", live: "live" };
+/** A bot's voice of its own, from --reading-* and --live-* (a change to what it has: "" goes back to Settings › Voice), or null for --same-voice. */
+function voiceOf(options) {
+  if (options["same-voice"] === true) {
+    if (Object.keys(options).some((name) => name.startsWith("reading-") || name.startsWith("live-"))) throw usage("Give --same-voice or the voice options, not both.");
+    return null;
+  }
+  const voice = {};
+  for (const [word, section] of Object.entries(VOICE_SECTIONS)) {
+    for (const key of ["provider", "model", "voice", "speed"]) {
+      const given = options[word + "-" + key];
+      if (given === undefined) continue;
+      if (key === "speed") {
+        const speed = given === "" ? "" : Number(given);
+        if (speed !== "" && !(speed >= 0.5 && speed <= 2)) throw usage("--" + word + "-speed is a number from 0.5 to 2.");
+        (voice[section] ??= {}).speed = speed;
+      } else (voice[section] ??= {})[key] = given;
+    }
+  }
+  if (voice.live?.speed !== undefined) throw usage("Live voice has no speed.");
+  return Object.keys(voice).length ? voice : undefined;
+}
+/** A bot's fields from --name, --role, --instructions, --instructions-file, --model and the voice options. */
 function botFields(options) {
   if (options.instructions !== undefined && options["instructions-file"] !== undefined) throw usage("Give --instructions or --instructions-file, not both.");
+  const voice = voiceOf(options);
   return {
     ...(options.name !== undefined && { name: options.name }),
     ...(options.role !== undefined && { role: options.role }),
     ...(options.instructions !== undefined && { instructions: options.instructions }),
     ...(options["instructions-file"] !== undefined && { instructions: fileText(options["instructions-file"]) }),
     ...(options.model !== undefined && { model: options.model }),
+    ...(voice !== undefined && { voice }),
   };
 }
 const BOT_OPTIONS = {
@@ -31,6 +56,17 @@ const BOT_OPTIONS = {
   instructions: { type: "string", value: "text", about: "How the bot should work" },
   "instructions-file": { type: "string", value: "path", about: "The same, from a file" },
   model: { type: "string", value: "provider/model", about: "Its model, as `botkins models` names it (\"\" for the default)" },
+};
+/** The options that give a bot a voice of its own. Only `bots edit` has them. */
+const VOICE_OPTIONS = {
+  "reading-provider": { type: "string", value: "provider", about: "Who reads its replies: device (this computer), openai, azure, elevenlabs, gemini, custom or local (\"\" for the same as Settings › Voice)" },
+  "reading-model": { type: "string", value: "model", about: "The reading model (\"\" for the default)" },
+  "reading-voice": { type: "string", value: "voice", about: "The reading voice (\"\" for the default)" },
+  "reading-speed": { type: "string", value: "0.5-2", about: "How fast it reads (\"\" for the speed in Settings › Voice)" },
+  "live-provider": { type: "string", value: "provider", about: "Who talks in live voice: codex, openai, gemini or elevenlabs (\"\" for the same as Settings › Voice)" },
+  "live-model": { type: "string", value: "model", about: "The live model (\"\" for the default)" },
+  "live-voice": { type: "string", value: "voice", about: "The live voice (\"\" for the default)" },
+  "same-voice": { type: "boolean", about: "Give the bot no voice of its own: it follows Settings › Voice" },
 };
 
 /**
@@ -234,14 +270,14 @@ export const workspace = {
       },
       edit: {
         summary: "Change a bot",
-        usage: "botkins bots edit <bot> [--name <text>] [--role <text>] [--instructions <text> | --instructions-file <path>] [--model <provider/model>]",
-        options: { name: { type: "string", value: "text", about: "A new name" }, ...BOT_OPTIONS },
-        details: "With no option, the bot opens in your editor ($VISUAL, $EDITOR, else vi) as JSON: change its name, role, instructions or model and save.",
+        usage: "botkins bots edit <bot> [--name <text>] [--role <text>] [--instructions <text> | --instructions-file <path>] [--model <provider/model>] [--reading-provider <provider>] [--reading-model <model>] [--reading-voice <voice>] [--reading-speed <0.5-2>] [--live-provider <provider>] [--live-model <model>] [--live-voice <voice>] [--same-voice]",
+        options: { name: { type: "string", value: "text", about: "A new name" }, ...BOT_OPTIONS, ...VOICE_OPTIONS },
+        details: "With no option, the bot opens in your editor ($VISUAL, $EDITOR, else vi) as JSON: change its name, role, instructions or model and save. The voice options give the bot a voice of its own, over Settings › Voice: only what you name changes, and an empty value goes back to Settings. The keys stay in Settings › Voice.",
         async run(context) {
           if (context.args.length !== 1) throw usage("Name the bot (its name or id).");
           let fields = botFields(context.options);
           if (!Object.keys(fields).length) {
-            if (!context.stdin.isTTY || context.json) throw usage("Say what to change: --name, --role, --instructions, --instructions-file or --model.");
+            if (!context.stdin.isTTY || context.json) throw usage("Say what to change: --name, --role, --instructions, --instructions-file, --model or a voice option.");
             const bot = await context.client.call("bots.get", context.args[0]);
             const before = { name: bot.name, role: bot.role, instructions: bot.instructions, model: bot.model ? modelOf(bot) : "" };
             let after;

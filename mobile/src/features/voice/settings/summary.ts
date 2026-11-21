@@ -1,7 +1,8 @@
 // Settings › Voice's overview: one line for each of dictation, reading aloud and live voice, the two
 // ways live voice listens, and which provider sheet sets a provider up. Plain, for the tests.
-import type { VoiceKeyProvider, VoiceSettings } from "@/link/types";
+import type { BotVoice, VoiceKeyProvider, VoiceSettings } from "@/link/types";
 import type { PhoneVoicePrefs } from "../prefs";
+import { effectiveLive, effectiveTts } from "../botVoice";
 import { KEY_PROVIDERS, LANGUAGES, missing, providerName } from "../choices";
 
 /** A provider whose key or models are set in `ProviderSheet`. */
@@ -59,4 +60,28 @@ export function keysSummary(voice: VoiceSettings): string {
 export function setupFor(provider: string | null | undefined): SheetProvider | null {
   if (provider === "local") return "local";
   return (KEY_PROVIDERS as string[]).includes(provider ?? "") ? (provider as VoiceKeyProvider) : null;
+}
+
+/** A voice id as a person would say it ("nova" is "Nova"). An opaque id (an ElevenLabs voice) is left out: only the list knows its name. */
+const voiceWord = (id: string | undefined) => (id && !/^[A-Za-z0-9_-]{20,}$/.test(id) ? id.charAt(0).toUpperCase() + id.slice(1) : undefined);
+
+/**
+ * One line for a bot's own voice on its page: "Same as Settings", or what it changes, such as
+ * "OpenAI · Nova · Live: Gemini · Puck". Only what the bot sets is named; the provider of a part
+ * it sets only a voice for is the shared one.
+ */
+export function botVoiceSummary(own: BotVoice | undefined, shared: VoiceSettings | undefined): string {
+  const parts: string[] = [];
+  const tts = own?.tts;
+  if (tts && Object.keys(tts).length) {
+    const provider = shared ? effectiveTts(shared.tts, tts).provider : tts.provider;
+    parts.push(...[provider && providerName(provider), voiceWord(tts.voice), tts.speed !== undefined && provider !== "gemini" ? Math.round(tts.speed * 100) / 100 + "×" : undefined].filter((part): part is string => !!part));
+  }
+  const live = own?.live;
+  if (live && Object.keys(live).length) {
+    const provider = shared ? effectiveLive(shared.live, live).provider : live.provider;
+    const words = [provider && providerName(provider), voiceWord(live.voice)].filter((part): part is string => !!part);
+    parts.push("Live: " + (words.join(" · ") || "Settings"));
+  }
+  return parts.join(" · ") || "Same as Settings";
 }

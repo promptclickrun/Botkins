@@ -24,6 +24,7 @@ import { openProviderSettings } from "./providers";
 import { ChatRow, deleteBot, useAsk, type PageActions } from "./Pages";
 import { BotRoutines } from "./Routines";
 import BotAccess from "./BotAccess";
+import BotVoiceCard from "./BotVoiceCard";
 import { openBotViewNext } from "./Settings";
 import "./integrations.css";
 import type { Bot, BotLook, State } from "./types";
@@ -356,6 +357,7 @@ export default function BotProfile({
               Manage capabilities
             </button>
           </section>
+          <BotVoiceCard bot={bot} />
           <MemoryCard state={state} bot={bot} actions={actions} />
           <section className="profile-card">
             <h2>Today</h2>

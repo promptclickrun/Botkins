@@ -8,7 +8,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { LIVE_LIMITS, liveContextOf, liveInstructions, liveTranscript, Voice, wavFromPcm } from "../link-host/voice.mjs";
+import { botVoiceField, cleanBotVoice, LIVE_LIMITS, liveContextOf, liveInstructions, liveTranscript, Voice, wavFromPcm } from "../link-host/voice.mjs";
+import { remoteArgs } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { LinkHost } from "../link-host/server.mjs";
 
@@ -1252,4 +1253,82 @@ test("live voice on the computer: the chat, the app's notes and the place reach 
   } finally {
     await link.stop();
   }
+});
+
+// ── A voice of a bot's own ("bot-voice-v1") ───────────────────────────────────────────────────
+
+test("a bot's own voice goes over the shared settings for reading aloud and live voice, and only for that bot", async () => {
+  const net = fake({
+    "POST api.openai.com/v1/audio/speech": () => new Response(MP3),
+    "POST generativelanguage.googleapis.com/v1beta/interactions": () => ({ steps: [{ type: "model_output", content: [{ type: "audio", data: WAV.toString("base64") }] }] }),
+    "POST generativelanguage.googleapis.com/v1beta/auth_tokens": () => ({ name: "auth_tokens/abc", uses: 1 }),
+  });
+  const backend = new MockBackend({ speed: 0.05 });
+  const link = new LinkHost({ relay: false, dir: scratch(), backend, port: 0, fetch: net.fetch as any });
+  const [pip, nova] = (backend.snapshot().bots as any[]).map((b) => b.id);
+  const call = (name: string, input: unknown) => (link as any).calls[name]({}, [input]);
+  try {
+    (link as any).voice.setKey("openai", KEY);
+    (link as any).voice.set({ tts: { provider: "openai", model: "tts-1-hd", voice: "cedar", speed: 1.5 }, live: { provider: "openai", voice: "marin" } });
+    await backend.call("updateBot", remoteArgs("updateBot", [pip, { voice: { tts: { voice: "sage" } } }]));
+    await backend.call("updateBot", remoteArgs("updateBot", [nova, { voice: { tts: { provider: "gemini", voice: "Puck" }, live: { provider: "gemini", voice: "Puck" } } }]));
+    // Reading aloud: the bot's voice, the shared model and speed it leaves alone; another bot and no bot keep the shared ones.
+    await call("link.voice.speak", { text: "Hello.", botId: pip });
+    assert.deepEqual(json(net.last()), { model: "tts-1-hd", input: "Hello.", voice: "sage", response_format: "mp3", speed: 1.5 });
+    await call("link.voice.speak", { text: "Hello.", botId: "bot-unknown" });
+    assert.equal(json(net.last()).voice, "cedar");
+    await call("link.voice.speak", { text: "Hello." });
+    assert.equal(json(net.last()).voice, "cedar");
+    // A voice named by the caller still wins, as before.
+    await call("link.voice.speak", { text: "Hello.", botId: pip, voice: "echo", speed: 1 });
+    assert.deepEqual(json(net.last()), { model: "tts-1-hd", input: "Hello.", voice: "echo", response_format: "mp3" });
+    // Another provider: its own key, and none of the shared provider's model or voice.
+    await assert.rejects(call("link.voice.speak", { text: "Hello.", botId: nova }), { message: "Add a Gemini key in Settings › Voice first." });
+    (link as any).voice.setKey("gemini", "AIza-gemini-key-123456");
+    await call("link.voice.speak", { text: "Hello.", botId: nova });
+    const spoken = json(net.last());
+    assert.equal(spoken.model, "gemini-3.8-flash-tts");
+    assert.equal(spoken.generation_config.speech_config[0].voice, "Puck");
+
+    // Live voice: the call reaches the session with the bot's live voice, and a bot with none gets nothing extra.
+    const asked: any[] = [];
+    const real = (link as any).voice.live.bind((link as any).voice);
+    (link as any).voice.live = (input: any) => (asked.push(input), real(input));
+    const chat = (backend.snapshot().chats as any[]).find((item) => item.id === "chat-blog");
+    const session = await (link as any).liveVoice({ chatId: chat.id, botId: nova, provider: "gemini" });
+    assert.equal(session.setup.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, "Puck");
+    assert.deepEqual(asked[0].override, { provider: "gemini", voice: "Puck" });
+    // The shared live voice is OpenAI's: a bot that has its own provider without a key fails with the sentence the shared setting gives.
+    (link as any).voice.setKey("gemini", null);
+    await assert.rejects((link as any).liveVoice({ chatId: chat.id, botId: nova }), { message: "Add a Gemini key in Settings › Voice first." });
+  } finally {
+    await link.stop();
+  }
+});
+
+test("a bot's voice is checked: unknown providers, stray fields, long strings and a speed out of range are refused; null clears; empty is none", () => {
+  assert.deepEqual(botVoiceField({ tts: { provider: "openai", voice: " nova ", speed: 1.234 }, live: { provider: "gemini", model: "" } }), { tts: { provider: "openai", voice: "nova", speed: 1.23 }, live: { provider: "gemini" } });
+  assert.equal(botVoiceField(null), null);
+  assert.equal(botVoiceField({ tts: {}, live: { voice: null } }), null);
+  for (const bad of [
+    "nova",
+    [],
+    { tts: { provider: "nope" } },
+    { tts: { provider: "codex" } },
+    { live: { provider: "device" } },
+    { live: { speed: 1 } },
+    { tts: { speed: 3 } },
+    { tts: { speed: "fast" } },
+    { tts: { voice: "x".repeat(201) } },
+    { tts: { voice: "bad id!" } },
+    { tts: { key: "sk-secret" } },
+    { key: "sk-secret" },
+  ])
+    assert.throws(() => botVoiceField(bad), /can't be saved|isn't supported|between 0\.5 and 2|up to 200/, JSON.stringify(bad));
+  // A phone's updateBot is cut to that shape on the way in; a voice that isn't one is refused with the sentence.
+  assert.deepEqual(remoteArgs("updateBot", ["bot-1", { name: "Pip", voice: { tts: { speed: 1.25 } } }]), ["bot-1", { name: "Pip", voice: { tts: { speed: 1.25 } } }]);
+  assert.deepEqual(remoteArgs("updateBot", ["bot-1", { voice: null }]), ["bot-1", { voice: null }]);
+  assert.throws(() => remoteArgs("updateBot", ["bot-1", { voice: { tts: { provider: "nope" } } }]), /isn't supported/);
+  // What is read back is never half of a bad voice.
+  assert.equal(cleanBotVoice({ tts: { speed: 9 } }), null);
 });

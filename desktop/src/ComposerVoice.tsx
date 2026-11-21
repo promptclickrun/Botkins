@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { AudioLines, Info, Mic, Square } from "lucide-react";
 import { Recorder, startLive, useLive, voiceError } from "./voice";
+import { effectiveLive } from "./botVoice";
+import type { BotVoice } from "./types";
 import LivePanel, { Meter } from "./LiveVoice";
 import "./voice.css";
 
@@ -16,6 +18,7 @@ type Note = { text: string; settings?: boolean; error?: boolean };
 export function useComposerVoice({
   chatId,
   botName,
+  botVoice,
   draft,
   change,
   input,
@@ -23,6 +26,8 @@ export function useComposerVoice({
 }: {
   chatId?: string;
   botName?: string;
+  /** The bot's voice of its own, if it has one. */
+  botVoice?: BotVoice;
   draft: string;
   change: (value: string) => void;
   input: RefObject<HTMLTextAreaElement | null>;
@@ -127,7 +132,8 @@ export function useComposerVoice({
     setNote(null);
     try {
       const settings = await api.voiceSettings();
-      const provider = settings.live.provider;
+      // This bot's own live voice, when it has one, over the shared choice (the main process applies it to the call).
+      const provider = effectiveLive(settings.live, botVoice?.live).provider;
       if (!provider) return setNote({ text: "Live voice needs a voice to talk with. Choose one in Settings › Voice.", settings: true });
       if (!settings.ready) return setNote({ text: settings.problem || "Voice isn't ready yet.", error: true });
       if (provider === "codex" && !settings.providers.codex.signedIn)

@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { ASK_BOT, VoiceDesk, cutForSpeech, liveInstructions, speakable, splitSentences } from "../desktop/voicedesk.mjs";
 import { CodexVoice } from "../desktop/codexvoice.mjs";
-import { Voice } from "../desktop/link/voice.mjs";
+import { Voice, effectiveLive as linkLive, effectiveTts as linkTts } from "../desktop/link/voice.mjs";
+import { botVoiceSummary, effectiveLive, effectiveTts, withProvider } from "../src/botVoice.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,12 +54,12 @@ function fakeVoice({ tts = "openai" } = {}) {
 }
 
 /** A stand-in workspace: send() runs a "turn" that adds the bot's reply. */
-function fakeWorkspace({ reply = "Sure. **Done** with `code`.", messages = [], liveContext } = {}) {
+function fakeWorkspace({ reply = "Sure. **Done** with `code`.", messages = [], liveContext, voice } = {}) {
   const chat = { id: "chat-1", botId: "bot-1", messages };
   const ws = {
     sent: [],
     active: new Map(),
-    state: { bots: [{ id: "bot-1", name: "Pip", role: "Keeps the garden notes." }], chats: [chat] },
+    state: { bots: [{ id: "bot-1", name: "Pip", role: "Keeps the garden notes.", ...(voice && { voice }) }, { id: "bot-2", name: "Nova", role: "Edits." }], chats: [chat] },
     chat: (id) => {
       if (id !== chat.id) throw new Error("Unknown chat");
       return chat;
@@ -134,6 +135,32 @@ test("speak: This computer speaks in the page; a provider's audio comes in parts
   const spoken = voice.calls.filter((c) => c[0] === "speak").map((c) => c[1]);
   assert.ok(spoken.every((n) => n <= 4000));
   await assert.rejects(desk.speak("   "), /nothing to read/);
+});
+
+test("a bot's own voice goes over the shared one for reading aloud and live voice, for that bot only", async () => {
+  const bots = { tts: { provider: "gemini", voice: "Puck" }, live: { provider: "gemini", voice: "Puck" } };
+  const workspace = () => fakeWorkspace({ voice: bots });
+  const sent = [];
+  const voice = fakeVoice();
+  voice.speak = async (args) => (sent.push(args), { audio: Buffer.from([1]), format: "mp3" });
+  const desk = new VoiceDesk({ voice: () => voice, workspace });
+  await desk.speak("Hello.", { botId: "bot-1" });
+  assert.deepEqual(sent.at(-1).override, bots.tts);
+  await desk.speak("Hello.", { botId: "bot-2" });
+  assert.equal(sent.at(-1).override, undefined, "a bot with no voice of its own reads in the shared one");
+  await desk.speak("Hello.");
+  assert.equal(sent.at(-1).override, undefined);
+  // "This computer" for one bot is read by the window, even when the shared reading is a provider's.
+  const quiet = new VoiceDesk({ voice: () => voice, workspace: () => fakeWorkspace({ voice: { tts: { provider: "device" } } }) });
+  assert.deepEqual(await quiet.speak("Hello.", { botId: "bot-1" }), { device: true });
+  assert.equal((await quiet.speak("Hello.", { botId: "bot-2" })).parts.length, 1);
+  // And the other way: the shared choice is "This computer", the bot's own is a provider.
+  const shared = new VoiceDesk({ voice: () => fakeVoice({ tts: "device" }), workspace });
+  assert.deepEqual(await shared.speak("Hello.", { botId: "bot-2" }), { device: true });
+  assert.ok((await shared.speak("Hello.", { botId: "bot-1" })).parts);
+  // Live voice: the bot's own live voice reaches the session.
+  await desk.startLive("chat-1", { sdp: "v=0 offer" });
+  assert.deepEqual(voice.calls.find((c) => c[0] === "live")[1].override, bots.live);
 });
 
 test("speakable drops Markdown marks, code blocks and link addresses", () => {
@@ -634,4 +661,15 @@ test("Codex live: words for the voice to say later go into the session, and not 
   codex.end(id);
   await peer.exited;
   assert.equal(await codex.say(id, "too late"), false);
+});
+
+test("the window resolves and names a bot's own voice as the main process does", () => {
+  const shared = { tts: { provider: "openai", model: "tts-1-hd", voice: "cedar", speed: 1.5 }, live: { provider: "openai", voice: "marin" }, providers: { openai: { hasKey: true }, gemini: { hasKey: true } } };
+  for (const own of [undefined, { voice: "sage" }, { provider: "openai", speed: 0.8 }, { provider: "gemini", voice: "Puck" }, { provider: "device" }]) assert.deepEqual(effectiveTts(shared.tts, own), linkTts(shared.tts, own), JSON.stringify(own));
+  for (const own of [undefined, { voice: "Puck" }, { provider: "gemini", voice: "Puck" }]) assert.deepEqual(effectiveLive(shared.live, own), linkLive(shared.live, own), JSON.stringify(own));
+  assert.equal(botVoiceSummary(undefined, shared), "Same as Settings");
+  assert.equal(botVoiceSummary({ tts: { provider: "openai", voice: "nova" }, live: { provider: "gemini", voice: "Puck" } }, shared), "OpenAI · Nova · Live: Gemini · Puck");
+  assert.equal(botVoiceSummary({ tts: { provider: "device" } }, shared), "This computer");
+  // Another provider keeps the speed and drops the model and voice that wouldn't fit it.
+  assert.deepEqual(withProvider({ tts: { provider: "openai", model: "tts-1", voice: "nova", speed: 1.25 } }, "tts", "gemini"), { tts: { provider: "gemini", speed: 1.25 } });
 });
