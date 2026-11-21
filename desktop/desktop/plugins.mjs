@@ -7,6 +7,13 @@ import { describeStarts, folderReader, pluginStarts, startWarnings } from "./plu
 import { pluginSession, pluginOAuthServers } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
+/**
+ * Named by an app whose description of a plugin is what the plugin starts, and all of it (one
+ * reading, desktop/plugin-reading.mjs). "plugins-v1" is named by apps from before that too, and
+ * from one of those a plugin that shows no command can still run one. So a client that does not
+ * see this name asks first for every plugin, and says to update the app on the computer.
+ */
+export const PLUGIN_STARTS = "plugin-starts-v1";
 function limitsFor(preview) {
   const limits = [
     "Copilot loads skills, agents and commands and can run command hooks and MCP servers.",

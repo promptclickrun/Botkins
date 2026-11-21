@@ -29,7 +29,7 @@ import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
 import { FOLDERS, Folders } from "./folders.mjs";
 import { deviceCall } from "./device-call.mjs";
-import { PLUGINS, pluginHandlers } from "./plugins.mjs";
+import { PLUGINS, PLUGIN_STARTS, pluginHandlers } from "./plugins.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
@@ -94,7 +94,7 @@ const REPLY_MS = 1500;
 export const APP_UPDATE = "app-update-v1";
 /** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
 export const PROVIDER_SIGNIN = "provider-signin-v1";
-export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN, SPACES];
+export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.

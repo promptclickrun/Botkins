@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
+import { PLUGIN_STARTS } from "../desktop/plugins.mjs";
+import { CAPABILITIES } from "../desktop/runtime.mjs";
 
 test("a copied folder needs activation and its settings survive restart behind the vault", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "botkins-plugin-settings-"));
@@ -252,4 +254,10 @@ test("a plugin folder that was linked live becomes an installed plugin, switched
   assert.deepEqual(await after.plugins.session(after.bot("pip"), { id: "chat-1" }), { directories: [], mcpServers: {}, hooks: undefined });
   // A new link cannot be made: the folder goes the plugins' way.
   assert.throws(() => after.integrations.addFromFolder(folder), (error) => error.code === "PLUGIN_FOLDER" && error.folder === folder);
+});
+
+test("the app names the capability that says its description of a plugin is what the plugin starts", () => {
+  // A client tells an app with the one reading from an older one by this name, and asks first for every plugin without it.
+  assert.equal(PLUGIN_STARTS, "plugin-starts-v1");
+  assert.ok(CAPABILITIES.includes(PLUGIN_STARTS));
 });
