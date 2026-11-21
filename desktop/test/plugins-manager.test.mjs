@@ -187,6 +187,7 @@ test("an installed copy that was changed on disk is not used, the app says why, 
   assert.deepEqual(await session(), { directories: [], mcpServers: {}, hooks: undefined });
   const [listed] = ws.plugins.list();
   assert.deepEqual([listed.status, listed.detail], ["error", "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings."]);
+  assert.equal(listed.repair, "update");
   // Off and on again does not get round it.
   await ws.plugins.setEnabled(added.id, false);
   await assert.rejects(ws.plugins.setEnabled(added.id, true), /are not the files that were reviewed/);
@@ -252,6 +253,7 @@ test("a plugin installed by an earlier version that starts anything its descript
   // A copy that cannot be read is off, with its own reason, and is not marked as read.
   assert.equal(byName("gone").enabled, false);
   assert.match(byName("gone").detail, /Its installed files could not be read, so Botkins cannot show what it starts\. Update the plugin to write its files again, then switch it on\./);
+  assert.equal(byName("gone").repair, "update");
   const stored = () => JSON.parse(readFileSync(file, "utf8"));
   const marked = (name) => stored().find((row) => row.preview.name === name + "-fixture").reading;
   assert.deepEqual(["remote", "args", "long", "short", "mixed"].map(marked), [2, 2, 2, 2, 2]);
@@ -295,10 +297,11 @@ test("a changed copy is put right by an update, which writes the reviewed files 
   await ws.plugins.session(ws.bot("pip"), { id: "chat-1" });
   const [broken] = ws.plugins.list();
   assert.deepEqual([broken.status, broken.detail], ["error", "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings."]);
+  assert.equal(broken.repair, "update", "the mark that an update is the way back, for a client that does not read the sentence");
   // The runtime asks before each hook starts.
   assert.equal(ws.plugins.runtimeRecord(row).intact(), false);
   const fixed = await ws.plugins.update(added.id, { revision: row.revision });
-  assert.equal(fixed.status, "ready");
+  assert.deepEqual([fixed.status, fixed.repair], ["ready", undefined]);
   assert.equal(existsSync(planted), false);
   assert.equal(isSet(), true);
   assert.equal(ws.plugins.runtimeRecord(ws.plugins.records[0]).intact(), true);

@@ -300,6 +300,10 @@ export class Plugins {
       bots: row.bots,
       installedAt: row.installedAt,
       status,
+      // The way back for a copy that is changed, gone or not readable is an update: it writes the
+      // reviewed files again and keeps the settings. A client offers Update from this mark, not
+      // from the words of `detail`, also when the source did not change.
+      ...((changedCopy || (row.heldBack === "unread" && !row.enabled)) && { repair: "update" }),
       ...(row.heldBack && !row.enabled && { detail: HELD_BACK[row.heldBack] }),
       ...(status === "error" && {
         detail: unavailable ? "This computer could not open a saved plugin setting." : changedCopy && existsSync(row.folder) ? CHANGED_COPY : row.heldBack === "unread" && !row.enabled ? HELD_BACK.unread : "The installed plugin files could not be opened.",

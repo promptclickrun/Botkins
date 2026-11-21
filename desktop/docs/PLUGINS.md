@@ -93,6 +93,7 @@ config[].sentTo?: ({ tool: string; env: string } | { tool: string; header: strin
 - `sentTo` is each place that gets the value of the setting.
 - For an installed plugin, these fields come from the installed copy each time, not from what was kept at install.
 - An installed plugin that Botkins switched off has `enabled: false` and a `detail` sentence with the reason.
+- An installed plugin has `repair: "update"` when an update is the way back: its copy is not the reviewed files, or its files cannot be read. A client offers Update from this mark, also when the source did not change. The update writes the files again and keeps the settings.
 - An app that holds to this rule names the capability `plugin-starts-v1`. An app from before it names `plugins-v1` only, and its description can leave out a command that runs. A client that does not see `plugin-starts-v1` asks first for every plugin, and tells the person to update the app on the computer.
 
 ## Runtime support
