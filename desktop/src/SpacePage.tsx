@@ -38,7 +38,9 @@ import {
   arrangePin,
   arrangeStep,
   askBot,
+  asksOf,
   changedLine,
+  changedPanels,
   deleteQuestion,
   initial,
   lastLine,
@@ -468,7 +470,9 @@ export function SpacePage({
   }, [space.id]);
 
   const project = space.projectId ? state.projects?.find((p) => p.id === space.projectId) : undefined;
-  const line = changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
+  // Once the space is read, the line counts its panels as the dots do, so a person's own tick or
+  // note is not news to them. Before that, and for a space never opened, the computer's count.
+  const line = content && seenAt.current ? changedLine(changedPanels(panels, seenAt.current, me), seenAt.current) : changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
   const shown = panels.filter((p) => p.hidden === hidden);
   const drag = usePanelDrag(
     shown.map((p) => p.id),
@@ -575,7 +579,7 @@ export function SpacePage({
               badges={
                 <>
                   {p.blocks.some((b) => b.type === "html") && <span className="space-app">App</span>}
-                  {panelChanged(p, seenAt.current) && <i className="space-dot" aria-label="Changed" />}
+                  {panelChanged(p, seenAt.current, me) && <i className="space-dot" aria-label="Changed" />}
                 </>
               }
               tools={
@@ -707,6 +711,7 @@ export function SpacePage({
         <OpenedPanel
           title={opened.title}
           bot={askAllowed ? state.bots.find((b) => b.id === opened.botId) : undefined}
+          asks={asksOf(opened)}
           close={() => setOpenedId("")}
           ask={async (said) => {
             try {

@@ -113,12 +113,18 @@ const content = {
       panel("p_check", "luna", "Launch checklist", "wide", [{ type: "html", frame: checklistFrame, height: 110 }], {
         updatedAt: now - 2 * MIN,
         last: { by: "m_maya", name: "Maya Chen", label: "Ticked Press kit", at: now - 2 * MIN },
+        // What its bot says is worth asking next. The second has marks that must show as they are.
+        asks: ["Add a press release row", "Compare with **last** launch"],
         notes: [
           { id: "n1", by: "m_maya", name: "Maya Chen", text: "Press kit is in the drive.", at: now - 3 * MIN },
           { id: "n2", by: "m_dev", name: "Dev Patel", text: "Thanks!", at: now - 2 * MIN },
         ],
       }),
-      panel("p_price", "pip", "Pricing calculator", "small", [{ type: "html", frame: pricingFrame, height: 70 }]),
+      // The owner's own change a minute ago: not news to the owner, so no dot and not in the count.
+      panel("p_price", "pip", "Pricing calculator", "small", [{ type: "html", frame: pricingFrame, height: 70 }], {
+        updatedAt: now - MIN,
+        last: { by: "owner", name: "Studio Mac", label: "Set seats to 12", at: now - MIN },
+      }),
       panel("p_prs", "morel", "Open pull requests", "small", [{ type: "list", items: ["Pricing page copy #214", "Waitlist email template #209"] }]),
     ],
     cards: [],
@@ -447,11 +453,28 @@ try {
   if (shots) await win.screenshot({ path: join(shots, "space-panel-opened-light.png") });
   await clearCalls();
   const askLuna = openedPanel.getByRole("textbox", { name: "Ask Luna to change it" });
+  // The panel's asks are chips over the bar, as text. A click puts the words in the field and sends nothing.
+  const chips = openedPanel.getByRole("group", { name: "Ideas to ask Luna" }).getByRole("button");
+  await expect(chips).toHaveText(["Add a press release row", "Compare with **last** launch"]);
+  await expect(openedPanel.locator(".space-asks strong, .space-asks a")).toHaveCount(0);
+  await chips.nth(1).click();
+  await expect(askLuna).toHaveValue("Compare with **last** launch");
+  await expect(askLuna).toBeFocused();
+  await expect(openedPanel).toBeVisible();
+  assert.deepEqual(await callsOf("spaces.ask"), [], "a chip sends nothing");
+  if (shots) await win.screenshot({ path: join(shots, "space-panel-asks-light.png") });
   await askLuna.fill("Add a row for the press release");
   await askLuna.press("Enter");
   await expect.poll(() => callsOf("spaces.ask")).toEqual([[{ spaceId: "s_launch", botId: "luna", text: "Add a row for the press release", panelId: "p_check" }]]);
   await expect(win.locator(".chathead h2")).toHaveText("Luna");
-  console.log("An app panel opens large; asking there is about that panel and goes to its bot.");
+  // A panel whose bot gave no asks shows no chips: none are made up.
+  await menu.getByRole("button", { name: "Launch", exact: true }).click();
+  await win.getByRole("button", { name: "Open Pricing calculator" }).click();
+  const openedPrice = win.getByRole("dialog", { name: "Pricing calculator" });
+  await expect(openedPrice.getByRole("textbox", { name: "Ask Pip to change it" })).toBeVisible();
+  await expect(openedPrice.locator(".space-asks")).toHaveCount(0);
+  await openedPrice.getByRole("button", { name: "Close" }).click();
+  console.log("An app panel opens large; asking there is about that panel and goes to its bot. Its asks fill the field and do not send.");
 
   // ---- Add panel: the sheet "New panel".
   await menu.getByRole("button", { name: "Launch", exact: true }).click();
