@@ -59,6 +59,18 @@ export function cleanLook(look) {
   return clean;
 }
 
+/**
+ * A new random id for a device or a server: `bytes` random bytes as base64url. One that starts with
+ * "-" is drawn again, because a command line reads such a word as an option (`botkins devices remove
+ * <id>`). About one in 64 does. An id stays opaque; ids saved before this are as they were.
+ */
+export function newId(bytes, draw = random) {
+  for (;;) {
+    const id = b64u(draw(bytes));
+    if (!id.startsWith("-")) return id;
+  }
+}
+
 export class LinkStore {
   /**
    * @param dir      Folder for link.json.
@@ -174,7 +186,7 @@ export class LinkStore {
     return this.data.relay.key;
   }
   fresh() {
-    return { serverId: b64u(random(12)), keys: newKeyPair(), port: DEFAULT_PORT, enabled: false, name: "", devices: [], looks: {}, screen: "off", relay: { enabled: false, url: DEFAULT_RELAY_URL, key: null }, push: {}, sources: {}, team: defaultTeam() };
+    return { serverId: newId(12), keys: newKeyPair(), port: DEFAULT_PORT, enabled: false, name: "", devices: [], looks: {}, screen: "off", relay: { enabled: false, url: DEFAULT_RELAY_URL, key: null }, push: {}, sources: {}, team: defaultTeam() };
   }
   save() {
     // A store that couldn't open its key never overwrites the file it failed to read.
@@ -223,7 +235,7 @@ export class LinkStore {
     const is = deviceKind(kind, platform);
     const who = personName(person);
     const device = {
-      id: b64u(random(9)),
+      id: newId(9),
       name: deviceName(name, is),
       ...(who && { person: who }),
       platform: String(platform || "").slice(0, 20),
