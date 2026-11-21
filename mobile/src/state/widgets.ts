@@ -48,20 +48,7 @@ function write() {
   saved = next;
   void Activities.setWidgetData(JSON.stringify(next)).catch(() => {});
 }
-// With no Botkins widget on the Home Screen, Lock Screen or StandBy, the snapshot is written only
-// when the app leaves the front (where adding a widget or a control reads its bots): it used to be
-// worked out every 1.5 s while a bot worked whether or not anything showed it. Installed widgets are
-// asked for again each time the app comes to the front, which is when a person who just added one returns.
-let anyWidget: boolean | undefined;
-async function checkWidgets() {
-  try {
-    anyWidget = Activities?.installedWidgets ? (await Activities.installedWidgets()).length > 0 : undefined;
-  } catch {
-    anyWidget = undefined;
-  }
-}
 const soon = () => {
-  if (anyWidget === false) return;
   if (!timer) timer = setTimeout(write, QUIET_MS);
 };
 
@@ -113,12 +100,9 @@ export async function startWidgets() {
   watchSpaceContents(soon);
   AppState.addEventListener("change", (next) => {
     if (next === "active") {
-      void checkWidgets().then(soon);
       void freshUsage();
       void freshPanels();
-    // Always written on the way out: adding a widget or a control reads its list of bots from it.
     } else write();
   });
-  await checkWidgets();
   soon();
 }

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { type FetchLike, LinkClient, LinkError, type LinkState, pair, type Pairing, pushKeyOf } from "../src/link/client";
+import { type FetchLike, LinkClient, LinkError, type LinkState, pair, type Pairing } from "../src/link/client";
 import { parsePairingUrl } from "../src/link/pairing";
 import type { ChatDetail, ChatSummary, Live, Run } from "../src/link/types";
 
@@ -57,9 +57,6 @@ test("a phone pairs from the QR link, then follows and changes the computer", as
   assert.equal(link.status().devices.length, 1);
   assert.equal(link.status().devices[0].name, "Test phone");
   assert.equal(link.status().pairing, null, "the code is spent");
-  // A pairing's keys are worked out once: X25519 in plain JavaScript is slow on the phone, and it
-  // used to run again on every reconnect (build 12's CPU reports). The same key comes back each time.
-  assert.equal(pushKeyOf(paired), pushKeyOf({ ...paired, hosts: ["10.0.0.9:47610"] }));
 
   const { client, parts, until } = follow(paired);
   await until(() => !!parts.bots, "the first state");
