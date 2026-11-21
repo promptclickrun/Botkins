@@ -2,10 +2,14 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { createPortal } from "react-dom";
 import { findPathSpans } from "../desktop/path-detector.mjs";
 import type { Artifact } from "./types";
+import { mediaPlaces } from "./mediaParts";
+
+export { pathMarkup } from "./mediaParts";
 
 export type FilePreview = { item: Artifact; local: boolean };
 export type ChatFiles = { chatId: string; botId: string; hostId?: string; remote: boolean; preview: (file: FilePreview) => void };
-type Found = { path: string; start: number; end: number; item: Artifact };
+/** A path in a reply that the computer answered for. `media`: a `MEDIA:` attachment the computer knows, drawn in place of its text (`again`: an earlier place draws it). */
+export type Found = { path: string; start: number; end: number; item: Artifact; media?: Artifact; again?: boolean };
 export const ChatFileContext = createContext<{ files?: ChatFiles; found: Found[] }>({ found: [] });
 
 export function useChatFiles(text: string, files?: ChatFiles) {
@@ -27,9 +31,21 @@ export function useChatFiles(text: string, files?: ChatFiles) {
             }));
         results.forEach((item, index) => { if (item) valid.set(batch[index], item); });
       }
-      if (current) setChecked({ key, found: candidates.flatMap((span) => {
-        const item = valid.get(span.path);
-        return item ? [{ ...span, item }] : [];
+      // A MEDIA: attachment is drawn only when the computer knows the file as the chat's own.
+      // On this computer a path's link asks only whether the file is there, so that is asked apart.
+      const known = new Map<string, Artifact>();
+      const sent = [...new Set(candidates.filter((span) => span.media).map((span) => span.path))];
+      if (scope.remote) for (const path of sent) { const item = valid.get(path); if (item) known.set(path, item); }
+      else for (let i = 0; i < sent.length && current; i += 20) {
+        const batch = sent.slice(i, i + 20);
+        const items = await window.botkins["artifacts.resolve"]({ chatId: scope.chatId, paths: batch }).then((reply) => reply.items, () => []);
+        items.forEach((item, index) => { if (item) known.set(batch[index], item); });
+      }
+      const places = mediaPlaces(candidates, known);
+      if (current) setChecked({ key, found: candidates.flatMap((span, index) => {
+        const { media: _sent, ...place } = span;
+        const item = valid.get(span.path) ?? places[index]?.media;
+        return item ? [{ ...place, item, ...places[index] }] : [];
       }) });
     }
     const handle = window.setTimeout(() => {
@@ -38,40 +54,6 @@ export function useChatFiles(text: string, files?: ChatFiles) {
     return () => { current = false; window.clearTimeout(handle); };
   }, [key, candidates]);
   return useMemo(() => checked?.key === key ? checked.found : [], [checked, key]);
-}
-
-type MdNode = { type: string; value?: string; children?: MdNode[]; position?: { start: { offset?: number }; end: { offset?: number } }; data?: unknown };
-
-// Link only the exact text nodes established by the detector and the host.
-// Existing Markdown links retain their own destinations and labels.
-export function pathMarkup(text: string, found: Found[]) {
-  return () => (tree: MdNode) => {
-    function replace(node: MdNode): MdNode[] {
-      if (["link", "image", "linkReference", "imageReference", "definition", "code"].includes(node.type)) return [node];
-      if (node.type !== "text" && node.type !== "inlineCode") {
-        if (node.children) node.children = node.children.flatMap(replace);
-        return [node];
-      }
-      const start = node.position?.start.offset;
-      const end = node.position?.end.offset;
-      if (start == null || end == null || !node.value) return [node];
-      const out: MdNode[] = [];
-      let consumed = 0;
-      found.forEach((span, index) => {
-        if (span.start < start || span.end > end) return;
-        const label = text.slice(span.start, span.end);
-        const begin = node.value!.indexOf(label, consumed);
-        if (begin < 0) return;
-        if (begin > consumed) out.push({ type: "text", value: node.value!.slice(consumed, begin) });
-        out.push({ type: "chatFile", data: { hName: "span", hProperties: { "data-chat-file": index } }, children: [{ type: "text", value: label }] });
-        consumed = begin + label.length;
-      });
-      if (!out.length) return [node];
-      if (consumed < node.value.length) out.push({ type: "text", value: node.value.slice(consumed) });
-      return out;
-    }
-    replace(tree);
-  };
 }
 
 export function FileLink({ index, children }: { index: number; children: ReactNode }) {
