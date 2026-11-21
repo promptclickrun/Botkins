@@ -356,7 +356,30 @@ botkins artifacts read <artifact> --output ./notes.pdf
 
 ### The wiki
 
-The commands for this part come in a later change.
+The wiki is a set of Markdown pages in sections (folders). You and your bots keep it. The app keeps earlier versions of each page.
+
+```sh
+botkins wiki tree
+botkins wiki add "Launch plan" --folder projects --file plan.md
+botkins wiki show projects/launch-plan > plan.md
+botkins wiki save projects/launch-plan --file plan.md --base 3f9c1a2b7d4e5f60
+botkins wiki search launch friday
+botkins wiki history projects/launch-plan
+botkins wiki restore projects/launch-plan 1732190000000-You --yes
+botkins wiki move projects/launch-plan archive/launch-plan.md
+botkins wiki export --format zip --output ~/Documents
+```
+
+- **A page is named by its path**, as `wiki tree` prints it: `projects/launch-plan.md`. The `.md` and the letter case may be left off. A title works when only one page has it. If two pages have it, the command lists their paths. A section is named by its path too (`wiki move`, `wiki remove`, `wiki add --folder`).
+- **`wiki show` prints the page as it is.** The text goes to standard output and nothing else does, so a pipe or a file gets the page. A note with the revision goes to standard error. A page is a person's or a bot's text, so a terminal that shows it can be moved or changed by what it holds. `wiki version` prints an earlier version the same way. The titles in `wiki tree`, `wiki search` and `wiki history` are made safe: a control character is written as its number. `--json` has every value as it is.
+- **The text of a page comes from a file or from standard input.** `wiki add` and `wiki save` take `--file <path>`, and `--file -` reads standard input. Without `--file`, `wiki add` makes the page from the section's template, and `wiki save` at a terminal opens your editor with the page. With no terminal, `wiki save` with no `--file` is refused and names `--file`. `wiki add --for <project>` makes a page from a project's record (its name or id).
+- **A save can check that nobody changed the page.** `wiki show --json` has the page's revision as `base`, and the plain `wiki show` prints it on standard error. Give it back with `wiki save --base <revision>`. If the page changed since, nothing is saved, and the refusal says to read the page again for its current revision. Without `--base`, the save replaces the text. The old text is kept as a version, so a save can be undone with `wiki restore`. The editor form always checks.
+- **`wiki history <page>` lists the versions**, newest first, each with an id. `wiki version` and `wiki restore` take the whole id or the start of it. The app keeps 20 versions of a page. A restore keeps the text the page had before it.
+- **A removal and a restore ask first.** `wiki remove` (a page, or a section with its pages) and `wiki restore` ask at a terminal. With no terminal they print what they would do on standard error, fail, and name `--yes`. A removed page is kept in the `.trash` folder inside the wiki's folder, with its versions. No command brings it back: copy it out of that folder.
+- **`wiki move <page or section> <new path>`** takes the whole new path (`archive/launch-plan.md`). The links to the page in other pages follow it.
+- **`wiki export` writes the file itself.** The window's save dialog has no place on a command line. Give `--output <path>`: a file, or a folder that exists (the file then has the name that the app makes, such as `Wiki wiki export.zip`). A file that is there already is replaced only with `--yes`, or when you say yes at a terminal. `--scope all` is the whole wiki, the default with no page. With a page the default scope is `page`: the page and the pages that link with it. `--scope project` goes two steps of links out. `--list` shows the pages that an export would hold and why, and writes nothing. The formats are `zip` (Markdown files) and `html` (one web page). A PDF is laid out by the app's window and is not offered: export `html` and print it to PDF in a browser. The export is also kept among the artifacts of the first bot, as it is for a phone.
+- Every command works with `--json` and with no terminal. A change leaves a line in the log with the page's path and never its words: `wiki.add`, `wiki.addFolder`, `wiki.save`, `wiki.move`, `wiki.remove`, `wiki.restore` and `wiki.export`.
+- The wiki's own log (`log.md`) and the list of versions say "You" for a change made from here, as they do for the window. They do not tell a person from a bot. `botkins logs` shows which commands ran, and on which page.
 
 ### Preferences, usage, the cache, voice and the Mac tools
 

@@ -163,7 +163,21 @@ export const WORKSPACE = {
   moveTask: cmd("tasks move"),
   startTask: cmd("tasks start"),
   deleteTask: cmd("tasks remove"),
-  ...each("wikiTree wikiPage searchWiki createWikiPage createWikiPageFor createWikiFolder saveWikiPage moveWiki deleteWiki wikiHistory wikiVersion restoreWikiVersion wikiExportPlan wikiExportPages exportWikiFile", owed("d")),
+  wikiTree: cmd("wiki tree"),
+  wikiPage: cmd("wiki show"),
+  searchWiki: cmd("wiki search"),
+  // A new page: from a title, from a text, or for a project (`--for`: the app's only record kind).
+  ...each("createWikiPage createWikiPageFor", cmd("wiki add")),
+  createWikiFolder: cmd("wiki add-folder"),
+  saveWikiPage: cmd("wiki save"),
+  moveWiki: cmd("wiki move"),
+  deleteWiki: cmd("wiki remove"),
+  wikiHistory: cmd("wiki history"),
+  wikiVersion: cmd("wiki version"),
+  restoreWikiVersion: cmd("wiki restore"),
+  // The export: the window's save dialog has no place on a command line. `wiki export` asks for the plan (`--list` shows it),
+  // takes the pages' text through the same calls the web page's layout uses, and writes the file where --output says.
+  ...each("wikiExportPlan wikiExportPages exportWikiFile", cmd("wiki export")),
   "artifacts.list": cmd("artifacts list"),
   "artifacts.read": cmd("artifacts read"),
   "artifacts.resolve": cmd("artifacts resolve"),
@@ -361,6 +375,15 @@ export const CHANGES = {
   "tasks.start": (args, value) => value?.title ?? args?.[0],
   "tasks.remove": (args, value) => value?.title ?? args?.[0],
   // ── The wiki (control-wiki.mjs) ──
+  // (By the page's or section's path: the name that the wiki gives it, not its text.)
+  "wiki.add": (args, value) => value?.path ?? args?.[0]?.title,
+  "wiki.addFolder": (args, value) => value?.path ?? args?.[0]?.name,
+  "wiki.save": (args, value) => value?.path ?? args?.[0],
+  "wiki.move": (args, value) => value?.from ?? args?.[0],
+  "wiki.remove": (args, value) => value?.removed ?? args?.[0],
+  "wiki.restore": (args, value) => value?.path ?? args?.[0],
+  // An export is kept among the artifacts of the first bot: the scope, and the page it started from.
+  "wiki.export": (args) => (args?.[0]?.scope === "all" ? "all pages" : args?.[0]?.page),
   // ── Preferences, usage, the cache and the Mac tools (control-prefs.mjs) ──
   // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
   // ── Voice (control-voice.mjs) ──
@@ -373,7 +396,7 @@ export const MORE_READS = {
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
-  wiki: [],
+  wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: [],
   credentials: [],
   voice: [],
