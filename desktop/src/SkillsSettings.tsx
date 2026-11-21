@@ -33,8 +33,8 @@ export function useSkills(stamp: string) {
 
 /** Where a skill comes from, as a short label. */
 export function skillOrigin(skill: SkillInfo, list?: SkillList) {
-  if (skill.origin === "commander") return "Botkins";
   if (skill.origin === "built-in") return "Built in";
+  if (skill.origin !== "folder") return "Botkins";
   const folder = list?.folders.find((f) => f.id === skill.folderId);
   return folder ? folderName(folder.path) : "Linked folder";
 }

@@ -1,3 +1,4 @@
+import { storageKey } from "./storage";
 import { useBotDrag } from "./useBotDrag";
 import { useChatDrag } from "./useChatDrag";
 import { chatGroups, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
@@ -550,7 +551,7 @@ function BotCard({
   );
 }
 
-const collapsedKey = "commander.collapsedSections";
+const collapsedKey = storageKey("collapsedSections");
 function readCollapsed(): string[] {
   try {
     return JSON.parse(localStorage.getItem(collapsedKey) || "[]");

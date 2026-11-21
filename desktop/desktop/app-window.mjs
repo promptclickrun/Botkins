@@ -4,7 +4,7 @@ import { BrowserWindow, dialog, ipcMain, protocol, session, shell } from "electr
 import { fileURLToPath } from "node:url";
 import { guardedPage, unshadow } from "./view-guard.mjs";
 
-export const APP_SCHEME = "commander-app";
+export const APP_SCHEME = "botkins-app";
 const CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",

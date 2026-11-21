@@ -1,8 +1,7 @@
 // "@" and "#" mentions and the Teamwork rail, in an isolated data folder. No Copilot turns unless BOTKINS_LIVE=1.
 // Seeds a project, a chat and a file in Pip's folder; picks each from the composer menus, removes chips and
 // checks what Send passes (the send IPC is wrapped, so no model turn runs). "@" opens a menu only in a group
-// chat. Then seeds a stored chat with sent mentions (one saved by an earlier version as a customer, which shows
-// as a plain label) and teammate asks, and checks the chips, rail rows and detail popup.
+// chat. Then checks a stored chat with sent mentions and teammate asks.
 // Set BOTKINS_MENTION_SHOTS to a folder to save light and dark screenshots.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -14,12 +13,12 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-mentions-ui-"));
 const dataDir = join(dir, "app");
-const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, COMMANDER_DATA_DIR: dataDir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dataDir };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dataDir);
 delete env.ELECTRON_RUN_AS_NODE;
-const live = (process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1";
-const shots = (process.env.BOTKINS_MENTION_SHOTS ?? process.env.COMMANDER_MENTION_SHOTS);
+const live = process.env.BOTKINS_LIVE === "1";
+const shots = process.env.BOTKINS_MENTION_SHOTS;
 let app, page;
 const errors = [];
 const button = (name, scope = page) => scope.getByRole("button", { name, exact: true });
@@ -52,7 +51,7 @@ async function shot(name, locator, keepFocus = false) {
   if (keepFocus) await entry().focus();
 }
 async function launch() {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
@@ -218,8 +217,8 @@ try {
       time: t,
       runId: "run-team",
       mentions: [
-        // Saved by an earlier version, when "@" could mention a customer.
-        { kind: "customer", id: "removed-customer", label: "Contoso" },
+        // An unrecognized saved reference must not open a record.
+        { kind: "retired", id: "r1", label: "Contoso" },
         { kind: "project", id: projectId, label: "Mail migration" },
         { kind: "file", path: report.path, label: "report.md" },
       ],
@@ -266,9 +265,8 @@ try {
   await expect(sentChips.getByRole("listitem")).toHaveText(["Contoso", "Mail migration", "report.md"]);
   await expect(sentChips.getByRole("button", { name: /^Remove/ })).toHaveCount(0);
   await expect(sentChips.getByRole("listitem").nth(2)).toHaveAttribute("title", report.path);
-  // The old customer mention is a plain label: nothing to open and nothing that says customer.
+  // The retired reference has no target.
   await expect(sentChips.getByRole("listitem").first().getByRole("button")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^Open customer/ })).toHaveCount(0);
   await shot("sent-chips", page.locator("article.user").first());
 
   // Rail rows, merged and by status.
@@ -331,7 +329,7 @@ try {
   await button("Open project Mail migration").click();
   await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Work", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Mail migration" }).first()).toBeVisible();
-  console.log("The project chip opens its project; the old customer mention stays a plain label.");
+  console.log("The project chip opens its project; the retired reference stays a plain label.");
 
   if (live) {
     await button("New chat").click();

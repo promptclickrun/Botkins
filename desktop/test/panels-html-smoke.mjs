@@ -59,19 +59,19 @@ const page = (label) => `<!doctype html><html><head><title>${label}</title>
   fetch("${outside}/fetch").then(() => (tries.local = "reached"), (e) => (tries.local = "blocked"));
   document.getElementById("pic").addEventListener("error", () => (tries.img = "blocked"));
   document.getElementById("pic").addEventListener("load", () => (tries.img = "reached"));
-  try { tries.parentBridge = typeof window.parent.commander; } catch (e) { tries.parentBridge = "blocked"; }
+  try { tries.parentBridge = typeof window.parent.botkins; } catch (e) { tries.parentBridge = "blocked"; }
   try { tries.parentDom = window.parent.document.title; } catch (e) { tries.parentDom = "blocked"; }
   try { tries.top = window.top.location.href; } catch (e) { tries.top = "blocked"; }
   tries.ownBridge = Object.keys(window.botkins).sort().join(",");
-  tries.appBridge = [typeof require, typeof window.ipcRenderer, typeof process, typeof window.botkins.snapshot, typeof window.commander.snapshot].join(",");
+  tries.appBridge = [typeof require, typeof window.ipcRenderer, typeof process, typeof window.botkins.snapshot, typeof window.bighelp.snapshot].join(",");
   window.forge = () => {
     document.getElementById("title").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
   };
   document.getElementById("answer").onclick = () =>
-    commander.sendAnswer("Plan the launch for ${label}").then(() => (tries.answer = "ok"), (e) => (tries.answer = e.message));
+    botkins.sendAnswer("Plan the launch for ${label}").then(() => (tries.answer = "ok"), (e) => (tries.answer = e.message));
   document.getElementById("link").onclick = () =>
-    commander.openLink("https://example.com/docs").then((v) => (tries.link = String(v)), (e) => (tries.link = e.message));
+    botkins.openLink("https://example.com/docs").then((v) => (tries.link = String(v)), (e) => (tries.link = e.message));
   document.getElementById("leave").onclick = () => { location.href = "${outside}/leave"; };
   // Saved state (a panel in a space): what the page reads, what it hears of, and two saves:
   // one it tries by itself as it loads, and one when the person presses Save.
@@ -140,7 +140,7 @@ const frames = [
 ];
 writeFileSync(join(data, "workspace.json"), JSON.stringify({ bots: starterBots, chats, runs, panels, frames }));
 
-const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, COMMANDER_DATA_DIR: dataDir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dataDir };
 delete env.ELECTRON_RUN_AS_NODE;
 let app, win;
 const snap = () => win.evaluate(() => window.botkins.snapshot());
@@ -168,7 +168,7 @@ async function frameOf(iframe) {
 const tries = (frame) => frame.evaluate(() => ({ ...window.tries }));
 
 try {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   win = await app.firstWindow();
   win.on("pageerror", (e) => errors.push(e.message));
   // Signed in as a made-up account; links and questions answered by stand-ins that record what they were asked.
@@ -194,7 +194,7 @@ try {
   const panelEl = win.locator(".live-panel", { has: win.getByRole("heading", { name: "Acme dashboard" }) });
   const iframe = panelEl.locator("iframe");
   await expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
-  await expect(iframe).toHaveAttribute("src", "commander-app://frame-" + panelFrame + "/");
+  await expect(iframe).toHaveAttribute("src", "botkins-app://frame-" + panelFrame + "/");
   await expect(iframe).toHaveAttribute("referrerpolicy", "no-referrer");
   await expect(iframe).toHaveAttribute("title", "Acme dashboard");
   let frame = await frameOf(iframe);
@@ -248,7 +248,7 @@ try {
   // The app blocks the load; the frame shows its own page again, never another address or an error page.
   await win.waitForTimeout(1200);
   frame = await frameOf(iframe);
-  assert.equal(frame.url(), "commander-app://frame-" + panelFrame + "/", "the frame stayed on its page");
+  assert.equal(frame.url(), "botkins-app://frame-" + panelFrame + "/", "the frame stayed on its page");
   await expect.poll(() => frame.evaluate(() => document.getElementById("title").textContent)).toBe("Quarter at a glance");
   assert.deepEqual(hits, [], "the outside server was reached: " + hits.join(", "));
   // The app's own page is untouched by the frame.
@@ -281,7 +281,7 @@ try {
   // ---- A view the person isn't working in can't act by itself: no text for the message box, no question.
   await win.getByRole("heading", { name: "Today", exact: true }).click();
   const alone = await frame.evaluate(() =>
-    Promise.all([commander.sendAnswer("By itself").then(() => "sent", (e) => e.message), commander.openLink("https://example.com/by-itself").then(String, (e) => e.message)]),
+    Promise.all([botkins.sendAnswer("By itself").then(() => "sent", (e) => e.message), botkins.openLink("https://example.com/by-itself").then(String, (e) => e.message)]),
   );
   assert.deepEqual(alone, ["Click inside this view first.", "Click inside this view first."]);
   assert.equal((await app.evaluate(() => globalThis.asked ?? [])).length, 0);

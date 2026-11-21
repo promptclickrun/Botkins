@@ -24,7 +24,7 @@ function fixture(t) {
 }
 
 test("media previews serve seek ranges and stop reading when closed", async () => {
-  const media = new ArtifactMedia("commander-app");
+  const media = new ArtifactMedia("botkins-app");
   const size = 2 * 1024 * 1024;
   const calls = [];
   const url = media.add("video/mp4", size, (offset, length) => {

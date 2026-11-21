@@ -22,9 +22,9 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-phone-"));
 seedApp(dir);
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot", BOTKINS_NEARBY: "1" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", BOTKINS_NEARBY: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 const errors = [];
 let app;
 const post = (base, route, body, headers = {}) => fetch(base + route, { method: "POST", headers: { "content-type": typeof body === "string" ? "application/json" : "application/octet-stream", ...headers }, body });

@@ -18,7 +18,7 @@ writeFileSync(fixture, `
   Workspace.prototype.snapshot = function () { globalThis.smokeWorkspace = this; return snapshot.call(this); };
   await import(${JSON.stringify(new URL("../desktop/main.mjs", import.meta.url).href)});
 `);
-const env = { ...process.env, BOTKINS_DATA_DIR: data, COMMANDER_DATA_DIR: data, BOTKINS_TOOL_PATH: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: data, BOTKINS_TOOL_PATH: dir };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.BOTKINS_KEYCHAIN;
 const url = "https://secure-input.invalid/sign-in";

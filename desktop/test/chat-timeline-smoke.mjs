@@ -11,7 +11,7 @@ import { skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-timeline-ui-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 delete env.ELECTRON_RUN_AS_NODE;
 seedApp(dir);
 const workspaceFile = join(dir, "data", "workspace.json");

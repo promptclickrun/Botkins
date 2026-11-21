@@ -273,15 +273,15 @@ test("model services are looked up, connected with a key or a sign-in, and remov
 
 test("approval levels and the bridge become an OpenCode session's rules", () => {
   const rule = (action, effect) => ({ action, resource: "*", effect });
-  assert.deepEqual(sessionRules("ask", { bridge: "commander-abc", servers: ["crm"] }), [
+  assert.deepEqual(sessionRules("ask", { bridge: "botkins-abc", servers: ["crm"] }), [
     rule("shell", "ask"),
     rule("edit", "ask"),
     rule("external_directory", "ask"),
     rule("crm_*", "ask"),
     rule(BRIDGE_PREFIX + "*", "deny"),
-    rule("commander-abc_*", "allow"),
+    rule("botkins-abc_*", "allow"),
   ]);
-  assert.deepEqual(sessionRules("all", { bridge: "commander-abc" }), [rule("*", "allow"), rule(BRIDGE_PREFIX + "*", "deny"), rule("commander-abc_*", "allow")], "even a chat that allows everything can't reach another chat's tools");
+  assert.deepEqual(sessionRules("all", { bridge: "botkins-abc" }), [rule("*", "allow"), rule(BRIDGE_PREFIX + "*", "deny"), rule("botkins-abc_*", "allow")], "even a chat that allows everything can't reach another chat's tools");
   assert.deepEqual(sessionRules("read", { plan: true }).filter((r) => r.action === "edit"), [rule("edit", "ask"), rule("edit", "deny")], "plan mode: the later rule wins, nothing is changed");
 });
 

@@ -18,7 +18,7 @@ const dir = mkdtempSync(join(tmpdir(), "botkins-wiki-ui-"));
 const dataDir = join(dir, "app");
 const wikiDir = join(dataDir, "data", "wiki");
 seedApp(dataDir);
-const env = { ...process.env, BOTKINS_DATA_DIR: dataDir, COMMANDER_DATA_DIR: dataDir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dataDir };
 delete env.ELECTRON_RUN_AS_NODE;
 const shots = process.env.WIKI_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
@@ -48,7 +48,7 @@ async function shot(name) {
   await theme("light");
 }
 async function launch() {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await app.firstWindow();
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {

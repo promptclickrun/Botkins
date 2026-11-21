@@ -17,8 +17,8 @@ export const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[
 
 /** Where a skill comes from, as the desktop labels it: Botkins, Built in, or its linked folder's name. */
 export function skillOrigin(skill: SkillInfo, folders: Folder[] = []) {
-  if (skill.origin === "commander") return "Botkins";
   if (skill.origin === "built-in") return "Built in";
+  if (skill.origin !== "folder") return "Botkins";
   const folder = folders.find((item) => item.id === skill.folderId);
   return folder ? folderName(folder.path) : "Linked folder";
 }

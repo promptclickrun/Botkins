@@ -1,6 +1,6 @@
 // The plain logic of what a bot asks of the person (an approval, a question or a form), with no
 // React Native imports so `tests/requests.test.ts` can run it. The words are the desktop app's
-// (Commander-Con/src/RequestPanel.tsx), so both apps say the same thing.
+// (desktop/src/RequestPanel.tsx), so both apps say the same thing.
 import type { AgentRequest, FormField } from "@/link/types";
 
 // --- What a request looks like -------------------------------------------------------------

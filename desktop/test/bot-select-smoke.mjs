@@ -11,7 +11,7 @@ import { skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-select-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
+const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app") };
 delete env.ELECTRON_RUN_AS_NODE;
 seedApp(join(dir, "app"));
 // A conversation that already happened, so "the latest chat" is something.

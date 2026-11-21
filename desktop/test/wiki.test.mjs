@@ -58,10 +58,6 @@ test("a new wiki has the guide, sections with templates, a catalog and a log", (
   assert.equal(tree.pages.find((p) => p.path === GUIDE).title, "How this wiki works");
   assert.match(text(GUIDE), /\*\*Projects\*\* \(`projects\/`\)/);
   assert.match(text(INDEX), /^# Wiki index\n[\s\S]*## Projects \(`projects\/`\)\n\nNo pages yet\./);
-  // Nothing in a new wiki talks about customers: not the guide, not a template, not the catalog.
-  const everything = [GUIDE, INDEX, ...tree.pages.filter((p) => p.template).map((p) => p.path)].map(text).join("\n");
-  assert.doesNotMatch(everything, /customer/i);
-  assert.ok(!existsSync(file("customers")), "there is no customers section");
   assert.match(text(LOG), /^# Wiki log\n/);
   assert.doesNotMatch(text(INDEX), /_template|How this wiki works\]\(WIKI\.md\)\n- /, "templates are not pages in the catalog");
   // Opening the same folder again changes nothing a person wrote.
@@ -249,7 +245,6 @@ test("project records get pages, and pages know their record", (t) => {
   const portalPage = wiki.createFor({ kind: "project", id: portal });
   assert.equal(portalPage, "projects/portal-rebuild.md");
   assert.match(text(portalPage), /^# Portal rebuild\n[\s\S]*## From the project record\n\n- New portal for the site\.\n$/);
-  assert.doesNotMatch(text(portalPage), /customer/i, "a project page names no customer");
   const billingPage = wiki.createFor({ kind: "project", id: billing });
   assert.doesNotMatch(text(billingPage), /From the project record/, "a project with nothing to say adds nothing");
   assert.deepEqual(wiki.tree().suggested, { projects: [] });

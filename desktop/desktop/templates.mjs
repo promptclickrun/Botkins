@@ -1,6 +1,7 @@
 // Bot templates the person saves or receives. A template is a bot's setup without its history:
 // name, role, about text, instructions and look. Shared files carry nothing local: no folders,
 // capability sources, chats or credentials.
+import { LEGACY_NAME } from "./home.mjs";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { textField } from "./panels.mjs";
@@ -9,8 +10,8 @@ import { cleanLook } from "./looks.mjs";
 
 /** The format a template file is written in. */
 export const FORMAT = "botkins.bot-template";
-/** Formats that are read: this one, and the one the app wrote when it was called Commander. */
-export const FORMATS = [FORMAT, "commander.bot-template"];
+/** An imported file may have been written before the app was renamed. */
+export const FORMATS = [FORMAT, LEGACY_NAME.toLowerCase() + ".bot-template"];
 const MAX_FILE = 256 * 1024;
 
 /**

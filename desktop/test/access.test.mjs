@@ -1,11 +1,11 @@
 // Agent access: resolution rules and backend enforcement, with fake Copilot sessions.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
-import { accessField, canUseProject, migrateCustomers } from "../desktop/access.mjs";
+import { accessField, canUseProject } from "../desktop/access.mjs";
 
 /** A fake client that records each session's config and answers "ok". */
 function fakeClient() {
@@ -63,7 +63,7 @@ test("access resolves globally, by all and per project", (t) => {
   assert.ok(canUseProject(s, bot, rollout));
   assert.ok(!canUseProject(s, ws.bot("scout"), rollout), "other bots keep their own grants");
   assert.throws(() => accessField(s, { projects: ["nope"] }), /Unknown project/);
-  assert.deepEqual(accessField(s, { all: false, customers: ["old"], projects: [] }), { all: false, projects: [] }, "a grant from an older page loses its customers");
+  assert.deepEqual(accessField(s, { all: false, unknown: ["old"], projects: [] }), { all: false, projects: [] }, "the grant accepts only current fields");
   assert.throws(() => ws.setPreferences({ access: { allBots: "no" } }), /all bots/);
   // Deleting a project removes it from grants.
   ws.access.setBotAccess("scout", { projects: [personal] });
@@ -124,10 +124,8 @@ test("a chat in a project gets the project in its system message and the to-do t
   const config = log.configs.get(id);
   const system = config.systemMessage.content;
   assert.match(system, /This chat belongs to the project “Migration”\.\nProject description: Move mail to the cloud/);
-  assert.doesNotMatch(system, /customer/i, "a project no longer belongs to anyone");
   const names = config.tools.definitions.map((x) => x.name);
   for (const n of ["todo_list", "todo_add", "todo_update", "project_info"]) assert.ok(names.includes(n), n);
-  assert.ok(!names.some((n) => n.startsWith("customer_")), "there are no customer tools");
   const plain = ws.createChat("pip");
   await ws.send(plain, "hi");
   const other = log.configs.get(plain);
@@ -174,86 +172,4 @@ test("panels published from a project chat join the project, and need access", (
   assert.equal(ws.projects.projectOf(ws.chat(refresh)).id, migration);
   ws.projects.remove(migration);
   assert.equal(panel.projectId, undefined, "deleting the project unlinks its panels");
-});
-
-/** A workspace file as the last version with Customers saved it. */
-function legacyWorkspace() {
-  const bots = [
-    { id: "pip", name: "Pip", role: "R", instructions: "I", face: "idle", access: { all: false, customers: ["c1"], projects: ["p3"] } },
-    { id: "scout", name: "Scout", role: "R", instructions: "I", face: "idle", access: { all: true, customers: [], projects: [] } },
-    { id: "patch", name: "Patch", role: "R", instructions: "I", face: "idle" },
-  ];
-  const project = (id, name, customerId) => ({ id, name, customerId, description: "", todos: [], lastUsed: 1, createdAt: 1 });
-  return {
-    bots,
-    chats: [],
-    runs: [],
-    customers: [
-      { id: "c1", name: "Contoso", tpids: [{ value: "1001", primary: true }], tenantIds: [], stakeholders: [{ name: "Ada", title: "CTO" }], msxId: "MSX-9", notes: "Renewal in May", createdAt: 1, updatedAt: 1 },
-      { id: "c2", name: "Fabrikam", tpids: [], tenantIds: [], stakeholders: [], msxId: "", createdAt: 2, updatedAt: 2 },
-    ],
-    projects: [project("p1", "Migration", "c1"), project("p2", "Rollout", "c2"), project("p3", "Personal", null), project("p4", "Audit", "c1")],
-  };
-}
-
-test("workspaces saved with customers move to projects: grants keep their reach, the records are archived once", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "botkins-access-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const legacy = legacyWorkspace();
-  writeFileSync(join(dir, "workspace.json"), JSON.stringify(legacy));
-  const ws = new Workspace(dir, async () => ({}), () => {});
-  assert.equal("customers" in ws.state, false);
-  assert.ok(ws.state.projects.every((p) => !("customerId" in p)));
-  assert.deepEqual(ws.bot("pip").access, { all: false, projects: ["p3", "p1", "p4"] }, "the customer's projects join the bot's own");
-  assert.deepEqual(ws.bot("scout").access, { all: true, projects: [] });
-  assert.deepEqual(ws.bot("patch").access, { all: false, projects: [] });
-  // Once global access is off, Pip still reaches exactly what it reached through Contoso.
-  ws.setPreferences({ access: { allBots: false } });
-  const reach = (bot) => ws.state.projects.filter((p) => canUseProject(ws.state, ws.bot(bot), p)).map((p) => p.name).sort();
-  assert.deepEqual(reach("pip"), ["Audit", "Migration", "Personal"]);
-  assert.deepEqual(reach("patch"), []);
-  // The records are kept in one file nobody else can read.
-  const archive = join(dir, "customers-removed.json");
-  assert.deepEqual(JSON.parse(readFileSync(archive, "utf8")), legacy.customers);
-  assert.match(readFileSync(archive, "utf8"), /\n {2}\{/, "pretty-printed");
-  if (process.platform !== "win32") assert.equal(statSync(archive).mode & 0o777, 0o600);
-  // The saved file no longer mentions customers, and loading again changes nothing.
-  const saved = JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8"));
-  assert.equal("customers" in saved, false);
-  assert.equal(JSON.stringify(saved).includes("customerId"), false);
-  const again = new Workspace(dir, async () => ({}), () => {});
-  assert.deepEqual(again.bot("pip").access, { all: false, projects: ["p3", "p1", "p4"] });
-  assert.deepEqual(JSON.parse(readFileSync(archive, "utf8")), legacy.customers);
-});
-
-test("the customer migration is a no-op the second time, never overwrites an archive and writes nothing for an empty list", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "botkins-access-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const state = legacyWorkspace();
-  migrateCustomers(state, dir);
-  const after = structuredClone(state);
-  migrateCustomers(state, dir);
-  assert.deepEqual(state, after, "a second run changes nothing");
-  assert.ok(existsSync(join(dir, "customers-removed.json")));
-  // An archive that is already there stays as it is; the new records go to the next free name.
-  writeFileSync(join(dir, "customers-removed.json"), "keep me");
-  const more = legacyWorkspace();
-  more.customers = [{ id: "c9", name: "Northwind" }];
-  migrateCustomers(more, dir);
-  assert.equal(readFileSync(join(dir, "customers-removed.json"), "utf8"), "keep me");
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "customers-removed-2.json"), "utf8")), [{ id: "c9", name: "Northwind" }]);
-  // No records: the key goes and nothing is written.
-  const empty = mkdtempSync(join(tmpdir(), "botkins-access-"));
-  t.after(() => rmSync(empty, { recursive: true, force: true }));
-  for (const customers of [[], undefined]) {
-    const bare = { ...legacyWorkspace(), customers };
-    migrateCustomers(bare, empty);
-    assert.equal("customers" in bare, false);
-  }
-  assert.equal(existsSync(join(empty, "customers-removed.json")), false);
-  // A state that never had customers is left alone.
-  const fresh = { bots: [{ id: "pip", access: { all: false, projects: ["p1"] } }], projects: [{ id: "p1", name: "A" }] };
-  const copy = structuredClone(fresh);
-  migrateCustomers(fresh, empty);
-  assert.deepEqual(fresh, copy);
 });

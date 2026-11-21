@@ -979,7 +979,7 @@ test("a message's mentions are cut down to the shapes the composer sends", async
       { kind: "wiki", path: "projects/website.md" },
       { kind: "project", id: "p1", label: "extra key" },
       { kind: "file", path: "x", label: "extra key" },
-      { kind: "customer", id: "c1" },
+      { kind: "unknown", id: "c1" },
       { kind: "file", id: "x" },
       { kind: "project", path: "x" },
       { kind: "file", path: 5 },

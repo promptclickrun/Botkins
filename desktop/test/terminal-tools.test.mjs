@@ -179,7 +179,7 @@ test("skills are added, changed, turned off and removed, and one bot's tools and
   assert.equal((await botkins(["skills", "add", "none", "--description", "x"])).exit, 2);
   assert.match((await botkins(["skills", "add", "!!!", "--description", "x", "--instructions", "y"])).err, /Name the skill with letters, numbers and dashes\./);
   const list = (await botkins(["skills", "list", "--json"])).json();
-  assert.deepEqual(list.skills.filter((skill) => skill.origin === "commander").map((skill) => [skill.name, skill.enabled]).sort(), [["from-pipe", true], ["weekly-report", true]]);
+  assert.deepEqual(list.skills.filter((skill) => skill.origin === "botkins").map((skill) => [skill.name, skill.enabled]).sort(), [["from-pipe", true], ["weekly-report", true]]);
   assert.match((await botkins(["skills", "show", "weekly-report"])).out, /weekly-report\nUse for the Friday report\.\n\n# Weekly report\n\nList what shipped\./);
   // A change keeps what is not named.
   assert.equal((await botkins(["skills", "edit", "weekly-report", "--description", "Use for the Monday report."])).exit, 0);

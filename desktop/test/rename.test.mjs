@@ -1,4 +1,4 @@
-// The rename from Commander to Botkins: a person's data is found again, their keychain-guarded
+// The rename to Botkins: a person's data is found again, their keychain-guarded
 // keys open again, and the old environment variables still work. (Their saved appearance: test/appearance.test.mjs.)
 // Everything here runs in temporary folders with stand-in keychains; nothing touches real data.
 import test from "node:test";
@@ -27,9 +27,9 @@ const keychain = (name) => ({
     return text.startsWith(name + ":") ? text.slice(name.length + 1) : null;
   },
 });
-/** Everything a person's Commander folder holds that must still be there afterwards. */
-function commanderFolder(appData, { wrapWith } = {}) {
-  const root = join(appData, "Commander");
+/** Everything the earlier data folder holds that must still be there afterwards. */
+function earlierFolder(appData, { wrapWith } = {}) {
+  const root = join(appData, LEGACY_NAME);
   const data = join(root, "data");
   const files = {
     "data/workspace.json": JSON.stringify({ bots: [{ id: "pip", name: "Pip", role: "Helper", instructions: "Help.", face: "idle", avatar: { body: "bighelp.biggie" } }], chats: [{ id: "c1", botId: "pip", title: "Hello", time: 1, messages: [{ role: "user", text: "Hi" }] }], runs: [], settings: { onboarded: true, appearance: { theme: "dark", lightBackground: "sage", darkBackground: "forest", bubble: "#336699" } } }),
@@ -47,7 +47,7 @@ function commanderFolder(appData, { wrapWith } = {}) {
     writeFileSync(join(root, path), text);
   }
   if (wrapWith) {
-    // The vault and the phone link as the installed Commander left them: keys wrapped by its keychain entry.
+    // The vault and the phone link as the earlier installation left them: keys wrapped by its keychain entry.
     const vault = new Vault(data, wrapWith);
     vault.put("sk-live-123", { label: "CRM key", kind: "header", owner: "mcp:crm" }, "crm-key");
     const link = new LinkStore(join(data, "link"), { protect: wrapWith.wrap, reveal: wrapWith.unwrap });
@@ -66,15 +66,16 @@ test("someone new gets a Botkins folder; tests name their own", (t) => {
   assert.equal(existsSync(join(appData, "Botkins")), false, "choosing a folder creates nothing");
 });
 
-test("a Commander folder takes the app's name in one step, and the old name still leads to it", (t) => {
+test("an earlier folder can be opened through Botkins while saved paths still work", (t) => {
   const appData = folder(t);
-  const { root, files } = commanderFolder(appData);
+  const { root, files } = earlierFolder(appData);
   const before = tree(root);
   const botkins = join(appData, "Botkins");
-  assert.equal(adoptFolder({ appData }), "moved");
-  // Everything is there under the new name, byte for byte, and nothing was left behind or copied.
+  assert.equal(adoptFolder({ appData }), "linked");
+  // Both paths open the same files.
   assert.deepEqual(tree(botkins), before);
-  assert.ok(lstatSync(root).isSymbolicLink(), "the old name is a link now");
+  assert.ok(lstatSync(botkins).isSymbolicLink());
+  assert.ok(lstatSync(root).isDirectory(), "the original folder stays in place");
   assert.equal(realpathSync(root), realpathSync(botkins));
   // A path saved under the old name still opens the same file.
   for (const path of Object.keys(files)) assert.equal(readFileSync(join(root, path), "utf8"), readFileSync(join(botkins, path), "utf8"), path);
@@ -83,62 +84,62 @@ test("a Commander folder takes the app's name in one step, and the old name stil
   const ws = new Workspace(join(botkins, "data"), async () => ({}), () => {});
   assert.equal(ws.state.chats[0].messages[0].text, "Hi");
   assert.equal(join(ws.dir, "files", "pip"), join(appData, "Botkins", "data", "files", "pip"));
-  assert.ok(!join(ws.dir, "files", "pip").includes("Commander"));
-  // Asked again, there is nothing left to do: the link is not a folder to move.
+  assert.ok(!join(ws.dir, "files", "pip").includes(LEGACY_NAME));
+  // A second start uses the same Botkins entry point.
   assert.equal(adoptFolder({ appData }), "none");
-  assert.ok(lstatSync(root).isSymbolicLink() && hasWorkspace(botkins));
+  assert.ok(lstatSync(root).isDirectory() && hasWorkspace(botkins));
 });
 
-test("the folder is not renamed while an app runs on it, or over a Botkins folder that holds anything", (t) => {
+test("a busy workspace and an occupied Botkins folder keep their paths", (t) => {
   // An earlier version of the app is running on the folder: its lock names a process that is alive.
   const busy = folder(t);
-  const { root } = commanderFolder(busy);
+  const { root } = earlierFolder(busy);
   const before = tree(root);
   symlinkSync("this-mac-4242", join(root, "SingletonLock"));
   assert.equal(adoptFolder({ appData: busy, running: (pid) => pid === 4242 }), "busy");
   assert.ok(lstatSync(root).isDirectory() && !lstatSync(root).isSymbolicLink());
   assert.equal(existsSync(join(busy, "Botkins")), false);
-  assert.deepEqual(dataHome({ appData: busy }), { dir: root, from: "commander" }, "the folder is used where it is");
+  assert.deepEqual(dataHome({ appData: busy }), { dir: root, from: "earlier" }, "the folder is used where it is");
   // A lock left by a process that is gone, or this very process's own, doesn't hold the folder.
-  assert.equal(adoptFolder({ appData: busy, running: () => false }), "moved");
-  assert.equal(readlinkSync(join(busy, "Botkins", "SingletonLock")), "this-mac-4242", "the lock moved with the rest");
+  assert.equal(adoptFolder({ appData: busy, running: () => false }), "linked");
+  assert.equal(readlinkSync(join(busy, "Botkins", "SingletonLock")), "this-mac-4242", "both paths see the lock");
   assert.deepEqual(tree(join(busy, "Botkins")).filter((path) => !path.includes("SingletonLock")), before);
 
   // A Botkins folder with anything in it is someone's: nothing is renamed over it.
   const taken = folder(t);
-  commanderFolder(taken);
+  earlierFolder(taken);
   mkdirSync(join(taken, "Botkins", "Cache"), { recursive: true });
   assert.equal(adoptFolder({ appData: taken }), "taken");
-  assert.ok(hasWorkspace(join(taken, "Commander")));
-  assert.equal(dataHome({ appData: taken }).from, "commander");
+  assert.ok(hasWorkspace(join(taken, LEGACY_NAME)));
+  assert.equal(dataHome({ appData: taken }).from, "earlier");
   // An empty one (a crashed first start can leave it) is no one's.
   const empty = folder(t);
-  commanderFolder(empty);
+  earlierFolder(empty);
   mkdirSync(join(empty, "Botkins"));
-  assert.equal(adoptFolder({ appData: empty }), "moved");
+  assert.equal(adoptFolder({ appData: empty }), "linked");
   assert.ok(hasWorkspace(join(empty, "Botkins")));
 
-  // Nothing to rename: no earlier folder, or one that holds no workspace.
+  // Nothing to adopt: no earlier folder, or one that holds no workspace.
   const none = folder(t);
   assert.equal(adoptFolder({ appData: none }), "none");
-  mkdirSync(join(none, "Commander", "Cache"), { recursive: true });
+  mkdirSync(join(none, LEGACY_NAME, "Cache"), { recursive: true });
   assert.equal(adoptFolder({ appData: none }), "none");
-  assert.ok(existsSync(join(none, "Commander", "Cache")));
+  assert.ok(existsSync(join(none, LEGACY_NAME, "Cache")));
 
-  // A rename the system refuses leaves everything as it was, and the app goes on in the old folder.
+  // A link the system refuses leaves everything as it was, and the app goes on in the old folder.
   const refused = folder(t);
-  const kept = commanderFolder(refused);
+  const kept = earlierFolder(refused);
   const whole = tree(kept.root);
-  assert.equal(adoptFolder({ appData: refused, rename: () => { throw Object.assign(new Error("not permitted"), { code: "EPERM" }); } }), "failed");
+  assert.equal(adoptFolder({ appData: refused, link: () => { throw Object.assign(new Error("not permitted"), { code: "EPERM" }); } }), "failed");
   assert.deepEqual(tree(kept.root), whole);
-  assert.equal(dataHome({ appData: refused }).from, "commander");
+  assert.equal(dataHome({ appData: refused }).from, "earlier");
 });
 
-test("a Commander folder that could not be renamed is used where it is, with everything in it", (t) => {
+test("an earlier folder that could not be linked is used where it is, with everything in it", (t) => {
   const appData = folder(t);
-  const { root, data, files } = commanderFolder(appData);
+  const { root, data, files } = earlierFolder(appData);
   const before = tree(root);
-  assert.deepEqual(dataHome({ appData }), { dir: root, from: "commander" });
+  assert.deepEqual(dataHome({ appData }), { dir: root, from: "earlier" });
   assert.deepEqual(tree(root), before, "nothing is moved, copied or removed");
   assert.equal(existsSync(join(appData, "Botkins")), false);
 
@@ -152,7 +153,7 @@ test("a Commander folder that could not be renamed is used where it is, with eve
   for (const path of Object.keys(files)) assert.ok(existsSync(join(root, path)), path);
   assert.equal(readFileSync(join(data, "files", "pip", "notes.txt"), "utf8"), "kept");
   // A chat still works in the folder its conversation was started in.
-  assert.equal(join(ws.dir, "files", "pip"), join(appData, "Commander", "data", "files", "pip"));
+  assert.equal(join(ws.dir, "files", "pip"), join(appData, LEGACY_NAME, "data", "files", "pip"));
 
   // An appearance saved before themes keeps its look: the light preset decides.
   assert.deepEqual(ws.state.settings.appearance, { theme: "dark", colorTheme: "fern", themePicked: true, textSize: "default", font: "system", fontPicked: false, bubble: "#336699", lightBackground: "sage", darkBackground: "forest" });
@@ -160,37 +161,37 @@ test("a Commander folder that could not be renamed is used where it is, with eve
 
 test("the folder is chosen by which one holds a workspace", (t) => {
   const appData = folder(t);
-  commanderFolder(appData);
+  earlierFolder(appData);
   // An empty Botkins folder (the system or a crashed first start can leave one) doesn't hide the data.
   mkdirSync(join(appData, "Botkins", "Cache"), { recursive: true });
-  assert.equal(dataHome({ appData }).from, "commander");
+  assert.equal(dataHome({ appData }).from, "earlier");
   // Once Botkins has a workspace of its own, that one is used and the earlier folder is left alone.
   mkdirSync(join(appData, "Botkins", "data"), { recursive: true });
   writeFileSync(join(appData, "Botkins", "data", "workspace.json"), "{}");
   assert.deepEqual(dataHome({ appData }), { dir: join(appData, "Botkins"), from: "botkins" });
-  assert.ok(hasWorkspace(join(appData, "Commander")));
-  // A Commander folder without a workspace is not data.
+  assert.ok(hasWorkspace(join(appData, LEGACY_NAME)));
+  // An earlier folder without a workspace is not data.
   const other = folder(t);
-  mkdirSync(join(other, "Commander", "Cache"), { recursive: true });
+  mkdirSync(join(other, LEGACY_NAME, "Cache"), { recursive: true });
   assert.equal(dataHome({ appData: other }).from, "botkins");
 });
 
 test("environment variables are read under the new name, then the old one", () => {
-  assert.equal(env("DATA_DIR", { COMMANDER_DATA_DIR: "/old" }), "/old");
-  assert.equal(env("DATA_DIR", { BOTKINS_DATA_DIR: "/new", COMMANDER_DATA_DIR: "/old" }), "/new");
+  assert.equal(env("DATA_DIR", { [LEGACY_NAME.toUpperCase() + "_DATA_DIR"]: "/old" }), "/old");
+  assert.equal(env("DATA_DIR", { BOTKINS_DATA_DIR: "/new", [LEGACY_NAME.toUpperCase() + "_DATA_DIR"]: "/old" }), "/new");
   assert.equal(env("PROVIDERS", { BOTKINS_PROVIDERS: "copilot" }), "copilot");
   assert.equal(env("LIVE", {}), undefined);
-  assert.equal(env("TIMING", { COMMANDER_TIMING: "1" }), "1");
+  assert.equal(env("TIMING", { [LEGACY_NAME.toUpperCase() + "_TIMING"]: "1" }), "1");
   // An empty new spelling doesn't hide the old one: a smoke that names its folder the old way stays in it.
-  assert.equal(env("DATA_DIR", { BOTKINS_DATA_DIR: "", COMMANDER_DATA_DIR: "/tmp/test" }), "/tmp/test");
-  assert.equal(env("DATA_DIR", { BOTKINS_DATA_DIR: "", COMMANDER_DATA_DIR: "" }), undefined);
+  assert.equal(env("DATA_DIR", { BOTKINS_DATA_DIR: "", [LEGACY_NAME.toUpperCase() + "_DATA_DIR"]: "/tmp/test" }), "/tmp/test");
+  assert.equal(env("DATA_DIR", { BOTKINS_DATA_DIR: "", [LEGACY_NAME.toUpperCase() + "_DATA_DIR"]: "" }), undefined);
 });
 
-test("keys the Commander keychain entry guards open again, and the earlier wrapping is kept", async (t) => {
+test("keys the earlier keychain entry guards open again, and the earlier wrapping is kept", async (t) => {
   const appData = folder(t);
-  const commander = keychain("Commander");
+  const oldKeys = keychain(LEGACY_NAME);
   const botkins = keychain("Botkins");
-  const { data } = commanderFolder(appData, { wrapWith: commander });
+  const { data } = earlierFolder(appData, { wrapWith: oldKeys });
   const vaultBefore = JSON.parse(readFileSync(join(data, "vault.json"), "utf8"));
   const linkBefore = readFileSync(join(data, "link", "link.json"), "utf8");
   assert.equal(vaultBefore.key.by, "os");
@@ -214,7 +215,7 @@ test("keys the Commander keychain entry guards open again, and the earlier wrapp
     output.on("end", () => setImmediate(() => child.emit("close", 0)));
     const app = { setName: (name) => (app.name = name), setPath: (key, value) => (app[key] = value), whenReady: () => Promise.resolve(), exit: () => output.end() };
     const safeStorage = { isEncryptionAvailable: () => true, decryptString: (buffer) => {
-      const text = commander.unwrap(buffer.toString("base64"));
+      const text = oldKeys.unwrap(buffer.toString("base64"));
       if (text == null) throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString.");
       return text;
     } };
@@ -235,7 +236,7 @@ test("keys the Commander keychain entry guards open again, and the earlier wrapp
   assert.equal(vault.get("vault:crm-key"), "sk-live-123");
   const saved = JSON.parse(readFileSync(join(data, "vault.json"), "utf8"));
   assert.equal(saved.key.data, vaultBefore.key.data, "the earlier wrapping is never overwritten");
-  assert.equal(botkins.unwrap(saved.key.botkins), commander.unwrap(vaultBefore.key.data), "the same key, under the new entry too");
+  assert.equal(botkins.unwrap(saved.key.botkins), oldKeys.unwrap(vaultBefore.key.data), "the same key, under the new entry too");
   assert.deepEqual(saved.entries, vaultBefore.entries);
 
   // The next start needs no helper, and changes keep both wrappings.
@@ -246,8 +247,8 @@ test("keys the Commander keychain entry guards open again, and the earlier wrapp
   const later = JSON.parse(readFileSync(join(data, "vault.json"), "utf8"));
   assert.equal(later.key.data, vaultBefore.key.data);
   assert.ok(botkins.unwrap(later.key.botkins));
-  // An earlier Commander still opens the same vault, with what Botkins added.
-  const earlier = new Vault(data, commander);
+  // An earlier installation still opens the same vault, with what Botkins added.
+  const earlier = new Vault(data, oldKeys);
   assert.equal(earlier.locked, false);
   assert.equal(earlier.get("vault:second"), "sk-second");
 
@@ -271,9 +272,9 @@ test("keys the Commander keychain entry guards open again, and the earlier wrapp
 
 test("when the earlier keys can't be opened, nothing is changed and nothing is lost", async (t) => {
   const appData = folder(t);
-  const commander = keychain("Commander");
+  const oldKeys = keychain(LEGACY_NAME);
   const botkins = keychain("Botkins");
-  const { data } = commanderFolder(appData, { wrapWith: commander });
+  const { data } = earlierFolder(appData, { wrapWith: oldKeys });
   const vaultBefore = readFileSync(join(data, "vault.json"), "utf8");
   const linkBefore = readFileSync(join(data, "link", "link.json"), "utf8");
   const locked = lockedKeys(data, botkins.unwrap);
@@ -321,7 +322,7 @@ test("when the earlier keys can't be opened, nothing is changed and nothing is l
     assert.equal(readFileSync(join(data, "link", "link.json"), "utf8"), linkBefore, "and so is the link's");
   }
   // The earlier app, or a later start where the person allows it, still opens everything.
-  assert.equal(new Vault(data, commander).get("vault:crm-key"), "sk-live-123");
+  assert.equal(new Vault(data, oldKeys).get("vault:crm-key"), "sk-live-123");
   assert.equal((await openWithEarlierKeychain([], { launch: broken })).size, 0, "with nothing locked the helper isn't started");
 });
 
@@ -331,7 +332,7 @@ test("the helper is only this app started with its flag, and only looks for the 
   const asked = [];
   const run = (command, args) => (asked.push([command, ...args]), { status: 0 });
   assert.equal(hasEarlierKeychain({ platform: "darwin", run }), true);
-  assert.deepEqual(asked, [["/usr/bin/security", "find-generic-password", "-s", "Commander Safe Storage"]], "it asks whether the entry exists, never for its secret");
+  assert.deepEqual(asked, [["/usr/bin/security", "find-generic-password", "-s", LEGACY_NAME + " Safe Storage"]], "it asks whether the entry exists, never for its secret");
   assert.equal(hasEarlierKeychain({ platform: "darwin", run: () => ({ status: 44 }) }), false);
   assert.equal(hasEarlierKeychain({ platform: "win32", run }), false, "Windows keeps the key with the data folder, so nothing changes there");
   assert.equal(asked.length, 1);
@@ -353,27 +354,27 @@ test("a vault from a fresh Botkins has one wrapping, and a development vault sti
 
 test("a wrapping the wrong keychain entry turns into junk still counts as locked", async (t) => {
   const appData = folder(t);
-  const commander = keychain("Commander");
-  const { data } = commanderFolder(appData, { wrapWith: commander });
+  const oldKeys = keychain(LEGACY_NAME);
+  const { data } = earlierFolder(appData, { wrapWith: oldKeys });
   const before = JSON.parse(readFileSync(join(data, "vault.json"), "utf8"));
   // Now and then decrypting with the wrong key doesn't fail: it returns nonsense. This entry always does.
   const junky = { wrap: keychain("Botkins").wrap, unwrap: (wrapped) => keychain("Botkins").unwrap(wrapped) ?? "\u0000\u0013junk" };
   assert.equal(isKey("\u0000\u0013junk"), false);
-  assert.equal(isKey(commander.unwrap(before.key.data)), true);
+  assert.equal(isKey(oldKeys.unwrap(before.key.data)), true);
   assert.equal(isKey(Buffer.alloc(32, 1).toString("base64url")), true, "the link's key is written without padding");
   assert.equal(isKey(Buffer.alloc(31, 1).toString("base64")), false);
   const locked = lockedKeys(data, junky.unwrap);
   assert.equal(locked.length, 2, "both keys are seen as locked, so the helper is asked");
   // With what the helper opened, the junk never wins.
-  const opened = new Map(locked.map((wrapped) => [wrapped, commander.unwrap(wrapped)]));
+  const opened = new Map(locked.map((wrapped) => [wrapped, oldKeys.unwrap(wrapped)]));
   const keys = keyStore(junky, opened);
-  assert.equal(keys.unwrap(before.key.data), commander.unwrap(before.key.data));
+  assert.equal(keys.unwrap(before.key.data), oldKeys.unwrap(before.key.data));
   const vault = new Vault(data, keys);
   assert.equal(vault.locked, false);
   assert.equal(vault.get("vault:crm-key"), "sk-live-123");
   // Without the helper the vault is locked, not opened with nonsense, and its file is as it was.
   const alone = folder(t);
-  const again = commanderFolder(alone, { wrapWith: commander });
+  const again = earlierFolder(alone, { wrapWith: oldKeys });
   const file = readFileSync(join(again.data, "vault.json"), "utf8");
   assert.equal(new Vault(again.data, keyStore(junky)).locked, true);
   assert.equal(readFileSync(join(again.data, "vault.json"), "utf8"), file);
@@ -381,39 +382,39 @@ test("a wrapping the wrong keychain entry turns into junk still counts as locked
 
 test("the vault's own wrapping is written again when it is lost, or when an earlier build saved the vault", (t) => {
   const appData = folder(t);
-  const commander = keychain("Commander");
+  const oldKeys = keychain(LEGACY_NAME);
   const botkins = keychain("Botkins");
-  const { data } = commanderFolder(appData, { wrapWith: commander });
+  const { data } = earlierFolder(appData, { wrapWith: oldKeys });
   // Only the vault is looked at here.
   rmSync(join(data, "link"), { recursive: true });
   const read = () => JSON.parse(readFileSync(join(data, "vault.json"), "utf8"));
   const original = read().key.data;
-  const helped = () => keyStore(botkins, new Map([[original, commander.unwrap(original)]]));
+  const helped = () => keyStore(botkins, new Map([[original, oldKeys.unwrap(original)]]));
   new Vault(data, helped());
   assert.ok(botkins.unwrap(read().key.botkins));
 
   // "Botkins Safe Storage" is removed from the keychain: the app gets a new entry that opens nothing old.
   const fresh = keychain("Botkins2");
   assert.deepEqual(lockedKeys(data, fresh.unwrap), [original], "the helper is asked again");
-  const repaired = new Vault(data, keyStore(fresh, new Map([[original, commander.unwrap(original)]])));
+  const repaired = new Vault(data, keyStore(fresh, new Map([[original, oldKeys.unwrap(original)]])));
   assert.equal(repaired.get("vault:crm-key"), "sk-live-123");
   assert.equal(read().key.data, original);
   assert.ok(fresh.unwrap(read().key.botkins), "its own wrapping is written under the new entry");
   assert.deepEqual(lockedKeys(data, fresh.unwrap), [], "and the next start needs no help");
 
-  // An earlier Commander saves the vault the way it always did: one wrapping, its own, in `data`.
+  // An earlier installation saves the vault the way it always did: one wrapping, its own, in `data`.
   const file = read();
-  const rewrapped = commander.wrap(commander.unwrap(original));
+  const rewrapped = oldKeys.wrap(oldKeys.unwrap(original));
   writeFileSync(join(data, "vault.json"), JSON.stringify({ version: 1, key: { by: "os", data: rewrapped }, entries: file.entries }));
   assert.deepEqual(lockedKeys(data, botkins.unwrap), [rewrapped]);
-  const back = new Vault(data, keyStore(botkins, new Map([[rewrapped, commander.unwrap(rewrapped)]])));
+  const back = new Vault(data, keyStore(botkins, new Map([[rewrapped, oldKeys.unwrap(rewrapped)]])));
   assert.equal(back.get("vault:crm-key"), "sk-live-123");
   assert.equal(read().key.data, rewrapped, "what the earlier build wrote stays");
   assert.ok(botkins.unwrap(read().key.botkins));
 
   // The same class under the earlier name (a stand-in for that build) opens the vault and changes nothing in the file.
   const untouched = readFileSync(join(data, "vault.json"), "utf8");
-  assert.equal(new Vault(data, commander).get("vault:crm-key"), "sk-live-123");
+  assert.equal(new Vault(data, oldKeys).get("vault:crm-key"), "sk-live-123");
   assert.equal(readFileSync(join(data, "vault.json"), "utf8"), untouched);
 });
 

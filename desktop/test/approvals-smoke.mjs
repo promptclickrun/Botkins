@@ -9,13 +9,13 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-approval-ui-"));
 const data = createSources(dir);
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(dir);
 delete env.ELECTRON_RUN_AS_NODE;
 const app = await _electron.launch({
-  args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."],
-  executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY),
+  args: process.env.BOTKINS_BINARY ? [] : ["."],
+  executablePath: process.env.BOTKINS_BINARY,
   env,
 });
 let chatId;
@@ -75,10 +75,10 @@ try {
     };
   });
   assert.ok(geometry.scrolls && geometry.contained, JSON.stringify(geometry));
-  if ((process.env.BOTKINS_QA_DIR ?? process.env.COMMANDER_QA_DIR)) {
-    mkdirSync((process.env.BOTKINS_QA_DIR ?? process.env.COMMANDER_QA_DIR), { recursive: true });
+  if (process.env.BOTKINS_QA_DIR) {
+    mkdirSync(process.env.BOTKINS_QA_DIR, { recursive: true });
     await page.screenshot({
-      path: join((process.env.BOTKINS_QA_DIR ?? process.env.COMMANDER_QA_DIR), "approval.png"),
+      path: join(process.env.BOTKINS_QA_DIR, "approval.png"),
     });
   }
   await send("/btw Is the pending note synthetic? Respond with Yes or No.");

@@ -84,13 +84,12 @@ export type Artifact = {
 };
 /** A record named in a message with "#" (a project, a wiki page, or a file in the bot's workspace). */
 export type Mention =
+  | { kind: "label"; id: string; label: string } // Display only, for older messages.
   | { kind: "project"; id: string; label: string }
   /** `path` is a file's full path, or a wiki page's path inside the wiki, such as "projects/website.md". */
   | { kind: "file" | "wiki"; path: string; label: string }
   /** An item from Today being discussed. The message keeps its text, so its card shows after the item is cleared. */
-  | { kind: "board"; id: string; label: string; board?: "feed" | "idea" | "goal"; body?: string; links?: { url: string; title?: string }[] }
-  /** Only in messages saved by an earlier version. It shows as a plain label and does nothing. */
-  | { kind: "customer"; id: string; label: string };
+  | { kind: "board"; id: string; label: string; board?: "feed" | "idea" | "goal"; body?: string; links?: { url: string; title?: string }[] };
 /** What the composer sends for a mention; the main process checks it and fills in the label. */
 export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "file" | "wiki"; path: string };
 export type Message = {
@@ -507,7 +506,6 @@ export type NotificationSettings = {
 declare global {
   interface Window {
     /** The same bridge under the app's earlier name. Still there, so nothing that says it breaks. */
-    commander: Window["botkins"];
     /** The app, as its page reaches it (desktop/preload.cjs). */
     botkins: {
       snapshot(): Promise<State>;
@@ -1137,8 +1135,8 @@ export type SkillInfo = {
   description: string;
   /** The skill's folder. */
   path: string;
-  /** commander: kept and editable in Botkins. folder: read from a linked folder. built-in: ships with Botkins. */
-  origin: "commander" | "folder" | "built-in";
+  /** botkins: kept and editable in Botkins. folder: read from a linked folder. built-in: ships with Botkins. */
+  origin: "botkins" | "folder" | "built-in";
   enabled: boolean;
   editable?: boolean;
   folderId?: string;
@@ -1313,7 +1311,7 @@ export type PanelBlock =
   | { type: "line"; label: string; labels: string[]; series: { name: string; values: number[] }[] }
   /**
    * A page the bot wrote, drawn in a sandboxed frame: `<iframe sandbox="allow-scripts"
-   * src={"commander-app://frame-" + frame + "/"}>`. `height` is its starting height in pixels;
+   * src={"botkins-app://frame-" + frame + "/"}>`. `height` is its starting height in pixels;
    * the page reports its real height. See desktop/frames.mjs for the messages it exchanges.
    */
   | { type: "html"; frame: string; height: number };

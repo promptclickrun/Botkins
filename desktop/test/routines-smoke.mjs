@@ -9,10 +9,10 @@ import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-routines-ui-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 delete env.ELECTRON_RUN_AS_NODE;
-const live = (process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1";
-const qa = (process.env.BOTKINS_QA_DIR ?? process.env.COMMANDER_QA_DIR);
+const live = process.env.BOTKINS_LIVE === "1";
+const qa = process.env.BOTKINS_QA_DIR;
 
 // Synthetic history so Work counts and Usage have something to show.
 const DAY = 86400000,
@@ -99,7 +99,7 @@ async function shot(name) {
 const navTo = (name) => page.locator("aside nav").getByRole("button", { name, exact: true }).click();
 
 try {
-  app = await _electron.launch({ args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."], executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY), env });
+  app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
   page = await skipWelcome(await app.firstWindow());
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();

@@ -1,3 +1,4 @@
+import { storageKey } from "./storage";
 // The Wiki section: shared Markdown pages about goals, projects and people (desktop/wiki.mjs).
 // A side menu of sections and pages, a page in read or edit mode, and what links to it.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -81,7 +82,7 @@ type Edit = {
 
 // Unsaved edits are kept in the browser's storage as they are typed. Closing the window or quitting
 // with a page open in the editor therefore loses nothing: the Wiki offers the draft back next time.
-const DRAFT = "commander.wiki.draft";
+const DRAFT = storageKey("wiki.draft");
 type Kept = { path: string; base: string; text: string; time: number };
 function readDraft(): Kept | undefined {
   try {

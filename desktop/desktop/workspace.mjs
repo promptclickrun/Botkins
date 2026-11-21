@@ -5,7 +5,6 @@ import { EventEmitter } from "node:events";
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
@@ -73,7 +72,8 @@ import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Templates } from "./templates.mjs";
-import { Access, migrateCustomers } from "./access.mjs";
+import { readWorkspace } from "./workspace-file.mjs";
+import { Access } from "./access.mjs";
 import { memberCanSpaces, memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
 
@@ -166,7 +166,7 @@ export class Workspace {
       ? // A new workspace has no bots: the first-run screen offers the person's existing agents
         // (desktop/agents.mjs importable) or the Create a bot form.
         { bots: [], chats: [], runs: [] }
-      : JSON.parse(readFileSync(this.file, "utf8"));
+      : readWorkspace(this.file);
     // Queued messages share the atomic workspace write with the run that consumes them.
     this.queues = new Map(Object.entries(this.state.pendingMessages ?? {}));
     delete this.state.pendingMessages;
@@ -227,8 +227,6 @@ export class Workspace {
         this.notify();
       },
     });
-    // Customers were removed: bots keep their project access, and the records are archived once (desktop/access.mjs).
-    migrateCustomers(this.state, this.dir);
     // Skills and MCP servers for every bot, each bot's memory, bot-to-bot help and message mentions
     // (desktop/integrations.mjs, memory.mjs, teamwork.mjs, mentions.mjs)
     this.integrations = new Integrations(this);

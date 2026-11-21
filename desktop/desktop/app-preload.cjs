@@ -1,5 +1,4 @@
-// The bridge an HTML app sees: `window.botkins`. `window.commander` (the app's earlier name) and
-// `window.bighelp` are the same bridge, so apps written for either still run.
+// HTML apps use window.botkins. Saved apps can also use the earlier bridge names.
 const { contextBridge, ipcRenderer } = require("electron");
 const bridge = {
   getData: () => ipcRenderer.invoke("app:data"),

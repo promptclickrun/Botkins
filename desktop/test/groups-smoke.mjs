@@ -12,12 +12,12 @@ import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-groups-ui-"));
 const repo = join(dir, "repo");
-const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app"), COMMANDER_DATA_DIR: join(dir, "app") };
+const env = { ...process.env, BOTKINS_DATA_DIR: join(dir, "app") };
 // A new workspace has no bots; this smoke starts with the three test bots (test/starter.mjs).
 seedApp(join(dir, "app"));
 delete env.ELECTRON_RUN_AS_NODE;
-const live = (process.env.BOTKINS_LIVE ?? process.env.COMMANDER_LIVE) === "1";
-const shots = (process.env.BOTKINS_GROUPS_SHOTS ?? process.env.COMMANDER_GROUPS_SHOTS);
+const live = process.env.BOTKINS_LIVE === "1";
+const shots = process.env.BOTKINS_GROUPS_SHOTS;
 let app, page;
 const errors = [];
 const button = (name) => page.getByRole("button", { name, exact: true });
@@ -75,8 +75,8 @@ git("commit", "-qm", "first");
 
 try {
   app = await _electron.launch({
-    args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."],
-    executablePath: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY),
+    args: process.env.BOTKINS_BINARY ? [] : ["."],
+    executablePath: process.env.BOTKINS_BINARY,
     env,
   });
   page = await skipWelcome(await app.firstWindow());

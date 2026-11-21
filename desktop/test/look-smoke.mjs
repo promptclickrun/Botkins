@@ -14,9 +14,9 @@ import { openToday } from "./spaces-helper.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-look-"));
 const shots = process.env.LOOK_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", COMMANDER_PROVIDERS: "copilot" };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot" };
 delete env.ELECTRON_RUN_AS_NODE;
-const binary = process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY;
+const binary = process.env.BOTKINS_BINARY;
 
 const now = Date.now();
 const MIN = 60_000;
@@ -27,7 +27,7 @@ const team = [
   ["sales", "Sales Outbound", "Drafts outreach", "pounce"],
   ["talent", "Talent Scout", "Finds candidates", "fathom"],
   ["growth", "Growth Marketer", "Tests copy and channels", "posy"],
-  ["support", "Customer Support", "Answers tickets", "pip"],
+  ["support", "Support", "Answers tickets", "pip"],
   ["expense", "Expense Manager", "Codes receipts", "spool"],
 ];
 const bots = team.map(([id, name, role, head]) => ({ id, name, role, instructions: "You are the team's " + name + ". " + role + ".", face: "idle", look: { head, palette: "original" } }));

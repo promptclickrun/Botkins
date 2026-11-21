@@ -3,7 +3,7 @@
 // they need, and when the card is taller than its room its body scrolls while the buttons stay in
 // reach. The heading folds the card to one line ("Gordie has a question") so the chat behind it
 // can be read, and opens it again. The words and the behaviour are the desktop app's
-// (Commander-Con/src/RequestPanel.tsx): a choice is picked, then sent with "Send answer".
+// (desktop/src/RequestPanel.tsx): a choice is picked, then sent with "Send answer".
 //
 // Secrets are typed masked or picked from saved credentials (the computer fills those in, so the
 // value never reaches the phone), and are cleared the moment the answer goes. A request that looks

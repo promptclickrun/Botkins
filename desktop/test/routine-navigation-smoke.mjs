@@ -8,7 +8,7 @@ import { Workspace } from "./starter.mjs";
 import { skipWelcome } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-last-chat-"));
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, COMMANDER_DATA_DIR: dir };
+const env = { ...process.env, BOTKINS_DATA_DIR: dir };
 delete env.ELECTRON_RUN_AS_NODE;
 const workspace = () => new Workspace(join(dir, "data"), async () => { throw Error("The fixture uses no provider"); }, () => {}, () => ({ kind: "reject" }));
 let app;

@@ -182,9 +182,9 @@ botkins.state.onChange(fn)          // fn(state) when someone else changed it; r
 - A bot's `today_publish` keeps the state unless it passes `state`.
 - The `today-panel` skill teaches bots to keep what people change in `botkins.state`, and to pass a short `label`.
 - **On the wire** (the page a client gets from `link.frame.page` already has the bridge; the app that shows it answers its messages, as it does for `sendAnswer`):
-  - the page sends `{ commander: 1, type: "state", id }` for `get` and `{ commander: 1, type: "setState", id, patch, label? }` for `set`;
-  - the app answers each with `{ commander: 1, type: "result", id, value }`: the state object, or `true` or `false`;
-  - for a change someone else made, the app sends `{ commander: 1, type: "state", state }` to the frame;
+  - the page sends `{ botkins: 1, type: "state", id }` for `get` and `{ botkins: 1, type: "setState", id, patch, label? }` for `set`;
+  - the app answers each with `{ botkins: 1, type: "result", id, value }`: the state object, or `true` or `false`;
+  - for a change someone else made, the app sends `{ botkins: 1, type: "state", state }` to the frame;
   - with no answer in 5 seconds, `get` gives `{}` and `set` gives `false`, so an app from before this never makes a page wait.
 - The app that shows the view applies the 3-second and once-a-second rule before it calls `spaces.patchState`.
 

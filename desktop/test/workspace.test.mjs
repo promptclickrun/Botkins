@@ -166,9 +166,8 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   again.setPreferences({ sidebar: { collapsed: true } });
   assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: true, picked: true }, "so does collapsing it again");
   assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, ["Chats", "Home", "Today", "Work", "Wiki"]);
-  // A side menu saved while Customers existed, or while Projects was a place of its own (it is a
-  // tab of Work now), still loads: that place is dropped and the rest keep their order.
-  assert.deepEqual(sidebarField({ order: ["Wiki", "Customers", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work"]);
+  // Places that no longer exist are dropped. The remaining places keep their order.
+  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work"]);
   assert.deepEqual(sidebarField({ order: ["Projects", "Work", "Wiki", "Home", "Today", "Chats"] }).order, ["Work", "Wiki", "Home", "Today", "Chats"]);
   const old = join(dir, "old");
   mkdirSync(old);

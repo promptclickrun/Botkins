@@ -1,4 +1,5 @@
 // Html blocks in Today panels and chat cards: pages kept as frames (desktop/frames.mjs).
+import { LEGACY_NAME } from "../desktop/home.mjs";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ function setup(t) {
   const files = () => (existsSync(join(dir, "frames")) ? readdirSync(join(dir, "frames")).sort() : []);
   return { dir, ws, files };
 }
-const PAGE = "<h1 id=t>Sales</h1><script>commander.getData().then((d) => (t.textContent = d.title))</script>";
+const PAGE = "<h1 id=t>Sales</h1><script>botkins.getData().then((d) => (t.textContent = d.title))</script>";
 
 test("a panel's html block is stored as a frame, out of the workspace file and the page's state", (t) => {
   const { ws, dir, files } = setup(t);
@@ -90,8 +91,8 @@ test("the page a frame loads has the bridge and its data first, safely", () => {
   const page = framePage("<p>Hi</p>", { text: "</script><script>alert(1)</script>", line: "a b" });
   assert.match(page, /^<!doctype html><html><head><meta charset="utf-8"><style>/);
   assert.ok(page.indexOf("window, \"botkins\"") > 0 && page.indexOf("window, \"botkins\"") < page.indexOf("<p>Hi</p>"), "the bridge runs before the page");
-  // Pages written when the app was called Commander, or for Bighelp, find the same bridge under those names.
-  for (const name of ["commander", "bighelp"]) assert.ok(page.includes("Object.defineProperty(window, \"" + name + "\", { value: window.botkins })"), name);
+  // Saved pages can also use the earlier bridge names.
+  for (const name of [LEGACY_NAME.toLowerCase(), "bighelp"]) assert.ok(page.includes("Object.defineProperty(window, \"" + name + "\", { value: window.botkins })"), name);
   assert.equal(page.split("</script>").length - 1, 1, "data can't end the bridge's script");
   assert.match(page, /\\u003c\/script\\u003e\\u003cscript\\u003ealert\(1\)/);
   assert.match(page, /a\\u2028b/);

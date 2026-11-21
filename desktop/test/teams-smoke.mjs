@@ -53,14 +53,13 @@ await seed.stop();
 const env = {
   ...process.env,
   BOTKINS_DATA_DIR: userData,
-  COMMANDER_DATA_DIR: userData,
 };
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
 try {
   app = await _electron.launch({
-    args: (process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY) ? [] : ["."],
-    executablePath: process.env.BOTKINS_BINARY ?? process.env.COMMANDER_BINARY,
+    args: process.env.BOTKINS_BINARY ? [] : ["."],
+    executablePath: process.env.BOTKINS_BINARY,
     env,
   });
   const page = await skipWelcome(await app.firstWindow());

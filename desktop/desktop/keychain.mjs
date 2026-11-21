@@ -1,25 +1,6 @@
-// Keys the system keychain guards, across the app's rename.
-//
-// The installed app wraps two keys with Electron's safeStorage: the credential vault's key
-// (<data>/vault.json) and the phone link's private key (<data>/link/link.json). On macOS
-// safeStorage keeps its own secret in a keychain entry named after the app: "Commander Safe
-// Storage" before the rename, "Botkins Safe Storage" after it. A process named Botkins can't open
-// what the first entry wrapped. (Windows keeps safeStorage's secret in the data folder, under the
-// person's own account, so nothing changes there.)
-//
-// So, when the data folder holds a key this app can't open and the Mac still has the earlier
-// entry, the app starts itself once more as a helper: a process that takes the earlier name, opens
-// the keys it is handed, prints them to its parent and exits. It opens no window and uses a
-// throwaway folder. macOS asks the person once whether Botkins may use "Commander Safe Storage",
-// because the app's identity changed with its name. The vault then saves its key under the new
-// entry as well, beside the earlier wrapping, which is never overwritten: an earlier Commander
-// still opens the same vault. The phone link's key is saved under the new entry in the same start
-// (desktop/main.mjs), so the helper is needed once.
-//
-// What the helper is, plainly: this app, asked on its command line to decrypt what it is handed
-// with the earlier entry. Any program running as the same person could start it the same way.
-// macOS still asks the person each time, unless they chose "Always Allow" for that entry, which is
-// why the app asks them to choose "Allow": once is enough.
+// A macOS keychain entry belongs to the app name that created it. On upgrade a helper
+// opens old keys with permission, then the app can wrap them under its current identity.
+// The original wrapping stays usable if the person opens an older installation.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +8,7 @@ import { join } from "node:path";
 import { LEGACY_NAME } from "./home.mjs";
 
 /** Starts the app as the helper. */
-export const HELPER_FLAG = "--open-commander-keys";
+export const HELPER_FLAG = "--open-earlier-keys";
 const MARK = "@@botkins-keys@@";
 
 const json = (file) => {
