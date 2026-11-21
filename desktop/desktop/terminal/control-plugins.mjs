@@ -13,15 +13,26 @@ import { ControlError } from "./socket.mjs";
  * app starts (desktop/plugin-reading.mjs), so this list is too.
  */
 export const pluginRuns = (contents) => [
-  ...(contents?.hooks ?? []).map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [], ...(hook.envNotSet?.length && { envNotSet: hook.envNotSet }) })),
+  ...(contents?.hooks ?? []).map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [], ...(hook.envNotSet?.length && { envNotSet: hook.envNotSet }), ...(hook.timeoutSec !== undefined && { timeoutSec: hook.timeoutSec }) })),
   ...(contents?.mcpServers ?? []).filter((server) => server.kind === "local").map((server) => ({ what: "tool", name: server.name, command: server.command, args: server.args ?? [], env: server.env ?? [], ...(server.envNotSet?.length && { envNotSet: server.envNotSet }), ...(server.cwd && { cwd: server.cwd }) })),
 ];
-/** Where a plugin reaches on the web: each tool that is an address, with the names of the headers it is sent. */
-export const pluginReaches = (contents) => (contents?.mcpServers ?? []).filter((server) => server.kind === "remote").map((server) => ({ name: server.name, url: server.url, headers: server.headers ?? [], ...(server.oauth && { signsIn: true }) }));
+/** Where a plugin reaches on the web: each tool that is an address, with how Botkins talks to it, each header with its value as the plugin wrote it, and the client id of its sign-in. */
+export const pluginReaches = (contents) => (contents?.mcpServers ?? []).filter((server) => server.kind === "remote").map((server) => ({ name: server.name, ...(server.type && { type: server.type }), url: server.url, headers: server.headers ?? [], ...(server.oauth && { signsIn: true }), ...(server.oauthClientId && { oauthClientId: server.oauthClientId }) }));
 const LOOK_AGAIN = "This plugin is not the one that was looked at: its revision is another one now. Look at it again with `botkins plugins show`.";
 
 export function pluginsApi({ workspace, handlers, bot }) {
-  const installed = () => workspace.plugins.list();
+  /**
+   * The installed plugins as they are now. What the app keeps of the last check of a copy can be
+   * old (a file was changed since), so each copy is checked first. It reads no file when nothing
+   * below the copy's folder changed.
+   */
+  const installed = () => {
+    for (const row of workspace.plugins.records) {
+      const was = workspace.plugins.checked.get(row.folder)?.ok;
+      if (!workspace.plugins.intact(row) && was !== false) workspace.notify?.();
+    }
+    return workspace.plugins.list();
+  };
   /** An installed plugin by its id, or by its name when exactly one has it. */
   const plugin = (ref) => {
     if (typeof ref !== "string" || !ref.trim()) throw new ControlError("Give a plugin's id or name.", "BAD_ARGUMENT");
@@ -41,7 +52,11 @@ export function pluginsApi({ workspace, handlers, bot }) {
     if (!Array.isArray(bots) || !bots.length) throw new ControlError("Give `all`, or the bots.", "BAD_ARGUMENT");
     return bots.map((ref) => bot(ref).id);
   };
-  const view = (entry) => ({ ...entry, runs: pluginRuns(entry.contents), reaches: pluginReaches(entry.contents) });
+  /** Who gets a plugin, by name: "all", or the names in the order of the plugin's own list (a bot that is gone is left out). */
+  const botNames = (bots) => (bots === "all" ? "all" : (Array.isArray(bots) ? bots : []).flatMap((id) => workspace.state.bots.find((entry) => entry.id === id)?.name ?? []));
+  const view = (entry) => ({ ...entry, botNames: botNames(entry.bots), runs: pluginRuns(entry.contents), reaches: pluginReaches(entry.contents) });
+  /** A revision as a caller gives it: the string, or { revision } as a phone sends it to the app. Nothing when none was given. */
+  const revisionOf = (value) => (value !== null && typeof value === "object" && !Array.isArray(value) ? value.revision : value ?? undefined);
   /** The revision that was looked at: the app takes no install and no update without one (Plugins.install), and this says so in the command line's words. */
   const looked = (options) => {
     if (typeof options?.revision !== "string" || !/^[a-f0-9]{64}$/.test(options.revision)) throw new ControlError("Give the revision of the plugin that was looked at (`botkins plugins show` prints it). A plugin is not installed or updated without it.", "BAD_ARGUMENT");
@@ -61,21 +76,32 @@ export function pluginsApi({ workspace, handlers, bot }) {
     /**
      * On or off. To switch on a plugin that runs commands here, the caller names the revision
      * that was looked at, and it must be the installed one: a plugin that was updated between
-     * the look and the yes is not switched on by that yes.
+     * the look and the yes is not switched on by that yes. The refusal here is the friendly
+     * one. The app compares the revision again inside its queue, which is the one that holds
+     * when an update is under way.
      */
-    async "plugins.setEnabled"([ref, on, revision]) {
+    async "plugins.setEnabled"([ref, on, third]) {
       const found = plugin(ref);
+      const revision = revisionOf(third);
       if (on === true && found.enabled === false && pluginRuns(found.contents).length && revision !== found.revision) throw new ControlError(revision == null ? "This plugin runs commands on this computer. Give the revision that was looked at (`botkins plugins show` prints it)." : LOOK_AGAIN, "BAD_ARGUMENT");
-      await handlers["plugins.setEnabled"](found.id, on === true);
+      await handlers["plugins.setEnabled"](found.id, on === true, revision == null ? undefined : { revision });
       return view(plugin(found.id));
     },
     "plugins.configure": ([ref, values]) => handlers["plugins.configure"](plugin(ref).id, values),
     "plugins.uninstall": ([ref]) => handlers["plugins.uninstall"](plugin(ref).id),
-    /** Which bots have a plugin. `revision`, when given, must be the installed one (the caller showed that plugin before a wider choice). */
-    async "plugins.setBots"([ref, bots, revision]) {
+    /**
+     * Which bots have a plugin. A plugin that is on and runs commands here is shown first before
+     * more bots get it, and the caller names the revision that was looked at. The app compares
+     * it inside its queue.
+     */
+    async "plugins.setBots"([ref, bots, third]) {
       const found = plugin(ref);
+      const revision = revisionOf(third);
+      const ids = botIds(bots);
+      const wider = found.bots !== "all" && (ids === "all" || ids.some((id) => !found.bots.includes(id)));
+      if (found.enabled && wider && pluginRuns(found.contents).length && revision == null) throw new ControlError("This plugin is on and runs commands on this computer. Look at it first (`botkins plugins show`), then give the revision that was looked at, to give it to more bots.", "BAD_ARGUMENT");
       if (revision != null && revision !== found.revision) throw new ControlError(LOOK_AGAIN, "BAD_ARGUMENT");
-      await handlers["plugins.setBots"](found.id, botIds(bots));
+      await handlers["plugins.setBots"](found.id, ids, revision == null ? undefined : { revision });
       return view(plugin(found.id));
     },
     /** Forgets the sign-ins of a plugin's tools. Signing one in needs a browser: a paired phone or the app's window does that. */

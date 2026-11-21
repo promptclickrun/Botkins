@@ -12,19 +12,24 @@
 // It is for text that is shown for a decision: a command, an argument, a folder, an address, a
 // header's name, a name beside a question, a word for the log. It is not for every name that is
 // drawn. U+200C and U+200D are correct writing in some languages and a part of many emoji, and a
-// chat's or a bot's name that went through this rule would be spoiled.
+// variation selector (U+FE0F) is what makes a heart or a flag an emoji and not a sign. A chat's or
+// a bot's name that went through this rule would show "\u{fe0f}" in the middle of it.
 
 /**
- * The characters that are not shown as they are:
- *   U+0000 to U+001F, U+007F to U+009F   control characters (a new line and a tab among them)
- *   U+061C, U+200E, U+200F               marks that set the direction of text
- *   U+202A to U+202E, U+2066 to U+2069   marks that turn text around, and that end such a turn
- *   U+200B to U+200D, U+2060 to U+2064   characters with no width (a joiner, a space of no width)
- *   U+FEFF                               the byte order mark, which has no width either
- *   U+2028, U+2029                       the line and paragraph separators
- *   U+E0000 to U+E007F                   the tag characters, which are not drawn
+ * The characters that are not shown as they are. The classes are Unicode's own, so that a
+ * character that a later version adds to them is caught too:
+ *   Cc  control characters: U+0000 to U+001F, U+007F to U+009F (a new line and a tab among them)
+ *   Cf  format characters: U+00AD (the soft hyphen), U+061C, U+200B to U+200F, U+202A to U+202E,
+ *       U+2060 to U+2064, U+2066 to U+2069, U+FEFF, U+180E, the tag characters U+E0001 and
+ *       U+E0020 to U+E007F, and more. These set the direction of text, or have no width.
+ *   Zl, Zp  the line and paragraph separators U+2028 and U+2029
+ * and, which the classes do not hold, characters that draw nothing or change nothing:
+ *   U+FE00 to U+FE0F, U+E0100 to U+E01EF   variation selectors
+ *   U+115F, U+1160, U+3164, U+FFA0         Hangul fillers (they look like a space)
+ *   U+034F                                 the combining grapheme joiner
+ *   U+E0000 to U+E007F                     the tag block, whole
  */
-export const UNSHOWN = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
+export const UNSHOWN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180e\u3164\uffa0\ufe00-\ufe0f\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu;
 
 /** Text with each such character written as its number, as \u{202e}. Other text is as it was: letters of every language, accents and emoji stay. */
 export const shownText = (text) => String(text).replace(UNSHOWN, (char) => "\\u{" + char.codePointAt(0).toString(16) + "}");

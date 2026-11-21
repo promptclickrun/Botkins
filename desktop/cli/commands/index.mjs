@@ -100,7 +100,7 @@ export function describe(version, global = {}) {
     usage: command.usage ?? "botkins " + path.join(" "),
     arguments: command.arguments ?? argumentsOf(command.usage, path),
     options: Object.entries(command.options ?? {}).map(option),
-    // A command with --yes asks a person first. With no terminal it fails and names that flag.
+    // A command with --yes asks a person first. With no terminal it fails and names that flag. A command whose yes must name what was looked at has `asks: "--yes --revision"`.
     ...((command.asks || command.options?.yes) && { asks: command.asks ?? "--yes" }),
     ...(command.details && { details: command.details }),
   });

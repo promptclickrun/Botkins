@@ -71,7 +71,7 @@ async function setup(t) {
 }
 
 const RUN = { what: "hook", when: "userPromptSubmitted", command: HOOK, env: [{ name: "LEVEL", value: "${REGION}" }] };
-const SHOWN = /Runs on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}with LEVEL="\$\{REGION\}"\n/;
+const SHOWN = /Runs on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}for at most 10 seconds\n {6}with LEVEL="\$\{REGION\}"\n/;
 
 test("a plugin that runs commands is looked at first, and a yes names the revision that was looked at, at a terminal too", { skip }, async (t) => {
   const { botkins, market, memory, write, client, logged, everything } = await setup(t);
@@ -81,11 +81,13 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   const show = await botkins(["plugins", "show", id]);
   assert.match(
     show.out,
-    /^memory 1\.0\.0 {3}memory@test-market\nRemember things\nHolds: 1 tool, 1 hook\.\nRuns on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}with LEVEL="\$\{REGION\}"\nReaches on the web:\n {2}the tool memory: https:\/\/example\.test\/mcp, with the headers Authorization\nSettings:\n {2}MEMORY_API_KEY \(needed\) \(secret\): goes to the header Authorization of the tool memory at https:\/\/example\.test\/mcp\n {2}REGION: goes to the environment value LEVEL of the hook at userPromptSubmitted\n/,
+    /^memory 1\.0\.0 {3}memory@test-market\nRemember things\nHolds: 1 tool, 1 hook\.\nRuns on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}for at most 10 seconds\n {6}with LEVEL="\$\{REGION\}"\nReaches on the web:\n {2}the tool memory: https:\/\/example\.test\/mcp\n {6}with the header Authorization="Bearer \$\{MEMORY_API_KEY\}"\nSettings:\n {2}MEMORY_API_KEY \(needed\) \(secret\): goes to the header Authorization of the tool memory at https:\/\/example\.test\/mcp\n {2}REGION: goes to the environment value LEVEL of the hook at userPromptSubmitted\n/,
   );
   const seen = (await botkins(["plugins", "show", id, "--json"])).json();
   assert.match(seen.revision, /^[a-f0-9]{64}$/);
-  assert.deepEqual([seen.runs, seen.reaches], [[RUN], [{ name: "memory", url: "https://example.test/mcp", headers: ["Authorization"] }]]);
+  // (The description may carry more fields than these: a hook's time limit, a tool's type.)
+  assert.deepEqual(seen.runs.map(({ timeoutSec, ...run }) => run), [RUN]);
+  assert.deepEqual(seen.reaches.map((reach) => [reach.name, reach.url, reach.headers.map((header) => header.name ?? header)]), [["memory", "https://example.test/mcp", ["Authorization"]]]);
 
   // No install by the id alone, and none with a yes alone: with no terminal and at one. An agent's harness often
   // gives a terminal, so a terminal does not mean a person. Each time it says what runs, and what to do in the form
@@ -123,7 +125,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   const jsonned = await botkins(["plugins", "install", id, "--json", "--yes", "--revision", now]);
   assert.equal(jsonned.exit, 0, jsonned.err);
   assert.match(jsonned.err, SHOWN);
-  assert.deepEqual([jsonned.json().revision, jsonned.json().runs], [now, [RUN]]);
+  assert.deepEqual([jsonned.json().revision, jsonned.json().runs.map(({ timeoutSec, ...run }) => run)], [now, [RUN]]);
   assert.equal((await botkins(["plugins", "install", "other@test-market", "--json", "--yes"])).exit, 1, "a plugin that the marketplace does not have");
   // At a terminal the person is shown it and asked; a "no" installs nothing.
   await botkins(["plugins", "uninstall", id, "--yes"]);
@@ -187,7 +189,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   assert.match(both.out, new RegExp("Installed revision: " + installedRevision + "\nRevision of its source now: [a-f0-9]{64} {3}\\(an update takes this one\\)\n`botkins plugins update -- memory@test-market` shows what is new\\."));
   const bareUpdate = await botkins(["plugins", "update", "memory", "--yes"]);
   assert.equal(bareUpdate.exit, 2);
-  assert.match(bareUpdate.err, /memory: what this update changes\nIt runs and reaches the same as before\. Its files changed, and its commands run those files\./);
+  assert.match(bareUpdate.err, /memory: what this update changes\nIt runs the same and reaches the same addresses as before\./);
   // The installed revision is not the one an update takes, and the refusal says so.
   assert.match((await botkins(["plugins", "update", "memory", "--yes", "--revision", installedRevision])).err, /That is the revision of the installed copy\. An update takes the revision of the source as it is now/);
   const newer = (await client.call("plugins.preview", id)).revision;
@@ -199,7 +201,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   const moved = await botkins(["plugins", "update", "memory", "--yes"]);
   assert.equal(moved.exit, 2, "nothing runs on this computer after it, and it still needs the revision");
   assert.match(moved.err, /No longer runs:\n {2}at userPromptSubmitted: /);
-  assert.match(moved.err, /New or changed, reaches on the web:\n {2}the tool mirror: https:\/\/elsewhere\.test\/mcp, with the headers X-Key\n/);
+  assert.match(moved.err, /New or changed, reaches on the web:\n {2}the tool mirror: https:\/\/elsewhere\.test\/mcp\n {6}with the header X-Key="\$\{MEMORY_API_KEY\}"\n/);
   assert.match(moved.err, /A setting that you gave, which goes to another place now:\n {2}MEMORY_API_KEY .*the header X-Key of the tool mirror at https:\/\/elsewhere\.test\/mcp/);
   const movedTo = (await client.call("plugins.preview", id)).revision;
   const updated = await botkins(["plugins", "update", "--json", "--yes", "--revision=" + movedTo, "--", id]);
@@ -224,8 +226,8 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   assert.equal(lines.some((line) => /Tried.*plugins\.install/.test(line)), false, "what the command refused by itself never reached the service");
   // The service itself takes no install and no update with no revision, also by the plain call that reaches the app's own.
   await assert.rejects(client.call("plugins.install", id, {}), /Give the revision of the plugin that was looked at/);
-  await assert.rejects(client.call("call", "plugins.install", ["notes@test-market"]), /An install or an update names the revision that was looked at/);
-  await assert.rejects(client.call("call", "plugins.update", [id, {}]), /names the revision that was looked at/);
+  await assert.rejects(client.call("call", "plugins.install", ["notes@test-market"]), /Give the revision of the plugin that was looked at/);
+  await assert.rejects(client.call("call", "plugins.update", [id, {}]), /Give the revision of the plugin that was looked at/);
   assert.deepEqual((await logged()).slice(-3), ["Tried from the command line: plugins.install memory@test-market (it failed)", "Tried from the command line: call plugins.install (it failed)", "Tried from the command line: call plugins.update (it failed)"]);
   // A first word with a character that hides or turns text is not written to the log.
   await assert.rejects(client.call("plugins.update", "me\u202emory", { revision: "0".repeat(64) }));
@@ -260,7 +262,7 @@ test("a plugin that runs nothing installs with no question, a folder plugin is a
   write(join(mine, ".mcp.json"), { mcpServers: { files: { command: "npx", args: ["-y", "@scope/pkg server"], cwd: "/srv/data", env: { TOKEN: "x" } } } });
   const added = await botkins(["plugins", "add-folder", mine]);
   assert.equal(added.exit, 0, added.err);
-  assert.match(added.out, /\(installed, off\)\n[\s\S]*Runs on this computer, as the user that runs Botkins:\n {2}at sessionStart: sh \.\/start\.sh\n {2}the tool files: npx -y "@scope\/pkg server"\n {6}in the folder "\/srv\/data"\n {6}with TOKEN="x"\n[\s\S]*Added, and switched off\. Switch it on with `botkins plugins enable -- mine@folder-[a-f0-9]{12}`\./);
+  assert.match(added.out, /\(installed, off\)\n[\s\S]*Runs on this computer, as the user that runs Botkins:\n {2}at sessionStart: sh \.\/start\.sh\n {6}for at most 10 seconds\n {2}the tool files: npx -y "@scope\/pkg server"\n {6}in the folder "\/srv\/data"\n {6}with TOKEN="x"\n[\s\S]*Added, and switched off\. Switch it on with `botkins plugins enable -- mine@folder-[a-f0-9]{12}`\./);
   const { id, revision } = (await botkins(["plugins", "show", "mine", "--json"])).json();
   // Choosing bots while it is off needs no yes, and leaves it off.
   await client.call("bots.add", { name: "Nova" });
@@ -321,7 +323,7 @@ test("text from a plugin is shown as text: a character that hides or turns it is
   assert.match(outputs[1].out, /the tool to\\u\{200b\}ol: node "a\\\\u\{1b\}\[2Kb"/);
   assert.match(outputs[4].err, /A\\u\{202e\}label goes to/);
   // A value is shown as the plugin wrote it, and a name that Botkins does not set is said.
-  assert.match(outputs[1].out, /\n {6}with V="\$\{KEY\}"\n {6}with W="a\\\\u\{202e\}b"\n {6}not set by Botkins, though the plugin asks for them: GIT_SSH_COMMAND, N\\u\{200b\}\n/);
+  assert.match(outputs[1].out, /\n {6}with V="\$\{KEY\}"\n {6}with W="a\\\\u\{202e\}b"\n {6}not set by Botkins, though the plugin asks for them:\n {8}GIT_SSH_COMMAND(: .+)?\n {8}N\\u\{200b\}(: .+)?\n/);
   assert.match(outputs[1].out, /Note: Botkins does not set some environment names that this plugin asks for\./);
 });
 
@@ -343,4 +345,277 @@ test("sign-out forgets a plugin's sign-ins in whatever state the plugin is, and 
   assert.match(out.out, /signs is signed out \(1 of its 1 tool that sign in was signed in\)\./);
   assert.equal(plugins.oauth.status(server).signedIn, false);
   assert.deepEqual((await botkins(["plugins", "sign-out", "signs", "--json"])).json(), { id: plugins.records[0].preview.id, name: "signs", tools: 1, signedOut: 0 });
+});
+
+test("the bots are shown: who has a plugin, who will get it, and the new set before more bots get one that runs", { skip }, async (t) => {
+  const { botkins, market, client } = await setup(t);
+  await botkins(["plugins", "add-marketplace", market]);
+  await client.call("bots.add", { name: "Nova" });
+  await client.call("bots.add", { name: "Orbit" });
+  const id = "memory@test-market";
+  const { revision } = (await botkins(["plugins", "show", id, "--json"])).json();
+  // Before the question: with no --bot it is every bot, and with --bot those that were named.
+  const every = await botkins(["plugins", "install", id], { input: "n\n", tty: true });
+  assert.match(every.err, /\nFor: every bot\n/);
+  const named = await botkins(["plugins", "install", id, "--bot", "Nova"], { input: "n\n", tty: true });
+  assert.match(named.err, /\nFor: Nova\n/);
+  // The block that goes to standard error with --yes says it too.
+  const installed = await botkins(["plugins", "install", id, "--bot", "Nova", "--bot", "Orbit", "--yes", "--revision", revision, "--json"]);
+  assert.equal(installed.exit, 0, installed.err);
+  assert.match(installed.err, /\nFor: Nova, Orbit\n/);
+  assert.match((await botkins(["plugins", "show", "memory"])).out, /\nBots: Nova, Orbit\n/);
+  assert.equal((await botkins(["plugins", "bots", "memory", "--bot", "Nova"])).exit, 0, "fewer bots need no yes");
+  assert.match((await botkins(["plugins", "show", "memory"])).out, /\nBots: Nova\n/);
+  const installedRevision = (await client.call("plugins.get", "memory")).revision;
+  // More bots: the block and the question say the new set, and the sentence for a caller that cannot be asked is a command that works.
+  const wider = await botkins(["plugins", "bots", "memory", "--bot", "Nova", "--bot", "Orbit"]);
+  assert.equal(wider.exit, 2);
+  assert.match(wider.err, /\nNow: Nova\. After: Nova, Orbit\.\n/);
+  const command = (text) => text.match(/`botkins (plugins bots [^`]*)`/)[1].replace("<revision>", installedRevision).split(" ");
+  const printed = command(wider.err);
+  assert.deepEqual(printed.slice(0, 3), ["plugins", "bots", "--bot=Nova"]);
+  assert.ok(printed.includes("--bot=Orbit"), "the bots that were given are in it");
+  const worked = await botkins(printed);
+  assert.equal(worked.exit, 0, worked.err);
+  assert.match(worked.out, /memory is for 2 bots\./);
+  await botkins(["plugins", "bots", "memory", "--bot", "Orbit"]);
+  const all = await botkins(["plugins", "bots", "memory", "--all"], { input: "n\n", tty: true });
+  assert.match(all.err, /Now: Orbit\. After: every bot\. Let it run these for more bots\? \[y\/N\]/);
+  const everyOne = await botkins(["plugins", "bots", "memory", "--all"]);
+  assert.match(everyOne.err, /`botkins plugins bots --all --yes --revision=<revision> -- memory@test-market`/);
+  assert.match((await botkins(command(everyOne.err))).out, /memory is for every bot\./);
+  assert.match((await botkins(["plugins", "show", "memory"])).out, /\nBots: every bot\n/);
+  // A caller finds the whole rule in the description of the commands.
+  const asks = (await botkins(["help", "plugins", "--json"])).json().areas[0].commands.filter((entry) => entry.asks === "--yes --revision").map((entry) => entry.command);
+  assert.deepEqual(asks.sort(), ["plugins bots", "plugins enable", "plugins install", "plugins update"]);
+});
+
+test("an error line is text: a character that turns it is written as its number, and --json keeps the message", { skip }, async (t) => {
+  const { botkins, dir, write } = await setup(t);
+  const turn = String.fromCodePoint(0x202e);
+  // The app names a file of the plugin in its refusal: here a link with a turn mark in its name.
+  const linked = join(dir, "linked");
+  write(join(linked, "plugin.json"), { name: "linked" });
+  (await import("node:fs")).symlinkSync(dir, join(linked, "l" + turn + "k"));
+  const refused = await botkins(["plugins", "add-folder", linked]);
+  assert.equal(refused.exit, 1);
+  assert.equal(refused.err.includes(turn), false);
+  assert.match(refused.err, /contains a symlink: l\\u\{202e\}k\n/);
+  // A manifest that is not JSON is refused with a sentence, and a mark in its text is never printed raw.
+  const broken = join(dir, "broken");
+  write(join(broken, "plugin.json"), '{"name": "a' + turn + 'b", "version": }');
+  const bad = await botkins(["plugins", "add-folder", broken]);
+  assert.equal(bad.exit, 1);
+  assert.equal(bad.err.includes(turn), false);
+  // Whatever the message holds: the line on standard error is text, and the JSON document has the message as it is.
+  const client = { call: async () => Promise.reject(new Error("Unexpected token near " + turn + "evil\u001b[2K")) };
+  let err = "";
+  let out = "";
+  const sink = (take) => new Writable({ write: (chunk, _encoding, done) => (take(String(chunk)), done()) });
+  const exit = await main(["plugins", "list", "--json"], { stdout: sink((text) => void (out += text)), stderr: sink((text) => void (err += text)), stdin: Readable.from([]), env: {}, client });
+  assert.equal(exit, 1);
+  assert.equal(err, "botkins: Unexpected token near \\u{202e}evil\\u{1b}[2K\n");
+  assert.equal(JSON.parse(out).error.message.includes(turn), true);
+});
+
+test("install --settings for a plugin that runs nothing: a secret that goes to an address needs the yes, and where the values go is said", { skip }, async (t) => {
+  const { botkins, dir, write } = await setup(t);
+  // A plugin with a tool on the web only. Its secret goes into a header to the plugin's address.
+  const market = join(dir, "web-market");
+  write(join(market, ".github", "plugin", "marketplace.json"), { name: "web-market", plugins: [{ name: "web", source: "plugins/web", description: "A tool on the web", version: "1.0.0" }] });
+  const web = join(market, "plugins", "web");
+  write(join(web, "plugin.json"), { name: "web", version: "1.0.0", userConfig: { WEB_KEY: { title: "Key", sensitive: true, required: true }, REGION: { title: "Region" } } });
+  write(join(web, ".mcp.json"), { mcpServers: { api: { type: "http", url: "https://api.example.test/mcp", headers: { Authorization: "Bearer ${WEB_KEY}", "X-Region": "${REGION}" } } } });
+  assert.equal((await botkins(["plugins", "add-marketplace", market])).exit, 0);
+  const id = "web@web-market";
+  const { revision, runs } = (await botkins(["plugins", "show", id, "--json"])).json();
+  assert.deepEqual(runs, [], "it runs nothing on this computer");
+  const secretFile = write(join(dir, "secret.json"), { WEB_KEY: SECRET });
+  const regionFile = write(join(dir, "region.json"), { REGION: "eu" });
+  const installedNames = async () => (await botkins(["plugins", "list", "--json"])).json().map((plugin) => plugin.id);
+  // No yes, a yes alone, and a yes alone at a terminal: refused, and each time the plugin and where the secret goes are shown.
+  for (const [more, tty] of [[[], false], [["--yes"], false], [["--yes"], true]]) {
+    const refused = await botkins(["plugins", "install", id, "--settings", secretFile, ...more], { tty });
+    assert.equal(refused.exit, 2, more.join(" ") + " " + tty);
+    assert.match(refused.err, /Reaches on the web:\n {2}the tool api: https:\/\/api\.example\.test\/mcp\n/);
+    assert.match(refused.err, /\nFor: every bot\nThese values go to:\n {2}WEB_KEY \(needed\) \(secret\): goes to the header Authorization of the tool api at https:\/\/api\.example\.test\/mcp\n/);
+    assert.match(refused.err, /`botkins plugins install --settings \S+secret\.json --yes --revision=<revision> -- web@web-market`/);
+    assert.equal((refused.out + refused.err).includes(SECRET), false);
+  }
+  assert.deepEqual(await installedNames(), []);
+  // A person at a terminal is asked, and a "no" installs nothing.
+  const no = await botkins(["plugins", "install", id, "--settings", secretFile], { input: "n\n", tty: true });
+  assert.equal(no.exit, 1);
+  assert.match(no.err, /Install it and send these values to the addresses above\? \[y\/N\]/);
+  assert.deepEqual(await installedNames(), []);
+  // The yes of a caller names the revision that it looked at.
+  assert.equal((await botkins(["plugins", "install", id, "--yes", "--revision", "0".repeat(64), "--settings", secretFile])).exit, 1);
+  const done = await botkins(["plugins", "install", "--yes", "--revision=" + revision, "--settings", secretFile, "--", id]);
+  assert.equal(done.exit, 0, done.err);
+  assert.equal((done.out + done.err).includes(SECRET), false);
+  await botkins(["plugins", "uninstall", id, "--yes"]);
+  // A value that is not a secret, or a secret that goes to no address: said, and no question.
+  const plain = await botkins(["plugins", "install", id, "--settings", regionFile]);
+  assert.equal(plain.exit, 0, plain.err);
+  assert.match(plain.err, /^These values go to:\n {2}REGION: goes to the header X-Region of the tool api at https:\/\/api\.example\.test\/mcp\n$/);
+  await botkins(["plugins", "uninstall", id, "--yes"]);
+  // With no settings nothing is said and nothing is asked, as before.
+  const bare = await botkins(["plugins", "install", id]);
+  assert.deepEqual([bare.exit, bare.err], [0, ""]);
+  // A saved credential is not used by reference from the command line: the service says where it is chosen.
+  const byReference = write(join(dir, "ref.json"), { WEB_KEY: { $credential: "some-credential" } });
+  const configured = await botkins(["plugins", "configure", id, "--settings", byReference]);
+  assert.equal(configured.exit, 1);
+  assert.match(configured.err, /A saved credential is chosen in the app's window or on a paired phone\. From the command line, give the value itself/);
+  await botkins(["plugins", "uninstall", id, "--yes"]);
+  const installRef = await botkins(["plugins", "install", id, "--yes", "--revision", revision, "--settings", byReference]);
+  assert.equal(installRef.exit, 1);
+  assert.match(installRef.err, /A saved credential is chosen in the app's window or on a paired phone/);
+  assert.deepEqual(await installedNames(), []);
+});
+
+// An installed plugin and its source, as the service answers them, made by hand, so that each field of the description is the one that changes.
+const REV = { before: "a".repeat(64), after: "b".repeat(64) };
+const description = ({ hooks = [], tools = [], config = [], notRun, otherFiles, bots = ["b1"], botNames = ["Nova"], revision, installed = true } = {}) => ({
+  id: "p@m",
+  name: "p",
+  version: "1.0.0",
+  ...(installed && { installed: true, enabled: true, bots, botNames, status: "ready" }),
+  revision,
+  contents: { mcpServers: tools, hooks, ...(notRun && { notRun }), ...(otherFiles && { otherFiles }) },
+  // What the control wrapper makes of the description (desktop/terminal/control-plugins.mjs). A hook's run has no time limit here: the block says it from the hook.
+  runs: hooks.map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [] })),
+  reaches: tools.filter((tool) => tool.kind === "remote").map((tool) => ({ name: tool.name, url: tool.url, type: tool.type, headers: tool.headers, ...(tool.oauth && { signsIn: true }), ...(tool.oauthClientId && { oauthClientId: tool.oauthClientId }) })),
+  config,
+});
+const HOOK_A = { event: "sessionStart", command: "node a.mjs", env: [], timeoutSec: 10 };
+const HOOK_B = { event: "sessionEnd", command: "node b.mjs", env: [], timeoutSec: 10 };
+const WEB_TOOL = { name: "api", kind: "remote", type: "http", url: "https://api.example.test/mcp", headers: [{ name: "Authorization", value: "Bearer ${KEY}" }] };
+const FIELD = { key: "REGION", label: "Region", secret: false, required: false, default: "eu", sentTo: [{ header: "X-Region", tool: "api", url: "https://api.example.test/mcp" }] };
+/** The command line against a service that answers with these two descriptions. */
+async function against(before, next, argv = ["plugins", "update", "p"], { tty = false } = {}) {
+  const calls = [];
+  const client = {
+    call: async (name, ...args) => {
+      calls.push([name, ...args]);
+      if (name === "plugins.get") return before;
+      if (name === "plugins.preview") return next;
+      if (name === "plugins.update") return { ...next, installed: true, runs: next.runs };
+      throw new Error("unexpected call " + name);
+    },
+  };
+  let out = "";
+  let err = "";
+  const stdin = Readable.from([]);
+  stdin.isTTY = tty;
+  const sink = (take) => new Writable({ write: (chunk, _encoding, done) => (take(String(chunk)), done()) });
+  const exit = await main(argv, { stdout: sink((text) => void (out += text)), stderr: sink((text) => void (err += text)), stdin, env: {}, client });
+  return { exit, out, err, updated: calls.some(([name]) => name === "plugins.update") };
+}
+const updateOf = (before, next, ...more) => against({ ...before, revision: REV.before }, { ...next, revision: REV.after }, ["plugins", "update", "p", ...more]);
+
+test("show prints the whole description: bots, time limit, headers as written, defaults, what is not run, and the other files", { skip }, async () => {
+  const turn = String.fromCodePoint(0x202e);
+  const files = Array.from({ length: 14 }, (_, at) => ({ path: "config/c" + at + ".json", bytes: 10, config: true }));
+  const plugin = description({
+    revision: REV.before,
+    botNames: ["Nova", "Or" + turn + "bit"],
+    hooks: [{ ...HOOK_A, timeoutSec: 30, env: [{ name: "REGION_ID", value: "${REGION}" }] }],
+    tools: [{ ...WEB_TOOL, type: "sse", oauth: true, oauthClientId: "client-1", headers: [{ name: "Authorization", value: "Bearer ${KEY}" }, "X-Plain"] }],
+    config: [FIELD, { key: "KEY", label: "Key", secret: true, required: true, default: "never-shown", sentTo: [] }],
+    notRun: { count: 3, items: [{ what: "hook", name: "preToolUse", why: "Botkins has no such event." }, { what: "tool", name: "x", why: "It needs a window." }] },
+    otherFiles: { count: 20, bytes: 4096, files: [...files, { path: "node_modules/", bytes: 3000, files: 5, config: true }] },
+  });
+  plugin.runs[0] = { ...plugin.runs[0], timeoutSec: 30, envNotSet: [{ name: "GIT_SSH_COMMAND", why: "Botkins never sets it." }, "OLD_NAME"] };
+  const { out, exit } = await against(plugin, { revision: REV.before }, ["plugins", "show", "p"]);
+  assert.equal(exit, 0);
+  assert.match(out, /\nBots: Nova, Or\\u\{202e\}bit\n/);
+  assert.match(out, /\n {2}at sessionStart: node a\.mjs\n {6}for at most 30 seconds\n {6}with REGION_ID="\$\{REGION\}"\n {6}not set by Botkins, though the plugin asks for them:\n {8}GIT_SSH_COMMAND: Botkins never sets it\.\n {8}OLD_NAME\n/);
+  assert.match(out, /Reaches on the web:\n {2}the tool api: https:\/\/api\.example\.test\/mcp, as a stream \(sse\)\n {6}with the header Authorization="Bearer \$\{KEY\}"\n {6}with the header X-Plain\n {6}signs in, with the client id "client-1"\n/);
+  assert.match(out, /Settings:\n {2}REGION \(default "eu"\): goes to the header X-Region/);
+  assert.match(out, /\n {2}KEY \(needed\) \(secret\): goes to no tool and no hook of the plugin\n/, "a secret's default is never shown");
+  assert.equal(out.includes("never-shown"), false);
+  assert.match(out, /Not run by Botkins:\n {2}the hook preToolUse: Botkins has no such event\.\n {2}the tool x: It needs a window\.\n {2}and 1 more\n/);
+  assert.match(out, /Other files of the plugin: 20 files, 4096 bytes\n {2}configuration files: config\/c0\.json, .*config\/c11\.json and 3 more\nA command runs with these files, and Botkins cannot show all that they make it do\.\n/);
+  // At most twelve names, and a folder is one row with how many files it holds.
+  assert.equal(out.includes("config/c12.json"), false);
+  const folder = await against(description({ revision: REV.before, hooks: [HOOK_A], otherFiles: { count: 5, bytes: 3000, files: [{ path: "node_modules/", bytes: 3000, files: 5, config: true }] } }), { revision: REV.before }, ["plugins", "show", "p"]);
+  assert.match(folder.out, /configuration files: node_modules\/ \(5 files\)\n/);
+  // An older answer: names of headers alone, a plain list of what is not run, and bots by their count.
+  const older = description({ revision: REV.before, bots: ["b1", "b2"], tools: [{ ...WEB_TOOL, headers: ["Authorization"] }], notRun: [{ what: "hook", name: "h", why: "No." }] });
+  delete older.botNames;
+  const old = await against(older, { revision: REV.before }, ["plugins", "show", "p"]);
+  assert.match(old.out, /\nBots: 2 bots\n/);
+  assert.match(old.out, /\n {6}with the header Authorization\n/);
+  assert.match(old.out, /Not run by Botkins:\n {2}the hook h: No\.\n/);
+  assert.equal((await against(description({ revision: REV.before, bots: "all", botNames: "all" }), { revision: REV.before }, ["plugins", "show", "p"])).out.includes("\nBots: every bot\n"), true);
+  // A plugin that is not installed has no bots.
+  const preview = await against({}, description({ installed: false, revision: REV.after }), ["plugins", "show", "p@m"]);
+  assert.equal(/Bots:/.test(preview.out), false);
+});
+
+test("an update compares the whole description: a hook's order and time limit, a header as written, a type, a default, what is not run, the other files", { skip }, async () => {
+  // Hooks run on this computer, so these ask. The block says what changed.
+  const both = description({ hooks: [HOOK_A, HOOK_B] });
+  const swapped = await updateOf(both, description({ hooks: [HOOK_B, HOOK_A] }));
+  assert.equal(swapped.exit, 2);
+  assert.match(swapped.err, /\nThe order of the hooks changed\.\n/);
+  assert.match(swapped.err, /It runs the same and reaches the same addresses as before\./);
+  assert.equal((await updateOf(both, description({ hooks: [HOOK_A, HOOK_B] }))).err.includes("order of the hooks"), false);
+  const slower = await updateOf(both, description({ hooks: [HOOK_A, { ...HOOK_B, timeoutSec: 120 }] }));
+  assert.equal(slower.exit, 2);
+  assert.match(slower.err, /New or changed hooks:\n {2}at sessionEnd: node b\.mjs\n {6}for at most 120 seconds\n/);
+  assert.equal(slower.updated, false);
+
+  // A plugin that runs nothing and has one tool on the web: each of these asks, and the block says it.
+  const web = description({ tools: [WEB_TOOL], config: [FIELD] });
+  const asks = async (next, said) => {
+    const refused = await updateOf(web, next);
+    assert.equal(refused.exit, 2, said.toString());
+    assert.match(refused.err, said);
+    assert.equal(refused.updated, false);
+    const yes = await updateOf(web, next, "--yes", "--revision", REV.after);
+    assert.equal(yes.exit, 0, yes.err);
+    assert.equal(yes.updated, true);
+  };
+  await asks(description({ tools: [{ ...WEB_TOOL, headers: [{ name: "Authorization", value: "Bearer ${OTHER}" }] }], config: [FIELD] }), /New or changed, reaches on the web:\n {2}the tool api: .*\n {6}with the header Authorization="Bearer \$\{OTHER\}"\n/);
+  await asks(description({ tools: [{ ...WEB_TOOL, type: "sse" }], config: [FIELD] }), /the tool api: https:\/\/api\.example\.test\/mcp, as a stream \(sse\)\n/);
+  await asks(description({ tools: [{ ...WEB_TOOL, oauth: true, oauthClientId: "client-2" }], config: [FIELD] }), /signs in, with the client id "client-2"/);
+  await asks(description({ tools: [WEB_TOOL], config: [{ ...FIELD, default: "us" }] }), /Settings that changed:\n {2}REGION \(default "us"\): goes to the header X-Region/);
+  // Even when the lists of runs and reaches that the service made do not hold the change, the tool itself is compared (the type, here).
+  const unseen = description({ tools: [{ ...WEB_TOOL, type: "sse" }], config: [FIELD] });
+  unseen.reaches = web.reaches;
+  const hidden = await updateOf(web, unseen);
+  assert.equal(hidden.exit, 2);
+  assert.match(hidden.err, /New or changed tools:\n {2}the tool api: .*, as a stream \(sse\)\n/);
+
+  // These do not ask, because nothing runs, no new place is reached and no value goes elsewhere. They are said all the same.
+  const quiet = async (next, said) => {
+    const done = await updateOf(web, next);
+    assert.equal(done.exit, 0, done.err);
+    assert.match(done.err, said);
+    assert.equal(done.updated, true);
+  };
+  await quiet(description({ tools: [WEB_TOOL], config: [FIELD], notRun: { count: 1, items: [{ what: "hook", name: "h", why: "Botkins has no such event." }] } }), /New or changed, not run by Botkins:\n {2}the hook h: Botkins has no such event\.\n/);
+  await quiet(description({ tools: [WEB_TOOL], config: [{ ...FIELD, label: "Zone" }] }), /Settings that changed:\n/);
+  // (An installed copy that has no count of its own is not compared, so the one here has a count of none.)
+  const none = { count: 0, bytes: 0, files: [] };
+  const withNone = description({ tools: [WEB_TOOL], config: [FIELD], otherFiles: none });
+  const quietFrom = async (from, next, said) => {
+    const done = await updateOf(from, next);
+    assert.equal(done.exit, 0, done.err);
+    assert.match(done.err, said);
+  };
+  await quietFrom(withNone, description({ tools: [WEB_TOOL], config: [FIELD], otherFiles: { count: 2, bytes: 50, files: [{ path: "config/a.json", bytes: 50, config: true }] } }), /The other files of the plugin changed: from 0 files, 0 bytes to 2 files, 50 bytes\.\n {2}new configuration files: config\/a\.json\n/);
+  // A default that changes for a setting that goes nowhere is no reason to ask.
+  const nowhere = { ...FIELD, sentTo: [] };
+  const later = await updateOf(description({ tools: [WEB_TOOL], config: [nowhere] }), description({ tools: [WEB_TOOL], config: [{ ...nowhere, default: "us" }] }));
+  assert.equal(later.exit, 0, later.err);
+  // Nothing differs but the files: said by what the plugin does, and "nothing" only for a plugin that runs and reaches nothing.
+  assert.match((await updateOf(web, web)).err, /\nIt runs the same and reaches the same addresses as before\.\n/);
+  assert.match((await updateOf(description(), description())).err, /\nIt runs and reaches the same as before: nothing\.\n/);
+  // The other files: counted and named by what they are now and what they were.
+  const files = (count, paths) => ({ count, bytes: count * 10, files: paths.map((path) => ({ path, bytes: 10, config: true })) });
+  const moved = await updateOf(description({ tools: [WEB_TOOL], otherFiles: files(2, ["a.json", "b.json"]) }), description({ tools: [WEB_TOOL], otherFiles: files(2, ["a.json", "c.json"]) }));
+  assert.match(moved.err, /new configuration files: c\.json\n {2}configuration files that are gone: b\.json\n/);
 });

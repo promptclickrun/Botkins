@@ -8,7 +8,12 @@ import { hasUnshown, shownText } from "../desktop/shown-text.mjs";
 const at = (code) => String.fromCodePoint(code);
 
 test("a character that changes what a person sees is written as its number", () => {
-  const hidden = [0x00, 0x07, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202e, 0x2060, 0x2064, 0x2066, 0x2069, 0xfeff, 0xe0001, 0xe0041, 0xe007f];
+  const hidden = [
+    // Cc, Cf, Zl and Zp: the classes themselves.
+    0x00, 0x07, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0xad, 0x0600, 0x061c, 0x180e, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202e, 0x2060, 0x2061, 0x2063, 0x2064, 0x2066, 0x2067, 0x2069, 0xfeff, 0xe0001, 0xe0041, 0xe007f,
+    // What the classes do not hold: the combining grapheme joiner, the Hangul fillers, the variation selectors.
+    0x034f, 0x115f, 0x1160, 0x3164, 0xffa0, 0xfe00, 0xfe0f, 0xe0100, 0xe01ef,
+  ];
   for (const code of hidden) {
     const text = "rm" + at(code) + "x";
     assert.equal(shownText(text), "rm\\u{" + code.toString(16) + "}x", "U+" + code.toString(16));
@@ -27,6 +32,14 @@ test("other text is as it was: every language, accents, emoji and the signs of a
     assert.equal(hasUnshown(text), false);
   }
   assert.equal(shownText(42), "42");
+});
+
+test("an emoji's variation selector is written as its number: the rule is for text shown for a decision, not for every name", () => {
+  // U+FE0F is what draws the heart as an emoji. It has no width, so a command can hide behind it, and so the rule writes it as a number.
+  // (A name that is only drawn, such as a chat's, does not go through this rule.)
+  assert.equal(shownText("\u2764\ufe0f"), "\u2764\\u{fe0f}");
+  assert.equal(hasUnshown("\u2764\ufe0f"), true);
+  assert.equal(hasUnshown("\u2764"), false);
 });
 
 test("the file that holds the rule holds none of the characters itself", () => {

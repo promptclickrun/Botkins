@@ -3,6 +3,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { parseArgs } from "node:util";
+import { shownText } from "../desktop/shown-text.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { controlClient, ControlError } from "../desktop/terminal/socket.mjs";
 import { CliError, EXIT, paint, usage } from "./output.mjs";
@@ -59,7 +60,8 @@ export async function main(argv, io = {}) {
     const exit = error instanceof CliError ? error.exit : error instanceof ControlError ? (error.code === "NOT_RUNNING" ? EXIT.notRunning : error.code === "DENIED" ? EXIT.denied : EXIT.failed) : EXIT.failed;
     const message = String(error?.message ?? error);
     if (json) stdout.write(JSON.stringify({ error: { message, ...(error?.code && { code: error.code }), ...(error?.problems && { problems: error.problems }) } }) + "\n");
-    stderr.write("botkins: " + message + "\n");
+    // An error can quote a plugin's own text (a snippet of its JSON, a file name), so the line is text, as everything else that is shown. The --json document keeps the message as it is.
+    stderr.write("botkins: " + shownText(message) + "\n");
     if (exit === EXIT.usage && !json) stderr.write("Run `botkins help` to see every command.\n");
     return exit;
   };
