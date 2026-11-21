@@ -24,11 +24,16 @@ const one = (context, what) => {
 };
 const count = (list, word) => (list?.length ? list.length + " " + word + (list.length === 1 ? "" : "s") : null);
 const called = (plugin) => safe(plugin.name ?? plugin.id);
-/** One thing that a plugin runs here, whole: a hook's command, or a tool's line with every word, then its folder and the names of its environment values. */
+/**
+ * One thing that a plugin runs here, whole: a hook's command, or a tool's line with every word,
+ * then its folder, each environment value as the plugin wrote it (a value can be a command), and
+ * the names that the plugin asked for and Botkins does not set.
+ */
 const runLines = (run) => [
   "  " + (run.what === "hook" ? "at " + safe(run.when) + ": " + safe(run.command) : "the tool " + safe(run.name) + ": " + shown([run.command, ...(run.args ?? [])])),
-  ...(run.cwd ? ["      in the folder " + JSON.stringify(safe(run.cwd))] : []),
-  ...(run.env?.length ? ["      with the environment values " + run.env.map(safe).join(", ")] : []),
+  ...(run.cwd ? ["      in the folder " + JSON.stringify(safe(run.cwd)) + (/^(?:[/]|[A-Za-z]:)/.test(run.cwd) ? "" : " of the plugin's own copy")] : []),
+  ...(run.env ?? []).map((entry) => "      with " + safe(entry.name) + "=" + JSON.stringify(safe(entry.value))),
+  ...(run.envNotSet?.length ? ["      not set by Botkins, though the plugin asks for them: " + run.envNotSet.map(safe).join(", ")] : []),
 ];
 const reachLine = (reach) => "  the tool " + safe(reach.name) + ": " + safe(reach.url) + (reach.headers?.length ? ", with the headers " + reach.headers.map(safe).join(", ") : "") + (reach.signsIn ? " (signs in)" : "");
 /** Where a setting's value goes: the environment names and the headers that get it. */
@@ -189,7 +194,14 @@ export const pluginCommands = {
       const o = context.options;
       if (o.revision !== undefined && o.revision !== preview.revision)
         throw new CliError(o.revision === before.revision ? "That is the revision of the installed copy. An update takes the revision of the source as it is now: `botkins plugins show -- " + safe(before.id) + "` prints both." : "This plugin is not the one that you looked at: its revision is another one now. Look at it again: `botkins plugins show -- " + safe(before.id) + "`.");
-      if (preview.revision === before.revision) return void context.print(before, () => called(before) + " is up to date.");
+      // A copy that is not the reviewed files is written again by an update, to the same revision too, and the settings stay.
+      const repair = preview.revision === before.revision && before.repair === "update";
+      if (preview.revision === before.revision && !repair) return void context.print(before, () => called(before) + " is up to date.");
+      if (repair) {
+        show(context, called(before) + ": " + safe(before.detail ?? "its installed files are written again."));
+        if (before.runs.length && !(await agreed(context, before, { text: described(before), question: "Write its files again?", command: "update", revision: preview.revision }))) return EXIT.failed;
+        return void context.print(await context.client.call("plugins.update", before.id, { revision: preview.revision }), (now) => "The files of " + called(now) + " are written again. Your settings stay.");
+      }
       const change = changes(before, preview);
       const text = [called(before) + ": what this update changes", ...changeLines(change, preview), "", "After the update:", described(preview)].join("\n");
       // Saved settings are carried over. So a new place on the web, or a setting that goes to another place, asks too, also when nothing runs here.

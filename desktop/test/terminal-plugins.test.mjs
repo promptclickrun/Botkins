@@ -70,8 +70,8 @@ async function setup(t) {
   return { dir, write, market, memory, botkins, client, logged, everything, running };
 }
 
-const RUN = { what: "hook", when: "userPromptSubmitted", command: HOOK, env: ["LEVEL"] };
-const SHOWN = /Runs on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}with the environment values LEVEL\n/;
+const RUN = { what: "hook", when: "userPromptSubmitted", command: HOOK, env: [{ name: "LEVEL", value: "${REGION}" }] };
+const SHOWN = /Runs on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}with LEVEL="\$\{REGION\}"\n/;
 
 test("a plugin that runs commands is looked at first, and a yes names the revision that was looked at, at a terminal too", { skip }, async (t) => {
   const { botkins, market, memory, write, client, logged, everything } = await setup(t);
@@ -81,7 +81,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
   const show = await botkins(["plugins", "show", id]);
   assert.match(
     show.out,
-    /^memory 1\.0\.0 {3}memory@test-market\nRemember things\nHolds: 1 tool, 1 hook\.\nRuns on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}with the environment values LEVEL\nReaches on the web:\n {2}the tool memory: https:\/\/example\.test\/mcp, with the headers Authorization\nSettings:\n {2}MEMORY_API_KEY \(needed\) \(secret\): goes to the header Authorization of the tool memory at https:\/\/example\.test\/mcp\n {2}REGION: goes to the environment value LEVEL of the hook at userPromptSubmitted\n/,
+    /^memory 1\.0\.0 {3}memory@test-market\nRemember things\nHolds: 1 tool, 1 hook\.\nRuns on this computer, as the user that runs Botkins:\n {2}at userPromptSubmitted: node "\$\{PLUGIN_ROOT\}\/recall\.mjs"\n {6}with LEVEL="\$\{REGION\}"\nReaches on the web:\n {2}the tool memory: https:\/\/example\.test\/mcp, with the headers Authorization\nSettings:\n {2}MEMORY_API_KEY \(needed\) \(secret\): goes to the header Authorization of the tool memory at https:\/\/example\.test\/mcp\n {2}REGION: goes to the environment value LEVEL of the hook at userPromptSubmitted\n/,
   );
   const seen = (await botkins(["plugins", "show", id, "--json"])).json();
   assert.match(seen.revision, /^[a-f0-9]{64}$/);
@@ -234,7 +234,7 @@ test("a plugin that runs commands is looked at first, and a yes names the revisi
 });
 
 test("a plugin that runs nothing installs with no question, a folder plugin is added switched off, and more bots for one that runs ask", { skip }, async (t) => {
-  const { botkins, market, dir, write, client } = await setup(t);
+  const { botkins, market, dir, write, client, running } = await setup(t);
   await botkins(["plugins", "add-marketplace", market]);
   const show = await botkins(["plugins", "show", "notes@test-market"]);
   assert.match(show.out, /Holds: 1 skill\.\nRuns nothing on this computer\./);
@@ -260,7 +260,7 @@ test("a plugin that runs nothing installs with no question, a folder plugin is a
   write(join(mine, ".mcp.json"), { mcpServers: { files: { command: "npx", args: ["-y", "@scope/pkg server"], cwd: "/srv/data", env: { TOKEN: "x" } } } });
   const added = await botkins(["plugins", "add-folder", mine]);
   assert.equal(added.exit, 0, added.err);
-  assert.match(added.out, /\(installed, off\)\n[\s\S]*Runs on this computer, as the user that runs Botkins:\n {2}at sessionStart: sh \.\/start\.sh\n {2}the tool files: npx -y "@scope\/pkg server"\n {6}in the folder "\/srv\/data"\n {6}with the environment values TOKEN\n[\s\S]*Added, and switched off\. Switch it on with `botkins plugins enable -- mine@folder-[a-f0-9]{12}`\./);
+  assert.match(added.out, /\(installed, off\)\n[\s\S]*Runs on this computer, as the user that runs Botkins:\n {2}at sessionStart: sh \.\/start\.sh\n {2}the tool files: npx -y "@scope\/pkg server"\n {6}in the folder "\/srv\/data"\n {6}with TOKEN="x"\n[\s\S]*Added, and switched off\. Switch it on with `botkins plugins enable -- mine@folder-[a-f0-9]{12}`\./);
   const { id, revision } = (await botkins(["plugins", "show", "mine", "--json"])).json();
   // Choosing bots while it is off needs no yes, and leaves it off.
   await client.call("bots.add", { name: "Nova" });
@@ -277,6 +277,21 @@ test("a plugin that runs nothing installs with no question, a folder plugin is a
   assert.deepEqual((await client.call("plugins.get", id)).bots.length, 1);
   assert.match((await botkins(["plugins", "bots", "mine", "--all", "--yes", "--revision", revision])).out, /mine is for every bot\./);
   assert.match((await botkins(["plugins", "bots", "mine", "--bot", "Nova"])).out, /mine is for 1 bot\./);
+  // A file is written into its installed copy. At the next look the plugin is not used, and the error names the way back.
+  const manager = running.runtime.workspace.plugins;
+  const row = manager.records.find((entry) => entry.preview.id === id);
+  writeFileSync(join(row.folder, "planted.txt"), "not reviewed");
+  manager.intact(row);
+  const broken = await botkins(["plugins", "show", "mine"]);
+  assert.match(broken.out, /State: error\nNote: The installed files of this plugin are not the files that were reviewed\. Update the plugin: Botkins writes its files again and keeps your settings\./);
+  // An update is that way back, to the same revision too. It runs commands, so it needs the yes with the revision.
+  const bareRepair = await botkins(["plugins", "update", "mine", "--yes"]);
+  assert.equal(bareRepair.exit, 2);
+  const repaired = await botkins(["plugins", "update", "--yes", "--revision=" + revision, "--", "mine"]);
+  assert.equal(repaired.exit, 0, repaired.err);
+  assert.match(repaired.out, /The files of mine are written again\. Your settings stay\./);
+  assert.deepEqual([(await client.call("plugins.get", id)).status, (await import("node:fs")).existsSync(join(row.folder, "planted.txt"))], ["ready", false]);
+  assert.match((await botkins(["plugins", "update", "mine"])).out, /mine is up to date\./);
   // The same folder is not one for `skills add-folder`.
   const viaSkills = await botkins(["skills", "add-folder", mine]);
   assert.equal(viaSkills.exit, 1);
@@ -294,7 +309,7 @@ test("text from a plugin is shown as text: a character that hides or turns it is
   const [turn, none, escape] = ["\u202e", "\u200b", "\u001b[2K"];
   const odd = join(dir, "odd");
   write(join(odd, "plugin.json"), { name: "odd" + turn + "name", version: "1.0.0", description: "It" + none + "hides" + escape, userConfig: { KEY: { title: "A" + turn + "label" } } });
-  write(join(odd, "hooks.json"), { hooks: { sessionStart: [{ command: "echo " + turn + "dlrow", env: { V: "${KEY}" } }] } });
+  write(join(odd, "hooks.json"), { hooks: { sessionStart: [{ command: "echo " + turn + "dlrow", env: { V: "${KEY}", W: "a" + turn + "b", GIT_SSH_COMMAND: "sh -c evil", ["N" + none]: "x" } }] } });
   write(join(odd, ".mcp.json"), { mcpServers: { ["to" + none + "ol"]: { command: "node", args: ["a" + escape + "b"], cwd: "/x" + turn }, web: { url: "https://example.test/" + turn + "mcp", headers: { ["X" + none]: "${KEY}" } } } });
   const added = await botkins(["plugins", "add-folder", odd]);
   assert.equal(added.exit, 0, added.err);
@@ -305,6 +320,9 @@ test("text from a plugin is shown as text: a character that hides or turns it is
   assert.match(outputs[1].out, /at sessionStart: echo \\u\{202e\}dlrow/);
   assert.match(outputs[1].out, /the tool to\\u\{200b\}ol: node "a\\\\u\{1b\}\[2Kb"/);
   assert.match(outputs[4].err, /A\\u\{202e\}label goes to/);
+  // A value is shown as the plugin wrote it, and a name that Botkins does not set is said.
+  assert.match(outputs[1].out, /\n {6}with V="\$\{KEY\}"\n {6}with W="a\\\\u\{202e\}b"\n {6}not set by Botkins, though the plugin asks for them: GIT_SSH_COMMAND, N\\u\{200b\}\n/);
+  assert.match(outputs[1].out, /Note: Botkins does not set some environment names that this plugin asks for\./);
 });
 
 test("sign-out forgets a plugin's sign-ins in whatever state the plugin is, and says what it did", { skip }, async (t) => {

@@ -324,6 +324,12 @@ test("a name is a name: a word with a value in it is refused before anything is 
   const cwd = await botkins(["tools", "add", "odd", "--command", "node", "--cwd", "/srv/a\rb", "--yes"]);
   assert.equal(cwd.exit, 1);
   assert.match(cwd.err, /in the folder "\/srv\/a\\\\u\{d\}b"[\s\S]*The working folder's path has characters that can't be shown\./);
+  // U+200C and U+200D are correct writing in some languages, and a person there has folders with them: such a path is
+  // saved. Where it is shown for a decision, the character is written as its number.
+  const joiner = await botkins(["tools", "add", "joiner", "--command", "node", "--cwd", "/srv/a\u200cb", "--yes"]);
+  assert.equal(joiner.exit, 0, joiner.err);
+  assert.match(joiner.err, /in the folder "\/srv\/a\\\\u\{200c\}b"/);
+  assert.equal(joiner.err.includes("\u200c"), false);
 });
 
 test("a folder that is a plugin is not taken as a folder of skills, and two skills of one name are not guessed between", { skip }, async (t) => {

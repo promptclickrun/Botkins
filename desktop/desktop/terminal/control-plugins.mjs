@@ -6,15 +6,15 @@ import { ControlError } from "./socket.mjs";
 
 /**
  * What of a plugin runs on this computer: each hook's command, and each tool that is a local
- * program, with every word of its line, its folder and the names of its environment values. A
+ * program, with every word of its line, its folder and each environment value as written. A
  * plugin with any of these is shown to the person before it is installed, updated or turned on
  * (mobile/AGENTS.md: "A plugin that runs commands on the computer asks first").
  * It is made from the plugin's description and from nothing else. The description is what the
  * app starts (desktop/plugin-reading.mjs), so this list is too.
  */
 export const pluginRuns = (contents) => [
-  ...(contents?.hooks ?? []).map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [] })),
-  ...(contents?.mcpServers ?? []).filter((server) => server.kind === "local").map((server) => ({ what: "tool", name: server.name, command: server.command, args: server.args ?? [], env: server.env ?? [], ...(server.cwd && { cwd: server.cwd }) })),
+  ...(contents?.hooks ?? []).map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [], ...(hook.envNotSet?.length && { envNotSet: hook.envNotSet }) })),
+  ...(contents?.mcpServers ?? []).filter((server) => server.kind === "local").map((server) => ({ what: "tool", name: server.name, command: server.command, args: server.args ?? [], env: server.env ?? [], ...(server.envNotSet?.length && { envNotSet: server.envNotSet }), ...(server.cwd && { cwd: server.cwd }) })),
 ];
 /** Where a plugin reaches on the web: each tool that is an address, with the names of the headers it is sent. */
 export const pluginReaches = (contents) => (contents?.mcpServers ?? []).filter((server) => server.kind === "remote").map((server) => ({ name: server.name, url: server.url, headers: server.headers ?? [], ...(server.oauth && { signsIn: true }) }));
