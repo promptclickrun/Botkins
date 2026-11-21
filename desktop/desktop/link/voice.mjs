@@ -27,6 +27,8 @@ const MAX_ANSWER = 40 * 1024 * 1024; // the most audio a provider may send back
 const REQUEST_MS = 60_000;
 const LIST_MS = 15_000;
 const CACHE_MS = 5 * 60_000;
+/** How often the ChatGPT sign-in (backend.voice.codex) is asked again when the settings are read. */
+const CODEX_CHECK_MS = 15_000;
 const MAX_TOOLS = 64;
 const MAX_SESSIONS = 32;
 const FORMATS = { wav: "audio/wav", m4a: "audio/mp4", mp3: "audio/mpeg", webm: "audio/webm" };
@@ -360,12 +362,10 @@ export class Voice {
       this.log("voice: the local models could not be listed");
     }
     const codex = this.helpers().codex;
-    let signedIn = false;
-    try {
-      signedIn = !!codex && !!codex.signedIn();
-    } catch {
-      signedIn = false;
-    }
+    const signedIn = this.codexSignedIn();
+    // What was sent, so a later answer that differs sends the settings again.
+    this.codexShown = signedIn;
+    this.checkCodex();
     return structuredClone({
       stt,
       tts,
@@ -387,6 +387,48 @@ export class Voice {
     } catch {
       return {};
     }
+  }
+
+  // ── The ChatGPT sign-in (live voice through Codex) ─────────────────────────────────────────
+
+  /** The app's last answer: whether Codex is installed and signed in with ChatGPT. */
+  codexSignedIn() {
+    try {
+      return !!this.helpers().codex?.signedIn();
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Asks the app again (`codex.refresh()`, which asks Codex itself). The app's answer is kept from
+   * its last ask, and nothing else asks on a phone's behalf or on a host with no window, so a
+   * person signed in with ChatGPT under Model providers read as not signed in. Resolves with the
+   * new answer.
+   */
+  async refreshCodex() {
+    const codex = this.helpers().codex;
+    if (typeof codex?.refresh === "function") {
+      try {
+        await codex.refresh();
+      } catch {
+        // The answer stays as it was.
+      }
+    }
+    return this.codexSignedIn();
+  }
+  /**
+   * settings() has to answer at once, so it asks again in the background, at most once in
+   * CODEX_CHECK_MS, and the settings are sent again when the answer is not what was sent.
+   */
+  checkCodex() {
+    if (typeof this.helpers().codex?.refresh !== "function" || this.codexAsking || this.now() - (this.codexAt ?? -Infinity) < CODEX_CHECK_MS) return;
+    this.codexAsking = true;
+    this.codexAt = this.now();
+    void this.refreshCodex()
+      .then((signedIn) => {
+        if (signedIn !== this.codexShown) this.onChange();
+      })
+      .finally(() => (this.codexAsking = false));
   }
 
   /**
@@ -942,12 +984,9 @@ export class Voice {
   async liveCodex({ sdp, voice, instructions, tools, about }) {
     const codex = this.helpers().codex;
     if (!codex) throw new Failure("Codex isn't available in this app.");
-    let signedIn = false;
-    try {
-      signedIn = !!codex.signedIn();
-    } catch {
-      signedIn = false;
-    }
+    // Asked now, not taken from the last ask: a sign-in since then counts.
+    const signedIn = await this.refreshCodex();
+    if (signedIn !== this.codexShown) this.onChange();
     if (!signedIn) throw new Failure("Sign in to Codex on your computer first.");
     if (!sdp) throw new Failure("Live voice with Codex needs a connection offer.");
     let answer;
