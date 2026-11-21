@@ -103,7 +103,7 @@ export class LinkStore {
           // What each phone set up, by device id: where its notifications go, and what bots may use on it.
           push: saved.push && typeof saved.push === "object" ? saved.push : {},
           sources: saved.sources && typeof saved.sources === "object" ? saved.sources : {},
-          team: this.loadTeam(saved.team),
+          team: this.revealCopies(this.loadTeam(saved.team), saved.wrapped),
         };
       } catch (error) {
         return { ...this.fresh(), locked: error.message };
@@ -122,6 +122,26 @@ export class LinkStore {
     const privateKey = typeof stored.privateKey === "string" && saved.wrapped && this.reveal ? this.reveal(stored.privateKey) : stored.privateKey;
     const key = { publicKey: stored.publicKey, privateKey };
     return { enabled: relay.enabled === true, url: typeof relay.url === "string" && relay.url ? relay.url : DEFAULT_RELAY_URL, key: validRelayKey(key) ? key : null };
+  }
+  /**
+   * A copy of a shared space that is still to be taken back from a relay may hold the relay key it was
+   * put with, when that key was replaced since. Its private half is wrapped on disk like the key in use.
+   */
+  revealCopies(team, wrapped) {
+    const copies = (team.spaceCopies ?? []).map((copy) => {
+      if (!copy?.key) return copy;
+      const { key, ...rest } = copy;
+      let privateKey = key.privateKey;
+      try {
+        if (wrapped && this.reveal) privateKey = this.reveal(privateKey);
+      } catch {
+        privateKey = "";
+      }
+      const opened = { publicKey: key.publicKey, privateKey };
+      // A key that can't be opened is dropped: that copy ends by itself.
+      return validRelayKey(opened) ? { ...rest, key: opened } : rest;
+    });
+    return { ...team, spaceCopies: copies };
   }
   loadTeam(saved) {
     const base = defaultTeam();
@@ -176,7 +196,8 @@ export class LinkStore {
       ...(screenSetBy && { screenSetBy }),
       push,
       sources,
-      team,
+      // An old relay key kept to take a shared space's copy back is wrapped like the one in use.
+      team: !this.protect || !(team.spaceCopies ?? []).some((copy) => copy?.key) ? team : { ...team, spaceCopies: team.spaceCopies.map((copy) => (copy?.key ? { ...copy, key: { publicKey: copy.key.publicKey, privateKey: this.protect(copy.key.privateKey) } } : copy)) },
       // The relay's private key is wrapped like the link's own.
       relay: { enabled: relay.enabled, url: relay.url, key: relay.key && { publicKey: relay.key.publicKey, privateKey: this.protect ? this.protect(relay.key.privateKey) : relay.key.privateKey } },
     };

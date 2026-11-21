@@ -59,6 +59,22 @@ The host can publish an encrypted invite card for a code at `PUT /v1/invites/<lo
 
 Invite links use `https://relay.botkins.app/join#c=<CODE>&k=<serverKey>`. The code and key stay in the URL fragment, which the browser never sends to the Worker. The page validates the fragment, formats the code and offers the `botkins://join` deep link. It has no external assets, sends no referrer and is not cached.
 
+## Spaces shared by link
+
+A computer can put out a sealed copy of a space, and anyone with the link reads it in a browser. The whole contract is `mobile/docs/spaces.md`, "Share by link". The relay's part:
+
+- **The relay cannot read a copy.** It is sealed (AES-256-GCM) with a key that is only in the link's fragment, `https://relay.botkins.app/s/<shareId>#k=<key>`, which a browser never sends. The relay keeps the bytes and gives them back.
+- `PUT /v1/spaces/<shareId>` keeps a copy, at most 4 MiB, for at most 7 days. The computer signs it with its relay key, as for an invite, and sends a salt: `shareId` is 16 bytes of `SHA-256("botkins-space-id-v1:" + key + ":" + salt)`, so nobody else can ever put a copy under that id. This is checked before any of the body is read.
+- `DELETE /v1/spaces/<shareId>` takes it back, with the same proof. The relay remembers the signed time of a DELETE for ten minutes: a PUT that was on its way when the DELETE arrived was signed earlier and is refused (409), so a link that was taken back stays taken back.
+- `GET /v1/spaces/<shareId>` gives the bytes to anyone, `cache-control: no-store`, or 404.
+- One computer key holds at most 100 live copies, 64 MiB in all, and puts at most 30 a minute (429 after that). The Worker counts these in a Durable Object named by the key (`SpaceOwner`); a copy is one named by its id (`Space`), kept in pieces of 256 KiB, with an alarm for when it ends.
+- All copies together take at most 1 GiB (507 after that, until copies end or are taken back). Any key can sign a copy, so this is what keeps shared spaces from filling the storage that rooms and invites need. On Cloudflare one object for the whole relay keeps the count (`SpaceBudget`); it is asked when a copy is put or taken back, never when one is read. The Node relay takes `SPACE_BYTES_MAX` (bytes) to change it.
+- `GET /s/<shareId>` is the page. It is the same for every id, so the relay never learns what a link opens: the page's script (`src/space-page.js.txt`) fetches the copy, opens it with the key and draws it. Every string of a copy is written as text. The page's policy lets it load only from the relay itself and run only its own script (a nonce).
+- `GET /s/frame` is an empty document for a panel that is a page of its own (an app panel). It is served with `sandbox allow-scripts` and the phone's custom-view policy, so it has no origin and no network: it cannot read the link's key, the page that holds it or anything this address keeps. `src/space-frame.js.txt` takes the panel's page from the page that holds it, in one message. It also keeps every nested frame out of that page: a frame made there would have WebRTC again, and no browser policy forbids an empty or inline one (see "Share by link" in `mobile/docs/spaces.md` for what was checked and what was not).
+- `GET /s/botkin/<head>-<palette>.webp` is a Botkin's picture for the page. On Cloudflare these are static assets (`assets` in `wrangler.jsonc`, the phone app's `assets/botkins`, without its `layers` folder); a request for one does not run the Worker.
+
+`test/space-page.test.mjs` runs the page's script with a document of its own: it opens a sealed copy as a browser would, and shows that markup and `javascript:` links in a copy stay text. `mobile/tests/space-page.test.ts` keeps the frame's policy and the page's colors the same as the phone's.
+
 ## Run and test on this machine
 
 ```sh
@@ -79,12 +95,13 @@ None of this logs in to Cloudflare or changes anything in an account.
 `node/server.mjs` is the same relay on plain Node, for a server that should not depend on `relay.botkins.app`. The Azure one-click deployment runs it behind Caddy (`deploy/azure`).
 
 ```sh
-npm run start:node   # PORT (8080), HOST, DATA_DIR, CLIENT_IP_HEADER, PUSH_UPSTREAM, RATE_LIMITS
+npm run start:node   # PORT (8080), HOST, DATA_DIR, CLIENT_IP_HEADER, PUSH_UPSTREAM, RATE_LIMITS, BOTKINS_DIR
 npm run test:node    # the relay tests above against it (RELAY_TARGET=node), and test/node.test.mjs
 ```
 
 - It speaks `botkins.host.v3` and `botkins.host.v2` as the Worker does: the active and standby host sockets, the bounded request cache and its replay, the `0x06` acknowledgements, the silent-seat rules and the 4001 repair close. The checks and limits are the Worker's own code (`src/pure.ts`, `src/shared.ts`). The whole of `test/relay.test.mjs` passes against it. Only the two assertions that count Durable Object wakes are skipped, because Node has nothing to hibernate.
-- Rooms and held requests are in memory. A restart drops the sockets, and computers and phones connect again on their own. Invite cards are kept in `DATA_DIR/invites.json`.
+- Rooms and held requests are in memory. A restart drops the sockets, and computers and phones connect again on their own. Invite cards are kept in `DATA_DIR/invites.json`, and the sealed copies of shared spaces in `DATA_DIR/spaces` with `DATA_DIR/spaces.json`.
+- It serves the shared-space routes as the Worker does. The Botkin pictures come from `BOTKINS_DIR` (the phone app's `assets/botkins` by default; the Docker image has a copy).
 - It runs behind a TLS proxy. `CLIENT_IP_HEADER` names the header in which that proxy gives the client's address. Without it the relay uses the address of the socket.
 - It has no Apple key. It forwards `POST /v1/push` unchanged to `PUSH_UPSTREAM` (`https://relay.botkins.app` by default). The computer already signed the request, so the relay adds nothing. `PUSH_UPSTREAM=off` sends none.
 - It serves `/pair`: a page that draws a QR code of the `botkins://pair` link in the URL fragment. The browser does not send the fragment to the relay.
@@ -113,6 +130,7 @@ The Worker limits how often one network may knock, with the Workers Rate Limitin
 - `SOCKETS`: 30 new sockets a minute for each network.
 - `REQUESTS`: 120 of everything else a minute for each network (pages, health checks, wrong paths, other methods, bad room names, and every call to `/v1/push`).
 - `INVITES`: 20 GET lookups a minute for each network, in addition to `REQUESTS`.
+- `SPACES`: 60 reads of a shared space's copy a minute for each network, in addition to `REQUESTS`.
 - `PUSHES`: 240 push items a minute for each computer key (not each network). See "Push notifications".
 
 A network is an IPv4 address or an IPv6 /64. Over the limit the answer is 429, before any other work. The counts are kept per Cloudflare location and are approximate: they stop a flood, they are not an exact gate, and a new deployment takes a few minutes to start enforcing them. The limits were seen working on this account's plan (a burst of 320 requests got 194 answers of 429).

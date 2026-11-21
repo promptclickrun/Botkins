@@ -7,6 +7,7 @@
 // (`link.spaces.*`) pass the caller; the app on the host passes "owner" for its own window.
 import { createHash } from "node:crypto";
 import { b64u, random } from "./crypto.mjs";
+import { retiredCopy } from "./space-links.mjs";
 import { hasAction, makerOf, OWNER, roleOfMember, SPACE_ACCESS, SPACE_LIMITS, spaceCan, spaceShare, spacesViewOf, spaceView } from "./team.mjs";
 import { Failure } from "./tools.mjs";
 
@@ -24,6 +25,7 @@ export class Spaces {
    * @param setTeam   (team) => saves it and tells every device
    * @param names     () => Map of person id → name
    * @param relay     () => { on, base, publicKey }: the relay in use, for links
+   * `onShare(id)` and `leaving()` are set by the host once it has a publisher (space-links.mjs).
    * @param changed   () => the parts changed without the team changing (who is here)
    * @param app       the app's own half, host-side: `ensure(person)`, `release(person)`, `snapshot(id)`
    * @param demoLinks links are made without a relay (the demo computer): nothing is published
@@ -46,7 +48,7 @@ export class Spaces {
   }
   /** What goes with the app's list to make one person's view of it. */
   context(person) {
-    return { role: this.role(person), names: this.names(), here: this.here(), linkOf: (share) => this.linkOf(share) };
+    return { role: this.role(person), names: this.names(), here: this.here(), linkOf: (share) => this.linkOf(share), leaving: this.leaving?.() };
   }
   /** The `spaces` part for one person: `SpaceSummary[]`. */
   for(person, { partOnly = false } = {}) {
@@ -74,8 +76,10 @@ export class Spaces {
 
   // ── Sharing ─────────────────────────────────────────────────────────────────────────────────
 
+  /** A link's address, or null while links are off (the relay is off): the space keeps its level and has no link. */
   linkOf(share) {
-    const { base } = this.relay();
+    const { base, on } = this.relay();
+    if (!on && !this.demoLinks) return null;
     let origin = "https://relay.botkins.app";
     try {
       origin = new URL(base).origin.replace(/^ws/, "http");
@@ -89,8 +93,8 @@ export class Spaces {
     return { id: shareIdOf(this.relay().publicKey, salt), salt, key: b64u(random(32)), createdAt: Date.now() };
   }
   /** A link's copy that has to leave the relay: kept until the relay says it is gone (the publisher works through the list). */
-  retired(team, share) {
-    return share ? [...(team.spaceCopies ?? []), { id: share.id, salt: share.salt, relay: this.relay().base }].slice(-500) : (team.spaceCopies ?? []);
+  retired(team, share, spaceId) {
+    return share ? [...(team.spaceCopies ?? []), retiredCopy(spaceId, share, this.relay().base)].slice(-500) : (team.spaceCopies ?? []);
   }
   share(person, id, input) {
     const space = this.owned(person, id);
@@ -122,7 +126,7 @@ export class Spaces {
     }
     const entry = access === "private" ? null : { access, grants, teamCan, ...(share && { share }) };
     // Going back to a narrower level takes the link's copy off the relay.
-    this.saveEntry(id, entry, { spaceCopies: share ? (team.spaceCopies ?? []) : this.retired(team, before.share) });
+    this.saveEntry(id, entry, { spaceCopies: share ? (team.spaceCopies ?? []) : this.retired(team, before.share, id) });
     this.onShare?.(id);
     return share ? { link: this.linkOf(share) } : {};
   }
@@ -134,7 +138,7 @@ export class Spaces {
     if (before.access !== "link") throw new Failure("This space isn't shared by link.");
     if (!this.relay().on && !this.demoLinks) throw new Failure("Turn on the relay on your computer to share by link.");
     const share = this.newShare();
-    this.saveEntry(id, { access: "link", grants: [], teamCan: before.teamCan, share }, { spaceCopies: this.retired(team, before.share) });
+    this.saveEntry(id, { access: "link", grants: [], teamCan: before.teamCan, share }, { spaceCopies: this.retired(team, before.share, id) });
     this.onShare?.(id);
     return { link: this.linkOf(share) };
   }
@@ -142,6 +146,7 @@ export class Spaces {
   removed(id) {
     const team = this.team();
     if (!team.spaces || !Object.hasOwn(team.spaces, id)) return;
+    // The space is gone, so the copy is of none: nothing shows "Taking the link back…" for it.
     this.saveEntry(id, null, { spaceCopies: this.retired(team, spaceShare(team, id).share) });
     this.onShare?.(id);
   }
@@ -255,7 +260,7 @@ export class Spaces {
     const spaces = {};
     for (const [id, entry] of Object.entries(team.spaces ?? {})) {
       if (mine.has(id)) {
-        if (entry?.share) copies = [...copies, { id: entry.share.id, salt: entry.share.salt, relay: this.relay().base }];
+        if (entry?.share) copies = [...copies, retiredCopy(id, entry.share, this.relay().base)];
         continue;
       }
       spaces[id] = Array.isArray(entry?.grants) ? { ...entry, grants: entry.grants.filter((grant) => grant.id !== memberId) } : entry;
