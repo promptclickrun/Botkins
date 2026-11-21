@@ -8,7 +8,7 @@ import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-nati
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Preferences, Project, QueuedMessage, Run } from "@/link/types";
-import { liveTextOn, useChatPrefs } from "@/state/chatPrefs";
+import { textStreamingOn, useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
@@ -357,11 +357,11 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
     return () => subscription.remove();
   }, []);
   const still = useReducedMotion();
-  // Without live text a reply lands whole: one that comes while this chat is open is shown word by word (reveal.ts).
-  const liveText = useChatPrefs((prefs) => prefs.liveText);
+  // Without text streaming a reply lands whole: one that comes while this chat is open is shown word by word (reveal.ts).
+  const textStreaming = useChatPrefs((prefs) => prefs.textStreaming);
   const route = useApp((state) => state.route);
-  const textOff = useCapability("live-text-off-v1");
-  const reveals = textOff && !still && !liveTextOn(liveText, route);
+  const textOff = useCapability("text-streaming-off-v1");
+  const reveals = textOff && !still && !textStreamingOn(textStreaming, route);
   const turnLive = streaming || !!underWay(runPart);
   const chatEnd = view.from + view.messages.length;
   useEffect(() => {

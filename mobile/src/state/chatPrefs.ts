@@ -38,17 +38,14 @@ export type ChatPrefs = {
   /** The person chose `readAloud` on this phone. Until then it follows the computer's Settings › Voice. */
   readAloudPicked?: boolean;
   /**
-   * A reply as the bot writes it. direct: only when not through the relay (each update costs a relay
-   * message). Without it a reply lands whole and is shown word by word here (src/features/chat/reveal.ts).
+   * A reply as the bot writes it, when not through the relay (each update there costs a relay message).
+   * Otherwise a reply lands whole and is shown word by word here (src/features/chat/reveal.ts).
    */
-  liveText: LiveText;
+  textStreaming: boolean;
 };
 
-export type LiveText = "always" | "direct" | "off";
-const LIVE_TEXT: readonly LiveText[] = ["always", "direct", "off"];
-
 /** Whether a reply's text is followed as it is written, on this route. */
-export const liveTextOn = (choice: LiveText, route: "direct" | "relay" | null) => choice === "always" || (choice === "direct" && route !== "relay");
+export const textStreamingOn = (on: boolean, route: "direct" | "relay" | null) => on && route !== "relay";
 
 export const chatPrefDefaults: ChatPrefs = {
   steps: "folded",
@@ -63,7 +60,7 @@ export const chatPrefDefaults: ChatPrefs = {
   // A phone has no Shift key, so Return makes a new line unless asked otherwise. A tablet with a keyboard may prefer sending.
   enterSends: Platform.OS === "ios" && Platform.isPad,
   readAloud: false,
-  liveText: "direct",
+  textStreaming: true,
 };
 
 export const useChatPrefs = create<ChatPrefs>(() => chatPrefDefaults);
@@ -77,7 +74,7 @@ export function loadChatPrefs(): Promise<void> {
       const saved = await readKept(KEY);
       if (saved) {
         const read = JSON.parse(saved) as Partial<ChatPrefs>;
-        useChatPrefs.setState({ ...chatPrefDefaults, ...read, steps: settleSteps(read), completionPosition: completionPositionOf(read.completionPosition), botTap: botTapOf(read.botTap), liveText: LIVE_TEXT.includes(read.liveText!) ? read.liveText! : chatPrefDefaults.liveText });
+        useChatPrefs.setState({ ...chatPrefDefaults, ...read, steps: settleSteps(read), completionPosition: completionPositionOf(read.completionPosition), botTap: botTapOf(read.botTap), textStreaming: typeof read.textStreaming === "boolean" ? read.textStreaming : chatPrefDefaults.textStreaming });
       }
     } catch {
       // Unreadable choices fall back to the defaults.
