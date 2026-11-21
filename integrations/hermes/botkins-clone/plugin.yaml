@@ -1,0 +1,12 @@
+name: botkins-clone
+label: Botkins Clone
+kind: standalone
+version: 2.0.0
+description: >
+  Clone a Hermes profile as a Botkins bot. `hermes botkins-clone light` brings the SOUL as the
+  bot's instructions; `full` also brings USER, IDENTITY and MEMORY, with the SOUL condensed into
+  the bot's AGENTS.md. `export` makes the same files for download, and /botkins-clone export
+  attaches them in the chat. Profiles are only read, never changed.
+requires_hermes: ">=0.22.0"
+provides_tools: []
+provides_hooks: []
