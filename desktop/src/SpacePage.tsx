@@ -618,7 +618,7 @@ export function SpacePage({
             {project && (
               <button className="space-tag space-project" title="Open project" onClick={() => openProject(project.id)}>
                 <span className={"space-project-dot project-color " + (project.color ?? "")} aria-hidden="true" />
-                {project.name}
+                <span className="space-project-name">{project.name}</span>
               </button>
             )}
           </div>
