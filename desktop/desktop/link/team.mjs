@@ -127,6 +127,8 @@ const POLICY = {
   "link.spaces.notify": ["today", "view"],
   "link.spaces.here": ["today", "view"],
   "link.team.setLinkSharing": "owner",
+  // Admin mode: whether this owner device is shown every member's spaces, bots and chats.
+  "link.team.setAdminMode": "owner",
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
   saveSkill: ["skills", "create"],
@@ -422,9 +424,10 @@ export function spaceShare(team, spaceId) {
  * "edit", "view", or null when the space does not exist for them. A member's role applies on top
  * (spaceRule). This one function decides for the link host, the window and the app.
  */
-export function spaceCan(team, space, person) {
+export function spaceCan(team, space, person, { plain = false } = {}) {
   if (!space || typeof person !== "string" || !person) return null;
-  if (person === OWNER || makerOf(space) === person) return "own";
+  // `plain` asks what the owner would have as any other person: what the owner is part of (Admin mode off).
+  if ((person === OWNER && !plain) || makerOf(space) === person) return "own";
   const share = spaceShare(team, space.id);
   if (share.access === "members") return share.grants.find((grant) => grant.id === person)?.can ?? null;
   if (share.access === "team" || share.access === "link") return share.teamCan;
@@ -461,7 +464,10 @@ export function spaceView(team, records, person, context = {}) {
   const view = spacesViewOf(team, person);
   const nameOf = (id) => context.names?.get?.(id) ?? (id === OWNER ? "Owner" : "");
   const sees = (botId) => person === OWNER || !botId || visible(role, botId);
-  const open = (Array.isArray(records) ? records : []).filter((space) => space && typeof space.id === "string").map((space) => ({ space, can: spaceCan(team, space, person) })).filter((entry) => entry.can);
+  // The owner may open every space; with Admin mode off (`partOnly`) an owner device is sent only
+  // the ones the owner is part of: those the owner made, and those shared with the owner.
+  const part = (space) => !context.partOnly || spaceCan(team, space, person, { plain: true });
+  const open = (Array.isArray(records) ? records : []).filter((space) => space && typeof space.id === "string").map((space) => ({ space, can: spaceCan(team, space, person) })).filter((entry) => entry.can && part(entry.space));
   // A person who never arranged their list starts with their own four built-in spaces pinned.
   const pinned = view.pinned ?? BUILTINS.flatMap((kind) => open.find(({ space }) => space.builtin === kind && makerOf(space) === person)?.space.id ?? []);
   const place = new Map([...pinned, ...view.order].map((id, index) => [id, index]).reverse());
@@ -634,6 +640,58 @@ export function sharedBotFlags(flags) {
   return rest;
 }
 const READ_REQUEST_METHODS = new Set(["respond"]);
+
+/**
+ * What an owner device is sent with Admin mode off: what the person "owner" is part of, not every
+ * member's chats, spaces and bots. It changes what the owner is shown, never what the owner may do:
+ * a call from the owner that names a member's chat or space still passes.
+ *
+ * - `chats`, and `live`, `runs`, `chat:<id>` and `run:<id>` with them: chats the owner started or
+ *   was invited to. A chat with a request only the owner can answer (an approval, a secure input)
+ *   is listed while that request waits, so it can be answered where it is.
+ * - `spaces`, `panels`, `board`: by the same rule for spaces (`extra.spaces` is the app's list).
+ * - `bots`: without a bot a member made (`createdBy`), unless something listed uses it.
+ * Everything that is the owner's alone stays: settings, credentials, the team, projects, tasks, devices.
+ */
+export function ownerParts(parts, team, extra = {}) {
+  const out = { ...parts };
+  const waiting = new Set((parts.live?.requests ?? []).filter((request) => request.kind === "permission" || request.kind === "secure").map((request) => request.chatId));
+  const listed = (parts.chats ?? []).filter((chat) => inChat(team, chat, OWNER) || waiting.has(chat.id));
+  const ids = new Set(listed.map((chat) => chat.id));
+  out.chats = listed;
+  const live = parts.live;
+  if (live) {
+    const byChat = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([id]) => ids.has(id)));
+    out.live = {
+      ...live,
+      streams: byChat(live.streams),
+      intents: byChat(live.intents),
+      thinking: byChat(live.thinking),
+      speakers: byChat(live.speakers),
+      queued: byChat(live.queued),
+      ...(live.steerable && { steerable: byChat(live.steerable) }),
+      requests: (live.requests ?? []).filter((request) => ids.has(request.chatId)),
+      active: (live.active ?? []).filter((id) => ids.has(id)),
+    };
+  }
+  out.runs = (parts.runs ?? []).filter((run) => ids.has(run.chatId));
+  for (const name of Object.keys(parts)) {
+    const about = /^(?:chat|run):(.+)$/.exec(name);
+    if (about && !ids.has(about[1])) out[name] = null;
+  }
+  const used = new Set(listed.flatMap((chat) => [chat.botId, ...(chat.botIds ?? [])]));
+  const records = Array.isArray(extra.spaces) ? extra.spaces : null;
+  if (records) {
+    out.spaces = spaceView(team, records, OWNER, { names: extra.names, here: extra.here, linkOf: extra.linkOf, partOnly: true });
+    const mine = new Set(out.spaces.map((space) => space.id));
+    out.panels = (parts.panels ?? []).filter((panel) => !panel.spaceId || mine.has(panel.spaceId));
+    out.board = (parts.board ?? []).filter((item) => !item.spaceId || mine.has(item.spaceId));
+    for (const space of records) if (mine.has(space.id)) for (const item of space.items ?? []) used.add(item.botId);
+  }
+  out.bots = (parts.bots ?? []).filter((bot) => !bot.createdBy || used.has(bot.id));
+  out.meta = { ...(parts.meta ?? {}), you: { kind: "owner", admin: false } };
+  return out;
+}
 
 /** A member's role, by their id. */
 export const roleOfMember = (team, memberId) => roleFor({ kind: "member", memberId }, team);

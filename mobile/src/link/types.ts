@@ -913,7 +913,11 @@ export type Meta = {
   serverId: string;
   protocol: number;
   capabilities: string[];
-  you?: { kind: "owner" } | { kind: "member"; memberId: string; name: string };
+  /**
+   * Who this device is. For an owner device, `admin` says whether Admin mode is on: with it off the
+   * device is sent what the owner is part of, not every member's chats, spaces and bots.
+   */
+  you?: { kind: "owner"; admin?: boolean } | { kind: "member"; memberId: string; name: string };
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
@@ -1406,6 +1410,8 @@ export type Calls = {
   "link.spaces.here"(id: string | null, panelId?: string): null;
   /** Owner only: whether members may share by link. */
   "link.team.setLinkSharing"(on: boolean): boolean;
+  /** Owner only, for this device: Admin mode. On: every member's spaces, bots and chats are listed. Answers what it is now. */
+  "link.team.setAdminMode"(on: boolean): boolean;
   /** Invites a person ("owner" or a member's id) to a chat, or takes them out ("team-people-v1"). Each answers who is invited afterwards. The chat's starter or the owner invites; someone invited may take themselves out. */
   "link.team.inviteToChat"(chatId: string, personId: string): string[];
   "link.team.removeFromChat"(chatId: string, personId: string): string[];

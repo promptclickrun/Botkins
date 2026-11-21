@@ -285,6 +285,8 @@ async function team(options: Record<string, unknown> = {}) {
     return { client, parts, until, space, call: <T,>(method: string, ...args: unknown[]) => client.call<T>(method, ...args) };
   };
   const owner = follow(await pair(real, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "Owner phone", platform: "ios" }));
+  // This owner looks at everything (Admin mode on); tests/admin-mode.test.ts has the owner without it.
+  await owner.call("link.team.setAdminMode", true);
   const collab = structuredClone(link.store.data.team.roles.find((one: any) => one.id === "r_collab"));
   collab.bots = "all";
   await owner.call("link.team.saveRole", collab);

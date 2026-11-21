@@ -21,7 +21,7 @@ Written 2026-11-20 against `origin/main` at `42c6445`, and reviewed once against
 9. Spaces can be pinned and put in order by each person. Panels can be moved and resized.
 10. Today, Feed, Ideas and Goals each become a space.
 
-**One choice here is this contract's, not the owner's, and the owner has been asked:** the host's owner can open every space on their host, a member's private one included. `TEAMS.md` already lets the owner read every member's chat, and a member's panel is built in such a chat, so a space the owner could not open would be a promise the host does not keep. "Private" therefore means: no other member. If the owner decides otherwise, the change is in `spaceCan`, and then `panels`, `board`, `spaces`, the frame calls, a space's chats and its refresh alerts all need a cut for owner devices too.
+**The owner and a member's space** (the owner's answer, 2026-11-20): the host's owner can open every space on their host, a member's private one included, but is not shown them by default. `spaceCan` answers `"own"` for the owner on every space. What an owner device is *sent* follows **Admin mode** (`link-contract.md`, "Admin mode"): off at first, the owner's `spaces` holds the spaces the owner made and those shared with the owner; on, every space, with "From members". "Private" therefore means: no other member, and not in the owner's lists unless the owner turns Admin mode on.
 
 ## Words
 
@@ -92,7 +92,7 @@ A space with no entry in `team.spaces` is private.
 `spaceCan(team, space, person)` in `team.mjs` (pure, tested) answers `"own"`, `"edit"`, `"view"` or `null`. The link host, the window and the app all use this one function.
 
 - The maker (`createdBy`, or the owner when there is none): `"own"`.
-- The owner: `"own"` for every space on the host.
+- The owner: `"own"` for every space on the host. Which of them an owner device is sent follows Admin mode (above).
 - `access: "members"`: a person with a grant gets that grant's `can`.
 - `access: "team"` or `"link"`: every person gets `teamCan`.
 - Anyone else: `null`. The space does not exist for them: it is in no part, and a call that names it, one of its panels, one of its cards or one of its custom views fails as an unknown id does.
@@ -176,7 +176,7 @@ botkins.state.onChange(fn)          // fn(state) when someone else changed it; r
 
 ## What each device is sent
 
-**The `spaces` part**: the spaces the person can open, in that person's order (pinned first, in pinned order; a space new to the person goes last, unpinned).
+**The `spaces` part**: the spaces the person can open (for an owner device with Admin mode off: the ones the owner is part of), in that person's order (pinned first, in pinned order; a space new to the person goes last, unpinned).
 
 ```ts
 type SpaceSummary = {

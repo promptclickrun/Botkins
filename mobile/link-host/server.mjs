@@ -26,7 +26,7 @@ import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } fro
 import { Screen } from "./screen.mjs";
 import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
-import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
+import { authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -334,6 +334,7 @@ export class LinkHost extends EventEmitter {
       "link.spaces.notify": async (session, a) => this.spaces.notify(personOf(session.principal), a[0], a[1]),
       "link.spaces.here": async (session, a) => this.spaces.lookingAt(personOf(session.principal), a[0], a[1]),
       "link.team.setLinkSharing": async (_session, a) => this.spaces.setLinkSharing(a[0]),
+      "link.team.setAdminMode": async (session, a) => this.setAdminMode(session.deviceId, a[0]),
     };
     // Spaces ("spaces-v1"): how each is shared and each person's view of the list (spaces.mjs).
     this.spaces = new Spaces({
@@ -362,6 +363,8 @@ export class LinkHost extends EventEmitter {
     this.waiters = new Set();
     this.parts = new Map(); // name → { json, v }
     this.partViews = new Map(); // principal id → name → { json, v }
+    this.partsRev = 0; // goes up when a part changes
+    this.teamRev = 0; // goes up when the team, or anyone's view, changes
     this.texts = new Map();
     this.version = 0;
     this.dirty = true;
@@ -727,7 +730,8 @@ export class LinkHost extends EventEmitter {
   principal(deviceId) {
     const device = this.store.device(deviceId);
     if (!device) return null;
-    if (!device.memberId) return { kind: "owner" };
+    // Admin mode is each owner device's own: it changes what the device is shown, never what it may do.
+    if (!device.memberId) return { kind: "owner", ...(device.admin === true && { admin: true }) };
     const member = this.store.data.team.members.find((item) => item.id === device.memberId);
     if (!member) return null;
     return { kind: "member", memberId: member.id, name: member.name, groupId: member.groupId };
@@ -834,6 +838,7 @@ export class LinkHost extends EventEmitter {
   }
   teamChanged() {
     this.dirty = true;
+    this.teamRev++;
     for (const session of this.sessions.values()) session.principal = this.principal(session.deviceId);
     this.changed();
     this.emit("status");
@@ -1137,9 +1142,24 @@ export class LinkHost extends EventEmitter {
 
   // ── People in a chat, and each member's own view ("team-people-v1") ─────────────────
 
+  /** Admin mode for one owner device. Answers what it is now. */
+  setAdminMode(deviceId, on) {
+    if (!this.store.setAdmin(deviceId, on === true)) throw new Failure("Only the owner's own devices have Admin mode.");
+    this.teamChanged();
+    return on === true;
+  }
+  /**
+   * For the app on the host, whose window has no device: its own snapshot's lists as an owner
+   * without Admin mode is shown them. `parts` holds any of `chats`, `live`, `runs`, `bots`, `panels`, `board`.
+   */
+  ownerParts(parts) {
+    const records = this.backend.snapshot().spaces;
+    return ownerParts(parts, this.store.data.team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(OWNER) } : {});
+  }
   // ── Spaces, for the app on the host (the person first: "owner" for its own window) ──
-  spacesFor(person) {
-    return this.spaces.for(person);
+  /** `admin: false` answers what the owner is part of (Admin mode off); the default is every space, as for an owner with it on. */
+  spacesFor(person, { admin = true } = {}) {
+    return this.spaces.for(person, { partOnly: person === OWNER && !admin });
   }
   /** "own", "edit", "view" or null. `space` is a space's id, or the app's own record of it (`SpaceRecord`). */
   spaceCan(space, person) {
@@ -1783,7 +1803,8 @@ export class LinkHost extends EventEmitter {
     // version then tells us whether it has already seen the latest non-text change.
     const next = { quietLive: null, ...baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings(), ...(this.headless() && { headless: true, display: this.display() }), screenSetBy: this.store.data.screenSetBy }) };
     next.quietLive = quietLive(next.live);
-    next.meta.you = { kind: "owner" };
+    // These are the parts of an owner device with Admin mode on; one with it off gets a cut of them (viewParts).
+    next.meta.you = { kind: "owner", admin: true };
     next.team = this.team();
     // Spaces: the app's own list is never sent. The owner's devices get the owner's view of it;
     // `panels` and `board` stay for an app that doesn't know spaces (every Today's panels).
@@ -1831,10 +1852,17 @@ export class LinkHost extends EventEmitter {
     this.texts = texts;
     for (const [name, value] of Object.entries(next)) {
       const json = JSON.stringify(value ?? null);
-      if (this.parts.get(name)?.json !== json) this.parts.set(name, { json, v: ++this.version });
+      if (this.parts.get(name)?.json !== json) {
+        this.parts.set(name, { json, v: ++this.version });
+        this.partsRev++;
+      }
     }
     // Chats nobody watches any more are dropped.
-    for (const name of [...this.parts.keys()]) if (!(name in next)) this.parts.delete(name);
+    for (const name of [...this.parts.keys()]) {
+      if (name in next) continue;
+      this.parts.delete(name);
+      this.partsRev++;
+    }
     this.dirty = false;
   }
   names(watching) {
@@ -1846,24 +1874,36 @@ export class LinkHost extends EventEmitter {
   /** The parts one device may see, each with its version: the owner's are the computer's own, a member's are cut to their role. */
   viewParts(session, watching) {
     const principal = this.principal(session.deviceId);
-    if (principal?.kind === "owner") return this.parts;
-    if (principal?.kind !== "member") return new Map();
-    const key = "member:" + principal.memberId;
+    // An owner device with Admin mode on is sent everything; the host's own calls too.
+    if (principal?.kind === "owner" && principal.admin) return this.parts;
+    if (principal?.kind !== "owner" && principal?.kind !== "member") return new Map();
+    const key = principal.kind === "owner" ? "owner" : "member:" + principal.memberId;
     const previous = this.partViews.get(key) ?? new Map();
-    // The computer's own indicators name every chat, so they stay out: a member's are made below
-    // from the member's own `live`, after it was cut to their chats.
-    const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, JSON.parse(part.json)]));
+    // Nothing changed since this view was made for the same chats: it is still right.
+    const stamp = this.partsRev + ":" + this.teamRev + ":" + watching.join(",");
+    if (previous.stamp === stamp) return previous;
+    // The computer's own indicators name every chat, so they stay out: a view's own are made below
+    // from its own `live`, after it was cut to its chats.
+    // The owner's cut keeps or drops a chat's page whole, so those (the largest parts) are not read
+    // here: a kept one is sent as it is. A member's cut also changes what is inside one.
+    const whole = (name) => principal.kind === "owner" && (name.startsWith("chat:") || name.startsWith("run:"));
+    const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, whole(name) ? true : JSON.parse(part.json)]));
     const records = this.backend.snapshot().spaces;
-    const values = filterParts(raw, principal, this.store.data.team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(principal.memberId) } : {});
-    const put = (name, value) => {
-      const json = JSON.stringify(value ?? null);
+    const team = this.store.data.team;
+    const values =
+      principal.kind === "owner"
+        ? ownerParts(raw, team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(OWNER) } : {})
+        : filterParts(raw, principal, team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(principal.memberId) } : {});
+    const put = (name, json) => {
       if (previous.get(name)?.json !== json) previous.set(name, { json, v: ++this.version });
     };
     // Before `live`, so a full `live` is always newer than its indicators (see refresh).
-    put("quietLive", quietLive(values.live));
+    put("quietLive", JSON.stringify(quietLive(values.live) ?? null));
     for (const name of this.names(watching)) {
-      if (name in values) put(name, values[name]);
+      if (!(name in values)) continue;
+      put(name, whole(name) && values[name] === true ? this.parts.get(name).json : JSON.stringify(values[name] ?? null));
     }
+    previous.stamp = stamp;
     this.partViews.set(key, previous);
     return previous;
   }

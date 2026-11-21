@@ -49,8 +49,8 @@ export class Spaces {
     return { role: this.role(person), names: this.names(), here: this.here(), linkOf: (share) => this.linkOf(share) };
   }
   /** The `spaces` part for one person: `SpaceSummary[]`. */
-  for(person) {
-    return this.on ? spaceView(this.team(), this.records(), person, this.context(person)) : [];
+  for(person, { partOnly = false } = {}) {
+    return this.on ? spaceView(this.team(), this.records(), person, { ...this.context(person), partOnly }) : [];
   }
   /** What a person may do with a space. `space` is its id, or the app's own record of it. */
   can(space, person) {
