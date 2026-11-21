@@ -169,7 +169,8 @@ try {
       const own = s.team ?? {};
       return { name: "Studio", groups: [], members: [], invites: [], requests: [], ...own, roles: own.roles?.length ? own.roles : t.roles, people: t.people, linkSharing: t.linkSharing };
     };
-    const add = (s) => (s && typeof s === "object" ? { ...s, spaces: t.spaces, team: team(s) } : s);
+    // The stand-in's spaces include two that members made, which a real computer sends the owner only with Admin mode on.
+    const add = (s) => (s && typeof s === "object" ? { ...s, spaces: t.spaces, team: team(s), adminMode: true } : s);
     ipcMain.removeHandler("snapshot");
     ipcMain.handle("snapshot", async (e, ...args) => add(await real(e, ...args)));
     // The app's own pushes carry the spaces too.
