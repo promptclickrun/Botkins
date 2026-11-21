@@ -386,7 +386,10 @@ test("a turn can fail, be stopped, or be planned without touching anything", asy
   await assert.rejects(session.send({ prompt: "Go" }), /usage limit/);
   outcome = "interrupted";
   const stopped = session.send({ prompt: "Go" });
-  await tick(20);
+  // The stand-in server takes the turn at its own pace, and only then is there something to release.
+  // So wait until it holds the turn, not for a fixed time (a slow runner was not there after 20 ms).
+  for (let waited = 0; typeof server.release !== "function" && waited < 500; waited++) await tick(10);
+  assert.equal(typeof server.release, "function", "the stand-in server holds the turn");
   await assert.rejects(session.send({ prompt: "Again" }), /already working/);
   await session.abort();
   assert.deepEqual(sent("turn/interrupt"), [{ threadId: "thread-1", turnId: "turn-2" }]);
