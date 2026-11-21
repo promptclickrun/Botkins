@@ -1,6 +1,12 @@
 // Bots may suggest a change. Only the person can authorize its reviewed revision, even in
 // approve-all chats. Values from a secure settings prompt go from Interactions to the vault.
 import { defineTool } from "./providers/provider.mjs";
+import { pluginCard, shownCut } from "./plugin-card.mjs";
+
+// A plugin that the card cannot show whole is not asked about in a chat: a yes must be for all of
+// it. One sentence works for every action.
+const TOO_LARGE =
+  "This plugin is too large to look at in a chat. Make this change in Settings, Marketplace, Plugins, or with `botkins plugins` on the command line, where all of it is shown.";
 
 export function pluginTools(ws, bot, chat, run, task) {
   if (!task || !run || chat.helper || run.scheduleId != null || run.panelId || run.taskId) return [];
@@ -41,23 +47,26 @@ export function pluginTools(ws, bot, chat, run, task) {
           if (generation !== plugins.generation)
             throw new Error("The plugins changed while this request was open. Review the change again.");
         };
-        const detail = [
-          "Plugin: " + card.name + " (" + id + ")",
-          "Bots: " +
-            (action === "install"
-              ? bot.name
-              : existing.bots === "all"
-                ? "All bots"
-                : existing.bots.map((x) => ws.state.bots.find((b) => b.id === x)?.name ?? x).join(", ")),
-          ...card.contents.hooks.map((h) => h.event + ": " + h.command),
-          ...card.contents.mcpServers.map((s) => s.name + ": " + (s.command || s.url || s.kind)),
-          ...(card.warnings ?? []),
-        ].join("\n");
+        const bots =
+          action === "install"
+            ? bot.name
+            : existing.bots === "all"
+              ? "All bots"
+              : existing.bots.map((x) => ws.state.bots.find((b) => b.id === x)?.name ?? x).join(", ");
+        const { lines, whole } = pluginCard(card, { bots, action, id });
+        if (!whole) {
+          ws.pluginNote?.(chat.id, TOO_LARGE);
+          return TOO_LARGE;
+        }
+        const detail = lines.join("\n");
+        // Text from the plugin that goes outside the card is made safe and bounded. A key that
+        // sends a value back stays exact; only what is shown is changed.
+        const name = shownCut(card.name || id, 80, false);
         const decision = await ws.interactions.request(chat, task, {
           botId: bot.id,
           kind: "permission",
           title: "Allow plugin change?",
-          preview: action + " · " + card.name,
+          preview: action + " · " + name,
           detail,
         });
         stillCurrent();
@@ -73,11 +82,11 @@ export function pluginTools(ws, bot, chat, run, task) {
               {
                 kind: "secure",
                 botId: bot.id,
-                title: "Configure " + card.name,
-                detail: "Save these settings for " + card.name + " on this computer. The plugin can use them when it runs.",
+                title: "Configure " + name,
+                detail: "Save these settings for " + name + " on this computer. The plugin can use them when it runs.",
                 fields: batch.map((f) => ({
                   key: f.key,
-                  label: f.label,
+                  label: shownCut(f.label ?? f.key, 120),
                   kind: f.secret ? "secret" : "text",
                   optional: action === "configure" || !f.required,
                 })),
@@ -94,7 +103,7 @@ export function pluginTools(ws, bot, chat, run, task) {
         else if (action === "configure") await plugins.configure(id, values, stillCurrent);
         else if (action === "update") await plugins.update(id, { revision: card.revision }, stillCurrent);
         else if (action === "uninstall") await plugins.uninstall(id, stillCurrent);
-        else await plugins.setEnabled(id, action === "enable", stillCurrent);
+        else await plugins.setEnabled(id, action === "enable", undefined, stillCurrent);
         return "Plugin change saved.";
       },
     }),

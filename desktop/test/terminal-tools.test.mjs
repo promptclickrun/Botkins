@@ -327,7 +327,7 @@ test("a name is a name: a word with a value in it is refused before anything is 
 });
 
 test("a folder that is a plugin is not taken as a folder of skills, and two skills of one name are not guessed between", { skip }, async (t) => {
-  const { botkins, client, dir, changes } = await service(t);
+  const { botkins, client, dir, changes, paths } = await service(t);
   const { homedir } = await import("node:os");
   const { mkdtempSync: temp, rmSync: remove } = await import("node:fs");
   // The folders that can be chosen are in the home folder of the user that runs the service.
@@ -351,7 +351,22 @@ test("a folder that is a plugin is not taken as a folder of skills, and two skil
   assert.throws(() => ws.integrations.addFromFolder(plugin, { plugins: false }), /This folder is a plugin, which can run commands on this computer\. It is not added as a folder of skills\./);
   assert.deepEqual(ws.integrations.folders().plugins, []);
   assert.deepEqual(ws.integrations.addFromFolder(make("both", { "SKILL.md": "---\nname: both\ndescription: A skill.\n---\nDo it.", "plugin.json": "{}" }), { plugins: false }), { kind: "skill", name: "both" });
-  assert.equal(ws.integrations.addFromFolder(plugin).kind, "plugin", "the app's window still links one");
+  // No caller links a plugin folder any more. The app's own call (the window and a phone use it) sends the folder
+  // the plugins' way: it is copied, described and added switched off, and the answer says so.
+  assert.throws(() => ws.integrations.addFromFolder(plugin), (error) => error.code === "PLUGIN_FOLDER");
+  // (A trial service lets a caller choose folders below its own home folder only.)
+  const hooked = join(paths.dataDir, "folders-home", "hooked");
+  mkdirSync(join(hooked, "hooks"), { recursive: true });
+  writeFileSync(join(hooked, "plugin.json"), JSON.stringify({ name: "hooked" }));
+  writeFileSync(join(hooked, "hooks", "hooks.json"), JSON.stringify({ hooks: { sessionStart: [{ command: "touch /tmp/hooked" }] } }));
+  const sent = await client.call("call", "addSkillFolderAt", [hooked]);
+  assert.deepEqual([sent.kind, sent.name, sent.enabled], ["plugin", "hooked", false]);
+  const [installed] = await client.call("plugins.list");
+  assert.deepEqual([installed.id, installed.enabled, installed.contents.hooks.map((hook) => hook.command)], [sent.id, false, ["touch /tmp/hooked"]]);
+  // The command for skills still refuses it, with the same sentence.
+  const refused = await botkins(["skills", "add-folder", hooked]);
+  assert.equal(refused.exit, 1);
+  assert.match(refused.err, /This folder is a plugin, which can run commands on this computer\. It is not added as a folder of skills\./);
   // A relative path is the folder it names from where the command runs; the log has the path.
   const relative = await botkins(["skills", "add-folder", "no-such-folder-here"]);
   assert.equal(relative.exit, 1);

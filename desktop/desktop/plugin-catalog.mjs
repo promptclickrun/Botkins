@@ -5,6 +5,11 @@
  * starts a command, or evaluates a manifest.  A reviewed plugin is an
  * immutable set of bytes identified by its SHA-256 revision; callers can
  * hand that revision to materialize() after the user has approved it.
+ *
+ * What a plugin starts (its tools and hooks) is not read here. The
+ * description comes from pluginStarts (plugin-reading.mjs), which is the
+ * call the runtime starts things from, so the two cannot say different
+ * things.
  */
 import {
   createHash,
@@ -23,6 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { configFile, declaredPath, dependencyFolder, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
@@ -50,29 +56,12 @@ const BUILT_INS = [
   },
 ];
 
-const MANIFEST_PATHS = [
-  ".plugin/plugin.json",
-  "plugin.json",
-  ".github/plugin/plugin.json",
-  ".claude-plugin/plugin.json",
-  ".codex-plugin/plugin.json",
-];
 const MARKETPLACE_PATHS = [
   ".github/plugin/marketplace.json",
   ".plugin/marketplace.json",
   ".claude-plugin/marketplace.json",
   "marketplace.json",
 ];
-const MCP_PATHS = [".mcp.json", "mcp.json", ".claude-plugin/.mcp.json", ".claude-plugin/mcp.json"];
-const HOOK_PATHS = ["hooks.json", "hooks/hooks.json", ".claude-plugin/hooks.json", ".claude-plugin/hooks/hooks.json"];
-const BUILT_IN_PLACEHOLDERS = new Set([
-  "PLUGIN_ROOT",
-  "PLUGIN_DATA",
-  "CLAUDE_PLUGIN_ROOT",
-  "CLAUDE_PLUGIN_DATA",
-  "HOME",
-  "PATH",
-]);
 const SUPPORTED_EXTENSIONS = new Set(["com.github.awesome-copilot"]);
 
 function fail(message) {
@@ -191,13 +180,20 @@ function githubRefFromUrl(url) {
 
 
 
-function readLocalFiles(root) {
+/**
+ * Every regular file below a folder: Map of path → { bytes, mode }. A link is refused. A `.git`
+ * entry is skipped by default (right for a source folder a person works in); with
+ * `{ git: "refuse" }` it is an error, for an installed copy, where nothing may be named `.git`.
+ */
+function readLocalFiles(root, { git = "skip" } = {}) {
   const realRoot = realpathSync(root);
   const files = new Map();
   let total = 0;
   const visit = (current, prefix = "") => {
     const entries = readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
+      // In a copy, a disk that takes ".GIT" for ".git" would give git that entry too.
+      if (git === "refuse" && entry.name.toLowerCase() === ".git") fail(`Plugin copy contains a .git entry: ${join(prefix, entry.name)}`);
       if (entry.name === ".git") continue;
       const path = join(current, entry.name);
       const info = lstatSync(path);
@@ -246,13 +242,6 @@ function assertNoSymlinkPath(path, stopAt = undefined) {
   }
 }
 
-function locateFile(files, candidates) {
-  for (const candidate of candidates) {
-    if (files.has(candidate)) return { name: candidate, bytes: files.get(candidate).bytes };
-  }
-  return null;
-}
-
 function collectFiles(files, directory) {
   const prefix = `${directory}/`;
   return [...files.keys()].filter((name) => name.startsWith(prefix)).sort();
@@ -293,77 +282,6 @@ function fieldsFromManifest(userConfig) {
   return result;
 }
 
-function placeholders(value, output) {
-  if (typeof value !== "string") return;
-  for (const match of value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
-    const key = match[1];
-    if (!BUILT_IN_PLACEHOLDERS.has(key)) output.add(key);
-  }
-}
-
-function walkValues(value, output) {
-  if (typeof value === "string") placeholders(value, output);
-  else if (Array.isArray(value)) for (const item of value) walkValues(item, output);
-  else if (value && typeof value === "object") for (const item of Object.values(value)) walkValues(item, output);
-}
-
-function mcpEntries(value) {
-  if (!value) return [];
-  if (typeof value === "string") return [];
-  if (value.mcpServers && typeof value.mcpServers === "object") return Object.entries(value.mcpServers);
-  if (typeof value === "object" && !Array.isArray(value)) return Object.entries(value);
-  return [];
-}
-
-function parseMcp(value) {
-  return mcpEntries(value).flatMap(([name, server]) => {
-    if (!server || typeof server !== "object") return [];
-    const kind = server.url || server.serverUrl || server.type === "http" || server.type === "sse" || server.type === "streamable-http" ? "remote" : "local";
-    const command = typeof server.command === "string" ? server.command : undefined;
-    const url = typeof (server.url ?? server.serverUrl) === "string" ? (server.url ?? server.serverUrl) : undefined;
-    const oauth = Boolean(server.oauth || server.oauthClientId || server.authentication?.oauth);
-    return [{
-      name: String(name),
-      kind,
-      ...(command ? { command } : {}),
-      ...(url ? { url } : {}),
-      ...(oauth ? { oauth: true } : {}),
-    }];
-  });
-}
-
-function parseHooks(value) {
-  if (!value || typeof value !== "object") return [];
-  const source = value.hooks && typeof value.hooks === "object" ? value.hooks : value;
-  const result = [];
-  const commandKeys = ["bash", "command", "cmd", "shell", "powershell", "windows", "darwin", "macos", "linux"];
-  const add = (event, definition) => {
-    if (Array.isArray(definition)) {
-      for (const item of definition) add(event, item);
-      return;
-    }
-    if (typeof definition === "string") {
-      if (definition.trim()) result.push({ event, command: definition.slice(0, 300) });
-      return;
-    }
-    if (!definition || typeof definition !== "object") return;
-    // Claude-style hooks put the actual command under a nested hooks array;
-    // platform-specific forms put the command under command/bash/windows/etc.
-    if (definition.hooks) add(event, definition.hooks);
-    if (definition.commands) add(event, definition.commands);
-    if (definition.type && definition.type !== "command" && !definition.command && !definition.bash && !definition.cmd) return;
-    for (const key of commandKeys) {
-      const command = definition[key];
-      if (typeof command === "string" && command.trim()) result.push({ event, command: command.slice(0, 300) });
-      else if (command && typeof command === "object") add(event, command);
-    }
-  };
-  for (const [event, definitions] of Object.entries(source)) {
-    add(event, definitions);
-  }
-  return result;
-}
-
 function normalizeAuthor(author) {
   if (typeof author === "string") return author;
   if (author && typeof author === "object") return author.name || author.login || undefined;
@@ -380,10 +298,24 @@ function normalizeMetadata(entry) {
   return metadata;
 }
 
+/**
+ * A plugin's name, or null. A name is one word of letters, digits, dots, dashes and underscores, with
+ * a letter or a digit first. The id (`name@marketplace`) is printed inside commands that a person or an
+ * agent is told to run; a name with a space, a quote, a semicolon, a `$` or a leading dash would be more
+ * than a name once it is pasted into a shell. The text is trimmed first, as the manifest's name always was.
+ */
+function pluginName(value) {
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  return name.length >= 1 && name.length <= 200 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) ? name : null;
+}
+
+const NAME_REFUSED = "This plugin's name is not one word of letters, digits, dots, dashes and underscores, so Botkins does not install it.";
+
 function listingFromEntry(entry, marketplace) {
   if (!entry || typeof entry !== "object") return null;
-  const name = typeof entry.name === "string" ? entry.name.trim() : "";
-  if (!name || name.length > 200 || !entry.source) return null;
+  const name = pluginName(entry.name);
+  if (!name || !entry.source) return null;
   return {
     id: `${name}@${marketplace.id}`,
     name,
@@ -418,60 +350,113 @@ function extensionPaths(manifest) {
   return { requested: [...new Set(requested)], unsupported: [...new Set(unsupported)] };
 }
 
-function parsePluginFiles(files, folder = undefined) {
-  const manifestFile = locateFile(files, MANIFEST_PATHS);
-  if (!manifestFile) fail("Plugin has no supported plugin.json manifest.");
-  const manifest = json(manifestFile.bytes, manifestFile.name);
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) fail("Plugin manifest must be a JSON object.");
-  const name = typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : undefined;
-  if (!name) fail("Plugin manifest is missing a name.");
+/**
+ * A plugin's file names, checked: each in its one form, and no two that a disk could take for
+ * the same file. The installed copy is read by exact name; without this, a disk that takes
+ * "A" for "a" could keep one file where the reviewed plugin had two.
+ */
+function assertPlainNames(files) {
+  const seen = new Map();
+  for (const name of files.keys()) {
+    if (declaredPath(name) !== name) fail(`Plugin has a file with an unsafe name: ${JSON.stringify(name).slice(0, 200)}`);
+    // A copy with a .git entry is never seen as the reviewed one (verifySnapshot), so it is not made.
+    if (name.split("/").some((part) => part.toLowerCase() === ".git")) fail(`Plugin has a .git entry: ${JSON.stringify(name).slice(0, 200)}`);
+    for (let at = name.indexOf("/"); ; at = name.indexOf("/", at + 1)) {
+      const path = at < 0 ? name : name.slice(0, at);
+      const folded = path.normalize("NFC").toLowerCase();
+      if (seen.has(folded) && seen.get(folded) !== path) fail(`Plugin has two names that differ only by case or accent form: ${JSON.stringify(path).slice(0, 200)}`);
+      seen.set(folded, path);
+      if (at < 0) break;
+    }
+  }
+}
 
-  const mcpFile = typeof manifest.mcpServers === "string"
-    ? { name: manifest.mcpServers, bytes: files.get(safeRelativePath(manifest.mcpServers, "mcpServers"))?.bytes }
-    : locateFile(files, MCP_PATHS);
-  const mcpValue = manifest.mcpServers && typeof manifest.mcpServers === "object"
-    ? manifest.mcpServers
-    : (mcpFile?.bytes ? json(mcpFile.bytes, mcpFile.name) : undefined);
-  const hooksFile = typeof manifest.hooks === "string"
-    ? { name: manifest.hooks, bytes: files.get(safeRelativePath(manifest.hooks, "hooks"))?.bytes }
-    : locateFile(files, HOOK_PATHS);
-  const hooksValue = manifest.hooks && typeof manifest.hooks === "object"
-    ? manifest.hooks
-    : (hooksFile?.bytes ? json(hooksFile.bytes, hooksFile.name) : undefined);
-  const mcpServers = parseMcp(mcpValue);
-  const hooks = parseHooks(hooksValue);
+/** How many rows of the plugin's other files are listed. The totals count all of the files. */
+const MAX_OTHER_FILES = 40;
+/**
+ * The plugin's files that are not handed on as skills, agents or commands: the manifest, the hook
+ * and tool files, scripts, dotfiles, a `node_modules`. A command runs in the plugin's folder, so
+ * these files decide what it does; the person sees at least that they are there.
+ *   - `count` and `bytes` are totals over the files that are NOT in the three lists, so that the
+ *     numbers keep their meaning;
+ *   - the rows are those files, plus every file anywhere that a tool reads by itself (`config`),
+ *     also below `skills/`, `agents/` and `commands/`: a `package.json` there would change what
+ *     `npm test` does, and its place in a list does not say so;
+ *   - all files below a folder of dependencies (`node_modules/`, `vendor/` ...) are one row for the
+ *     top-most such folder, with their total and their number, so that they cannot push out the
+ *     other rows;
+ *   - the marked rows come first, then the rest, each group by path; at most 40 rows.
+ */
+function otherFiles(files, handed) {
+  let count = 0;
+  let bytes = 0;
+  const rows = [];
+  const folders = new Map();
+  for (const [path, entry] of files) {
+    const size = entry.bytes.length;
+    const outside = !handed.has(path);
+    if (outside) {
+      count++;
+      bytes += size;
+    }
+    const folder = dependencyFolder(path);
+    if (folder) {
+      const row = folders.get(folder) ?? { path: folder, bytes: 0, files: 0, config: true };
+      row.bytes += size;
+      row.files++;
+      folders.set(folder, row);
+    } else if (outside || configFile(path)) rows.push({ path, bytes: size, ...(configFile(path) && { config: true }) });
+  }
+  const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const all = [...rows, ...folders.values()];
+  const listed = [...all.filter((row) => row.config).sort(byPath), ...all.filter((row) => !row.config).sort(byPath)].slice(0, MAX_OTHER_FILES);
+  return { count, bytes, files: listed };
+}
+
+function parsePluginFiles(files, folder = undefined) {
+  assertPlainNames(files);
+  const starts = pluginStarts(filesReader(files));
+  if (!starts.manifestPath) fail("Plugin has no supported plugin.json manifest.");
+  const { manifest } = starts;
+  if (!manifest) fail(`The plugin's manifest (${starts.manifestPath}) is not a JSON object.`);
+  const named = typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : undefined;
+  if (!named) fail("Plugin manifest is missing a name.");
+  const name = pluginName(named);
+  if (!name) fail(NAME_REFUSED);
+  // What is shown is shown whole. A plugin with a command too long to show is not installed.
+  if (starts.refused.length) fail(`This plugin cannot be shown whole, so Botkins does not install it. ${starts.refused[0].why}`);
+  const { mcpServers, hooks, sentTo, notRun } = describeStarts(starts);
   const config = fieldsFromManifest(manifest.userConfig ?? manifest.settings);
-  const names = new Set();
-  walkValues(mcpValue, names);
-  walkValues(hooksValue, names);
-  for (const key of names) {
+  // A setting the plugin uses and does not declare is asked for too.
+  for (const key of sentTo.keys()) {
     if (!config.has(key)) config.set(key, { key, label: readableKey(key), secret: looksSecret(key), required: true });
   }
-  const lspFile = locateFile(files, ["lsp.json", ".lsp.json", ".claude-plugin/lsp.json"]);
-  let lspServers = [];
-  if (lspFile) {
-    const lsp = json(lspFile.bytes, lspFile.name);
-    if (lsp && typeof lsp === "object") lspServers = Object.keys(lsp.lspServers ?? lsp).sort();
-  }
+  // Where each setting's value goes: the environment names and headers that get it.
+  for (const [key, places] of sentTo) config.set(key, { ...config.get(key), sentTo: places });
+  // Only the names of language servers are listed. Nothing is started from them.
+  const lspServers = lspNames(filesReader(files));
+  // The files that go on to the runtime, and no others (handedOn is the one rule for them).
+  const handed = (directory) => collectFiles(files, directory).filter((name) => handedOn(name, files.get(name).bytes.length));
+  const skills = handed("skills");
+  const agents = handed("agents");
+  const commands = handed("commands");
   const contents = {
-    skills: collectFiles(files, "skills"),
-    agents: collectFiles(files, "agents"),
-    commands: collectFiles(files, "commands"),
+    skills,
+    agents,
+    commands,
     mcpServers: clone(mcpServers),
     hooks: clone(hooks),
+    ...(notRun ? { notRun: clone(notRun) } : {}),
     ...(lspServers.length ? { lspServers } : {}),
+    otherFiles: otherFiles(files, new Set([...skills, ...agents, ...commands])),
   };
   const extensionInfo = extensionPaths(manifest);
-  const warnings = [];
-  if (extensionInfo.unsupported.length) warnings.push(`Uses unsupported plugin extensions: ${extensionInfo.unsupported.join(", ")}.`);
-  if (hooks.length) warnings.push("Runs a command on your computer through plugin hooks.");
-  if (mcpServers.some((server) => server.kind === "local")) warnings.push("Runs a local MCP server on your computer.");
-  if (mcpServers.some((server) => server.kind === "remote")) warnings.push("Connects to a remote MCP server.");
+  const warnings = startWarnings(mcpServers, hooks, extensionInfo.unsupported.length ? [`Uses unsupported plugin extensions: ${extensionInfo.unsupported.join(", ")}.`] : [], notRun);
   const postInstallMessage = manifest.postInstallMessage ?? manifest.postInstall;
   return {
     ...(folder ? { folder } : {}),
     manifest,
-    manifestPath: manifestFile.name,
+    manifestPath: starts.manifestPath,
     name,
     contents,
     config: [...config.values()],
@@ -493,6 +478,8 @@ function publicPreview(parsed, listing, revision) {
     ...(parsed.postInstallMessage ? { postInstallMessage: parsed.postInstallMessage } : {}),
     ...(parsed.warnings?.length ? { warnings: [...parsed.warnings] } : {}),
     revision,
+    // Only this reading makes the mark: an older app's description has none.
+    starts: STARTS,
   };
   return preview;
 }
@@ -671,6 +658,56 @@ function listingDetails(listing, entry) {
 function localPathIsWithin(child, parent) {
   const rel = relative(parent, child);
   return rel === "" || (rel && !rel.startsWith(`..${sep}`) && rel !== "..");
+}
+
+/**
+ * Whether an installed copy is still the bytes that were reviewed: the hash of its files is its
+ * revision.
+ *   true   it is
+ *   false  it is not: another hash, a link in it, a `.git` in it, too many files or bytes, a file
+ *          added, changed or taken away, or the folder is not there
+ *   null   the check could not be done (the system said "too many open files", an I/O error, no
+ *          right to read a file ...). That says nothing about the copy, so it is not "changed".
+ */
+export function verifySnapshot(folder, revision) {
+  try {
+    // A `.git` folder or file in the copy is seen, not skipped: a command shown as `git status` would take its config.
+    return typeof revision === "string" && hashFiles(readLocalFiles(folder, { git: "refuse" }).files) === revision;
+  } catch (error) {
+    // The errors that fail() throws have no code and mean the copy is not the reviewed one; so do a missing folder and a link loop.
+    if (typeof error?.code === "string" && !["ENOENT", "ENOTDIR", "ELOOP"].includes(error.code)) return null;
+    return false;
+  }
+}
+
+/**
+ * A mark of a folder's state that reads no file: it is another one when a file or a folder below
+ * is added, taken away, written or given other rights (the times, sizes and rights of all of
+ * them). Null when the folder cannot be walked. An installed copy is hashed again only when its
+ * mark is not the one it had at the last hash.
+ */
+export function snapshotStamp(folder) {
+  const hash = createHash("sha256");
+  let count = 0;
+  const visit = (current, prefix) => {
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      if (++count > MAX_PLUGIN_FILES * 4) fail("too many entries");
+      const path = join(current, entry.name);
+      const info = lstatSync(path, { bigint: true });
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      hash.update(JSON.stringify([name, info.isDirectory() ? "d" : info.isFile() ? "f" : "x", String(info.size), String(info.mtimeNs), String(info.ctimeNs), String(info.mode), String(info.ino)]));
+      if (info.isDirectory()) visit(path, name);
+    }
+  };
+  try {
+    const top = lstatSync(folder, { bigint: true });
+    if (!top.isDirectory()) return null;
+    hash.update(JSON.stringify([String(top.mtimeNs), String(top.ctimeNs), String(top.mode), String(top.ino)]));
+    visit(folder, "");
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 export function inspectPlugin(folder) {
@@ -872,6 +909,8 @@ export class PluginCatalog {
     const temporary = { id: sha256(source).slice(0, 16), name: source, source, builtIn: false };
     const loaded = await this._readMarketplace(temporary, sourceInfo);
     const id = loaded.id;
+    // The marketplace's id goes after the @ in every plugin id, so it is one word too.
+    if (!pluginName(id)) fail("This marketplace's name is not one word of letters, digits, dots, dashes and underscores, so Botkins does not add it.");
     const existing = this.marketplacesById.get(id);
     if (existing && (existing.builtIn || existing.source !== source)) fail(`Marketplace id ${id} is already registered from another source.`);
     const record = {
@@ -969,7 +1008,9 @@ export class PluginCatalog {
     const marketplace = this.marketplacesById.get(marketplaceId);
     if (!marketplace) fail(`Unknown marketplace: ${marketplaceId}`);
     await this._ensureMarketplace(marketplace);
-    const entry = (marketplace._entries || []).find((candidate) => candidate?.name === id.slice(0, at));
+    // The same reading as the listing: an entry that the listing leaves out cannot be resolved.
+    const wanted = id.slice(0, at);
+    const entry = (marketplace._entries || []).find((candidate) => listingFromEntry(candidate, marketplace)?.name === wanted);
     if (!entry) fail(`Unknown plugin: ${id}`);
     const listing = listingFromEntry(entry, marketplace);
     const source = normalizeGithubSource(entry.source, marketplace._sourceInfo || await this._marketplaceSource(marketplace.source));
@@ -1001,9 +1042,9 @@ export class PluginCatalog {
     const destination = join(this.pluginDir, safeId(id), revision);
     assertNoSymlinkPath(destination, this.dir);
     if (existsSync(destination)) {
-      const existing = readLocalFiles(destination);
-      if (hashFiles(existing.files) !== revision) fail("An immutable plugin snapshot was modified.");
-      return destination;
+      if (verifySnapshot(destination, revision) === true) return destination;
+      // A copy that is no longer the reviewed bytes, or that could not be checked, is taken away, and the reviewed bytes are written again.
+      rmSync(destination, { recursive: true, force: true });
     }
     const parent = dirname(destination);
     mkdirSync(parent, { recursive: true });

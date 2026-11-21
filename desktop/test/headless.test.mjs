@@ -9,7 +9,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deviceCall } from "../desktop/device-call.mjs";
-import { headlessBackend } from "../desktop/headless/backend.mjs";
+import { headlessBackend, PROMISES } from "../desktop/headless/backend.mjs";
+import { PLUGIN_STARTS } from "../desktop/plugins.mjs";
 import { listenWorkspace, workspaceRequest } from "../desktop/headless/transport.mjs";
 import { workspaceActions } from "../desktop/headless/workspace.mjs";
 import { phonePage } from "../desktop/phonepage.mjs";
@@ -40,6 +41,7 @@ function stubWorkspace() {
   };
   return { backend, state, displays, calls, contexts, changed: () => change() };
 }
+
 
 test("the public link reads workspace changes and loses display availability on disconnect", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "bk-"));
@@ -387,4 +389,51 @@ test("on the two-container host a member's chat, message and turn are the member
   }
   await assert.rejects(workspaceRequest(socket, "call", ["createChat", ["pip"]]), NO_PERSON);
   assert.equal(JSON.stringify(ws.state.chats), before);
+});
+
+test("the link tells the workspace's own list of capabilities; a promise about the workspace's code is not told while it cannot be reached", async () => {
+  const old = workspaceActions({ ...stubWorkspace().backend, capabilities: ["models-v2", "plugin-starts-v1"] }, () => {});
+  // The same workspace put back from an older image: another epoch, and a list without the new name.
+  const older = workspaceActions({ ...stubWorkspace().backend, capabilities: ["models-v2", "plugins-v1"] }, () => {});
+  let answering = old;
+  let reachable = true;
+  const { backend, refresh } = headlessBackend(async (method, args) => {
+    if (!reachable) throw new Error("connect ENOENT");
+    return answering.dispatch(method, args);
+  }, "test");
+  let changes = 0;
+  backend.subscribe(() => changes++);
+  assert.deepEqual(backend.capabilities, []);
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugin-starts-v1"]);
+  // The workspace cannot be reached: the name that is a promise about its code is not told, and phones are told
+  // that it changed. The other names stay, so a phone says that the computer cannot be reached, not "update the app".
+  reachable = false;
+  const before = changes;
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2"]);
+  assert.equal(changes, before + 1);
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2"], "still not reached: nothing more changes");
+  // Back with the same epoch and nothing changed in it: the list comes again, because the look asks for a whole answer.
+  reachable = true;
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugin-starts-v1"]);
+  // The workspace put back from an older image answers with its own list: the old name is gone.
+  answering = older;
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugins-v1"]);
+  assert.equal(backend.capabilities.includes("plugin-starts-v1"), false);
+  // That older one cannot be reached for a moment, and answers again: the name comes back only with an answer that has it.
+  reachable = false;
+  await refresh();
+  reachable = true;
+  await refresh();
+  assert.deepEqual(backend.capabilities, ["models-v2", "plugins-v1"]);
+  // The list of promises is the name that the app gives the promise.
+  assert.deepEqual(PROMISES, [PLUGIN_STARTS]);
+  // Another start that answers with no list at all (it should not): the old list is not kept.
+  answering = { dispatch: async (method, args) => (method === "state" ? { version: "third/1", display: true, team: null } : null) };
+  await refresh();
+  assert.deepEqual(backend.capabilities, []);
 });

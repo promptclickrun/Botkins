@@ -29,7 +29,7 @@ import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
 import { FOLDERS, Folders } from "./folders.mjs";
 import { deviceCall } from "./device-call.mjs";
-import { PLUGINS, pluginHandlers } from "./plugins.mjs";
+import { PLUGINS, PLUGIN_STARTS, pluginHandlers } from "./plugins.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
@@ -94,7 +94,7 @@ const REPLY_MS = 1500;
 export const APP_UPDATE = "app-update-v1";
 /** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
 export const PROVIDER_SIGNIN = "provider-signin-v1";
-export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PROVIDER_SIGNIN, SPACES];
+export const CAPABILITIES = ["models-v2", LOOKS_CAPABILITY, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -311,6 +311,17 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const routines = workspace.panels.routines;
   const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
   const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null });
+  // A folder a person adds for its skills. A plugin folder goes the plugins' way instead, which
+  // copies it, shows what it starts and adds it switched off: a plugin has no other way in.
+  const addFolderOrPlugin = async (path, options) => {
+    try {
+      return workspace.integrations.addFromFolder(path);
+    } catch (error) {
+      if (error?.code !== "PLUGIN_FOLDER" || options?.plugins === false) throw error;
+      const added = await workspace.plugins.addFolder(error.folder);
+      return { kind: "plugin", name: added.name, id: added.id, enabled: false };
+    }
+  };
   const handlers = {
     ...pluginHandlers(workspace.plugins, savedCredentials),
     ...teamHandlers(() => link),
@@ -501,7 +512,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         buttonLabel: "Add",
         properties: ["openDirectory"],
       });
-      return paths ? workspace.integrations.addFromFolder(paths[0]) : null;
+      return paths ? addFolderOrPlugin(paths[0]) : null;
     },
     removeSkillFolder: (id) => workspace.integrations.removeFolder(id),
     revealSkill: (name) => {
@@ -626,7 +637,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     listFolders: (path) => folders.list(path),
     addProjectFolder: async (path) => workspace.projects.add((await folders.allowed(path)).path),
     // (`options.plugins: false` refuses a plugin folder: for a caller that shows nothing before it links.)
-    addSkillFolderAt: async (path, options) => workspace.integrations.addFromFolder((await folders.allowed(path)).path, options?.plugins === false ? { plugins: false } : {}),
+    addSkillFolderAt: async (path, options) => addFolderOrPlugin((await folders.allowed(path)).path, options),
     addProject: async () => {
       const paths = await host.dialogs.open({ title: "Choose a project folder", properties: ["openDirectory", "createDirectory"] });
       return paths ? workspace.projects.add(paths[0]) : null;

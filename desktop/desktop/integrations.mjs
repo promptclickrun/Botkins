@@ -17,6 +17,7 @@
 // MCP servers are stored in the workspace file (mode 0600). Their environment values and headers
 // often hold keys, so the app's page never receives them: it sees the names only.
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
+import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -28,7 +29,6 @@ const MAX_SERVERS = 50;
 const MAX_SKILL_TEXT = 60000;
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const PLUGIN_MANIFESTS = [".plugin/plugin.json", ".codex-plugin/plugin.json", "plugin.json", ".github/plugin.json", ".github/plugin/plugin.json", ".claude-plugin/plugin.json"];
 
 const text = (value, max, name) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("Enter a " + name + " of up to " + max + " characters.");
@@ -366,6 +366,7 @@ export class Integrations {
         try {
           if (typeof path !== "string" || !isAbsolute(path)) continue;
           if (kind === "skills") this.addFolder(this.skillState.folders, path);
+          // (No session reads this list any more. Plugins.adoptLinked makes each one an installed plugin, switched off.)
           else if (kind === "plugin") this.addFolder(this.skillState.plugins, path);
           else if (kind === "mcp")
             for (const server of parseServers(readFileSync(path, "utf8"), dirname(path), this.sealFor))
@@ -688,10 +689,13 @@ export class Integrations {
   }
   /**
    * Adds skills from a folder the person chose:
-   * a skill folder (it holds SKILL.md) is copied into Botkins; a plugin folder or a folder of
-   * skill folders stays where it is and is read from there.
+   * a skill folder (it holds SKILL.md) is copied into Botkins; a folder of skill folders stays
+   * where it is and is read from there.
+   * A plugin folder is not added here. A plugin can start commands, so it has one way in, the one
+   * that copies it, shows what it starts and adds it switched off (Plugins.addFolder). The
+   * refusal has `code: "PLUGIN_FOLDER"` and the `folder`, so that a caller can send it there.
    */
-  addFromFolder(path, { plugins = true } = {}) {
+  addFromFolder(path) {
     if (typeof path !== "string" || !isAbsolute(path)) throw new Error("Choose a folder.");
     let info;
     try {
@@ -715,14 +719,7 @@ export class Integrations {
       this.changed();
       return { kind: "skill", name: skill.name || id };
     }
-    if (isPlugin(path)) {
-      // A plugin folder can hold hooks and tools that run. A caller that shows nothing before it
-      // links (the command line's `skills add-folder`) does not take one.
-      if (!plugins) throw new Error("This folder is a plugin, which can run commands on this computer. It is not added as a folder of skills.");
-      this.addFolder(this.skillState.plugins, path);
-      this.changed();
-      return { kind: "plugin", name: basename(path) };
-    }
+    if (isPlugin(path)) throw Object.assign(new Error("This folder is a plugin, which can run commands on this computer. It is not added as a folder of skills."), { code: "PLUGIN_FOLDER", folder: path });
     const count = skillsIn(path, "folder").length;
     if (!count) throw new Error("No skills found there. A skill is a folder with a SKILL.md file inside.");
     this.addFolder(this.skillState.folders, path);
@@ -761,11 +758,9 @@ export class Integrations {
   /** The skill folders and switched-off skills for a bot's sessions. */
   skillsFor(bot) {
     return {
-      directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p))],
+      // A linked folder that has become a plugin since it was linked is not handed on, as a plugin can start commands. It stays linked, and is looked at again at each call.
+      directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
       disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? [])])],
     };
-  }
-  pluginsFor() {
-    return this.skillState.plugins.map((f) => f.path).filter((p) => existsSync(p) && isPlugin(p));
   }
 }

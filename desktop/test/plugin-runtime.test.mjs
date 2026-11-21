@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pluginOAuthServers, pluginServerName, pluginSession } from "../desktop/plugin-runtime.mjs";
+import { pluginOAuthServers, pluginServerName, pluginSession, plainAgentFile, plainHeaderFile } from "../desktop/plugin-runtime.mjs";
 
 const temp = () => mkdtempSync(join(tmpdir(), "botkins-plugin-runtime-"));
 
@@ -136,9 +136,10 @@ test("keeps settings out of local command paths, argv, working directories, and 
   assert.deepEqual(JSON.parse(Buffer.from(local.args[1], "base64url").toString("utf8")), {
     command: "${TOKEN}",
     args: ["${TOKEN}"],
-    envKeys: ["TOKEN"],
+    envKeys: ["TOKEN", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"],
   });
-  assert.equal(local.workingDirectory, "${TOKEN}");
+  // A relative folder is below the plugin's own folder; a setting is not expanded in it.
+  assert.equal(local.workingDirectory, join(plugin, "${TOKEN}"));
   assert.equal(local.env.TOKEN, "synthetic-setting");
   assert.equal(remote.url, "https://example.test/${TOKEN}");
   assert.equal(remote.headers.Authorization, "Bearer synthetic-setting");
@@ -292,4 +293,174 @@ test("keeps durable plugin data stable when the materialized folder changes", as
   const dataDirs = readdirSync(dataRoot);
   assert.equal(dataDirs.length, 1);
   assert.equal(readFileSync(join(dataRoot, dataDirs[0], "revision.log"), "utf8"), "once\nonce\n");
+});
+
+test("gives a local tool its data folder, a folder below the plugin, or an absolute one", () => {
+  const dir = temp();
+  const plugin = join(dir, "tools");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "tools", mcpServers: ".mcp.json" }));
+  const absolute = join(dir, "elsewhere");
+  writeFileSync(join(plugin, ".mcp.json"), JSON.stringify({ mcpServers: {
+    own: { command: "node", env: { KEEP: "1" } },
+    below: { command: "node", cwd: "server/bin" },
+    away: { command: "node", cwd: absolute },
+  } }));
+  const result = pluginSession([{ id: "tools", folder: plugin, status: "ready", enabled: true, bots: "all", config: [] }], { dir, chatId: "chat", botId: "bot" });
+  const own = result.mcpServers[pluginServerName("tools", "own")];
+  assert.equal(own.workingDirectory, plugin);
+  assert.equal(result.mcpServers[pluginServerName("tools", "below")].workingDirectory, join(plugin, "server/bin"));
+  assert.equal(result.mcpServers[pluginServerName("tools", "away")].workingDirectory, absolute);
+  const dataRoot = join(dir, ".botkins-plugin-data");
+  const [data] = readdirSync(dataRoot);
+  assert.equal(own.env.PLUGIN_DATA, join(dataRoot, data));
+  assert.equal(own.env.CLAUDE_PLUGIN_DATA, join(dataRoot, data));
+  assert.equal(own.env.KEEP, "1");
+  const spec = JSON.parse(Buffer.from(own.args[1], "base64url").toString("utf8"));
+  assert.deepEqual(spec.envKeys, ["KEEP", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"]);
+});
+
+test("looks at the installed copy before each hook and stops at the first look that says it is not intact", async () => {
+  const dir = temp();
+  const plugin = join(dir, "looked-at");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "looked-at" }));
+  writeFileSync(join(plugin, "hooks.json"), JSON.stringify({ hooks: { userPromptSubmitted: [{ command: "one" }, { command: "two" }, { command: "three" }] } }));
+  const ran = [];
+  const run = async (command) => {
+    ran.push(command);
+    return JSON.stringify({ additionalContext: command });
+  };
+  const open = (intact) => pluginSession([{ id: "looked-at", folder: plugin, status: "ready", enabled: true, bots: "all", config: [], ...(intact && { intact }) }], { dir, chatId: "chat", botId: "bot" }, { run });
+  // No `intact`: all run, as before.
+  assert.equal((await open().hooks.handlers.onUserPromptSubmitted({ prompt: "p" })).additionalContext, "one\n\ntwo\n\nthree");
+  // Looked at before each hook; the second look says false: the first ran, the others did not.
+  ran.length = 0;
+  let looks = 0;
+  const output = await open(() => ++looks < 2).hooks.handlers.onUserPromptSubmitted({ prompt: "p" });
+  assert.deepEqual(ran, ["one"]);
+  assert.equal(looks, 2);
+  assert.equal(output.additionalContext, "one");
+  // Nothing ran before the first look: nothing comes back.
+  ran.length = 0;
+  assert.equal(await open(() => false).hooks.handlers.onUserPromptSubmitted({ prompt: "p" }), undefined);
+  assert.deepEqual(ran, []);
+  // Only exactly false stops a hook.
+  ran.length = 0;
+  await open(() => undefined).hooks.handlers.onUserPromptSubmitted({ prompt: "p" });
+  assert.deepEqual(ran, ["one", "two", "three"]);
+});
+
+test("writes the header of an agent file again, with the keys that hold the agent back", () => {
+  assert.equal(
+    plainAgentFile('---\nname: scout\ndescription: "Looks"\nmodel: x\ntools: [Read, Grep]\nmcp-servers:\n  evil:\n    command: sh\nhooks: {}\n---\nBody\n'),
+    '---\nname: "scout"\ndescription: "Looks"\nmodel: "x"\ntools: ["Read","Grep"]\n---\nBody\n',
+  );
+  assert.equal(plainAgentFile("No header"), '---\ndescription: ""\n---\nNo header');
+  assert.equal(plainAgentFile("---\ndisable-model-invocation: true\nuser-invocable: 'false'\ninfer: maybe\n---\nB"), '---\ndescription: ""\ndisable-model-invocation: true\nuser-invocable: false\ninfer: false\n---\nB');
+  assert.equal(plainHeaderFile("---\ndisable-model-invocation: [x]\nuser-invocable: |\n---\nB", "agent"), '---\ndescription: ""\ndisable-model-invocation: true\nuser-invocable: false\n---\nB');
+});
+
+test("writes the header of a skill file and of a command file again", () => {
+  assert.equal(
+    plainHeaderFile("---\nname: s\ndescription: d\nallowed-tools: Bash(*)\nmodel: m\nlicense: x\nhooks:\n  PreToolUse: []\nmcp-servers:\n  a: {}\nuser-invocable: false\n---\nBody", "skill"),
+    '---\nname: "s"\ndescription: "d"\nuser-invocable: false\n---\nBody',
+  );
+  assert.equal(
+    plainHeaderFile("---\ndescription: d\nargument-hint: <file>\nallowed-tools: Bash(*)\nmodel: m\ninfer: true\ndisable-model-invocation: yes\n---\nBody", "command"),
+    '---\ndescription: "d"\nargument-hint: "<file>"\ndisable-model-invocation: true\n---\nBody',
+  );
+  assert.match(plainHeaderFile("---\nargument-hint: " + "a".repeat(300) + "\n---\n", "command"), new RegExp('argument-hint: "a{200}"'));
+  assert.throws(() => plainHeaderFile("x", "other"));
+});
+
+test("a header after blank space is replaced, not left as text below the new header", () => {
+  assert.equal(plainAgentFile("  ---\nmcp-servers: { hidden: { command: sh } }\n---\nBody"), '---\ndescription: ""\n---\nBody');
+  assert.equal(plainHeaderFile("\uFEFF\n\n  ---\nname: s\nallowed-tools: shell\n---\nBody", "skill"), '---\nname: "s"\ndescription: ""\n---\nBody');
+  // Without a header the text is as it was, blank space included.
+  assert.equal(plainAgentFile("  \nJust text"), '---\ndescription: ""\n---\n  \nJust text');
+});
+
+function toolPlugin(args, config, values) {
+  const dir = temp();
+  const plugin = join(dir, "tool");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "tool", mcpServers: ".mcp.json" }));
+  writeFileSync(join(plugin, ".mcp.json"), JSON.stringify({ mcpServers: { local: { command: "node", args } } }));
+  return pluginSession([{ id: "tool", folder: plugin, status: "ready", enabled: true, bots: "all", config, ...(values && { values }) }], { dir, chatId: "chat", botId: "bot" });
+}
+
+test("a tool is held back for the value of a secret setting in its line, not for any setting's value", () => {
+  const name = pluginServerName("tool", "local");
+  // A plain setting whose default is the same text as an argument does not stop the tool.
+  assert.ok(toolPlugin(["server.js", "--port", "8080"], [{ key: "PORT", default: "8080" }]).mcpServers[name]);
+  assert.ok(toolPlugin(["server.js", "--port", "8080"], [{ key: "PORT" }], { PORT: "8080" }).mcpServers[name]);
+  assert.ok(toolPlugin(["server.js", "--verbose=true"], [{ key: "VERBOSE", default: "true" }]).mcpServers[name]);
+  // The value of a secret setting in a word of the line stops it, for each way a field is marked secret.
+  assert.equal(toolPlugin(["server.js", "--key=synthetic-secret"], [{ key: "API_KEY", secret: true }], { API_KEY: "synthetic-secret" }).mcpServers[name], undefined);
+  assert.equal(toolPlugin(["server.js", "synthetic-secret"], [{ key: "ANYTHING", sensitive: true }], { ANYTHING: "synthetic-secret" }).mcpServers[name], undefined);
+  assert.equal(toolPlugin(["server.js", "synthetic-secret"], [{ key: "MY_TOKEN" }], { MY_TOKEN: "synthetic-secret" }).mcpServers[name], undefined);
+  // A secret value shorter than 4 characters would match by accident, so it does not stop the tool.
+  assert.ok(toolPlugin(["server.js", "--port", "808"], [{ key: "MY_TOKEN" }], { MY_TOKEN: "808" }).mcpServers[name]);
+});
+
+test("hook output has every supplied value redacted, secret or not", async () => {
+  const dir = temp();
+  const plugin = join(dir, "redact");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "redact" }));
+  writeFileSync(join(plugin, "hooks.json"), JSON.stringify({ hooks: { userPromptSubmitted: [{ command: "echo" }] } }));
+  const run = async () => JSON.stringify({ additionalContext: "port 8080 key synthetic-secret ok" });
+  const result = pluginSession(
+    [{ id: "redact", folder: plugin, status: "ready", enabled: true, bots: "all", values: { PORT: "8080", API_KEY: "synthetic-secret" }, config: [{ key: "PORT" }, { key: "API_KEY", secret: true }] }],
+    { dir, chatId: "chat", botId: "bot" },
+    { run },
+  );
+  const output = await result.hooks.handlers.onUserPromptSubmitted({ prompt: "p" });
+  assert.equal(output.additionalContext, "port [redacted] key [redacted] ok");
+});
+
+test("one plugin's hook keeps a turn going three times in a row and no more, and the turn's activity is told one time", async () => {
+  const { STOP_BLOCKS } = await import("../desktop/plugin-runtime.mjs");
+  assert.equal(STOP_BLOCKS, 3);
+  const dir = temp();
+  const plugin = join(dir, "keeps-going");
+  mkdirSync(plugin, { recursive: true });
+  // The form of Claude's own tool: the event is named Stop, which Botkins takes as agentStop.
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "keeps-going", hooks: { hooks: { Stop: [{ hooks: [{ type: "command", command: "check" }] }] } } }));
+  const notes = [];
+  const session = pluginSession([{ id: "keeps-going@folder", folder: plugin, config: [] }], { dir, chatId: "chat-1", botId: "bot-1", note: (line) => notes.push(line) }, { run: async () => JSON.stringify({ decision: "block", reason: "go on" }) });
+  const stop = session.hooks.handlers.onAgentStop;
+  // The first end of a turn, then each end that follows a block.
+  const answers = [await stop({ stopHookActive: false })];
+  for (let turn = 0; turn < 5; turn++) answers.push(await stop({ stopHookActive: true }));
+  assert.deepEqual(answers.map((answer) => answer?.decision), ["block", "block", "block", undefined, undefined, undefined]);
+  assert.deepEqual(notes, ["The plugin keeps-going@folder kept this turn going 3 times. Botkins did not let it do that again."]);
+  // The next turn of the person starts a new count.
+  assert.equal((await stop({ stopHookActive: false }))?.decision, "block");
+  assert.equal(notes.length, 1);
+  // A runtime that does not say whether the end follows a block: the count is not started again, so the limit holds.
+  const quiet = pluginSession([{ id: "keeps-going@folder", folder: plugin, config: [] }], { dir, chatId: "chat-2", botId: "bot-1" }, { run: async () => JSON.stringify({ decision: "block", reason: "go on" }) }).hooks.handlers.onAgentStop;
+  const unsaid = [];
+  for (let turn = 0; turn < 6; turn++) unsaid.push((await quiet({}))?.decision);
+  assert.deepEqual(unsaid, ["block", "block", "block", undefined, undefined, undefined]);
+});
+
+test("a hook that does not read what it is sent does not stop the app, and its answer counts", { skip: process.platform === "win32" }, async () => {
+  const dir = temp();
+  const plugin = join(dir, "does-not-read");
+  mkdirSync(plugin, { recursive: true });
+  // The hook answers and ends at once. It never reads its input, which is larger than a pipe holds.
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "does-not-read", hooks: { hooks: { userPromptSubmitted: [{ command: "echo '{\"additionalContext\":\"said\"}'" }], sessionEnd: [{ command: "true" }] } } }));
+  const session = pluginSession([{ id: "does-not-read@folder", folder: plugin, config: [] }], { dir, chatId: "chat-1", botId: "bot-1" });
+  const large = "x".repeat(2_000_000);
+  // Without a listener for the failed write, this is an error that nobody takes, and the test process ends.
+  for (let round = 0; round < 5; round++) {
+    assert.deepEqual(await session.hooks.handlers.onUserPromptSubmitted({ prompt: large }), { additionalContext: "said" });
+    assert.equal(await session.hooks.handlers.onSessionEnd({ prompt: large }), undefined);
+  }
+  // A hook that writes much to its error output is not held up by it.
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "does-not-read", hooks: { hooks: { sessionStart: [{ command: "head -c 300000 /dev/zero >&2; echo '{\"additionalContext\":\"after\"}'", timeoutSec: 5 }] } } }));
+  const loud = pluginSession([{ id: "does-not-read@folder", folder: plugin, config: [] }], { dir, chatId: "chat-2", botId: "bot-1" });
+  assert.deepEqual(await loud.hooks.handlers.onSessionStart({}), { additionalContext: "after" });
 });

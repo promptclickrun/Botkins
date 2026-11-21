@@ -539,6 +539,19 @@ export class Workspace {
       }
     });
   }
+  /**
+   * One line in the activity of the turn that runs in a chat now, for a thing that Botkins itself
+   * did about a plugin (it did not let a plugin's hook keep the turn going again). With no turn
+   * that runs, there is nothing to write it in.
+   */
+  pluginNote(chatId, text) {
+    const run = this.active.get(chatId)?.run;
+    if (!run || typeof text !== "string" || !text) return;
+    const now = Date.now();
+    run.steps ??= [];
+    run.steps.push({ id: "plugin-note-" + randomUUID(), name: "Botkins", label: text.split("\n")[0].slice(0, 180), status: "Done", started: now, finished: now });
+    this.notify();
+  }
   bot(id) {
     const bot = this.state.bots.find((b) => b.id === id);
     if (!bot) throw new Error("Unknown bot");
@@ -1190,10 +1203,9 @@ export class Workspace {
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
       mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
-      plugins: [
-        ...(access.skills ? this.integrations.pluginsFor() : []),
-        ...(access.plugins ? pluginSpec.directories : []),
-      ],
+      // Only what Botkins itself wrote for the session from installed plugins (desktop/plugin-runtime.mjs).
+      // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
+      plugins: [...(access.plugins ? pluginSpec.directories : [])],
       pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.messages ?? [],
