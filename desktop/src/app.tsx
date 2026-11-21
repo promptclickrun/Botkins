@@ -36,9 +36,11 @@ import BotProfile from "./BotProfile";
 import NewChat from "./NewChat";
 import ProjectsPage, { type ProjectsTarget } from "./Projects";
 import WikiPage, { type WikiTarget } from "./Wiki";
+import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
+import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
-import type { Attachment, Bot, Chat, MentionInput, State } from "./types";
+import type { Attachment, BoardItem, Bot, Chat, MentionInput, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
@@ -49,7 +51,8 @@ import "./style.css";
 startAppearance();
 const api = window.botkins;
 // Work is three pages with tabs between them (Routines, Projects, Tasks); Activity and Usage open from its top.
-type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage";
+// With Spaces ("spaces-v1"), a space's page and All spaces take the Today page's place (src/SpacePage.tsx).
+type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage" | "Space" | "AllSpaces";
 const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
@@ -85,6 +88,8 @@ function App() {
   } }), [snapshot, display]);
   const [page, setPage] = useState<Page>("Home");
   const [chatId, setChatId] = useState("");
+  /** The space whose page is open (page "Space"). */
+  const [spaceId, setSpaceId] = useState("");
   const host = state?.remote?.using?.id ?? "local";
   const pendingVisit = useRef<{ host: string; id: string } | null>(null);
   const [messageTarget, setMessageTarget] = useState<{ chatId: string; index: number } | null>(null);
@@ -299,6 +304,34 @@ function App() {
       setWikiTarget((t) => ({ path, n: t.n + 1 }));
     });
   }
+  function openSpace(id: string) {
+    leave(() => {
+      nav("Space");
+      setSpaceId(id);
+    });
+  }
+  /** Today: the Today space when the computer has Spaces, else the Today page. */
+  function openToday() {
+    const today = hasSpaces(state!) && (state!.spaces ?? []).find((s) => s.builtin === "today" && s.mine);
+    if (today) openSpace(today.id);
+    else nav("Today");
+  }
+  /** Opens a chat the computer just made, once the window knows it. */
+  async function openNew(id: string) {
+    receiveSnapshot(await api.snapshot());
+    open(id);
+  }
+  /** A chat about a Feed, Ideas or Goals card. `send` sends the text; otherwise it waits in the message box. */
+  async function boardChat(botId: string, text: string, send: boolean, item?: BoardItem) {
+    const id = await newChat(botId);
+    // A Today item goes along as a record: the chat shows a card for it and the bot reads it.
+    const mention: DraftMention | undefined = item && { kind: "board", id: item.id, label: item.title };
+    if (send) await api.send(id, text, mention && { mentions: [{ kind: "board", id: mention.id }] });
+    else {
+      setDrafts((prev) => ({ ...prev, [id]: mention ? tokenOf(mention) + " " + text : text }));
+      if (mention) setDraftMentions((prev) => ({ ...prev, [id]: [mention] }));
+    }
+  }
   /** A new chat with the primary bot and a prepared message, not sent. A page comes as a "#" mention. */
   async function wikiChat(text: string, wikiPage?: { path: string; title: string }) {
     const id = await newChat(state!.bots[0].id);
@@ -510,6 +543,23 @@ function App() {
   useEffect(() => {
     if (welcome) setModal("");
   }, [welcome]);
+  // With Spaces, Today is a space; without them (another computer, an older Botkins) there are no space pages.
+  const spaces = !!state && hasSpaces(state);
+  const openedSpace = page === "Space" ? state?.spaces?.find((s) => s.id === spaceId) : undefined;
+  const hadSpace = useRef("");
+  useEffect(() => {
+    if (!state) return;
+    if (!spaces && (page === "Space" || page === "AllSpaces")) return nav("Home");
+    if (spaces && page === "Today") return openToday();
+    if (openedSpace) hadSpace.current = openedSpace.id;
+    // The open space went away (deleted, or no longer shared): go to the first pinned one.
+    else if (page === "Space" && hadSpace.current === spaceId) {
+      hadSpace.current = "";
+      const first = state.spaces?.find((s) => s.pinned && s.id !== spaceId);
+      if (first) openSpace(first.id);
+      else nav("Home");
+    }
+  }, [spaces, page, spaceId, !!openedSpace]);
   if (!state) return <main>{error || "Opening Botkins…"}</main>;
   if (welcome)
     return (
@@ -595,7 +645,7 @@ function App() {
           {collapsed && toggle}
         </div>
         <nav aria-label="Workspace">
-          {placeOrder(state.settings.sidebar?.order).filter(placeAllowed).map((p) => {
+          {placeOrder(state.settings.sidebar?.order).filter((p) => placeAllowed(p) && !(spaces && p === "Today")).map((p) => {
             const working = p === "Work" && Object.keys(state.streams).length > 0;
             const selected = p === "Work" ? WORK_PAGES.includes(page) : p === page;
             return (
@@ -621,6 +671,16 @@ function App() {
             );
           })}
         </nav>
+        {spaces && placeAllowed("Today") && (
+          <SidebarSpaces
+            state={state}
+            collapsed={collapsed}
+            selected={chat || profileBot ? "" : page === "Space" ? spaceId : page === "AllSpaces" ? "all" : ""}
+            openSpace={openSpace}
+            openAll={() => nav("AllSpaces")}
+            fail={fail}
+          />
+        )}
         {canViewAgents && (
           <>
             <div className="sidebarlabel">
@@ -710,7 +770,7 @@ function App() {
             messageTarget={messageTarget?.chatId === chat.id ? messageTarget : undefined}
             openProject={(projectId) => projects({ projectId })}
             openWiki={(path) => wiki(path)}
-            openToday={() => nav("Today")}
+            openToday={openToday}
             openRoutines={routines}
             openBot={() => botPage(bot.id)}
           />
@@ -734,9 +794,27 @@ function App() {
             startChat={(text, wikiPage) => void wikiChat(text, wikiPage).catch(fail)}
             guard={(ask) => (leaveGuard.current = ask)}
           />
+        ) : page === "Space" && openedSpace ? (
+          <SpacePage
+            key={host + ":" + openedSpace.id}
+            state={state}
+            space={openedSpace}
+            open={open}
+            openNew={(id) => void openNew(id).catch(fail)}
+            openProject={(projectId) => projects({ projectId })}
+            boardChat={boardChat}
+            removed={() => {
+              hadSpace.current = "";
+              const first = state.spaces?.find((s) => s.pinned && s.id !== openedSpace.id);
+              if (first) openSpace(first.id);
+              else nav("Home");
+            }}
+            fail={fail}
+          />
         ) : (
           <div className="content">
-            {page === "Today" && (
+            {page === "AllSpaces" && <AllSpaces state={state} openSpace={openSpace} fail={fail} />}
+            {page === "Today" && !spaces && (
               <Today
                 state={state}
                 open={open}
@@ -746,20 +824,7 @@ function App() {
                   await api.send(id, "/today-panel " + text);
                 }}
                 board={
-                  <BoardPanel
-                    state={state}
-                    fail={fail}
-                    startChat={async (botId, text, send, item) => {
-                      const id = await newChat(botId);
-                      // A Today item goes along as a record: the chat shows a card for it and the bot reads it.
-                      const mention: DraftMention | undefined = item && { kind: "board", id: item.id, label: item.title };
-                      if (send) await api.send(id, text, mention && { mentions: [{ kind: "board", id: mention.id }] });
-                      else {
-                        setDrafts((prev) => ({ ...prev, [id]: mention ? tokenOf(mention) + " " + text : text }));
-                        if (mention) setDraftMentions((prev) => ({ ...prev, [id]: [mention] }));
-                      }
-                    }}
-                  />
+                  <BoardPanel state={state} fail={fail} startChat={boardChat} />
                 }
               />
             )}
@@ -811,7 +876,7 @@ function App() {
                 actions={actions}
                 initial={routineTarget}
                 work={work}
-                openToday={() => nav("Today")}
+                openToday={openToday}
               />
             )}
             {page === "Usage" && (

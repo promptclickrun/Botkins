@@ -18,7 +18,7 @@ import HtmlFrame from "./HtmlFrame";
 import "./blocks.css";
 import "./board.css";
 import { BotAvatar } from "./Avatar";
-import type { Cadence, Panel, PanelBlock, State } from "./types";
+import type { Cadence, Panel, PanelBlock, State, ShownPanel } from "./types";
 import { CadencePicker, ZoneInput, cadenceFromCron, cadenceSummary, cronFromCadence } from "./Routines";
 const api = window.botkins;
 const stamp = (n: number) =>
@@ -165,7 +165,7 @@ function LineChart({ block }: { block: Extract<PanelBlock, { type: "line" }> }) 
     </figure>
   );
 }
-function RoutineForm({ panel, done }: { panel: Panel; done: () => void }) {
+function RoutineForm({ panel, done }: { panel: ShownPanel; done: () => void }) {
   const [cadence, setCadence] = useState<Cadence>(() =>
     cadenceFromCron(panel.routine?.cron || "0 9 * * 1-5"),
   );
@@ -217,6 +217,210 @@ function RoutineForm({ panel, done }: { panel: Panel; done: () => void }) {
     </form>
   );
 }
+/**
+ * One panel on a grid: its bot, its title, its blocks and its footer. The Today page and every space
+ * draw panels with it. Without `manage` there is no ⋯; with `readOnly` there is no Refresh either.
+ */
+export function PanelCard({
+  state,
+  panel: p,
+  manage,
+  fail,
+  readOnly,
+  badges,
+  foot,
+  side,
+  when = stamp,
+}: {
+  state: State;
+  panel: ShownPanel;
+  manage?: () => void;
+  fail: (e: unknown) => void;
+  readOnly?: boolean;
+  /** Shown after the bot's name (a space's App badge and changed dot). */
+  badges?: ReactNode;
+  /** More quiet lines in the footer (a space's last line). */
+  foot?: ReactNode;
+  /** Beside Refresh (a space's note count). */
+  side?: ReactNode;
+  /** How the footer writes a time. */
+  when?: (time: number) => string;
+}) {
+  const bot = state.bots.find((b) => b.id === p.botId);
+  if (!bot) return null;
+  const busy = !!p.refreshChatId && p.refreshChatId in state.streams;
+  return (
+    <section className={"live-panel today-panel " + p.size} aria-label={p.title}>
+      <div className="panel-top">
+        <BotAvatar bot={bot} state={busy ? "thinking" : "idle"} size={24} />
+        <small>{bot.name}</small>
+        {badges}
+        {p.projectId && state.projects?.some((x) => x.id === p.projectId) && (
+          <span className="panel-project" title="Project">
+            <FolderKanban size={11} />
+            {state.projects.find((x) => x.id === p.projectId)!.name}
+          </span>
+        )}
+        {manage && (
+          <button aria-label={"Manage " + p.title} onClick={manage}>
+            <Ellipsis size={17} />
+          </button>
+        )}
+      </div>
+      <h2>{p.title}</h2>
+      <div className="panel-blocks">
+        {p.blocks.map((b, i) => (
+          <Block key={b.type === "html" ? b.frame : i} block={b} title={p.title} />
+        ))}
+      </div>
+      <footer>
+        <div>
+          <small>{busy ? "Refreshing…" : "Updated " + when(p.updatedAt)}</small>
+          {p.routine && (
+            <small>
+              <Clock3 size={12} /> {p.routine.enabled && p.routine.nextAt ? "Next " + when(p.routine.nextAt) : "Routine paused"}
+            </small>
+          )}
+          {p.lastCheck && (
+            <small title={p.lastCheck.detail}>
+              Last check · {when(p.lastCheck.time)} · {p.lastCheck.status}
+            </small>
+          )}
+          {foot}
+        </div>
+        {side}
+        {!readOnly && (
+          <button aria-label={"Refresh " + p.title} disabled={busy} onClick={() => api.refreshPanel(p.id).catch(fail)}>
+            <RefreshCw size={16} />
+          </button>
+        )}
+      </footer>
+    </section>
+  );
+}
+
+/**
+ * A panel's ⋯: its chats, size, order, routine, hiding and removing, in one dialog. `where` names the
+ * page it hides from ("Today", or a space's name).
+ */
+export function usePanelManager(panels: ShownPanel[], open: (id: string) => void, where = "Today") {
+  const [view, setView] = useState<"manage" | "schedule" | "remove" | null>(null);
+  const [selected, select] = useState("");
+  const [err, setErr] = useState("");
+  const dialog = useRef<HTMLDialogElement>(null);
+  const panel = panels.find((p) => p.id === selected);
+  useEffect(() => {
+    setErr("");
+    if (view) dialog.current?.showModal();
+    else dialog.current?.close();
+  }, [view]);
+  async function change(action: string) {
+    try {
+      await api.changePanel(selected, action);
+      setView(null);
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+  const node = (
+    <dialog ref={dialog} onCancel={() => setView(null)}>
+      <div className="sectionhead">
+        <h2>{view === "schedule" ? "Panel routine" : view === "remove" ? "Remove panel?" : panel?.title || "Panel"}</h2>
+        <button aria-label="Close dialog" onClick={() => setView(null)}>
+          <X size={18} />
+        </button>
+      </div>
+      {view === "manage" && panel && (
+        <div className="panel-settings">
+          {panel.chatId && (
+            <button
+              onClick={() => {
+                if (panel.chatId) open(panel.chatId);
+                setView(null);
+              }}
+            >
+              Open original chat <ArrowRight size={15} />
+            </button>
+          )}
+          {panel.refreshChatId && (
+            <button
+              onClick={() => {
+                open(panel.refreshChatId!);
+                setView(null);
+              }}
+            >
+              Open refresh history <ArrowRight size={15} />
+            </button>
+          )}
+          <label>
+            Panel size
+            <select value={panel.size} onChange={(e) => api.changePanel(panel.id, e.target.value).catch((e) => setErr(String(e)))}>
+              <option value="small">Small</option>
+              <option value="wide">Wide</option>
+              <option value="tall">Tall</option>
+            </select>
+          </label>
+          <div className="actionrow">
+            <button onClick={() => change("earlier")}>
+              <ChevronLeft size={15} />
+              Earlier
+            </button>
+            <button onClick={() => change("later")}>
+              Later
+              <ChevronRight size={15} />
+            </button>
+          </div>
+          <button onClick={() => setView("schedule")}>
+            <CalendarClock size={16} />
+            {panel.routine ? "Edit routine" : "Set a routine"}
+          </button>
+          {panel.routine && (
+            <>
+              <small>
+                {cadenceSummary(cadenceFromCron(panel.routine.cron))} · {panel.routine.timezone}
+              </small>
+              <button
+                onClick={() =>
+                  api.routine(panel.id, { action: panel.routine!.enabled ? "pause" : "resume" }).catch((e) => setErr(String(e)))
+                }
+              >
+                {panel.routine.enabled ? "Pause routine" : "Resume routine"}
+              </button>
+              <button onClick={() => api.routine(panel.id, { action: "remove" }).catch((e) => setErr(String(e)))}>
+                Remove routine
+              </button>
+            </>
+          )}
+          <button onClick={() => change(panel.hidden ? "show" : "hide")}>
+            <EyeOff size={16} />
+            {panel.hidden ? "Show on " + where : "Hide from " + where}
+          </button>
+          <button className="danger" onClick={() => setView("remove")}>
+            Remove panel
+          </button>
+        </div>
+      )}
+      {view === "schedule" && panel && <RoutineForm panel={panel} done={() => setView(null)} />}
+      {view === "remove" && panel && (
+        <>
+          <p>Remove {panel.title} and its refresh routine?</p>
+          <button className="primary" onClick={() => change("delete")}>
+            Remove panel and routine
+          </button>
+        </>
+      )}
+      {err && <p role="alert">{err}</p>}
+    </dialog>
+  );
+  return {
+    manage: (id: string) => {
+      select(id);
+      setView("manage");
+    },
+    node,
+  };
+}
+
 export default function Today({
   state,
   open,
@@ -231,42 +435,27 @@ export default function Today({
   /** Feed, Ideas and Goals, shown above the panels. */
   board?: ReactNode;
 }) {
-  const [view, setView] = useState<
-    "new" | "manage" | "schedule" | "remove" | null
-  >(null);
-  const [selected, select] = useState(""),
-    [hidden, showHidden] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [hidden, showHidden] = useState(false);
   const [asking, setAsking] = useState(false),
     [err, setErr] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
-  const panel = state.panels.find((p) => p.id === selected);
+  const manager = usePanelManager(state.panels, open);
   const cards = state.panels.filter((p) => p.hidden === hidden);
   const hiddenCount = state.panels.filter((p) => p.hidden).length;
   useEffect(() => {
     setErr("");
-    if (view) dialog.current?.showModal();
+    if (creating) dialog.current?.showModal();
     else dialog.current?.close();
-  }, [view]);
+  }, [creating]);
   useEffect(() => {
     if (!hiddenCount) showHidden(false);
   }, [hiddenCount]);
-  function manage(id: string) {
-    select(id);
-    setView("manage");
-  }
-  async function change(action: string) {
-    try {
-      await api.changePanel(selected, action);
-      setView(null);
-    } catch (e) {
-      setErr(String(e));
-    }
-  }
   return (
     <>
       <div className="titleline">
         <h1>Today</h1>
-        <button className="primary" onClick={() => setView("new")}>
+        <button className="primary" onClick={() => setCreating(true)}>
           <Plus size={16} />
           Create panel
         </button>
@@ -289,88 +478,26 @@ export default function Today({
           </span>
           <h2>{hidden ? "No hidden panels" : "Build your first panel"}</h2>
           <p>Ask a bot for a briefing, a table or a chart, kept fresh on a schedule.</p>
-          <button className="textbutton" onClick={() => setView("new")}>
+          <button className="textbutton" onClick={() => setCreating(true)}>
             Ask a bot <ArrowRight size={16} />
           </button>
         </div>
       ) : (
         <div className="panel-grid">
-          {cards.map((p) => {
-            const bot = state.bots.find((b) => b.id === p.botId)!;
-            const busy = !!p.refreshChatId && p.refreshChatId in state.streams;
-            return (
-              <section className={"live-panel today-panel " + p.size} key={p.id}>
-                <div className="panel-top">
-                  <BotAvatar bot={bot} state={busy ? "thinking" : "idle"} size={24} />
-                  <small>{bot.name}</small>
-                  {p.projectId && state.projects?.some((x) => x.id === p.projectId) && (
-                    <span className="panel-project" title="Project">
-                      <FolderKanban size={11} />
-                      {state.projects.find((x) => x.id === p.projectId)!.name}
-                    </span>
-                  )}
-                  <button
-                    aria-label={"Manage " + p.title}
-                    onClick={() => manage(p.id)}
-                  >
-                    <Ellipsis size={17} />
-                  </button>
-                </div>
-                <h2>{p.title}</h2>
-                <div className="panel-blocks">
-                  {p.blocks.map((b, i) => (
-                    <Block key={b.type === "html" ? b.frame : i} block={b} title={p.title} />
-                  ))}
-                </div>
-                <footer>
-                  <div>
-                    <small>
-                      {busy ? "Refreshing…" : "Updated " + stamp(p.updatedAt)}
-                    </small>
-                    {p.routine && (
-                      <small>
-                        <Clock3 size={12} />{" "}
-                        {p.routine.enabled && p.routine.nextAt
-                          ? "Next " + stamp(p.routine.nextAt)
-                          : "Routine paused"}
-                      </small>
-                    )}
-                    {p.lastCheck && (
-                      <small title={p.lastCheck.detail}>
-                        Last check · {stamp(p.lastCheck.time)} ·{" "}
-                        {p.lastCheck.status}
-                      </small>
-                    )}
-                  </div>
-                  <button
-                    aria-label={"Refresh " + p.title}
-                    disabled={busy}
-                    onClick={() => api.refreshPanel(p.id).catch(fail)}
-                  >
-                    <RefreshCw size={16} />
-                  </button>
-                </footer>
-              </section>
-            );
-          })}
+          {cards.map((p) => (
+            <PanelCard key={p.id} state={state} panel={p} manage={() => manager.manage(p.id)} fail={fail} />
+          ))}
         </div>
       )}
-      <dialog ref={dialog} onCancel={() => setView(null)}>
+      {manager.node}
+      <dialog ref={dialog} onCancel={() => setCreating(false)}>
         <div className="sectionhead">
-          <h2>
-            {view === "new"
-              ? "Create a panel"
-              : view === "schedule"
-                ? "Panel routine"
-                : view === "remove"
-                  ? "Remove panel?"
-                  : panel?.title || "Panel"}
-          </h2>
-          <button aria-label="Close dialog" onClick={() => setView(null)}>
+          <h2>Create a panel</h2>
+          <button aria-label="Close dialog" onClick={() => setCreating(false)}>
             <X size={18} />
           </button>
         </div>
-        {view === "new" && (
+        {creating && (
           <form
             onSubmit={async (e) => {
               e.preventDefault();
@@ -378,11 +505,8 @@ export default function Today({
               const form = new FormData(e.currentTarget);
               setAsking(true);
               try {
-                await request(
-                  String(form.get("bot")),
-                  String(form.get("request")),
-                );
-                setView(null);
+                await request(String(form.get("bot")), String(form.get("request")));
+                setCreating(false);
               } catch (e) {
                 setErr(String(e));
               } finally {
@@ -414,103 +538,6 @@ export default function Today({
               Ask bot <ArrowRight size={15} />
             </button>
           </form>
-        )}
-        {view === "manage" && panel && (
-          <div className="panel-settings">
-            <button
-              onClick={() => {
-                open(panel.chatId);
-                setView(null);
-              }}
-            >
-              Open original chat <ArrowRight size={15} />
-            </button>
-            {panel.refreshChatId && (
-              <button
-                onClick={() => {
-                  open(panel.refreshChatId!);
-                  setView(null);
-                }}
-              >
-                Open refresh history <ArrowRight size={15} />
-              </button>
-            )}
-            <label>
-              Panel size
-              <select
-                value={panel.size}
-                onChange={(e) =>
-                  api
-                    .changePanel(panel.id, e.target.value)
-                    .catch((e) => setErr(String(e)))
-                }
-              >
-                <option value="small">Small</option>
-                <option value="wide">Wide</option>
-                <option value="tall">Tall</option>
-              </select>
-            </label>
-            <div className="actionrow">
-              <button onClick={() => change("earlier")}>
-                <ChevronLeft size={15} />
-                Earlier
-              </button>
-              <button onClick={() => change("later")}>
-                Later
-                <ChevronRight size={15} />
-              </button>
-            </div>
-            <button onClick={() => setView("schedule")}>
-              <CalendarClock size={16} />
-              {panel.routine ? "Edit routine" : "Set a routine"}
-            </button>
-            {panel.routine && (
-              <>
-                <small>
-                  {cadenceSummary(cadenceFromCron(panel.routine.cron))} ·{" "}
-                  {panel.routine.timezone}
-                </small>
-                <button
-                  onClick={() =>
-                    api
-                      .routine(panel.id, {
-                        action: panel.routine!.enabled ? "pause" : "resume",
-                      })
-                      .catch((e) => setErr(String(e)))
-                  }
-                >
-                  {panel.routine.enabled ? "Pause routine" : "Resume routine"}
-                </button>
-                <button
-                  onClick={() =>
-                    api
-                      .routine(panel.id, { action: "remove" })
-                      .catch((e) => setErr(String(e)))
-                  }
-                >
-                  Remove routine
-                </button>
-              </>
-            )}
-            <button onClick={() => change(panel.hidden ? "show" : "hide")}>
-              <EyeOff size={16} />
-              {panel.hidden ? "Show on Today" : "Hide from Today"}
-            </button>
-            <button className="danger" onClick={() => setView("remove")}>
-              Remove panel
-            </button>
-          </div>
-        )}
-        {view === "schedule" && panel && (
-          <RoutineForm panel={panel} done={() => setView(null)} />
-        )}
-        {view === "remove" && panel && (
-          <>
-            <p>Remove {panel.title} and its refresh routine?</p>
-            <button className="primary" onClick={() => change("delete")}>
-              Remove panel and routine
-            </button>
-          </>
         )}
         {err && <p role="alert">{err}</p>}
       </dialog>

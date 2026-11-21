@@ -41,25 +41,33 @@ export default function BoardPanel({
   state,
   startChat,
   fail,
+  cards,
+  only,
 }: {
   state: State;
+  /** A space's cards (spaces.read). Left out, the cards of Today's board. */
+  cards?: BoardItem[];
+  /** A Feed, Ideas or Goals space shows its one kind, without the tabs. */
+  only?: Kind;
   /** Opens a new chat with the bot. `send` sends the text; otherwise it waits in the composer. */
   /** Starts a chat with a bot. With `item`, the message carries that Today item, and the chat shows a card for it. */
   startChat: (botId: string, text: string, send: boolean, item?: BoardItem) => Promise<void>;
   fail: (e: unknown) => void;
 }) {
-  const [kind, setKind] = useState<Kind>("feed");
+  const [picked, setKind] = useState<Kind>("feed");
+  const kind = only ?? picked;
+  const board = cards ?? state.board ?? [];
   const [openId, setOpenId] = useState("");
   const [finished, setFinished] = useState(false);
   const [why, setWhy] = useState("");
   const now = Date.now();
-  const items = (state.board ?? []).filter(
+  const items = board.filter(
     (i) => i.kind === kind && (finished ? i.status !== "open" : i.status === "open" && !((i.snoozedUntil ?? 0) > now)),
   );
   const counts = Object.fromEntries(
     tabs.map((t) => [
       t.kind,
-      (state.board ?? []).filter((i) => i.kind === t.kind && i.status === "open" && !((i.snoozedUntil ?? 0) > now) && !i.read)
+      board.filter((i) => i.kind === t.kind && i.status === "open" && !((i.snoozedUntil ?? 0) > now) && !i.read)
         .length,
     ]),
   );
@@ -72,9 +80,9 @@ export default function BoardPanel({
     if (!item.read) void act(item.id, "read");
   }
   return (
-    <section className="live-panel today-panel wide board-panel" aria-label="Feed, Ideas and Goals">
+    <section className="live-panel today-panel wide board-panel" aria-label={only ? tab.label : "Feed, Ideas and Goals"}>
       <div className="board-head">
-        <div className="filters chips board-tabs" role="tablist" aria-label="Board">
+        {only ? <span /> : <div className="filters chips board-tabs" role="tablist" aria-label="Board">
           {tabs.map((t) => (
             <button
               key={t.kind}
@@ -90,7 +98,7 @@ export default function BoardPanel({
               {!!counts[t.kind] && <span className="board-count">{counts[t.kind]}</span>}
             </button>
           ))}
-        </div>
+        </div>}
         <button className="textbutton" aria-pressed={finished} onClick={() => setFinished(!finished)}>
           {finished ? "Show open" : "Show finished"}
         </button>
