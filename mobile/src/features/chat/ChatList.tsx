@@ -1,122 +1,18 @@
 import { router } from "expo-router";
-import { Archive, Search, SquarePen, X } from "lucide-react-native";
-import { useMemo, useState } from "react";
-import { Alert, TextInput, View } from "react-native";
-import Animated, { FadeIn } from "react-native-reanimated";
-import type { Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBots, useCan, useChatActivity, useChats, usePart } from "@/state/hooks";
-import { api, attempt } from "@/state/link";
+import { Archive, FolderPlus, Search, SquarePen, X } from "lucide-react-native";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { TextInput, useWindowDimensions, View } from "react-native";
+import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { BoardScroll } from "@/features/home/BotBoard";
+import type { ChatSummary } from "@/link/types";
+import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { ago, dayBucket } from "@/state/time";
-import { BotAvatar, Chip, Dot, EmptyState, HoldMenu, IconButton, Label, Mascot, Page, radius, space, T, Tap, useTheme } from "@/ui";
-import { GroupFace, plainPreview } from "./bits";
-import { myPlace, myself } from "./people";
+import { Chip, EmptyState, IconButton, LinkBanner, Mascot, radius, space, T, TAB_BAR_ROOM, Tap, useTheme } from "@/ui";
+import { ChatBoard } from "./ChatBoard";
+import { newSection } from "./sectionMenus";
 
 const isArchivedConversation = (chat: ChatSummary) => !!chat.archived && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine);
-
-function remove(chat: ChatSummary) {
-  Alert.alert("Delete this chat?", chat.title, [
-    { text: "Cancel", style: "cancel" },
-    { text: "Delete", style: "destructive", onPress: () => void attempt(api.deleteChat(chat.id)) },
-  ]);
-}
-
-function rename(chat: ChatSummary) {
-  Alert.prompt(
-    "Rename chat",
-    undefined,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Rename",
-        onPress: (value?: string) => {
-          const title = value?.trim().slice(0, 120);
-          if (title && title !== chat.title) void attempt(api.renameChat(chat.id, title));
-        },
-      },
-    ],
-    "plain-text",
-    chat.title,
-  );
-}
-
-function ChatRow({ chat, bots }: { chat: ChatSummary; bots: Map<string, Bot> }) {
-  const state = useChatActivity(chat.id);
-  const bot = bots.get(chat.botId);
-  const live = activityLabel(state);
-  const group = chat.botIds && chat.botIds.length > 1;
-  const canChat = useCan("agents", "chat");
-  const me = myself(usePart("meta"));
-  const speaker = chat.last?.role === "user" ? "You" : group && chat.last?.botId ? bots.get(chat.last.botId)?.name : undefined;
-  const preview = chat.last ? (speaker ? speaker + ": " : "") + plainPreview(chat.last.text) : "No messages yet";
-  const title = chat.title || bot?.name || "Chat";
-  // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
-  const mine = myPlace(chat, me) === "manages";
-  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }] : [];
-  const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
-  const actions = chat.archived
-    ? [{ id: "restore", title: "Restore", image: "tray.and.arrow.up" }, ...starters, ...ends]
-    : [
-        { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
-        { id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" },
-        ...starters,
-        { id: "archive", title: "Archive", image: "archivebox" },
-        ...ends,
-      ];
-  return (
-    <HoldMenu
-      actions={canChat ? actions : []}
-      onPressAction={({ nativeEvent }) => {
-        const action = nativeEvent.event;
-        if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }));
-        else if (action === "unread") void attempt(api.setChatFlags(chat.id, { unread: !chat.unread }));
-        else if (action === "archive") void attempt(api.setChatFlags(chat.id, { archived: true }), "Archived");
-        else if (action === "restore") void attempt(api.setChatFlags(chat.id, { archived: false }), "Restored");
-        else if (action === "rename") rename(chat);
-        else if (action === "delete") remove(chat);
-      }}
-    >
-      <Tap
-        onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })}
-        sink={1}
-        feel="select"
-        hitSlop={0}
-        accessibilityLabel={title + ", " + (live || preview) + (chat.unread ? ", unread" : "")}
-        accessibilityHint="Long press for more"
-      >
-        <View style={{ minHeight: 72, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md }}>
-          {group ? (
-            <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} />
-          ) : (
-            <BotAvatar bot={bot} size={48} state={state} />
-          )}
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <T variant="callout" weight={chat.unread ? "700" : "600"} numberOfLines={1} style={{ flex: 1 }}>
-                {title}
-              </T>
-              <T variant="footnote" color={chat.unread ? "accentText" : "faint"} weight={chat.unread ? "600" : "400"}>
-                {ago(chat.time)}
-              </T>
-            </View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              {live ? (
-                <T variant="subhead" weight="600" color={state === "waiting" ? "warning" : "accentText"} numberOfLines={1} style={{ flex: 1 }}>
-                  {live}
-                </T>
-              ) : (
-                <T variant="subhead" color={chat.unread ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
-                  {preview}
-                </T>
-              )}
-              {chat.unread && <Dot size={9} />}
-            </View>
-          </View>
-        </View>
-      </Tap>
-    </HoldMenu>
-  );
-}
 
 function SearchField({ value, onChange }: { value: string; onChange: (text: string) => void }) {
   const { colors, dark, type, control } = useTheme();
@@ -165,7 +61,62 @@ function Skeleton() {
   );
 }
 
-type Section = { title: string; chats: ChatSummary[] };
+/**
+ * Page's frame for a tab's root, with a scroll view the list can scroll itself: a dragged chat near
+ * the top or bottom edge scrolls the page (Page has no handle on its scroll view). Keep it like
+ * Page's, and like Home's own frame.
+ */
+function ChatsFrame({ children, scroll, scrollEnabled, actions }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode }) {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const view = useSharedValue(0);
+  const content = useSharedValue(0);
+  const { edges, offset, max } = scroll;
+  useEffect(() => {
+    edges.value = { top: insets.top, bottom: height - TAB_BAR_ROOM - insets.bottom };
+  }, [edges, insets.top, insets.bottom, height]);
+  const onScroll = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      offset.value = event.contentOffset.y;
+    },
+  });
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <Animated.ScrollView
+        ref={scroll.ref}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: insets.top + space.md, paddingBottom: TAB_BAR_ROOM + insets.bottom + space.xxl, gap: space.xl }}
+        contentInsetAdjustmentBehavior="never"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={scrollEnabled}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        onLayout={(event) => {
+          view.value = event.nativeEvent.layout.height;
+          max.value = Math.max(0, content.value - view.value);
+        }}
+        onContentSizeChange={(_, h) => {
+          content.value = h;
+          max.value = Math.max(0, content.value - view.value);
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: space.md, marginBottom: space.xs }}>
+          <View style={{ flex: 1 }}>
+            <T variant="display" accessibilityRole="header" numberOfLines={2}>
+              Chats
+            </T>
+          </View>
+          {!!actions && <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingBottom: 3 }}>{actions}</View>}
+        </View>
+        <LinkBanner />
+        {children}
+      </Animated.ScrollView>
+    </View>
+  );
+}
 
 export default function ChatList() {
   const { colors } = useTheme();
@@ -175,71 +126,59 @@ export default function ChatList() {
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const canChat = useCan("agents", "chat");
+  // The person's own sections ("chat-sections-v1"). Without them the list is as it always was.
+  const filing = useCapability("chat-sections-v1");
+  const held = usePart("chatSections");
+  const sections = filing ? (held ?? []) : undefined;
 
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const conversations = useMemo(() => chats.filter(isConversation), [chats]);
   const archived = useMemo(() => chats.filter(isArchivedConversation), [chats]);
-
-  const sections = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+  const needle = query.trim().toLowerCase();
+  const { shown, old } = useMemo(() => {
     const matches = (chat: ChatSummary) => {
       if (!needle) return true;
       const names = (chat.botIds ?? [chat.botId]).map((id) => bots.get(id)?.name ?? "").join(" ");
       return (chat.title + " " + names + " " + (chat.last?.text ?? "")).toLowerCase().includes(needle);
     };
-    const newest = (list: ChatSummary[]) => list.filter(matches).sort((a, b) => b.time - a.time);
-    const out: Section[] = [];
-    const shown = newest(conversations);
-    const pinned = shown.filter((chat) => chat.pinned);
-    if (pinned.length) out.push({ title: "Pinned", chats: pinned });
-    for (const bucket of ["Today", "Yesterday", "Earlier"] as const) {
-      const list = shown.filter((chat) => !chat.pinned && dayBucket(chat.time) === bucket);
-      if (list.length) out.push({ title: bucket, chats: list });
-    }
-    if (showArchived) {
-      const list = newest(archived);
-      if (list.length) out.push({ title: "Archived", chats: list });
-    }
-    return out;
-  }, [conversations, archived, bots, query, showArchived]);
+    return { shown: conversations.filter(matches), old: showArchived ? archived.filter(matches) : [] };
+  }, [conversations, archived, bots, needle, showArchived]);
 
+  // The page, for scrolling it under a dragged chat; and whether a drag is under way, which stops its own scrolling.
+  const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
+  const [dragging, setDragging] = useState(false);
   const empty = synced && conversations.length === 0 && archived.length === 0;
+  const nothing = shown.length === 0 && old.length === 0 && (!!needle || !sections?.length);
 
   return (
-    <Page tab title="Chats" actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
+    <ChatsFrame scroll={scroll} scrollEnabled={!dragging} actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
       {!synced ? (
         <Skeleton />
       ) : empty ? (
         <EmptyState art={<Mascot size={104} />} title="No chats yet" action={canChat ? "New chat" : undefined} onAction={canChat ? () => router.push("/chat/new") : undefined} />
       ) : (
-        <Animated.View entering={FadeIn.duration(220)} style={{ gap: space.xl }}>
+        <Animated.View entering={FadeIn.duration(220)} style={{ gap: space.md }}>
           <View style={{ gap: space.md }}>
             <SearchField value={query} onChange={setQuery} />
-            {archived.length > 0 && (
-              <View style={{ flexDirection: "row" }}>
-                <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />
+            {(archived.length > 0 || (sections && canChat)) && (
+              <View style={{ flexDirection: "row", gap: space.sm }}>
+                {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection()} />}
+                {archived.length > 0 && <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />}
               </View>
             )}
           </View>
-          {sections.length === 0 ? (
+          {nothing ? (
             <View style={{ alignItems: "center", paddingVertical: space.huge, gap: space.sm }}>
               <Search size={26} color={colors.faint} strokeWidth={2} />
               <T variant="callout" color="muted">
-                {query.trim() ? "No matches" : "No chats"}
+                {needle ? "No matches" : "No chats"}
               </T>
             </View>
           ) : (
-            sections.map((section) => (
-              <View key={section.title}>
-                <Label style={{ marginBottom: 0 }}>{section.title}</Label>
-                {section.chats.map((chat) => (
-                  <ChatRow key={chat.id} chat={chat} bots={bots} />
-                ))}
-              </View>
-            ))
+            <ChatBoard chats={shown} archived={old} sections={sections} bots={bots} searching={!!needle} scroll={scroll} onDragging={setDragging} />
           )}
         </Animated.View>
       )}
-    </Page>
+    </ChatsFrame>
   );
 }
