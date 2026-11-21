@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { moveBot } from "../src/moveBot.ts";
 import { settleChatDisplay } from "../src/chatDisplay.ts";
-import { leftEmpty } from "../src/emptyChat.ts";
+import { leftEmpty, newChatToReuse } from "../src/emptyChat.ts";
 import { commitInterim, finishReply } from "../desktop/transcript.mjs";
 
 test("old profiles migrate to Folded once and keep later explicit choices", () => {
@@ -111,4 +111,21 @@ test("a chat nobody wrote in is archived when it is left; every other chat is ke
   assert.equal(leftEmpty(chat(), idle, "  half a sentence"), false, "typed text is not thrown away");
   assert.equal(leftEmpty(chat(), idle, "   "), true);
   assert.equal(leftEmpty(undefined, idle), false, "a chat that is gone");
+});
+
+test("Start a new chat reuses the bot's empty new chat, listed or archived, before making another", () => {
+  const idle = { streams: {}, queued: {} };
+  const chat = (id, more = {}) => ({ id, botId: "pip", title: "New chat", time: 1, messages: [], ...more });
+  const talk = chat("talk", { messages: [{ role: "user", text: "Hello" }], time: 9 });
+  const pick = (chats, state = idle) => newChatToReuse(chats, "pip", state)?.id;
+  assert.equal(pick([talk]), undefined, "a conversation is never reused");
+  assert.equal(pick([talk, chat("blank")]), "blank");
+  assert.equal(pick([talk, chat("old", { archived: true, time: 2 }), chat("newer", { archived: true, time: 5 })]), "newer", "the newest archived one");
+  assert.equal(pick([chat("archived", { archived: true, time: 8 }), chat("listed", { time: 1 })]), "listed", "one still in the lists comes first");
+  assert.equal(pick([chat("scouts", { botId: "scout" })]), undefined, "another bot's");
+  // Not the bot's plain new chat: a group, a project's chat, a panel's, a routine's, a pinned one, one that is working.
+  for (const more of [{ botIds: ["pip", "ivy"] }, { projectId: "p1" }, { panelId: "panel" }, { schedules: [{ id: 1, routine: true }] }, { pinned: true }, { count: 2 }])
+    assert.equal(pick([chat("no", { archived: true, ...more })]), undefined, JSON.stringify(more));
+  assert.equal(pick([chat("busy")], { streams: { busy: "" }, queued: {} }), undefined);
+  assert.equal(pick([chat("waiting")], { streams: {}, queued: { waiting: [{ text: "next" }] } }), undefined);
 });

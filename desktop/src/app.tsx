@@ -42,7 +42,7 @@ import type { Attachment, Bot, Chat, MentionInput, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
-import { leftEmpty } from "./emptyChat";
+import { leftEmpty, newChatToReuse } from "./emptyChat";
 import "./style.css";
 
 // The remembered colors go on before anything is drawn.
@@ -342,10 +342,12 @@ function App() {
   function botChat(b: Bot) {
     const chats = state?.chats.filter((c) => c.botId === b.id && personalChat(c)) ?? [];
     // Settings › Chat › When you select a bot: "Start a new chat". A new chat nobody wrote in yet
-    // is that new chat, so selecting the bot twice makes one, not two.
+    // is that new chat, so selecting the bot twice makes one, not two; so is one that was archived
+    // when it was left. It is taken out of the archive first, also when it is not shown as
+    // archived yet: the archiving of a chat just left may still be on its way.
     if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
-      const blank = chats.find((c) => leftEmpty(c, state));
-      if (blank) open(blank.id);
+      const blank = newChatToReuse(state.chats, b.id, state);
+      if (blank) void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
       else void newChat(b.id).catch(fail);
       return;
     }
