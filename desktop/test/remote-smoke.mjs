@@ -10,12 +10,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
+import { freePort } from "./free-port.mjs";
 import { skipWelcome } from "./welcome-helper.mjs";
 
 const binary = process.env.BOTKINS_BINARY;
 const out = process.env.REMOTE_SHOTS || null;
 if (out) mkdirSync(out, { recursive: true });
-const PORT = 47700 + Math.floor(Math.random() * 200);
+const PORT = await freePort();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (what, check, ms = 60000) => { const limit = Date.now() + ms; for (;;) { const v = await check(); if (v) return v; if (Date.now() > limit) throw new Error("Timed out waiting for " + what); await sleep(300); } };
 /** Starts a copy of the app. With `kept`, on a data folder an earlier copy used: the app opened again. */
