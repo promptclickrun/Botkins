@@ -435,6 +435,13 @@ The command line has two readers: a person, and an agent that changes Botkins be
 
 **Use each command with no terminal.** Add `--json`: the answer is one JSON document on standard output, and a failure is `{"error": {"message": "…", "code": "…"}}` with a non-zero exit code. A long value comes from a file (`--instructions-file <path>`). Name a thing by its id when you have one; a name works when only one thing has it.
 
+**An id or a value that starts with a dash.** Some ids are random text, and about one in 64 starts with `-` (a device's id, for example). The command line reads a word that starts with a dash as an option. One rule covers each command:
+
+- Give an option's value with `=`: `--chat=<id>`, `--bot=<id>`, `--project=<id>`.
+- Put a word that is not an option after `--`: `botkins devices remove --yes -- <id>`, `botkins devices rename -- <id> "Kitchen phone"`. Each option of Botkins comes before the `--`.
+
+A caller that takes an id from a `--json` answer does both always, and then no id can be misread. When the command line refuses such a word, its sentence says this rule.
+
 **A secret is never a word on the command line.** A command line shows in the process list and in the shell's history. A command that takes a secret reads it from standard input or from a hidden prompt (`botkins providers login <provider> --token`). No command prints one.
 
 **A change leaves a line in the log.** Each call that changes something writes one line when it is done: `Changed from the command line: bots.edit Nova`. The line names the call and the thing. It never has a value. Thus a person can see afterwards (`botkins logs`) what an agent changed.

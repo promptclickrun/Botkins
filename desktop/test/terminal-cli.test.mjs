@@ -339,3 +339,67 @@ test("tables, times and durations read well", () => {
   assert.equal(ago(null), "never");
   assert.deepEqual([duration(42), duration(125), duration(3725), duration(90000)], ["42s", "2m 5s", "1h 2m", "1d 1h"]);
 });
+
+test("an id or a value that starts with a dash is given after -- or with =, and a refusal says so", async () => {
+  // Some ids are random text: a device's can start with a dash. So can a name a person chose.
+  const id = "-Ab3_x9Zq-Kp";
+  const service = fakeService({
+    "devices.rename": (ref, name) => ({ id: ref, name }),
+    "devices.setPerson": (ref, person) => ({ id: ref, name: "Phone", person }),
+    "devices.remove": (ref) => ({ removed: ref, name: "Phone" }),
+    "bots.get": (ref) => ({ id: ref, name: ref, role: "", instructions: "" }),
+    "bots.edit": (ref, fields) => ({ id: ref, name: fields.name ?? ref, role: "" }),
+    "bots.remove": (ref) => ({ id: ref, name: ref }),
+    "bots.tools": (ref) => ({ id: ref, name: ref, tools: [], skills: [] }),
+    "bots.tools.set": (ref, patch) => ({ id: ref, name: ref, tools: [], skills: [], patch }),
+    "routines.run": (ref) => ({ id: ref, name: ref }),
+    "routines.pause": (ref) => ({ id: ref, name: ref, enabled: false }),
+    "plugins.setEnabled": () => undefined,
+    "plugins.uninstall": () => undefined,
+    "tools.get": (ref) => ({ id: ref, name: ref, kind: "web", url: "https://x.example", enabled: true, env: [], headers: [] }),
+    "tools.remove": (ref) => ({ removed: ref, name: ref }),
+    "skills.enable": (ref) => ({ name: ref, enabled: true }),
+    "routines.list": () => [],
+  });
+  const last = () => service.calls.at(-1);
+  // A word that is not an option goes after "--". Botkins' own options come before it.
+  for (const [argv, call] of [
+    [["devices", "rename", "--", id, "Kitchen phone"], ["devices.rename", id, "Kitchen phone"]],
+    [["devices", "set-person", "--", id, "Sam"], ["devices.setPerson", id, "Sam"]],
+    [["devices", "remove", "--yes", "--", id], ["devices.remove", id]],
+    [["bots", "edit", "--name", "Nova", "--", id], ["bots.edit", id, { name: "Nova" }]],
+    [["bots", "remove", "--yes", "--", id], ["bots.remove", id]],
+    [["bots", "tools", "--", id], ["bots.tools", id]],
+    [["routines", "run", "--", id], ["routines.run", id]],
+    [["routines", "pause", "--", id], ["routines.pause", id]],
+    [["plugins", "disable", "--", id], ["plugins.setEnabled", id, false]],
+    [["plugins", "uninstall", "--yes", "--", id], ["plugins.uninstall", id]],
+    [["tools", "show", "--", id], ["tools.get", id]],
+    [["tools", "remove", "--yes", "--", id], ["tools.remove", id]],
+    [["skills", "enable", "--", id], ["skills.enable", id, true]],
+  ]) {
+    const run = await botkins(argv, { service });
+    assert.equal(run.exit, EXIT.ok, argv.join(" ") + ": " + run.err);
+    assert.deepEqual(last(), call, argv.join(" "));
+  }
+  // An option's value is given with "=".
+  for (const [argv, call] of [
+    [["routines", "list", "--bot=" + id], ["routines.list", id]],
+    [["bots", "tools", "Nova", "--off=" + id, "--on=" + id], ["bots.tools.set", "Nova", { toolsOn: [id], toolsOff: [id] }]],
+    [["bots", "edit", "Nova", "--name=" + id], ["bots.edit", "Nova", { name: id }]],
+  ]) {
+    const run = await botkins(argv, { service });
+    assert.equal(run.exit, EXIT.ok, argv.join(" ") + ": " + run.err);
+    assert.deepEqual(last(), call, argv.join(" "));
+  }
+  // Given as a plain word, or as a value after a space, it is refused, and the refusal says the rule. Nothing reaches the service.
+  const before = service.calls.length;
+  for (const argv of [["devices", "remove", "--yes", id], ["devices", "rename", id, "Kitchen"], ["routines", "list", "--bot", id], ["bots", "tools", "Nova", "--off", id], ["tools", "show", id]]) {
+    const run = await botkins(argv, { service });
+    assert.equal(run.exit, EXIT.usage, argv.join(" "));
+    assert.match(run.err, /If that word is an id or a value that starts with a dash: give an option's value as --option=value, and put a word that is not an option after `--` \(botkins devices remove --yes -- <id>\)\./, argv.join(" "));
+  }
+  assert.equal(service.calls.length, before);
+  // A real mistake still reads as one, with the same help.
+  assert.match((await botkins(["devices", "list", "--nope"], { service })).err, /Unknown option '--nope'\./);
+});
