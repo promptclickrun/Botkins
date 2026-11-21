@@ -87,6 +87,13 @@ if (process.argv[2] !== "--isolated") {
     rmSync(home, { recursive: true, force: true });
   }
 } else {
+  // An error that nothing caught (the runtime died, a write to it failed) ends the run with the same last line as a
+  // case that did not hold. Without this, Node would print its own trace and the last line would not say FAILED.
+  for (const event of ["uncaughtException", "unhandledRejection"])
+    process.on(event, (error) => {
+      console.log("FAILED: the script itself stopped: " + String(error?.stack ?? error).slice(0, 400).replace(/\s*\n\s*/g, " | "));
+      process.exit(1);
+    });
   const root = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "botkins-hook-args-live-inner-"));
   const DEBUG = !!process.env.BOTKINS_PROBE_DEBUG;
   const isShellTool = (name) => /^(bash|shell|powershell)$/i.test(name ?? "");
@@ -535,7 +542,7 @@ if (process.argv[2] !== "--isolated") {
     console.log(failed.length ? "FAILED: " + failed.join("; ") : "PASSED");
     if (failed.length) process.exitCode = 1;
   } catch (error) {
-    console.log("FAILED: the script itself stopped: " + String(error?.stack ?? error).slice(0, 400));
+    console.log("FAILED: the script itself stopped: " + String(error?.stack ?? error).slice(0, 400).replace(/\s*\n\s*/g, " | "));
     process.exitCode = 1;
   } finally {
     await client?.stop?.().catch(() => {});
