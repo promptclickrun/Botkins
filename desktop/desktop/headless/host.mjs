@@ -27,7 +27,12 @@ const ttl = Math.min(Math.max(Number(process.env.BOTKINS_PAIR_TTL_MS) || 5 * 60_
 // member's role (team-cut.mjs says what the cut holds and what it never does). It is read from the
 // link's own store each time, so a change is told with the next call or the next look.
 let host;
-const team = () => (host ? teamCut(host.store.data.team, teamPeople(host.store.data.team, host.ownerName())) : null);
+// (`teamForApp` is the link's own list for this, without anything that is the link's to keep. A link from before it has none, and the store is read.)
+const team = () => {
+  if (!host) return null;
+  const told = typeof host.teamForApp === "function" ? host.teamForApp() : { ...host.store.data.team, owner: host.ownerName() };
+  return teamCut(told, teamPeople(told, told.owner));
+};
 const { backend, refresh, screenInput } = headlessBackend((method, args) => workspaceRequest(socket, method, args), version, { team });
 host = new LinkHost({ dir, backend, screenInput, port, relay: relayUrl ? { url: relayUrl, own: relayOwn } : false, log: (s) => console.error(s) });
 const hostName = process.env.BOTKINS_HOST_NAME?.trim();
