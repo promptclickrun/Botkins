@@ -145,11 +145,12 @@ test("skills are made in Botkins, copied or linked from folders, and switched of
   skillFolder(join(team, ".hidden"), "secret");
   skillFolder(join(team, "node_modules"), "dependency");
   assert.deepEqual(ws.integrations.addFromFolder(team), { kind: "folder", name: "team-skills", count: 2 });
-  // A plugin folder is linked as a plugin.
+  // A plugin folder is never linked: a plugin can start commands, so it has one way in (Plugins.addFolder).
   const plugin = join(dir, "acme-plugin");
   mkdirSync(plugin);
   writeFileSync(join(plugin, "plugin.json"), "{}");
-  assert.deepEqual(ws.integrations.addFromFolder(plugin), { kind: "plugin", name: "acme-plugin" });
+  assert.throws(() => ws.integrations.addFromFolder(plugin), (error) => error.code === "PLUGIN_FOLDER" && /is a plugin, which can run commands/.test(error.message));
+  assert.deepEqual(ws.integrations.skillState.plugins, []);
   mkdirSync(join(dir, "empty", "nested"), { recursive: true });
   assert.throws(() => ws.integrations.addFromFolder(join(dir, "empty")), /No skills found/);
   assert.throws(() => ws.integrations.addFromFolder("relative"), /Choose a folder/);
@@ -160,9 +161,9 @@ test("skills are made in Botkins, copied or linked from folders, and switched of
   );
   const folders = ws.integrations.folders();
   // Folders are kept by their real path.
-  const [teamPath, pluginPath] = [realpathSync(team), realpathSync(plugin)];
+  const teamPath = realpathSync(team);
   assert.deepEqual(folders.folders.map((f) => [f.path, f.skills, f.missing]), [[teamPath, 2, false]]);
-  assert.deepEqual(folders.plugins.map((f) => f.path), [pluginPath]);
+  assert.deepEqual(folders.plugins, []);
   // What a bot's session receives.
   ws.integrations.setSkillEnabled("retro", false);
   ws.integrations.setBotIntegrations("pip", { skillsOff: ["standup"] });
@@ -172,7 +173,8 @@ test("skills are made in Botkins, copied or linked from folders, and switched of
   assert.equal(config.skills.enabled, true);
   assert.deepEqual(config.skills.directories.slice(1), [join(dir, "data", "skills"), teamPath]);
   assert.deepEqual(config.skills.disabledSkills.slice(0, 2), ["retro", "standup"]);
-  assert.deepEqual(config.plugins.directories, [pluginPath]);
+  // No folder of a plugin goes to the runtime as it is: the runtime would read its hooks and tools by itself.
+  assert.deepEqual(config.plugins.directories, []);
   assert.deepEqual(ws.integrations.skillsFor(ws.bot("scout")).disabled, ["retro"]);
   // Removing: Botkins' own skills are deleted; linked ones are unlinked, never deleted.
   ws.integrations.removeSkill("triage");

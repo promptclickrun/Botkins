@@ -5,6 +5,11 @@
  * starts a command, or evaluates a manifest.  A reviewed plugin is an
  * immutable set of bytes identified by its SHA-256 revision; callers can
  * hand that revision to materialize() after the user has approved it.
+ *
+ * What a plugin starts (its tools and hooks) is not read here. The
+ * description comes from pluginStarts (plugin-reading.mjs), which is the
+ * call the runtime starts things from, so the two cannot say different
+ * things.
  */
 import {
   createHash,
@@ -23,6 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { declaredPath, describeStarts, filesReader, pluginStarts, startWarnings } from "./plugin-reading.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
@@ -50,29 +56,12 @@ const BUILT_INS = [
   },
 ];
 
-const MANIFEST_PATHS = [
-  ".plugin/plugin.json",
-  "plugin.json",
-  ".github/plugin/plugin.json",
-  ".claude-plugin/plugin.json",
-  ".codex-plugin/plugin.json",
-];
 const MARKETPLACE_PATHS = [
   ".github/plugin/marketplace.json",
   ".plugin/marketplace.json",
   ".claude-plugin/marketplace.json",
   "marketplace.json",
 ];
-const MCP_PATHS = [".mcp.json", "mcp.json", ".claude-plugin/.mcp.json", ".claude-plugin/mcp.json"];
-const HOOK_PATHS = ["hooks.json", "hooks/hooks.json", ".claude-plugin/hooks.json", ".claude-plugin/hooks/hooks.json"];
-const BUILT_IN_PLACEHOLDERS = new Set([
-  "PLUGIN_ROOT",
-  "PLUGIN_DATA",
-  "CLAUDE_PLUGIN_ROOT",
-  "CLAUDE_PLUGIN_DATA",
-  "HOME",
-  "PATH",
-]);
 const SUPPORTED_EXTENSIONS = new Set(["com.github.awesome-copilot"]);
 
 function fail(message) {
@@ -293,77 +282,6 @@ function fieldsFromManifest(userConfig) {
   return result;
 }
 
-function placeholders(value, output) {
-  if (typeof value !== "string") return;
-  for (const match of value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
-    const key = match[1];
-    if (!BUILT_IN_PLACEHOLDERS.has(key)) output.add(key);
-  }
-}
-
-function walkValues(value, output) {
-  if (typeof value === "string") placeholders(value, output);
-  else if (Array.isArray(value)) for (const item of value) walkValues(item, output);
-  else if (value && typeof value === "object") for (const item of Object.values(value)) walkValues(item, output);
-}
-
-function mcpEntries(value) {
-  if (!value) return [];
-  if (typeof value === "string") return [];
-  if (value.mcpServers && typeof value.mcpServers === "object") return Object.entries(value.mcpServers);
-  if (typeof value === "object" && !Array.isArray(value)) return Object.entries(value);
-  return [];
-}
-
-function parseMcp(value) {
-  return mcpEntries(value).flatMap(([name, server]) => {
-    if (!server || typeof server !== "object") return [];
-    const kind = server.url || server.serverUrl || server.type === "http" || server.type === "sse" || server.type === "streamable-http" ? "remote" : "local";
-    const command = typeof server.command === "string" ? server.command : undefined;
-    const url = typeof (server.url ?? server.serverUrl) === "string" ? (server.url ?? server.serverUrl) : undefined;
-    const oauth = Boolean(server.oauth || server.oauthClientId || server.authentication?.oauth);
-    return [{
-      name: String(name),
-      kind,
-      ...(command ? { command } : {}),
-      ...(url ? { url } : {}),
-      ...(oauth ? { oauth: true } : {}),
-    }];
-  });
-}
-
-function parseHooks(value) {
-  if (!value || typeof value !== "object") return [];
-  const source = value.hooks && typeof value.hooks === "object" ? value.hooks : value;
-  const result = [];
-  const commandKeys = ["bash", "command", "cmd", "shell", "powershell", "windows", "darwin", "macos", "linux"];
-  const add = (event, definition) => {
-    if (Array.isArray(definition)) {
-      for (const item of definition) add(event, item);
-      return;
-    }
-    if (typeof definition === "string") {
-      if (definition.trim()) result.push({ event, command: definition.slice(0, 300) });
-      return;
-    }
-    if (!definition || typeof definition !== "object") return;
-    // Claude-style hooks put the actual command under a nested hooks array;
-    // platform-specific forms put the command under command/bash/windows/etc.
-    if (definition.hooks) add(event, definition.hooks);
-    if (definition.commands) add(event, definition.commands);
-    if (definition.type && definition.type !== "command" && !definition.command && !definition.bash && !definition.cmd) return;
-    for (const key of commandKeys) {
-      const command = definition[key];
-      if (typeof command === "string" && command.trim()) result.push({ event, command: command.slice(0, 300) });
-      else if (command && typeof command === "object") add(event, command);
-    }
-  };
-  for (const [event, definitions] of Object.entries(source)) {
-    add(event, definitions);
-  }
-  return result;
-}
-
 function normalizeAuthor(author) {
   if (typeof author === "string") return author;
   if (author && typeof author === "object") return author.name || author.login || undefined;
@@ -418,35 +336,43 @@ function extensionPaths(manifest) {
   return { requested: [...new Set(requested)], unsupported: [...new Set(unsupported)] };
 }
 
+/**
+ * A plugin's file names, checked: each in its one form, and no two that a disk could take for
+ * the same file. The installed copy is read by exact name; without this, a disk that takes
+ * "A" for "a" could keep one file where the reviewed plugin had two.
+ */
+function assertPlainNames(files) {
+  const seen = new Map();
+  for (const name of files.keys()) {
+    if (declaredPath(name) !== name) fail(`Plugin has a file with an unsafe name: ${JSON.stringify(name).slice(0, 200)}`);
+    for (let at = name.indexOf("/"); ; at = name.indexOf("/", at + 1)) {
+      const path = at < 0 ? name : name.slice(0, at);
+      const folded = path.normalize("NFC").toLowerCase();
+      if (seen.has(folded) && seen.get(folded) !== path) fail(`Plugin has two names that differ only by case or accent form: ${JSON.stringify(path).slice(0, 200)}`);
+      seen.set(folded, path);
+      if (at < 0) break;
+    }
+  }
+}
+
 function parsePluginFiles(files, folder = undefined) {
-  const manifestFile = locateFile(files, MANIFEST_PATHS);
-  if (!manifestFile) fail("Plugin has no supported plugin.json manifest.");
-  const manifest = json(manifestFile.bytes, manifestFile.name);
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) fail("Plugin manifest must be a JSON object.");
+  assertPlainNames(files);
+  const starts = pluginStarts(filesReader(files));
+  if (!starts.manifestPath) fail("Plugin has no supported plugin.json manifest.");
+  const { manifest } = starts;
+  if (!manifest) fail(`The plugin's manifest (${starts.manifestPath}) is not a JSON object.`);
   const name = typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : undefined;
   if (!name) fail("Plugin manifest is missing a name.");
-
-  const mcpFile = typeof manifest.mcpServers === "string"
-    ? { name: manifest.mcpServers, bytes: files.get(safeRelativePath(manifest.mcpServers, "mcpServers"))?.bytes }
-    : locateFile(files, MCP_PATHS);
-  const mcpValue = manifest.mcpServers && typeof manifest.mcpServers === "object"
-    ? manifest.mcpServers
-    : (mcpFile?.bytes ? json(mcpFile.bytes, mcpFile.name) : undefined);
-  const hooksFile = typeof manifest.hooks === "string"
-    ? { name: manifest.hooks, bytes: files.get(safeRelativePath(manifest.hooks, "hooks"))?.bytes }
-    : locateFile(files, HOOK_PATHS);
-  const hooksValue = manifest.hooks && typeof manifest.hooks === "object"
-    ? manifest.hooks
-    : (hooksFile?.bytes ? json(hooksFile.bytes, hooksFile.name) : undefined);
-  const mcpServers = parseMcp(mcpValue);
-  const hooks = parseHooks(hooksValue);
+  // What is shown is shown whole. A plugin with a command too long to show is not installed.
+  if (starts.refused.length) fail(`This plugin cannot be shown whole, so Botkins does not install it: ${starts.refused[0]}.`);
+  const { mcpServers, hooks, sentTo } = describeStarts(starts);
   const config = fieldsFromManifest(manifest.userConfig ?? manifest.settings);
-  const names = new Set();
-  walkValues(mcpValue, names);
-  walkValues(hooksValue, names);
-  for (const key of names) {
+  // A setting the plugin uses and does not declare is asked for too.
+  for (const key of sentTo.keys()) {
     if (!config.has(key)) config.set(key, { key, label: readableKey(key), secret: looksSecret(key), required: true });
   }
+  // Where each setting's value goes: the environment names and headers that get it.
+  for (const [key, places] of sentTo) config.set(key, { ...config.get(key), sentTo: places });
   const lspFile = locateFile(files, ["lsp.json", ".lsp.json", ".claude-plugin/lsp.json"]);
   let lspServers = [];
   if (lspFile) {
@@ -462,16 +388,12 @@ function parsePluginFiles(files, folder = undefined) {
     ...(lspServers.length ? { lspServers } : {}),
   };
   const extensionInfo = extensionPaths(manifest);
-  const warnings = [];
-  if (extensionInfo.unsupported.length) warnings.push(`Uses unsupported plugin extensions: ${extensionInfo.unsupported.join(", ")}.`);
-  if (hooks.length) warnings.push("Runs a command on your computer through plugin hooks.");
-  if (mcpServers.some((server) => server.kind === "local")) warnings.push("Runs a local MCP server on your computer.");
-  if (mcpServers.some((server) => server.kind === "remote")) warnings.push("Connects to a remote MCP server.");
+  const warnings = startWarnings(mcpServers, hooks, extensionInfo.unsupported.length ? [`Uses unsupported plugin extensions: ${extensionInfo.unsupported.join(", ")}.`] : []);
   const postInstallMessage = manifest.postInstallMessage ?? manifest.postInstall;
   return {
     ...(folder ? { folder } : {}),
     manifest,
-    manifestPath: manifestFile.name,
+    manifestPath: starts.manifestPath,
     name,
     contents,
     config: [...config.values()],
@@ -671,6 +593,48 @@ function listingDetails(listing, entry) {
 function localPathIsWithin(child, parent) {
   const rel = relative(parent, child);
   return rel === "" || (rel && !rel.startsWith(`..${sep}`) && rel !== "..");
+}
+
+/**
+ * True when an installed copy is still the bytes that were reviewed: the hash of its files is
+ * its revision. A link in the copy, a file added, changed or taken away: all false.
+ */
+export function verifySnapshot(folder, revision) {
+  try {
+    return typeof revision === "string" && hashFiles(readLocalFiles(folder).files) === revision;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A mark of a folder's state that reads no file: it is another one when a file or a folder below
+ * is added, taken away, written or given other rights (the times, sizes and rights of all of
+ * them). Null when the folder cannot be walked. An installed copy is hashed again only when its
+ * mark is not the one it had at the last hash.
+ */
+export function snapshotStamp(folder) {
+  const hash = createHash("sha256");
+  let count = 0;
+  const visit = (current, prefix) => {
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      if (++count > MAX_PLUGIN_FILES * 4) fail("too many entries");
+      const path = join(current, entry.name);
+      const info = lstatSync(path, { bigint: true });
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      hash.update(JSON.stringify([name, info.isDirectory() ? "d" : info.isFile() ? "f" : "x", String(info.size), String(info.mtimeNs), String(info.ctimeNs), String(info.mode), String(info.ino)]));
+      if (info.isDirectory()) visit(path, name);
+    }
+  };
+  try {
+    const top = lstatSync(folder, { bigint: true });
+    if (!top.isDirectory()) return null;
+    hash.update(JSON.stringify([String(top.mtimeNs), String(top.ctimeNs), String(top.mode), String(top.ino)]));
+    visit(folder, "");
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 export function inspectPlugin(folder) {
@@ -1001,9 +965,9 @@ export class PluginCatalog {
     const destination = join(this.pluginDir, safeId(id), revision);
     assertNoSymlinkPath(destination, this.dir);
     if (existsSync(destination)) {
-      const existing = readLocalFiles(destination);
-      if (hashFiles(existing.files) !== revision) fail("An immutable plugin snapshot was modified.");
-      return destination;
+      if (verifySnapshot(destination, revision)) return destination;
+      // A copy that is no longer the reviewed bytes is taken away, and the reviewed bytes are written again.
+      rmSync(destination, { recursive: true, force: true });
     }
     const parent = dirname(destination);
     mkdirSync(parent, { recursive: true });

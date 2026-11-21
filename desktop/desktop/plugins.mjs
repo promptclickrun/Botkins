@@ -1,8 +1,9 @@
 // The host owns installed plugin scope and configuration. Only list() is published to clients.
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
-import { PluginCatalog } from "./plugin-catalog.mjs";
+import { PluginCatalog, snapshotStamp, verifySnapshot } from "./plugin-catalog.mjs";
+import { describeStarts, folderReader, pluginStarts, startWarnings } from "./plugin-reading.mjs";
 import { pluginSession, pluginOAuthServers } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
@@ -15,6 +16,18 @@ function limitsFor(preview) {
   return limits.join(" ");
 }
 const digest = (value) => createHash("sha256").update(value).digest("hex").slice(0, 40);
+/**
+ * Which reading made the description that is kept with an installed plugin. Before 2, the
+ * description came from other code than the code that starts a plugin's tools and hooks, and the
+ * two could say different things. Since 2 both come from desktop/plugin-reading.mjs.
+ */
+const READING = 2;
+/** Why Botkins itself switched a plugin off. The person switches it on again after a look. */
+const HELD_BACK = {
+  unseen: "Botkins switched this plugin off. An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts, and switch it on again if you agree.",
+  linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
+};
+const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Remove the plugin and install it again.";
 const scoped = (r, id) => r.enabled && (r.bots === "all" || r.bots.includes(id));
 
 // The paired-device router and desktop IPC share the same mutations and credential handling.
@@ -45,6 +58,91 @@ export class Plugins {
     this.oauth = ws.integrations.oauth;
     this.generation = 0;
     this.oauthSchemas = new Map();
+    this.descriptions = new Map(); // folder → what the copy starts, as a person is shown it
+    this.checked = new Map(); // folder → { stamp, ok }: the last check of the copy against its revision
+    this.reviewOld();
+    // Each copy is checked once at the start, and a plugin folder that an earlier version linked
+    // live becomes an installed plugin. Neither holds up the start of the app.
+    this.queue = this.queue.then(async () => {
+      if (this.records.some((row) => !this.intact(row))) this.ws.notify?.();
+      await this.adoptLinked();
+    }).catch(() => {});
+  }
+  /** What an installed copy starts, as a person is shown it: read from the copy, by the reading the runtime starts things from. */
+  described(row) {
+    if (!this.descriptions.has(row.folder)) {
+      let value = null;
+      try {
+        const starts = pluginStarts(folderReader(row.folder));
+        if (starts.manifest) value = describeStarts(starts);
+      } catch {}
+      this.descriptions.set(row.folder, value);
+    }
+    return this.descriptions.get(row.folder);
+  }
+  /**
+   * True while the installed copy is the bytes that were reviewed (its hash is its revision).
+   * Called when a plugin is switched on and when a session opens. The files are hashed again
+   * only when something below the folder changed since the last hash.
+   */
+  intact(row) {
+    const stamp = snapshotStamp(row.folder);
+    const known = this.checked.get(row.folder);
+    if (known && known.stamp === stamp) return known.ok;
+    const ok = stamp !== null && verifySnapshot(row.folder, row.revision ?? basename(row.folder));
+    this.checked.set(row.folder, { stamp, ok });
+    this.descriptions.delete(row.folder);
+    this.oauthSchemas.delete(row.folder);
+    if (!ok) console.warn("Botkins does not use the plugin " + row.preview.id + ": its installed files are not the files that were reviewed.");
+    return ok;
+  }
+  /**
+   * The descriptions kept from before the one reading are made again from the copies. A plugin
+   * that starts a command its old description did not have at all is switched off, with the
+   * reason, until the person has looked: nobody was shown that command.
+   */
+  reviewOld() {
+    let changed = false;
+    for (const row of this.records) {
+      if (row.reading === READING) continue;
+      const fresh = this.described(row);
+      if (fresh) {
+        const before = row.preview.contents ?? {};
+        // (An old description cut a hook's command at 300 characters.)
+        const shown = (hook) => (before.hooks ?? []).some((old) => typeof old?.command === "string" && (old.command === hook.command || (old.command.length === 300 && hook.command.startsWith(old.command))));
+        const known = (server) => server.kind !== "local" || (before.mcpServers ?? []).some((old) => old?.name === server.name && old.kind === "local" && old.command === server.command);
+        if (row.enabled && !(fresh.hooks.every(shown) && fresh.mcpServers.every(known))) Object.assign(row, { enabled: false, heldBack: "unseen" });
+        const warnings = startWarnings(fresh.mcpServers, fresh.hooks, row.preview.warnings ?? []);
+        const { warnings: _old, ...preview } = row.preview;
+        row.preview = { ...preview, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks }, ...(warnings.length && { warnings }) };
+      }
+      row.reading = READING;
+      changed = true;
+    }
+    if (!changed) return;
+    try {
+      writeFileSync(this.file + ".tmp", JSON.stringify(this.records), { mode: 0o600 });
+      renameSync(this.file + ".tmp", this.file);
+    } catch {}
+  }
+  /**
+   * A plugin folder that an earlier version linked live (Settings, Skills) was read by the
+   * runtime itself, with its hooks and tools, on for every bot, and nobody was shown what it
+   * starts. Each one becomes an installed plugin: copied, described, switched off. One that
+   * cannot be copied stays in the list, where the person can remove it, and is not used.
+   */
+  async adoptLinked() {
+    const state = this.ws.integrations?.skillState;
+    for (const link of [...(state?.plugins ?? [])]) {
+      try {
+        const { folder, preview, revision } = await this.catalog.addFolder(link.path);
+        if (!this.records.some((row) => row.preview.id === preview.id))
+          this.save({ folder, preview, revision, sourceFolder: link.path, enabled: false, bots: "all", installedAt: Date.now(), refs: {}, reading: READING, heldBack: "linked" });
+        this.ws.integrations.removeFolder(link.id);
+      } catch (error) {
+        console.warn("Botkins does not use the linked plugin folder " + link.path + ": " + String(error?.message ?? error));
+      }
+    }
   }
   serialize(fn) {
     const pending = this.queue.then(fn);
@@ -123,7 +221,6 @@ export class Plugins {
     return { id: row.preview.id, folder: row.folder, config: row.preview.config, values: this.values(row) };
   }
   oauthServers(row) {
-    if (!row.preview.contents.mcpServers.some((s) => s.oauth)) return [];
     // Manifests are immutable per revision. Snapshotting a streaming chat must not
     // reread a plugin from disk or decrypt its settings on every text delta.
     if (!this.oauthSchemas.has(row.folder)) {
@@ -145,7 +242,12 @@ export class Plugins {
       return { ...f, set: ref ? !this.vault.locked && this.vault.has(ref) : f.default != null && f.default !== "" };
     });
     const unavailable = config.some((field) => row.refs[field.key] && !field.set);
-    let status = unavailable ? "error" : config.some((f) => f.required && !f.set) ? "needs-config" : "ready";
+    // (The last check of the copy. This is called for every look at the app's state, so it reads no file.)
+    const changedCopy = this.checked.get(row.folder)?.ok === false;
+    let status = unavailable || changedCopy ? "error" : config.some((f) => f.required && !f.set) ? "needs-config" : "ready";
+    // What the plugin starts is read from the copy, not taken from what was kept at install.
+    const fresh = changedCopy ? null : this.described(row);
+    const warnings = fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? []) : (preview.warnings ?? []);
     let servers = [];
     if (status === "ready") {
       try {
@@ -156,23 +258,27 @@ export class Plugins {
         status = "error";
       }
     }
+    const { warnings: _kept, ...rest } = preview;
     return {
-      ...preview,
+      ...rest,
+      ...(warnings.length && { warnings }),
       installed: true,
       enabled: row.enabled,
       bots: row.bots,
       installedAt: row.installedAt,
       status,
+      ...(row.heldBack && !row.enabled && { detail: HELD_BACK[row.heldBack] }),
       ...(status === "error" && {
-        detail: unavailable ? "This computer could not open a saved plugin setting." : "The installed plugin files could not be opened.",
+        detail: unavailable ? "This computer could not open a saved plugin setting." : changedCopy && existsSync(row.folder) ? CHANGED_COPY : "The installed plugin files could not be opened.",
       }),
       ...(status === "needs-sign-in" && { detail: "Sign in to the plugin’s remote tools on this computer." }),
       limits: limitsFor(preview),
-      config,
+      config: config.map(({ sentTo: _old, ...field }) => ({ ...field, ...(fresh?.sentTo.has(field.key) && { sentTo: fresh.sentTo.get(field.key) }) })),
       ...(row.sourceFolder && { folder: row.sourceFolder }),
       contents: {
         ...preview.contents,
-        mcpServers: preview.contents.mcpServers.map((s) => {
+        ...(fresh && { hooks: fresh.hooks }),
+        mcpServers: (fresh?.mcpServers ?? preview.contents.mcpServers).map((s) => {
           const auth = servers.find((a) => a.manifestName === s.name);
           return auth ? { ...s, serverId: auth.id } : s;
         }),
@@ -196,7 +302,7 @@ export class Plugins {
       const bots = this.scope(options.bots ?? "all");
       const { folder, preview, revision } = await this.catalog.materialize(id, options.revision);
       verify?.();
-      const row = { folder, preview, revision, enabled: true, bots, installedAt: Date.now(), refs: {} };
+      const row = { folder, preview, revision, enabled: true, bots, installedAt: Date.now(), refs: {}, reading: READING };
       const created = this.settings(row, options.config ?? {});
       this.save(row, undefined, created);
       return this.public(row);
@@ -206,7 +312,7 @@ export class Plugins {
     return this.serialize(async () => {
       const { folder, preview, revision } = await this.catalog.addFolder(path);
       if (this.records.some((r) => r.preview.id === preview.id)) throw new Error("This folder is already installed.");
-      const row = { folder, preview, revision, sourceFolder: path, enabled: false, bots: "all", installedAt: Date.now(), refs: {} };
+      const row = { folder, preview, revision, sourceFolder: path, enabled: false, bots: "all", installedAt: Date.now(), refs: {}, reading: READING };
       this.save(row);
       return this.public(row);
     });
@@ -226,7 +332,10 @@ export class Plugins {
     return this.serialize(() => {
       verify?.();
       if (typeof enabled !== "boolean") throw new Error("Choose on or off.");
-      this.save({ ...this.get(id), enabled });
+      // (Switching on is the person's yes after a look: a reason Botkins switched it off for is done with.)
+      const { heldBack: _reason, ...row } = this.get(id);
+      if (enabled && !this.intact(row)) throw new Error(CHANGED_COPY);
+      this.save({ ...row, enabled });
     });
   }
   update(id, options = {}, verify) {
@@ -242,7 +351,7 @@ export class Plugins {
             : [],
         ),
       );
-      const row = { ...before, folder: material.folder, revision: material.revision, preview: material.preview, refs };
+      const row = { ...before, folder: material.folder, revision: material.revision, preview: material.preview, refs, reading: READING };
       const previousServers = this.knownOAuthServers(before);
       const currentServers = new Set(this.knownOAuthServers(row).map((server) => server.id));
       this.save(row);
@@ -308,7 +417,12 @@ export class Plugins {
     return null;
   }
   async session(bot, chat, { skillsOnly = false } = {}) {
-    const rows = this.records.filter((r) => scoped(r, bot.id) && this.public(r).status === "ready");
+    // A copy that is no longer the reviewed bytes is not used, and the app shows why.
+    const scopedRows = this.records.filter((r) => scoped(r, bot.id));
+    const before = scopedRows.map((r) => this.checked.get(r.folder)?.ok);
+    const sound = scopedRows.filter((r) => this.intact(r));
+    if (scopedRows.some((r, index) => before[index] !== false && this.checked.get(r.folder)?.ok === false)) this.ws.notify();
+    const rows = sound.filter((r) => this.public(r).status === "ready");
     if (!rows.length) return { directories: [], mcpServers: {}, hooks: undefined };
     const plugins = rows.map((row) => (skillsOnly ? { id: row.preview.id, folder: row.folder } : this.runtimeRecord(row)));
     return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly });

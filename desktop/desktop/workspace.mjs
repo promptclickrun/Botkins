@@ -1190,10 +1190,9 @@ export class Workspace {
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
       mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
-      plugins: [
-        ...(access.skills ? this.integrations.pluginsFor() : []),
-        ...(access.plugins ? pluginSpec.directories : []),
-      ],
+      // Only what Botkins itself wrote for the session from installed plugins (desktop/plugin-runtime.mjs).
+      // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
+      plugins: [...(access.plugins ? pluginSpec.directories : [])],
       pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.messages ?? [],

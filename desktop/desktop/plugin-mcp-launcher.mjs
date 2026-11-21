@@ -58,6 +58,10 @@ for (const key of spec.envKeys) {
   if (value !== undefined) environment[key] = value;
 }
 
+// The tool runs in the plugin's installed copy, which must stay the files that were reviewed:
+// Python does not write its cache there.
+environment.PYTHONDONTWRITEBYTECODE ??= "1";
+
 let child;
 try {
   child = spawn(spec.command, spec.args, {

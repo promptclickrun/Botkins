@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
@@ -151,4 +151,105 @@ test("the server id shown in an installed plugin completes the host OAuth flow",
   assert.equal(ws.plugins.list()[0].status, "ready");
   await ws.plugins.signOut(serverId);
   assert.equal(ws.plugins.list()[0].status, "needs-sign-in");
+});
+
+/** A workspace in a folder of its own, and a way to open it again as after a restart. */
+function managed(t) {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-plugin-copy-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const open = () => new Workspace(join(dir, "data"), fakeClient().client, () => {});
+  const source = (name, files) => {
+    const root = join(dir, name);
+    for (const [file, value] of Object.entries(files)) {
+      mkdirSync(join(root, file, ".."), { recursive: true });
+      writeFileSync(join(root, file), typeof value === "string" ? value : JSON.stringify(value));
+    }
+    return root;
+  };
+  return { dir, open, source, file: join(dir, "data", "plugins.json") };
+}
+
+test("an installed copy that was changed on disk is not used, the app says why, and a new install puts the reviewed files back", async (t) => {
+  const { open, source } = managed(t);
+  const folder = source("mine", { "plugin.json": { name: "copy-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
+  const ws = open();
+  const added = await ws.plugins.addFolder(folder);
+  await ws.plugins.setEnabled(added.id, true);
+  const bot = ws.bot("pip");
+  const session = () => ws.plugins.session(bot, { id: "chat-1" });
+  assert.equal(typeof (await session()).hooks.handlers.onSessionStart, "function");
+  // Something on this computer writes into the copy: a second hooks file, which a look by the list of names would find.
+  const copy = ws.plugins.records[0].folder;
+  mkdirSync(join(copy, "hooks"));
+  writeFileSync(join(copy, "hooks", "hooks.json"), JSON.stringify({ hooks: { sessionEnd: [{ command: "touch /tmp/planted" }] } }));
+  assert.deepEqual(await session(), { directories: [], mcpServers: {}, hooks: undefined });
+  const [listed] = ws.plugins.list();
+  assert.deepEqual([listed.status, listed.detail], ["error", "The installed files of this plugin are not the files that were reviewed. Remove the plugin and install it again."]);
+  // Off and on again does not get round it.
+  await ws.plugins.setEnabled(added.id, false);
+  await assert.rejects(ws.plugins.setEnabled(added.id, true), /are not the files that were reviewed/);
+  // After a restart the copy is checked again before anything of it is used.
+  const again = open();
+  await again.plugins.queue;
+  assert.equal(again.plugins.list()[0].status, "error");
+  // Remove and add: the reviewed files are written again, and the planted file is gone.
+  await again.plugins.uninstall(added.id);
+  const back = await again.plugins.addFolder(folder);
+  await again.plugins.setEnabled(back.id, true);
+  assert.equal(again.plugins.list()[0].status, "ready");
+  assert.deepEqual(Object.keys((await again.plugins.session(again.bot("pip"), { id: "chat-1" })).hooks.handlers), ["onSessionStart"]);
+});
+
+test("a plugin installed by an earlier version that starts a command its description did not have is switched off until the person has looked", async (t) => {
+  const { open, source, file } = managed(t);
+  const hidden = source("hidden", { "plugin.json": { name: "hidden-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ type: "x", darwin: "touch /tmp/unseen" }] } } });
+  const long = "echo " + "a".repeat(400);
+  const honest = source("honest", { "plugin.json": { name: "honest-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: long }] } }, ".mcp.json": { mcpServers: { files: { command: "npx", args: ["-y", "pkg"] } } } });
+  const ws = open();
+  for (const folder of [hidden, honest]) await ws.plugins.setEnabled((await ws.plugins.addFolder(folder)).id, true);
+  // The file as the earlier version kept it: no mark of the reading, and the description that version made
+  // (no hook for the first plugin; for the second the command cut at 300 characters and the program's name alone).
+  const rows = JSON.parse(readFileSync(file, "utf8")).map(({ reading: _mark, ...row }) => ({
+    ...row,
+    preview: { ...row.preview, contents: { ...row.preview.contents, hooks: row.preview.name === "hidden-fixture" ? [] : [{ event: "sessionStart", command: long.slice(0, 300) }], mcpServers: row.preview.contents.mcpServers.map(({ name, kind, command }) => ({ name, kind, command })) } },
+  }));
+  writeFileSync(file, JSON.stringify(rows));
+  const after = open();
+  const byName = (name) => after.plugins.list().find((row) => row.name === name);
+  assert.equal(byName("hidden-fixture").enabled, false);
+  assert.match(byName("hidden-fixture").detail, /Botkins switched this plugin off\. An earlier version of Botkins did not show everything that this plugin starts/);
+  assert.deepEqual(byName("hidden-fixture").contents.hooks, [{ event: "sessionStart", command: "touch /tmp/unseen", env: [], timeoutSec: 10 }]);
+  assert.match(byName("hidden-fixture").warnings.join(" "), /Runs a command on your computer through plugin hooks/);
+  // What the old description had, cut or with less said, was shown: that plugin stays on, and now shows the whole.
+  assert.equal(byName("honest-fixture").enabled, true);
+  assert.equal(byName("honest-fixture").detail, undefined);
+  assert.equal(byName("honest-fixture").contents.hooks[0].command, long);
+  assert.deepEqual(byName("honest-fixture").contents.mcpServers, [{ name: "files", kind: "local", command: "npx", args: ["-y", "pkg"], env: [] }]);
+  // It is done once: the file has the mark, and the person's switch is theirs from then on.
+  await after.plugins.setEnabled(byName("hidden-fixture").id, true);
+  const third = open();
+  assert.deepEqual(third.plugins.list().map((row) => [row.name, row.enabled, row.detail]).sort(), [["hidden-fixture", true, undefined], ["honest-fixture", true, undefined]]);
+});
+
+test("a plugin folder that was linked live becomes an installed plugin, switched off, and no session gets the folder itself", async (t) => {
+  const { open, source } = managed(t);
+  const folder = realpathSync(source("linked", { "plugin.json": { name: "linked-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "touch /tmp/linked" }] } }, "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\nA." }));
+  const gone = join(folder, "..", "gone");
+  const ws = open();
+  await ws.plugins.queue;
+  // As an earlier version left it: the folder in the list of linked plugin folders.
+  ws.integrations.addFolder(ws.integrations.skillState.plugins, folder);
+  ws.integrations.addFolder(ws.integrations.skillState.plugins, gone);
+  ws.save();
+  const after = open();
+  await after.plugins.queue;
+  const [row] = after.plugins.list();
+  assert.deepEqual([row.name, row.enabled, row.folder], ["linked-fixture", false, folder]);
+  assert.match(row.detail, /This plugin folder was linked for its skills\. Botkins now keeps a copy of it and shows what it starts/);
+  assert.deepEqual(row.contents.hooks.map((hook) => hook.command), ["touch /tmp/linked"]);
+  // The one that could be copied is no longer linked. The one that could not stays in the list, and is not used.
+  assert.deepEqual(after.integrations.skillState.plugins.map((link) => link.path), [gone]);
+  assert.deepEqual(await after.plugins.session(after.bot("pip"), { id: "chat-1" }), { directories: [], mcpServers: {}, hooks: undefined });
+  // A new link cannot be made: the folder goes the plugins' way.
+  assert.throws(() => after.integrations.addFromFolder(folder), (error) => error.code === "PLUGIN_FOLDER" && error.folder === folder);
 });

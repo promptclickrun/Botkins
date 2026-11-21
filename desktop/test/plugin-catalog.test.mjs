@@ -56,13 +56,16 @@ test("catalog browses a local marketplace and parses components without executin
   const preview = await catalog.preview("memory@test-market");
   assert.match(preview.revision, /^[a-f0-9]{64}$/);
   assert.deepEqual(preview.contents.skills, ["skills/remember/SKILL.md"]);
-  assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", url: "https://example.test/mcp" }]);
-  assert.deepEqual(preview.contents.hooks, [{ event: "userPromptSubmitted", command: "node \"${PLUGIN_ROOT}/recall.mjs\"" }]);
+  assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", url: "https://example.test/mcp", headers: ["Authorization"] }]);
+  // The fixture's hook has a matcher. Botkins runs no hook with a matcher, so the description, which is what runs, has none.
+  assert.deepEqual(preview.contents.hooks, []);
   assert.deepEqual(preview.config, [{
     key: "MEMORY_API_KEY",
     label: "Memory API key",
     secret: true,
     required: true,
+    // Where the value goes: this header of this tool, at this address.
+    sentTo: [{ tool: "memory", header: "Authorization", url: "https://example.test/mcp" }],
   }]);
   assert.match(preview.warnings.join(" "), /remote MCP/i);
 
