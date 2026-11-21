@@ -103,7 +103,8 @@ export function pluginTools(ws, bot, chat, run, task) {
         else if (action === "configure") await plugins.configure(id, values, stillCurrent);
         else if (action === "update") await plugins.update(id, { revision: card.revision }, stillCurrent);
         else if (action === "uninstall") await plugins.uninstall(id, stillCurrent);
-        else await plugins.setEnabled(id, action === "enable", undefined, stillCurrent);
+        // A yes to switch on is for the revision that the card showed: a plugin that changed since is refused by the app.
+        else await plugins.setEnabled(id, action === "enable", action === "enable" ? { revision: card.revision } : undefined, stillCurrent);
         return "Plugin change saved.";
       },
     }),

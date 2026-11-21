@@ -22,6 +22,7 @@ function harness(card, { answer = { action: "approve" } } = {}) {
     preview: async () => card,
     install: async (...args) => calls.push(["install", ...args.slice(0, 2)]),
     configure: async (...args) => calls.push(["configure", ...args.slice(0, 2)]),
+    setEnabled: async (...args) => calls.push(["setEnabled", ...args.slice(0, 3)]),
   };
   const ws = {
     closing: false,
@@ -74,6 +75,20 @@ test("a whole card is asked about, and a yes goes on as before", async () => {
   assert.deepEqual(notes, []);
   assert.equal(calls.length, 1);
   assert.deepEqual({ ...calls[0][2], config: { ...calls[0][2].config } }, { bots: ["b1"], config: { K: "secret" }, revision: "r1" });
+});
+
+test("a yes to switch on is tied to the revision that the card showed, and a switch-off names none", async () => {
+  const card = { name: "small", revision: "a".repeat(64), config: [], contents: { hooks: [{ event: "sessionStart", command: "true", env: [] }] } };
+  const on = harness(card);
+  assert.equal(await on.tool.handler({ id: "p", action: "enable" }), "Plugin change saved.");
+  assert.deepEqual(on.calls, [["setEnabled", "p", true, { revision: card.revision }]]);
+  const off = harness(card);
+  assert.equal(await off.tool.handler({ id: "p", action: "disable" }), "Plugin change saved.");
+  assert.deepEqual(off.calls, [["setEnabled", "p", false, undefined]]);
+  // A no sends nothing.
+  const declined = harness(card, { answer: { action: "deny" } });
+  assert.equal(await declined.tool.handler({ id: "p", action: "enable" }), "The person declined.");
+  assert.deepEqual(declined.calls, []);
 });
 
 test("a name and a label from the plugin are safe and bounded in every request", async () => {

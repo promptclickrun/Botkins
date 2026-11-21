@@ -3,19 +3,11 @@
 // the app's own names ("plugins.install", "plugins.preview", …), as a phone makes them
 // (desktop/terminal/control.mjs).
 import { ControlError } from "./socket.mjs";
+import { pluginRuns } from "../plugin-reading.mjs";
 
-/**
- * What of a plugin runs on this computer: each hook's command, and each tool that is a local
- * program, with every word of its line, its folder and each environment value as written. A
- * plugin with any of these is shown to the person before it is installed, updated or turned on
- * (mobile/AGENTS.md: "A plugin that runs commands on the computer asks first").
- * It is made from the plugin's description and from nothing else. The description is what the
- * app starts (desktop/plugin-reading.mjs), so this list is too.
- */
-export const pluginRuns = (contents) => [
-  ...(contents?.hooks ?? []).map((hook) => ({ what: "hook", when: hook.event, command: hook.command, env: hook.env ?? [], ...(hook.envNotSet?.length && { envNotSet: hook.envNotSet }), ...(hook.timeoutSec !== undefined && { timeoutSec: hook.timeoutSec }) })),
-  ...(contents?.mcpServers ?? []).filter((server) => server.kind === "local").map((server) => ({ what: "tool", name: server.name, command: server.command, args: server.args ?? [], env: server.env ?? [], ...(server.envNotSet?.length && { envNotSet: server.envNotSet }), ...(server.cwd && { cwd: server.cwd }) })),
-];
+// (Where the app itself needs this list too: Plugins.setEnabled in desktop/plugins.mjs. It lives with the one reading.)
+export { pluginRuns };
+
 /** Where a plugin reaches on the web: each tool that is an address, with how Botkins talks to it, each header with its value as the plugin wrote it, and the client id of its sign-in. */
 export const pluginReaches = (contents) => (contents?.mcpServers ?? []).filter((server) => server.kind === "remote").map((server) => ({ name: server.name, ...(server.type && { type: server.type }), url: server.url, headers: server.headers ?? [], ...(server.oauth && { signsIn: true }), ...(server.oauthClientId && { oauthClientId: server.oauthClientId }) }));
 const LOOK_AGAIN = "This plugin is not the one that was looked at: its revision is another one now. Look at it again with `botkins plugins show`.";
@@ -77,8 +69,9 @@ export function pluginsApi({ workspace, handlers, bot }) {
      * On or off. To switch on a plugin that runs commands here, the caller names the revision
      * that was looked at, and it must be the installed one: a plugin that was updated between
      * the look and the yes is not switched on by that yes. The refusal here is the friendly
-     * one. The app compares the revision again inside its queue, which is the one that holds
-     * when an update is under way.
+     * one, in the words of the command line. The app holds the rule itself too: it refuses a
+     * switch-on with no revision, and compares the revision again inside its queue, which is
+     * the one that holds when an update is under way.
      */
     async "plugins.setEnabled"([ref, on, third]) {
       const found = plugin(ref);

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { PluginCatalog, snapshotStamp, verifySnapshot } from "./plugin-catalog.mjs";
-import { describeStarts, folderReader, lineOf, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
+import { describeStarts, folderReader, lineOf, pluginRuns, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
 import { MIN_SECRET_LENGTH, newStops, pluginSession, pluginOAuthServers, secretField } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
@@ -38,6 +38,8 @@ const HELD_BACK = {
   newhook: "Botkins switched this plugin off. A hook of this plugin did not run before this version of Botkins and runs now. Look at what it starts, and switch it on again if you agree.",
   linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
 };
+/** A switch-on of a plugin that runs commands names the revision that was looked at. The app holds this rule itself, whoever calls. */
+const LOOK_FIRST = "This plugin runs commands on this computer. Look at what it starts before you switch it on. If the app does not show you that, update the app.";
 const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
 /** The check of the copy could not be done (a read error). That says nothing about the files, so it is not "changed". */
 const UNREADABLE_COPY = "Botkins could not read the installed files of this plugin to check them. Try again. If it stays so, update the plugin: Botkins writes its files again and keeps your settings.";
@@ -569,21 +571,31 @@ export class Plugins {
     return this.serialize(() => {
       verify?.();
       if (typeof enabled !== "boolean") throw new Error("Choose on or off.");
-      this.lookedAt(this.get(id), options);
+      const before = this.get(id);
+      this.lookedAt(before, options);
       // (Switching on is the person's yes after a look: a reason Botkins switched it off for is done with.)
-      const { heldBack: _reason, ...row } = this.get(id);
+      const { heldBack: _reason, ...row } = before;
+      let fresh;
       if (enabled && row.reading !== READING) {
         // The copy is checked before it is read. (A copy that is gone is "could not be read", below.)
         if (existsSync(row.folder)) this.assertIntact(row);
         // A copy that could not be read at the start is read again now, not from what was kept.
         this.descriptions.delete(row.folder);
-        const fresh = this.described(row);
+        fresh = this.described(row);
         if (!fresh) throw new Error(HELD_BACK.unread);
         // (The person looks at the fresh description before this yes, so the start does not ask again.)
         row.reading = READING;
         row.preview = this.refreshed(row.preview, fresh);
       }
       if (enabled) this.assertIntact(row);
+      // A plugin that is off and runs commands here is switched on by a yes that names the revision of what was looked at.
+      // What it runs is read from the installed copy now, as the control socket reads it (pluginRuns). A plugin that is on
+      // already changes nothing, so it needs no yes.
+      if (enabled && !before.enabled && options?.revision === undefined) {
+        fresh ??= this.described(row);
+        if (!fresh) throw new Error(HELD_BACK.unread);
+        if (pluginRuns(fresh).length) throw new Error(LOOK_FIRST);
+      }
       this.save({ ...row, enabled });
     });
   }
