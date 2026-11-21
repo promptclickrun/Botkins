@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Builds what the Live Activity extension draws a Botkin from (targets/widgets):
+// Builds what the widget extension (Live Activities and widgets) draws with (targets/widgets):
 //   targets/widgets/assets/<head>-<palette>.png   each head in each kit palette, small, without eyes
+//   targets/widgets/assets/provider-<id>.png      each model provider's mark (src/ui/ProviderIcon.tsx)
+//   targets/widgets/symbols/botkin.<head>.svg      each head as a symbol, for the controls (scripts/botkin-symbols.py; needs Pillow and numpy)
 //   targets/widgets/BotkinHeads.swift             where each head's eyes go, and its own eye color
 // It reads the design kit directly (design/botkins-kit), like scripts/build-botkins.mjs, and needs
 // macOS (the SVGs are drawn by AppKit).
@@ -13,7 +15,8 @@ import { join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const kit = require("../design/botkins-kit/customize.js");
-const SIZE = 132; // 44 points at 3x
+const SIZE = 192; // 64 points at 3x: the largest a Home Screen widget draws a head
+const MARK = 48; // 16 points at 3x
 const OUT = "targets/widgets/assets";
 const work = mkdtempSync(join(tmpdir(), "botkins-widget-"));
 const renderer = join(work, "render-svg");
@@ -22,6 +25,7 @@ rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
 const heads = [];
+mkdirSync(join(work, "eyes"), { recursive: true });
 for (const file of readdirSync("design/botkins-kit/avatars").filter((name) => name.endsWith(".svg")).sort()) {
   const id = file.replace(/\.svg$/, "");
   const source = readFileSync(join("design/botkins-kit/avatars", file), "utf8");
@@ -35,8 +39,34 @@ for (const file of readdirSync("design/botkins-kit/avatars").filter((name) => na
     writeFileSync(base + ".svg", art);
     execFileSync(renderer, [base + ".svg", join(OUT, id + "-" + palette.toLowerCase() + ".png"), String(SIZE)]);
   }
+  // In its own colors with open eyes, for the symbol.
+  const withEyes = join(work, "eyes", id);
+  writeFileSync(withEyes + ".svg", kit.render(source, "Oval", "Original", { blink: false }));
+  execFileSync(renderer, [withEyes + ".svg", withEyes + ".png", "256"]);
   process.stdout.write(".");
 }
+rmSync("targets/widgets/symbols", { recursive: true, force: true });
+execFileSync("python3", ["scripts/botkin-symbols.py", join(work, "eyes"), "targets/widgets/symbols"], { stdio: "inherit" });
+
+// The providers' marks, from the same paths the app draws them with. A mark with one color of its
+// own (Claude's) keeps it; the others are drawn black and tinted by the widget, like a symbol.
+const icon = readFileSync("src/ui/ProviderIcon.tsx", "utf8");
+const marks = [];
+for (const [, id, body] of icon.matchAll(/\n  (\w+): \{\n([\s\S]*?)\n  \},/g)) {
+  const viewBox = /viewBox: "([^"]+)"/.exec(body)?.[1];
+  if (!viewBox) continue;
+  const own = /^\s{4}fill: "(#[0-9A-Fa-f]{6})"/m.exec(body)?.[1];
+  const paths = [...body.matchAll(/d: "([^"]+)"(?:, (fill: [^,}]+|evenOdd: true))?/g)].map(([, d, extra]) => `<path d="${d}"${/evenOdd/.test(extra ?? "") || /evenOdd: true/.test(body) ? ' fill-rule="evenodd" clip-rule="evenodd"' : ""}${/fill: \[/.test(extra ?? "") ? ' fill-opacity=".45"' : ""}/>`);
+  if (!paths.length) continue;
+  const svg = join(work, "provider-" + id + ".svg");
+  writeFileSync(svg, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="${MARK}" height="${MARK}"><g fill="${own ?? "#000000"}">${paths.join("")}</g></svg>`);
+  execFileSync(renderer, [svg, join(OUT, "provider-" + id + ".png"), String(MARK)]);
+  marks.push(id + (own ? " (own color)" : ""));
+}
+// Antigravity's mark is a picture in the app too.
+execFileSync("sips", ["-Z", String(MARK), "assets/images/providers/antigravity.png", "--out", join(OUT, "provider-antigravity.png")], { stdio: "ignore" });
+marks.push("antigravity (picture)");
+console.log("\nmarks: " + marks.join(", "));
 
 const inks = Object.entries(kit.palettes).filter(([, colors]) => colors).map(([name, colors]) => `  "${name.toLowerCase()}": "${colors[3]}",`);
 writeFileSync(

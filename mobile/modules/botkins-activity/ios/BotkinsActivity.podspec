@@ -16,6 +16,8 @@ Pod::Spec.new do |s|
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'
+  # Its notification hook: a notification's answering actions are caught as the app launches.
+  s.dependency 'ExpoNotifications'
 
   s.source_files = "**/*.{h,m,swift}"
   s.pod_target_xcconfig = {

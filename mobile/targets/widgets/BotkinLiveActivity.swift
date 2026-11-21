@@ -1,5 +1,7 @@
-// A chat's running turn on the Lock Screen and in the Dynamic Island: the bot's Botkin, its name,
-// what it is doing in a few words, and how long it has been at it. Tapping opens the chat.
+// The Live Activities on the Lock Screen and in the Dynamic Island. A Botkin's card
+// ("activity-bots-v1") is drawn by BotCard.swift. A chat's card (an older computer's) is drawn here:
+// the bot's Botkin, its name, what it is doing in a few words, and how long it has been at it.
+// Tapping opens the chat.
 //
 // The Botkin is drawn the way the app draws it: a picture of the head (assets/<head>-<palette>.png,
 // from scripts/build-widget-assets.mjs) with the eyes on top, in the shape that fits the moment.
@@ -12,10 +14,20 @@ import WidgetKit
 struct BotkinsWidgets: WidgetBundle {
   var body: some Widget {
     BotkinLiveActivity()
+    // The Home Screen and Lock Screen widgets (HomeWidgets.swift) take App Intents to set up.
+    if #available(iOS 17.0, *) {
+      BotkinWidget()
+      CrewWidget()
+      UsageWidget()
+    }
+    // Control Center, the Lock Screen's buttons and the Action button (Controls.swift).
+    if #available(iOS 18.0, *) {
+      BotkinControl()
+    }
   }
 }
 
-private extension Color {
+extension Color {
   /// "#rrggbb"
   init(hex: String) {
     var value: UInt64 = 0
@@ -56,17 +68,53 @@ private func eyes(for phase: Phase, own: String) -> String {
   }
 }
 
-/// A Botkin: the head's picture with eyes drawn over it.
+/// A Botkin's look: its character, palette, eyes and (for a custom palette) its four colors.
+struct Look {
+  let head: String
+  let palette: String
+  let eyes: String
+  let colors: [String]
+
+  init(head: String, palette: String, eyes: String, colors: [String] = []) {
+    self.head = head
+    self.palette = palette
+    self.eyes = eyes
+    self.colors = colors
+  }
+
+  init(_ about: BotkinActivityAttributes) {
+    self.init(head: about.head, palette: about.palette, eyes: about.eyes, colors: about.colors)
+  }
+}
+
+/// A Botkin: the head's picture with eyes drawn over it, in `expression` (a style of eyes).
 struct BotkinFace: View {
-  let about: BotkinActivityAttributes
-  let phase: String
+  let look: Look
+  let expression: String
   let size: CGFloat
 
+  init(look: Look, expression: String, size: CGFloat) {
+    self.look = look
+    self.expression = expression
+    self.size = size
+  }
+
+  /// A chat's card: the eyes for the turn's phase.
+  init(about: BotkinActivityAttributes, phase: String, size: CGFloat) {
+    self.init(look: Look(about), expression: eyes(for: phase, own: about.eyes), size: size)
+  }
+
   var body: some View {
+    let about = look
     let palette = UIImage(named: "\(about.head)-\(about.palette).png") == nil ? "original" : about.palette
     ZStack {
       if let picture = UIImage(named: "\(about.head)-\(palette).png") {
-        Image(uiImage: picture).resizable().interpolation(.high).scaledToFit()
+        if #available(iOS 18.0, *) {
+          // On a tinted or clear Home Screen a Botkin draws desaturated, so its face still reads.
+          Image(uiImage: picture).widgetAccentedRenderingMode(.desaturated).resizable().interpolation(.high).scaledToFit()
+        } else {
+          Image(uiImage: picture).resizable().interpolation(.high).scaledToFit()
+        }
       } else {
         // A character this build doesn't know: a plain round face still reads as a bot.
         Circle().fill(Color(hex: "#d7984b"))
@@ -75,7 +123,7 @@ struct BotkinFace: View {
         Canvas { context, canvas in
           let unit = canvas.width / 256
           let ink = Color(hex: about.colors.count == 4 ? about.colors[3] : (botkinPaletteInk[palette] ?? head.ink))
-          let style = eyes(for: phase, own: about.eyes)
+          let style = expression
           func place(_ x: Double, _ y: Double) -> CGPoint {
             CGPoint(x: (head.tx + head.scale * x) * unit, y: (head.ty + head.scale * y) * unit)
           }
@@ -140,6 +188,52 @@ private func detail(_ state: BotkinActivityAttributes.ContentState) -> String {
 struct BotkinLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: BotkinActivityAttributes.self) { context in
+      if context.attributes.card == "bot" {
+        // A Botkin's card (BotCard.swift).
+        let model = CardModel(context)
+        BotCardLock(model: model)
+          .activityBackgroundTint(Color(white: 0.09).opacity(0.82))
+          .activitySystemActionForegroundColor(.white)
+          .widgetURL(model.first.map { Links.chat($0.id, host: model.host) } ?? Links.bot(context.attributes.botId, host: model.host))
+      } else {
+        chatCard(context)
+      }
+    } dynamicIsland: { context in
+      context.attributes.card == "bot" ? botIsland(context) : chatIsland(context)
+    }
+  }
+
+  // ── A Botkin's card in the Dynamic Island ─────────────────────────────────────────────────
+
+  private func botIsland(_ context: ActivityViewContext<BotkinActivityAttributes>) -> DynamicIsland {
+    let model = CardModel(context)
+    return DynamicIsland {
+      DynamicIslandExpandedRegion(.leading) {
+        IslandFace(model: model, size: 48).padding(.leading, 4)
+      }
+      DynamicIslandExpandedRegion(.center) {
+        IslandCenter(model: model)
+      }
+      DynamicIslandExpandedRegion(.trailing) {
+        IslandTime(model: model).padding(.trailing, 4)
+      }
+      DynamicIslandExpandedRegion(.bottom) {
+        IslandBottom(model: model)
+      }
+    } compactLeading: {
+      IslandFace(model: model, size: 24)
+    } compactTrailing: {
+      IslandTrailing(model: model)
+    } minimal: {
+      IslandFace(model: model, size: 22)
+    }
+    .widgetURL(model.first.map { Links.chat($0.id, host: model.host) } ?? Links.bot(context.attributes.botId, host: model.host))
+    .keylineTint(model.first?.phase == "needs-you" ? Tone.amber : phaseColor(model.state.phase))
+  }
+
+  // ── A chat's card (an older computer's) ───────────────────────────────────────────────────
+
+  private func chatCard(_ context: ActivityViewContext<BotkinActivityAttributes>) -> some View {
       // The Lock Screen, and the banner on phones without a Dynamic Island.
       HStack(spacing: 12) {
         BotkinFace(about: context.attributes, phase: context.state.phase, size: 48)
@@ -154,7 +248,9 @@ struct BotkinLiveActivity: Widget {
       .padding(.vertical, 14)
       .activityBackgroundTint(Color(.systemBackground).opacity(0.85))
       .widgetURL(URL(string: "botkins://chat/\(context.attributes.chatId)"))
-    } dynamicIsland: { context in
+  }
+
+  private func chatIsland(_ context: ActivityViewContext<BotkinActivityAttributes>) -> DynamicIsland {
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
           BotkinFace(about: context.attributes, phase: context.state.phase, size: 44).padding(.leading, 4)
@@ -186,6 +282,5 @@ struct BotkinLiveActivity: Widget {
       }
       .widgetURL(URL(string: "botkins://chat/\(context.attributes.chatId)"))
       .keylineTint(phaseColor(context.state.phase))
-    }
   }
 }

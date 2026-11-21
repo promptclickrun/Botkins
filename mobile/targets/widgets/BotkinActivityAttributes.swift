@@ -4,6 +4,10 @@
 // activities) and in targets/widgets (the extension draws them). Apple matches the two, and a push
 // that starts an activity from afar, by the type's name, so keep both copies and the name the same
 // (the computer sends it as ACTIVITY_TYPE in link-host/push.mjs).
+//
+// One activity is either a chat's card (`card` is nil; the first version) or a Botkin's card
+// (`card` is "bot", "activity-bots-v1"; docs/live-cards.md). Everything added for a Botkin's card is
+// optional, so a push from an older computer, and an activity an older build started, still decode.
 import ActivityKit
 import Foundation
 
@@ -18,6 +22,29 @@ public struct BotkinActivityAttributes: ActivityAttributes {
     public var startedAt: Double
     /// When the turn ended, in Unix seconds. Missing while it runs, and from a computer that doesn't send it.
     public var finishedAt: Double?
+
+    // A Botkin's card ("activity-bots-v1"):
+    /// The shape's version (1).
+    public var v: Int?
+    /// Up to three of the Botkin's chats, as Apple may see them: phases, counts, times, the provider.
+    public var chats: [Chat]?
+    /// How many more chats there are than the card shows.
+    public var more: Int?
+    /// The chats' titles, steps, thinking and requests, sealed for this phone (opened by the extension).
+    public var sealed: String?
+    /// Set on the phone only, when the person answered on the card: the answer's words, until the computer's next update.
+    public var sent: String?
+
+    public struct Chat: Codable, Hashable {
+      public var id: String
+      public var phase: String
+      public var steps: Int
+      public var startedAt: Double
+      public var finishedAt: Double?
+      public var provider: String?
+      /// approve, risky, question or open: what the card's buttons are.
+      public var ask: String?
+    }
 
     public init(phase: String, label: String, steps: Int, startedAt: Double, finishedAt: Double? = nil) {
       self.phase = phase
@@ -36,8 +63,10 @@ public struct BotkinActivityAttributes: ActivityAttributes {
   public var palette: String
   public var eyes: String
   public var colors: [String]
+  /// "bot" for a Botkin's card. Missing on a chat's card.
+  public var card: String?
 
-  public init(chatId: String, botId: String, botName: String, head: String, palette: String, eyes: String, colors: [String]) {
+  public init(chatId: String, botId: String, botName: String, head: String, palette: String, eyes: String, colors: [String], card: String? = nil) {
     self.chatId = chatId
     self.botId = botId
     self.botName = botName
@@ -45,5 +74,9 @@ public struct BotkinActivityAttributes: ActivityAttributes {
     self.palette = palette
     self.eyes = eyes
     self.colors = colors
+    self.card = card
   }
+
+  /// The key the app and the computer know this activity by: the chat's id, or "bot:" and the Botkin's.
+  public var key: String { card == "bot" ? "bot:" + botId : chatId }
 }

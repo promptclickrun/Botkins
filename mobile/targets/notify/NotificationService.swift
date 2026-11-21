@@ -3,7 +3,7 @@
 // What Apple carries says only "New message". The real title and text are in `b`, sealed by the
 // computer with a key only it and this phone have (link-host/push.mjs):
 //   b = base64(nonce(12) + ChaCha20-Poly1305(key, nonce, JSON, aad "botkins-push-v1"))
-//   JSON = { t: title, m: text, c: chat id, k: kind, r?: request id }
+//   JSON = { t: title, m: text, c: chat id, k: kind, r?: request id, q?: a request's buttons }
 // The key is in a keychain group this extension shares with the app (modules/botkins-activity). A
 // phone can be paired with several computers: there is a key for each ("key:<the computer's id>"),
 // each is tried, and the id of the computer whose key opened the alert is noted as `host`, so a tap
@@ -31,6 +31,21 @@ final class NotificationService: UNNotificationServiceExtension {
       if let kind = opened["k"] as? String { info["kind"] = kind }
       if let asked = opened["r"] as? String { info["requestId"] = asked }
       if let host { info["host"] = host }
+      // A request's buttons (docs/live-cards.md, section 6). Without `q` (previews off, or an older
+      // computer) the notification keeps its category and only opens the app.
+      if let ask = opened["q"] as? [String: Any], let kind = ask["k"] as? String {
+        let choices = (ask["ch"] as? [String]) ?? []
+        let free = ask["free"] as? Bool ?? false
+        if kind == "permission" {
+          content.categoryIdentifier = ask["x"] as? Bool == true ? "botkins_approve_risky" : ask["rm"] as? Bool == true ? "botkins_approve" : "botkins_approve_once"
+        } else if kind == "question" && (!choices.isEmpty || free) {
+          content.categoryIdentifier = "botkins_question"
+          info["choices"] = choices
+          info["free"] = free
+        } else {
+          content.categoryIdentifier = "botkins_open"
+        }
+      }
       content.userInfo = info
     }
     contentHandler(content)

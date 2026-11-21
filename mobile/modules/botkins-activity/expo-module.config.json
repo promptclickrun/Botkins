@@ -1,4 +1,4 @@
 {
   "platforms": ["apple"],
-  "apple": { "modules": ["BotkinsActivityModule"] }
+  "apple": { "modules": ["BotkinsActivityModule"], "appDelegateSubscribers": ["BotkinsAnswersAppDelegate"] }
 }

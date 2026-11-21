@@ -16,12 +16,16 @@
 //   b      = base64(nonce(12) + ChaCha20-Poly1305(key, nonce, JSON, aad "botkins-push-v1"))
 //   JSON   = { t: title, m: text, c: chat id, k: kind, r?: request id }
 //
-// A Live Activity can't be sealed (Apple hands its state straight to the Lock Screen), so its state
-// is small and plain: a phase, a step count, and a short label that is the step's name only when the
-// phone has previews on.
+// A Live Activity's state goes to the Lock Screen as Apple delivers it, so what it says in the clear
+// is small: phases, counts, times and the provider. A phone that asked for one card per Botkin
+// ("activity-bots-v1", docs/live-cards.md) also gets the chats' titles, steps, thinking and requests,
+// sealed like an alert (with its own AAD, "botkins-card-v1"); the widget extension opens them on the
+// phone. A phone with one card per chat gets a short label that is the step's name only when it has
+// previews on, as before.
 //
 // Nothing here throws into the caller. A failed send is logged and forgotten: a notification that
 // is late is worse than one that is missing.
+import { askDetail, botCard, CARD_AAD, cardOver } from "./cards.mjs";
 import { b64u, hkdf, random, seal } from "./crypto.mjs";
 import { signWithRelayKey } from "./relay.mjs";
 import { Failure } from "./tools.mjs";
@@ -63,7 +67,8 @@ export function cleanTarget(target) {
   const env = target?.env === "sandbox" ? "sandbox" : "production";
   const start = target?.start == null ? undefined : String(target.start).toLowerCase();
   if (start !== undefined && !TOKEN.test(start)) throw new Failure("That isn't a notification address.");
-  return { token, env, ...(start && { start }) };
+  // "bots": one Live Activity per Botkin ("activity-bots-v1"). Without it, one per chat.
+  return { token, env, ...(start && { start }), ...(target?.cards === "bots" && { cards: "bots" }) };
 }
 
 export function cleanPrefs(prefs, base = DEFAULT_PREFS) {
@@ -110,6 +115,8 @@ export class Push {
     this.sent = new Map(); // "device:chat" → { at, text } of the last Live Activity update
     this.updating = new Set(); // "device version": an update notice on its way, not yet taken by the relay
     this.timer = null;
+    this.cardTimer = null; // looks again when a Botkin's card next changes by itself (a chat drops off, a held-back update)
+    this.cardAt = 0;
   }
 
   // ── What a phone sets ───────────────────────────────────────────────────────────────────────
@@ -158,12 +165,19 @@ export class Push {
     // The card's own address is known now (or the card is gone): no more guessing about it.
     this.started.delete(deviceId + ":" + chatId);
     if (token == null) this.stay(deviceId + ":" + chatId, false);
-    // A turn may have moved on, or ended, while the phone was getting its token.
-    if (token != null) this.catchUp(deviceId, chatId);
+    // A turn may have moved on, or ended, while the phone was getting its token. A Botkin's card is
+    // brought up to date by the next look, which sends it whole now that nothing was sent to it.
+    if (token != null) {
+      if (chatId.startsWith("bot:")) this.soon();
+      else this.catchUp(deviceId, chatId);
+    }
   }
   setPresence(deviceId, active, chatId) {
+    const was = this.front.get(deviceId)?.active === true;
     this.front.set(deviceId, { active: active === true, chatId: typeof chatId === "string" ? chatId : undefined });
     this.seen.set(deviceId, this.now());
+    // The phone drew its own cards while it was in front; from now on this computer does.
+    if (was && active !== true) this.soon();
   }
   /** Any call from a phone shows it is awake. */
   heard(deviceId) {
@@ -199,6 +213,7 @@ export class Push {
   /** What a chat's card was last told to show, for a push that only ends it. */
   lastState(deviceId, chatId) {
     const last = this.sent.get(deviceId + ":" + chatId);
+    if (last?.state) return last.state;
     try {
       if (last?.text) return JSON.parse(last.text);
     } catch {
@@ -255,6 +270,8 @@ export class Push {
   dispose() {
     clearTimeout(this.timer);
     this.timer = null;
+    clearTimeout(this.cardTimer);
+    this.cardTimer = null;
   }
 
   look() {
@@ -281,6 +298,8 @@ export class Push {
         // Turns still under way: their Live Activities follow along.
         else if (working) this.onProgress(sends, targets, state, run);
       }
+      // Each Botkin's card, on the phones that have one per Botkin.
+      this.cards(sends, targets, state);
     }
     this.working = known;
     this.asked = new Set(requests.map((request) => request.id));
@@ -320,7 +339,9 @@ export class Push {
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
       const record = this.store.push(device.id);
       const text = record.prefs.previews ? firstLine(request.title) || "Open Botkins to answer." : "Open Botkins to answer.";
-      sends.push(this.alert(device.id, record, { t: title, m: text, c: request.chatId, k: "request", r: request.id }, { urgent: true, expiration: 300 }));
+      // What the notification's buttons are (docs/live-cards.md, section 6). With previews off they
+      // would show the bot's words, so the notification only opens the app.
+      sends.push(this.alert(device.id, record, { t: title, m: text, c: request.chatId, k: "request", r: request.id, ...(record.prefs.previews && { q: askDetail(request) }) }, { urgent: true, expiration: 300 }));
     }
   }
 
@@ -392,6 +413,10 @@ export class Push {
     for (const device of targets) {
       if (!this.maySeeChat(device, chat)) continue;
       const record = this.store.push(device.id);
+      if (record.cards === "bots") {
+        this.startCard(sends, device, record, state, bot);
+        continue;
+      }
       // A new turn takes the chat's card over: it is no longer waiting to be ended.
       this.stay(device.id + ":" + run.chatId, false);
       if (!record.prefs.activities || !record.start || record.activities?.[run.chatId] || this.present(device.id)) continue;
@@ -442,12 +467,12 @@ export class Push {
   // ── Building what is sent ───────────────────────────────────────────────────────────────────
 
   /** Seals `content` for one phone. Null when the phone is gone. */
-  seal(deviceId, content) {
+  seal(deviceId, content, aad = PUSH_AAD) {
     const deviceKey = this.deviceKey(deviceId);
     if (!deviceKey) return null;
     const key = hkdf(deviceKey, Buffer.from(deviceId, "utf8"), PUSH_INFO);
     const nonce = random(12);
-    return Buffer.concat([nonce, seal(key, nonce, Buffer.from(JSON.stringify(content), "utf8"), PUSH_AAD)]).toString("base64");
+    return Buffer.concat([nonce, seal(key, nonce, Buffer.from(JSON.stringify(content), "utf8"), aad)]).toString("base64");
   }
 
   alert(deviceId, record, content, { urgent = false, expiration = 900, group } = {}) {
@@ -505,7 +530,7 @@ export class Push {
    * "done": the card isn't shown as out of date before then, and Apple keeps the push for a phone
    * that is out of reach for a while. `dismissIn` (seconds) is how long an ended card stays.
    */
-  activity(record, token, event, state, { urgent = false, dismissIn, staleIn } = {}) {
+  activity(record, token, event, state, { urgent = false, dismissIn, staleIn, relevance } = {}) {
     // Apple applies a card's pushes by their timestamp and drops one that isn't newer than the last.
     // Two pushes in the same second (the last "writing" and the "done") would lose the second one.
     const seconds = Math.max(Math.floor(this.now() / 1000), (this.stamps.get(token) ?? 0) + 1);
@@ -524,10 +549,116 @@ export class Push {
           timestamp: seconds,
           event,
           "content-state": state,
+          // Which card the Dynamic Island shows when there are several: the one that needs the person.
+          ...(relevance !== undefined && { "relevance-score": relevance }),
           ...(event === "end" ? { "dismissal-date": seconds + (dismissIn ?? 240) } : { "stale-date": seconds + (staleIn ?? ACTIVITY_STALE_S) }),
         },
       },
     };
+  }
+
+  // ── One card per Botkin ("activity-bots-v1") ────────────────────────────────────────────────
+
+  /** Starts a Botkin's card from afar when a turn begins and the phone has none for it (the app is closed). */
+  startCard(sends, device, record, state, bot) {
+    if (!bot) return;
+    const cardKey = "bot:" + bot.id;
+    const key = device.id + ":" + cardKey;
+    if (!record.prefs.activities || !record.start || record.activities?.[cardKey] || this.started.has(key) || this.present(device.id)) return;
+    const card = botCard(state, bot.id, { previews: record.prefs.previews, now: this.now(), visible: (chat) => this.maySeeChat(device, chat) });
+    if (!card) return;
+    this.started.add(key);
+    const look = bot.look ?? this.store.data.looks?.[bot.id] ?? {};
+    const sealed = card.detail ? this.seal(device.id, card.detail, CARD_AAD) : null;
+    sends.push({
+      token: record.start,
+      env: record.env,
+      type: "liveactivity",
+      priority: 10,
+      expiration: 120,
+      payload: {
+        aps: {
+          timestamp: Math.floor(this.now() / 1000),
+          event: "start",
+          "attributes-type": ACTIVITY_TYPE,
+          attributes: { chatId: "", botId: bot.id, botName: (bot.name ?? "Botkins").slice(0, 40), head: look.head ?? "", palette: look.palette ?? "original", eyes: look.eyes ?? "oval", colors: look.colors ?? [], card: "bot" },
+          "content-state": { ...card.state, ...(sealed && { sealed }) },
+          "relevance-score": card.relevance,
+          "stale-date": Math.floor(this.now() / 1000) + ACTIVITY_STALE_S,
+          alert: { title: bot.name ?? "Botkins", body: "Working on it" },
+        },
+      },
+    });
+  }
+
+  /**
+   * Brings each Botkin's card up to date on the phones that have one per Botkin. A change that
+   * matters (a chat needs the person, a chat ended, a new turn on a card that said done) goes at once;
+   * steps and thinking at most every ACTIVITY_GAP_MS, and not while the phone is in front (it draws
+   * its own cards then). A card with no chat left to show is ended.
+   */
+  cards(sends, targets, state) {
+    const now = this.now();
+    let next = null;
+    const later = (at) => (next = next == null ? at : Math.min(next, at));
+    for (const device of targets) {
+      const record = this.store.push(device.id);
+      if (record?.cards !== "bots" || !record.prefs.activities) continue;
+      const visible = (chat) => this.maySeeChat(device, chat);
+      const prefix = device.id + ":";
+      const keys = new Set([...Object.keys(record.activities ?? {}).filter((key) => key.startsWith("bot:")), ...[...this.started].filter((key) => key.startsWith(prefix + "bot:")).map((key) => key.slice(prefix.length))]);
+      for (const cardKey of keys) {
+        const key = prefix + cardKey;
+        const token = record.activities?.[cardKey];
+        const card = botCard(state, cardKey.slice(4), { previews: record.prefs.previews, now, visible });
+        if (card?.expires != null) later(card.expires + 100);
+        if (!token) {
+          // A push started this card and the phone hasn't said where its updates go (the app was
+          // closed). Once every chat on it has ended, the app is woken for a moment: it brings the
+          // card up to date itself and tells this computer the card's address.
+          if (this.started.has(key) && (!card || cardOver(card.state))) {
+            this.started.delete(key);
+            sends.push({ token: record.token, env: record.env, type: "background", priority: 5, expiration: 600, payload: { aps: { "content-available": 1 }, w: 1 } });
+          }
+          continue;
+        }
+        if (!card) {
+          this.endActivity(device.id, cardKey);
+          continue;
+        }
+        const text = JSON.stringify([card.state, card.detail]);
+        const last = this.sent.get(key);
+        if (last?.text === text) continue;
+        const marks = card.state.chats
+          .filter((chat) => chat.phase === "needs-you" || chat.phase === "done" || chat.phase === "failed")
+          .map((chat) => chat.id + ":" + chat.phase)
+          .join();
+        const over = cardOver(card.state);
+        const urgent = !last || marks !== last.marks || (last.over === true && !over);
+        if (!urgent) {
+          if (this.present(device.id)) continue;
+          const wait = ACTIVITY_GAP_MS - (now - (last?.at ?? 0));
+          if (wait > 0) {
+            later(now + wait + 50);
+            continue;
+          }
+        }
+        const sealed = card.detail ? this.seal(device.id, card.detail, CARD_AAD) : null;
+        const content = { ...card.state, ...(sealed && { sealed }) };
+        this.sent.set(key, { at: now, text, state: content, marks, over });
+        sends.push(this.activity(record, token, "update", content, { urgent, relevance: card.relevance, ...(over && { staleIn: ACTIVITY_LINGER_MS / 1000 + 60 }) }));
+      }
+    }
+    // Nothing else may change before then: look again when a chat drops off, or a held-back update is due.
+    if (next != null && (!this.cardTimer || next < this.cardAt)) {
+      clearTimeout(this.cardTimer);
+      this.cardAt = next;
+      this.cardTimer = setTimeout(() => {
+        this.cardTimer = null;
+        this.soon();
+      }, Math.max(250, next - now));
+      this.cardTimer.unref?.();
+    }
   }
 
   /** A push the phone doesn't show: it wakes the app for a moment, so it can answer a bot's question to the phone. */

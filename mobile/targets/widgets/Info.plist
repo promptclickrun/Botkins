@@ -4,6 +4,10 @@
 <dict>
   <key>CFBundleDisplayName</key>
   <string>Botkins</string>
+  <key>BotkinsKeychainGroup</key>
+  <string>$(AppIdentifierPrefix)app.botkins.mobile.shared</string>
+  <key>BotkinsAppGroup</key>
+  <string>group.app.botkins.mobile</string>
   <key>NSExtension</key>
   <dict>
     <key>NSExtensionPointIdentifier</key>
