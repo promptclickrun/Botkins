@@ -10,6 +10,8 @@ import { ArtifactMedia } from "../desktop/artifact-media.mjs";
 import { Workspace } from "./starter.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { LinkHost } from "../desktop/link/index.mjs";
+import { Providers } from "../desktop/providers/index.mjs";
+import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { LinkClient, pair } from "../desktop/remote/link-client.mjs";
 
 function fixture(t) {
@@ -181,4 +183,68 @@ test("a shell tool's file is indexed even when the filesystem reports the write 
     await delay(25);
   }
   assert.deepEqual(items.map((a) => [a.source, a.name]), [["tool", "chart.csv"]]);
+});
+
+test("a picture that a bot wrote into its own session's folder shows in that chat, and in no other", async (t) => {
+  const { dir, put } = fixture(t);
+  // The app as it runs: the model's runtime keeps its sessions in a folder of the app's own, and
+  // gives each session a folder for its files. A bot that names no place writes its pictures there.
+  const base = join(dir, "copilot");
+  const sessionFiles = (sessionId) => join(base, "session-state", sessionId, "files");
+  const picture = (sessionId, name) => {
+    mkdirSync(join(sessionFiles(sessionId), "duo"), { recursive: true });
+    const path = join(sessionFiles(sessionId), "duo", name);
+    writeFileSync(path, "png");
+    return path;
+  };
+  let reply = "";
+  const fake = fakeClient(async () => ({ data: { content: reply } }));
+  const open = () => new Workspace(dir, new Providers([new CopilotProvider({ connect: fake.client, baseDirectory: base })]), () => {});
+  let ws = open();
+  const chatId = ws.createChat("pip");
+  const other = ws.createChat("pip");
+  const mine = [picture(chatId, "01-anatomy.png"), picture(chatId, "02-layers.png")];
+  const theirs = picture(other, "private.png");
+  const unrelated = put("unrelated.png");
+  // A link in the session's folder to a file somewhere else is not a file of that folder.
+  const linked = join(sessionFiles(chatId), "duo", "linked.png");
+  symlinkSync(unrelated, linked);
+  reply = [...mine, theirs, unrelated, linked, join(sessionFiles(chatId), "..", "..", other, "files", "duo", "private.png")].map((path) => "MEDIA:" + path).join("\n");
+  await ws.send(chatId, "Draw the anatomy");
+  const shown = (workspace, id) => workspace.artifacts.list({ botId: "pip", chatId: id }).items.map((item) => [item.source, item.name]).sort();
+  assert.deepEqual(shown(ws, chatId), [["media", "01-anatomy.png"], ["media", "02-layers.png"]]);
+  // What a phone asks for each line: the two pictures are there; the rest stay text.
+  assert.deepEqual(ws.artifacts.resolve({ chatId, paths: [...mine, theirs, unrelated, linked] }).items.map((item) => item?.name ?? null), ["01-anatomy.png", "02-layers.png", null, null, null]);
+  // The other chat's own picture is its own: named there, it shows there.
+  reply = "MEDIA:" + theirs;
+  await ws.send(other, "And mine");
+  assert.deepEqual(shown(ws, other), [["media", "private.png"]]);
+  assert.deepEqual(shown(ws, chatId), [["media", "01-anatomy.png"], ["media", "02-layers.png"]], "and still not in the first chat");
+  // A session id is one name. Nothing that is a path, or empty, names a folder.
+  const provider = new CopilotProvider({ connect: fake.client, baseDirectory: base });
+  assert.equal(provider.sessionFiles(chatId), sessionFiles(chatId));
+  for (const id of ["", "..", ".", "../" + other, other + "/..", "a/b", "a\\b", null, undefined, 7, "x".repeat(201)]) assert.equal(provider.sessionFiles(id), null, String(id));
+  assert.equal(new CopilotProvider({ connect: fake.client }).sessionFiles(chatId), null, "a runtime with no folder of the app's own has none");
+
+  // A chat from before this rule: its pictures were said and not taken. They are found once the app starts again.
+  ws.artifacts.rows.splice(0);
+  ws.artifacts.save();
+  delete ws.state.mediaPass;
+  ws.save();
+  await ws.close?.();
+  ws = open();
+  const names = (id) => shown(ws, id).map(([, name]) => name);
+  assert.deepEqual(names(chatId).filter((name) => name !== "private.png"), ["01-anatomy.png", "02-layers.png"]);
+  assert.deepEqual(names(other), ["private.png"]);
+  // (The older rule stands beside the new one: a file that the bot already has a row for can be
+  // named in another chat of that bot. So the first chat, which also named the other's picture,
+  // may show it after this look, once that picture is the bot's by its own chat.)
+  // That look happens once: the next start reads nothing again.
+  assert.equal(ws.state.mediaPass, 1);
+  ws.artifacts.rows.splice(0);
+  ws.artifacts.save();
+  ws.save();
+  await ws.close?.();
+  ws = open();
+  assert.deepEqual(shown(ws, chatId), []);
 });

@@ -466,6 +466,14 @@ export class CopilotProvider extends ModelProvider {
     this.connection = null;
     this.signInFlow = null;
   }
+  /**
+   * The runtime keeps a folder of files for each session: `<baseDirectory>/session-state/<id>/files`.
+   * Only for a runtime with a folder of the app's own; a session id is one name, never a path.
+   */
+  sessionFiles(sessionId) {
+    if (!this.baseDirectory || typeof sessionId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(sessionId)) return null;
+    return join(this.baseDirectory, "session-state", sessionId, "files");
+  }
 
   /** The connected SDK client. The runtime starts on first use. */
   client() {
