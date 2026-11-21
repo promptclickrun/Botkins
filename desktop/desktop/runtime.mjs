@@ -98,13 +98,13 @@ export const APP_UPDATE = "app-update-v1";
 export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
-export const CAPABILITIES = ["quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES];
+export const CAPABILITIES = ["voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (name !== "voice-history-v1" || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -748,6 +748,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     importAgents: (keys) => workspace.agents.importAgents(keys),
     createChat: (id) => workspace.createChat(id),
     createGroupChat: (botIds, title) => workspace.createGroupChat(botIds, title),
+    recordVoiceLine: (chatId, id, text, final, author) => workspace.recordVoiceLine(chatId, id, text, final, author),
     send: (id, text, options) => {
       // The desktop steers by default. Queue is an explicit composer action.
       const turn = workspace.submit(id, text, {
@@ -756,6 +757,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         quote: options?.quote,
         mentions: options?.mentions,
         author: options?.author,
+        voiceId: options?.voiceId,
         ...(options?.notify === false && { notify: false }),
       });
       turn?.catch((err) => console.error("Workspace turn:", err.message));
@@ -905,6 +907,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         throw error;
       }
     },
+    liveVoiceTranscript: (id, text, final, options) => {
+      if (voiceDesk.isOwn(id)) voiceDesk.heardUser(id, text, final, options);
+    },
     liveVoiceTool: (sessionId, name, args) => voiceDesk.liveTool(sessionId, name, args),
     endLiveVoice: (sessionId) => {
       host.window.peerToPeer(false);
@@ -948,6 +953,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         const own = voiceDesk.isOwn(sessionId);
         // BOTKINS_VOICE_LOG=1 prints what a session's voice and the person said, for a check by hand.
         if (env("VOICE_LOG") === "1" && event.type === "transcript" && event.final) console.log("voice " + sessionId.slice(0, 14) + " " + event.role + ": " + event.text);
+        if (event.type === "transcript" && event.role === "user") voiceDesk.heardUser(sessionId, event.text, event.final);
         if (event.type === "ended") {
           if (own) host.window.peerToPeer(false);
           voiceDesk.forget(sessionId);

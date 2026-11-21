@@ -14,6 +14,7 @@ function open(t) {
   const handlers = {
     createChat: (...args) => ws.createChat(...args),
     send: (...args) => ws.send(...args),
+    recordVoiceLine: (...args) => ws.recordVoiceLine(...args),
     respond: (id, answer) => ws.interactions.respond(id, answer),
   };
   return { ws, call: deviceCall({ workspace: ws, handlers, folders: {} }) };
@@ -151,4 +152,18 @@ test("a bot a member makes or copies is marked as theirs, and one without the ma
   assert.equal("createdBy" in ws.bot(mine), false);
   // The mark is kept when the app starts again.
   assert.equal(new Workspace(ws.dir, fakeClient().client, () => {}).bot(made).createdBy, "m_avery");
+});
+
+test("a member's spoken request is updated and runs once in their name", async (t) => {
+  const { ws, call } = open(t);
+  const context = { principal: avery };
+  const id = await call("createChat", ["pip"], context);
+  await call("recordVoiceLine", [id, "call:1", "Check", false], context);
+  await call("recordVoiceLine", [id, "call:1", "Check the time", true], context);
+  await call("send", [id, "Check the time", { voiceId: "call:1" }], context);
+  const said = ws.chat(id).messages.filter(message => message.role === "user");
+  assert.equal(said.length, 1);
+  assert.equal(said[0].text, "Check the time");
+  assert.deepEqual(said[0].author, { memberId: avery.memberId, name: avery.name });
+  assert.ok(said[0].runId);
 });

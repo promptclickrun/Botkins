@@ -25,6 +25,8 @@ export class ElevenLabsTransport extends LiveBase {
   private rates: { input: number; output: number };
   private count = 0;
   private lastBot = "";
+  private userLine = "";
+  private lastUserEvent?: number;
   /** Sound from before the last interruption is dropped. */
   private cutAt = -1;
   /** The person cut the agent off: its sound is dropped until ElevenLabs takes their turn. */
@@ -144,11 +146,19 @@ export class ElevenLabsTransport extends LiveBase {
         this.setStatus("listening");
         return;
       }
+      case "tentative_user_transcript":
       case "user_transcript": {
-        const text = str(obj(message.user_transcription_event).user_transcript);
-        // ElevenLabs took the person's turn: what it says next is the new answer.
-        this.cutting = false;
-        if (text) this.line("you-" + ++this.count, "you", text, { final: true });
+        const final = message.type === "user_transcript";
+        const event = obj(final ? message.user_transcription_event : message.tentative_user_transcription_event);
+        const text = str(event.user_transcript);
+        if (!text.trim() || (typeof event.event_id === "number" && event.event_id === this.lastUserEvent)) return;
+        this.userLine ||= "you-" + ++this.count;
+        this.line(this.userLine, "you", text, { final });
+        if (final) {
+          this.lastUserEvent = typeof event.event_id === "number" ? event.event_id : undefined;
+          this.userLine = "";
+          this.cutting = false;
+        }
         return;
       }
       case "agent_response": {

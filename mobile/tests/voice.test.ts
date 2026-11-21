@@ -967,6 +967,7 @@ test("live with ElevenLabs: tools and the agent are made once, reused after a re
   assert.deepEqual(toolBodies[1], { tool_config: { type: "client", name: "list_bots", description: "Lists the bots.", expects_response: true } });
   const created = json(net.seen.find((s) => s.url.pathname === "/v1/convai/agents/create")!);
   assert.equal(created.name, "Botkins");
+  assert.ok(created.conversation_config.conversation.client_events.includes("tentative_user_transcript"));
   assert.deepEqual(created.conversation_config.agent.prompt.tool_ids, ["tool_1", "tool_2"]);
   assert.deepEqual(created.platform_settings.overrides.conversation_config_override, { agent: { first_message: true, language: true, prompt: { prompt: true, tool_ids: true } }, tts: { voice_id: true } });
   for (const s of net.seen) assert.equal(s.headers.get("xi-api-key"), "xi-eleven-key-12345");
@@ -1335,4 +1336,29 @@ test("a bot's voice is checked: unknown providers, stray fields, long strings an
   assert.throws(() => remoteArgs("updateBot", ["bot-1", { voice: { tts: { provider: "nope" } } }]), /isn't supported/);
   // What is read back is never half of a bad voice.
   assert.equal(cleanBotVoice({ tts: { speed: 9 } }), null);
+});
+
+test("live speech updates one chat message without starting a bot turn", async () => {
+  const backend = new MockBackend();
+  const host = new LinkHost({ relay: false, dir: scratch(), backend, port: 0 });
+  try {
+    const id = await backend.call("createChat", ["bot-mira"]);
+    const runs = backend.snapshot().runs.length;
+    const say = (key: string, text: string, final: boolean) =>
+      host.dispatch({}, { m: "recordVoiceLine", a: [id, key, text, final] });
+    assert.ok(backend.capabilities.includes("voice-history-v1"));
+    await say("call1:u1", "Is it", false);
+    const page = () => host.dispatch({}, { m: "link.messages", a: [id] });
+    assert.deepEqual((await page()).messages.map((m: any) => m.text), ["Is it"]);
+    await say("call1:u1", "Is it raining?", true);
+    await say("call1:u1", "Is it", false);
+    await say("call1:u1", "Is it raining?", true);
+    await say("call2:u1", "Is it raining?", true);
+    assert.deepEqual((await page()).messages.map((m: any) => [m.role, m.text]), [
+      ["user", "Is it raining?"], ["user", "Is it raining?"],
+    ]);
+    assert.equal(backend.snapshot().runs.length, runs);
+  } finally {
+    await host.stop();
+  }
 });

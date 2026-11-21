@@ -2,6 +2,7 @@
 // It keeps a small workspace in memory, shaped like the desktop's, and answers a message with a
 // scripted reply: thinking, one tool step, then streamed text. A message with "approve" in it asks
 // for an approval first; one with "which" asks a question.
+import { addUserMessage, recordVoiceLine } from "./voice-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -1095,7 +1096,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1347,18 +1348,17 @@ export class MockBackend {
     if (!fn) throw new Error("The demo computer doesn't do " + method + " yet.");
     // The person a call is made for (spaces are a person's): "owner", or a member's id and name.
     this.caller = context.principal?.kind === "member" ? { id: context.principal.memberId, name: context.principal.name || "A member" } : { id: "owner", name: OWNER_NAME };
-    const result = await fn.apply(this, args);
+    const callArgs = method === "send"
+      ? [args[0], args[1], { ...args[2], author: this.caller.id === "owner" ? undefined : { memberId: this.caller.id, name: this.caller.name } }]
+      : args;
+    const result = await fn.apply(this, callArgs);
     const principal = context.principal;
     if (principal?.kind === "member") {
       if (method === "createChat" || method === "createGroupChat" || method === "forkChat" || method === "spaces.newPanel" || method === "spaces.ask") {
         const chat = this.state.chats.find((item) => item.id === (result?.chatId ?? result));
         if (chat) chat.createdBy = principal.memberId;
       }
-      if (method === "send") {
-        const chat = this.chat(args[0]);
-        const message = [...chat.messages].reverse().find((item) => item.role === "user" && item.text === args[1]);
-        if (message) message.author = { memberId: principal.memberId, name: principal.name };
-      }
+
     }
     this.changed();
     return result;
@@ -1689,7 +1689,7 @@ export class MockBackend {
     const next = this.state.queued[id]?.shift();
     if (next) {
       if (!this.state.queued[id].length) delete this.state.queued[id];
-      this.handlers.send.call(this, id, next.text);
+      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author });
     }
   }
   /** A scripted turn: thinking, a tool step, an approval or question when asked for, then the reply. */
@@ -1860,7 +1860,7 @@ export class MockBackend {
     const next = this.state.queued[id]?.shift();
     if (next) {
       if (!this.state.queued[id].length) delete this.state.queued[id];
-      this.handlers.send.call(this, id, next.text);
+      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author });
     }
   }
   handlers = {
@@ -2030,6 +2030,10 @@ export class MockBackend {
       this.state.chats = this.state.chats.filter((c) => c.id !== id);
     },
     warmChat() {},
+    recordVoiceLine(chatId, id, text, final) {
+      const author = this.caller?.id && this.caller.id !== "owner" ? { memberId: this.caller.id, name: this.caller.name } : undefined;
+      recordVoiceLine(this.chat(chatId), id, text, final, author);
+    },
     // A new chat with the messages up to and including `messageIndex`.
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
@@ -2072,7 +2076,7 @@ export class MockBackend {
       const prompt = text(value, 32000, "message");
       if (this.turns.has(id)) {
         if (options?.delivery === "steer" && this.turns.get(id).steer?.(prompt)) return;
-        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt });
+        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt, ...(options?.author && { author: options.author }), ...(options?.voiceId && { voiceId: options.voiceId }) });
         return;
       }
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
@@ -2080,7 +2084,7 @@ export class MockBackend {
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
-      chat.messages.push({ role: "user", text: prompt, runId: run.id, time: now() });
+      addUserMessage(chat, { role: "user", text: prompt, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
       if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
       chat.time = now();
       // Today › New panel sends "/today-panel <what it should show>"; the demo bot makes one at once.

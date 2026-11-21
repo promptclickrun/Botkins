@@ -443,6 +443,9 @@ class LiveCall {
   private releaseTimer: number | null = null;
   private micTimer: number | null = null;
   private turnMs = 0;
+  private geminiInput = "";
+  private geminiSpeaking = false;
+  private lastElevenFinal?: number;
 
   constructor(chatId: string, provider: string) {
     this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, level: 0, transcript: [], error: "", inputMode: this.inputMode };
@@ -454,8 +457,15 @@ class LiveCall {
     this.state = { ...this.state, ...patch };
     live.set(this.state);
   }
-  /** Adds to the running transcript: a delta joins the line being spoken, a final line replaces it. */
-  heard(role: "user" | "assistant", text: string, final: boolean) {
+  /** The person's words go in the chat. The voice panel still captions the bot's replies. */
+  heard(role: "user" | "assistant", text: string, final: boolean, options?: { item?: string; replace?: boolean }) {
+    if (role === "user") {
+      // Codex sends these directly to VoiceDesk, including when the call is on a paired phone.
+      if (this.state.provider !== "codex" && this.session && !this.ended) {
+        void api.liveVoiceTranscript(this.session.id, text, final, options).catch(e => this.update({ error: voiceError(e) }));
+      }
+      return;
+    }
     if (!text) return;
     const lines = [...this.state.transcript];
     const last = lines.at(-1);
@@ -601,10 +611,10 @@ class LiveCall {
         }
         return;
       case "conversation.item.input_audio_transcription.delta":
-        if (!codex) this.heard("user", String(event.delta ?? ""), false);
+        if (!codex) this.heard("user", String(event.delta ?? ""), false, { item: event.item_id });
         return;
       case "conversation.item.input_audio_transcription.completed":
-        if (!codex) this.heard("user", String(event.transcript ?? ""), true);
+        if (!codex) this.heard("user", String(event.transcript ?? ""), true, { item: event.item_id });
         return;
       case "response.output_audio_transcript.delta":
       case "response.audio_transcript.delta":
@@ -740,7 +750,16 @@ class LiveCall {
           this.gate.queued((inline.data.length * 3 / 4) / 2 / rate * 1000);
         }
       }
-      if (content.inputTranscription?.text) this.heard("user", content.inputTranscription.text, false);
+      if (content.inputTranscription?.text || content.interimInputTranscription?.text) {
+        this.geminiSpeaking = true;
+        this.geminiInput += content.inputTranscription?.text ?? "";
+        this.heard("user", this.geminiInput + (content.interimInputTranscription?.text ?? ""), false, { replace: true });
+      }
+      if (this.geminiSpeaking && (content.turnComplete || content.inputTranscription?.finished)) {
+        this.heard("user", "", true);
+        this.geminiInput = "";
+        this.geminiSpeaking = false;
+      }
       if (content.outputTranscription?.text) this.heard("assistant", content.outputTranscription.text, false);
       if (content.turnComplete) this.settleLine();
     }
@@ -785,9 +804,15 @@ class LiveCall {
       case "ping":
         ws.send(JSON.stringify({ type: "pong", event_id: message.ping_event?.event_id }));
         return;
-      case "user_transcript":
-        this.heard("user", String(message.user_transcription_event?.user_transcript ?? ""), true);
+      case "tentative_user_transcript":
+      case "user_transcript": {
+        const final = message.type === "user_transcript";
+        const event = final ? message.user_transcription_event : message.tentative_user_transcription_event;
+        if (!event?.user_transcript || (typeof event.event_id === "number" && event.event_id === this.lastElevenFinal)) return;
+        this.heard("user", event.user_transcript, final, { replace: true });
+        if (final) this.lastElevenFinal = event.event_id;
         return;
+      }
       case "agent_response":
         this.heard("assistant", String(message.agent_response_event?.agent_response ?? ""), true);
         return;

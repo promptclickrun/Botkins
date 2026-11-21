@@ -157,9 +157,11 @@ export abstract class LiveBase implements LiveTransport {
 
   /** Adds to a line (`append`) or replaces its text. */
   protected line(id: string, who: Line["who"], text: string, options: { append?: boolean; final?: boolean } = {}) {
-    if (!id) return;
+    if (this.ended || !id) return;
     const held = this.lines.get(id);
-    const next: Line = { id, who, text: options.append && held ? held.text + text : text, final: !!options.final };
+    if (who === "you" && held?.final) return;
+    const words = options.append && held ? held.text + text : text;
+    const next: Line = { id, who, text: options.final && !words.trim() && held ? held.text : words, final: !!options.final };
     if (!next.text.trim() && !held) return;
     this.lines.set(id, next);
     // Only the last lines matter; old ones are forgotten.
@@ -194,6 +196,9 @@ export abstract class LiveBase implements LiveTransport {
 
   end() {
     if (this.ended) return;
+    for (const line of this.lines.values()) {
+      if (line.who === "you" && !line.final) this.line(line.id, line.who, line.text, { final: true });
+    }
     this.ended = true;
     try {
       this.close();

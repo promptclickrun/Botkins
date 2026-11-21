@@ -264,7 +264,7 @@ export const WORKSPACE = {
   ...each("revealProject revealSkill revealWiki revealWikiExport openChatPath openLink openAppRelease", no("window")), // opens a folder, a file or a link on the computer's screen
   ...each("copyText copyReply", no("window")), // the clipboard
   ...each("exportTemplate importTemplate exportUsage exportWiki", no("window")), // a save or open dialog; the text forms have commands
-  ...each("startDictation startLiveVoice endLiveVoice liveVoiceTool transcribe speak", no("window")), // the window's microphone and speaker
+  ...each("startDictation startLiveVoice endLiveVoice liveVoiceTool liveVoiceTranscript recordVoiceLine transcribe speak", no("window")), // the window's microphone and speaker
   ...each("testNotification requestScreenPermission allowLocalNetwork grantMacTool setPhoneScreen", no("window")), // a notification or a permission the system asks for on the screen
   // ── What only the window uses to draw itself ──
   ...each("sidePane frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),

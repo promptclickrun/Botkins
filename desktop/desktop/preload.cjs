@@ -260,6 +260,7 @@ for (const name of [
   "send",
   "stop",
   "warmChat",
+  "recordVoiceLine",
   "chooseFiles",
   "unqueue",
   "sendNow",
@@ -317,6 +318,7 @@ for (const name of [
   "speak",
   "startDictation",
   "startLiveVoice",
+  "liveVoiceTranscript",
   "liveVoiceTool",
   "endLiveVoice",
 ])

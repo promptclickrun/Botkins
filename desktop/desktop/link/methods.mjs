@@ -51,7 +51,7 @@ export const REMOTE_METHODS = new Set([
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
   "createChat", "createGroupChat", "setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat",
-  "setChatProject", "startProjectChat",
+  "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
   // Models and providers

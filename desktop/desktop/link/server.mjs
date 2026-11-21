@@ -465,7 +465,8 @@ export class LinkHost extends EventEmitter {
     // A member's call says so: the app leaves the owner's own notes out of what it hands over.
     const notes = await this.liveNotes(chat.id, bot.id, principal?.kind === "member" ? principal.memberId : undefined);
     const instructions = liveInstructions({ bot, messages: chat.messages ?? [], bots: state.bots ?? [], notes, location });
-    const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name }, override: cleanBotVoice(bot.voice)?.live });
+    const author = principal?.kind === "member" ? { memberId: principal.memberId, name: principal.name } : undefined;
+    const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name, ...(author && { author }) }, override: cleanBotVoice(bot.voice)?.live });
     return { ...session, tools: [ASK_BOT] };
   }
 

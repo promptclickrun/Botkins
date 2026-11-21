@@ -936,6 +936,7 @@ declare global {
       /** { prepare: true } readies this window for WebRTC, before the offer is made. */
       startLiveVoice(chatId: string, options?: { sdp?: string; prepare?: boolean }): Promise<DeskLiveSession>;
       /** Runs a tool the live voice called (ask_bot): resolves with the bot's reply, ready to speak. */
+      liveVoiceTranscript(sessionId: string, text: string, final: boolean, options?: { item?: string; replace?: boolean }): Promise<void>;
       liveVoiceTool(sessionId: string, name: string, args: Record<string, unknown>): Promise<string>;
       endLiveVoice(sessionId: string): Promise<void>;
       /** What a live session in the main process (Codex) heard and said, and when it ended. */

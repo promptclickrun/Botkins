@@ -11,6 +11,8 @@ import { type FetchLike, LinkClient, LinkError, type LinkState, pair, type Pairi
 import { parsePairingUrl } from "../src/link/pairing";
 import type { ChatDetail, ChatSummary, Live, Run } from "../src/link/types";
 
+import { VoiceHistoryWriter } from "../src/features/voice/live/history";
+
 const fetcher = fetch as unknown as FetchLike;
 const device = { name: "Test phone", platform: "ios" };
 
@@ -244,4 +246,28 @@ test("a phone at rest follows nothing until it wakes, and its calls still go thr
   await until(() => (parts.bots as { id: string }[]).some((bot) => bot.id === id), "the change after waking");
   client.stop();
   await link.stop();
+});
+
+test("live microphone text reaches the watched chat before final and keeps one row", async t => {
+  const { link } = await host();
+  t.after(() => link.stop());
+  const paired = await pair(fetcher, { hosts: [loopback(link)], code: link.startPairing().code }, device);
+  const { client, parts, until } = follow(paired);
+  t.after(() => client.stop());
+  await until(() => !!parts.chats, "the first state");
+  const chatId = await client.call<string>("createChat", "bot-mira");
+  client.watch([chatId]);
+  const detail = () => parts["chat:" + chatId] as ChatDetail | undefined;
+  const writer = new VoiceHistoryWriter(
+    line => client.call<void>("recordVoiceLine", chatId, line.id, line.text, line.final),
+    () => assert.fail("the transcript could not be saved"),
+  );
+  const line = { who: "you" as const, id: "call:u1", final: false, text: "Is it four" };
+  writer.put(line);
+  await until(() => detail()?.messages[0]?.text === line.text, "partial speech in the watched chat");
+  writer.put({ ...line, text: "Is it Friday?", final: true });
+  await until(() => detail()?.messages[0]?.text === "Is it Friday?", "the corrected final");
+  assert.equal(detail()?.messages.length, 1);
+  assert.equal(detail()?.messages[0].voicePartial, undefined);
+  assert.equal(detail()?.runs.length, 0);
 });

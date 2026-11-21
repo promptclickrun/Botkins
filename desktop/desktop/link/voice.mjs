@@ -953,7 +953,7 @@ export class Voice {
     let answer;
     try {
       const short = (value) => (typeof value === "string" && value.length <= 200 ? value : undefined);
-      answer = await codex.live({ sdp, voice, instructions, tools, chatId: short(about?.chatId), botId: short(about?.botId), botName: short(about?.botName) });
+      answer = await codex.live({ sdp, voice, instructions, tools, chatId: short(about?.chatId), botId: short(about?.botId), botName: short(about?.botName), ...(about?.author && { author: about.author }) });
     } catch (error) {
       if (error instanceof Failure) throw error;
       this.log("voice: Codex live failed");
@@ -1058,7 +1058,10 @@ export class Voice {
     if (!agent) {
       const body = {
         name: "Botkins",
-        conversation_config: { agent: { first_message: "", language: "en", prompt: { prompt: "You are a helpful voice assistant.", tool_ids: toolIds } } },
+        conversation_config: {
+          agent: { first_message: "", language: "en", prompt: { prompt: "You are a helpful voice assistant.", tool_ids: toolIds } },
+          conversation: { client_events: ["conversation_initiation_metadata", "audio", "interruption", "ping", "user_transcript", "tentative_user_transcript", "agent_response", "agent_response_correction", "client_tool_call"] },
+        },
         platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true, language: true, prompt: { prompt: true, tool_ids: true } }, tts: { voice_id: true } } } },
       };
       let made;

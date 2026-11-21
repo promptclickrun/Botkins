@@ -1,3 +1,4 @@
+import { addUserMessage, recordVoiceLine } from "./link/voice-history.mjs";
 import { commitInterim, finishReply, wholeMessage } from "./transcript.mjs";
 import { stripVTControlCharacters } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
@@ -628,9 +629,14 @@ export class Workspace {
   createGroupChat(botIds, title) {
     return createGroupChat(this, botIds, title);
   }
+  recordVoiceLine(chatId, id, text, final, author) {
+    if (!recordVoiceLine(this.chat(chatId), id, text, final, author)) return;
+    if (final) this.save();
+    else this.notify();
+  }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, author, also: rawAlso, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, author, also: rawAlso, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -677,7 +683,7 @@ export class Workspace {
       ...(context.scheduleId != null && this.panels.routines.noOutput(chat, context.scheduleId) && { noOutput: true }),
     };
     this.state.runs.unshift(run);
-    chat.messages.push({
+    const message = addUserMessage(chat, {
       role: "user",
       text: prompt,
       runId: run.id,
@@ -687,9 +693,9 @@ export class Workspace {
       ...(attachments.length && { attachments }),
       ...(quote && { quote }),
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
-    });
+    }, voiceId);
     run.recovery = { extra };
-    return this.startTurn(chat, bot, chat.messages.at(-1), run, false);
+    return this.startTurn(chat, bot, message, run, false);
   }
 
   startTurn(chat, bot, message, run, recovering) {
@@ -743,6 +749,7 @@ export class Workspace {
       id: randomUUID(),
       steer: delivery === "steer",
       ...(options.notify === false && { notify: false }),
+      ...(typeof options.voiceId === "string" && options.voiceId.length <= 256 && { voiceId: options.voiceId }),
       text: textField(text, 32000, "message"),
       attachments: validateAttachments(options.attachments),
       ...(typeof options.quote === "string" &&
@@ -788,10 +795,10 @@ export class Workspace {
           const accepted = await task.deliverSteer({ prompt: quotedPrompt(authored, item.quote) + (refs.context || ""), attachments: [...attachments, ...mentioned] });
           if (!accepted) break;
           commitInterim(chat, task.run, task);
-          chat.messages.push({ role: "user", text: item.text, steeredRunId: task.run.id, time: Date.now(),
+          addUserMessage(chat, { role: "user", text: item.text, steeredRunId: task.run.id, time: Date.now(),
             ...(item.author && { author: item.author }),
             ...(item.quote && { quote: item.quote }), ...(attachments.length && { attachments }),
-            ...(refs.list.length && { mentions: refs.list, context: refs.context }) });
+            ...(refs.list.length && { mentions: refs.list, context: refs.context }) }, item.voiceId);
           const remaining = this.queues.get(chat.id)?.filter(q => q.id !== item.id);
           if (remaining?.length) this.queues.set(chat.id, remaining);
           else this.queues.delete(chat.id);
@@ -833,6 +840,7 @@ export class Workspace {
         mentions: next.mentions,
         author: next.author,
         ...(next.notify === false && { notify: false }),
+        voiceId: next.voiceId,
       }).catch((err) => console.error("Queued turn:", err.message));
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
@@ -845,7 +853,7 @@ export class Workspace {
           const run = { id: randomUUID(), chatId, title: next.text.slice(0, 100), time, status: "Needs you", detail: err.message, finished: time, ending: "failed" };
           if (next.notify === false) run.notify = false;
           this.state.runs.unshift(run);
-          chat.messages.push({
+          addUserMessage(chat, {
             role: "user",
             text: next.text,
             runId: run.id,
@@ -853,7 +861,7 @@ export class Workspace {
             ...(next.author && { author: next.author }),
             ...(next.attachments?.length && { attachments: next.attachments }),
             ...(next.quote && { quote: next.quote }),
-          });
+          }, next.voiceId);
           chat.time = time;
           chat.unread = true;
           this.save();

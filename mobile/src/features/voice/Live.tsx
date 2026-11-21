@@ -8,13 +8,15 @@ import { useEffect, useRef, useState } from "react";
 import { AppState, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LiveProvider } from "@/link/types";
-import { type AvatarState, useBot, useWatchedChat } from "@/state/hooks";
+import { type AvatarState, useBot, useCapability, useWatchedChat } from "@/state/hooks";
 import { loadDevicePrefs, useDevicePrefs } from "@/state/devicePrefs";
 import { api } from "@/state/link";
-import { useApp } from "@/state/store";
+import { showToast, useApp } from "@/state/store";
 import { AvatarMotion, BotAvatar, Button, haptic, IconButton, slopFor, space, T, Tap, useTheme } from "@/ui";
 import { RequestPanel } from "../chat/RequestPanel";
 import { chatAccess } from "./chatAccess";
+import { VoiceCanvas } from "./VoiceCanvas";
+import { type SpokenLine, updateSpoken, VoiceHistoryWriter } from "./live/history";
 import { liveContext } from "./live/context";
 import { chatTools, type Kit, type Line, type LiveStatus, type LiveTransport, planFor, socketTransport, webrtcTransport } from "./live/index";
 import type { Connect, InputMode, SocketLike } from "./live/types";
@@ -58,6 +60,11 @@ const AVATAR: Record<LiveStatus, AvatarState> = { connecting: "pending", listeni
 
 function LiveScreen() {
   const { chatId, botId } = useLocalSearchParams<{ chatId: string; botId: string }>();
+  const computer = useApp(state => state.pairing?.serverId);
+  return <LiveCall key={JSON.stringify([computer, chatId, botId])} chatId={chatId} botId={botId} computer={computer} />;
+}
+
+function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; computer?: string }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const bot = useBot(botId);
@@ -66,11 +73,12 @@ function LiveScreen() {
   // This bot's own live voice, when it has one, over the shared choice (the computer applies it to the call).
   const provider = voice ? effectiveLive(voice.live, botVoiceOf(botId)?.live).provider : null;
   const request = useApp((state) => state.parts.live?.requests.find((item) => item.chatId === chatId));
-  useWatchedChat(chatId);
+  const chat = useWatchedChat(chatId);
+  const savesHistory = useCapability("voice-history-v1");
 
   const [status, setStatus] = useState<LiveStatus>("connecting");
   const [problem, setProblem] = useState<string | null>(null);
-  const [lines, setLines] = useState<Line[]>([]);
+  const [spoken, setSpoken] = useState<SpokenLine[]>([]);
   const [muted, setMuted] = useState(false);
   const [speaker, setSpeaker] = useState(true);
   const [callStarted, setCallStarted] = useState(false);
@@ -101,6 +109,31 @@ function LiveScreen() {
     stopSpeech();
     setCallStarted(true);
 
+    const sameComputer = () => useApp.getState().pairing?.serverId === computer;
+    const writer = new VoiceHistoryWriter(
+      async line => {
+        if (!sameComputer()) throw new Error("Computer changed.");
+        await api.recordVoiceLine(chatId, line.id, line.text, line.final);
+      },
+      () => showToast("Couldn't save a voice message to this chat.", "error"),
+    );
+    let lastSpeech: Line | undefined;
+    let claimed: string | undefined;
+    const heard = (line: Line) => {
+      // Codex sends its transcript to the computer. Its watched chat already carries those words.
+      if (!sessionId || (line.who === "you" && provider === "codex" && savesHistory)) return;
+      const snapshot = { ...line, id: sessionId + ":" + line.id };
+      const state = useApp.getState();
+      const at = state.chats[chatId]?.total ?? state.parts.chats?.find(chat => chat.id === chatId)?.count ?? 0;
+      if (!gone) setSpoken(current => updateSpoken(current, snapshot, at));
+      if (line.who === "you" && savesHistory) {
+        lastSpeech = snapshot;
+        writer.put(snapshot);
+      }
+    };
+    const endSession = (id: string) => {
+      if (sameComputer()) void api["link.voice.endLive"](id).catch(() => {});
+    };
     let routed = false;
     const attach = (next: LiveTransport) => {
       held.current = next;
@@ -115,7 +148,7 @@ function LiveScreen() {
             void tools.route(speakerOn.current);
           }
         }),
-        next.on("line", (line) => setLines((held) => [...held.filter((item) => item.id !== line.id), line].slice(-6))),
+        next.on("line", heard),
         next.on("error", (message) => {
           setProblem(message);
           // A problem the call lives through is shown for a moment.
@@ -125,7 +158,11 @@ function LiveScreen() {
         }),
       );
     };
-    const run = chatTools(chatAccess(chatId));
+    const run = chatTools(chatAccess(chatId), undefined, text => {
+      if (!lastSpeech || lastSpeech.id === claimed || lastSpeech.text.trim() !== text.trim()) return;
+      claimed = lastSpeech.id;
+      return claimed;
+    });
     // Roughly where the person is, only with Location on in Device access. Looked for from the
     // start, alongside the rest, and given up on quickly (live/context.ts).
     const where = loadDevicePrefs()
@@ -143,8 +180,10 @@ function LiveScreen() {
             tools,
             async (sdp) => {
               const context = await where;
+              if (gone || !sameComputer()) throw new Error("The call has ended.");
               const session = await api["link.voice.live"]({ chatId, botId, provider, sdp, ...(context && { context }) });
               sessionId = session.id;
+              if (gone) endSession(session.id);
               if (session.kind !== "webrtc") throw new Error(UPDATE_COMPUTER + ".");
               return session;
             },
@@ -155,9 +194,10 @@ function LiveScreen() {
           await next.start();
         } else {
           const context = await where;
+          if (gone || !sameComputer()) return;
           const session = await api["link.voice.live"]({ chatId, botId, provider, ...(context && { context }) });
           sessionId = session.id;
-          if (gone) return;
+          if (gone) return endSession(session.id);
           const next = socketTransport(session, tools, run);
           if (!next) throw new Error(UPDATE_APP);
           next.setInput(mode);
@@ -174,16 +214,16 @@ function LiveScreen() {
 
     return () => {
       gone = true;
-      for (const off of offs) off();
       held.current?.end();
+      for (const off of offs) off();
       transport.current = null;
       // A session the computer set up is ended there too, however the screen closed.
       const id = sessionId ?? (held.current as { sessionId?: string | null } | null)?.sessionId;
-      if (id) void api["link.voice.endLive"](id).catch(() => {});
+      if (id) endSession(id);
       setCallStarted(false);
       void audioModule()?.setAudioModeAsync({ allowsRecording: false, shouldRouteThroughEarpiece: false }).catch(() => {});
     };
-  }, [ready, chatId, botId, provider]);
+  }, [ready, chatId, botId, provider, savesHistory, computer]);
 
   // The phone stays awake while a call is being set up or is on. A call that ended or never started
   // leaves the screen open with its message, and the phone may sleep.
@@ -263,28 +303,17 @@ function LiveScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas, paddingTop: insets.top + space.xl, paddingBottom: insets.bottom + space.lg, paddingHorizontal: space.xl }}>
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: space.md }}>
-        <BotAvatar bot={bot} size={180} state={avatar} />
-        <T variant="title1" center numberOfLines={1}>
-          {bot?.name ?? "Bot"}
-        </T>
-        <T variant="subhead" color={failed ? "danger" : "muted"} center numberOfLines={2} accessibilityLiveRegion="polite">
-          {line}
-        </T>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+        <BotAvatar bot={bot} size={52} state={avatar} />
+        <View style={{ flex: 1 }}>
+          <T variant="title2" numberOfLines={1}>{bot?.name ?? "Bot"}</T>
+          <T variant="subhead" color={failed ? "danger" : "muted"} numberOfLines={2} accessibilityLiveRegion="polite">{line}</T>
+        </View>
       </View>
 
-      {request ? (
-        <RequestPanel request={request} bot={bot} maxHeight={320} />
-      ) : (
-        <View style={{ minHeight: 120, justifyContent: "flex-end", gap: space.sm, paddingBottom: space.lg }} accessibilityLabel="Transcript">
-          {lines.slice(-4).map((item) => (
-            <T key={item.id} variant={item.who === "bot" ? "body" : "callout"} color={item.who === "bot" ? "ink" : "muted"} numberOfLines={3}>
-              {item.text.trim()}
-            </T>
-          ))}
-        </View>
-      )}
-
+      <VoiceCanvas chatId={chatId} chat={chat} spoken={spoken} />
+      {supported && !savesHistory && <T variant="footnote" color="muted">Update the app on your computer to save voice messages in this chat.</T>}
+      {request && <RequestPanel request={request} bot={bot} maxHeight={260} />}
       <View style={{ height: MAIN, alignItems: "center", justifyContent: "center" }}>
         {push ? (
           <TalkButton holding={holding} disabled={!live} onDown={talkDown} onUp={talkUp} />

@@ -33,6 +33,7 @@ export function deviceCall({ workspace, handlers, folders }) {
     // A member's message carries their name with it, wherever `send` puts it: in the chat now, in
     // the queue, or into the turn under way.
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : checked;
+    if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member);
     if (member) {
       // These three take the member's id beside what the device sent; a handler never reads it from the device.
       if (name === "mentionables") return workspace.mentions.candidates(checked[0], checked[1], member.memberId);
