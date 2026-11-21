@@ -20,6 +20,7 @@ const PHONE = "botkins.phone.v1";
 const MiB = 1024 * 1024;
 const MAX_PHONE = 6 * MiB + 64 * 1024; // a phone's largest message
 const MAX_INVITE_LIFE = 30 * 24 * 60 * 60 * 1000;
+const SPACE_BYTES_MAX = 12 * MiB;
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 // ---- wrangler dev ----------------------------------------------------------------------------
@@ -79,9 +80,11 @@ async function startDev() {
       "--show-interactive-dev-session=false",
       // Every socket of a test run comes from one address, so the per-network limits are off here.
       "--var=RATE_LIMITS:off",
+      // All copies of shared spaces together: 12 MiB here, so a test can fill it.
+      `--var=SPACE_BYTES_MAX:${SPACE_BYTES_MAX}`,
     ];
   // The Node relay trusts the address header only when told to, as it does behind its proxy.
-  if (NODE_RELAY) Object.assign(env, { PORT: String(port), HOST: "127.0.0.1", RATE_LIMITS: "off", CLIENT_IP_HEADER: "cf-connecting-ip", DATA_DIR: stateDir, PUSH_UPSTREAM: "off" });
+  if (NODE_RELAY) Object.assign(env, { PORT: String(port), HOST: "127.0.0.1", RATE_LIMITS: "off", CLIENT_IP_HEADER: "cf-connecting-ip", DATA_DIR: stateDir, PUSH_UPSTREAM: "off", SPACE_BYTES_MAX: String(SPACE_BYTES_MAX) });
   child = spawn(process.execPath, args, { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
@@ -1177,6 +1180,31 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     // Another computer is not held back by it.
     const other = newRoom();
     assert.equal((await putSpace(other, newShare(other), sealedCopy(64))).status, 204);
+  });
+
+  it("holds only so much of all computers' copies together, and makes room when one is taken back", async () => {
+    // This relay holds 12 MiB (1 GiB when deployed). Computers put 4 MiB copies until it is full.
+    const made = [];
+    let full = null;
+    for (let n = 0; n < 4 && !full; n++) {
+      const r = newRoom();
+      const share = newShare(r);
+      const status = (await putSpace(r, share, sealedCopy(4 * MiB), { seconds: nowSeconds() - 20 })).status;
+      if (status === 507) full = { r, share };
+      else {
+        assert.equal(status, 204);
+        made.push({ r, share });
+      }
+    }
+    assert.ok(full, "a copy is refused once all copies together are over what the relay holds");
+    assert.equal((await readSpace(full.share)).status, 404);
+    // A computer that holds a copy may still replace it with a smaller one.
+    assert.equal((await putSpace(made[0].r, made[0].share, sealedCopy(1000), { seconds: nowSeconds() - 10 })).status, 204);
+    // And a copy taken back makes room for another.
+    assert.equal((await putSpace(full.r, full.share, sealedCopy(4 * MiB), { seconds: nowSeconds() - 9 })).status, 204);
+    for (const one of [...made, full]) assert.equal((await deleteSpace(one.r, one.share)).status, 204);
+    const after = newRoom();
+    assert.equal((await putSpace(after, newShare(after), sealedCopy(4 * MiB))).status, 204, "taken back: there is room again");
   });
 
   it("serves the same page for every shared space, and an empty frame for a panel's own page", async () => {

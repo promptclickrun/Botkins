@@ -33,7 +33,21 @@
   const num = (value) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
   const list = (value, max = 500) => (Array.isArray(value) ? value.slice(0, max) : []);
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
-  const isWeb = (url) => typeof url === "string" && url.length <= 2000 && /^https?:\/\/[^\s/?#]+/i.test(url);
+  /**
+   * An address as the browser reads it, or null: http or https only, and never with a name before
+   * the host (`https://bank.example@other.example`), which reads as one site and opens another.
+   * What is shown is always this, so a link goes where it says.
+   */
+  function webUrl(text) {
+    if (typeof text !== "string" || text.length > 2000 || !/^https?:\/\//i.test(text)) return null;
+    try {
+      const url = new URL(text);
+      return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password && url.hostname ? url.href : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  const isWeb = (url) => webUrl(url) !== null;
 
   // ── Opening the copy ────────────────────────────────────────────────────────
 
@@ -93,12 +107,14 @@
   // ── Markdown: a small renderer that only ever makes text and a few elements ──
 
   function link(parent, label, href) {
-    if (!isWeb(href)) {
+    const to = webUrl(href);
+    if (!to) {
       parent.append(label);
       return;
     }
-    const a = el("a", "", label);
-    a.href = href;
+    // A bare address is shown as the browser reads it.
+    const a = el("a", "", label === href ? to : label);
+    a.href = to;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     parent.append(a);
@@ -358,16 +374,17 @@
     const answer = (value) => {
       try { source.postMessage({ botkins: 1, type: "result", id, value }, "*"); } catch (e) {}
     };
-    if (entry.ask) entry.ask(false);
-    if (!isWeb(url)) return answer(false);
+    // One question at a time for a view: a second one cannot take the place of the one being read.
+    const to = webUrl(url);
+    if (entry.ask || !to) return answer(false);
     const bar = el("div", "ask");
     const go = el("a", "", "Open link");
-    go.href = url;
+    go.href = to;
     go.target = "_blank";
     go.rel = "noopener noreferrer";
     const no = el("button", "", "Dismiss");
     no.type = "button";
-    bar.append(el("span", "url", url), go, no);
+    bar.append(el("span", "url", to), go, no);
     entry.ask = (value) => {
       entry.ask = null;
       bar.remove();
@@ -442,7 +459,8 @@
         const rows = el("ul", "links");
         for (const url of links) {
           const row = el("li");
-          link(row, url.replace(/^https?:\/\//i, "").replace(/\/$/, "").slice(0, 80), url);
+          const to = webUrl(url);
+          link(row, to.replace(/^https?:\/\//i, "").replace(/\/$/, "").slice(0, 80), to);
           rows.append(row);
         }
         card.append(rows);

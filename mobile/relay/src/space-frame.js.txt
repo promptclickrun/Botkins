@@ -5,9 +5,95 @@
 // Nothing here can save: `state.set` and `sendAnswer` answer false.
 (() => {
   // The policy has no word for peer-to-peer connections, so the ways to open one are removed
-  // (FRAME_GUARD in mobile/src/ui/frame.ts).
+  // (FRAME_GUARD in mobile/src/ui/frame.ts). The phone runs that in every frame of a view; a browser
+  // gives a page no such hook, so here nested frames are kept out instead (below).
   for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "RTCSessionDescription", "RTCIceCandidate", "WebSocket", "EventSource", "WebTransport", "Worker", "SharedWorker"]) {
     try { Object.defineProperty(window, name, { value: undefined, configurable: false, writable: false }); } catch (e) {}
+  }
+  // A frame inside this one would be a window of its own, with everything removed above back in it,
+  // and no policy forbids an empty or inline one. So no frame is ever left in a panel's page: each is
+  // taken out the moment it is put in, before anything in it can run (a frame's own code starts in a
+  // later turn). The functions used for that are kept from here on, so the page cannot swap them.
+  const un = (fn) => Function.prototype.call.bind(fn);
+  const getter = (proto, name) => un(Object.getOwnPropertyDescriptor(proto, name).get);
+  const matches = un(Element.prototype.matches);
+  const queryAll = un(Element.prototype.querySelectorAll);
+  const removeNode = un(Element.prototype.remove);
+  const addedOf = getter(MutationRecord.prototype, "addedNodes");
+  const countOf = getter(NodeList.prototype, "length");
+  const itemOf = un(NodeList.prototype.item);
+  const observe = un(MutationObserver.prototype.observe);
+  const Observer = MutationObserver;
+  const NESTED = "iframe,frame,object,embed,portal,fencedframe";
+  const drop = (node) => {
+    try {
+      if (matches(node, NESTED)) return removeNode(node);
+      const inside = queryAll(node, NESTED);
+      for (let i = countOf(inside) - 1; i >= 0; i--) removeNode(itemOf(inside, i));
+    } catch (e) {
+      // Not an element (text, a comment): nothing to take out.
+    }
+  };
+  const watch = (root) =>
+    observe(
+      new Observer((records) => {
+        for (let r = 0; r < records.length; r++) {
+          const added = addedOf(records[r]);
+          for (let i = countOf(added) - 1; i >= 0; i--) drop(itemOf(added, i));
+        }
+      }),
+      root,
+      { childList: true, subtree: true },
+    );
+  watch(document);
+  // What is inside a shadow root is not seen from the document, so each one made is watched too, and
+  // the ways to make one from markup are removed.
+  const attach = Element.prototype.attachShadow;
+  if (attach) {
+    const attachTo = un(attach);
+    Object.defineProperty(Element.prototype, "attachShadow", {
+      value: function attachShadow(init) {
+        const root = attachTo(this, init);
+        watch(root);
+        return root;
+      },
+      writable: false,
+      configurable: false,
+    });
+  }
+  for (const [owner, name] of [[Element.prototype, "setHTMLUnsafe"], [typeof ShadowRoot === "function" ? ShadowRoot.prototype : null, "setHTMLUnsafe"], [Document, "parseHTMLUnsafe"]]) {
+    try { if (owner && name in owner) Object.defineProperty(owner, name, { value: undefined, configurable: false, writable: false }); } catch (e) {}
+  }
+  // Markup that makes a shadow root would hide what is inside it from the watch above, so that
+  // attribute is unnamed in everything written here. (It is done by hand: the usual ways to search a
+  // string can be swapped by a page.)
+  const codeAt = un(String.prototype.charCodeAt);
+  const sliceOf = un(String.prototype.slice);
+  const WORD = "shadowroot";
+  const plain = (value) => {
+    const html = "" + value;
+    let out = "";
+    let from = 0;
+    for (let i = 0; i + WORD.length <= html.length; i++) {
+      let hit = true;
+      for (let j = 0; j < WORD.length && hit; j++) hit = (codeAt(html, i + j) | 32) === codeAt(WORD, j);
+      if (!hit) continue;
+      out += sliceOf(html, from, i) + "data-no-";
+      from = i;
+    }
+    return out + sliceOf(html, from);
+  };
+  const writeTo = un(Document.prototype.write);
+  for (const name of ["write", "writeln"]) {
+    Object.defineProperty(Document.prototype, name, {
+      value: function (...parts) {
+        let text = "";
+        for (let i = 0; i < parts.length; i++) text += parts[i];
+        return writeTo(this, plain(text) + (name === "writeln" ? "\n" : ""));
+      },
+      writable: false,
+      configurable: false,
+    });
   }
   const holder = window.parent;
   const BASE_STYLE =
@@ -101,10 +187,11 @@
       true,
     );
     const vars = safeColors(first.colors).map(([name, value]) => name + ":" + value).join(";");
-    document.write(
+    writeTo(
+      document,
       '<!doctype html><html data-theme="' + mode + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
         "<style>:root{color-scheme:" + mode + ";" + vars + ";" + BASE_STYLE + "</style></head><body>" +
-        (typeof first.html === "string" ? first.html : "") +
+        (typeof first.html === "string" ? plain(first.html) : "") +
         "</body></html>",
     );
     document.close();

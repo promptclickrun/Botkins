@@ -52,6 +52,10 @@ export const retiredCopy = (spaceId, share, base) => ({
   ...(share.until && { until: share.until }),
 });
 
+const without = (object, name) => {
+  const { [name]: _gone, ...rest } = object;
+  return rest;
+};
 const origin = (base) => String(base).replace(/^ws/, "http").replace(/\/+$/, "");
 const seconds = (ms) => Math.floor(ms / 1000);
 
@@ -113,7 +117,7 @@ export class SpaceLinks {
         spaces[id] = entry;
         continue;
       }
-      if (entry.share.putAt) copies = [...copies, { ...retiredCopy(id, entry.share, base), key: oldKey }];
+      if (entry.share.putAt || entry.share.tried) copies = [...copies, { ...retiredCopy(id, entry.share, base), key: oldKey }];
       spaces[id] = { ...entry, share: this.newShare() };
     }
     this.setTeam({ ...team, spaces, spaceCopies: copies.slice(-500) });
@@ -133,9 +137,10 @@ export class SpaceLinks {
       if (!share) continue;
       const stays = relay.on && entry.access === "link" && (!share.relay || share.relay === relay.base);
       if (stays) wanted.add(share.id);
-      else if (share.putAt) {
+      else if (share.putAt || share.tried) {
+        // `tried`: a put was sent and its answer never came. The copy may be out, so it is taken back too.
         copies = [...copies, retiredCopy(id, share, relay.base)];
-        const { putAt: _putAt, rev: _rev, until: _until, relay: _relay, ...kept } = share;
+        const { putAt: _putAt, rev: _rev, until: _until, relay: _relay, tried: _tried, ...kept } = share;
         spaces = { ...spaces, [id]: { ...entry, share: kept } };
         changed = true;
       }
@@ -223,6 +228,12 @@ export class SpaceLinks {
     const share = entry?.access === "link" ? entry.share : null;
     if (!share || !relay.on || !validRelayKey(relay.key)) return;
     const rev = Number((this.records() ?? []).find((space) => space?.id === id)?.rev) || 0;
+    // Noted before the first put leaves: if its answer is lost, or the host stops meanwhile, the copy
+    // may be out with nothing else to say so, and a later switch-off or new key must still take it back.
+    if (!share.putAt && !share.tried) {
+      const team = this.team();
+      this.setTeam({ ...team, spaces: { ...team.spaces, [id]: { ...entry, share: { ...share, tried: true, relay: relay.base } } } });
+    }
     const work = (async () => {
       let body;
       try {
@@ -263,7 +274,7 @@ export class SpaceLinks {
     const team = this.team();
     const current = team.spaces?.[id];
     if (current?.access !== "link" || current.share?.id !== share.id) return;
-    this.setTeam({ ...team, spaces: { ...team.spaces, [id]: { ...current, share: { ...current.share, putAt: done.at, rev, until: done.expiresAt, relay: relay.base } } } });
+    this.setTeam({ ...team, spaces: { ...team.spaces, [id]: { ...current, share: { ...without(current.share, "tried"), putAt: done.at, rev, until: done.expiresAt, relay: relay.base } } } });
   }
 
   /** Takes one copy back. It stays in the list until the relay says it is gone. */

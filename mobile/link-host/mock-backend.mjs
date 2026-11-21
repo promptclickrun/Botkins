@@ -503,7 +503,7 @@ const text = (value, limit, what) => {
 // An app panel's page ("spaces-v1"): a checklist people tick together. What they tick is kept in the
 // panel's state with botkins.state, each change under a short label ("Ticked Press kit").
 const CHECKLIST_VIEW = String.raw`<style>
-  body { margin: 0; font: 15px/1.4 -apple-system, system-ui, sans-serif; color: var(--botkins-ink, #1a1420); }
+  body { margin: 0; font: 15px/1.4 -apple-system, system-ui, sans-serif; color: var(--ink); }
   label { display: flex; gap: 10px; align-items: center; padding: 8px 2px; }
   input { width: 20px; height: 20px; }
   .done { opacity: 0.55; text-decoration: line-through; }

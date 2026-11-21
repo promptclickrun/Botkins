@@ -10,8 +10,8 @@ Botkins is the phone app for the Botkins app on the person's computer (the deskt
 
 ```sh
 npx tsc --noEmit     # typecheck (fast; run it after every change)
-npm test             # 597 tests: the link, the computer's end of it, several devices, the relay path, push and Live Activities, device tools, voice, custom views, limits, chat logic, selectable text, looks, tables, themes
-(cd relay && npm test)            # the relay Worker's own tests: 136 (they start wrangler dev)
+npm test             # 599 tests: the link, the computer's end of it, several devices, the relay path, push and Live Activities, device tools, voice, custom views, limits, chat logic, selectable text, looks, tables, themes
+(cd relay && npm test)            # the relay Worker's own tests: 137 (they start wrangler dev)
 npm run dev-host     # a demo computer to pair with (link-host/dev-host.mjs); see "The demo computer"
 npx expo start       # Metro, for a build that is already installed
 npx expo run:ios     # build and run on a simulator

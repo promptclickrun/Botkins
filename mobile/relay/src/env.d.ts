@@ -12,6 +12,8 @@ interface Env {
   APNS_SANDBOX_KEY_ID?: string;
   /** The Apple developer team id. */
   APNS_TEAM_ID?: string;
+  /** Tests only: how much all copies of shared spaces may take together, in bytes, in place of 1 GiB. Unset in wrangler.jsonc. */
+  SPACE_BYTES_MAX?: string;
   /** Tests only: replaces both Apple hosts, and adds an `x-botkins-apns-env` header. Unset in wrangler.jsonc. */
   APNS_HOST?: string;
 }

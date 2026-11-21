@@ -3,7 +3,7 @@
 // relay's own checks (relay/src/shared.ts); no socket is opened to any relay.
 import assert from "node:assert/strict";
 import { createDecipheriv } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -38,6 +38,11 @@ function memoryRelay() {
     copies,
     asked,
     fail: null as string | null,
+    /** The relay does what this method asks, but the computer never hears the answer. */
+    lose: null as string | null,
+    /** An answer to this method waits for `release()`. */
+    hold: null as string | null,
+    release: () => {},
     count: (method: string, id?: string) => asked.filter((one) => one.method === method && one.status < 300 && (!id || one.id === id)).length,
     fetch: async (input: unknown, init: any = {}) => {
       const url = new URL(String(input));
@@ -65,6 +70,8 @@ function memoryRelay() {
         }
       }
       asked.push({ method, id, status, at: Date.now() });
+      if (relay.hold === method) await new Promise<void>((resolve) => (relay.release = resolve));
+      if (relay.lose === method) throw new TypeError("the answer was lost");
       return new Response(null, { status });
     },
   };
@@ -87,10 +94,10 @@ const parse = (link: string) => {
 };
 
 /** The demo computer with a relay, and the owner's phone. */
-async function computer(relay: ReturnType<typeof memoryRelay>, dir = realpathSync(mkdtempSync(join(tmpdir(), "botkins-space-links-")))) {
+async function computer(relay: ReturnType<typeof memoryRelay>, dir = realpathSync(mkdtempSync(join(tmpdir(), "botkins-space-links-"))), options: Record<string, unknown> = {}) {
   if (!folders.includes(dir)) folders.push(dir);
   const backend = new MockBackend({ speed: 0.01 });
-  const link = new LinkHost({ dir, backend, port: 0, extraHosts: ["127.0.0.1"], relay: { url: "https://relay.test", WebSocket: new FakeRelay().WebSocket }, fetch: relay.fetch, spaceLinkTiming: { gap: 300, retry: [40, 40] } });
+  const link = new LinkHost({ dir, backend, port: 0, extraHosts: ["127.0.0.1"], relay: { url: "https://relay.test", WebSocket: new FakeRelay().WebSocket }, fetch: relay.fetch, spaceLinkTiming: { gap: 300, retry: [40, 40] }, ...options });
   await link.setEnabled(true);
   link.setRelay({ enabled: true });
   return { link, backend, dir };
@@ -224,6 +231,74 @@ test("a copy that could not be taken back is taken back at the next start", asyn
   try {
     await until(() => !relay.copies.has(shareId), "the next start takes it back");
     await until(() => second.link.store.data.team.spaceCopies.length === 0, "and it is owed no longer");
+  } finally {
+    await second.link.stop();
+  }
+});
+
+test("a copy whose put was never confirmed is still taken back", async () => {
+  // The relay kept the copy, and the computer never heard so. Then the relay is switched off.
+  const relay = memoryRelay();
+  const { link } = await computer(relay);
+  try {
+    await until(() => link.spacesFor("owner").length, "the demo has spaces");
+    const launch = link.spacesFor("owner").find((space: SpaceSummary) => space.name === "Launch")!;
+    relay.lose = "PUT";
+    const { id } = parse(link.shareSpace("owner", launch.id, { access: "link" }).link);
+    await until(() => relay.copies.has(id), "the copy reached the relay");
+    assert.equal(link.store.data.team.spaces[launch.id].share.putAt, undefined, "the computer does not know it is out");
+    relay.lose = null;
+    link.setRelay({ enabled: false });
+    await until(() => !relay.copies.has(id), "it is taken back all the same");
+    await until(() => link.store.data.team.spaceCopies.length === 0, "and owed no longer");
+
+    // A new relay key while the first put of a link is on its way: the copy lands, and is taken back with the old key.
+    link.setRelay({ enabled: true });
+    await until(() => relay.copies.has(id), "out again");
+    const money = link.spacesFor("owner").find((space: SpaceSummary) => space.name === "Money")!;
+    relay.hold = "PUT";
+    const before = parse(link.shareSpace("owner", money.id, { access: "link" }).link).id;
+    await until(() => relay.copies.has(before), "the put reached the relay; its answer is still on its way");
+    link.resetRelay();
+    relay.hold = null;
+    relay.release();
+    const after = () => link.store.data.team.spaces[money.id].share.id as string;
+    assert.notEqual(after(), before, "a new key makes a new link");
+    await until(() => relay.copies.has(after()) && !relay.copies.has(before) && !relay.copies.has(id), "the new copy is out and both old ones are gone");
+    await until(() => link.store.data.team.spaceCopies.length === 0, "nothing is owed");
+  } finally {
+    await link.stop();
+  }
+});
+
+test("an old relay key kept to take a copy back is wrapped on disk like the key in use", async () => {
+  const relay = memoryRelay();
+  const wrap = { protect: (text: string) => "wrapped:" + Buffer.from(text).toString("hex"), reveal: (text: string) => Buffer.from(text.replace(/^wrapped:/, ""), "hex").toString() };
+  const first = await computer(relay, undefined, wrap);
+  let id = "";
+  let oldKey = { publicKey: "", privateKey: "" };
+  try {
+    await until(() => first.link.spacesFor("owner").length, "the demo has spaces");
+    const launch = first.link.spacesFor("owner").find((space: SpaceSummary) => space.name === "Launch")!;
+    id = parse(first.link.shareSpace("owner", launch.id, { access: "link" }).link).id;
+    await until(() => relay.copies.has(id), "the copy is out");
+    oldKey = { ...first.link.store.relayKey() };
+    relay.fail = "DELETE";
+    first.link.resetRelay();
+    await until(() => relay.asked.some((one) => one.method === "DELETE" && one.status === 503), "the relay did not take it back");
+  } finally {
+    await first.link.stop();
+  }
+  const file = readFileSync(join(first.dir, "link.json"), "utf8");
+  assert.ok(file.includes(oldKey.publicKey), "the old key is kept for the copy");
+  assert.ok(!file.includes(oldKey.privateKey), "its private half is not readable in the file");
+  // The next start opens it and takes the copy back with it.
+  relay.fail = null;
+  const second = await computer(relay, first.dir, wrap);
+  try {
+    await until(() => !relay.copies.has(id), "the copy is taken back with the old key");
+    await until(() => second.link.store.data.team.spaceCopies.length === 0, "and the old key is kept no longer");
+    assert.ok(!readFileSync(join(first.dir, "link.json"), "utf8").includes(oldKey.publicKey));
   } finally {
     await second.link.stop();
   }

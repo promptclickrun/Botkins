@@ -17,7 +17,7 @@
 // key, lookup, card, `from` tag or message.
 
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,7 @@ import {
   V3_LEGACY_SILENCE,
   V3_RECONNECT_WINDOW,
   V3_RESEAT_CLOSE,
+  MAX_SPACE_BYTES_ALL,
   admitSpace,
   checkInviteDelete,
   checkInvitePut,
@@ -141,8 +142,10 @@ class Invites {
  * signed time of each recent DELETE, so a restart keeps them.
  */
 class Spaces {
-  constructor(dir) {
+  constructor(dir, max = MAX_SPACE_BYTES_ALL) {
     this.dir = dir;
+    /** All copies together, in bytes. */
+    this.max = max;
     /** share id → { owner, time, expiresAt, size, body? } (`body` only without a folder). */
     this.copies = new Map();
     /** share id → the signed time (seconds) of its last DELETE. */
@@ -152,10 +155,18 @@ class Spaces {
     if (!dir) return;
     try {
       const saved = JSON.parse(readFileSync(join(dir, "spaces.json"), "utf8"));
-      for (const [id, copy] of Object.entries(saved.copies ?? {})) this.copies.set(id, copy);
-      for (const [id, time] of Object.entries(saved.gone ?? {})) this.gone.set(id, time);
+      for (const [id, copy] of Object.entries(saved.copies ?? {})) {
+        if (BASE64URL_22.test(id) && copy && typeof copy.owner === "string" && Number.isSafeInteger(copy.time) && Number.isSafeInteger(copy.expiresAt) && Number.isSafeInteger(copy.size)) this.copies.set(id, copy);
+      }
+      for (const [id, time] of Object.entries(saved.gone ?? {})) if (BASE64URL_22.test(id) && Number.isSafeInteger(time)) this.gone.set(id, time);
     } catch {
       // No file yet, or one that can't be read: start empty.
+    }
+    // A file that no copy stands for (the relay stopped between writing it and noting it) is removed.
+    try {
+      for (const name of readdirSync(join(dir, "spaces"))) if (!this.copies.has(name.replace(/\.bin$/, ""))) rmSync(join(dir, "spaces", name), { force: true });
+    } catch {
+      // No folder yet.
     }
     this.sweep();
   }
@@ -181,12 +192,18 @@ class Spaces {
       return null;
     }
   }
-  /** 204, 409 when the copy is not newer than what is held or was taken back, 429 when the computer has too many or puts too often. */
+  /**
+   * 204, 409 when the copy is not newer than what is held or was taken back, 429 when the computer has
+   * too many, too much or puts too often, 507 when all copies together would be over what this relay holds.
+   */
   put(id, { owner, body, expiresAt, time }) {
     const now = Date.now();
-    const live = Object.fromEntries([...this.copies].filter(([, copy]) => copy.owner === owner && copy.expiresAt > now).map(([key, copy]) => [key, copy.expiresAt]));
-    const admitted = admitSpace({ live, puts: this.puts.get(owner) }, id, expiresAt, now);
+    const live = Object.fromEntries([...this.copies].filter(([, copy]) => copy.owner === owner && copy.expiresAt > now).map(([key, copy]) => [key, { until: copy.expiresAt, size: copy.size }]));
+    const admitted = admitSpace({ live, puts: this.puts.get(owner) }, id, expiresAt, body.length, now);
     if (!admitted) return 429;
+    let all = body.length;
+    for (const [key, copy] of this.copies) if (key !== id && copy.expiresAt > now) all += copy.size;
+    if (all > this.max && body.length > (this.held(id)?.size ?? 0)) return 507;
     this.puts.set(owner, admitted.puts);
     if (!spacePutAllowed(this.held(id)?.time ?? null, this.goneAt(id), time)) return 409;
     if (this.dir) {
@@ -309,10 +326,11 @@ function loadQrSource(file) {
  *   limits         false turns the per-network limits off (tests from one address)
  *   qrFile         the vendored QR generator for the pairing page
  *   botkinsDir     the folder of Botkin pictures a shared space's page shows (the phone app's assets/botkins)
+ *   spaceBytesMax  how much all copies of shared spaces may take together (1 GiB)
  */
-export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, botkinsDir, fetch = globalThis.fetch } = {}) {
+export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, botkinsDir, spaceBytesMax, fetch = globalThis.fetch } = {}) {
   const invites = new Invites(dataDir ? join(dataDir, "invites.json") : null);
-  const spaces = new Spaces(dataDir || null);
+  const spaces = new Spaces(dataDir || null, spaceBytesMax);
   const sweeper = setInterval(() => (invites.sweep(), spaces.sweep()), WINDOW_MS);
   sweeper.unref();
   const limiters = { sockets: new Limiter(LIMITS.sockets), requests: new Limiter(LIMITS.requests), invites: new Limiter(LIMITS.invites), spaces: new Limiter(LIMITS.spaces) };
@@ -810,7 +828,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       if (!body) return plain("Not found", 404);
       return new Response(body, { headers: { "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
     }
-    const status = { 204: () => new Response(null, { status: 204 }), 404: () => plain("Not found", 404), 409: () => plain("Conflict", 409), 429: () => plain("Too many requests", 429) };
+    const status = { 204: () => new Response(null, { status: 204 }), 404: () => plain("Not found", 404), 409: () => plain("Conflict", 409), 429: () => plain("Too many requests", 429), 507: () => plain("Insufficient storage", 507) };
     if (request.method === "PUT") {
       const checked = await checkSpacePut(request, shareId);
       return checked instanceof Response ? checked : status[spaces.put(shareId, checked)]();
@@ -933,6 +951,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     limits: process.env.RATE_LIMITS !== "off",
     qrFile: process.env.QR_FILE || undefined,
     botkinsDir: process.env.BOTKINS_DIR || undefined,
+    spaceBytesMax: Number(process.env.SPACE_BYTES_MAX) || undefined,
   });
   server.listen(port, process.env.HOST || "0.0.0.0", () => log("listening", { code: port }));
   for (const signal of ["SIGTERM", "SIGINT"]) process.once(signal, () => server.close(() => process.exit(0)));

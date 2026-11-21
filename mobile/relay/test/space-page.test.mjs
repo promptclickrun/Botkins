@@ -6,7 +6,7 @@ import { createCipheriv, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { MAX_SPACES_PER_KEY, SPACE_PUTS_PER_MINUTE, admitSpace, shareIdOf, spaceGoneUntil, spacePutAllowed } from "../src/shared.ts";
+import { MAX_SPACE_BYTES_PER_KEY, MAX_SPACES_PER_KEY, SPACE_PUTS_PER_MINUTE, admitSpace, shareIdOf, spaceBytes, spaceGoneUntil, spacePutAllowed } from "../src/shared.ts";
 
 // ---- a document that only remembers what was made ------------------------------------------------
 
@@ -132,7 +132,12 @@ test("what a copy says is written as text: no markup, and only http and https li
   for (const tag of ["script", "img", "b", "i", "iframe"]) assert.equal(all(box, tag).length, 0, tag);
   assert.ok(box.textContent.includes("<script>alert(1)</script>"));
   assert.ok(box.textContent.includes("<img src=x onerror=alert(1)>"));
-  assert.deepEqual(all(box, "a").map((a) => a.href), ["https://example.com/x", "https://example.org"]);
+  // An address is kept as the browser reads it; a bare one is shown that way too.
+  assert.deepEqual(all(box, "a").map((a) => a.href), ["https://example.com/x", "https://example.org/"]);
+  assert.deepEqual(all(box, "a").map((a) => a.textContent), ["ok", "https://example.org/"]);
+  const named = new Element("div");
+  page.markdown(named, "[bank](https://bank.example@other.example/) https://bank.example@other.example/login");
+  assert.equal(all(named, "a").length, 0, "an address with a name before the host is never a link");
   for (const a of all(box, "a")) assert.deepEqual([a.target, a.rel], ["_blank", "noopener noreferrer"]);
   assert.ok(box.textContent.includes("bad") && box.textContent.includes("data"), "a link that is refused stays as its words");
   assert.equal(all(box, "strong")[0].textContent, "bold");
@@ -201,11 +206,21 @@ test("a view may ask to open a web page; the person presses a real link, and not
   assert.deepEqual([link.href, link.target, link.rel, link.textContent], ["https://example.com/page", "_blank", "noopener noreferrer", "Open link"]);
   assert.ok(bar.textContent.includes("https://example.com/page"), "the whole address is shown");
   assert.equal(answers.length, 0, "nothing opens until the person says");
-  // A newer ask replaces it, and the older one is answered no.
+  // One question at a time: a second ask cannot take the place of the one being read. It is answered no.
   listen({ source, data: { botkins: 1, type: "open", id: 3, url: "https://example.org/" } });
-  assert.deepEqual(answers.pop(), { botkins: 1, type: "result", id: 2, value: false });
-  all(entry.box.children.at(-1), "button")[0].listeners.click[0]();
   assert.deepEqual(answers.pop(), { botkins: 1, type: "result", id: 3, value: false });
+  assert.equal(all(entry.box, "a")[0].href, "https://example.com/page");
+  all(bar, "button")[0].listeners.click[0]();
+  assert.deepEqual(answers.pop(), { botkins: 1, type: "result", id: 2, value: false });
+  // An address is shown as the browser reads it, and one that reads as another site is refused.
+  listen({ source, data: { botkins: 1, type: "open", id: 4, url: "https://trusted.example@evil.example/" } });
+  assert.deepEqual(answers.pop(), { botkins: 1, type: "result", id: 4, value: false });
+  listen({ source, data: { botkins: 1, type: "open", id: 5, url: "https://EXAMPLE.com\\path/../x" } });
+  const shown = entry.box.children.find((child) => !child.removed && child !== bar);
+  assert.equal(all(shown, "a")[0].href, new URL("https://EXAMPLE.com\\path/../x").href);
+  assert.ok(shown.textContent.includes(all(shown, "a")[0].href), "what is shown is what opens");
+  all(shown, "button")[0].listeners.click[0]();
+  answers.pop();
 
   // Its height, within what a panel can be.
   listen({ source, data: { botkins: 1, type: "size", height: 99999 } });
@@ -217,20 +232,27 @@ test("a view may ask to open a web page; the person presses a real link, and not
   assert.equal(entry.frame.style.height, "4000px");
 });
 
-test("one computer holds 100 copies and puts 30 a minute", () => {
+test("one computer holds 100 copies, 64 MiB in all, and puts 30 a minute", () => {
   const now = 1_000_000_000_000;
   let state = null;
-  for (let n = 0; n < SPACE_PUTS_PER_MINUTE; n++) state = admitSpace(state, "id" + n, now + 60_000, now);
+  for (let n = 0; n < SPACE_PUTS_PER_MINUTE; n++) state = admitSpace(state, "id" + n, now + 60_000, 100, now);
   assert.equal(Object.keys(state.live).length, 30);
-  assert.equal(admitSpace(state, "one-more", now + 60_000, now + 59_999), null, "the 31st in a minute");
-  assert.ok(admitSpace(state, "one-more", now + 60_000, now + 60_000), "the next minute");
+  assert.equal(spaceBytes(state.live), 3000);
+  assert.equal(admitSpace(state, "one-more", now + 60_000, 100, now + 59_999), null, "the 31st in a minute");
+  assert.ok(admitSpace(state, "one-more", now + 60_000, 100, now + 60_000), "the next minute");
   // A hundred live copies: a new id is refused, one it already has is not, and ended copies make room.
-  const live = Object.fromEntries(Array.from({ length: MAX_SPACES_PER_KEY }, (_unused, n) => ["id" + n, now + (n === 0 ? 10 : 600_000)]));
+  const live = Object.fromEntries(Array.from({ length: MAX_SPACES_PER_KEY }, (_unused, n) => ["id" + n, { until: now + (n === 0 ? 10 : 600_000), size: 100 }]));
   const full = { live, puts: { start: now - 120_000, count: 30 } };
-  assert.equal(admitSpace(full, "new", now + 600_000, now), null);
-  assert.ok(admitSpace(full, "id5", now + 600_000, now));
-  assert.ok(admitSpace(full, "new", now + 600_000, now + 11), "id0 ended");
-  assert.equal(Object.hasOwn(admitSpace(full, "new", now + 600_000, now + 11).live, "id0"), false);
+  assert.equal(admitSpace(full, "new", now + 600_000, 100, now), null);
+  assert.ok(admitSpace(full, "id5", now + 600_000, 100, now));
+  assert.ok(admitSpace(full, "new", now + 600_000, 100, now + 11), "id0 ended");
+  assert.equal(Object.hasOwn(admitSpace(full, "new", now + 600_000, 100, now + 11).live, "id0"), false);
+  // 64 MiB in all: a copy that would take the computer over it is refused; a smaller one in its place is not.
+  const big = { live: { a: { until: now + 600_000, size: MAX_SPACE_BYTES_PER_KEY - 1000 } }, puts: { start: now, count: 0 } };
+  assert.equal(admitSpace(big, "b", now + 600_000, 1001, now), null);
+  assert.ok(admitSpace(big, "b", now + 600_000, 1000, now));
+  assert.equal(admitSpace(big, "a", now + 600_000, MAX_SPACE_BYTES_PER_KEY + 1, now), null);
+  assert.equal(spaceBytes(admitSpace(big, "a", now + 600_000, 5, now).live), 5, "a copy put again counts once");
 });
 
 test("a copy must be newer than the one held and than the last time it was taken back", async () => {

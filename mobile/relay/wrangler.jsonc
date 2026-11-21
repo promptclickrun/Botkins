@@ -34,17 +34,19 @@
       { "name": "ROOM", "class_name": "Room" },
       { "name": "INVITE", "class_name": "Invite" },
       { "name": "SPACE", "class_name": "Space" },
-      { "name": "SPACE_OWNER", "class_name": "SpaceOwner" }
+      { "name": "SPACE_OWNER", "class_name": "SpaceOwner" },
+      { "name": "SPACE_BUDGET", "class_name": "SpaceBudget" }
     ]
   },
   // The Botkin pictures a shared space's page shows beside a bot's name, straight from the phone
   // app's own files (assets/botkins/.assetsignore leaves the layer masks out). Served without the Worker.
   "assets": { "directory": "../assets/botkins", "base_path": "/s/botkin" },
   // SQLite-backed, the only kind the Free plan allows. Room uses hibernation; Invite stores sealed cards;
-  // Space stores one sealed copy of a shared space, SpaceOwner counts one computer's copies.
+  // Space stores one sealed copy of a shared space, SpaceOwner counts one computer's copies,
+  // SpaceBudget counts all of them.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
     { "tag": "v2", "new_sqlite_classes": ["Invite"] },
-    { "tag": "v3", "new_sqlite_classes": ["Space", "SpaceOwner"] }
+    { "tag": "v3", "new_sqlite_classes": ["Space", "SpaceOwner", "SpaceBudget"] }
   ]
 }

@@ -26,6 +26,10 @@ export const MIN_SPACE_BODY = 12 + 16;
 export const MAX_SPACE_LIFE = 7 * 24 * 60 * 60 * 1000;
 export const MAX_SPACES_PER_KEY = 100;
 export const SPACE_PUTS_PER_MINUTE = 30;
+/** All of one computer's live copies together. */
+export const MAX_SPACE_BYTES_PER_KEY = 64 * 1024 * 1024;
+/** All live copies on this relay together, so shared spaces can never fill the storage the rest of the relay needs. */
+export const MAX_SPACE_BYTES_ALL = 1024 * 1024 * 1024;
 /** A copy is kept in pieces of this size, under the store's limit for one value. */
 export const SPACE_PIECE = 256 * 1024;
 
@@ -231,18 +235,22 @@ export const spacePutAllowed = (heldTime: number | null, goneTime: number | null
 export const spaceGoneUntil = (goneTime: number) => (goneTime + 2 * MAX_SKEW) * 1000;
 
 /**
- * One computer's copies: how many it may hold and how often it may put one. `live` is share id →
- * when it ends, `puts` the current minute's count. Answers what to keep, or null when it is refused.
+ * One computer's copies: how many it may hold, how large they may be together, and how often it may
+ * put one. `live` is share id → when it ends and its size, `puts` the current minute's count.
+ * Answers what to keep, or null when it is refused.
  */
-export type SpaceOwnerState = { live: Record<string, number>; puts: { start: number; count: number } };
-export function admitSpace(state: SpaceOwnerState | null, shareId: string, expiresAt: number, nowMs: number): SpaceOwnerState | null {
-  const live = Object.fromEntries(Object.entries(state?.live ?? {}).filter(([, ends]) => ends > nowMs));
+export type SpaceOwnerState = { live: Record<string, { until: number; size: number }>; puts: { start: number; count: number } };
+export function admitSpace(state: SpaceOwnerState | null, shareId: string, expiresAt: number, size: number, nowMs: number): SpaceOwnerState | null {
+  const live = Object.fromEntries(Object.entries(state?.live ?? {}).filter(([, copy]) => copy && copy.until > nowMs));
   const window = state?.puts && nowMs - state.puts.start < 60_000 ? state.puts : { start: nowMs, count: 0 };
   if (window.count >= SPACE_PUTS_PER_MINUTE) return null;
   if (!Object.hasOwn(live, shareId) && Object.keys(live).length >= MAX_SPACES_PER_KEY) return null;
-  live[shareId] = expiresAt;
+  live[shareId] = { until: expiresAt, size };
+  if (spaceBytes(live) > MAX_SPACE_BYTES_PER_KEY) return null;
   return { live, puts: { start: window.start, count: window.count + 1 } };
 }
+/** The bytes of a computer's live copies together. */
+export const spaceBytes = (live: SpaceOwnerState["live"]) => Object.values(live).reduce((sum, copy) => sum + copy.size, 0);
 
 /** A self-contained page: one nonce for its style and script, no outside assets, no referrer, no cache. */
 export function securePage(title: string, css: string, body: string, script: string): Response {
