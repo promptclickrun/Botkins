@@ -369,9 +369,9 @@ export type LinkOptions = {
   onHosts?(hosts: string[]): void;
   /** How the phone is connected changed: null while there is no session. */
   onRoute?(route: LinkRoute | null): void;
-  /** While connected through the relay, the first wait before looking for a direct address (default 60 s). */
+  /** While connected through the relay, the first wait before looking for a direct address (default 5 s). Each wait after doubles. */
   probeMs?: number;
-  /** The longest wait between direct probes (default 5 minutes). */
+  /** The longest wait between direct probes (default 60 s). */
   probeMaxMs?: number;
   /** Called when the link wakes: the transport proves its open connections are alive (the relay's sockets). */
   check?(): void;
@@ -379,11 +379,19 @@ export type LinkOptions = {
   wakeMs?: number;
   /** Each time a sync came back: the phone is in step with the computer now. */
   onSync?(): void;
+  /**
+   * Whether a reply's text comes as it is written, on this route (default yes). No sends `text: false`
+   * ("live-text-off-v1"): the indicators stay and the reply comes whole when it ends. Read on each sync;
+   * call `liveTextChanged` when the answer may have changed.
+   */
+  liveText?(route: LinkRoute): boolean;
 };
 
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
 /** How long a direct address that answered and then failed is left out, when there is a relay to use. */
 const DISTRUST_MS = 10 * 60_000;
+/** How long a direct probe waits for its hello. Longer than the first look's 1.5 s: nobody waits on it. */
+const PROBE_HELLO_MS = 3000;
 
 export class LinkClient {
   state: LinkState = "connecting";
@@ -393,6 +401,8 @@ export class LinkClient {
   private texts = new Map<string, HeldText>();
   private supportsAppends: boolean | undefined;
   private receivedFullLive = false;
+  /** What the last sync said about live text. */
+  private sentText = true;
   private have: Record<string, number> = {};
   private watching: string[] = [];
   private running = false;
@@ -420,8 +430,8 @@ export class LinkClient {
     private options: LinkOptions,
   ) {
     this.deviceKey = deviceKeyOf(pairing);
-    this.probeMs = options.probeMs ?? 60_000;
-    this.probeMaxMs = Math.max(this.probeMs, options.probeMaxMs ?? 300_000);
+    this.probeMs = options.probeMs ?? 5_000;
+    this.probeMaxMs = Math.max(this.probeMs, options.probeMaxMs ?? 60_000);
     this.probeDelay = this.probeMs;
   }
 
@@ -507,6 +517,13 @@ export class LinkClient {
     // The waiting request is for the old set: ask again.
     this.poll?.abort();
   }
+  /** The choice behind `liveText` changed: a waiting sync that asked otherwise asks again. */
+  liveTextChanged() {
+    if (this.session && this.textFor(this.session) !== this.sentText) this.poll?.abort();
+  }
+  private textFor(session: Session) {
+    return this.options.liveText?.(routeOf(session)!) ?? true;
+  }
 
   /** Sets the session and reports how it connects. */
   private useSession(session: Session | null) {
@@ -531,7 +548,8 @@ export class LinkClient {
   }
 
   /**
-   * While connected through the relay: asks the direct addresses (1.5 s) and, when one answers as the
+   * While connected through the relay: asks the direct addresses (3 s, in the background: a phone's
+   * VPN can be slow to wake) and, when one answers as the
    * right computer, drops the session so the next request opens a direct one. A call in flight keeps
    * the session it started with; only the waiting sync request is cut short. True when it switched.
    */
@@ -545,7 +563,7 @@ export class LinkClient {
     try {
       const direct = this.trusted(this.pairing.hosts.filter((host) => !isRelayHost(host)));
       if (!direct.length) return false;
-      await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, 1500);
+      await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, PROBE_HELLO_MS);
       if (this.session !== seen || this.opening) return false;
       this.useSession(null);
       this.poll?.abort();
@@ -776,11 +794,18 @@ export class LinkClient {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
         const quick = this.suspect;
         this.suspect = false;
+        const text = this.textFor(await this.openSession());
+        // Text back on: the computer sends each held body again from its start.
+        if (text && !this.sentText) {
+          this.texts.clear();
+          delete this.have.live;
+        }
+        this.sentText = text;
         const watching = this.watching;
         const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
           watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
         const appends = requestText ? { appends: this.cursors() } : {};
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
+        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(!text && { text: false }), ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
         if (this.lifetime !== lifetime) break;
         failures = 0;
         this.setState("online");

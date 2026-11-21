@@ -63,7 +63,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "live-text-off-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -2059,15 +2059,18 @@ export class LinkHost extends EventEmitter {
   /** Missing parts as JSON, null when caught up, or milliseconds until a text-only flush. */
   news(known, watching, cursors, session, throttle) {
     const values = this.viewParts(session, watching);
+    // A phone that asked for no live text ("live-text-off-v1") gets the indicators only, and no text:
+    // text growing alone wakes nothing. The reply comes whole in its chat's page.
+    const quiet = !!cursors || session.noText;
     let textOnly = true;
     const parts = [];
     const versions = {};
     for (const name of this.names(watching)) {
-      const part = values.get(cursors && name === "live" ? "quietLive" : name);
+      const part = values.get(quiet && name === "live" ? "quietLive" : name);
       if (!part) continue;
       versions[name] = part.v;
       if (known[name] === part.v) continue;
-      const legacyTextOnly = name === "live" && !cursors && known.live > (values.get("quietLive")?.v ?? Infinity);
+      const legacyTextOnly = name === "live" && !quiet && known.live > (values.get("quietLive")?.v ?? Infinity);
       if (!legacyTextOnly) textOnly = false;
       // A chat's page and its run with light steps ("step-details-v1"), made once for each version.
       const light = session.light && (name.startsWith("chat:") || name.startsWith("run:"));
@@ -2075,6 +2078,11 @@ export class LinkHost extends EventEmitter {
     }
     for (const chat of cursors ? watching : []) {
       const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
+      // Text the phone still holds is cleared once; then it holds none and is sent none.
+      if (session.noText) {
+        if (cursor) parts.push(JSON.stringify("text:" + chat) + ":null");
+        continue;
+      }
       // A member reads the text of their own chats only: their view holds null for any other chat.
       const shown = values === this.parts || (values.get("chat:" + chat)?.json ?? "null") !== "null";
       const delta = textDelta(shown ? this.texts.get(chat) : undefined, cursor);
@@ -2088,9 +2096,10 @@ export class LinkHost extends EventEmitter {
     session.watchUntil = session.lastNews + MAX_WAIT;
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
   }
-  sync(session, { epoch, have, watch, wait, appends, steps }, gone) {
+  sync(session, { epoch, have, watch, wait, appends, steps, text }, gone) {
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     session.watching = watching;
+    session.noText = text === false;
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
     session.light = steps === "light";
     session.watchUntil = Date.now() + MAX_WAIT;

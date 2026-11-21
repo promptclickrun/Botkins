@@ -6,7 +6,7 @@ import { test, type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { checkJoin, LinkClient, pair, startJoin } from "../src/link/client";
+import { checkJoin, LinkClient, type LinkOptions, pair, startJoin } from "../src/link/client";
 import { applyParts, useApp } from "../src/state/store";
 import { activityLabel, botActivity, chatActivity, needsYou, panelRefreshing } from "../src/state/sessionActivity";
 
@@ -37,9 +37,9 @@ async function setup(t: TestContext, appends = true) {
     await link.stop();
     rmSync(dir, { recursive: true, force: true });
   });
-  async function phone(streamAppends = false, onParts = (_parts: Record<string, unknown>) => {}) {
+  async function phone(streamAppends = false, onParts = (_parts: Record<string, unknown>) => {}, more: Partial<LinkOptions> = {}) {
     const paired = await pair(fetch, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "phone", platform: "ios" });
-    const client = new LinkClient(paired, { fetch, streamAppends, onParts, onState() {} });
+    const client = new LinkClient(paired, { fetch, streamAppends, onParts, onState() {}, ...more });
     clients.push(client);
     return client;
   }
@@ -262,6 +262,65 @@ for (const optIn of [false, true]) {
     assert.ok(!link.waiters.has(quietWaiter), "first text after silence missed the fast pump");
   });
 }
+
+test("with live text off a phone gets indicators only, is not woken by text, and the reply whole", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const received: Record<string, any>[] = [];
+  let text = true;
+  const syncs: Record<string, unknown>[] = [];
+  const client = await phone(true, (news) => {
+    received.push(news);
+    applyParts(news);
+  }, { liveText: () => text });
+  const sync = link.sync.bind(link);
+  link.sync = (session, args, gone) => {
+    syncs.push(args);
+    return sync(session, args, gone);
+  };
+  const chat = backend.state.chats.find((c) => !c.botIds);
+  const id = chat.id;
+  const stream = backend.state.streams;
+  const held = () => useApp.getState().texts[id];
+  stream[id] = "first";
+  backend.changed();
+  client.watch([id]);
+  client.start();
+  await until(() => held()?.stream === "first");
+  assert.ok(!("text" in syncs.at(-1)!), "live text on: the field is left out");
+
+  text = false;
+  client.liveTextChanged();
+  await until(() => !held());
+  assert.equal(syncs.at(-1)!.text, false);
+  assert.ok(useApp.getState().parts.meta!.capabilities.includes("live-text-off-v1"));
+  await until(() => link.waiters.size === 1);
+  const [waiter] = link.waiters;
+  const count = received.length;
+  stream[id] += " and more";
+  backend.changed();
+  await sleep(300);
+  assert.ok(link.waiters.has(waiter), "text alone woke the phone");
+  assert.equal(received.length, count);
+  backend.state.intents[id] = "Reading";
+  backend.changed();
+  await until(() => received.length > count);
+  const news = received.at(-1)!;
+  assert.equal(news.live.streams[id], true, "booleans only");
+  assert.ok(!Object.keys(news).some((name) => name.startsWith("text:")), "no text");
+  assert.equal(held(), undefined);
+
+  delete stream[id];
+  chat.messages.push({ role: "assistant", text: "first and more" });
+  backend.changed();
+  await until(() => useApp.getState().chats[id]?.messages.at(-1)?.text === "first and more");
+
+  stream[id] = "next";
+  backend.changed();
+  await until(() => useApp.getState().parts.live?.streams[id] === true);
+  text = true;
+  client.liveTextChanged();
+  await until(() => held()?.stream === "next");
+});
 
 test("a team member who asks for appends gets indicators and text for their own chats only", async (t) => {
   const { backend, link, phone } = await setup(t);
