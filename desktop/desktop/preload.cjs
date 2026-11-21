@@ -35,6 +35,12 @@ for (const name of [
   "link.spaces.notify",
   "link.spaces.here",
   "link.team.setLinkSharing",
+  // Sections on the Chats page ("chat-sections-v1"): the link's calls, made as the owner here.
+  "link.chats.addSection",
+  "link.chats.renameSection",
+  "link.chats.deleteSection",
+  "link.chats.orderSections",
+  "link.chats.setSection",
   "artifacts.list",
   "artifacts.read",
   "artifacts.resolve",

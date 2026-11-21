@@ -137,6 +137,8 @@ export type Chat = {
   pinned?: boolean;
   archived?: boolean;
   unread?: boolean;
+  /** The section of the Chats page the person put this chat in ("chat-sections-v1"); left out for a chat in none. */
+  sectionId?: string;
   /** Set on a chat made by Fork from here. */
   forkedFrom?: { chatId: string; messageIndex: number };
   /** The last known context-window use, from session.usage_info. */
@@ -339,6 +341,8 @@ export type State = {
   settings: Preferences;
   requests: AgentRequest[];
   sections: Section[];
+  /** The person's own sections on the Chats page, in their order ("chat-sections-v1"). Left out when the computer in use has none. */
+  chatSections?: Section[];
   /** Bot templates the person saved or imported. */
   templates?: BotTemplate[];
   /** Feed posts, ideas and goals that bots publish to Today. */
@@ -565,6 +569,12 @@ declare global {
       "link.spaces.notify": (id: string, mode: SpaceNotify) => Promise<void>;
       "link.spaces.here": (id: string | null, panelId?: string) => Promise<void>;
       "link.team.setLinkSharing": (on: boolean) => Promise<void>;
+      // Sections on the Chats page ("chat-sections-v1"): the link keeps them, for the owner here.
+      "link.chats.addSection": (name: string) => Promise<string>;
+      "link.chats.renameSection": (id: string, name: string) => Promise<null>;
+      "link.chats.deleteSection": (id: string) => Promise<null>;
+      "link.chats.orderSections": (ids: string[]) => Promise<null>;
+      "link.chats.setSection": (chatId: string, sectionId: string | null) => Promise<null>;
       "artifacts.thumbnail": (id: string, options?: { size?: number }) => Promise<{ data: string; mime: string } | null>;
       "artifacts.resolve": (input: { chatId: string; paths: string[] }) => Promise<{ items: (Artifact | null)[] }>;
       inspectChatPaths(paths: string[]): Promise<({ path: string; kind: ArtifactKind; name: string; mime: string; size: number | null } | null)[]>;

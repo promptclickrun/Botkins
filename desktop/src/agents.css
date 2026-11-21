@@ -403,6 +403,51 @@
   font-weight: 600;
   color: var(--muted);
 }
+/* A section of the Chats page ("chat-sections-v1"): a heading that folds it, with its ⋯, over its chats. */
+.chatsection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 0 2px;
+}
+.chatsection-head > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+}
+.chatsection-head > button:first-child:hover {
+  background: var(--hover);
+}
+.chatsection-head > button:first-child > svg:not(.botgroup-chevron) {
+  color: var(--muted);
+}
+.chatsection-head small {
+  font-weight: 400;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.chatsection-head button[aria-expanded="false"] .botgroup-chevron {
+  transform: rotate(-90deg);
+}
+.chatsection-head > .menu-button {
+  margin-right: 4px;
+}
+.chatsection-none {
+  margin: 2px 0 6px;
+  padding: 6px 8px 6px 34px;
+  font-size: calc(13px * var(--text-scale));
+}
+/* Dropping a chat here, or on a section, outlines where it will land. */
+.chatsection[data-drag-over="true"],
+.chatgroups-loose[data-drag-over="true"] {
+  border-radius: var(--radius);
+}
 .unread-dot {
   display: inline-block;
   width: 8px;

@@ -1,4 +1,6 @@
 import { useBotDrag } from "./useBotDrag";
+import { useChatDrag } from "./useChatDrag";
+import { chatGroups, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
 import {
   useEffect,
   useLayoutEffect,
@@ -12,7 +14,9 @@ import { createPortal } from "react-dom";
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   SlidersHorizontal,
   Check,
   ChevronDown,
@@ -344,6 +348,9 @@ export function arrangeBots(state: State) {
 }
 
 const run = (actions: PageActions, p: Promise<unknown>) => void p.catch(actions.fail);
+/** A call about chat sections: the computer's sentence is shown as it comes, without the window's wrapping. */
+const runSection = (actions: PageActions, p: Promise<unknown>) =>
+  void p.catch((e: unknown) => actions.fail((e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, "")));
 
 /** The bot ⋯ menu, shared by bot cards, the sidebar and the bot page. */
 export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: AskFn): MenuItem[] {
@@ -843,13 +850,102 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
 
 /* ----------------------------------------------------------------- chats */
 
-function chatMenuItems(chat: Chat, actions: PageActions, ask: AskFn): MenuItem[] {
+/** A chat's "Move to section": each of the person's sections, None, then New section… ("chat-sections-v1"). */
+function chatSectionItem(state: State, chat: Chat, actions: PageActions, ask: AskFn): MenuItem {
+  const sections = state.chatSections ?? [];
+  const put = (sectionId: string | null) => runSection(actions, api()["link.chats.setSection"](chat.id, sectionId));
+  return {
+    label: "Move to section",
+    icon: FolderInput,
+    submenu: [
+      ...sections.map((s) => ({ label: s.name, checked: chat.sectionId === s.id, run: () => put(s.id) })),
+      {
+        label: "None",
+        checked: !chat.sectionId || !sections.some((s) => s.id === chat.sectionId),
+        run: () => put(null),
+      },
+      "separator",
+      {
+        label: "New section…",
+        icon: FolderPlus,
+        run: () =>
+          runSection(
+            actions,
+            (async () => {
+              const name = await ask({
+                title: "New section",
+                body: chat.title + " moves into it.",
+                confirm: "Create section",
+                field: { label: "Section name", value: "", max: 40 },
+              });
+              if (!name) return;
+              const id = await api()["link.chats.addSection"](name);
+              await api()["link.chats.setSection"](chat.id, id);
+            })(),
+          ),
+      },
+    ],
+  };
+}
+
+/** A section's menu on the Chats page: Rename…, Move up, Move down, Delete section…. */
+function chatSectionMenuItems(state: State, section: Section, actions: PageActions, ask: AskFn): MenuItem[] {
+  const sections = state.chatSections ?? [];
+  const order = (by: -1 | 1) => movedSection(sections, section.id, by);
+  const move = (by: -1 | 1) => {
+    const ids = order(by);
+    if (ids) runSection(actions, api()["link.chats.orderSections"](ids));
+  };
+  return [
+    {
+      label: "Rename…",
+      icon: Pencil,
+      run: () =>
+        runSection(
+          actions,
+          (async () => {
+            const name = await ask({
+              title: "Rename section",
+              confirm: "Rename",
+              field: { label: "Section name", value: section.name, max: 40 },
+            });
+            if (name && name !== section.name) await api()["link.chats.renameSection"](section.id, name);
+          })(),
+        ),
+    },
+    { label: "Move up", icon: ArrowUp, disabled: !order(-1), run: () => move(-1) },
+    { label: "Move down", icon: ArrowDown, disabled: !order(1), run: () => move(1) },
+    "separator",
+    {
+      label: "Delete section…",
+      icon: Trash2,
+      danger: true,
+      run: () =>
+        runSection(
+          actions,
+          (async () => {
+            const ok = await ask({
+              title: "Delete “" + section.name + "”?",
+              body: "Its chats stay. They move out of the section.",
+              confirm: "Delete section",
+              danger: true,
+            });
+            if (ok) await api()["link.chats.deleteSection"](section.id);
+          })(),
+        ),
+    },
+  ];
+}
+
+function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskFn): MenuItem[] {
   return [
     {
       label: chat.pinned ? "Unpin" : "Pin",
       icon: chat.pinned ? PinOff : Pin,
       run: () => run(actions, api().setChatFlags(chat.id, { pinned: !chat.pinned })),
     },
+    // Only when the computer in use keeps sections; without them the menu is as before.
+    ...(hasChatSections(state) ? [chatSectionItem(state, chat, actions, ask)] : []),
     {
       label: chat.unread ? "Mark read" : "Mark unread",
       icon: chat.unread ? MailOpen : Mail,
@@ -907,12 +1003,15 @@ export function ChatRow({
   chat,
   open,
   actions,
+  drag,
 }: {
   state: State;
   chat: Chat;
   open: (id: string) => void;
   /** With actions, the row gets its ⋯ and right-click menu. */
   actions?: PageActions;
+  /** On the Chats page with sections, the row can be dragged into one. */
+  drag?: ReturnType<ReturnType<typeof useChatDrag>["row"]>;
 }) {
   const b = state.bots.find((b) => b.id === chat.botId);
   const members = (chat.botIds ?? []).map((id) => state.bots.find((x) => x.id === id)).filter((x): x is Bot => !!x);
@@ -925,7 +1024,7 @@ export function ChatRow({
   const dialogs = useAsk();
   if (!b) return null;
   const controls = teamCan(state, "agents", "chat") ? actions : undefined;
-  const items = () => chatMenuItems(chat, controls!, dialogs.ask);
+  const items = () => chatMenuItems(state, chat, controls!, dialogs.ask);
   const last = chat.messages.at(-1)?.text;
   const row = (
     <button className={"row chatrow" + (chat.unread ? " unread" : "")} onClick={() => open(chat.id)}>
@@ -966,7 +1065,7 @@ export function ChatRow({
   );
   if (!controls) return row;
   return (
-    <div className="rowwrap" onContextMenu={(e) => menu.show(e, chat.title, items())}>
+    <div {...drag} className="rowwrap" onContextMenu={(e) => menu.show(e, chat.title, items())}>
       {row}
       <button
         className="menu-button"
@@ -1026,24 +1125,8 @@ export function HomePage({ state, actions, composer }: { state: State; actions: 
   );
 }
 
-/** Pinned, Today, Yesterday and Earlier, newest first. */
-function groupChats(chats: Chat[], pinFirst: boolean) {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const today = start.getTime();
-  const yesterday = today - 86400000;
-  const groups: [string, Chat[]][] = [
-    ["Pinned", []],
-    ["Today", []],
-    ["Yesterday", []],
-    ["Earlier", []],
-  ];
-  for (const c of chats) {
-    const g = pinFirst && c.pinned ? 0 : c.time >= today ? 1 : c.time >= yesterday ? 2 : 3;
-    groups[g][1].push(c);
-  }
-  return groups.filter(([, list]) => list.length);
-}
+/** The sections folded on the Chats page, kept while the app is open (not saved). */
+const foldedChatSections = new Set<string>();
 
 export function ChatsPage({
   state,
@@ -1057,15 +1140,64 @@ export function ChatsPage({
   setQuery: (q: string) => void;
 }) {
   const [filter, setFilter] = useState<"All" | "Unread" | "Archived">("All");
-  const chats = [...state.chats].sort((a, b) => b.time - a.time);
+  const [folded, setFolded] = useState(() => new Set(foldedChatSections));
+  const menu = useMenu();
+  const dialogs = useAsk();
+  const drag = useChatDrag(state.chats, (e) => runSection(actions, Promise.reject(e)));
+  const chats = state.chats;
   const unread = chats.filter((c) => c.unread && !c.archived).length;
   const archived = chats.filter((c) => c.archived).length;
-  const q = query.toLowerCase();
-  const matches = chats.filter(
-    (c) =>
-      (filter === "Archived" ? c.archived : !c.archived && (filter === "All" || c.unread)) &&
-      (c.title + " " + state.bots.find((b) => b.id === c.botId)?.name).toLowerCase().includes(q),
+  // Sections are there only when the computer in use keeps them ("chat-sections-v1").
+  const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
+  const groups = chatGroups({ chats, sections, query, filter, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
+  const matched = groups.some((group) => group.chats.length);
+  // A chat is dragged into a section only where its menu could move it there.
+  const movable = !!sections && filter !== "Archived" && teamCan(state, "agents", "chat");
+  function fold(id: string) {
+    if (foldedChatSections.has(id)) foldedChatSections.delete(id);
+    else foldedChatSections.add(id);
+    setFolded(new Set(foldedChatSections));
+  }
+  const rows = (list: Chat[]) =>
+    list.map((c) => <ChatRow key={c.id} state={state} chat={c} open={actions.open} actions={actions} drag={movable ? drag.row(c) : undefined} />);
+  const plain = (group: ChatGroup) => (
+    <div className="chatgroup" key={group.key} role="group" aria-label={group.label}>
+      <h3 className="chatgroup-label">{group.label}</h3>
+      {rows(group.chats)}
+    </div>
   );
+  const sectionGroup = (group: Extract<ChatGroup, { kind: "section" }>) => {
+    const { section } = group;
+    // While searching, a folded section opens, so its matches show.
+    const open = !!query || !folded.has(section.id);
+    const sectionMenu = (e: ReactMouseEvent<HTMLElement>) => menu.show(e, section.name, chatSectionMenuItems(state, section, actions, dialogs.ask));
+    return (
+      <div
+        {...(movable ? drag.place(section.id) : {})}
+        className="chatgroup chatsection"
+        key={group.key}
+        role="group"
+        aria-label={section.name}
+        onContextMenu={movable ? sectionMenu : undefined}
+      >
+        <div className="chatsection-head">
+          <button aria-expanded={open} onClick={() => fold(section.id)}>
+            <ChevronDown size={14} className="botgroup-chevron" />
+            <Folder size={14} />
+            <span>{section.name}</span>
+            <small>{group.chats.length}</small>
+          </button>
+          {movable && (
+            <button className="menu-button" aria-label={"Options for section " + section.name} aria-haspopup="menu" onClick={sectionMenu}>
+              <Ellipsis size={16} />
+            </button>
+          )}
+        </div>
+        {open && (group.chats.length ? rows(group.chats) : <p className="muted chatsection-none">No chats here yet.</p>)}
+      </div>
+    );
+  };
+  const days = groups.filter((group) => group.kind === "day");
   return (
     <>
       <h1>Chats</h1>
@@ -1096,14 +1228,23 @@ export function ChatsPage({
             </button>
           ))}
         </div>
-        {groupChats(matches, filter !== "Archived").map(([label, list]) => (
-          <div className="chatgroup" key={label} role="group" aria-label={label}>
-            <h3 className="chatgroup-label">{label}</h3>
-            {list.map((c) => (
-              <ChatRow key={c.id} state={state} chat={c} open={actions.open} actions={actions} />
-            ))}
-          </div>
-        ))}
+        {groups.map((group) => (group.kind === "pinned" ? plain(group) : group.kind === "section" ? sectionGroup(group) : null))}
+        {movable && sections!.length > 0 ? (
+          // The chats in no section are one place to drop a chat on, which takes it out of its section.
+          days.length > 0 ? (
+            <div {...drag.place(null)} className="chatgroups-loose">
+              {days.map(plain)}
+            </div>
+          ) : (
+            drag.dragging?.sectionId && (
+              <div className="bot-drop-zones">
+                <div {...drag.place(null)}>None</div>
+              </div>
+            )
+          )
+        ) : (
+          days.map(plain)
+        )}
         {!chats.length && teamCan(state, "agents", "chat") && (
           <div className="empty">
             <button className="textbutton" onClick={actions.newChat}>
@@ -1111,7 +1252,7 @@ export function ChatsPage({
             </button>
           </div>
         )}
-        {!!chats.length && !matches.length && (
+        {!!chats.length && !matched && (
           <p className="muted bots-none">
             {query
               ? "No matching chats."
@@ -1122,6 +1263,8 @@ export function ChatsPage({
                   : "No chats. Restore one from Archived."}
           </p>
         )}
+        {menu.node}
+        {dialogs.node}
       </section>
     </>
   );
