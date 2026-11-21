@@ -327,6 +327,20 @@ try {
   await tabs.getByRole("tab", { name: "About", exact: true }).click();
   const { version } = await page.evaluate(() => window.botkins.appInfo());
   await dialog.getByText("Version " + version, { exact: true }).waitFor();
+  // A check for updates that GitHub refuses says why in the app's own words, without the words the
+  // window's bridge puts in front of an error ("Error invoking remote method …").
+  await app.evaluate(() => {
+    const real = globalThis.fetch;
+    globalThis.__realFetch = real;
+    globalThis.fetch = async (url, options) => (/^https:\/\/(api\.)?github\.com\//.test(String(url?.url ?? url)) ? new Response("{}", { status: 503 }) : real(url, options));
+  });
+  await dialog.locator("button", { hasText: "Check for updates" }).click();
+  const refused = dialog.locator(".set-row", { hasText: "Updates" }).locator("small");
+  // The row says "Botkins checks GitHub Releases automatically." until the check has an answer.
+  await expect(refused).not.toHaveText(/automatically|Checking/, { timeout: 30000 });
+  await expect(refused).toContainText("GitHub");
+  assert.ok(!/Error invoking|^Error:/.test(await refused.textContent()), "the reason is said plainly: " + (await refused.textContent()));
+  await app.evaluate(() => void (globalThis.fetch = globalThis.__realFetch));
   // Arrow keys move through the menu and wrap.
   await tabs.getByRole("tab", { name: "General", exact: true }).click();
   await page.keyboard.press("ArrowDown");
