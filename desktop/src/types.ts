@@ -731,7 +731,8 @@ declare global {
       removeSkill(name: string): Promise<void>;
       setSkillEnabled(name: string, enabled: boolean): Promise<void>;
       /** Asks for a folder: a skill is copied in; a folder of skills or a plugin is linked. null when cancelled. */
-      addSkillFolder(): Promise<{ kind: "skill" | "plugin" | "folder"; name: string; count?: number } | null>;
+      /** A plugin folder is installed as a plugin, switched off (`id`, `enabled: false`); it is never linked as a folder of skills. */
+      addSkillFolder(): Promise<{ kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean } | null>;
       removeSkillFolder(id: string): Promise<void>;
       revealSkill(name: string): Promise<void>;
       /** Which skills (names) and MCP servers (ids) one bot leaves out. */
@@ -745,8 +746,8 @@ declare global {
       "plugins.install"(id: string, options?: { bots?: "all" | string[]; config?: Record<string, PluginConfigValue>; revision?: string }): Promise<InstalledPlugin>;
       "plugins.addFolder"(path: string): Promise<InstalledPlugin>;
       "plugins.configure"(id: string, values: Record<string, PluginConfigValue>): Promise<void>;
-      "plugins.setBots"(id: string, bots: "all" | string[]): Promise<void>;
-      "plugins.setEnabled"(id: string, on: boolean): Promise<void>;
+      "plugins.setBots"(id: string, bots: "all" | string[], options?: { revision?: string }): Promise<void>;
+      "plugins.setEnabled"(id: string, on: boolean, options?: { revision?: string }): Promise<void>;
       "plugins.update"(id: string, options?: { revision?: string }): Promise<InstalledPlugin>;
       "plugins.uninstall"(id: string): Promise<void>;
       /** Native folder chooser for local plugin installs. Remote hosts do not expose this method. */
@@ -1184,14 +1185,35 @@ export type PluginHookEvent =
   | "preCompact"
   | "notification"
   | "permissionRequest";
+/** An environment name or a header with its value as the plugin wrote it. A secret is never in it: the text then has `${NAME}` for a setting. */
+export type PluginNamed = { name: string; value: string };
+/** A name the plugin asked for that Botkins does not set, with the computer's reason as a sentence. */
+export type PluginNotSet = { name: string; why: string };
+/**
+ * A tool of a plugin, by what the computer does with it ("plugins-v1", docs/PLUGINS.md). `local`:
+ * the computer starts `command` with `args`, in `cwd`, with `env`. `remote`: it connects to `url`
+ * and sends `headers`. A computer from before "plugin-starts-v1" sends only the name, the kind and
+ * the command or address, so everything else can be missing.
+ */
+export type PluginTool =
+  | { name: string; kind: "local"; command?: string; args?: string[]; env?: PluginNamed[]; envNotSet?: PluginNotSet[]; cwd?: string }
+  | { name: string; kind: "remote"; type?: "http" | "sse"; url?: string; headers?: PluginNamed[]; oauth?: true; oauthClientId?: string; serverId?: string };
+export type PluginHook = { event: PluginHookEvent | (string & {}); command: string; env?: PluginNamed[]; envNotSet?: PluginNotSet[]; timeoutSec?: number };
 export type PluginContents = {
+  /** Exactly the files that go to the runtime. */
   skills: string[];
   agents: string[];
   commands: string[];
-  mcpServers: { name: string; kind: "local" | "remote"; command?: string; url?: string; oauth?: true; serverId?: string }[];
-  hooks: { event: PluginHookEvent | (string & {}); command: string }[];
+  mcpServers: PluginTool[];
+  hooks: PluginHook[];
   lspServers?: string[];
+  /** The hooks and tools the computer does not run: how many, and the first of them with the reason. */
+  notRun?: { count: number; items: { what: "hook" | "tool"; name: string; why: string }[] };
+  /** The plugin's files that are not a skill, an agent or a command. `config`: a file that tools read by themselves. A folder of dependencies is one row whose path ends with "/". */
+  otherFiles?: { count: number; bytes: number; files: { path: string; bytes: number; config?: true; files?: number }[] };
 };
+/** Where a setting's value goes: an environment name of a tool or of a hook (named by its event), or a header at an address. */
+export type PluginSentTo = { tool: string; env: string } | { tool: string; header: string; url: string } | { hook: string; env: string };
 export type PluginField = {
   key: string;
   label: string;
@@ -1199,6 +1221,7 @@ export type PluginField = {
   secret: boolean;
   required: boolean;
   default?: string;
+  sentTo?: PluginSentTo[];
 };
 export type PluginPreview = PluginListing & {
   contents: PluginContents;
@@ -1206,6 +1229,8 @@ export type PluginPreview = PluginListing & {
   postInstallMessage?: string;
   revision?: string;
   warnings?: string[];
+  /** The mark of a description in which every command the computer starts is shown, whole. Without it, ask first. */
+  starts?: 1;
 };
 export type InstalledPlugin = PluginListing & {
   installed: true;
@@ -1219,6 +1244,12 @@ export type InstalledPlugin = PluginListing & {
   updateAvailable?: true;
   folder?: string;
   installedAt: number;
+  /** The installed copy's revision: sent with a switch-on and a choice of bots, so the computer can refuse a plugin that is another one by then. */
+  revision?: string;
+  warnings?: string[];
+  starts?: 1;
+  /** An update is the way back (a changed or unreadable copy): offer Update, also when the source did not change. */
+  repair?: "update";
 };
 export type PluginConfigValue = string | CredentialRef | null;
 export type Mentionables = {
