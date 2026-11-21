@@ -2,7 +2,7 @@
 // words are the contract's "Words on screen" (docs/spaces.md), final for both apps.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { asksOf, changedLine, changedSince, holds, initials, lastLine, linkNote, names, panelProject, panelRows, pickRows, rowLine, shareChoices, since, spaceSections, spaceTitle, whoCanOpen, withMove, withPick, withPin } from "../src/features/spaces/logic";
+import { applyArrangement, asksOf, changedLine, changedSince, holds, initials, lastLine, linkNote, names, panelProject, panelRows, pickRows, spaceDropPlan, spaceItems, rowLine, shareChoices, since, spaceSections, spaceTitle, whoCanOpen, withMove, withPick, withPin } from "../src/features/spaces/logic";
 import type { SpaceSummary } from "../src/link/types";
 
 const space = (more: Partial<SpaceSummary> = {}): SpaceSummary => ({ id: "s", name: "Launch", by: { id: "owner", name: "Alex Kim" }, mine: true, access: "private", can: "own", count: 5, changed: 0, pinned: false, notify: "daily", here: [], rev: 1, updatedAt: 1, ...more });
@@ -142,4 +142,44 @@ test("a panel's last line, and panels laid out for a phone", () => {
   const sizes = (list: ("small" | "wide" | "tall")[]) => panelRows(list.map((size) => ({ size }))).map((row) => row.map((panel) => panel.size));
   assert.deepEqual(sizes(["small", "small", "tall", "small", "wide", "small", "small", "small"]), [["small", "small"], ["tall"], ["small"], ["wide"], ["small", "small"], ["small"]]);
   assert.deepEqual(sizes([]), []);
+});
+
+test("dragging a space: the list, where a drop lands, and the list shown at once", () => {
+  const owner = { owner: true, admin: true };
+  const list = [
+    space({ id: "today", pinned: true }),
+    space({ id: "feed", pinned: true }),
+    space({ id: "launch" }),
+    space({ id: "theirs", mine: false, by: { id: "m1", name: "Maya" } }),
+    space({ id: "money" }),
+  ];
+  const keys = (items: { key: string }[]) => items.map((item) => item.key);
+  // Pinned, More, then what members made: fixed, so nothing is dropped among those.
+  const items = spaceItems(list, owner, false);
+  assert.deepEqual(keys(items), ["head:pinned", "space:today", "space:feed", "head:more", "space:launch", "space:money", "head:theirs", "space:theirs"]);
+  assert.deepEqual(items.filter((item) => item.kind === "fixed").map((item) => item.key), ["head:theirs", "space:theirs"]);
+  // With nothing pinned the heading shows only while a space is dragged, as a place to drop one.
+  const none = list.map((one) => ({ ...one, pinned: false }));
+  assert.deepEqual(keys(spaceItems(none, owner, false)).slice(0, 2), ["head:more", "space:today"]);
+  assert.deepEqual(keys(spaceItems(none, owner, true)).slice(0, 2), ["head:pinned", "head:more"]);
+
+  // Within Pinned: the row on Home takes that order.
+  assert.deepEqual(spaceDropPlan(list, owner, "feed", "pinned", 0), { order: ["feed", "today", "launch", "theirs", "money"], pinned: ["feed", "today"] });
+  assert.equal(spaceDropPlan(list, owner, "feed", "pinned", 1), undefined, "dropped where it was");
+  // Into Pinned from More: pinned, at that place.
+  assert.deepEqual(spaceDropPlan(list, owner, "money", "pinned", 1), { order: ["today", "money", "feed", "launch", "theirs"], pinned: ["today", "money", "feed"] });
+  // Out of Pinned: unpinned, among More at that place. What members made keeps its place.
+  assert.deepEqual(spaceDropPlan(list, owner, "today", "more", 1), { order: ["feed", "launch", "theirs", "today", "money"], pinned: ["feed"] });
+  assert.deepEqual(spaceDropPlan(list, owner, "today", "more", 2), { order: ["feed", "launch", "theirs", "money", "today"], pinned: ["feed"] });
+  // Within More.
+  assert.deepEqual(spaceDropPlan(list, owner, "money", "more", 0), { order: ["today", "feed", "money", "launch", "theirs"], pinned: ["today", "feed"] });
+  assert.equal(spaceDropPlan(list, owner, "launch", "more", 0), undefined);
+  assert.equal(spaceDropPlan(list, owner, "gone", "more", 0), undefined);
+  // An index past the end is the end.
+  assert.deepEqual(spaceDropPlan(list, owner, "launch", "pinned", 9)?.pinned, ["today", "feed", "launch"]);
+
+  // Shown at once: the order and the pins of the plan; a space the plan does not name stays, last.
+  const plan = spaceDropPlan(list, owner, "money", "pinned", 1)!;
+  const now = applyArrangement([...list, space({ id: "new" })], plan);
+  assert.deepEqual(now.map((one) => one.id + (one.pinned ? "*" : "")), ["today*", "money*", "feed*", "launch", "theirs", "new"]);
 });

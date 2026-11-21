@@ -61,15 +61,21 @@ export function boardItems(arranged: Pick<Arranged, "primary" | "pinned" | "sect
 }
 
 /** A place to drop: after the item at `after` (an index into the items), into `zone` at `index` among its other bots. */
-export type Slot = { after: number; zone: Zone; index: number };
+export type Slot<Z extends string = Zone> = { after: number; zone: Z; index: number };
+
+/**
+ * What the slot math needs of an item: a heading opens its group, a row is a place in it, and any
+ * other kind is passed over. So another list (spaces) can use the same math with its own groups.
+ */
+export type SlotItem<Z extends string = string> = { kind: "head" | "row"; zone: Z } | { kind: "primary" | "fixed" };
 
 /**
  * Every place the item at `dragged` could go, top to bottom: under a heading (the top of its group)
  * and under each other bot. Never above or beside the primary bot.
  */
-export function slotsFor(items: readonly BoardItem[], dragged: number): Slot[] {
+export function slotsFor<Z extends string>(items: readonly SlotItem<Z>[], dragged: number): Slot<Z>[] {
   "worklet";
-  const slots: Slot[] = [];
+  const slots: Slot<Z>[] = [];
   const counts: Record<string, number> = {};
   for (let i = 0; i < items.length; i++) {
     if (i === dragged) continue;
@@ -90,10 +96,10 @@ export function slotsFor(items: readonly BoardItem[], dragged: number): Slot[] {
  * `hs` are each item's top and height as laid out with the bot still in place; the bot's own height
  * is taken out below it, and a gap of that height opens at the slot.
  */
-export function pickSlot(items: readonly BoardItem[], ys: readonly number[], hs: readonly number[], dragged: number, center: number): Slot | undefined {
+export function pickSlot<Z extends string>(items: readonly SlotItem<Z>[], ys: readonly number[], hs: readonly number[], dragged: number, center: number): Slot<Z> | undefined {
   "worklet";
   const size = hs[dragged] ?? 0;
-  let best: Slot | undefined;
+  let best: Slot<Z> | undefined;
   let bestDistance = Infinity;
   for (const slot of slotsFor(items, dragged)) {
     const bottom = (ys[slot.after] ?? 0) + (hs[slot.after] ?? 0) - (slot.after > dragged ? size : 0);

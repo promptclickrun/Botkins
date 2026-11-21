@@ -95,7 +95,7 @@ export default function NewPanel() {
         <MenuView title="Space" actions={places.map((one) => ({ id: one.id, title: spaceTitle(one), state: one.id === space?.id ? ("on" as const) : ("off" as const) }))} onPressAction={({ nativeEvent }) => setPlace(nativeEvent.event)}>
           <Row title="Space" value={space ? spaceTitle(space) : "None"} trailing={<ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />} />
         </MenuView>
-        {!member && (
+        {!member && !!projects?.length && (
           <MenuView
             title="Project"
             actions={[{ id: "", title: "None", state: projectId ? ("off" as const) : ("on" as const) }, ...(projects ?? []).map((one) => ({ id: one.id, title: one.name, state: one.id === projectId ? ("on" as const) : ("off" as const) }))]}

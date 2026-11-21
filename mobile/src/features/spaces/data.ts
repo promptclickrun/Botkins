@@ -2,14 +2,15 @@
 // space's content is asked for (`spaces.read`) and asked again when the list says its `rev` passed
 // the one held. Nothing here is kept past the computer in use: `onComputerChange` empties it.
 import { type Href, router } from "expo-router";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import type { PanelView, SpaceContent, SpaceSummary } from "@/link/types";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { onComputerChange } from "@/state/store";
+import { DRAG } from "@/features/home/drag";
+import { onComputerChange, useApp } from "@/state/store";
 import type { FrameState } from "@/ui";
-import { withPin } from "./logic";
+import { applyArrangement, type Arrangement, withPin } from "./logic";
 
 const NONE: SpaceSummary[] = [];
 
@@ -67,6 +68,34 @@ export function lookingAt(id: string | null, panelId?: string) {
 }
 
 export const setPinned = (spaces: SpaceSummary[], id: string, pinned: boolean) => void attempt(api["link.spaces.arrange"](withPin(spaces, id, pinned)));
+
+/**
+ * The person's order and pins, changed by a drop: the new list is shown at once and kept until the
+ * computer's own arrives (the list changes once more after the call, or DRAG.HOLD_ORDER_MS). A call
+ * that failed shows its toast and the computer's list comes back. Home holds a dropped bot's order
+ * the same way.
+ */
+export function useArranging(spaces: SpaceSummary[]) {
+  const [pending, setPending] = useState<{ plan: Arrangement; done?: SpaceSummary[] } | null>(null);
+  const live = useApp((state) => state.parts.spaces);
+  const stale = !!pending?.done && pending.done !== live;
+  useEffect(() => {
+    if (stale) setPending(null);
+  }, [stale]);
+  useEffect(() => {
+    if (!pending?.done) return;
+    const timer = setTimeout(() => setPending(null), DRAG.HOLD_ORDER_MS);
+    return () => clearTimeout(timer);
+  }, [pending]);
+  const arrange = (plan: Arrangement | undefined) => {
+    if (!plan) return;
+    const mine = { plan };
+    setPending(mine);
+    void attempt(api["link.spaces.arrange"](plan).then(() => true)).then((ok) => setPending((now) => (now === mine ? (ok ? { ...mine, done: useApp.getState().parts.spaces ?? [] } : null) : now)));
+  };
+  const shown = useMemo(() => (pending && !stale ? applyArrangement(spaces, pending.plan) : spaces), [spaces, pending, stale]);
+  return { shown, arrange };
+}
 
 // The routes are new: typed routes learn them the next time Metro starts.
 export const openSpace = (id: string) => router.push(("/space/" + encodeURIComponent(id)) as unknown as Href);

@@ -344,7 +344,7 @@ export default function Home() {
             />
           )}
           {/* A computer with spaces shows the pinned ones here, where Today sat; one without keeps Today. */}
-          {canSeeToday && spacesOn && <HomeSpaces />}
+          {canSeeToday && spacesOn && <HomeSpaces onDragging={setDragging} />}
           {/* Today is always under the bots, even with nothing open: it has its own empty states. */}
           {canSeeToday && !spacesOn && (
             <View style={{ gap: space.lg }}>
