@@ -12,6 +12,7 @@ import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
 import { DESKTOP_ONLY } from "../host/headless.mjs";
+import { CHANGES, thingForLog } from "./coverage.mjs";
 
 const WAIT_MS = 25_000;
 const text = (value, max, what) => {
@@ -415,10 +416,26 @@ export function controlApi(service) {
   return api;
 }
 
-/** (method, args, context) → the value, for desktop/terminal/socket.mjs. */
-export function dispatcher(api) {
-  return (method, args, context) => {
+/**
+ * (method, args, context) → the value, for desktop/terminal/socket.mjs.
+ *
+ * A call that changes something leaves one line in the log once it is done: which call and which
+ * thing (a bot, a device, a setting's name), never a value. `call` reaches the app's own calls by
+ * name, so its line names that call and nothing of what it was given. So when a bot changed its
+ * own tools from its shell, a person can see it afterwards.
+ */
+export function dispatcher(api, { log } = {}) {
+  const said = (method, args) => {
+    if (method === "call") return "call " + (thingForLog(args?.[0]) ?? "");
+    if (!Object.hasOwn(CHANGES, method)) return null;
+    const thing = CHANGES[method] === null ? null : thingForLog(args?.[CHANGES[method]]);
+    return method + (thing ? " " + thing : "");
+  };
+  return async (method, args, context) => {
     if (!Object.hasOwn(api, method)) throw new ControlError("The service has no call named " + method + ". Is the command line newer than the service? Run `botkins status`.", "UNKNOWN_METHOD");
-    return api[method](args, context);
+    const value = await api[method](args, context);
+    const line = log && said(method, args);
+    if (line) log("Changed from the command line: " + line.trim());
+    return value;
   };
 }
