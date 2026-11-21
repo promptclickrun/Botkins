@@ -9,6 +9,13 @@ import { isGroup } from "./groups.mjs";
 export const CADENCES = ["once", "daily", "weekdays", "weekly", "custom"];
 /** The version of routine destinations (`deliver`), for a phone to check before it offers them. */
 export const ROUTINE_DELIVERY = "routine-delivery-v1";
+/**
+ * Says that a routine a team member makes carries their id (`createdBy` on its `chat.schedules[]`
+ * entry and on its chat). The link turns on its check with this name: a member may change, run,
+ * enable or delete only a routine they made. A routine made before the stamp has no name on it
+ * and is the owner's.
+ */
+export const ROUTINE_OWNER = "routine-owner-v1";
 /** Where a routine's result can land. "routine" is its own chat and the historical default. */
 export const DELIVER_TARGETS = ["none", "routine", "chat", ...BOARD_KINDS];
 const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];

@@ -261,6 +261,11 @@ test("a routine a member makes is theirs, runs under their limits and delivers o
   const averys = ws.createChat("pip");
   ws.chat(averys).createdBy = "m_avery";
 
+  // The app says it stamps routines, which is what turns on the link's check of who may change one.
+  const { CAPABILITIES, linkCapabilities } = await import("../desktop/runtime.mjs");
+  const { ROUTINE_OWNER } = await import("../desktop/routines.mjs");
+  assert.equal(ROUTINE_OWNER, "routine-owner-v1");
+  assert.ok(CAPABILITIES.includes(ROUTINE_OWNER) && linkCapabilities(new Set()).includes(ROUTINE_OWNER));
   // Made by a member: the routine and its chat say whose it is, and its turns have the member's limits.
   const id = await call("createRoutine", [{ ...daily, createdBy: "m_someone_else" }], member);
   const { chat, entry } = routines.find(id);
