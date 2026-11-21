@@ -174,6 +174,94 @@ export function arrangePin(spaces: Pick<SpaceSummary, "id" | "pinned">[], id: st
   return { order: [...pinned, ...rest], pinned };
 }
 
+/** `ids` with `id` taken out and put back before `target`, or after it. The same list when it does not move. */
+function reorder(ids: string[], id: string, target: string, after: boolean) {
+  if (id === target || !ids.includes(id) || !ids.includes(target)) return ids;
+  const rest = ids.filter((x) => x !== id);
+  rest.splice(rest.indexOf(target) + (after ? 1 : 0), 0, id);
+  return rest;
+}
+
+/** Pinned spaces in a new order, then the rest as they were: the shape `link.spaces.arrange` takes. */
+function arrangeWith(spaces: Pick<SpaceSummary, "id" | "pinned">[], pinned: string[]) {
+  const rest = spaces.map((s) => s.id).filter((s) => !pinned.includes(s));
+  return { order: [...pinned, ...rest], pinned };
+}
+
+/**
+ * The person's order after dragging the pinned space `id` before or after the pinned space
+ * `target` in the side menu. Null when nothing moves.
+ */
+export function arrangeMove(spaces: Pick<SpaceSummary, "id" | "pinned">[], id: string, target: string, after: boolean) {
+  const pinned = spaces.filter((s) => s.pinned).map((s) => s.id);
+  const next = reorder(pinned, id, target, after);
+  if (next.join() === pinned.join()) return null;
+  return arrangeWith(spaces, next);
+}
+
+/** Move up (-1) or Move down (1) for a pinned space. Null at the top or the bottom. */
+export function arrangeStep(spaces: Pick<SpaceSummary, "id" | "pinned">[], id: string, by: -1 | 1) {
+  const pinned = spaces.filter((s) => s.pinned).map((s) => s.id);
+  const at = pinned.indexOf(id);
+  const target = pinned[at + by];
+  if (at < 0 || !target) return null;
+  return arrangeMove(spaces, id, target, by > 0);
+}
+
+/**
+ * Where a dragged panel lands when it is dropped before or after the panel `target`: the order the
+ * page shows while dragging, and `before` for `spaces.movePanel` (the panel it lands in front of, or
+ * null for the end). Null when it would stay where it is.
+ */
+export function panelDrop(ids: string[], id: string, target: string, after: boolean) {
+  const order = reorder(ids, id, target, after);
+  if (order.join() === ids.join()) return null;
+  return { order, before: order[order.indexOf(id) + 1] ?? null };
+}
+
+export type PanelSize = "small" | "wide" | "tall";
+export const PANEL_SIZES: { id: PanelSize; label: string }[] = [
+  { id: "small", label: "Small" },
+  { id: "wide", label: "Wide" },
+  { id: "tall", label: "Tall" },
+];
+
+/**
+ * The size a panel snaps to while its corner is pulled. `width` and `height` are from the panel's
+ * top left corner to the pointer. The grid has two columns: a pull that ends nearer one column than
+ * both is Small; across both it is Wide, and pulled down past `tallAt` it is Tall.
+ */
+export function snapSize(width: number, height: number, grid: { width: number; gap: number; tallAt: number }): PanelSize {
+  const column = (grid.width - grid.gap) / 2;
+  if (width < (column + grid.width) / 2) return "small";
+  return height >= grid.tallAt ? "tall" : "wide";
+}
+
+/** The size after an arrow key on a panel's corner: right and down make it bigger, left and up smaller. */
+export function stepSize(size: PanelSize, key: string): PanelSize {
+  const at = PANEL_SIZES.findIndex((s) => s.id === size);
+  const by = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
+  return PANEL_SIZES[Math.min(PANEL_SIZES.length - 1, Math.max(0, at + by))].id;
+}
+
+/** A person removes their own notes; the space's maker and the computer's owner remove any. */
+export const canRemoveNote = (note: Pick<PanelNote, "by">, me: string, space: Pick<SpaceSummary, "mine">) =>
+  note.by === me || space.mine || me === "owner";
+
+/**
+ * The spaces a panel may move to from the panel's ⋯: every other space the person can change. A
+ * panel leaves a space only when the person owns that space or asked for the panel.
+ */
+export function moveTargets<T extends Pick<SpaceSummary, "id" | "can">>(spaces: T[], from: Pick<SpaceSummary, "id" | "can">, panel: { createdBy?: string }, me: string) {
+  if (from.can !== "own" && panel.createdBy !== me) return [];
+  return spaces.filter((s) => s.id !== from.id && s.can !== "view");
+}
+
+/** The spaces Attach offers on a project: the person's own, not the built-ins, and any already attached there. */
+export function attachable<T extends Pick<SpaceSummary, "mine" | "builtin" | "projectId">>(spaces: T[], projectId: string) {
+  return spaces.filter((s) => s.projectId === projectId || (s.mine && !s.builtin));
+}
+
 /** The lists of All spaces. `owner`: the person looking is the computer's owner. */
 export function spaceSections<T extends Pick<SpaceSummary, "pinned" | "mine" | "by">>(spaces: T[], owner: boolean) {
   const pinned = spaces.filter((s) => s.pinned);

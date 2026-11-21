@@ -863,6 +863,8 @@ function App() {
                 actions={actions}
                 openChat={open}
                 botPage={botPage}
+                openSpace={openSpace}
+                openNew={(id) => void openNew(id).catch(fail)}
                 fail={fail}
               />
             )}

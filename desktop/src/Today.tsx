@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import {
   ArrowRight,
   CalendarClock,
@@ -231,6 +231,9 @@ export function PanelCard({
   foot,
   side,
   when = stamp,
+  outer,
+  top,
+  after,
 }: {
   state: State;
   panel: ShownPanel;
@@ -245,13 +248,19 @@ export function PanelCard({
   side?: ReactNode;
   /** How the footer writes a time. */
   when?: (time: number) => string;
+  /** More on the panel itself (a space's drop target); its class is added to the panel's. */
+  outer?: HTMLAttributes<HTMLElement>;
+  /** More on the header (a space's drag handle). */
+  top?: HTMLAttributes<HTMLDivElement>;
+  /** Drawn last, inside the panel (a space's resize corner). */
+  after?: ReactNode;
 }) {
   const bot = state.bots.find((b) => b.id === p.botId);
   if (!bot) return null;
   const busy = !!p.refreshChatId && p.refreshChatId in state.streams;
   return (
-    <section className={"live-panel today-panel " + p.size} aria-label={p.title}>
-      <div className="panel-top">
+    <section {...outer} className={"live-panel today-panel " + p.size + (outer?.className ? " " + outer.className : "")} aria-label={p.title}>
+      <div {...top} className={"panel-top" + (top?.className ? " " + top.className : "")}>
         <BotAvatar bot={bot} state={busy ? "thinking" : "idle"} size={24} />
         <small>{bot.name}</small>
         {badges}
@@ -295,6 +304,7 @@ export function PanelCard({
           </button>
         )}
       </footer>
+      {after}
     </section>
   );
 }
@@ -303,7 +313,13 @@ export function PanelCard({
  * A panel's ⋯: its chats, size, order, routine, hiding and removing, in one dialog. `where` names the
  * page it hides from ("Today", or a space's name).
  */
-export function usePanelManager(panels: ShownPanel[], open: (id: string) => void, where = "Today") {
+export function usePanelManager(
+  panels: ShownPanel[],
+  open: (id: string) => void,
+  where = "Today",
+  /** More rows for a space's panel (Space, Notes), with a way to close the dialog. */
+  extra?: (panel: ShownPanel, close: () => void) => ReactNode,
+) {
   const [view, setView] = useState<"manage" | "schedule" | "remove" | null>(null);
   const [selected, select] = useState("");
   const [err, setErr] = useState("");
@@ -370,6 +386,7 @@ export function usePanelManager(panels: ShownPanel[], open: (id: string) => void
               <ChevronRight size={15} />
             </button>
           </div>
+          {extra?.(panel, () => setView(null))}
           <button onClick={() => setView("schedule")}>
             <CalendarClock size={16} />
             {panel.routine ? "Edit routine" : "Set a routine"}
