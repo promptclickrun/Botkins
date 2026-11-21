@@ -142,12 +142,31 @@ export const WORKSPACE = {
   addSkillFolderAt: cmd("skills add-folder"),
   removeSkillFolder: cmd("skills remove-folder"),
   // ── Projects ──
-  ...each("createProject addProject renameProject updateProject removeProject addProjectFolder addProjectArtifact removeProjectArtifact projectArtifacts projectChanges projectDiff projectCommit startProjectChat", owed("d")),
-  ...each("addTodo updateTodo moveTodo deleteTodo", owed("d")),
+  ...each("createProject addProjectFolder", cmd("projects add")),
+  addProject: no("window"), // a folder dialog; `projects add <folder>` takes the path itself
+  renameProject: cmd("projects rename"),
+  updateProject: cmd("projects edit"),
+  removeProject: cmd("projects remove"),
+  addProjectArtifact: cmd("projects add-artifact"),
+  removeProjectArtifact: cmd("projects remove-artifact"),
+  projectArtifacts: cmd("projects artifacts"),
+  projectChanges: cmd("projects changes"),
+  projectDiff: cmd("projects diff"),
+  projectCommit: cmd("projects commit"),
+  startProjectChat: cmd("projects chat"),
+  addTodo: cmd("todos add"),
+  updateTodo: cmd("todos edit"),
+  moveTodo: cmd("todos move"),
+  deleteTodo: cmd("todos remove"),
   // ── Tasks, the wiki, artifacts ──
-  ...each("saveTask moveTask startTask deleteTask", owed("d")),
+  saveTask: cmd("tasks add"), // and `tasks edit`
+  moveTask: cmd("tasks move"),
+  startTask: cmd("tasks start"),
+  deleteTask: cmd("tasks remove"),
   ...each("wikiTree wikiPage searchWiki createWikiPage createWikiPageFor createWikiFolder saveWikiPage moveWiki deleteWiki wikiHistory wikiVersion restoreWikiVersion wikiExportPlan wikiExportPages exportWikiFile", owed("d")),
-  ...each("artifacts.list artifacts.read artifacts.resolve", owed("d")),
+  "artifacts.list": cmd("artifacts list"),
+  "artifacts.read": cmd("artifacts read"),
+  "artifacts.resolve": cmd("artifacts resolve"),
   // ── Preferences, credentials, usage, voice ──
   setPreferences: owed("d"),
   ...each("credentials removeCredential savedCredentials saveSavedCredential checkSavedCredential removeSavedCredential resetVault", owed("d")),
@@ -315,6 +334,32 @@ export const CHANGES = {
   // A chat's own schedule (a prompt it set with /every or /after): the chat's title. The line does not say pause or delete.
   "routines.schedule": (args, value) => value?.chat ?? args?.[0],
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
+  // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
+  "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
+  "projects.rename": (args, value) => value?.name ?? args?.[0],
+  "projects.edit": (args, value) => value?.name ?? args?.[0],
+  "projects.remove": (args, value) => value?.name ?? args?.[0],
+  "projects.addArtifact": (args, value) => value?.project?.name ?? args?.[0],
+  "projects.removeArtifact": (args, value) => value?.project?.name ?? args?.[0],
+  // A commit is in the log by the project's name: not its message, not its files.
+  "projects.commit": (args, value) => value?.name ?? args?.[0],
+  // A chat in the mode yolo says so: `Site (yolo)`, or `(yolo)` alone when the name cannot be in a line. (Its mode is the one the chat got: a project with no folder gives default.)
+  "projects.chat": (args, value) => {
+    const name = value?.project?.name ?? args?.[0];
+    if ((value ? value.mode : args?.[1]?.mode) !== "yolo") return name;
+    return thingForLog(name) && name.length <= 73 ? name + " (yolo)" : "(yolo)";
+  },
+  // A to-do is a person's own text: its line names the project.
+  "todos.add": (args, value) => value?.project?.name ?? args?.[0],
+  "todos.edit": (args, value) => value?.project?.name ?? args?.[0],
+  "todos.move": (args, value) => value?.project?.name ?? args?.[0],
+  "todos.remove": (args, value) => value?.project?.name ?? args?.[0],
+  // A task is named by its title (a title longer than 80 characters, or with a line break in it, is left out of the line by `thingForLog`). Not its details, its result or its bot's words.
+  "tasks.add": (args, value) => value?.title ?? args?.[0]?.title,
+  "tasks.edit": (args, value) => value?.title ?? args?.[0],
+  "tasks.move": (args, value) => value?.title ?? args?.[0],
+  "tasks.start": (args, value) => value?.title ?? args?.[0],
+  "tasks.remove": (args, value) => value?.title ?? args?.[0],
   // ── The wiki (control-wiki.mjs) ──
   // ── Preferences, usage, the cache and the Mac tools (control-prefs.mjs) ──
   // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
@@ -327,7 +372,7 @@ export const MORE_READS = {
   bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview"],
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
-  projects: [],
+  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: [],
   prefs: [],
   credentials: [],

@@ -328,7 +328,31 @@ botkins routines schedule "Daily standup" 1 pause
 
 ### Projects, to-dos, tasks and artifacts
 
-The commands for this part come in a later change.
+A **project** keeps a folder, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
+
+```sh
+botkins folders
+botkins projects add ~/code/site --name Site
+botkins projects changes Site
+botkins projects commit Site --message "Fix the header"
+botkins projects chat Site --bot Nova
+botkins todos add Site "Check the mobile menu"
+botkins todos done Site 1
+botkins tasks add "Write the release notes" --bot Nova --status ready
+botkins tasks list --status review
+botkins artifacts list --bot Nova
+botkins artifacts read <artifact> --output ./notes.pdf
+```
+
+- **A project's folder is a path on this computer.** It must be one that the window's folder chooser can show a paired phone: in the home folder of the user that runs Botkins, or on a plugged-in disk (`botkins folders` lists what you can choose). `projects add <folder>`, `projects edit --folder` use the app's own check and its own refusal; there is no second rule. A folder that has a project is not added twice. `projects edit --no-folder` takes the folder away.
+- **`projects remove` asks first.** The question says what goes with the project (its to-do list, its list of attached artifacts) and that its chats stay, with no project. The folder and its files are not touched. With no terminal it needs `--yes`.
+- **`projects commit` shows the files first and asks.** It prints the folder, the branch and each file that goes into the commit, then asks (`--yes` with no terminal). It stages every change in the project's folder (`git add -A`), so a project in a folder of a larger repository commits only that folder's files, and the files that were staged before. `projects changes` marks each file with whether a commit takes it. Git hooks do not run. The message comes from `--message <text>`, from `--file <path>` or `--message -` or `--file -` (standard input), or, at a terminal, from a question. If the changes are not the files that were shown, nothing is committed. The log has the project's name, never the message or the files.
+- **`projects changes` and `projects diff` read the folder** with git, with the repository's hooks, filters and external programs switched off. A diff is made safe to show at a terminal; in a pipe and with `--json` it is as git wrote it.
+- **`projects chat` opens a chat and sends nothing.** No turn of a model starts. The answer gives the command that sends the first message (`botkins chat <bot> --chat <id> -m <message>`); that starts a turn. `--mode yolo` gives more: each request of the bot in that chat gets a yes with no question, but for one that leaves the sandbox. So it asks. The command prints the project and its folder, the bot, and that sentence, then asks (`--yes` with no terminal, and with `--json`; the refusal names the flag). The block goes to standard error also with `--yes` and `--json`, so a caller's own record has it. The modes `default` and `plan` ask nothing. A project with no folder has no modes, so its chat opens in `default`. The log line has the project's name and `(yolo)`: `projects.chat Site (yolo)`. A project with a folder takes one bot, and a project with no folder can take a group of up to 6 (`--bot` more than once).
+- **To-dos are a project's own.** Name a to-do by its id, its words, the start of its words, or its number in `botkins todos list <project>` (1 is the first). `todos remove` asks first. The log has the project's name, never a to-do's words.
+- **A task has a lane.** The lanes are later, ready, working, review, blocked, done and archived. Only Botkins puts a task in working. **A task that is Ready and has a bot starts by itself** when the bot is free: a turn of the bot's model, in a chat of its own. `tasks start` does the same now. It says what starts, and a tool that needs an approval waits for a person. `tasks remove` asks first. The log names a task by its title (a title that is longer than 80 characters or has a line break is left out), never by its details.
+- **`artifacts read` prints text and saves anything.** A text artifact (a text type, JSON, XML and the like) goes to standard output: exact in a pipe, made safe to show at a terminal, and the `text` field with `--json`. An artifact that is not text (an image, a PDF, a program) is never printed: give `--output <path>`. The file is written whole or not at all, and a file that is there already is replaced only after a yes (`--yes` with no terminal). An artifact is named by its id or its full path; `artifacts list --bot <bot>` shows both. `projects add-artifact` and `projects remove-artifact` change only the list on the project, not the file.
+- **A name is found as in the other commands:** its id, then its exact name, then the start of a name when only one has it. When more than one matches, the error says which.
 
 ### The wiki
 
@@ -606,7 +630,7 @@ What a person can do in the app's window, a person or an agent can do from a ter
 - one reason from a fixed list: it needs a window (a file dialog, the clipboard, a microphone), it is the window's own (a pane, a preview), it is a phone's own (its notifications, the screen it is shown), or it needs a person at the app (a call that reaches a secret which the terminal cannot read by itself, or sends one somewhere), or
 - the part of the work that still owes its command. This third kind goes away when the last part is done.
 
-The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, `startProjectChat` with the mode `yolo`, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
+The same table decides what the hidden `botkins call <name>` may reach. A call that a command covers is refused there, with the command's name: the command shows what it changes and leaves a line in the log. A call with a reason is refused with a sentence that says where it is done. Only a call that is still owed runs through `call`, and a few of those are held until their command is written: a call that takes a secret as an argument, a call that removes saved secrets with no question, `setVoice` with a provider's web address, and `setPreferences` with an approval level (`HELD` in `desktop/desktop/terminal/control.mjs`). Each goes when its command is merged. A refused call leaves the line of a failed call in the log, with the call's name and none of its arguments. When nothing is owed any more, `call` goes.
 
 `test/terminal-coverage.test.mjs` reads the calls from a service that runs and from the link. It fails when a call has no entry, when an entry names a call that is gone, and when a command in the table no longer exists. So a new call in the window cannot ship without its command or a stated reason. The test's output says how many calls each part still owes.
 

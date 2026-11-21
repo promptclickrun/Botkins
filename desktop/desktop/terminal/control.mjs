@@ -66,7 +66,6 @@ export const COVERED_BY_COMMAND = (name, command) => "`" + name + "` is done by 
 const IN_THE_APP = "Do it in the app's window or on a paired phone. A command for it comes.";
 const takesSecret = (name) => "`" + name + "` takes a secret as an argument, and a secret is never a word on the command line. " + IN_THE_APP;
 const removesSecrets = (name) => "`" + name + "` removes saved secrets with no question. Do it in the app's window or on a paired phone, where a person is asked. A command for it comes, and it asks first.";
-const givesYes = (name) => "`" + name + "` with the mode yolo gives each request of the chat a yes, with no question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks.";
 const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 // Every field of the voice settings that is a provider's web address (desktop/link/voice.mjs `merge`).
 const VOICE_ADDRESSES = [["openai", "baseUrl"], ["azure", "endpoint"], ["azure", "region"], ["custom", "baseUrl"]];
@@ -96,8 +95,6 @@ export const HELD = {
   // A key that the person gives later goes to the address that is set then, so the address is set where it is shown.)
   // Choices that are no address run.
   setVoice: (args, name) => (setsVoiceAddress(args[0]) ? "`" + name + "` with a provider's web address says where that provider's key goes. Set an address in the app's window or on a paired phone, where it is shown. A command for it comes. Choices that are no address run here." : null),
-  // The mode yolo gives each request of a chat a yes with no question. The others run.
-  startProjectChat: (args, name) => (args[2] === "yolo" ? givesYes(name) : null),
   // The level of approval: telling a looser one needs the present value, so any change is held.
   setPreferences: (args, name) => (isPlain(args[0]) && (Object.hasOwn(args[0], "approval") || Object.hasOwn(args[0], "access")) ? "`" + name + "` with an approval level or an access changes what the bots may do without a question. Set it in the app's window or on a paired phone. A command for it comes, and it shows this and asks." : null),
   // A Mac tool that is switched on lets the bots read or use an app of this Mac. Switching one off runs.
