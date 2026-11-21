@@ -33,7 +33,8 @@ import { Failure } from "./tools.mjs";
 export const PUSH_INFO = "botkins/push/v1";
 export const PUSH_AAD = "botkins-push-v1";
 /** `updates`: a newer Botkins for this computer is out ("app-update-v1"). A phone registered before it existed counts as wanting it. */
-export const DEFAULT_PREFS = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true };
+// `spaces`: notes and changes in a person's spaces ("space-alerts-v1", space-alerts.mjs).
+export const DEFAULT_PREFS = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true, spaces: true };
 /** A version the computer may name in an update notice ("0.16.5", "1.0.0-beta.2"). */
 const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,40})?$/;
 /** The Swift type the phone's Live Activity is declared with. Apple matches a push to it by this name. */
@@ -488,7 +489,7 @@ export class Push {
       collapse: b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)),
       payload: {
         aps: {
-          alert: { title: "Botkins", body: content.k === "request" ? "A bot needs you" : content.k === "update" ? "An update is available" : "New message" },
+          alert: { title: "Botkins", body: content.k === "request" ? "A bot needs you" : content.k === "update" ? "An update is available" : content.k === "space" ? "A space changed" : "New message" },
           sound: "default",
           "mutable-content": 1,
           "thread-id": b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),

@@ -547,6 +547,25 @@ export function spaceView(team, records, person, context = {}) {
 }
 
 /**
+ * For the once-a-day alert: what changed in each space a person can open and wants to hear of
+ * (their "Notify me" is not Off), since they last opened it or `since` (the last such alert),
+ * whichever is later. Their own changes, and what their role's bots can't show, are left out, as
+ * in `spaceView`. Answers `{ space: SpaceSummary, items: string[] }[]`, in the person's order.
+ */
+export function spaceNews(team, records, person, context = {}, since = 0) {
+  const role = person === OWNER ? null : context.role;
+  const view = spacesViewOf(team, person);
+  const sees = (botId) => person === OWNER || !botId || visible(role, botId);
+  const byId = new Map((Array.isArray(records) ? records : []).map((record) => [record?.id, record]));
+  return spaceView(team, records, person, context).flatMap((space) => {
+    if (space.notify === "off") return [];
+    const from = Math.max(Number(view.seen[space.id]) || 0, Number(since) || 0);
+    const items = (byId.get(space.id)?.items ?? []).filter((item) => sees(item.botId) && (Number(item.updatedAt) || 0) > from && item.by !== person).map((item) => item.id);
+    return items.length ? [{ space, items }] : [];
+  });
+}
+
+/**
  * A panel as a device is sent it (`PanelView`): never who wrote it last on the host. For a member
  * also without its project; without its chats unless they are in them; and without its routine's
  * prompt unless they may change the space.

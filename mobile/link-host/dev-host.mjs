@@ -74,6 +74,8 @@ backend.phone = { call: (name, args, options) => host.callDeviceTool(name, args,
 // Its made-up updates (BOTKINS_DEV_UPDATE): a newer version tells the phones, and an install
 // "restarts" the link for a few seconds, as a real update restarts the app.
 backend.updates.onAvailable = (version) => host.push.updateAvailable(version);
+// A note or a change in a space: the link tells the others who want to hear of it (space-alerts.mjs).
+backend.onSpaceEvent = (event) => host.spaceEvent(event);
 backend.updates.onRestart = async () => {
   console.log("Restarting for the update…");
   await host.setEnabled(false);

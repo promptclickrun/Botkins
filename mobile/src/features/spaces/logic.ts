@@ -100,6 +100,15 @@ export function withMove(spaces: SpaceSummary[], id: string, by: -1 | 1): { orde
   return { order: [...pins, ...rest], pinned: pins };
 }
 
+// ── Where a space is ─────────────────────────────────────────────────────────
+
+/** The route of a panel, of a space, or (with neither) of the list of spaces. An id travels encoded: it is opaque. */
+export function spaceRoute(spaceId?: string, panelId?: string): string {
+  if (!spaceId) return "/spaces";
+  if (panelId) return "/space/panel?spaceId=" + encodeURIComponent(spaceId) + "&id=" + encodeURIComponent(panelId);
+  return "/space/" + encodeURIComponent(spaceId);
+}
+
 // ── Dragging a space ─────────────────────────────────────────────────────────
 
 /** Where a dragged space can land: among the pinned (Home's row) or among the others. What members made is no place to drop. */

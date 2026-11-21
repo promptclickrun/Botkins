@@ -9,7 +9,8 @@
 // chat. When a push wakes the app in the background, it answers what bots asked the phone
 // (src/state/device.ts) and sends answers given on a card or a notification (src/state/answers.ts).
 import * as Application from "expo-application";
-import { router } from "expo-router";
+import { type Href, router } from "expo-router";
+import { spaceRoute } from "@/features/spaces/logic";
 import { keep, readKept } from "@/state/keep";
 import { AppState, Platform } from "react-native";
 import { create } from "zustand";
@@ -50,7 +51,7 @@ type PushStore = {
 };
 export const usePush = create<PushStore>(() => ({ wanted: false, status: native ? "off" : "unsupported", problem: null }));
 
-export const pushDefaults: PushPrefs = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true };
+export const pushDefaults: PushPrefs = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true, spaces: true };
 /** This phone's choices as the computer holds them, or null while notifications are off there. */
 export function usePushPrefs(): PushPrefs | null {
   return useApp((state) => (state.pairing ? (state.parts.phones?.[state.pairing.deviceId]?.push ?? null) : null));
@@ -186,6 +187,14 @@ function hostOf(response: import("expo-notifications").NotificationResponse): st
   const host = payload?.host ?? (request.content.data as Record<string, unknown> | undefined)?.host;
   return typeof host === "string" && host ? host : undefined;
 }
+/** The space an alert is about ("space-alerts-v1"), and the panel when it is about one. */
+function spaceOf(response: import("expo-notifications").NotificationResponse): { spaceId?: string; panelId?: string } {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const data = request.content.data as Record<string, unknown> | undefined;
+  const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+  return { spaceId: text(payload?.spaceId ?? data?.spaceId), panelId: text(payload?.panelId ?? data?.panelId) };
+}
 function kindOf(response: import("expo-notifications").NotificationResponse): string | undefined {
   const request = response.notification.request;
   const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
@@ -208,7 +217,8 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
     if (typeof request === "string" && chatId) router.push({ pathname: "/open/answer", params: { request, chat: chatId, ...(host && { host }) } });
     return;
   }
-  if (!chatId && kind !== "team" && kind !== "update") return;
+  const about = spaceOf(response);
+  if (!chatId && kind !== "team" && kind !== "update" && kind !== "space") return;
   // The app may still be starting: the chat opens once the pairing is read. An alert from another
   // paired computer makes the phone use that computer first.
   const go = () => {
@@ -222,6 +232,11 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
     // "A newer Botkins is out" ("app-update-v1"): the computer's page, where it is installed.
     if (kind === "update") {
       router.push("/settings/desktop");
+      return;
+    }
+    // A note or a change in a space: the panel it is about, else the space, else (several spaces changed) the list.
+    if (kind === "space") {
+      router.push(spaceRoute(about.spaceId, about.panelId) as unknown as Href);
       return;
     }
     if (!chatId) return;

@@ -10,7 +10,7 @@ import { api, attempt } from "@/state/link";
 import { DRAG } from "@/features/home/drag";
 import { onComputerChange, useApp } from "@/state/store";
 import type { FrameState } from "@/ui";
-import { applyArrangement, type Arrangement, withPin } from "./logic";
+import { applyArrangement, type Arrangement, spaceRoute, withPin } from "./logic";
 
 const NONE: SpaceSummary[] = [];
 
@@ -98,11 +98,11 @@ export function useArranging(spaces: SpaceSummary[]) {
 }
 
 // The routes are new: typed routes learn them the next time Metro starts.
-export const openSpace = (id: string) => router.push(("/space/" + encodeURIComponent(id)) as unknown as Href);
-export const openSpaces = () => router.push("/spaces" as unknown as Href);
+export const openSpace = (id: string) => router.push(spaceRoute(id) as unknown as Href);
+export const openSpaces = () => router.push(spaceRoute() as unknown as Href);
 export const openShare = (id: string) => router.push(("/space/share?id=" + encodeURIComponent(id)) as unknown as Href);
 export const openNewPanel = (spaceId: string) => router.push(("/space/new-panel?spaceId=" + encodeURIComponent(spaceId)) as unknown as Href);
-export const openPanel = (spaceId: string, panelId: string) => router.push(("/space/panel?spaceId=" + encodeURIComponent(spaceId) + "&id=" + encodeURIComponent(panelId)) as unknown as Href);
+export const openPanel = (spaceId: string, panelId: string) => router.push(spaceRoute(spaceId, panelId) as unknown as Href);
 
 /**
  * A panel's saved state for its app: what it is, and how to change it when the person may act in

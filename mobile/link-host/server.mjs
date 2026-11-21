@@ -26,6 +26,7 @@ import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } fro
 import { Screen } from "./screen.mjs";
 import { ChatSections } from "./chat-sections.mjs";
 import { SpaceLinks } from "./space-links.mjs";
+import { SpaceAlerts } from "./space-alerts.mjs";
 import { Spaces } from "./spaces.mjs";
 import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, spacesViewOf } from "./team.mjs";
@@ -60,6 +61,8 @@ const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following p
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
+/** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
+const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
 const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
@@ -375,6 +378,29 @@ export class LinkHost extends EventEmitter {
       log: (line) => this.log(line),
       timing: spaceLinkTiming,
     });
+    // Alerts about spaces: a note, a change, and once a day what changed (space-alerts.mjs).
+    this.spaceAlerts = new SpaceAlerts({
+      spaces: this.spaces,
+      team: () => this.store.data.team,
+      setTeam: (team) => this.setTeam(team),
+      devices: () => this.store.data.devices,
+      // An owner device with Admin mode off is shown only what the owner is part of.
+      shown: (device) => this.spaces.for(device.memberId ?? OWNER, { partOnly: !device.memberId && device.admin !== true }),
+      context: (person) => this.spaces.context(person),
+      records: () => {
+        const spaces = this.backend.snapshot().spaces;
+        return Array.isArray(spaces) ? spaces : null;
+      },
+      titles: () => {
+        const state = this.backend.snapshot();
+        const titles = new Map([...(state.panels ?? []), ...(state.board ?? [])].map((item) => [item.id, item.title]));
+        return (id) => titles.get(id);
+      },
+      names: () => new Map(teamPeople(this.store.data.team, this.ownerName()).map((person) => [person.id, person.name])),
+      wants: (device) => this.push.wants(device, "spaces"),
+      previews: (device) => this.store.push(device.id)?.prefs?.previews !== false,
+      send: (device, content, options) => this.push.notify(device.id, content, options),
+    });
     this.spaces.onShare = () => this.spaceLinks.sync();
     this.spaces.leaving = () => this.spaceLinks.leaving();
     this.spaceLinkMark = "";
@@ -409,6 +435,7 @@ export class LinkHost extends EventEmitter {
     });
     // The first look only notes what is going on, so nothing old is announced.
     this.push.start();
+    this.spaceAlerts.start();
   }
 
   // ── Live voice ──────────────────────────────────────────────────────────────────────────────
@@ -550,6 +577,7 @@ export class LinkHost extends EventEmitter {
     this.cancelPairing();
     clearTimeout(this.pumping);
     this.push.dispose();
+    this.spaceAlerts.stop();
     this.spaces.dispose();
     this.spaceLinks.stop();
     for (const timer of this.inviteTimers.values()) clearTimeout(timer);
@@ -1193,6 +1221,15 @@ export class LinkHost extends EventEmitter {
     return ownerParts(parts, this.store.data.team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(OWNER) } : {});
   }
   // ── Spaces, for the app on the host (the person first: "owner" for its own window) ──
+  /**
+   * The app says what a person did in a space, so the others who want to hear of it are told
+   * (docs/spaces.md, "Notifications"): `{ spaceId, panelId?, by, kind: "note" | "change", text?, label? }`.
+   * `by` is the person ("owner" or a member's id); `text` is a note's words, `label` a change's
+   * ("Ticked Press kit"). The link picks who is told. Answers how many alerts it sent.
+   */
+  spaceEvent(event) {
+    return this.spaceAlerts.event(event);
+  }
   /** `admin: false` answers what the owner is part of (Admin mode off); the default is every space, as for an owner with it on. */
   spacesFor(person, { admin = true } = {}) {
     return this.spaces.for(person, { partOnly: person === OWNER && !admin });
@@ -1847,7 +1884,7 @@ export class LinkHost extends EventEmitter {
       protocol: PROTOCOL,
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
-      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => c !== "stream-appends-v1" || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"])])],
+      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => c !== "stream-appends-v1" || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
     };
   }
   /** The desktop changed: wake the phones that are waiting, at most once per PUMP_MS. */
