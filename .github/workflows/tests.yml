@@ -4,8 +4,12 @@
 # holds the terminal host's tests too. It runs on Linux and on macOS because the terminal
 # host is installed on both. A change that breaks one of them fails here before it merges.
 #
-# The last job builds the terminal host's Docker image and starts it, so a change that breaks the
-# image fails here and not on the day of a release.
+# The "Docker image" job builds the terminal host's Docker image and starts it, so a change that
+# breaks the image fails here and not on the day of a release.
+#
+# The last job builds the two containers of the Docker host with a screen (`host` and `workspace`,
+# the Compose profile "display"), starts them, and uses them as an owner's phone and a team
+# member's phone do (desktop/test/display-e2e). No other check starts those two containers.
 #
 # No job uses a secret, so a pull request from a fork runs the same checks.
 name: Tests
@@ -113,3 +117,52 @@ jobs:
           cache-to: type=gha,mode=max
       - name: The image serves, and reports this version
         run: sh .github/scripts/check-image.sh botkins:check "$(jq -r .version desktop/package.json)"
+
+  display:
+    name: Docker host with a screen (two containers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # The stand-in phones are Node programs. They need no packages.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: docker/setup-buildx-action@v4
+      # This job builds the two images itself, with the runner's layer cache, and the check then
+      # starts them with --no-build. So it must build what Compose would. When the Compose file
+      # starts to build a service another way, this step fails and says so.
+      - name: The job builds what Compose builds
+        working-directory: desktop
+        run: |
+          expected='{"host":{"dockerfile":"Dockerfile","target":"host","args":null},"workspace":{"dockerfile":"Dockerfile","target":"workspace","args":null},"images":[null,null]}'
+          found=$(docker compose -p botkins-display-e2e --profile display config --format json |
+            jq -c '.services | {host: (.host.build | {dockerfile, target, args}), workspace: (.workspace.build | {dockerfile, target, args}), images: [.host.image, .workspace.image]}')
+          if [ "$found" != "$expected" ]; then
+            echo "desktop/docker-compose.yml builds the host or the workspace another way than this job does:" >&2
+            echo "  the file: $found" >&2
+            echo "  this job: $expected" >&2
+            echo "Change the two build steps of the job \"display\" in .github/workflows/tests.yml to match, and this line." >&2
+            exit 1
+          fi
+      # The names are the ones Compose gives the images of the project botkins-display-e2e.
+      - name: Build the host image
+        uses: docker/build-push-action@v7
+        with:
+          context: desktop
+          target: host
+          load: true
+          tags: botkins-display-e2e-host
+          cache-from: type=gha,scope=display-host
+          cache-to: type=gha,mode=max,scope=display-host
+      - name: Build the workspace image
+        uses: docker/build-push-action@v7
+        with:
+          context: desktop
+          target: workspace
+          load: true
+          tags: botkins-display-e2e-workspace
+          cache-from: type=gha,scope=display-workspace
+          cache-to: type=gha,mode=max,scope=display-workspace
+      - name: An owner's phone and a member's phone use the two containers
+        run: sh desktop/test/display-e2e/run.sh --no-build
