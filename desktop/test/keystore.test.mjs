@@ -108,7 +108,8 @@ test("under systemd the key is the unit's credential, and is never written to th
   assert.equal(store.where, "systemd credential");
   assert.equal(existsSync(join(dataDir, "host.key")), false);
   assert.equal(sealer(key).unwrap(store.wrap("secret")), "secret");
-  assert.doesNotMatch(readFileSync(join(dataDir, "keystore.json"), "utf8"), new RegExp(key.toString("base64").slice(0, 20)));
+  // Looked for as plain text: a key's base64 can hold "+" and "/", which a pattern would read as its own signs.
+  assert.equal(readFileSync(join(dataDir, "keystore.json"), "utf8").includes(key.toString("base64").slice(0, 20)), false);
   // Started by hand, outside the unit: the folder's key is not there, and no other key takes its place.
   await assert.rejects(openKeyStore({ dataDir, env: {}, platform: "linux" }), /The service's unit didn't hand over the host key/);
   assert.equal(existsSync(join(dataDir, "host.key")), false);
