@@ -147,6 +147,13 @@ test("a plugin the computer switched off reads \"Needs review\", and each notice
   assert.equal(statusLine(plugin({ enabled: false, status: "error", detail: "The installed files of this plugin are not the files that were reviewed." })), "The installed files of this plugin are not the files that were reviewed.");
   assert.equal(statusLine(plugin({ status: "error", detail: "x" }), { page: true }), "Something is wrong with this plugin.");
   assert.ok(needsReview(plugin({ enabled: false, detail: held })) && !needsReview(plugin({ enabled: false })) && !needsReview(plugin({ detail: "Sign in." })));
+  // An entry in error that no update repairs (a linked folder that could not be copied) has nothing to review: it is not counted, and can only be removed.
+  const stuck = plugin({ id: "linked-1", enabled: false, status: "error", detail: "The folder could not be read." });
+  assert.equal(needsReview(stuck), false);
+  assert.equal(reviewNotice([stuck], "mac-1", []), undefined);
+  assert.deepEqual(skillsNotices([stuck], "mac-1", []), []);
+  // One an update repairs is looked at: Update first, then "Turn on".
+  assert.ok(needsReview(plugin({ enabled: false, status: "error", repair: "update", detail: "Its installed files could not be read." })));
 
   const list = [plugin({ id: "a", enabled: false, detail: held }), plugin({ id: "b", name: "team-skills", enabled: false, detail: held }), plugin({ id: "c", enabled: false, detail: held, contents: empty }), plugin({ id: "d" })];
   const notice = reviewNotice(list, "mac-1", []);

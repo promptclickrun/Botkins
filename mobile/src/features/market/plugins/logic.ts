@@ -213,15 +213,19 @@ export function byLine(listing: PluginListing, marketplaces: PluginMarketplace[]
   return marketplaces?.find((market) => market.id === listing.marketplace)?.name ?? "";
 }
 
-/** Whether the computer switched a plugin off and says why: the person looks at it, then turns it on (or updates it, with `repair`). */
-export const needsReview = (plugin: Pick<InstalledPlugin, "enabled" | "detail">) => !plugin.enabled && !!plugin.detail;
+/**
+ * Whether the computer switched a plugin off and says why: the person looks at it, then turns it
+ * on (or updates it first, with `repair`). An entry in error that no update repairs (a linked
+ * folder that could not be copied) has nothing to review: it can only be removed.
+ */
+export const needsReview = (plugin: Pick<InstalledPlugin, "enabled" | "detail" | "status" | "repair">) => !plugin.enabled && !!plugin.detail && (plugin.status !== "error" || plugin.repair === "update");
 
 /**
  * An installed plugin's status as one line. A plugin the computer switched off reads
  * "Off · Needs review"; one a person switched off stays "Off". `page`: on the plugin's own page the
  * computer's sentence is shown whole under the name, so the line stays short.
  */
-export function statusLine(plugin: Pick<InstalledPlugin, "status" | "detail" | "enabled">, { page = false }: { page?: boolean } = {}): string {
+export function statusLine(plugin: Pick<InstalledPlugin, "status" | "detail" | "enabled" | "repair">, { page = false }: { page?: boolean } = {}): string {
   if (plugin.status !== "error" && needsReview(plugin)) return "Off · Needs review";
   if (plugin.status === "error" && page) return "Something is wrong with this plugin.";
   switch (plugin.status) {
