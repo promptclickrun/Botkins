@@ -74,7 +74,7 @@ import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Templates } from "./templates.mjs";
 import { Access, migrateCustomers } from "./access.mjs";
-import { memberPrompt, turnAccess } from "./team-turn.mjs";
+import { memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
 
 function textFieldOptional(text) {
   if (typeof text !== "string" || text.length > 4000)
@@ -122,6 +122,10 @@ export class Workspace {
     this.updates = options?.updates;
     this.fetch = options?.fetch ?? globalThis.fetch;
     this.teamOf = options?.team ?? (() => null);
+    // (chatId) => { createdBy, invited }: a chat's people, from the link, which keeps invites.
+    this.peopleOf = options?.people ?? null;
+    // (chatId) => whether the computer's owner is one of a chat's people, when the link answers that itself.
+    this.ownerIn = options?.notifiesOwner ?? null;
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
     this.file = join(dir, "workspace.json");
@@ -608,7 +612,7 @@ export class Workspace {
     if (isGroup(chat) && attachments.length)
       throw new Error("Group chats take text only. Send files in a chat with one bot.");
     // "#" projects, wiki pages and files become text and attachments for the model (desktop/mentions.mjs).
-    const refs = this.mentions.resolve(chat, rawMentions);
+    const refs = this.mentions.resolve(chat, rawMentions, author);
     // What a routine posted into this chat since the bot's last turn here (desktop/routines.mjs).
     // The session behind the chat never saw those messages, so the bot is told of them once, with
     // this turn, or it would not know what the person is answering.
@@ -697,7 +701,7 @@ export class Workspace {
       ...(typeof options.quote === "string" &&
         options.quote.trim() && { quote: options.quote.trim().slice(0, 4000) }),
       // Checked now so a bad mention is refused at once, and again when the message is sent.
-      ...(this.mentions.resolve(chat, options.mentions).list.length && { mentions: options.mentions }),
+      ...(this.mentions.resolve(chat, options.mentions, options.author).list.length && { mentions: options.mentions }),
       ...(options.author && { author: options.author }),
     };
     const list = this.queues.get(chat.id) ?? [];
@@ -729,7 +733,7 @@ export class Workspace {
         task.delivering = item.id;
         try {
           this.access.assertChat(chat, this.projects.botsOf(chat));
-          const refs = this.mentions.resolve(chat, item.mentions);
+          const refs = this.mentions.resolve(chat, item.mentions, item.author);
           const attachments = validateAttachments(item.attachments);
           const mentioned = refs.list.filter(m => m.kind === "file" && !attachments.some(a => a.path === m.path))
             .map(m => ({ kind: "file", path: m.path, name: m.label }));
@@ -831,7 +835,7 @@ export class Workspace {
     // Mentioned records that have since gone away are dropped the same way.
     const mentions = (message.mentions ?? []).filter((m) => {
       try {
-        return this.mentions.resolve(chat, [m]).list.length;
+        return this.mentions.resolve(chat, [m], message.author).list.length;
       } catch {
         return false;
       }
@@ -987,13 +991,46 @@ export class Workspace {
           ]),
     ];
   }
+  /**
+   * A chat's people: who made it ("owner" when a member did not) and whom they invited. A person
+   * is "owner" or a member's id. The link keeps invites; without it a chat has its creator only.
+   */
+  chatPeople(chatId) {
+    const chat = this.state.chats.find((item) => item.id === chatId);
+    const own = { createdBy: chat?.createdBy ?? "owner", invited: [] };
+    if (!chat || !this.peopleOf) return own;
+    try {
+      const told = this.peopleOf(chatId);
+      return { createdBy: own.createdBy, invited: Array.isArray(told?.invited) ? told.invited.filter((id) => typeof id === "string") : [] };
+    } catch {
+      return own;
+    }
+  }
+  /** Whether a person is one of a chat's people. A chat that is gone has none. */
+  inChat(chatId, personId) {
+    if (!this.state.chats.some((item) => item.id === chatId)) return false;
+    const people = this.chatPeople(chatId);
+    return people.createdBy === personId || people.invited.includes(personId);
+  }
+  /** Whether a chat's alerts are for the computer's owner: the owner made it or was invited to it. */
+  notifiesOwner(chatId) {
+    try {
+      const told = this.ownerIn?.(chatId);
+      if (typeof told === "boolean") return told;
+    } catch {
+      // The rule below is the same one without invites.
+    }
+    return this.inChat(chatId, "owner") || !this.state.chats.some((item) => item.id === chatId);
+  }
   accessForTurn(chat, task) {
-    // A member's chat keeps that member's limits for every turn, also when the owner writes in it,
-    // because a provider session opened with more tools would keep them for the member's next turns.
-    const author = chat?.createdBy
-      ? { memberId: chat.createdBy }
-      : task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
-    return turnAccess(author, this.teamOf());
+    // Two people's limits apply to a turn: those of the chat's creator, whose chat it is, and
+    // those of whoever wrote the message, who may be a member invited into it. A tool is there
+    // only when both may use it. So a member's chat keeps that member's limits when the owner
+    // writes in it, and an invited member's turn in the owner's chat has the member's. A provider
+    // gets a turn's tools with the turn (a warm session with other tools is not reused).
+    const team = this.teamOf();
+    const writer = task?.author ?? [...(chat?.messages ?? [])].reverse().find((message) => message.role === "user")?.author;
+    return narrower(turnAccess(chat?.createdBy ? { memberId: chat.createdBy } : null, team), turnAccess(writer, team));
   }
   /**
    * Opens the provider session for a chat (or a member's or teammate's view of one). `run` and
@@ -1363,7 +1400,7 @@ export class Workspace {
     if (task.recovering) {
       const chat = this.chat(run.chatId);
       const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id);
-      this.mentions.resolve(chat, message?.mentions);
+      this.mentions.resolve(chat, message?.mentions, message?.author);
       validateAttachments(message?.attachments);
     }
     delete checkpoint.eventId;

@@ -243,6 +243,10 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   workspace = new Workspace(dataDir, providers, notify, {
     updates,
     team: () => link?.team(),
+    // A chat's people and whether its alerts are the owner's: the link keeps invites (capability
+    // "team-people-v1"). A link without them answers nothing, and a chat has its creator only.
+    people: (chatId) => link?.chatPeople?.(chatId),
+    notifiesOwner: (chatId) => link?.notifiesOwner?.(chatId),
     secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => host.window.fillSecurePage(plan, values, signal) }),
     ...(keys && {
       vaultKey: keys,
@@ -863,8 +867,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     snapshot: () => workspace.snapshot(),
     // Optional context for a live voice: bounded bot profile files and the person's chosen name;
-    // no location is read on the desktop without a separate permissioned source.
-    liveContext: ({ chatId, botId }) => liveContextFor(workspace, { chatId, botId }),
+    // no location is read on the desktop without a separate permissioned source. The link says
+    // when a team member is asking (`memberId`): they get nothing from the owner's notes.
+    liveContext: ({ chatId, botId, memberId }) => liveContextFor(workspace, { chatId, botId, memberId }),
     // LinkHost only passes names in REMOTE_METHODS. What a paired device sends is checked and,
     // for a team member, marked as theirs on its way to the handlers (desktop/device-call.mjs).
     call: deviceCall({ workspace, handlers, folders }),

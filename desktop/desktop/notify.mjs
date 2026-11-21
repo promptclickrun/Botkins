@@ -37,7 +37,7 @@ export function firstLine(text, max = 140) {
  * event: {type: "turn", chat, run, bot} or {type: "request", request, bot, chat}.
  * Returns {title, body, chatId} or null.
  */
-export function decide(event, { settings, focused, now = new Date(), timeZone } = {}) {
+export function decide(event, { settings, focused, now = new Date(), timeZone, mine = true } = {}) {
   const prefs = { ...defaultSettings.notifications, ...settings?.notifications };
   if (inQuietHours(prefs.quietHours, now, timeZone)) return null;
   const botName = event.bot?.name ?? "Botkins";
@@ -50,7 +50,11 @@ export function decide(event, { settings, focused, now = new Date(), timeZone } 
     };
   }
   if (event.type === "request") {
-    const memberApproval = event.request.askedBy && (event.request.kind === "permission" || event.request.kind === "secure");
+    const ownersToAnswer = event.request.kind === "permission" || event.request.kind === "secure";
+    // A question in a chat the owner is not one of the people of is for those people. A request
+    // only the owner can answer still alerts the owner: nobody else can unblock the bot.
+    if (!mine && !ownersToAnswer) return null;
+    const memberApproval = event.request.askedBy && ownersToAnswer;
     if (!prefs.requests || (focused && !memberApproval)) return null;
     return {
       title: botName + (event.request.kind === "permission" ? " needs your approval" : " has a question"),
@@ -58,7 +62,7 @@ export function decide(event, { settings, focused, now = new Date(), timeZone } 
       chatId: event.request.chatId,
     };
   }
-  if (event.type !== "turn") return null;
+  if (event.type !== "turn" || !mine) return null;
   const { chat, run } = event;
   if (!run || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
   const failed = run.status !== "Completed";
@@ -113,7 +117,10 @@ export class Notifier {
   }
   consider(event) {
     try {
-      const note = decide(event, { settings: this.ws.state.settings, focused: this.focused() });
+      // A chat's alerts go to its people only: the computer's own are for its owner.
+      const chatId = event.type === "turn" ? (event.chat?.id ?? event.run?.chatId) : event.request?.chatId;
+      const mine = !chatId || typeof this.ws.notifiesOwner !== "function" || this.ws.notifiesOwner(chatId);
+      const note = decide(event, { settings: this.ws.state.settings, focused: this.focused(), mine });
       if (note) this.show(note);
     } catch (error) {
       console.error("Notification:", error.message);

@@ -8,8 +8,11 @@ const NOTE_LIMIT = 2000;
  * are read through the same bounded, no-symlink reader used by profile tools; nothing here reads
  * a home-folder file or an OS account name. A person's name is optional until the app has one in
  * its settings or an explicit `Name: …` line in USER.md.
+ *
+ * USER.md is what the bot knows about the computer's owner. A call a team member starts
+ * (`memberId`) gets none of it, and not the owner's name: only the bot's own identity.
  */
-export function liveContextFor(workspace, { chatId, botId } = {}) {
+export function liveContextFor(workspace, { chatId, botId, memberId } = {}) {
   const state = workspace?.state;
   const chat = state?.chats?.find((item) => item.id === chatId);
   const bot = state?.bots?.find((item) => item.id === botId);
@@ -23,6 +26,7 @@ export function liveContextFor(workspace, { chatId, botId } = {}) {
     }
   };
   const identity = profile("IDENTITY.md").slice(0, NOTE_LIMIT);
+  if (memberId) return identity ? { identity } : {};
   const userSource = profile("USER.md");
   // The desktop currently has no separate account-name setting. A future chosen name may use
   // settings.userName; otherwise only an explicit `Name: …` line in the person's USER.md counts.

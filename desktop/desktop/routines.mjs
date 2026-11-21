@@ -126,9 +126,17 @@ export function compileCadence(value, zone, now = Date.now()) {
   return { cadence, timezone, recurring: true, cron, nextAt: nextTime(cron, timezone, now) };
 }
 
-/** Why a chat can't receive a routine's result, or "" when it can. */
-function chatProblem(chat, botId) {
+/** The person a routine belongs to: the team member who made it, else the computer's owner. */
+const personOf = (createdBy) => createdBy ?? "owner";
+
+/**
+ * Why a chat can't receive a routine's result, or "" when it can. With `ws` and `person` (the
+ * routine's creator), the chat must also be one that person is in: a routine never writes into
+ * somebody else's chat.
+ */
+function chatProblem(chat, botId, ws, person) {
   if (!chat) return "That chat no longer exists.";
+  if (ws && person && !ws.inChat(chat.id, person)) return "That chat belongs to someone else. Choose a chat the routine's creator is in.";
   if (isGroup(chat)) return "Group chats can't receive a routine's result.";
   if (chat.botId !== botId) return "Choose a chat with this bot.";
   if (chat.schedules?.some((s) => s.routine)) return "A routine's chat can't receive a result. Choose another chat.";
@@ -140,9 +148,10 @@ function chatProblem(chat, botId) {
 
 /**
  * Validates where a routine's result goes and returns it in canonical form, or undefined for the
- * default (the routine's own chat), which is never saved. `ws` and `botId` let it check a chosen chat.
+ * default (the routine's own chat), which is never saved. `ws` and `botId` let it check a chosen
+ * chat, and `person` (the routine's creator: "owner" or a member's id) that the chat is theirs.
  */
-export function deliveryField(value, ws, botId) {
+export function deliveryField(value, ws, botId, person) {
   if (value == null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("Choose where the result goes.");
   const unknown = Object.keys(value).find((k) => !["to", "chatId", "category"].includes(k));
@@ -156,7 +165,7 @@ export function deliveryField(value, ws, botId) {
   if (to === "none") return { to };
   if (to === "chat" && chatId !== undefined) {
     if (typeof chatId !== "string" || !chatId) throw new Error("Choose a chat.");
-    const problem = chatProblem(ws?.state.chats.find((c) => c.id === chatId), botId);
+    const problem = chatProblem(ws?.state.chats.find((c) => c.id === chatId), botId, ws, person);
     if (problem) throw new Error(problem);
   }
   if (category !== undefined && !GOAL_CATEGORIES.includes(category))
@@ -269,22 +278,29 @@ export class Routines {
       ...compileCadence(data.cadence, data.timezone, now),
     };
   }
-  create(data, now = Date.now()) {
+  /**
+   * Makes a routine. `createdBy` is the team member who made it (never taken from `data`): it is
+   * kept on the routine and on its chat, so the routine's turns run under that member's limits
+   * and its result is theirs to hear of.
+   */
+  create(data, now = Date.now(), createdBy) {
     this.ws.bot(data.botId);
     const fields = this.fields(data, now);
-    const deliver = deliveryField(data.deliver, this.ws, data.botId);
+    const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
     const notify = notifyField(data.notify);
     const chatId = this.ws.createChat(data.botId, "Routine · " + fields.name);
     const chat = this.ws.chat(chatId);
+    if (createdBy) chat.createdBy = createdBy;
     const id = (chat.lastScheduleId ?? 0) + 1;
     chat.lastScheduleId = id;
-    chat.schedules = [{ id, routine: true, enabled: true, createdAt: now, ...fields, ...(deliver && { deliver }), ...(notify === false && { notify: false }) }];
+    chat.schedules = [{ id, routine: true, enabled: true, createdAt: now, ...fields, ...(createdBy && { createdBy }), ...(deliver && { deliver }), ...(notify === false && { notify: false }) }];
     this.ws.save();
     return chatId;
   }
   update(chatId, data, now = Date.now()) {
     const { chat, entry } = this.find(chatId);
-    const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId) ?? null);
+    // Whoever changes it, the result may only go to a chat of the routine's creator.
+    const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
     const notify = notifyField(data.notify);
     // A change of destination or of notifying alone leaves the schedule as it is, so a finished one-time routine can still take it.
     if (["name", "prompt", "cadence", "timezone"].every((k) => data[k] === undefined)) {
@@ -351,14 +367,18 @@ export class Routines {
     if (this.ws.active.has(chatId)) throw new Error("This routine is already running");
     return dispatch(this.ws, chat, entry, "manual");
   }
-  duplicate(chatId, botId, now = Date.now()) {
+  /** A copy of a routine. It belongs to whoever copies it: `createdBy` is that team member, or nothing for the owner. */
+  duplicate(chatId, botId, now = Date.now(), createdBy) {
     const { chat, entry } = this.find(chatId);
     // A chat chosen on the old bot isn't the new bot's, so a copy for another bot goes to its latest chat.
-    const { chatId: _picked, ...rest } = entry.deliver ?? {};
-    const deliver = entry.deliver && (botId === chat.botId ? entry.deliver : rest);
+    // Nor is a chosen chat kept when the copy's owner is not in it.
+    const { chatId: picked, ...rest } = entry.deliver ?? {};
+    const keep = botId === chat.botId && (picked === undefined || this.ws.inChat(picked, personOf(createdBy)));
+    const deliver = entry.deliver && (keep ? entry.deliver : rest);
     return this.create(
       { botId, name: entry.name, prompt: entry.prompt, cadence: entry.cadence, timezone: entry.timezone, deliver, ...(entry.notify === false && { notify: false }) },
       now,
+      createdBy,
     );
   }
   /** Next run for a cadence, for the editor preview. */
@@ -377,6 +397,7 @@ export class Routines {
       finished: entry.nextAt == null,
       nextRun: entry.enabled !== false && entry.nextAt != null ? new Date(entry.nextAt).toISOString() : null,
       ...(entry.deliver && { deliver: entry.deliver }),
+      ...(entry.createdBy && { createdBy: entry.createdBy }),
       // Left out when the routine notifies, which is the usual way.
       ...(entry.notify === false && { notify: false }),
     };
@@ -386,16 +407,23 @@ export class Routines {
     const entry = chat.schedules?.find((s) => s.id === scheduleId && s.routine);
     return (entry?.deliver && DESTINATION_NOTES[entry.deliver.to]) || "";
   }
-  /** The chat a routine's reply goes to: the one chosen, else the bot's latest. Makes one when the bot has none. */
-  chatTarget(botId, deliver, title) {
+  /**
+   * The chat a routine's reply goes to: the one chosen, else the bot's latest chat that the
+   * routine's creator is in. Makes one, theirs, when there is none.
+   */
+  chatTarget(botId, deliver, title, createdBy) {
+    const person = personOf(createdBy);
     if (deliver.chatId) {
       const chat = this.ws.state.chats.find((c) => c.id === deliver.chatId);
-      const problem = chatProblem(chat, botId);
+      const problem = chatProblem(chat, botId, this.ws, person);
       if (problem) throw new Error(problem);
       return chat;
     }
-    const latest = this.ws.state.chats.filter((c) => !chatProblem(c, botId)).sort((a, b) => b.time - a.time)[0];
-    return latest ?? this.ws.chat(this.ws.createChat(botId, title));
+    const latest = this.ws.state.chats.filter((c) => !chatProblem(c, botId, this.ws, person)).sort((a, b) => b.time - a.time)[0];
+    if (latest) return latest;
+    const made = this.ws.chat(this.ws.createChat(botId, title));
+    if (createdBy) made.createdBy = createdBy;
+    return made;
   }
   /** Sends a finished routine run's reply where its routine says. A failure is noted on the run. */
   deliver(chat, run) {
@@ -407,7 +435,7 @@ export class Routines {
     const { to, category } = entry.deliver;
     try {
       if (to === "chat") {
-        const target = this.chatTarget(chat.botId, entry.deliver, entry.name);
+        const target = this.chatTarget(chat.botId, entry.deliver, entry.name, entry.createdBy ?? chat.createdBy);
         const time = Date.now();
         target.messages.push({ role: "assistant", text, time });
         target.time = time;
@@ -472,7 +500,10 @@ export class Routines {
     };
     const notifyProp = { notify: { type: "boolean", description: "false makes the routine run quietly: no notification on the computer or the phone when it finishes. Leave it out to notify, which is the usual way." } };
     // "Remind me here": a result sent to a chat goes to the chat it was asked in, when that chat can take it.
-    const here = (deliver) => (deliver?.to === "chat" && deliver.chatId === undefined && !chatProblem(chat, bot.id) ? { ...deliver, chatId: chat.id } : deliver);
+    // A routine a bot makes belongs to whoever the bot is working for: the member who wrote this
+    // turn's message, else the member whose chat this is, else the owner.
+    const maker = task?.author?.memberId ?? chat.createdBy;
+    const here = (deliver) => (deliver?.to === "chat" && deliver.chatId === undefined && !chatProblem(chat, bot.id, ws, personOf(maker)) ? { ...deliver, chatId: chat.id } : deliver);
     const cadenceOf = (a) =>
       a.cadence ? { kind: a.cadence, time: a.time, days: a.days, date: a.date, cron: a.cron } : undefined;
     const id = { id: { type: "string", description: "Routine id from routine_list" } };
@@ -496,7 +527,7 @@ export class Routines {
             const cadence = cadenceOf(a);
             if (cadence?.kind === "cron" && !slowEnough(cadence.cron))
               throw new Error("Bots can't create routines that run more often than every 15 minutes. The person can set that up under Routines.");
-            const chatId = this.create({ botId: bot.id, name: a.name, prompt: a.instructions, cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify });
+            const chatId = this.create({ botId: bot.id, name: a.name, prompt: a.instructions, cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify }, undefined, maker);
             const found = this.find(chatId);
             return this.view(found.chat, found.entry);
           },
