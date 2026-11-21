@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { declaredPath, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings } from "./plugin-reading.mjs";
+import { configFile, declaredPath, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
@@ -357,6 +357,28 @@ function assertPlainNames(files) {
   }
 }
 
+/** How many of the plugin's other files are listed by name. The totals count all of them. */
+const MAX_OTHER_FILES = 40;
+/**
+ * The plugin's files that are not handed on as skills, agents or commands: the manifest, the hook
+ * and tool files, scripts, dotfiles, a `node_modules`. A command runs in the plugin's folder, so
+ * these files decide what it does; the person sees at least that they are there. The listed files
+ * are the ones that tools read by themselves first (`config`), then the rest, each by path.
+ */
+function otherFiles(files, handed) {
+  const rows = [];
+  let bytes = 0;
+  for (const [path, entry] of files) {
+    if (handed.has(path)) continue;
+    const size = entry.bytes.length;
+    bytes += size;
+    rows.push({ path, bytes: size, ...(configFile(path) && { config: true }) });
+  }
+  const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const listed = [...rows.filter((row) => row.config).sort(byPath), ...rows.filter((row) => !row.config).sort(byPath)].slice(0, MAX_OTHER_FILES);
+  return { count: rows.length, bytes, files: listed };
+}
+
 function parsePluginFiles(files, folder = undefined) {
   assertPlainNames(files);
   const starts = pluginStarts(filesReader(files));
@@ -366,8 +388,8 @@ function parsePluginFiles(files, folder = undefined) {
   const name = typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : undefined;
   if (!name) fail("Plugin manifest is missing a name.");
   // What is shown is shown whole. A plugin with a command too long to show is not installed.
-  if (starts.refused.length) fail(`This plugin cannot be shown whole, so Botkins does not install it: ${starts.refused[0]}.`);
-  const { mcpServers, hooks, sentTo } = describeStarts(starts);
+  if (starts.refused.length) fail(`This plugin cannot be shown whole, so Botkins does not install it. ${starts.refused[0].why}`);
+  const { mcpServers, hooks, sentTo, notRun = [] } = describeStarts(starts);
   const config = fieldsFromManifest(manifest.userConfig ?? manifest.settings);
   // A setting the plugin uses and does not declare is asked for too.
   for (const key of sentTo.keys()) {
@@ -379,16 +401,21 @@ function parsePluginFiles(files, folder = undefined) {
   const lspServers = lspNames(filesReader(files));
   // The files that go on to the runtime, and no others (handedOn is the one rule for them).
   const handed = (directory) => collectFiles(files, directory).filter((name) => handedOn(name, files.get(name).bytes.length));
+  const skills = handed("skills");
+  const agents = handed("agents");
+  const commands = handed("commands");
   const contents = {
-    skills: handed("skills"),
-    agents: handed("agents"),
-    commands: handed("commands"),
+    skills,
+    agents,
+    commands,
     mcpServers: clone(mcpServers),
     hooks: clone(hooks),
+    ...(notRun.length ? { notRun: clone(notRun) } : {}),
     ...(lspServers.length ? { lspServers } : {}),
+    otherFiles: otherFiles(files, new Set([...skills, ...agents, ...commands])),
   };
   const extensionInfo = extensionPaths(manifest);
-  const warnings = startWarnings(mcpServers, hooks, extensionInfo.unsupported.length ? [`Uses unsupported plugin extensions: ${extensionInfo.unsupported.join(", ")}.`] : []);
+  const warnings = startWarnings(mcpServers, hooks, extensionInfo.unsupported.length ? [`Uses unsupported plugin extensions: ${extensionInfo.unsupported.join(", ")}.`] : [], notRun);
   const postInstallMessage = manifest.postInstallMessage ?? manifest.postInstall;
   return {
     ...(folder ? { folder } : {}),
@@ -415,6 +442,8 @@ function publicPreview(parsed, listing, revision) {
     ...(parsed.postInstallMessage ? { postInstallMessage: parsed.postInstallMessage } : {}),
     ...(parsed.warnings?.length ? { warnings: [...parsed.warnings] } : {}),
     revision,
+    // Only this reading makes the mark: an older app's description has none.
+    starts: STARTS,
   };
   return preview;
 }
@@ -596,14 +625,21 @@ function localPathIsWithin(child, parent) {
 }
 
 /**
- * True when an installed copy is still the bytes that were reviewed: the hash of its files is
- * its revision. A link in the copy, a file added, changed or taken away: all false.
+ * Whether an installed copy is still the bytes that were reviewed: the hash of its files is its
+ * revision.
+ *   true   it is
+ *   false  it is not: another hash, a link in it, a `.git` in it, too many files or bytes, a file
+ *          added, changed or taken away, or the folder is not there
+ *   null   the check could not be done (the system said "too many open files", an I/O error, no
+ *          right to read a file ...). That says nothing about the copy, so it is not "changed".
  */
 export function verifySnapshot(folder, revision) {
   try {
     // A `.git` folder or file in the copy is seen, not skipped: a command shown as `git status` would take its config.
     return typeof revision === "string" && hashFiles(readLocalFiles(folder, { git: "refuse" }).files) === revision;
-  } catch {
+  } catch (error) {
+    // The errors that fail() throws have no code and mean the copy is not the reviewed one; so do a missing folder and a link loop.
+    if (typeof error?.code === "string" && !["ENOENT", "ENOTDIR", "ELOOP"].includes(error.code)) return null;
     return false;
   }
 }
@@ -966,8 +1002,8 @@ export class PluginCatalog {
     const destination = join(this.pluginDir, safeId(id), revision);
     assertNoSymlinkPath(destination, this.dir);
     if (existsSync(destination)) {
-      if (verifySnapshot(destination, revision)) return destination;
-      // A copy that is no longer the reviewed bytes is taken away, and the reviewed bytes are written again.
+      if (verifySnapshot(destination, revision) === true) return destination;
+      // A copy that is no longer the reviewed bytes, or that could not be checked, is taken away, and the reviewed bytes are written again.
       rmSync(destination, { recursive: true, force: true });
     }
     const parent = dirname(destination);

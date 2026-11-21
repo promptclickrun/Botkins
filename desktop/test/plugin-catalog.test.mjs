@@ -57,8 +57,14 @@ test("catalog browses a local marketplace and parses components without executin
   assert.match(preview.revision, /^[a-f0-9]{64}$/);
   assert.deepEqual(preview.contents.skills, ["skills/remember/SKILL.md"]);
   assert.deepEqual(preview.contents.mcpServers, [{ name: "memory", kind: "remote", url: "https://example.test/mcp", headers: ["Authorization"] }]);
-  // The fixture's hook has a matcher. Botkins runs no hook with a matcher, so the description, which is what runs, has none.
-  assert.deepEqual(preview.contents.hooks, []);
+  // The fixture's hook has the matcher "*", which means all: the hook runs, so it is shown.
+  assert.deepEqual(preview.contents.hooks, [{ event: "userPromptSubmitted", command: "node \"${PLUGIN_ROOT}/recall.mjs\"", env: [], timeoutSec: 10 }]);
+  assert.equal("notRun" in preview.contents, false);
+  assert.equal(preview.starts, 1, "a preview has the mark of this reading");
+  // The files that are not skills, agents or commands: counted, with the manifest, the tool and hook files and the script.
+  assert.deepEqual(preview.contents.otherFiles.files.map((file) => file.path), [".mcp.json", "hooks/hooks.json", "plugin.json", "recall.mjs"]);
+  assert.equal(preview.contents.otherFiles.count, 4);
+  assert.match(preview.warnings.join(" "), /A command runs with the plugin's own files/);
   assert.deepEqual(preview.config, [{
     key: "MEMORY_API_KEY",
     label: "Memory API key",

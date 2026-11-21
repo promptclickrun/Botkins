@@ -5,9 +5,26 @@ import { REMOTE_METHODS } from "../link/methods.mjs";
  * The capabilities that are a promise about the workspace's own code, not only a list of calls it
  * answers. "plugin-starts-v1" (desktop/plugins.mjs): what the workspace says a plugin starts is
  * what it starts. The link tells such a name only while the workspace that made the promise
- * answers.
+ * answers: a look or a call that cannot reach it drops the name, and only a later answer that
+ * carries the whole list brings it back.
+ *
+ * What this cannot close: a workspace container swapped for an older image faster than one look
+ * (it is reached every time, so nothing is dropped), and a call that arrives after the swap and
+ * before the next look. Each description of a plugin therefore carries its own mark (`starts: 1`),
+ * which an older workspace cannot make.
  */
 export const PROMISES = ["plugin-starts-v1"];
+
+// The codes of a connection that did not happen or did not last. An answer of the workspace's own
+// (also a refusal) comes back as an error with no code, so it is never taken for one of these.
+const TRANSPORT_CODES = new Set(["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"]);
+// What the socket client (desktop/headless/transport.mjs) raises when its own timer runs out. It has no code.
+const TRANSPORT_TIMEOUT = "The workspace did not answer.";
+
+/** True when the workspace could not be reached, false when it answered, also with an error. */
+function unreached(error) {
+  return TRANSPORT_CODES.has(error?.code) || (error?.code === undefined && error?.message === TRANSPORT_TIMEOUT);
+}
 
 /**
  * What a call that names no person, or one that cannot be read, is answered with. The link always
@@ -36,7 +53,7 @@ export function callContext(context) {
  * desktop/headless/team-cut.mjs), or null when there is none to tell. The revision goes with every
  * call and every look, and the whole cut is sent whenever the workspace does not hold that one.
  */
-export function headlessBackend(request, version, { team = () => null, log = (line) => console.error(line), clock = () => performance.now() } = {}) {
+export function headlessBackend(rawRequest, version, { team = () => null, log = (line) => console.error(line), clock = () => performance.now() } = {}) {
   const changes = new EventEmitter();
   // The revision the workspace last said it holds.
   let held = null;
@@ -117,7 +134,27 @@ export function headlessBackend(request, version, { team = () => null, log = (li
   // Set when the list of capabilities was dropped: the next look asks for a whole answer, so a
   // workspace that comes back with the same epoch still sends its list.
   let needList = false;
+  // Counts the drops of the list, so that a look that was asked before one is not taken as an answer after it.
+  let drops = 0;
   let reading;
+  /** Drops the names that are a promise about the workspace's code. True when there was one. */
+  function dropPromises() {
+    const kept = backend.capabilities.filter((name) => !PROMISES.includes(name));
+    const had = kept.length !== backend.capabilities.length;
+    backend.capabilities = kept;
+    needList = true;
+    drops++;
+    return had;
+  }
+  /** A request to the workspace. When it cannot be reached, the promise is dropped and the same error goes on. */
+  async function request(...args) {
+    try {
+      return await rawRequest(...args);
+    } catch (error) {
+      if (unreached(error) && dropPromises()) changes.emit("change");
+      throw error;
+    }
+  }
   const backend = {
     headless: true,
     capabilities: [],
@@ -163,8 +200,10 @@ export function headlessBackend(request, version, { team = () => null, log = (li
   // connected phones. A new Electron process has a new revision namespace.
   function refresh() {
     reading ??= (async () => {
+      // The look has its own handling below, so it goes to the workspace without the one in `request`.
+      const dropsBefore = drops;
       try {
-        const next = await request("state", [needList ? null : revision, current()?.rev ?? null]);
+        const next = await rawRequest("state", [needList ? null : revision, current()?.rev ?? null]);
         const newEpoch = String(next.version).split("/")[0] !== String(revision).split("/")[0];
         // A workspace that started again holds no cut, and says so here.
         if (newEpoch) {
@@ -180,8 +219,12 @@ export function headlessBackend(request, version, { team = () => null, log = (li
         const changed = revision !== next.version || available !== next.display;
         if (next.snapshot) {
           snapshot = next.snapshot;
-          backend.capabilities = Array.isArray(next.capabilities) ? next.capabilities : [];
-          needList = false;
+          // Only an answer that carries the whole list sets it. One that was asked before a drop
+          // (a call failed while it was on its way) is not that: it cannot bring a promise back.
+          const list = Array.isArray(next.capabilities) ? next.capabilities : [];
+          const stale = drops !== dropsBefore;
+          backend.capabilities = stale ? list.filter((name) => !PROMISES.includes(name)) : list;
+          needList = stale;
         } else if (newEpoch) {
           // The list is a promise about the workspace's own code. This is another start of it, so the
           // old list is not told (it always sends a new one here; this is only for a reply that does not).
@@ -196,10 +239,7 @@ export function headlessBackend(request, version, { team = () => null, log = (li
         // workspace's own code is therefore not told while it cannot be reached. The other names
         // stay: without them a phone would say "update the app" for a computer that only cannot
         // be reached. The next look asks for a whole answer, and that answer replaces the list.
-        const kept = backend.capabilities.filter((name) => !PROMISES.includes(name));
-        const hadPromise = kept.length !== backend.capabilities.length;
-        backend.capabilities = kept;
-        needList = true;
+        const hadPromise = dropPromises();
         if (available || hadPromise) {
           available = false;
           changes.emit("change");

@@ -17,6 +17,7 @@ import { BUILT_IN_VALUES, EVENTS, folderReader, handedOn, PLACEHOLDER, pluginSta
 const MAX_HOOK_OUTPUT = 256_000;
 const MAX_CONTEXT = 12_000;
 const MAX_PROMPT = 100_000;
+const MIN_SECRET_LENGTH = 4;
 const SECRET_NAME = /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL)/i;
 const MCP_LAUNCHER = fileURLToPath(new URL("./plugin-mcp-launcher.mjs", import.meta.url));
 
@@ -69,6 +70,7 @@ function approvedSettings(plugin, manifest) {
   const values = plugin?.values && typeof plugin.values === "object" && !Array.isArray(plugin.values) ? plugin.values : {};
   const settings = {};
   const secrets = [];
+  const secretValues = [];
   for (const value of Object.values(values)) if (typeof value === "string" && value.length <= 8_000 && !value.includes("\0") && value) secrets.push(value);
   for (const field of configEntries(plugin, manifest)) {
     const key = field.key;
@@ -82,8 +84,12 @@ function approvedSettings(plugin, manifest) {
     settings[key] = value;
     // Supplied values can be saved credentials even when a catalog omitted sensitive metadata.
     // They are all redacted from hook output; only approved fields are made available to a hook.
+    // A tool is held back only for a value of a secret field: a plain default such as 8080 or true is no reason.
+    // (A secret shorter than 4 characters would match a word by accident, so it is not in that list.)
+    if (secret && value.length >= MIN_SECRET_LENGTH) secretValues.push(value);
   }
-  return { settings, secrets: [...new Set(secrets)].sort((a, b) => b.length - a.length) };
+  const longestFirst = (list) => [...new Set(list)].sort((a, b) => b.length - a.length);
+  return { settings, secrets: longestFirst(secrets), secretValues: longestFirst(secretValues) };
 }
 
 const redactText = (value, secrets) => {
@@ -276,9 +282,11 @@ export function plainHeaderFile(source, kind) {
   const allowed = HEADER_KEYS[kind];
   if (!allowed) throw new Error("Unknown file kind: " + kind);
   const whole = String(source).replace(/^\uFEFF/, "");
-  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(whole);
+  // A header after blank space is still a header (the runtime may read it as one), so it is replaced too, not left as text below the new one.
+  const bare = whole.trimStart();
+  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(bare);
   const lines = match ? match[1].split(/\r?\n/) : [];
-  const body = match ? whole.slice(match[0].length) : whole;
+  const body = match ? bare.slice(match[0].length) : whole;
   const scalar = (value) => {
     const word = value.trim();
     if (/^"[\s\S]*"$/.test(word)) {
@@ -328,7 +336,8 @@ function headerKind(parts, text) {
     if (/^skill\.md$/i.test(name)) return "skill";
     // Another Markdown file of a skill is a paper that the skill reads. It has no header, and is copied as it is.
     // One that starts with a header all the same gets the skill's rule: nobody knows that the runtime never reads it as a skill.
-    return /\.md$/i.test(name) && /^\uFEFF?\s*---/.test(text) ? "skill" : null;
+    // (The whole text is looked at: blank space of any length can come before the header.)
+    return /\.md$/i.test(name) && text.replace(/^\uFEFF/, "").trimStart().startsWith("---") ? "skill" : null;
   }
   return /\.md$/i.test(name) ? "command" : null;
 }
@@ -364,11 +373,12 @@ function copyPlainTree(source, destination) {
           const bytes = readFileSync(fromPath);
           // The size is checked again on the bytes that were read: a file can grow after the first look.
           if (!handedOn(next.join("/"), bytes.length)) continue;
-          const kind = headerKind(next, bytes.toString("utf8", 0, 64));
+          const whole = bytes.toString("utf8");
+          const kind = headerKind(next, whole);
           const toPath = join(destination, ...next);
           mkdirSync(dirname(toPath), { recursive: true });
           // (A skill's script keeps the right to be run, as in the copy.)
-          writeFileSync(toPath, kind ? plainHeaderFile(bytes.toString("utf8"), kind) : bytes, { mode: info.mode & 0o111 ? 0o755 : 0o644 });
+          writeFileSync(toPath, kind ? plainHeaderFile(whole, kind) : bytes, { mode: info.mode & 0o111 ? 0o755 : 0o644 });
         } catch {
           // A file that changed or disappeared during projection is omitted.
         }
@@ -416,14 +426,14 @@ function workingFolder(plugin, cwd) {
   return join(plugin.folder, cwd);
 }
 
-/** One tool of the reading, with its values, as the SDK takes it. Null when a word of its line holds a value the person gave. */
-function serverConfig(plugin, { builtins, expand }, secrets, server) {
+/** One tool of the reading, with its values, as the SDK takes it. Null when a word of its line holds the value of a secret setting. */
+function serverConfig(plugin, { builtins, expand }, secretValues, server) {
   if (server.kind === "local") {
     const { command, args } = server;
     // Settings never become command-line arguments, executable paths or working directories.
     // A local credential must never become part of the launcher argv, even encoded in its
-    // reviewed command spec. Literal values that match a supplied credential therefore fail closed.
-    if ([command, ...args].some((part) => secrets.some((secret) => secret && part.includes(secret)))) return null;
+    // reviewed command spec. Literal values that match a secret setting's value therefore fail closed.
+    if ([command, ...args].some((part) => secretValues.some((secret) => part.includes(secret)))) return null;
     const env = Object.fromEntries(Object.entries(server.env).map(([key, value]) => [key, expand(value)]));
     // Every local tool gets its plugin's data folder, as a hook does. The plugin cannot set these
     // names (they are reserved), so what is put here after its own values is Botkins' value.
@@ -474,10 +484,10 @@ export function pluginSession(plugins, context = {}, { run = runHook } = {}) {
     const projection = project(plugin, safeContext, manifest);
     directories.push(projection);
     if (context.skillsOnly === true) continue;
-    const { settings, secrets } = approvedSettings(plugin, manifest);
+    const { settings, secrets, secretValues } = approvedSettings(plugin, manifest);
     const values = valuesFor(plugin, manifest, safeContext, projection, settings);
     for (const planned of starts.servers) {
-      const server = serverConfig(plugin, values, secrets, planned);
+      const server = serverConfig(plugin, values, secretValues, planned);
       if (server) mcpServers[pluginServerName(plugin.id, planned.name)] = server;
     }
     const handlers = makeHandlers(plugin, safeContext, starts.hooks, values, secrets, run);

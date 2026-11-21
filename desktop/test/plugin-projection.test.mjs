@@ -175,8 +175,8 @@ test("a skill's script keeps the right to be run; another Markdown file with a h
   assert.equal(statSync(join(root, "skills", "run", "scripts", "go.sh")).mode & 0o111, 0o111, "the script can still be run");
   assert.equal(statSync(join(root, "skills", "run", "SKILL.md")).mode & 0o111, 0);
   assert.equal(read("skills/run/notes.md"), "# Notes\nNo header here.", "a paper with no header is copied as it is");
-  assert.equal(read("skills/run/other.md").startsWith("---\ndescription: \"\"\n---\n"), true, "a header that this code does not read as one is below the new header");
-  assert.doesNotMatch(read("skills/run/other.md").split("\n---\n")[0], /allowed-tools/);
+  // A header after blank space is a header all the same: it is replaced, and nothing of the old one is left.
+  assert.equal(read("skills/run/other.md"), '---\nname: "other"\ndescription: ""\n---\nA second skill, perhaps.');
   // The agent's author limited its tools in a form this code does not read. The agent gets no tool, not every tool.
   assert.equal(read("agents/odd.agent.md"), "---\ndescription: \"Odd\"\ntools: []\n---\nBody.");
 });
@@ -189,4 +189,45 @@ test("a link in place of the skills folder itself is not followed", { skip: proc
   symlinkSync(join(base, "elsewhere"), join(folder, "skills"));
   put(folder, "commands/hello.md", "Say hello.");
   assert.deepEqual(walk(opened(folder)).filter((path) => path !== "plugin.json"), ["commands/hello.md"]);
+});
+
+test("the session folder is the files written here by hand, not only the files the rule says", () => {
+  const folder = join(temp(), "by-hand");
+  put(folder, "plugin.json", JSON.stringify({ name: "by-hand" }));
+  put(folder, "skills/ordinary/SKILL.md", "---\nname: ordinary\n---\nDo it.");
+  put(folder, "skills/ordinary/scripts/run.sh", "#!/bin/sh\n");
+  put(folder, "skills/ordinary/.dotfile", "dot");
+  put(folder, "skills/ordinary/node_modules/dep/index.js", "1");
+  put(folder, "agents/scout.md", "---\nname: scout\n---\nLook.");
+  put(folder, "agents/notes.txt", "not an agent");
+  put(folder, "commands/go.md", "Go.");
+  put(folder, "skills/a/b/c/d/e/f/g/h/ten.md", "ten parts");
+  put(folder, "skills/a/b/c/d/e/f/g/h/i/eleven.md", "eleven parts");
+  put(folder, "skills/ordinary/too-big.bin", Buffer.alloc(1_000_001));
+  assert.deepEqual(listed(opened(folder)), [
+    "agents/scout.md",
+    "commands/go.md",
+    "skills/a/b/c/d/e/f/g/h/ten.md",
+    "skills/ordinary/SKILL.md",
+    "skills/ordinary/scripts/run.sh",
+  ]);
+});
+
+test("a Markdown file with a header after any amount of blank space is written again", () => {
+  const folder = fixture();
+  const blank = " ".repeat(100) + "\n".repeat(100) + "\t".repeat(100);
+  put(folder, "skills/x/notes.md", blank + "---\nallowed-tools: shell\n---\nThe paper.");
+  put(folder, "skills/x/bare.md", "# No header\n" + blank + "---\nallowed-tools: shell\n---\n");
+  put(folder, "skills/x/SKILL.md", blank + "---\nname: x\nallowed-tools: shell\n---\nBody");
+  put(folder, "commands/spaced.md", "\uFEFF" + blank + "---\ndescription: d\nallowed-tools: shell\n---\nRun.");
+  put(folder, "agents/spaced.agent.md", blank + "---\nname: a\nmcp-servers: { hidden: { command: sh } }\n---\nBody");
+  const directory = opened(folder);
+  const read = (path) => readFileSync(join(directory, ...path.split("/")), "utf8");
+  assert.equal(read("skills/x/notes.md"), '---\ndescription: ""\n---\nThe paper.');
+  assert.equal(read("skills/x/SKILL.md"), '---\nname: "x"\ndescription: ""\n---\nBody');
+  assert.equal(read("commands/spaced.md"), '---\ndescription: "d"\n---\nRun.');
+  assert.equal(read("agents/spaced.agent.md"), '---\nname: "a"\ndescription: ""\n---\nBody');
+  // A paper with no header at the start is byte for byte as it was.
+  assert.equal(read("skills/x/bare.md"), "# No header\n" + blank + "---\nallowed-tools: shell\n---\n");
+  for (const path of ["skills/x/notes.md", "skills/x/SKILL.md", "commands/spaced.md", "agents/spaced.agent.md"]) assert.doesNotMatch(read(path), /allowed-tools|mcp-servers/);
 });

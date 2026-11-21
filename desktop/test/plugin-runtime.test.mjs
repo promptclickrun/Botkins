@@ -373,3 +373,49 @@ test("writes the header of a skill file and of a command file again", () => {
   assert.match(plainHeaderFile("---\nargument-hint: " + "a".repeat(300) + "\n---\n", "command"), new RegExp('argument-hint: "a{200}"'));
   assert.throws(() => plainHeaderFile("x", "other"));
 });
+
+test("a header after blank space is replaced, not left as text below the new header", () => {
+  assert.equal(plainAgentFile("  ---\nmcp-servers: { hidden: { command: sh } }\n---\nBody"), '---\ndescription: ""\n---\nBody');
+  assert.equal(plainHeaderFile("\uFEFF\n\n  ---\nname: s\nallowed-tools: shell\n---\nBody", "skill"), '---\nname: "s"\ndescription: ""\n---\nBody');
+  // Without a header the text is as it was, blank space included.
+  assert.equal(plainAgentFile("  \nJust text"), '---\ndescription: ""\n---\n  \nJust text');
+});
+
+function toolPlugin(args, config, values) {
+  const dir = temp();
+  const plugin = join(dir, "tool");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "tool", mcpServers: ".mcp.json" }));
+  writeFileSync(join(plugin, ".mcp.json"), JSON.stringify({ mcpServers: { local: { command: "node", args } } }));
+  return pluginSession([{ id: "tool", folder: plugin, status: "ready", enabled: true, bots: "all", config, ...(values && { values }) }], { dir, chatId: "chat", botId: "bot" });
+}
+
+test("a tool is held back for the value of a secret setting in its line, not for any setting's value", () => {
+  const name = pluginServerName("tool", "local");
+  // A plain setting whose default is the same text as an argument does not stop the tool.
+  assert.ok(toolPlugin(["server.js", "--port", "8080"], [{ key: "PORT", default: "8080" }]).mcpServers[name]);
+  assert.ok(toolPlugin(["server.js", "--port", "8080"], [{ key: "PORT" }], { PORT: "8080" }).mcpServers[name]);
+  assert.ok(toolPlugin(["server.js", "--verbose=true"], [{ key: "VERBOSE", default: "true" }]).mcpServers[name]);
+  // The value of a secret setting in a word of the line stops it, for each way a field is marked secret.
+  assert.equal(toolPlugin(["server.js", "--key=synthetic-secret"], [{ key: "API_KEY", secret: true }], { API_KEY: "synthetic-secret" }).mcpServers[name], undefined);
+  assert.equal(toolPlugin(["server.js", "synthetic-secret"], [{ key: "ANYTHING", sensitive: true }], { ANYTHING: "synthetic-secret" }).mcpServers[name], undefined);
+  assert.equal(toolPlugin(["server.js", "synthetic-secret"], [{ key: "MY_TOKEN" }], { MY_TOKEN: "synthetic-secret" }).mcpServers[name], undefined);
+  // A secret value shorter than 4 characters would match by accident, so it does not stop the tool.
+  assert.ok(toolPlugin(["server.js", "--port", "808"], [{ key: "MY_TOKEN" }], { MY_TOKEN: "808" }).mcpServers[name]);
+});
+
+test("hook output has every supplied value redacted, secret or not", async () => {
+  const dir = temp();
+  const plugin = join(dir, "redact");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "redact" }));
+  writeFileSync(join(plugin, "hooks.json"), JSON.stringify({ hooks: { userPromptSubmitted: [{ command: "echo" }] } }));
+  const run = async () => JSON.stringify({ additionalContext: "port 8080 key synthetic-secret ok" });
+  const result = pluginSession(
+    [{ id: "redact", folder: plugin, status: "ready", enabled: true, bots: "all", values: { PORT: "8080", API_KEY: "synthetic-secret" }, config: [{ key: "PORT" }, { key: "API_KEY", secret: true }] }],
+    { dir, chatId: "chat", botId: "bot" },
+    { run },
+  );
+  const output = await result.hooks.handlers.onUserPromptSubmitted({ prompt: "p" });
+  assert.equal(output.additionalContext, "port [redacted] key [redacted] ok");
+});

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { PluginCatalog, snapshotStamp, verifySnapshot } from "./plugin-catalog.mjs";
-import { describeStarts, folderReader, pluginStarts, startWarnings } from "./plugin-reading.mjs";
+import { describeStarts, folderReader, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
 import { pluginSession, pluginOAuthServers } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
@@ -36,6 +36,14 @@ const HELD_BACK = {
   linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
 };
 const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
+/** The mark on a description that is the one reading of an intact copy (STARTS of plugin-reading.mjs). */
+/** The id of a linked plugin folder that could not be copied, so a client can show it and remove it. */
+const linkedId = (path) => "linked-" + createHash("sha256").update(path).digest("hex").slice(0, 12);
+/** One short sentence, with no stack, for the person to read. */
+function oneSentence(error) {
+  const line = String(error?.message ?? error).split("\n")[0].trim().slice(0, 299) || "The folder could not be read";
+  return /[.!?]$/.test(line) ? line : line + ".";
+}
 const scoped = (r, id) => r.enabled && (r.bots === "all" || r.bots.includes(id));
 
 // The paired-device router and desktop IPC share the same mutations and credential handling.
@@ -68,6 +76,7 @@ export class Plugins {
     this.oauthSchemas = new Map();
     this.descriptions = new Map(); // folder → what the copy starts, as a person is shown it
     this.checked = new Map(); // folder → { stamp, ok }: the last check of the copy against its revision
+    this.unadopted = new Map(); // linked plugin folder → why Botkins could not copy it
     this.reviewOld();
     // Each copy is checked once at the start, and a plugin folder that an earlier version linked
     // live becomes an installed plugin. Neither holds up the start of the app.
@@ -99,9 +108,16 @@ export class Plugins {
     const known = this.checked.get(row.folder);
     if (known && known.stamp === stamp) return known.ok;
     const ok = stamp !== null && verifySnapshot(row.folder, row.revision ?? basename(row.folder));
-    this.checked.set(row.folder, { stamp, ok });
     this.descriptions.delete(row.folder);
     this.oauthSchemas.delete(row.folder);
+    if (ok === null) {
+      // The check itself failed (a read error), which says nothing about the files. Nothing is kept, so the next look
+      // tries again, and the app shows no "changed" sentence. The plugin is not used until a check says yes.
+      this.checked.delete(row.folder);
+      console.warn("Botkins could not check the installed files of the plugin " + row.preview.id + " this time, so it does not use it now. It tries again at the next look.");
+      return false;
+    }
+    this.checked.set(row.folder, { stamp, ok });
     if (!ok) console.warn("Botkins does not use the plugin " + row.preview.id + ": its installed files are not the files that were reviewed.");
     return ok;
   }
@@ -129,6 +145,11 @@ export class Plugins {
     };
     for (const row of this.records) {
       if (row.reading === READING) continue;
+      // The copy is checked before it is read: a description is never made from bytes that are not the reviewed ones.
+      // Such a row is left as it is. It stays as it was kept, on or off, and the error it shows already keeps it from
+      // being used. An update writes its files again and marks it as read. (A copy that is gone is not "changed":
+      // it falls through to "could not be read" below.)
+      if (existsSync(row.folder) && !this.intact(row)) continue;
       const fresh = this.described(row);
       if (!fresh) {
         if (row.enabled) {
@@ -139,9 +160,7 @@ export class Plugins {
       }
       const before = row.preview.contents ?? {};
       if (row.enabled && unseen(fresh, before)) Object.assign(row, { enabled: false, heldBack: "unseen" });
-      const warnings = startWarnings(fresh.mcpServers, fresh.hooks, row.preview.warnings ?? []);
-      const { warnings: _old, ...preview } = row.preview;
-      row.preview = { ...preview, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks }, ...(warnings.length && { warnings }) };
+      row.preview = this.refreshed(row.preview, fresh);
       row.reading = READING;
       changed = true;
     }
@@ -150,6 +169,13 @@ export class Plugins {
       writeFileSync(this.file + ".tmp", JSON.stringify(this.records), { mode: 0o600 });
       renameSync(this.file + ".tmp", this.file);
     } catch {}
+  }
+  /** A kept description with what the copy starts, as the one reading shows it: tools, hooks, what is not run, and the warnings made from them. */
+  refreshed(preview, fresh) {
+    const { warnings: _old, ...rest } = preview;
+    const { notRun: _was, ...before } = preview.contents ?? {};
+    const warnings = startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], fresh.notRun ?? []);
+    return { ...rest, contents: { ...before, mcpServers: fresh.mcpServers, hooks: fresh.hooks, ...(fresh.notRun?.length && { notRun: fresh.notRun }) }, ...(warnings.length && { warnings }) };
   }
   /**
    * A plugin folder that an earlier version linked live (Settings, Skills) was read by the
@@ -165,10 +191,20 @@ export class Plugins {
         if (!this.records.some((row) => row.preview.id === preview.id))
           this.save({ folder, preview, revision, sourceFolder: link.path, enabled: false, bots: "all", installedAt: Date.now(), refs: {}, reading: READING, heldBack: "linked" });
         this.ws.integrations.removeFolder(link.id);
+        this.unadopted.delete(link.path);
       } catch (error) {
-        console.warn("Botkins does not use the linked plugin folder " + link.path + ": " + String(error?.message ?? error));
+        // (The link stays, and list() shows it as a plugin in error, so the person can put the folder right or remove it.)
+        this.unadopted.set(link.path, oneSentence(error));
+        console.warn("Botkins does not use the linked plugin folder " + link.path + ": " + String(error?.message ?? error).split("\n")[0].slice(0, 300));
       }
     }
+    if (this.unadopted.size) this.ws.notify?.();
+  }
+  /** The linked plugin folders that could not be copied. A reason is dropped when its link is gone. */
+  linkedErrors() {
+    const links = this.ws.integrations?.skillState?.plugins ?? [];
+    for (const path of [...this.unadopted.keys()]) if (!links.some((link) => link.path === path)) this.unadopted.delete(path);
+    return links.filter((link) => this.unadopted.has(link.path)).map((link) => ({ link, id: linkedId(link.path), reason: this.unadopted.get(link.path) }));
   }
   serialize(fn) {
     const pending = this.queue.then(fn);
@@ -280,7 +316,7 @@ export class Plugins {
     let status = unavailable || changedCopy ? "error" : config.some((f) => f.required && !f.set) ? "needs-config" : "ready";
     // What the plugin starts is read from the copy, not taken from what was kept at install.
     const fresh = changedCopy ? null : this.described(row);
-    const warnings = fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? []) : (preview.warnings ?? []);
+    const warnings = fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], fresh.notRun ?? []) : (preview.warnings ?? []);
     let servers = [];
     if (status === "ready") {
       try {
@@ -291,9 +327,12 @@ export class Plugins {
         status = "error";
       }
     }
-    const { warnings: _kept, ...rest } = preview;
+    // (The mark comes from the fresh reading of an intact copy, never from what was kept.)
+    const { warnings: _kept, starts: _stored, ...rest } = preview;
+    const { notRun: _storedNotRun, ...storedContents } = preview.contents;
     return {
       ...rest,
+      ...(fresh && { starts: STARTS }),
       ...(warnings.length && { warnings }),
       installed: true,
       enabled: row.enabled,
@@ -313,8 +352,9 @@ export class Plugins {
       config: config.map(({ sentTo: _old, ...field }) => ({ ...field, ...(fresh?.sentTo.has(field.key) && { sentTo: fresh.sentTo.get(field.key) }) })),
       ...(row.sourceFolder && { folder: row.sourceFolder }),
       contents: {
-        ...preview.contents,
+        ...(fresh ? storedContents : preview.contents),
         ...(fresh && { hooks: fresh.hooks }),
+        ...(fresh?.notRun?.length && { notRun: fresh.notRun }),
         mcpServers: (fresh?.mcpServers ?? preview.contents.mcpServers).map((s) => {
           const auth = servers.find((a) => a.manifestName === s.name);
           return auth ? { ...s, serverId: auth.id } : s;
@@ -323,7 +363,23 @@ export class Plugins {
     };
   }
   list() {
-    return this.records.map((r) => this.public(r));
+    return [
+      ...this.records.map((r) => this.public(r)),
+      ...this.linkedErrors().map(({ link, id, reason }) => ({
+        id,
+        name: basename(link.path),
+        marketplace: "folder",
+        installed: true,
+        enabled: false,
+        bots: "all",
+        status: "error",
+        detail: "This plugin folder was linked for its skills. Botkins could not copy it, so it is not used: " + reason + " Put the folder right and start Botkins again, or remove it.",
+        folder: link.path,
+        config: [],
+        contents: { skills: [], agents: [], commands: [], mcpServers: [], hooks: [] },
+        limits: "",
+      })),
+    ];
   }
   async browse(query) {
     const page = await this.catalog.browse(query);
@@ -332,9 +388,14 @@ export class Plugins {
   preview(id) {
     return this.catalog.preview(id);
   }
+  /** An install and an update name the revision of the plugin as the person saw it; a source that is another one now is refused by the catalog. The app holds the rule itself: a call with no revision is refused, whoever makes it. */
+  reviewed(options) {
+    if (typeof options?.revision !== "string" || !/^[a-f0-9]{64}$/.test(options.revision)) throw new Error("Look at the plugin first. An install or an update names the revision that was looked at.");
+  }
   install(id, options = {}, verify) {
     return this.serialize(async () => {
       verify?.();
+      this.reviewed(options);
       if (this.records.some((r) => r.preview.id === id)) throw new Error("This plugin is already installed.");
       const bots = this.scope(options.bots ?? "all");
       const { folder, preview, revision } = await this.catalog.materialize(id, options.revision);
@@ -372,11 +433,15 @@ export class Plugins {
       // (Switching on is the person's yes after a look: a reason Botkins switched it off for is done with.)
       const { heldBack: _reason, ...row } = this.get(id);
       if (enabled && row.reading !== READING) {
+        // The copy is checked before it is read. (A copy that is gone is "could not be read", below.)
+        if (existsSync(row.folder) && !this.intact(row)) throw new Error(CHANGED_COPY);
         // A copy that could not be read at the start is read again now, not from what was kept.
         this.descriptions.delete(row.folder);
-        if (!this.described(row)) throw new Error(HELD_BACK.unread);
+        const fresh = this.described(row);
+        if (!fresh) throw new Error(HELD_BACK.unread);
         // (The person looks at the fresh description before this yes, so the start does not ask again.)
         row.reading = READING;
+        row.preview = this.refreshed(row.preview, fresh);
       }
       if (enabled && !this.intact(row)) throw new Error(CHANGED_COPY);
       this.save({ ...row, enabled });
@@ -385,8 +450,17 @@ export class Plugins {
   update(id, options = {}, verify) {
     return this.serialize(async () => {
       verify?.();
+      this.reviewed(options);
       const before = this.get(id);
-      const material = await this.catalog.materialize(id, options.revision);
+      // The way back that a client offers is an update. Where the update cannot work either, the person is told the next step.
+      const repairing = this.checked.get(before.folder)?.ok === false || before.heldBack === "unread";
+      let material;
+      try {
+        material = await this.catalog.materialize(id, options.revision);
+      } catch (error) {
+        if (repairing) throw new Error(String(error?.message ?? error) + " If the plugin cannot be updated, remove it.");
+        throw error;
+      }
       verify?.();
       const refs = Object.fromEntries(
         material.preview.config.flatMap((f) =>
@@ -418,6 +492,13 @@ export class Plugins {
   uninstall(id, verify) {
     return this.serialize(async () => {
       verify?.();
+      const linked = this.linkedErrors().find((entry) => entry.id === id);
+      if (linked) {
+        this.ws.integrations.removeFolder(linked.link.id);
+        this.unadopted.delete(linked.link.path);
+        this.ws.notify?.();
+        return;
+      }
       const row = this.get(id);
       // A missing source or damaged manifest must still be removable.
       for (const server of this.knownOAuthServers(row)) this.oauth.cancel(server.id);
