@@ -41,9 +41,9 @@ function Detail({ label, value, placeholder, onSave, url }: { label: string; val
 function Connection({ provider, voice }: { provider: VoiceKeyProvider; voice: VoiceSettings }) {
   const p = voice.providers;
   if (provider === "openai")
-    return <Detail label="Address" value={p.openai.baseUrl} placeholder="https://api.openai.com/v1" url onSave={(baseUrl) => save({ providers: { openai: { baseUrl: baseUrl || undefined } } })} />;
+    return <Detail label="Address" value={p.openai.baseUrl} placeholder="https://api.openai.com/v1" url onSave={(baseUrl) => save({ providers: { openai: { baseUrl } } })} />;
   if (provider === "custom")
-    return <Detail label="Address" value={p.custom.baseUrl} placeholder="http://192.168.1.20:8000/v1" url onSave={(baseUrl) => save({ providers: { custom: { baseUrl: baseUrl || undefined } } })} />;
+    return <Detail label="Address" value={p.custom.baseUrl} placeholder="http://192.168.1.20:8000/v1" url onSave={(baseUrl) => save({ providers: { custom: { baseUrl } } })} />;
   if (provider === "elevenlabs") return <Detail label="Agent id, for live voice" value={p.elevenlabs.agentId} placeholder="Made for you when empty" onSave={(agentId) => save({ providers: { elevenlabs: { agentId: agentId || undefined } } })} />;
   if (provider === "azure") {
     const azure = p.azure;
@@ -58,9 +58,9 @@ function Connection({ provider, voice }: { provider: VoiceKeyProvider; voice: Vo
           value={azure.kind}
           onChange={(kind) => set({ kind })}
         />
-        <Detail label="Endpoint" value={azure.endpoint} placeholder={azure.kind === "speech" ? "Or leave empty and set a region" : "https://name.openai.azure.com"} url onSave={(endpoint) => set({ endpoint: endpoint || undefined })} />
+        <Detail label="Endpoint" value={azure.endpoint} placeholder={azure.kind === "speech" ? "Or leave empty and set a region" : "https://name.openai.azure.com"} url onSave={(endpoint) => set({ endpoint })} />
         {azure.kind === "speech" ? (
-          <Detail label="Region" value={azure.region} placeholder="eastus" onSave={(region) => set({ region: region || undefined })} />
+          <Detail label="Region" value={azure.region} placeholder="eastus" onSave={(region) => set({ region })} />
         ) : (
           <>
             <Detail label="Transcription deployment" value={azure.sttDeployment} onSave={(sttDeployment) => set({ sttDeployment: sttDeployment || undefined })} />
@@ -73,6 +73,9 @@ function Connection({ provider, voice }: { provider: VoiceKeyProvider; voice: Vo
   }
   return null;
 }
+
+/** The providers whose key goes to an address a person can set. */
+const ADDRESSED: VoiceKeyProvider[] = ["openai", "azure", "custom"];
 
 function KeySheet({ provider, voice, onClose }: { provider: VoiceKeyProvider; voice: VoiceSettings; onClose: () => void }) {
   const [key, setKey] = useState("");
@@ -87,6 +90,13 @@ function KeySheet({ provider, voice, onClose }: { provider: VoiceKeyProvider; vo
   };
   return (
     <Sheet title={providerName(provider)} onClose={onClose} action="Save" onAction={() => void send(key.trim(), "Key saved")} actionDisabled={!key.trim()} actionLoading={saving}>
+      {/* The address comes first: a key is saved for the address that is set, and a new address removes it (link-host/voice.mjs). */}
+      <Connection provider={provider} voice={voice} />
+      {ADDRESSED.includes(provider) && (
+        <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, marginTop: -space.md }}>
+          A new address removes the saved key, so the key never goes somewhere you didn't give it for.
+        </T>
+      )}
       <View style={{ gap: space.sm }}>
         <SecretField label={hasKey ? "Replace the key" : provider === "custom" ? "Key, if your server needs one" : "API key"} value={key} onChangeText={setKey} placeholder={hasKey ? "Key saved" : "Paste the key"} />
         <CredentialPicker onPick={(ref, name) => void send(ref, "Using " + name)} disabled={saving} />
@@ -94,7 +104,6 @@ function KeySheet({ provider, voice, onClose }: { provider: VoiceKeyProvider; vo
           Kept on your computer, never on this phone.
         </T>
       </View>
-      <Connection provider={provider} voice={voice} />
       {hasKey && (
         <View style={{ alignItems: "flex-start" }}>
           <Button title="Remove key" variant="danger" size="sm" onPress={() => void send(null, "Key removed")} disabled={saving} />

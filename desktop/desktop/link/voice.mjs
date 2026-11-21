@@ -382,11 +382,13 @@ export class Voice {
       if (!["openai", "azure", "elevenlabs", "gemini", "custom", "local", "codex"].includes(name)) continue;
       if (!isPlain(given[name])) throw new Failure("Those " + (NAMES[name] ?? name) + " settings can't be saved.");
     }
-    // A key was given for one address. When that address is changed to another, the key is dropped,
-    // so it is never sent somewhere the person did not give it for; they enter it again for the new
-    // address. Setting an address for the first time keeps the key (there was nowhere to send it yet).
+    // A key was given for one address. When that address is set, changed or taken away, the key is
+    // dropped, so it is never sent somewhere the person did not give it for; they enter it again
+    // for the new address. A first address drops the key too: a key saved before any address was
+    // given for none, and a caller that only sets an address (a bot's shell on the computer can)
+    // must not get it sent there. The order for a provider is the address, then the key.
     const moved = (provider, before, after) => {
-      if (!loading && before && before !== after) delete data.keys[provider];
+      if (!loading && before !== after) delete data.keys[provider];
     };
     attempt(() => {
       const openai = given.openai;
