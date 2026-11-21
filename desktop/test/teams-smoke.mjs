@@ -125,6 +125,34 @@ try {
   await page.evaluate((id) => window.botkins.deleteChat(id), chatId);
   assert.equal((await page.evaluate(() => window.botkins.snapshot())).chats.some((chat) => chat.id === chatId), false);
 
+  // Admin mode (when the computer has it): off at first; the switch turns it on for this window, the
+  // computer's name says so, and the choice is this computer's own, so it is there after a restart.
+  const view = () => page.evaluate(() => window.botkins.snapshot().then((snapshot) => snapshot.adminMode));
+  if ((await view()) !== undefined) {
+    assert.equal(await view(), false, "Admin mode is off at first");
+    await expect(page.locator(".admin-tag")).toHaveCount(0);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await settings.getByRole("tab", { name: "Team", exact: true }).click();
+    const adminSwitch = settings.getByRole("switch", { name: "Admin mode" });
+    await expect(adminSwitch).not.toBeChecked();
+    await expect(settings).toContainText("See every member's spaces, bots and chats.");
+    await adminSwitch.check();
+    await expect.poll(view).toBe(true);
+    await page.screenshot({ path: join(shots, "teams-desktop-admin-mode.png") });
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await expect(settings).toBeHidden();
+    await expect(page.locator(".admin-tag")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Admin mode", exact: true })).toBeVisible();
+    // The tag opens Settings › Team, where the switch turns it off again.
+    await page.getByRole("button", { name: "Admin mode", exact: true }).click();
+    await expect(adminSwitch).toBeChecked();
+    await adminSwitch.uncheck();
+    await expect.poll(view).toBe(false);
+    await settings.getByRole("button", { name: "Close dialog" }).click();
+    await expect(page.locator(".admin-tag")).toHaveCount(0);
+    console.log("Admin mode: off at first, the switch turns it on and off, and the tag shows while it is on.");
+  }
+
   assert.deepEqual(errors, []);
 } finally {
   if (app) await app.close();

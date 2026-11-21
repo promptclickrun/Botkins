@@ -162,7 +162,8 @@ export function SidebarSpaces({
 export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace: (id: string) => void; fail: (e: unknown) => void }) {
   const menu = useMenu();
   const spaces = state.spaces ?? [];
-  const { pinned, more, fromMembers } = spaceSections(spaces, isOwner(state));
+  // "From members" is what Admin mode shows the owner. A computer without Admin mode shows the owner everything, as before it.
+  const { pinned, more, fromMembers } = spaceSections(spaces, isOwner(state) && state.adminMode !== false);
   const list = (title: string, items: SpaceSummary[]) =>
     items.length > 0 && (
       <section className="space-group" aria-label={title} key={title}>

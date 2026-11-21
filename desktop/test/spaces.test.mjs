@@ -263,6 +263,13 @@ test("a view's save goes out only soon after a real click or key press, and not 
   // A refused save does not count as one: the next allowed one is not pushed back.
   gate.gesture();
   assert.equal(gate.allow(), true);
+  // A page that has just loaded starts over: a click in the page before it does not let the new one save.
+  gate.gesture();
+  gate.reset();
+  now += SET_GAP_MS;
+  assert.equal(gate.allow(), false);
+  gate.gesture();
+  assert.equal(gate.allow(), true);
   // What a page hands over is cut to what the computer takes.
   assert.deepEqual(cleanPatch({ a: 1, b: null }), { a: 1, b: null });
   for (const bad of [null, undefined, "x", 3, ["a"]]) assert.equal(cleanPatch(bad), null, String(bad));

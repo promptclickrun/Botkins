@@ -21,7 +21,9 @@ export const LABEL_MAX = 80;
  * The gate for one view's saves: a page cannot write under a person's name when they only opened
  * it. `gesture()` is called when the main process says the person really clicked or pressed a key
  * inside the view (a page cannot make that signal itself); `allow()` says whether a save may go
- * out now, and counts it when it may.
+ * out now, and counts it when it may. `reset()` is for a page that has just loaded: a click in the
+ * page before it does not count for the new one, or a page could reload itself after a click and
+ * save as it starts.
  */
 export function saveGate(now: () => number = Date.now) {
   let gestureAt = -Infinity;
@@ -29,6 +31,9 @@ export function saveGate(now: () => number = Date.now) {
   return {
     gesture() {
       gestureAt = now();
+    },
+    reset() {
+      gestureAt = -Infinity;
     },
     allow() {
       const t = now();

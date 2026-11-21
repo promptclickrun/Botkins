@@ -46,7 +46,7 @@ const page = (label) => `<!doctype html><html><head><title>${label}</title>
   <h2 id="title">…</h2>
   <p id="mode">mode</p>
   <div class="bar" style="width:70%"></div><div class="bar" style="width:45%"></div>
-  <button id="answer">Send answer</button> <button id="link">Open docs</button> <button id="leave">Leave</button>
+  <button id="answer">Send answer</button> <button id="link">Open docs</button> <button id="leave">Leave</button> <button id="save">Save</button>
   <img id="pic" alt="remote picture" src="${outside}/picture.png">
   <div class="tall">Tall content</div>
 </div>
@@ -72,6 +72,14 @@ const page = (label) => `<!doctype html><html><head><title>${label}</title>
   document.getElementById("link").onclick = () =>
     commander.openLink("https://example.com/docs").then((v) => (tries.link = String(v)), (e) => (tries.link = e.message));
   document.getElementById("leave").onclick = () => { location.href = "${outside}/leave"; };
+  // Saved state (a panel in a space): what the page reads, what it hears of, and two saves:
+  // one it tries by itself as it loads, and one when the person presses Save.
+  if (window.botkins.state) {
+    botkins.state.set({ byItself: true }, "Changed by itself").then((ok) => (tries.selfSave = ok), () => (tries.selfSave = "error"));
+    botkins.state.get().then((s) => (tries.state = JSON.stringify(s)));
+    botkins.state.onChange((s) => (tries.changed = JSON.stringify(s)));
+    document.getElementById("save").onclick = () => botkins.state.set({ pressKit: true }, "Ticked Press kit").then((ok) => (tries.saved = ok));
+  }
 </script></body></html>`;
 
 const now = Date.now();
@@ -295,6 +303,27 @@ try {
     await win.waitForTimeout(300);
     await shot("panels-html-min");
     await size(1190, 830);
+  }
+
+  // ---- botkins.state: an app panel keeps what a person changes in it, and a page cannot save by itself.
+  if (await showsSpaces(win)) {
+    assert.equal(await frame.evaluate(() => tries.selfSave), false, "a page that was only opened saved by itself");
+    assert.equal(await frame.evaluate(() => tries.state), "{}");
+    const today = (await snap()).spaces.find((space) => space.builtin === "today");
+    const panelNow = async () => (await win.evaluate((id) => window.botkins["spaces.read"](id), today.id)).panels.find((p) => p.id === "panel-wide");
+    assert.equal((await panelNow()).state, undefined, "nothing was saved yet");
+    // The person presses Save in the view: a real click, so the save goes out.
+    await frame.click("#save");
+    await expect.poll(() => frame.evaluate(() => tries.saved)).toBe(true);
+    const saved = await panelNow();
+    assert.deepEqual(saved.state, { pressKit: true });
+    assert.equal(saved.last?.label, "Ticked Press kit");
+    await expect(panelEl.locator(".space-last")).toContainText("ticked Press kit");
+    assert.equal(await frame.evaluate(() => tries.changed), undefined, "a page is not told of its own save");
+    // A change made elsewhere reaches the page, merged with what it saved.
+    await win.evaluate(() => window.botkins["spaces.patchState"]("panel-wide", { waitlist: true }, "Ticked Email the waitlist"));
+    await expect.poll(() => frame.evaluate(() => tries.changed)).toBe(JSON.stringify({ pressKit: true, waitlist: true }));
+    console.log("An app panel saves on a real click and not by itself; the computer keeps the state and the last line, and the page hears of a change made elsewhere.");
   }
 
   // ---- sendAnswer hands the text over, not sent. On a computer with Spaces it waits in the ask
