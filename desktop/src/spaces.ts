@@ -25,6 +25,12 @@ export type SpaceSummary = {
   teamCan?: "view" | "edit";
   /** To the maker and the owner. */
   link?: string;
+  /**
+   * What is in the way of the link, to the maker and the owner: "leaving" while an earlier link's
+   * copy is still being taken back from the relay; "off" when the space is shared by link and the
+   * relay is off (it keeps its level and has no `link`).
+   */
+  linkState?: "leaving" | "off";
   /** Owner devices only. */
   projectId?: string;
   /** Panels and open cards the person is sent. */

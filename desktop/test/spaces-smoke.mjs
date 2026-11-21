@@ -170,7 +170,10 @@ try {
       return { name: "Studio", groups: [], members: [], invites: [], requests: [], ...own, roles: own.roles?.length ? own.roles : t.roles, people: t.people, linkSharing: t.linkSharing };
     };
     // The stand-in's spaces include two that members made, which a real computer sends the owner only with Admin mode on.
-    const add = (s) => (s && typeof s === "object" ? { ...s, spaces: t.spaces, team: team(s), adminMode: true } : s);
+    // So it starts with Admin mode on, and with it off it leaves those out, as the computer's own cut does.
+    t.adminMode = true;
+    const shownSpaces = () => (t.adminMode ? t.spaces : t.spaces.filter((space) => space.mine || space.by.id === "owner"));
+    const add = (s) => (s && typeof s === "object" ? { ...s, spaces: shownSpaces(), team: team(s), adminMode: t.adminMode } : s);
     ipcMain.removeHandler("snapshot");
     ipcMain.handle("snapshot", async (e, ...args) => add(await real(e, ...args)));
     // The app's own pushes carry the spaces too.
@@ -243,6 +246,7 @@ try {
         else delete find(id).projectId;
       },
       "link.team.setLinkSharing": (on) => void (t.linkSharing = on),
+      "link.team.setAdminMode": (on) => (t.adminMode = on === true),
       // The computer's own call for a panel's size and order, for the panels the stand-in holds.
       changePanel: (panelId, action) => {
         const c = Object.values(t.content).find((c) => c.panels.some((p) => p.id === panelId));
@@ -250,7 +254,7 @@ try {
         bump(find(c.id));
       },
     };
-    const names = ["changePanel", "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject", "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote", "link.spaces.share", "link.spaces.newLink", "link.spaces.arrange", "link.spaces.seen", "link.spaces.notify", "link.spaces.here", "link.team.setLinkSharing"];
+    const names = ["changePanel", "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject", "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote", "link.spaces.share", "link.spaces.newLink", "link.spaces.arrange", "link.spaces.seen", "link.spaces.notify", "link.spaces.here", "link.team.setLinkSharing", "link.team.setAdminMode"];
     for (const name of names) {
       ipcMain.removeHandler(name);
       ipcMain.handle(name, async (_e, ...args) => {
@@ -369,12 +373,22 @@ try {
   await share.getByRole("button", { name: "New link", exact: true }).click();
   await expect.poll(() => callsOf("link.spaces.newLink")).toEqual([["s_launch"]]);
   await expect(head.locator(".space-tag").first()).toHaveText("Anyone with the link");
-  // The relay went off: the level stays, the link is gone.
+  // The relay went off: the level stays, the link is gone, and the computer says why.
   await change(() => {
-    delete globalThis.__spaces.spaces.find((s) => s.id === "s_launch").link;
+    const launch = globalThis.__spaces.spaces.find((s) => s.id === "s_launch");
+    delete launch.link;
+    launch.linkState = "off";
   });
   await expect(share.getByText("Links are off while the relay is off.", { exact: true })).toBeVisible();
   await expect(share.getByRole("button", { name: "Copy link", exact: true })).toHaveCount(0);
+  // An earlier link's copy is still being taken back: the sheet says so until the computer stops saying it.
+  await change(() => void (globalThis.__spaces.spaces.find((s) => s.id === "s_launch").linkState = "leaving"));
+  await expect(share.getByText("Taking the link back…", { exact: true })).toBeVisible();
+  await expect(share.getByText("Links are off while the relay is off.", { exact: true })).toHaveCount(0);
+  await change(() => void delete globalThis.__spaces.spaces.find((s) => s.id === "s_launch").linkState);
+  await expect(share.getByText("Taking the link back…", { exact: true })).toHaveCount(0);
+  // A computer that says nothing about the link, with none while shared by link: its relay is off.
+  await expect(share.getByText("Links are off while the relay is off.", { exact: true })).toBeVisible();
   // All members: one choice for everyone.
   await share.getByRole("radio", { name: "All members", exact: true }).check();
   await expect.poll(async () => (await callsOf("link.spaces.share")).at(-1)).toEqual(["s_launch", { access: "team", teamCan: "edit" }]);
@@ -741,6 +755,34 @@ try {
   await expect.poll(async () => (await callsOf("link.spaces.arrange"))[0]?.[0].pinned).toEqual(["s_today", "s_feed", "s_money", "s_ideas", "s_goals", "s_launch", "s_reading"]);
   await expect(menu.getByRole("button", { name: "Reading list", exact: true })).toHaveCount(1);
   console.log("All spaces lists Pinned, More and From members, and pins from a row's menu.");
+
+  // ---- Admin mode off: the owner is shown their own spaces and those shared with them. The switch
+  // is in Settings › Team; while it is on, a tag says so.
+  await expect(win.locator(".admin-tag")).toHaveCount(1);
+  await clearCalls();
+  await win.getByRole("button", { name: "Settings", exact: true }).click();
+  const teamSettings = win.getByRole("dialog", { name: "Settings" });
+  await teamSettings.getByRole("tab", { name: "Team", exact: true }).click();
+  const adminSwitch = teamSettings.getByRole("switch", { name: "Admin mode" });
+  await expect(adminSwitch).toBeChecked();
+  await adminSwitch.uncheck();
+  await expect.poll(() => callsOf("link.team.setAdminMode")).toEqual([[false]]);
+  await change(() => {});
+  await teamSettings.getByRole("button", { name: "Close dialog" }).click();
+  await expect(teamSettings).toBeHidden();
+  await expect(win.locator(".admin-tag")).toHaveCount(0);
+  await expect(win.getByRole("region", { name: "From members", exact: true })).toHaveCount(0);
+  await expect(section("More").locator(".space-row strong")).toHaveCount(0);
+  await expect(win.getByText("Team offsite", { exact: true })).toHaveCount(0);
+  // On again, and the members' spaces are back under From members.
+  await win.getByRole("button", { name: "Settings", exact: true }).click();
+  await teamSettings.getByRole("tab", { name: "Team", exact: true }).click();
+  await adminSwitch.check();
+  await expect.poll(async () => (await callsOf("link.team.setAdminMode")).at(-1)).toEqual([true]);
+  await change(() => {});
+  await teamSettings.getByRole("button", { name: "Close dialog" }).click();
+  await expect(section("From members").locator(".space-row strong")).toHaveText(["Team offsite", "Maya's Today"]);
+  console.log("With Admin mode off the members' spaces are not listed and the tag is gone; on again, they are back.");
 
   // ---- A space this person may only view: no Add panel, no Share, no ask bar, no panel actions.
   await section("From members").getByRole("button", { name: /^Maya's Today/ }).click();
