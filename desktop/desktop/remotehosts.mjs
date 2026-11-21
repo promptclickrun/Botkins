@@ -50,6 +50,8 @@ export const HERE = new Set([
   "forgetRemoteHost",
   "renameRemoteHost",
 ]);
+/** Window calls that are the link's own on another computer, by the name the link knows them. */
+const LINK_NAMES = { inviteToChat: "link.team.inviteToChat", removeFromChat: "link.team.removeFromChat" };
 /** Settings that belong to the window a person sits at, not to the computer whose bots it shows. */
 const OWN_SETTINGS = ["appearance", "sidebar", "background", "onboarded"];
 
@@ -531,6 +533,12 @@ export class RemoteHosts {
   async call(name, args) {
     if (!this.client) throw new Error("No other computer is in use.");
     const host = this.find(this.current);
+    // The people in a chat: the other computer's link keeps them, and each chat it sends says who was invited.
+    if (name === "chatPeople") {
+      const chat = (this.parts.chats ?? []).find((item) => item.id === args[0]);
+      return { createdBy: chat?.createdBy ?? "owner", invited: Array.isArray(chat?.invited) ? [...chat.invited] : [] };
+    }
+    name = LINK_NAMES[name] ?? name;
     if (!name.startsWith("link.") && !REMOTE_METHODS.has(name)) throw new Error("That can only be done on " + host.name + " itself.");
     if (this.state === "revoked") throw new Error(host.name + " no longer knows this computer. Pair again to use it.");
     try {

@@ -386,7 +386,14 @@ test("a join request notification follows request preferences and opens Team req
 });
 
 test("team IPC handlers call the LinkHost owner API", async () => {
-  const { teamHandlers } = await import("../desktop/team-ipc.mjs");
+  const { forgetChatPeople, teamHandlers } = await import("../desktop/team-ipc.mjs");
+  // A chat deleted in the window is forgotten by the link; a link without chat people, or none yet, is left alone.
+  const forgotten = [];
+  forgetChatPeople(() => ({ removeChatPeople: (id) => forgotten.push(id) }), "chat-9");
+  forgetChatPeople(() => ({}), "chat-9");
+  forgetChatPeople(() => null, "chat-9");
+  forgetChatPeople(() => ({ removeChatPeople: () => { throw new Error("store is closed"); } }), "chat-9");
+  assert.deepEqual(forgotten, ["chat-9"]);
   const calls = [];
   const returned = {};
   const methods = {
@@ -402,6 +409,9 @@ test("team IPC handlers call the LinkHost owner API", async () => {
     moveMember: ["m_member", "g_everyone"],
     removeMember: ["m_member"],
     renameTeam: ["Northstar"],
+    chatPeople: ["chat-1"],
+    inviteToChat: ["chat-1", "m_member"],
+    removeFromChat: ["chat-1", "m_member"],
   };
   const host = Object.fromEntries(
     Object.entries(methods).map(([name]) => [
@@ -426,6 +436,9 @@ test("team IPC handlers call the LinkHost owner API", async () => {
     ["moveTeamMember", "moveMember"],
     ["removeTeamMember", "removeMember"],
     ["renameTeam", "renameTeam"],
+    ["chatPeople", "chatPeople"],
+    ["inviteToChat", "inviteToChat"],
+    ["removeFromChat", "removeFromChat"],
   ];
   for (const [handler, method] of actions) {
     assert.equal(await handlers[handler](...methods[method]), returned);
@@ -523,4 +536,29 @@ test("a member turn labels approval requests for the owner", (t) => {
   assert.deepEqual(request.askedBy, task.author);
   ws.interactions.respond(request.id, { action: "deny" });
   return pending;
+});
+
+test("who is looking at a chat's people, and what they may do", async () => {
+  const { OWNER, canLeave, chatPeopleView } = await import("../src/peopleView.ts");
+  const people = [{ id: "owner", name: "Studio" }, { id: "m_avery", name: "Avery" }, { id: "m_blake", name: "Blake" }];
+  const ownersChat = { id: "c1", botId: "pip", title: "Plans", time: 1, messages: [] };
+  const averysChat = { ...ownersChat, id: "c2", createdBy: "m_avery" };
+  // The owner's window on its own computer, and the owner using the computer from another one.
+  const owner = { team: { name: "Northstar", roles: [], groups: [], members: [], invites: [], requests: [], people } };
+  assert.equal(OWNER, "owner");
+  assert.deepEqual(chatPeopleView(owner, ownersChat), { people, me: "owner", createdBy: "owner", mayInvite: true });
+  assert.deepEqual(chatPeopleView(owner, averysChat), { people, me: "owner", createdBy: "m_avery", mayInvite: true }, "the owner may invite into any chat");
+  assert.equal(canLeave(chatPeopleView(owner, ownersChat), []), false, "whoever started a chat can't leave it");
+  assert.equal(canLeave(chatPeopleView(owner, averysChat), ["owner"]), true, "the owner, invited into a member's chat, may leave");
+  assert.equal(canLeave(chatPeopleView(owner, averysChat), []), false);
+  // A member's window, using the owner's computer.
+  const member = (memberId) => ({ team: { me: { memberId, name: "x", group: { id: "g", name: "g" }, role: { name: "Guest", perms: {}, bots: "all" } }, team: { name: "Northstar" }, people } });
+  assert.deepEqual(chatPeopleView(member("m_avery"), averysChat), { people, me: "m_avery", createdBy: "m_avery", mayInvite: true }, "in their own chat a member invites");
+  const invited = chatPeopleView(member("m_blake"), averysChat);
+  assert.deepEqual([invited.me, invited.mayInvite, canLeave(invited, ["m_blake"])], ["m_blake", false, true], "invited into another's chat: no inviting, but leaving");
+  assert.equal(chatPeopleView(member("m_avery"), ownersChat).mayInvite, false);
+  // A computer that keeps no chat people, a team of one, and no team at all: no control.
+  assert.equal(chatPeopleView({ team: { ...owner.team, people: undefined } }, ownersChat), null);
+  assert.equal(chatPeopleView({ team: { ...owner.team, people: [people[0]] } }, ownersChat), null);
+  assert.equal(chatPeopleView({}, ownersChat), null);
 });

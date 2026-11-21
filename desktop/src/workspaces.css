@@ -341,3 +341,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* "People in this chat": a switch for each person on the team. */
+.people-dialog .people-lede {
+  margin: 0;
+}
+.people-list li {
+  gap: 12px;
+  padding-right: 10px;
+}
+/* The dialog makes its fields as wide as it is; a switch keeps its own size. */
+.people-dialog .people-list input.switch {
+  width: 38px;
+  min-width: 38px;
+}
+.people-dialog .ask-actions {
+  justify-content: space-between;
+}
+.people-dialog .ask-actions .primary {
+  margin-left: auto;
+}
