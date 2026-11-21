@@ -100,6 +100,71 @@ export function withMove(spaces: SpaceSummary[], id: string, by: -1 | 1): { orde
   return { order: [...pins, ...rest], pinned: pins };
 }
 
+// ── Dragging a space ─────────────────────────────────────────────────────────
+
+/** Where a dragged space can land: among the pinned (Home's row) or among the others. What members made is no place to drop. */
+export type SpaceZone = "pinned" | "more";
+export type Arrangement = { order: string[]; pinned: string[] };
+type Viewer = { owner: boolean; admin: boolean };
+
+/** All spaces as one run of items, top to bottom: each section's heading, then its spaces. A dragged space lands only among "row" items. */
+export type SpaceItem = { key: string; kind: "head"; zone: SpaceZone } | { key: string; kind: "row"; zone: SpaceZone; id: string } | { key: string; kind: "fixed"; id?: string; title?: string };
+
+/**
+ * The list for the board. While a space is dragged (`dragging`), Pinned and More show their heading
+ * also when empty, so a space can be dropped into them.
+ */
+export function spaceItems(spaces: SpaceSummary[], viewer: Viewer, dragging: boolean): SpaceItem[] {
+  const sections = spaceSections(spaces, viewer);
+  const of = (title: string) => sections.find((section) => section.title === title)?.spaces ?? [];
+  const items: SpaceItem[] = [];
+  for (const [zone, title] of [["pinned", "Pinned"], ["more", "More"]] as const) {
+    const list = of(title);
+    if (!list.length && !dragging) continue;
+    items.push({ key: "head:" + zone, kind: "head", zone });
+    for (const space of list) items.push({ key: "space:" + space.id, kind: "row", zone, id: space.id });
+  }
+  const theirs = of("From members");
+  if (theirs.length) items.push({ key: "head:theirs", kind: "fixed", title: "From members" }, ...theirs.map((space): SpaceItem => ({ key: "space:" + space.id, kind: "fixed", id: space.id })));
+  return items;
+}
+
+/**
+ * What dropping space `id` into `zone`, at `index` among that group's other spaces, asks of the
+ * computer: the person's whole order (pinned first) and their pins. Only the dropped space moves.
+ * Undefined when nothing changes.
+ */
+export function spaceDropPlan(spaces: SpaceSummary[], viewer: Viewer, id: string, zone: SpaceZone, index: number): Arrangement | undefined {
+  if (!spaces.some((space) => space.id === id)) return undefined;
+  const was = spaces.filter((space) => space.pinned).map((space) => space.id);
+  const pinned = was.filter((one) => one !== id);
+  const rest = spaces.filter((space) => !space.pinned && space.id !== id).map((space) => space.id);
+  if (zone === "pinned") pinned.splice(Math.max(0, Math.min(index, pinned.length)), 0, id);
+  else {
+    // Among "More": just before the one now at `index` there, else after its last. What members made keeps its place.
+    const more = (spaceSections(spaces, viewer).find((section) => section.title === "More")?.spaces ?? []).map((space) => space.id).filter((one) => one !== id);
+    const at = Math.max(0, index);
+    const [before, next] = [more[at - 1], more[at]];
+    // Already between its new neighbours in the person's order: it stays where it is.
+    const now = spaces.filter((space) => !space.pinned).map((space) => space.id);
+    const here = now.indexOf(id);
+    if (here >= 0 && (!before || now.indexOf(before) < here) && (!next || now.indexOf(next) > here)) rest.splice(0, rest.length, ...now);
+    else rest.splice(next ? rest.indexOf(next) : more.length ? rest.indexOf(more[more.length - 1]!) + 1 : 0, 0, id);
+  }
+  const order = [...pinned, ...rest];
+  const same = order.every((one, i) => one === spaces[i]?.id) && pinned.length === was.length && pinned.every((one, i) => one === was[i]);
+  return same ? undefined : { order, pinned };
+}
+
+/** The spaces as they will be once the computer has taken an arrangement: shown at once, until its own list arrives. */
+export function applyArrangement(spaces: SpaceSummary[], plan: Arrangement): SpaceSummary[] {
+  const by = new Map(spaces.map((space) => [space.id, space]));
+  const pins = new Set(plan.pinned);
+  const moved = plan.order.flatMap((id) => (by.has(id) ? [{ ...by.get(id)!, pinned: pins.has(id) }] : []));
+  // A space the plan does not name (it arrived meanwhile) keeps its place at the end.
+  return [...moved, ...spaces.filter((space) => !plan.order.includes(space.id))];
+}
+
 // ── Share ───────────────────────────────────────────────────────────────────
 
 export type ShareChoice = { access: SpaceAccess; title: string; line: string; disabled?: string };
