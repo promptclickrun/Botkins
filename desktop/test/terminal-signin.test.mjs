@@ -632,7 +632,7 @@ test("the account that the sign-in server names is said in the last lines, and s
   const env = await world(t, { idToken: { email: "sam@example.com", name: "Sam" } });
   const { botkins, remote, changes, running } = env;
   const first = await signedIn(env);
-  assert.equal(first.done.out, "The sign-in server says that the account is sam@example.com.\nwords is signed in.\n");
+  assert.equal(first.done.out, "The sign-in server says that the account is \"sam@example.com\".\nwords is signed in.\n");
   assert.equal(first.step.host, new URL(remote.url).host);
   // The second sign-in writes over the first, and says so, and the log says so.
   const step = (await botkins(["tools", "sign-in", "words", "--start", "--json"])).json();
@@ -641,7 +641,7 @@ test("the account that the sign-in server names is said in the last lines, and s
   assert.equal(again.exit, 0, again.err);
   assert.deepEqual(again.json(), { done: true, id: step.id, name: "words", signedIn: true, again: true, host: step.host, account: "sam@example.com" });
   const text = await signedIn(env);
-  assert.equal(text.done.out, "The sign-in server says that the account is sam@example.com.\nSigned in to words again. This replaces the sign-in that was there.\n");
+  assert.equal(text.done.out, "The sign-in server says that the account is \"sam@example.com\".\nSigned in to words again. This replaces the sign-in that was there.\n");
   assert.deepEqual(await changes(), ["tools.add words", "tools.signIn words (signed in)", "tools.signIn words (signed in again)", "tools.signIn words (signed in again)"]);
   // The id token is not kept.
   absent(["sam@example.com"], env.everything(), JSON.stringify(running.runtime.workspace.integrations.oauth.read(running.runtime.workspace.integrations.server(step.id))));
@@ -658,9 +658,9 @@ test("the account that the sign-in server names is said in the last lines, and s
 test("the account is the server's own word, shown as text and cut", { skip }, async (t) => {
   const env = await world(t, { idToken: { email: "a\u202eb\u001b[2J" + "x".repeat(300) } });
   const done = await signedIn(env);
-  assert.match(done.done.out, /^The sign-in server says that the account is a\\u\{202e\}b\\u\{1b\}\[2Jx+\.\nwords is signed in\.\n$/);
+  assert.match(done.done.out, /^The sign-in server says that the account is "a\\u\{202e\}b\\u\{1b\}\[2Jx+"\.\nwords is signed in\.\n$/);
   assert.equal(/[\u001b\u202e]/.test(done.done.out), false);
-  const account = /account is (.*)\.\n/.exec(done.done.out)[1];
+  const account = /account is "(.*)"\.\n/.exec(done.done.out)[1];
   assert.ok(account.length < 140, "cut: " + account.length);
 });
 
@@ -767,21 +767,138 @@ test("a plugin whose installed copy was changed after install is refused for a s
   assert.deepEqual((await changes()).filter((line) => /signIn/.test(line)), [], "a sign-in that was refused leaves no line");
 });
 
-test("two tools that sign in at once on one port: the second says who holds it, and it works after the first is over", { skip }, async (t) => {
-  const { botkins, running, visit } = await world(t);
+const ENDED = "This sign-in was ended: a sign-in to another tool needed its port. Start it again.";
+const toolId = (running, name) => running.runtime.workspace.integrations.publicServers().find((server) => server.name === name).id;
+const registrations = (remote) => remote.state.log.filter((entry) => entry.path === "/register");
+/** A second sign-in server with a tool of its own, a tool whose client is typed in by hand (it cannot use another port), and the port both use. */
+async function twoTools(t, env) {
   const second = await oauthMcpServer();
   t.after(() => second.close());
-  assert.equal((await botkins(["tools", "add", "other", "--url", second.url])).exit, 0);
-  running.runtime.workspace.integrations.oauth.port = await freePort();
+  const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
+  t.after(() => own.close());
+  assert.equal((await env.botkins(["tools", "add", "other", "--url", second.url])).exit, 0);
+  assert.equal((await env.botkins(["tools", "add", "own", "--url", own.url, "--client-id", "mine"])).exit, 0);
+  const oauth = env.running.runtime.workspace.integrations.oauth;
+  oauth.port = await freePort();
+  return { second, own, oauth, fixed: oauth.port };
+}
+
+test("a held --start does not hold back the window's sign-in for another tool: it goes to a free port, and the held one is finished after", { skip }, async (t) => {
+  const env = await world(t);
+  const { botkins, running, visit } = env;
+  const { second, oauth, fixed } = await twoTools(t, env);
+  running.runtime.workspace.openExternal = (url) => second.browser(url);
   const first = (await botkins(["tools", "sign-in", "words", "--start", "--json"])).json();
-  const refused = await botkins(["tools", "sign-in", "other", "--start", "--json"]);
+  assert.equal(new URL(first.back).port, String(fixed));
+  // The window's own path, through the handler that its button calls.
+  await running.runtime.handlers.signInMcpServer(toolId(running, "other"));
+  assert.equal(oauth.status({ id: toolId(running, "other") }).signedIn, true);
+  assert.equal(registrations(second).length, 1);
+  assert.notEqual(new URL(JSON.parse(registrations(second)[0].body).redirect_uris[0]).port, String(fixed));
+  // The held one was not touched: it is open, its page works, and the address finishes it.
+  assert.equal(oauth.flows.has(first.id), true);
+  const answer = await visit(first.open);
+  const done = await botkins(["tools", "sign-in", "words", "--finish"], { input: answer.back });
+  assert.equal(done.exit, 0, done.err);
+});
+
+test("the same again for that tool after a cancel sends no new registration: the kept client and its port are used", { skip }, async (t) => {
+  const env = await world(t);
+  const { botkins, running } = env;
+  const { second, oauth } = await twoTools(t, env);
+  const other = toolId(running, "other");
+  await botkins(["tools", "sign-in", "words", "--start", "--json"]);
+  // A start of the window that nobody finishes, and is cancelled: the page is shown and nothing more.
+  running.runtime.workspace.openExternal = async () => {};
+  const first = running.runtime.handlers.signInMcpServer(other);
+  first.catch(() => {});
+  await until(() => registrations(second).length === 1 && oauth.flows.get(other)?.port, "the first registration");
+  const port = oauth.flows.get(other).port;
+  assert.equal(new URL(JSON.parse(registrations(second)[0].body).redirect_uris[0]).port, String(port));
+  oauth.cancel(other);
+  await assert.rejects(first, /Sign-in was cancelled\./);
+  // The next one, with the fixed port still held by the other sign-in, is on the same port and has the same client.
+  running.runtime.workspace.openExternal = (url) => second.browser(url);
+  await running.runtime.handlers.signInMcpServer(other);
+  assert.equal(registrations(second).length, 1, "no new registration was sent");
+  assert.equal(new URL(second.state.lastCallback).port, String(port));
+  assert.equal(oauth.status({ id: other }).signedIn, true);
+});
+
+test("a tool that cannot use another port ends a held --start that nobody follows, and that one says why", { skip }, async (t) => {
+  const env = await world(t);
+  const { botkins, running, visit } = env;
+  const { own, fixed } = await twoTools(t, env);
+  const first = (await botkins(["tools", "sign-in", "words", "--start", "--json"])).json();
+  const stale = await visit(first.open);
+  const started = await botkins(["tools", "sign-in", "own", "--start", "--json"]);
+  assert.equal(started.exit, 0, started.err);
+  const next = started.json();
+  assert.equal(new URL(next.back).port, String(fixed), "it has the port that it needs");
+  // The ended one: its session has the sentence, its port is free, and its command says it.
+  await until(() => running.service.signIns.last("tool:" + first.id), "the end of the first sign-in");
+  assert.equal(running.service.signIns.last("tool:" + first.id).error, ENDED);
+  const finish = await botkins(["tools", "sign-in", "words", "--finish", "--json"], { input: stale.back });
+  assert.equal(finish.exit, 1);
+  assert.equal(finish.json().error.message, ENDED);
+  assert.equal(running.runtime.workspace.integrations.oauth.flows.size, 1, "only the new one is open");
+  // The new one goes on and is finished.
+  const done = await botkins(["tools", "sign-in", "own", "--finish"], { input: (await visit(next.open)).back });
+  assert.equal(done.exit, 0, done.err);
+  assert.equal(own.state.log.filter((entry) => entry.path === "/token").length, 1);
+});
+
+test("a sign-in that somebody follows is not ended for another tool: the other tool is refused, with the name of the holder", { skip }, async (t) => {
+  const env = await world(t);
+  const { botkins, running, converse } = env;
+  const { own } = await twoTools(t, env);
+  const person = converse(["tools", "sign-in", "words"]);
+  await person.seen(/paste it here\./);
+  const refused = await botkins(["tools", "sign-in", "own", "--start", "--json"]);
   assert.equal(refused.exit, 1);
   assert.equal(refused.json().error.message, "Another sign-in (to words) is open on this computer and holds the port. Finish it or cancel it, then try again.");
-  assert.equal(second.state.log.some((entry) => entry.path === "/register"), false, "no client was registered");
-  assert.equal((await botkins(["tools", "sign-in", "words", "--cancel"])).exit, 0);
-  const next = (await botkins(["tools", "sign-in", "other", "--start", "--json"])).json();
-  assert.equal((await botkins(["tools", "sign-in", "other", "--finish"], { input: (await visit(next.open)).back })).exit, 0);
-  assert.ok(first.open);
+  assert.equal(running.runtime.workspace.integrations.oauth.flows.size, 1, "the one that is followed is still open");
+  assert.equal(own.state.log.some((entry) => entry.path === "/authorize"), false);
+  person.interrupt();
+  assert.equal(await person.finished, 130);
+  // With nobody following, the other tool goes on.
+  assert.equal((await botkins(["tools", "sign-in", "own", "--start", "--json"])).exit, 0);
+});
+
+test("a command that went away is ended after 45 seconds, not after the whole wait, and a held --start is not ended by that time", async () => {
+  const signIns = new SignIns({ providers: () => ({}), vault: () => ({}) });
+  // (150 ms stands in for the 45 seconds.)
+  const options = { abandonedMs: 150 };
+  const followed = await signIns.startTool({ id: "followed", name: "followed" }, waiting(), options);
+  const held = await signIns.startTool({ id: "held", name: "held" }, waiting(), { ...options, hold: true });
+  const reading = await signIns.startTool({ id: "reading", name: "reading" }, waiting(), options);
+  const started = Date.now();
+  // One that is read now and then is not left.
+  for (let round = 0; round < 8; round++) {
+    await signIns.read(reading.session, { ms: 50 });
+    await sleep(50);
+  }
+  assert.equal(signIns.sessions.get(reading.session).done, false, "a sign-in that is read is not ended");
+  await until(() => signIns.sessions.get(followed.session).done, "the end of the one that nobody reads");
+  assert.ok(Date.now() - started < 4000);
+  assert.match(signIns.sessions.get(followed.session).error, /Sign-in was cancelled\./);
+  await sleep(300);
+  assert.equal(signIns.sessions.get(held.session).done, false, "a sign-in that `--start` left open waits for its address");
+  assert.equal(followed.minutes, 10, "the wait for the address is the 10 minutes of a tool's sign-in");
+  await signIns.cancelTool("held");
+  await signIns.cancelTool("reading");
+});
+
+test("what a sign-in server says of the account is its email and nothing else: a name and a user name are not an account", { skip }, async (t) => {
+  const env = await world(t, { idToken: { name: "Alice Smith", preferred_username: "alice", sub: "s-1" } });
+  const { botkins, visit, remote } = env;
+  const first = await signedIn(env);
+  assert.equal(first.done.out, unnamed(remote, "words"));
+  assert.equal(/Alice|alice/.test(first.done.out), false);
+  const step = (await botkins(["tools", "sign-in", "words", "--start", "--json"])).json();
+  const again = await botkins(["tools", "sign-in", "words", "--finish", "--json"], { input: (await visit(step.open)).back });
+  assert.equal("account" in again.json(), false);
+  assert.equal(JSON.stringify(again.json()).includes("Alice"), false);
 });
 
 test("--no-input never asks: the plain form names the two steps, and --finish reads standard input only when it is not a terminal", { skip }, async (t) => {
@@ -824,7 +941,7 @@ test("the log has one line for a sign-in that is done, and none for one that was
   assert.deepEqual(await lines(), [], "a cancel leaves none");
   // A sign-in that runs out of time: the same call with a patience of 50 ms.
   const { signIns } = running.service;
-  const quick = { ...signIns, startTool: (tool, how, options) => signIns.startTool(tool, how, { ...options, patience: 50 }) };
+  const quick = { ...signIns, startTool: (tool, how, options) => signIns.startTool(tool, how, { ...options, answerMs: 50 }) };
   const { toolsApi } = await import("../desktop/terminal/control-tools.mjs");
   const api = toolsApi({ workspace: running.runtime.workspace, handlers: running.runtime.handlers, bot: () => null, signIns: quick, log: (line) => running.service.log.info(line) });
   const started = await api["tools.signIn"](["words", { hold: true }]);

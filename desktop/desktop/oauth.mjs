@@ -13,9 +13,18 @@ import { approvedClient } from "./oauth-clients.mjs";
 /** Where the browser hands the sign-in back. A fixed port, so it can be registered by hand too. */
 export const REDIRECT_PORT = 47823;
 const redirectUri = (port) => "http://127.0.0.1:" + port + "/callback";
+/** The port in a return address that Botkins made (`redirectUri`), or 0 for any other address. */
+const keptPort = (address) => {
+  const port = Number(/^http:\/\/127\.0\.0\.1:(\d{1,5})\/callback$/.exec(String(address))?.[1]);
+  return port > 0 && port < 65536 && redirectUri(port) === address ? port : 0;
+};
 const TIMEOUT = 15000;
 const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
 const EARLY = 60 * 1000; // a token this close to its end is renewed first
+
+/** What a sign-in says when a sign-in to a tool that cannot use another port ended it to take its port. */
+export const ENDED_FOR_PORT = "This sign-in was ended: a sign-in to another tool needed its port. Start it again.";
+const PORT_FREE_MS = 5000; // how long a sign-in waits for the port of one that it ended
 
 const MAX_ANSWER = 1_000_000; // bytes read from any one answer of a sign-in server
 
@@ -84,10 +93,12 @@ async function capped(response) {
 /** An error with a code, for a caller that tells one refusal from another (a terminal host). */
 const coded = (message, code) => Object.assign(new Error(message), { code });
 /**
- * The account that the sign-in server says the person signed in as, from the `id_token` of the
- * token answer (a JWT): `email`, else `preferred_username`, else `name`, cut to 120 characters.
- * The payload is read and not verified: it is the server's own word, shown as that. Nothing is
- * asked of any server for it, and the id token is never kept. Null when the answer has none.
+ * The account that the sign-in server says the person signed in as: the `email` claim of the
+ * `id_token` of the token answer (a JWT), trimmed and cut to 120 characters. No other claim is used:
+ * a name or a user name is chosen by the person who owns the account, so it can say anything,
+ * even the name of somebody else. The payload is read and not verified: it is the server's own word,
+ * shown as that. Nothing is asked of any server for it, and the id token is never kept. Null when the
+ * answer has no email.
  */
 export function accountOf(reply) {
   const token = reply?.id_token;
@@ -96,10 +107,8 @@ export function accountOf(reply) {
   if (parts.length !== 3) return null;
   try {
     const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    for (const key of ["email", "preferred_username", "name"]) {
-      const value = claims?.[key];
-      if (typeof value === "string" && value.trim()) return value.trim().slice(0, 120);
-    }
+    const email = claims?.email;
+    if (typeof email === "string" && email.trim()) return email.trim().slice(0, 120);
   } catch {}
   return null;
 }
@@ -435,14 +444,37 @@ export class McpOAuth {
    * the address to the person, and gives the answer with `answer()`. `patience` is how long the
    * answer may take, in milliseconds. `finished({ account, again })` is called once the tokens
    * are written: `again` is true when a sign-in was there before and is replaced, and `account` is
-   * what the sign-in server says the account is (accountOf), or null.
+   * the email that the sign-in server says the account has (accountOf), or null.
+   *
+   * The answer comes back to one port. When another sign-in of this app holds it, a tool that can use
+   * another port does (the port of a registration kept for this server, else one from the system). A
+   * tool that cannot (an approved client, a client the person typed in, a server with no registration)
+   * ends the holder when `followed()` of the holder says that nobody follows it, and is refused, with
+   * the holder named, while somebody does. `followed` is a function that says whether a person follows
+   * this sign-in at this moment; with none the answer is yes (the window's sign-in has a person in front of its browser).
    *
    * A cancel (`cancel()`) ends the sign-in in any state: before the page, while it waits, after
    * the address was taken and while the token request is out. Nothing is written after it.
    */
-  async signIn(server, { client, scope, hint, open = this.open, patience, finished } = {}) {
+  async signIn(server, { client, scope, hint, open = this.open, patience, finished, followed = () => true } = {}) {
     if (this.flows.has(server.id)) throw new Error("A sign-in for " + server.name + " is already open in your browser.");
-    const flow = { cancelled: false, cancel: () => {}, abort: () => {}, name: server.name, port: null };
+    const flow = {
+      id: server.id,
+      cancelled: false,
+      reason: null,
+      cancel: () => {},
+      abort: () => {},
+      name: server.name,
+      port: null,
+      // (A function that throws is a person who follows: ending a sign-in is the thing to be careful with.)
+      followed: () => {
+        try {
+          return followed() !== false;
+        } catch {
+          return true;
+        }
+      },
+    };
     // Rejects when the sign-in is cancelled: a request that is out is not waited for then.
     const aborted = new Promise((_resolve, reject) => (flow.abort = () => reject(new Error("Sign-in was cancelled."))));
     aborted.catch(() => {});
@@ -458,20 +490,42 @@ export class McpOAuth {
       const port = approved ? Number(approved.callback.port || 80) : this.port;
       const missingClient = () => new Error("Ask your administrator or the server operator to configure an approved OAuth client for " + server.name + ". You can also enter a client ID in this server's advanced sign-in settings.");
       if (!approved && !client && !meta.registration_endpoint && !saved.registered) throw missingClient();
-      // The answer comes back to a fixed port. Another sign-in of this one holds it: say so, and do not
-      // try another port (that would register one more client for a sign-in that waits). When something
-      // else holds it, a registration made for another port can be made again; one typed in by hand can't.
+      // The answer comes back to one port. When another sign-in of this app holds it, a tool that can use another port does.
+      // A tool that cannot (its return address is fixed) ends a holder that nobody follows, and is refused while somebody does.
+      const canMove = !approved && !client && !!meta.registration_endpoint;
       const holder = () => (port ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
       const held = (other) => new Error("Another sign-in (to " + other.name + ") is open on this computer and holds the port. Finish it or cancel it, then try again.");
-      if (holder()) throw held(holder());
-      flow.port = port || null;
-      try {
-        listener = await this.listen(port, approved?.callback, patience);
-      } catch (error) {
-        flow.port = null;
+      if (holder() && !canMove) {
+        const other = holder();
+        if (other.followed()) throw held(other);
+        this.cancel(other.id, ENDED_FOR_PORT);
+        // Its end frees its port: that is waited for, not for ever.
+        for (let waited = 0; holder() && waited < PORT_FREE_MS; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
         if (holder()) throw held(holder());
-        if (approved || client || !meta.registration_endpoint) throw new Error("Botkins couldn't listen for the sign-in on port " + port + ". Close what is using it and try again.");
-        listener = await this.listen(0, undefined, patience);
+      }
+      if (!holder()) {
+        flow.port = port || null;
+        try {
+          listener = await this.listen(port, approved?.callback, patience);
+        } catch (error) {
+          flow.port = null;
+          if (holder() && !canMove) throw held(holder());
+          if (!canMove) throw new Error("Botkins couldn't listen for the sign-in on port " + port + ". Close what is using it and try again.");
+        }
+      }
+      if (!listener) {
+        // Another port: first that of a registration kept for this server (it is used again, so none is made), then one from the system.
+        const kept = [saved.registered && saved, saved.registration]
+          .filter((entry) => entry?.clientId && entry.issuer === found.issuer && entry.tokenEndpoint === meta.token_endpoint)
+          .map((entry) => keptPort(entry.redirectUri))
+          .filter((other) => other && other !== port);
+        for (const other of kept) {
+          try {
+            listener = await this.listen(other, undefined, patience);
+            break;
+          } catch {}
+        }
+        listener ??= await this.listen(0, undefined, patience);
       }
       flow.port = listener.port;
       flow.cancel = listener.cancel;
@@ -564,6 +618,9 @@ export class McpOAuth {
       });
       finished?.({ account, again });
       return this.status(server);
+    } catch (error) {
+      // A sign-in that was ended for a reason says that reason, whichever step it was in.
+      throw flow.cancelled && flow.reason ? new Error(flow.reason) : error;
     } finally {
       listener?.close();
       this.flows.delete(server.id);
@@ -626,9 +683,10 @@ export class McpOAuth {
     if (!flow?.take) throw coded("No sign-in is waiting for that address. Start the sign-in again.", "NO_SIGN_IN");
     flow.take(address);
   }
-  cancel(serverId) {
+  cancel(serverId, reason) {
     const flow = this.flows.get(serverId);
     if (!flow) return false;
+    if (reason) flow.reason = reason;
     // Whatever state the sign-in is in: before the page, waiting, after the address was taken, with the token request out.
     flow.cancelled = true;
     flow.cancel();

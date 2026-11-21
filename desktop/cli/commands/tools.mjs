@@ -148,7 +148,7 @@ export const SIGN_IN_DETAILS = [
   "The pasted address is never a word on the command line: it holds a code.",
   "--no-input is for an agent, or a script, that has a terminal it cannot type at: the command then never asks. The plain form fails at once and names the two steps. --finish reads the address from standard input when that is not a terminal, and fails at once when it is. A pipe that is never closed makes --finish wait.",
   "",
-  "The page that the command prints is the key to the sign-in: whoever opens it can sign in with their own account, and whoever gives the address that follows to --finish signs the tool in as that account. So open only a page from your own command's output. Paste only the address that your own browser was sent to. Read which account the last lines name.",
+  "The page that the command prints is the key to the sign-in: whoever opens it can sign in with their own account, and whoever gives the address that follows to --finish signs the tool in as that account. So open only a page from your own command's output. Paste only the address that your own browser was sent to. The host that the command names is the host of the first page only. Many sign-in pages send the browser on to another host, so the host is something to check, not a promise. Read which account the last lines name.",
   "",
   "What is accepted: only the address this sign-in named, with the mark (`state`) of this sign-in. The tool's sign-in server is checked by its name in the address (`iss`) when it gives one. The code in the address works one time, and only with a secret this computer made for this sign-in. A wrong `state`, another address or no code is turned away, and the sign-in stays open for the right one. An answer in which the server names itself wrongly (`iss`) ends the sign-in: start it again. The address and the code are never in the log.",
 ].join("\n");
@@ -241,10 +241,13 @@ export async function signInCommand(context, { calls, target, next }) {
 }
 /** ", on login.example.com" for a page's host, as safe text. */
 const onHost = (host) => (host ? ", on " + safe(host) : "");
-/** The last lines of a sign-in that is done: which account the sign-in server says it is, and whether it replaced one. */
+/**
+ * The last lines of a sign-in that is done: the email that the sign-in server says the account has (in quotes, as it came: a
+ * name or a user name is chosen by whoever owns the account, so it is never shown as the account), and whether it replaced one.
+ */
 const signedIn = (done) =>
   [
-    done.account ? "The sign-in server says that the account is " + safe(done.account) + "." : "Botkins cannot tell which account this is. Check it at " + (done.host ? safe(done.host) : "the sign-in server") + ".",
+    done.account ? 'The sign-in server says that the account is "' + safe(done.account) + '".' : "Botkins cannot tell which account this is. Check it at " + (done.host ? safe(done.host) : "the sign-in server") + ".",
     done.again ? "Signed in to " + safe(done.name) + " again. This replaces the sign-in that was there." : safe(done.name) + " is signed in.",
   ].join("\n");
 const toolLine = (tool) => (tool.kind === "command" ? shown(tool.runs) : safe(tool.url));

@@ -814,12 +814,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;
     // the sign-in or the install command is this computer's own (desktop/terminal/signin.mjs).
     providerSignInStart: (id, options) =>
-      signIns.start(String(id), { service: typeof options?.service === "string" ? options.service : undefined, method: typeof options?.method === "string" ? options.method : undefined, patience: PHONE_PATIENCE_MS }),
+      signIns.start(String(id), { service: typeof options?.service === "string" ? options.service : undefined, method: typeof options?.method === "string" ? options.method : undefined, abandonedMs: PHONE_PATIENCE_MS }),
     providerSignInRead: (session, after) => signIns.read(String(session), { after: Number(after) || 0, ms: 10_000 }),
     providerSignInInput: (session, text) => void signIns.input(String(session), text),
     providerSignInCancel: (session) => signIns.cancel(String(session)),
     providerUseToken: (id, token, options) => signIns.useToken(String(id), token, { service: typeof options?.service === "string" ? options.service : undefined }),
-    installProvider: (id) => signIns.install(String(id), { patience: PHONE_PATIENCE_MS }),
+    installProvider: (id) => signIns.install(String(id), { abandonedMs: PHONE_PATIENCE_MS }),
     setProviderEnabled: (id, enabled) => workspace.setProviderEnabled(id, enabled),
     // A provider that holds several model services (OpenCode): look one up, connect it, remove it.
     providerServices: (id, query) => providers.require(id).services(typeof query === "string" ? query.slice(0, 100) : ""),

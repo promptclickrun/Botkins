@@ -721,13 +721,16 @@ function waits(ws, id, extra = {}) {
   return { done, page, go: async () => (await fetch((await page).address, { redirect: "manual" })).headers.get("location") };
 }
 
-test("the account is what the sign-in server says in its id token, and the token is not kept", () => {
+test("the account is the email that the sign-in server says in its id token, and no other word, and the token is not kept", () => {
   assert.equal(accountOf({ id_token: jwt({ email: "sam@example.com", preferred_username: "sam", name: "Sam" }) }), "sam@example.com");
-  assert.equal(accountOf({ id_token: jwt({ preferred_username: "sam", name: "Sam" }) }), "sam");
-  assert.equal(accountOf({ id_token: jwt({ name: "Sam Example" }) }), "Sam Example");
+  assert.equal(accountOf({ id_token: jwt({ email: "  sam@example.com  " }) }), "sam@example.com");
   assert.equal(accountOf({ id_token: jwt({ email: "x".repeat(300) }) }).length, 120);
+  // A name and a user name are chosen by whoever owns the account: they can say anything, even the name of somebody else. They are no account.
+  assert.equal(accountOf({ id_token: jwt({ preferred_username: "sam", name: "Sam" }) }), null);
+  assert.equal(accountOf({ id_token: jwt({ name: "Sam Example" }) }), null);
   // The server's own word is taken as text only: a number, a list and an empty word are no account.
   assert.equal(accountOf({ id_token: jwt({ email: 5, name: ["x"], preferred_username: "  " }) }), null);
+  assert.equal(accountOf({ id_token: jwt({ email: "   " }) }), null);
   for (const bad of [undefined, {}, { id_token: 5 }, { id_token: "not.a.jwt" }, { id_token: "a.b" }, { id_token: "e30.!!!.c2ln" }, { id_token: jwt(null) }, { id_token: jwt([1]) }]) assert.equal(accountOf(bad), null);
 });
 
@@ -774,29 +777,124 @@ test("a sign-in that is cancelled once the address was taken writes nothing and 
   assert.equal(ws.integrations.oauth.status(server).signedIn, true);
 });
 
-test("two sign-ins at once on one port: the second says who holds it and registers nothing, and a tool with a client of its own says the same", async (t) => {
+const ENDED = "This sign-in was ended: a sign-in to another tool needed its port. Start it again.";
+/** The port of the return address that a registration at the stand-in server named. */
+const registeredPort = (remote, n = 0) => Number(new URL(JSON.parse(remote.state.log.filter((entry) => entry.path === "/register")[n].body).redirect_uris[0]).port);
+
+test("a sign-in that is followed holds the port: a tool that cannot use another port is refused with the holder named, and one that can goes on", async (t) => {
   const { ws, id } = await setup(t);
-  const second = await oauthMcpServer();
-  t.after(() => second.close());
   const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
   t.after(() => own.close());
-  const other = ws.integrations.saveServer({ name: "other", type: "http", url: second.url });
   const client = ws.integrations.saveServer({ name: "client", type: "http", url: own.url, oauth: { clientId: "mine" } });
   ws.integrations.oauth.port = await freePort();
   const held = waits(ws, id);
   await held.page;
   t.after(() => ws.integrations.oauth.cancel(id));
-  const said = { message: "Another sign-in (to words) is open on this computer and holds the port. Finish it or cancel it, then try again." };
-  await assert.rejects(ws.integrations.signIn(other, { open: async () => {} }), said);
-  await assert.rejects(ws.integrations.signIn(client, { open: async () => {} }), said);
-  assert.equal(second.state.log.some((entry) => entry.path === "/register"), false, "no client was registered for a sign-in that could not wait");
-  assert.equal(ws.integrations.oauth.flows.size, 1);
+  // The window's own sign-in has a person in front of its browser: it is followed, whatever the other asks.
+  await assert.rejects(ws.integrations.signIn(client, { open: async () => {} }), { message: "Another sign-in (to words) is open on this computer and holds the port. Finish it or cancel it, then try again." });
+  assert.equal(ws.integrations.oauth.flows.size, 1, "the holder was not touched");
   // The first one finishes, and the port is free for the next.
   ws.integrations.answerSignIn(id, await held.go());
   assert.equal((await held.done).signedIn, true);
-  const next = waits(ws, other);
-  ws.integrations.answerSignIn(other, await next.go());
+  const next = waits(ws, client);
+  ws.integrations.answerSignIn(client, await next.go());
   assert.equal((await next.done).signedIn, true);
+});
+
+test("a held sign-in does not hold back another tool: it goes to a free port, and the held one stays open and can be finished", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  const second = await oauthMcpServer();
+  t.after(() => second.close());
+  const other = ws.integrations.saveServer({ name: "other", type: "http", url: second.url });
+  const fixed = await freePort();
+  ws.integrations.oauth.port = fixed;
+  // A sign-in that nobody follows (a `--start`, say) holds the fixed port.
+  const held = waits(ws, id, { followed: () => false });
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  // The window's own sign-in for another tool, through the default `open`, works, on another port.
+  assert.equal((await ws.integrations.signIn(other)).signedIn, true);
+  assert.notEqual(registeredPort(second), fixed);
+  // (The stand-in browser of this test is the first server's: it follows any page to the address it is sent back to.)
+  assert.equal(new URL(remote.state.lastCallback).port, String(registeredPort(second)));
+  // The held one was not touched: it is open and finishes.
+  assert.equal(ws.integrations.oauth.flows.has(id), true);
+  assert.equal(ws.integrations.oauth.flows.get(id).port, fixed);
+  ws.integrations.answerSignIn(id, await held.go());
+  assert.equal((await held.done).signedIn, true);
+});
+
+test("the same tool again after a cancel uses the registration that was kept, and its port: no new client is made", async (t) => {
+  const { ws, id } = await setup(t);
+  const second = await oauthMcpServer();
+  t.after(() => second.close());
+  const other = ws.integrations.saveServer({ name: "other", type: "http", url: second.url });
+  ws.integrations.oauth.port = await freePort();
+  const held = waits(ws, id, { followed: () => false });
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  const registrations = () => second.state.log.filter((entry) => entry.path === "/register").length;
+  // The first start registers, and is cancelled.
+  const first = waits(ws, other);
+  await first.page;
+  assert.equal(registrations(), 1);
+  const port = registeredPort(second);
+  ws.integrations.cancelSignIn(other);
+  await assert.rejects(first.done, /Sign-in was cancelled\./);
+  // The next one, with the fixed port held again, uses that client and that port.
+  const again = waits(ws, other);
+  const back = await again.go();
+  assert.equal(registrations(), 1, "no new registration was sent");
+  assert.equal(new URL(back).port, String(port));
+  assert.equal(new URL((await again.page).address).searchParams.get("client_id"), ws.integrations.oauth.read(ws.integrations.server(other)).registration.clientId);
+  ws.integrations.cancelSignIn(other);
+  await assert.rejects(again.done, /Sign-in was cancelled\./);
+  // When the kept port is taken by a program, a port from the system is used, with a new registration.
+  const taken = createServer(() => {});
+  await new Promise((resolve, reject) => taken.once("error", reject).listen(port, "127.0.0.1", resolve));
+  t.after(() => taken.close());
+  const moved = waits(ws, other);
+  await moved.page;
+  assert.equal(registrations(), 2);
+  assert.notEqual(registeredPort(second, 1), port);
+  ws.integrations.cancelSignIn(other);
+  await assert.rejects(moved.done, /Sign-in was cancelled\./);
+});
+
+test("a tool that cannot use another port ends a held sign-in that nobody follows, and goes on", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
+  t.after(() => own.close());
+  const client = ws.integrations.saveServer({ name: "client", type: "http", url: own.url, oauth: { clientId: "mine" } });
+  const fixed = await freePort();
+  ws.integrations.oauth.port = fixed;
+  const held = waits(ws, id, { followed: () => false });
+  await held.page;
+  // The window's sign-in for a tool with a client of its own (the default `open` answers through the stand-in).
+  assert.equal((await ws.integrations.signIn(client)).signedIn, true);
+  await assert.rejects(held.done, { message: ENDED });
+  assert.equal(ws.integrations.oauth.flows.size, 0);
+  assert.equal(ws.integrations.oauth.status(ws.integrations.server(id)).signedIn, false);
+  assert.equal(new URL(remote.state.lastCallback).port, String(fixed), "it used the port that it needed");
+  // A sign-in that is ended in this way says why, and asked about a second time it works again.
+  assert.equal((await ws.integrations.signIn(id)).signedIn, true);
+});
+
+test("a holder whose answer to \"is it followed\" fails is taken as followed, and is not ended", async (t) => {
+  const { ws, id } = await setup(t);
+  const own = await oauthMcpServer({ registration: false, staticClient: { id: "mine" } });
+  t.after(() => own.close());
+  const client = ws.integrations.saveServer({ name: "client", type: "http", url: own.url, oauth: { clientId: "mine" } });
+  ws.integrations.oauth.port = await freePort();
+  const held = waits(ws, id, {
+    followed: () => {
+      throw new Error("broken");
+    },
+  });
+  await held.page;
+  t.after(() => ws.integrations.oauth.cancel(id));
+  await assert.rejects(ws.integrations.signIn(client, { open: async () => {} }), /Another sign-in \(to words\) is open on this computer and holds the port\./);
+  assert.equal(ws.integrations.oauth.flows.has(id), true);
 });
 
 test("a registration made for a sign-in that was cancelled or timed out is used again, and holds no token", async (t) => {
