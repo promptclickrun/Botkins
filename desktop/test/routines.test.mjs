@@ -244,6 +244,7 @@ test("notification decisions follow the toggles, focus, quiet hours and run kind
   const reply = { type: "turn", bot, chat, run: { id: "r1", chatId: "c1", title: "Hi", status: "Completed" } };
   assert.deepEqual(decide(reply, ctx()), { title: "Pip · Plans", body: "Here you go", chatId: "c1" });
   assert.equal(decide(reply, ctx({ focused: true })), null, "no reply alert while the window is focused");
+  assert.equal(decide({ ...reply, run: { ...reply.run, notify: false } }, ctx()), null, "a quiet shortcut turn suppresses its reply alert");
   assert.equal(decide({ ...reply, run: { ...reply.run, status: "Stopped" } }, ctx()), null);
 
   const routine = { ...reply, run: { ...reply.run, title: "Inbox", trigger: "scheduled", scheduleId: 1 } };

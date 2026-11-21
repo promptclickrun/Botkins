@@ -1288,7 +1288,7 @@ export type Calls = {
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
-  send(chatId: string, text: string, options?: { quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
+  send(chatId: string, text: string, options?: { notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;

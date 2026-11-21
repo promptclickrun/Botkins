@@ -1,0 +1,115 @@
+import AppIntents
+import Foundation
+
+/// Only labels and stable IDs are returned to the picker. Host IDs keep saved shortcuts bound
+/// to the right pairing when two computers have identically named agents or models.
+private struct Catalog: Decodable {
+  struct Bot: Decodable { let id, name: String; let model: String? }
+  struct Model: Decodable { let key, name, provider, label: String; let efforts: [String] }
+  let host, name: String
+  let bots: [Bot]
+  let models: [Model]
+
+  static func load(host: String? = nil, models: Bool = false) async throws -> Self {
+    var fields = ["action": "catalog", "models": models ? "yes" : "no"]
+    fields["host"] = host
+    let json = try await runShortcut(fields)
+    return try JSONDecoder().decode(Self.self, from: Data(json.utf8))
+  }
+}
+
+private func hosts(in identifiers: [String]) -> Set<String> {
+  Set(identifiers.compactMap { id in id.firstIndex(of: "|").map { String(id[..<$0]) } })
+}
+
+struct ShortcutAgent: AppEntity {
+  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Agent"
+  static let defaultQuery = Query()
+  static let primary = Self(id: "primary", name: "Primary bot", computer: nil)
+  let id, name: String
+  let computer: String?
+  var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(title: "\(name)", subtitle: computer.map { "\($0)" }, image: .init(systemName: "person.crop.circle"))
+  }
+  var fields: [String: String] {
+    guard let split = id.firstIndex(of: "|") else { return [:] }
+    return ["host": String(id[..<split]), "bot": String(id[id.index(after: split)...])]
+  }
+
+  struct Query: EntityQuery {
+    private func agents(_ catalog: Catalog) -> [ShortcutAgent] {
+      catalog.bots.map { ShortcutAgent(id: catalog.host + "|" + $0.id, name: $0.name, computer: catalog.name) }
+    }
+    func defaultResult() async -> ShortcutAgent? { .primary }
+    func suggestedEntities() async throws -> [ShortcutAgent] {
+      let catalog = try await Catalog.load()
+      let primary = ShortcutAgent(id: "primary", name: "Primary bot", computer: catalog.bots.first?.name)
+      return [primary] + agents(catalog)
+    }
+    func entities(for identifiers: [String]) async throws -> [ShortcutAgent] {
+      var options: [ShortcutAgent] = [.primary]
+      for host in hosts(in: identifiers) { options += agents(try await Catalog.load(host: host)) }
+      return try identifiers.map { id in
+        guard let agent = options.first(where: { $0.id == id }) else { throw ShortcutError.message("Choose an available agent in the shortcut.") }
+        return agent
+      }
+    }
+  }
+}
+
+@available(iOS 17.0, *)
+struct ShortcutModel: AppEntity {
+  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Model"
+  static let defaultQuery = Query()
+  let host, key, name, provider, label: String
+  let efforts: [String]
+  var id: String { host + "|" + key }
+  var displayRepresentation: DisplayRepresentation {
+    let aliases = ["claudeAgent": "claude", "anthropic": "claude", "openai": "codex", "chatgpt": "codex", "github": "copilot"]
+    let mark = aliases[provider] ?? provider
+    var image = DisplayRepresentation.Image(systemName: "cpu")
+    if let url = Bundle.main.url(forResource: "provider-" + mark, withExtension: "png"),
+       let data = try? Data(contentsOf: url) {
+      image = .init(data: data, isTemplate: !["claude", "kiro", "antigravity"].contains(mark))
+    }
+    return DisplayRepresentation(title: "\(name)", subtitle: "\(label)", image: image)
+  }
+
+  struct Query: EntityQuery {
+    @IntentParameterDependency<SendBotkinsChat>(\.$agent) var intent
+    private func models(_ catalog: Catalog) -> [ShortcutModel] {
+      catalog.models.map { ShortcutModel(host: catalog.host, key: $0.key, name: $0.name, provider: $0.provider, label: $0.label, efforts: $0.efforts) }
+    }
+    func suggestedEntities() async throws -> [ShortcutModel] {
+      models(try await Catalog.load(host: intent?.agent.fields["host"], models: true))
+    }
+    func entities(for identifiers: [String]) async throws -> [ShortcutModel] {
+      var options: [ShortcutModel] = []
+      for host in hosts(in: identifiers) { options += models(try await Catalog.load(host: host, models: true)) }
+      return try identifiers.map { id in
+        guard let model = options.first(where: { $0.id == id }) else { throw ShortcutError.message("Choose an available model in the shortcut.") }
+        return model
+      }
+    }
+  }
+}
+
+@available(iOS 17.0, *)
+struct ThinkingLevels: DynamicOptionsProvider {
+  @IntentParameterDependency<SendBotkinsChat>(\.$agent, \.$model) var intent
+  func results() async throws -> ItemCollection<String> {
+    let levels: [String]
+    if let model = intent?.model {
+      levels = model.efforts
+    } else {
+      let agent = intent?.agent.fields ?? [:]
+      let catalog = try await Catalog.load(host: agent["host"], models: true)
+      let bot = agent["bot"].map { id in catalog.bots.first { $0.id == id } } ?? catalog.bots.first
+      levels = catalog.models.first { $0.key == bot?.model }?.efforts ?? []
+    }
+    return ItemCollection(sections: [ItemSection(items: levels.map { level in
+      let label = level == "xhigh" ? "Extra high" : level.capitalized
+      return Item(level, title: "\(label)")
+    })])
+  }
+}

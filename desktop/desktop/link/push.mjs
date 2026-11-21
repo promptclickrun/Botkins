@@ -348,7 +348,7 @@ export class Push {
 
   /** Whether a run that finished is worth a notification, and of which kind (the desktop's own rules). */
   kindOf(run, chat) {
-    if (!chat || chat.temporary || run.status === "Stopped") return null;
+    if (!chat || chat.temporary || run.status === "Stopped" || run.notify === false) return null;
     // A run that published nothing (a routine set to "No output", or one that reached the end with
     // no result to deliver) has nothing to tell: a notification would show an earlier run's words.
     // One that failed is still worth a look.

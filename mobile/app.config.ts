@@ -137,6 +137,7 @@ const config: ExpoConfig = {
     ["@config-plugins/react-native-webrtc", { cameraPermission: "Botkins uses the camera to scan the pairing code and to take a photo for a message.", microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot." }],
     // The Live Activities and widgets, the notification extension, and the notification content extension (targets/).
     "@bacons/apple-targets",
+    "./plugins/withShortcuts.js",
     // Android release signing with the Play upload key (plugins/withAndroidRelease.js).
     "./plugins/withAndroidRelease.js",
   ],
