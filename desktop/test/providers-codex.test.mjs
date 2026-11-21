@@ -12,6 +12,12 @@ import { BRIDGE, CodexProvider, approvalSettings, threadConfig } from "../deskto
 import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 
+/** Waits until `ready()` is true. A stand-in server works at its own pace, so a fixed time is not enough on a slow runner. */
+const until = async (ready, what) => {
+  for (let waited = 0; !ready() && waited < 500; waited++) await tick(10);
+  assert.ok(ready(), what);
+};
+
 /**
  * A stand-in for the app-server. `answer(method, params, server)` answers each request;
  * `server.emit` sends a notification and `server.ask` makes a request of the client, as Codex does.
@@ -388,8 +394,7 @@ test("a turn can fail, be stopped, or be planned without touching anything", asy
   const stopped = session.send({ prompt: "Go" });
   // The stand-in server takes the turn at its own pace, and only then is there something to release.
   // So wait until it holds the turn, not for a fixed time (a slow runner was not there after 20 ms).
-  for (let waited = 0; typeof server.release !== "function" && waited < 500; waited++) await tick(10);
-  assert.equal(typeof server.release, "function", "the stand-in server holds the turn");
+  await until(() => typeof server.release === "function", "the stand-in server holds the turn");
   await assert.rejects(session.send({ prompt: "Again" }), /already working/);
   await session.abort();
   assert.deepEqual(sent("turn/interrupt"), [{ threadId: "thread-1", turnId: "turn-2" }]);
@@ -606,14 +611,14 @@ test("Stop reaches a turn that hasn't started yet, and a turn nobody waits for i
   // Stop while the thread is still starting: the turn never begins.
   const early = await provider.openSession(spec({ approval: "all" }));
   const sending = early.send({ prompt: "Delete everything" });
-  await tick(10);
+  await until(() => typeof hold === "function", "the thread is starting");
   await early.abort();
   hold();
   assert.deepEqual(await sending, { text: "" });
   assert.equal(sent("turn/start").length, 0, "nothing ran after Stop");
   // The next message in the same session is not affected by the earlier Stop.
   const second = early.send({ prompt: "Hi" });
-  await tick(20);
+  await until(() => typeof release === "function", "the stand-in server holds the turn");
   assert.equal(sent("turn/start").length, 1);
   // A turn that times out on Botkins' side is interrupted at Codex.
   await assert.rejects(early.send({ prompt: "Again" }), /already working/);
