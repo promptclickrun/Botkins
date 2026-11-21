@@ -123,6 +123,8 @@ export type Chat = {
   botId: string;
   /** The member who created this chat, when it did not come from the owner. */
   createdBy?: string;
+  /** From another computer in use: the people invited into this chat ("owner" or a member's id). The window asks its own computer with chatPeople(). */
+  invited?: string[];
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
   mode?: ChatMode;
@@ -304,7 +306,9 @@ export type TeamInvite = {
   link: string;
 };
 export type TeamRequest = { id: string; name: string; person?: string; platform: string; kind: string; at: number; inviteId: string };
-export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[] };
+/** Someone who can be in a chat: the computer's owner (id "owner") or a team member. */
+export type TeamPerson = { id: string; name: string };
+export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[]; /** With "team-people-v1": the owner first, then each member. */ people?: TeamPerson[] };
 export type MemberTeam = {
   me: {
     memberId: string;
@@ -313,6 +317,7 @@ export type MemberTeam = {
     role: { name: string; perms: Record<TeamScope, string[]>; bots: "all" | string[] };
   };
   team: { name: string };
+  people?: TeamPerson[];
 };
 export type TeamJoinTarget = { code: string; serverId: string; serverKey: string; name: string; hosts: string[]; room?: string; relayBase?: string };
 export type TeamJoinState = { id: string; team: string; status: "pending" | "approved" | "denied" | "closed" | "offline"; createdAt?: number; requestId?: string };
@@ -919,6 +924,11 @@ declare global {
       takeTeamJoin(): Promise<string | null>;
       /** The owner view of this computer's team, managed by Settings › Team. */
       team(): Promise<OwnerTeam>;
+      /** Who started a chat ("owner" or a member's id) and who was invited into it. */
+      chatPeople(chatId: string): Promise<{ createdBy: string; invited: string[] }>;
+      /** Invites a person into a chat, or takes one out. Each answers the invited list afterwards. */
+      inviteToChat(chatId: string, personId: string): Promise<string[]>;
+      removeFromChat(chatId: string, personId: string): Promise<string[]>;
       saveTeamRole(role: TeamRole): Promise<OwnerTeam>;
       deleteTeamRole(id: string): Promise<OwnerTeam>;
       saveTeamGroup(group: TeamGroup): Promise<OwnerTeam>;

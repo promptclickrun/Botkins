@@ -101,6 +101,54 @@ const until = async (what, check, ms = 15000) => {
   }
 };
 
+test("a team member's window: its own chats, a chat it is invited into, and leaving it", async (t) => {
+  const a = await host(t);
+  const b = client(t, { device: { name: "Avery's laptop", platform: "darwin" } });
+  // The role lets a member see every bot and chat with it; then the laptop joins by invite, as a person would.
+  const guest = structuredClone(a.link.team().roles.find((role) => role.id === "r_guest"));
+  await a.link.saveRole({ ...guest, bots: "all" });
+  const invite = await a.link.createInvite({ groupId: "g_everyone", days: 7, maxUses: 1 });
+  const { serverKey } = lib.parseJoinUrl(invite.link);
+  const pending = await b.remote.startTeamJoin({ hosts: [a.address], code: invite.code, serverId: a.link.status().serverId, serverKey, name: "Studio" });
+  assert.equal(pending.status, "pending");
+  await a.link.approve(a.link.team().requests[0].id);
+  assert.equal((await b.remote.checkTeamJoin(pending.id)).status, "approved");
+  const me = a.link.team().members[0].id;
+  b.remote.use(b.remote.list()[0].id);
+  await until("the member's view of the host", () => b.remote.state === "online" && b.remote.snapshot().team?.me?.memberId === me);
+  const chats = () => b.remote.snapshot().chats.map((chat) => chat.id).sort();
+  // Everyone on the team can be listed, the owner first.
+  assert.deepEqual(b.remote.snapshot().team.people.map((person) => person.id), ["owner", me]);
+  assert.equal(b.remote.inUse().member, true);
+
+  // The owner's chat is not the member's to see; a chat the member made is.
+  const owners = a.ws.createChat("pip");
+  const mine = a.ws.createChat("pip");
+  a.ws.chat(mine).createdBy = me;
+  a.ws.save();
+  await until("the member's own chat", () => chats().includes(mine));
+  assert.deepEqual(chats(), [mine]);
+  assert.deepEqual(await b.remote.call("chatPeople", [mine]), { createdBy: me, invited: [] });
+  // In their own chat the member may invite: here, the owner.
+  assert.deepEqual(await b.remote.call("inviteToChat", [mine, "owner"]), ["owner"]);
+  assert.equal(a.link.notifiesOwner(mine), true);
+  await until("the chat to say the owner was invited", () => b.remote.snapshot().chats.find((chat) => chat.id === mine).invited?.[0] === "owner");
+
+  // Invited into the owner's chat, it appears, and says who started it and who was invited.
+  assert.deepEqual(a.link.inviteToChat(owners, me), [me]);
+  await until("the owner's chat to appear", () => chats().includes(owners));
+  assert.deepEqual(await b.remote.call("chatPeople", [owners]), { createdBy: "owner", invited: [me] });
+  // There the member may not invite or remove anyone else.
+  a.link.store.data.team.members.push({ id: "m_blake", name: "Blake", groupId: "g_everyone", joinedAt: 1, deviceIds: [] });
+  await assert.rejects(b.remote.call("inviteToChat", [owners, "m_blake"]));
+  assert.deepEqual(a.link.chatPeople(owners).invited, [me]);
+  // But may leave: the chat is gone from their window, and stays the owner's.
+  assert.deepEqual(await b.remote.call("removeFromChat", [owners, me]), []);
+  await until("the chat to leave the member's window", () => !chats().includes(owners));
+  assert.deepEqual(a.link.chatPeople(owners), { createdBy: "owner", invited: [] });
+  assert.ok(a.ws.state.chats.some((chat) => chat.id === owners));
+});
+
 test("pairing with a code makes this app a desktop device of the host, and the credential is kept wrapped", async (t) => {
   const a = await host(t);
   const wrapped = [];
@@ -159,6 +207,19 @@ test("using a host shows its bots and chats, sends the window's calls there, and
   assert.deepEqual(b.remote.watching, [chatId]);
   await until("the chat's messages", () => b.remote.snapshot().chats.find((chat) => chat.id === chatId).messages.length === 2);
   assert.deepEqual(b.remote.snapshot().chats.find((chat) => chat.id === chatId).messages.map((m) => m.text), ["What is the gate code?", "Heron forty two."]);
+  // The people in a chat are the host's link's to keep: the window's calls reach it by the link's own names.
+  a.link.store.data.team.members.push({ id: "m_blake", name: "Blake", groupId: "g_everyone", joinedAt: 1, deviceIds: [] });
+  assert.deepEqual(await b.remote.call("chatPeople", [chatId]), { createdBy: "owner", invited: [] });
+  // An invite never widens a role: someone whose role can't use the chat's bot is refused, in the host's words.
+  await assert.rejects(b.remote.call("inviteToChat", [chatId, "m_blake"]), /That person's role can't use this chat's bot\. Change their role in Team settings first\./);
+  await a.link.saveRole({ ...structuredClone(a.link.team().roles.find((role) => role.id === "r_guest")), bots: "all" });
+  assert.deepEqual(await b.remote.call("inviteToChat", [chatId, "m_blake"]), ["m_blake"]);
+  assert.deepEqual(a.link.chatPeople(chatId), { createdBy: "owner", invited: ["m_blake"] });
+  await until("the chat to say who was invited", () => b.remote.snapshot().chats.find((chat) => chat.id === chatId).invited?.length === 1);
+  assert.deepEqual(await b.remote.call("chatPeople", [chatId]), { createdBy: "owner", invited: ["m_blake"] });
+  await assert.rejects(b.remote.call("inviteToChat", [chatId, "m_nobody"]), /That person is no longer on the team\./);
+  assert.deepEqual(await b.remote.call("removeFromChat", [chatId, "m_blake"]), []);
+  assert.deepEqual(await b.remote.call("chatPeople", ["no-such-chat"]), { createdBy: "owner", invited: [] });
   // What a client may not do is refused here, in words, and never reaches the host.
   await assert.rejects(b.remote.call("startPhonePairing", []), /can only be done on .* itself/);
   await assert.rejects(b.remote.call("exportUsage", [30]), /can only be done on .* itself/);

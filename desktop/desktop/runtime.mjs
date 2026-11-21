@@ -53,7 +53,7 @@ import { VoiceDesk } from "./voicedesk.mjs";
 import { CodexVoice } from "./codexvoice.mjs";
 // Settings › Credentials: the link's saved credentials and password managers, for the app's window.
 import { SavedCredentials, trialToolDirs } from "./savedcredentials.mjs";
-import { teamHandlers } from "./team-ipc.mjs";
+import { forgetChatPeople, teamHandlers } from "./team-ipc.mjs";
 
 /**
  * How a trial run's Copilot runtime signs in to GitHub without the keychain: with the token in
@@ -521,7 +521,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     deleteSection: (id) => workspace.agents.deleteSection(id),
     setChatFlags: (id, patch) => workspace.agents.setChatFlags(id, patch),
     renameChat: (id, title) => workspace.agents.renameChat(id, title),
-    deleteChat: (id) => workspace.agents.deleteChat(id),
+    deleteChat: async (id) => {
+      const result = await workspace.agents.deleteChat(id);
+      // The link keeps who was invited into a chat; a chat that is gone has no people.
+      forgetChatPeople(() => link, id);
+      return result;
+    },
     boardAct: (id, action, value) => workspace.board.act(id, action, value),
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)

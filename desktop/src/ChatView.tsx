@@ -55,7 +55,9 @@ import { ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
 import { useModelCatalog } from "./providers";
 import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
 import { blockedBots } from "./access";
-import { FolderKanban, ShieldAlert } from "lucide-react";
+import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
+import { PeopleDialog } from "./ChatPeople";
+import { chatPeopleView } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
@@ -192,6 +194,9 @@ export default function ChatView({
     message.role + (message.role === "user" && message.author ? " from-member" : "");
   const project = chat.projectId ? state.projects?.find((p) => p.id === chat.projectId) : undefined;
   const canManageAgents = teamCan(state, "agents", "manage");
+  // "Invite" in the header, when the computer in use keeps chat people and the team has someone to invite.
+  const peopleView = chatPeopleView(state, chat);
+  const [showPeople, setShowPeople] = useState(false);
   // A bot that lost access to the chat's project can't take new turns here (desktop/access.mjs).
   const blocked = blockedBots(state, chat);
   const mode: ChatMode = chat.mode ?? "default";
@@ -680,6 +685,17 @@ export default function ChatView({
   return (
     <div className={"conversation" + (paneShown ? " with-side" : "") + (paneShown && narrow ? " with-drawer" : "")}>
       <div className="chat-main">
+        {showPeople && peopleView && (
+          <PeopleDialog
+            state={state}
+            chat={chat}
+            close={() => setShowPeople(false)}
+            left={() => {
+              setShowPeople(false);
+              back();
+            }}
+          />
+        )}
       <div className="chathead">
         <button className="chathead-back" aria-label="Back to chats" title="Back to chats" onClick={back}>
           <ArrowLeft size={18} />
@@ -773,6 +789,11 @@ export default function ChatView({
               onClick={pickModel}
             >
               <ModelBadge choice={model} models={models} />
+            </button>
+          )}
+          {peopleView && (
+            <button className="chathead-icon chat-invite" aria-label="Invite" title="Invite" aria-haspopup="dialog" onClick={() => setShowPeople(true)}>
+              <UserPlus size={17} />
             </button>
           )}
           {canManageAgents && (
