@@ -884,6 +884,8 @@ export class LinkHost extends EventEmitter {
     return {
       people: teamPeople(team, this.ownerName()),
       name: team.name,
+      // "Members may share by link" ("spaces-v1"), as the owner's Team settings and `botkins sharing links` show it.
+      linkSharing: team.linkSharing === true,
       roles: structuredClone(team.roles),
       groups: structuredClone(team.groups),
       members: team.members.map((member) => ({
