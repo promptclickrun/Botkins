@@ -47,10 +47,11 @@ export function toolsApi({ workspace, handlers, bot }) {
   const toolView = (server) => ({
     id: server.id,
     name: server.name,
-    kind: server.type === "stdio" ? "command" : "web",
+    // (One rule says what starts a program, for what is shown and for what is asked.)
+    kind: runs(server) ? "command" : "web",
     type: server.type,
     enabled: server.enabled !== false,
-    ...(server.type === "stdio" ? { command: server.command, args: server.args ?? [], ...(server.cwd && { cwd: server.cwd }), runs: runs(server) } : { url: server.url }),
+    ...(runs(server) ? { command: server.command, args: server.args ?? [], ...(server.cwd && { cwd: server.cwd }), runs: runs(server) } : { url: server.url }),
     env: server.env ?? [],
     headers: server.headers ?? [],
     ...(server.needs?.length && { needs: server.needs }),
@@ -65,11 +66,27 @@ export function toolsApi({ workspace, handlers, bot }) {
       : { id, name: raw.name, type: raw.type, enabled: raw.enabled, url: raw.url, headers: kept(raw.headers), ...(raw.oauth && { oauth: { clientId: raw.oauth.clientId, scope: raw.oauth.scope, clientSecret: raw.oauth.clientSecret ? null : undefined } }) };
   };
   const skillList = () => handlers.skills();
+  /** What a file of tools holds, before anything is saved. */
+  const importPreview = (json) => {
+    if (typeof json !== "string") throw new ControlError("Give the file's JSON as text.", "BAD_ARGUMENT");
+    return parseServers(json.slice(0, 1_000_000)).map((server) => ({
+      name: server.name,
+      kind: runs(server) ? "command" : "web",
+      ...(runs(server) ? { runs: runs(server), ...(server.cwd && { cwd: server.cwd }) } : { url: server.url }),
+      env: Object.keys(server.env ?? {}),
+      headers: Object.keys(server.headers ?? {}),
+      exists: servers().some((existing) => existing.name.toLowerCase() === server.name.toLowerCase()),
+    }));
+  };
   const skill = (ref) => {
     const wanted = text(ref, 200, "a skill's name");
-    const found = skillList().skills.find((entry) => entry.name.toLowerCase() === wanted.toLowerCase());
-    if (!found) throw new ControlError("There is no skill called " + wanted + ". See `botkins skills list`.", "NOT_FOUND");
-    return found;
+    const all = skillList().skills;
+    // Skills of linked folders can differ only by capitals. The exact name wins; otherwise one name must match one skill.
+    const exact = all.filter((entry) => entry.name === wanted);
+    const named = exact.length ? exact : all.filter((entry) => entry.name.toLowerCase() === wanted.toLowerCase());
+    if (named.length > 1) throw new ControlError("More than one skill is called " + wanted + ". Give its name exactly as `botkins skills list` shows it, or remove one of the two.", "AMBIGUOUS");
+    if (!named.length) throw new ControlError("There is no skill called " + wanted + ". See `botkins skills list`.", "NOT_FOUND");
+    return named[0];
   };
   /** What a bot leaves out, by name: the tools and skills that are on for every bot and off for this one. */
   const botTools = (entry) => {
@@ -144,20 +161,12 @@ export function toolsApi({ workspace, handlers, bot }) {
       return { id: found.id, name: found.name, ...(await handlers.testMcpServer(found.id)) };
     },
     /** What a file of tools holds, before anything is saved: each one's name, and what it would start or reach. No value is answered. */
-    "tools.import.preview"([json]) {
-      if (typeof json !== "string") throw new ControlError("Give the file's JSON as text.", "BAD_ARGUMENT");
-      return parseServers(json.slice(0, 1_000_000)).map((server) => ({
-        name: server.name,
-        kind: server.type === "stdio" ? "command" : "web",
-        ...(server.type === "stdio" ? { runs: runs(server), ...(server.cwd && { cwd: server.cwd }) } : { url: server.url }),
-        env: Object.keys(server.env ?? {}),
-        headers: Object.keys(server.headers ?? {}),
-        exists: servers().some((existing) => existing.name.toLowerCase() === server.name.toLowerCase()),
-      }));
-    },
-    "tools.import": ([json]) => {
-      if (typeof json !== "string") throw new ControlError("Give the file's JSON as text.", "BAD_ARGUMENT");
-      return handlers.importMcpServers(json);
+    "tools.import.preview": ([json]) => importPreview(json),
+    /** Adds the tools of a file. The answer names what was added and left out, and `starts`: each added tool that is a program, with its line, its folder and the names of its environment values. */
+    async "tools.import"([json]) {
+      const listed = importPreview(json);
+      const result = await handlers.importMcpServers(json);
+      return { ...result, starts: listed.filter((entry) => entry.kind === "command" && result.added.includes(entry.name)).map(({ name, runs: line, cwd, env }) => ({ name, runs: line, ...(cwd && { cwd }), env })) };
     },
     async "tools.signOut"([ref]) {
       const found = tool(ref);
@@ -190,7 +199,8 @@ export function toolsApi({ workspace, handlers, bot }) {
       return skill(found.name);
     },
     /** Adds a skill folder, or a folder of skills, by its full path on this computer. */
-    "skills.addFolder": ([path]) => handlers.addSkillFolderAt(text(path, 4000, "a folder's full path")),
+    // A plugin folder is refused here: it can run commands, and this call shows nothing before it links.
+    "skills.addFolder": ([path]) => handlers.addSkillFolderAt(text(path, 4000, "a folder's full path"), { plugins: false }),
     async "skills.removeFolder"([id]) {
       const folders = skillList();
       const found = [...(folders.folders ?? []), ...(folders.plugins ?? [])].find((entry) => entry.id === id || entry.path === id);

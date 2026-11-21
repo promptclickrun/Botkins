@@ -428,17 +428,17 @@ export function controlApi(service) {
  * own tools from its shell, a person can see it afterwards.
  */
 export function dispatcher(api, { log } = {}) {
-  const said = (method, args) => {
+  const said = (method, args, value) => {
     if (method === "call") return "call " + (thingForLog(args?.[0]) ?? "");
     if (!Object.hasOwn(CHANGES, method)) return null;
     const where = CHANGES[method];
-    const thing = where === null ? null : thingForLog(typeof where === "function" ? where(args) : args?.[where]);
+    const thing = where === null ? null : thingForLog(typeof where === "function" ? where(args, value) : args?.[where]);
     return method + (thing ? " " + thing : "");
   };
   return async (method, args, context) => {
     if (!Object.hasOwn(api, method)) throw new ControlError("The service has no call named " + method + ". Is the command line newer than the service? Run `botkins status`.", "UNKNOWN_METHOD");
     const value = await api[method](args, context);
-    const line = log && said(method, args);
+    const line = log && said(method, args, value);
     if (line) log("Changed from the command line: " + line.trim());
     return value;
   };

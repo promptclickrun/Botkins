@@ -63,7 +63,7 @@ test("a tool that starts a program is shown first and needs a yes; its values go
   // With no terminal there is nobody to ask: the command shows what would run, fails, and names the flag.
   const asked = await botkins(add());
   assert.equal(asked.exit, 2);
-  assert.match(asked.err, /files starts this program on this computer, as the user that runs Botkins:\n {2}npx -y "@example\/files server"\n/);
+  assert.match(asked.err, /^This starts a program on this computer, as the user that runs Botkins:\n {2}files: npx -y "@example\/files server"\n {6}with the environment values API_KEY\nThe program is found on the PATH of the service/);
   assert.match(asked.err, /This needs a yes\. Run it again with --yes\./);
   // With the yes and no value: the same for the value, and still nothing is added.
   const noValue = await botkins(add("--yes"));
@@ -87,7 +87,7 @@ test("a tool that starts a program is shown first and needs a yes; its values go
   const typed = await botkins(["tools", "add", "third", "--command", "node", "--env", "TOKEN", "--yes"], { input: SECRET + "\n", tty: true });
   assert.equal(typed.exit, 0, typed.err);
   assert.equal((typed.out + typed.err).includes(SECRET), false);
-  assert.equal((await botkins(["tools", "add", "broken", "--command", "node", "--env", "TOKEN", "--yes", "--secrets", put("other.json", { env: { OTHER: "x" } })])).exit, 1, "a file with no value for the name");
+  assert.equal((await botkins(["tools", "add", "broken", "--command", "node", "--env", "TOKEN", "--yes", "--secrets", put("other.json", { env: { OTHER: "x" } })])).exit, 2, "a file with a value for another name and none for this one");
 
   // Changing what it starts: shown and asked again, and the stored value must be given again, because it would go somewhere new.
   const moved = (...more) => ["tools", "edit", "files", ...more, "--", "-y", "@example/other"];
@@ -98,8 +98,10 @@ test("a tool that starts a program is shown first and needs a yes; its values go
   const again = await botkins(moved("--yes", "--env", "API_KEY", "--secrets", put("values2.json", { env: { API_KEY: SECRET + "2" } })));
   assert.equal(again.exit, 0, again.err);
   assert.match(again.err, /npx -y @example\/other/);
-  // A change that starts nothing new asks nothing: a new name, a value taken away.
-  assert.equal((await botkins(["tools", "edit", "files", "--name", "docs", "--remove-env", "API_KEY"])).exit, 0);
+  // A change that starts nothing new asks nothing: a new name. A value taken away changes what the program gets, so it asks.
+  assert.equal((await botkins(["tools", "edit", "files", "--name", "docs"])).exit, 0);
+  assert.equal((await botkins(["tools", "edit", "docs", "--remove-env", "API_KEY"])).exit, 2);
+  assert.equal((await botkins(["tools", "edit", "docs", "--remove-env", "API_KEY", "--yes"])).exit, 0);
   assert.deepEqual((await botkins(["tools", "show", "docs", "--json"])).json().env, []);
   assert.equal((await botkins(["tools", "edit", "docs"])).exit, 2, "nothing to change");
   assert.equal((await botkins(["tools", "edit", "docs", "--url", "https://example.com/mcp"])).exit, 2, "a program has no web address");
@@ -112,6 +114,14 @@ test("a tool that starts a program is shown first and needs a yes; its values go
   const tried = await botkins(["tools", "test", "docs"]);
   assert.match(tried.err, /Starting: npx -y @example\/other/);
   assert.match(tried.err, /Create a bot first\./);
+  assert.equal(tried.exit, 1);
+  // One that is off is shown and asked for, as when it is switched on: a test starts it too.
+  await botkins(["tools", "disable", "docs"]);
+  const offTest = await botkins(["tools", "test", "docs"]);
+  assert.equal(offTest.exit, 2);
+  assert.match(offTest.err, /This starts a program on this computer[\s\S]*docs: npx -y @example\/other[\s\S]*This needs a yes/);
+  assert.match((await botkins(["tools", "test", "docs", "--yes"])).err, /Create a bot first\./);
+  await botkins(["tools", "enable", "docs", "--yes"]);
   // Removing asks too.
   assert.equal((await botkins(["tools", "remove", "docs"])).exit, 2);
   assert.match((await botkins(["tools", "remove", "docs", "--yes"])).out, /Removed docs\./);
@@ -139,18 +149,26 @@ test("a tool on the web takes its header by name, and a file of tools is shown b
   const file = put("mcp.json", { mcpServers: { search: { url: "https://dup.example.com" }, notes: { command: "uvx", args: ["notes-mcp", "--dir", "/srv/notes"], env: { NOTES_KEY: SECRET } }, remote: { url: "https://remote.example.com/mcp" } } });
   const asked = await botkins(["tools", "import", file]);
   assert.equal(asked.exit, 2);
-  assert.match(asked.err, /These start a program on this computer, as the user that runs Botkins:\n {2}notes: uvx notes-mcp --dir \/srv\/notes\n/);
+  // Every tool of the file is listed, a web address too, and the question counts what was listed.
+  assert.match(asked.err, /^This file adds these 2 tools:\n {2}notes: uvx notes-mcp --dir \/srv\/notes\n {6}with the environment values NOTES_KEY\n {2}remote: reaches https:\/\/remote\.example\.com\/mcp\nOne of them starts a program on this computer, as the user that runs Botkins\. [^\n]*\nLeft out, because the name is taken: search\.\n/);
   assert.deepEqual((await botkins(["tools", "list", "--json"])).json().map((tool) => tool.name), ["search"]);
   const done = await botkins(["tools", "import", file, "--yes"]);
-  assert.match(done.out, /Added notes, remote\. Left out, because the name is taken: search\./);
+  assert.match(done.out, /Added notes, remote\. Left out: search \(the name is taken, or the limit of 50 tools is reached\)\./);
   assert.deepEqual((await botkins(["tools", "show", "notes", "--json"])).json().env, ["NOTES_KEY"]);
   assert.equal((await botkins(["tools", "import", put("bad.json", "{")])).exit, 1);
-  // From standard input, with nothing that starts a program: no question.
-  assert.equal((await botkins(["tools", "import", "-"], { input: JSON.stringify({ servers: { piped: { url: "https://piped.example.com" } } }) })).exit, 0);
+  // A file of only web tools is shown and asked for too: it also puts something on this computer's bots.
+  const webOnly = JSON.stringify({ servers: { piped: { url: "https://piped.example.com", headers: { "X-Key": SECRET } } } });
+  const webAsked = await botkins(["tools", "import", "-"], { input: webOnly });
+  assert.equal(webAsked.exit, 2);
+  assert.match(webAsked.err, /^This file adds this tool:\n {2}piped: reaches https:\/\/piped\.example\.com\/\n {6}with the headers X-Key\n/);
+  assert.equal(webAsked.err.includes(SECRET), false);
+  assert.equal((await botkins(["tools", "import", "-", "--yes"], { input: webOnly })).exit, 0);
+  // Nothing new in the file: nothing is asked.
+  assert.match((await botkins(["tools", "import", "-"], { input: webOnly })).out, /Nothing to add: each name in the file is taken \(piped\)\./);
   assert.equal((await botkins(["tools", "forget-approvals"])).exit, 0);
 
   // Each change is in the log by its call and its thing. No value is.
-  assert.deepEqual(await changes(), ["tools.add search", "tools.edit " + shown.id, "tools.signOut search", "tools.import", "tools.import", "tools.forgetApprovals"]);
+  assert.deepEqual(await changes(), ["tools.add search", "tools.edit search", "tools.signOut search", "tools.import notes, remote", "tools.import piped", "tools.forgetApprovals every chat"]);
   assert.equal(everything().includes(SECRET), false);
 });
 
@@ -201,4 +219,147 @@ test("skills are added, changed, turned off and removed, and one bot's tools and
   assert.deepEqual((({ all, projects }) => [all, projects])((await botkins(["bots", "access", "Nova", "--none", "--json"])).json()), [false, []]);
   assert.equal((await botkins(["bots", "access", "Nova", "--all", "--none"])).exit, 2);
   assert.match((await botkins(["bots", "access", "Nova", "--project", "Nowhere"])).err, /There is no project called Nowhere\./);
+});
+
+test("the question cannot be skipped by a program's own words, and what will start is shown with --json too", { skip }, async (t) => {
+  const { botkins, put, changes, client } = await service(t);
+  const listed = async () => (await client.call("tools.list")).map((tool) => tool.name);
+  // "-y" is npx's own. It is no short form of --yes, here or after "--".
+  const habit = await botkins(["tools", "add", "files", "--command", "npx", "-y", "@example/files"]);
+  assert.equal(habit.exit, 2);
+  assert.match(habit.err, /Unknown option '-y'/);
+  const after = await botkins(["tools", "add", "files", "--command", "npx", "--", "-y", "@example/files"]);
+  assert.equal(after.exit, 2);
+  assert.match(after.err, /files: npx -y @example\/files\n[\s\S]*This needs a yes/);
+  // A word after "--" is the program's, never Botkins' own: no help, no version, no JSON mode, and the tool is saved with it.
+  for (const word of ["--help", "-h", "--version", "-V", "--json", "--yes"]) {
+    const run = await botkins(["tools", "add", "t" + word.replace(/-/g, ""), "--command", "node", "--yes", "--", "server.js", word]);
+    assert.equal(run.exit, 0, word + ": " + run.err);
+    assert.match(run.out, /^Added /, word);
+    assert.deepEqual((await client.call("tools.get", "t" + word.replace(/-/g, ""))).runs, ["node", "server.js", word]);
+  }
+  assert.equal((await botkins(["tools", "add", "noyes", "--command", "node", "--", "server.js", "--yes"])).exit, 2, "a --yes after -- is the program's");
+  assert.equal((await listed()).includes("noyes"), false);
+
+  // With --json the block is still on standard error, and the answer says what starts.
+  const added = await botkins(["tools", "add", "jsonned", "--command", "uvx", "--cwd", "/srv/app", "--env", "API_KEY", "--json", "--yes", "--secrets", put("v.json", { env: { API_KEY: SECRET } }), "--", "srv"]);
+  assert.equal(added.exit, 0, added.err);
+  assert.match(added.err, /^This starts a program on this computer, as the user that runs Botkins:\n {2}jsonned: uvx srv\n {6}in the folder "\/srv\/app"\n {6}with the environment values API_KEY\n/);
+  assert.deepEqual((({ runs, cwd, env }) => [runs, cwd, env])(added.json()), [["uvx", "srv"], "/srv/app", ["API_KEY"]]);
+  await botkins(["tools", "disable", "jsonned"]);
+  const on = await botkins(["tools", "enable", "jsonned", "--json", "--yes"]);
+  assert.match(on.err, /jsonned: uvx srv\n {6}in the folder "\/srv\/app"\n {6}with the environment values API_KEY/);
+  assert.deepEqual((({ enabled, runs, cwd, env }) => [enabled, runs, cwd, env])(on.json()), [true, ["uvx", "srv"], "/srv/app", ["API_KEY"]]);
+  assert.equal((await botkins(["tools", "enable", "jsonned", "--json"])).exit, 0, "one that is on already asks nothing");
+  const file = put("m.json", { mcpServers: { imported: { command: "node", args: ["a.js"], cwd: "./server", env: { K: SECRET } }, web: { url: "https://w.example.com" } } });
+  const imported = await botkins(["tools", "import", file, "--json", "--yes"]);
+  assert.match(imported.err, /imported: node a\.js\n {6}in the folder "[^"]*\/server"\n {6}with the environment values K\n {2}web: reaches https:\/\/w\.example\.com\//);
+  const answer = imported.json();
+  assert.deepEqual([answer.added, answer.starts.map((entry) => [entry.name, entry.runs, entry.env])], [["imported", "web"], [["imported", ["node", "a.js"], ["K"]]]]);
+  assert.match(answer.starts[0].cwd, /\/server$/, "a folder beside the file is that folder");
+
+  // An edit of only environment values changes what runs: it is shown, with every name, and asked for.
+  const env = ["tools", "edit", "jsonned", "--env", "NODE_OPTIONS"];
+  const asked = await botkins([...env, "--secrets", put("n.json", { env: { NODE_OPTIONS: "--require /tmp/x.js" } })]);
+  assert.equal(asked.exit, 2);
+  assert.match(asked.err, /jsonned: uvx srv\n {6}in the folder "\/srv\/app"\n {6}with the environment values API_KEY, NODE_OPTIONS\n[\s\S]*This needs a yes/);
+  assert.deepEqual((await client.call("tools.get", "jsonned")).env, ["API_KEY"]);
+  assert.equal((await botkins([...env, "--yes", "--secrets", put("n.json", { env: { NODE_OPTIONS: "--require /tmp/x.js" } })])).exit, 0);
+  const gone = await botkins(["tools", "edit", "jsonned", "--remove-env", "API_KEY"]);
+  assert.equal(gone.exit, 2);
+  assert.match(gone.err, /with the environment values NODE_OPTIONS\n/);
+  // The log names each tool, also when the command gave its id, and each import's tools.
+  const lines = await changes();
+  for (const line of ["tools.add jsonned", "tools.enable jsonned", "tools.import imported, web", "tools.edit jsonned"]) assert.ok(lines.includes(line), line + " in " + JSON.stringify(lines));
+});
+
+test("a name is a name: a word with a value in it is refused before anything is asked, echoed or saved", { skip }, async (t) => {
+  const { botkins, put, client, everything } = await service(t);
+  const bad = [
+    ["--env", "API_KEY=" + SECRET],
+    ["--env", SECRET + " "],
+    ["--env", "9LIVES"],
+    ["--env", "A B"],
+  ];
+  for (const [flag, word] of bad) {
+    for (const input of [{}, { input: "typed\n", tty: true }]) {
+      const run = await botkins(["tools", "add", "leak", "--command", "node", "--yes", flag, word], input);
+      assert.equal(run.exit, 2, word);
+      assert.match(run.err, /--env takes a name only, such as API_KEY\. The value is never a word on the command line/);
+      assert.equal((run.out + run.err).includes(SECRET), false, "the word is not repeated");
+    }
+  }
+  for (const word of ["Authorization: Bearer " + SECRET, "X-Key=" + SECRET, "Bad Name", ""]) {
+    const run = await botkins(["tools", "add", "leak", "--url", "https://x.example.com", "--header", word, "--secrets", put("s.json", { headers: {} })]);
+    assert.equal(run.exit, 2, word);
+    assert.match(run.err, /--header takes a name only, such as Authorization\./);
+    assert.equal((run.out + run.err).includes(SECRET), false);
+  }
+  // The same in an edit, and in the app's own save, which a caller reaches without the command.
+  await botkins(["tools", "add", "ok", "--url", "https://x.example.com"]);
+  assert.equal((await botkins(["tools", "edit", "ok", "--header", "Authorization: Bearer " + SECRET])).exit, 2);
+  await assert.rejects(client.call("tools.add", { name: "direct", url: "https://x.example.com", headers: { ["Authorization: Bearer " + SECRET]: "v" } }), /A header is given by its name only, such as Authorization\./);
+  await assert.rejects(client.call("tools.add", { name: "direct", command: "node", env: { ["API_KEY=" + SECRET]: "v" } }), (error) => !error.message.includes(SECRET));
+  assert.deepEqual((await client.call("tools.list")).map((tool) => tool.name), ["ok"]);
+  assert.equal(everything().includes(SECRET), false);
+
+  // The secrets file: an object in the form, with a value for each name and for no other.
+  const add = (file, more = []) => botkins(["tools", "add", "s", "--command", "node", "--yes", "--env", "TOKEN", ...more, "--secrets", file]);
+  for (const text of ["null", '"a string"', "[]", "7", '{"env":"TOKEN"}', '{"env":{"TOKEN":7}}', '{"values":{"TOKEN":"x"}}', "{"]) {
+    const run = await add(put("bad.json", text));
+    assert.equal(run.exit, 2, text + ": " + run.err);
+    assert.match(run.err, /The secrets are not in the form \{ "env": \{ "NAME": "value" \}, "headers"/);
+  }
+  const extra = await add(put("extra.json", { env: { TOKEN: "a", OTHER: SECRET }, headers: { H: SECRET } }));
+  assert.equal(extra.exit, 2);
+  assert.match(extra.err, /The secrets hold 2 values that this command did not name\./);
+  assert.equal(extra.err.includes(SECRET), false);
+  assert.equal((await add(put("none.json", { env: {} }))).exit, 1, "no value for the name");
+  assert.equal((await client.call("tools.list")).some((tool) => tool.name === "s"), false);
+
+  // Text that would change what a person sees is written as numbers, and such a folder is not saved.
+  const odd = await botkins(["tools", "add", "odd", "--command", "node", "--", "a\u001b[2Kb", "\u202Egnp.exe"]);
+  assert.match(odd.err, /odd: node "a\\\\u\{1b\}\[2Kb" "\\\\u\{202e\}gnp\.exe"/);
+  assert.equal(/[\u001b\u202e]/.test(odd.err), false);
+  const cwd = await botkins(["tools", "add", "odd", "--command", "node", "--cwd", "/srv/a\rb", "--yes"]);
+  assert.equal(cwd.exit, 1);
+  assert.match(cwd.err, /in the folder "\/srv\/a\\\\u\{d\}b"[\s\S]*The working folder's path has characters that can't be shown\./);
+});
+
+test("a folder that is a plugin is not taken as a folder of skills, and two skills of one name are not guessed between", { skip }, async (t) => {
+  const { botkins, client, dir, changes } = await service(t);
+  const { homedir } = await import("node:os");
+  const { mkdtempSync: temp, rmSync: remove } = await import("node:fs");
+  // The folders that can be chosen are in the home folder of the user that runs the service.
+  const home = temp(join(homedir(), ".botkins-test-"));
+  t.after(() => remove(home, { recursive: true, force: true }));
+  const make = (name, files) => {
+    const folder = join(home, name);
+    mkdirSync(folder, { recursive: true });
+    for (const [file, text] of Object.entries(files)) {
+      mkdirSync(join(folder, file, ".."), { recursive: true });
+      writeFileSync(join(folder, file), text);
+    }
+    return folder;
+  };
+  // (Through the command, a folder must first be one that can be chosen; `skills add-folder /etc` in another test is refused there.)
+  // The rule itself, as the command reaches it: a plugin folder is refused; a folder with a SKILL.md is a skill, also beside a plugin's file.
+  const { Workspace } = await import("./starter.mjs");
+  const { fakeClient } = await import("./fake-copilot.mjs");
+  const ws = new Workspace(join(dir, "ws"), fakeClient().client, () => {});
+  const plugin = make("a-plugin", { "plugin.json": JSON.stringify({ name: "a-plugin" }), "hooks/hooks.json": "{}" });
+  assert.throws(() => ws.integrations.addFromFolder(plugin, { plugins: false }), /This folder is a plugin, which can run commands on this computer\. It is not added as a folder of skills\./);
+  assert.deepEqual(ws.integrations.folders().plugins, []);
+  assert.deepEqual(ws.integrations.addFromFolder(make("both", { "SKILL.md": "---\nname: both\ndescription: A skill.\n---\nDo it.", "plugin.json": "{}" }), { plugins: false }), { kind: "skill", name: "both" });
+  assert.equal(ws.integrations.addFromFolder(plugin).kind, "plugin", "the app's window still links one");
+  // A relative path is the folder it names from where the command runs; the log has the path.
+  const relative = await botkins(["skills", "add-folder", "no-such-folder-here"]);
+  assert.equal(relative.exit, 1);
+  assert.match(relative.err, /That folder doesn't exist on the computer\.|Only folders in your home folder/);
+  // Two skills whose names differ only by capitals: the exact name is that one, and another spelling is not guessed.
+  const real = client.call.bind(client);
+  await botkins(["skills", "add", "report", "--description", "d", "--instructions", "i"]);
+  assert.equal((await real("skills.get", "report")).name, "report");
+  assert.equal((await real("skills.get", "REPORT")).name, "report", "one match, whatever its capitals");
+  assert.deepEqual((await changes()).filter((line) => line.startsWith("skills.")), ["skills.save report"]);
 });

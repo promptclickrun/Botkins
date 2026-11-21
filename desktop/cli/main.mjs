@@ -51,7 +51,10 @@ export async function main(argv, io = {}) {
   const stderr = io.stderr ?? process.stderr;
   const stdin = io.stdin ?? process.stdin;
   const env = io.env ?? process.env;
-  const json = argv.includes("--json");
+  // What follows "--" is a program's own words (`botkins tools add x --command node -- server.js --help`),
+  // never Botkins' own: --json, --help and --version are looked for only before it.
+  const own = argv.includes("--") ? argv.slice(0, argv.indexOf("--")) : argv;
+  const json = own.includes("--json");
   const fail = (error) => {
     const exit = error instanceof CliError ? error.exit : error instanceof ControlError ? (error.code === "NOT_RUNNING" ? EXIT.notRunning : error.code === "DENIED" ? EXIT.denied : EXIT.failed) : EXIT.failed;
     const message = String(error?.message ?? error);
@@ -75,7 +78,7 @@ export async function main(argv, io = {}) {
       words.push(argv[index]);
       places.push(index);
     }
-    if (argv.includes("--version") || argv.includes("-V")) {
+    if (own.includes("--version") || own.includes("-V")) {
       stdout.write(json ? JSON.stringify({ version: version() }) + "\n" : version() + "\n");
       return EXIT.ok;
     }
@@ -98,14 +101,14 @@ export async function main(argv, io = {}) {
     if (!found) throw usage("There is no command `botkins " + words[0] + "`.");
     if (!found.command.run) {
       // A group: with --help, or with nothing after it, what it holds; with a word it doesn't know, a mistake.
-      if (argv.includes("--help") || argv.includes("-h") || words.length === found.path.length) {
+      if (own.includes("--help") || own.includes("-h") || words.length === found.path.length) {
         stdout.write(help(found) + "\n");
-        return argv.includes("--help") || argv.includes("-h") ? EXIT.ok : EXIT.usage;
+        return own.includes("--help") || own.includes("-h") ? EXIT.ok : EXIT.usage;
       }
       throw usage("`botkins " + found.path.join(" ") + "` has no command `" + words[found.path.length] + "`. It has: " + Object.keys(found.command.commands).join(", ") + ".");
     }
     const { command, path } = found;
-    if (argv.includes("--help") || argv.includes("-h")) {
+    if (own.includes("--help") || own.includes("-h")) {
       stdout.write(help(found) + "\n");
       return EXIT.ok;
     }

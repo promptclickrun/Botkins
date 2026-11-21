@@ -10,15 +10,31 @@
 //    changing what it starts and importing a file of them show the exact line that will run and
 //    need the person's yes (`--yes` when there is no terminal to ask at).
 import { readFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { ask, confirm, readAll } from "./input.mjs";
 
-const YES = { yes: { type: "boolean", short: "y", about: "Don't ask first" } };
-const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word))).join(" ");
+// No short form: a program's own "-y" (`npx -y …`) must never be read as this yes.
+const YES = { yes: { type: "boolean", about: "Don't ask first" } };
+/** Characters that change what a person sees when a word is printed: control characters, and the marks that turn text around. */
+const UNSHOWN = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/g;
+/** A word as it can be shown: such a character is written as its number, so it cannot move or hide the text around it. */
+const safe = (word) => String(word).replace(UNSHOWN, (char) => "\\u{" + char.codePointAt(0).toString(16) + "}");
+const shown = (line) => line.map((word) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : JSON.stringify(safe(word)))).join(" ");
 const one = (context, what) => {
   if (context.args.length !== 1) throw usage(what);
   return context.args[0];
 };
+/** What must be seen is written to standard error whatever --json is: a caller that reads JSON still shows its person what will start. */
+const show = (context, text) => void context.stderr.write(text + "\n");
+// A name is a name. A word with a value in it ("API_KEY=sk-…", "Authorization: Bearer …") is refused
+// before any question, any echo and any save, and is not repeated.
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+function namesOnly(list, pattern, flag, example) {
+  for (const name of list ?? []) if (!pattern.test(name)) throw usage(flag + " takes a name only, such as " + example + ". The value is never a word on the command line: it comes from --secrets or the hidden question.");
+  return list ?? [];
+}
 /** A file's text, or standard input for "-". */
 async function textFrom(context, path, what) {
   if (path === "-") return readAll(context.stdin);
@@ -28,24 +44,30 @@ async function textFrom(context, path, what) {
     throw new CliError("The " + what + " " + path + " can't be read: " + error.message);
   }
 }
+const SECRETS_FORM = "{ \"env\": { \"NAME\": \"value\" }, \"headers\": { \"NAME\": \"value\" }, \"clientSecret\": \"value\" }";
 /**
  * The values for the names given with --env and --header, and the client secret when
- * --client-secret is there. From `--secrets` (a JSON file, or "-" for standard input):
- * { "env": { NAME: value }, "headers": { NAME: value }, "clientSecret": value }. Without it, each
- * one is asked for at the terminal and not shown. With no terminal the command fails and names the flag.
+ * --client-secret is there. From `--secrets` (a JSON file, or "-" for standard input). Without
+ * it, each one is asked for at the terminal and not shown. With no terminal the command fails and
+ * names the flag. A file must be that object and hold a value for each name, and for no other.
  */
 async function secrets(context, { env = [], headers = [], clientSecret = false }) {
   const wanted = env.length + headers.length + (clientSecret ? 1 : 0);
-  if (!wanted) return { env: {}, headers: {} };
   let given = null;
   if (context.options.secrets !== undefined) {
     try {
       given = JSON.parse(await textFrom(context, context.options.secrets, "secrets file"));
     } catch (error) {
       if (error instanceof CliError) throw error;
-      throw new CliError("The secrets are not JSON. Give { \"env\": { \"NAME\": \"value\" }, \"headers\": { … }, \"clientSecret\": \"…\" }.");
+      given = undefined;
     }
-  } else if (!context.stdin.isTTY || context.json) throw usage("A value is needed for " + [...env, ...headers, ...(clientSecret ? ["the client secret"] : [])].join(", ") + ". Give them in a JSON file with --secrets <path>, or --secrets - to read it from standard input. A value is never a word on the command line.");
+    const map = (value) => value === undefined || (value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string"));
+    if (!given || typeof given !== "object" || Array.isArray(given) || !map(given.env) || !map(given.headers) || (given.clientSecret !== undefined && typeof given.clientSecret !== "string") || Object.keys(given).some((key) => !["env", "headers", "clientSecret"].includes(key)))
+      throw usage("The secrets are not in the form " + SECRETS_FORM + ".");
+    // A value that no option named would be dropped without a word. (Names are not secret; values are never said.)
+    const extra = [...Object.keys(given.env ?? {}).filter((name) => !env.includes(name)), ...Object.keys(given.headers ?? {}).filter((name) => !headers.includes(name)), ...(given.clientSecret !== undefined && !clientSecret ? ["clientSecret"] : [])];
+    if (extra.length) throw usage("The secrets hold " + extra.length + " value" + (extra.length === 1 ? "" : "s") + " that this command did not name. Name each one with --env or --header" + (given.clientSecret !== undefined && !clientSecret ? ", and give --client-secret" : "") + ", or take it out of the file.");
+  } else if (wanted && (!context.stdin.isTTY || context.json)) throw usage("A value is needed for " + [...env, ...headers, ...(clientSecret ? ["the client secret"] : [])].join(", ") + ". Give them in a JSON file with --secrets <path>, or --secrets - to read it from standard input. A value is never a word on the command line.");
   const value = async (kind, name, label) => {
     const found = kind === "clientSecret" ? given?.clientSecret : given?.[kind]?.[name];
     if (given) {
@@ -62,33 +84,35 @@ async function secrets(context, { env = [], headers = [], clientSecret = false }
   if (clientSecret) out.clientSecret = await value("clientSecret", null, "the client secret");
   return out;
 }
-/** Shows what a tool will start and asks. The line is printed even with --yes, so it is in the terminal's record. */
-async function mayRun(context, name, line, cwd) {
-  context.note(name + " starts this program on this computer, as the user that runs Botkins:");
-  context.note("  " + shown(line) + (cwd ? "   (in " + cwd + ")" : ""));
+/** A program as a person must see it before it starts: its line, its folder, and the names of the environment values it gets. */
+const programLines = ({ name, runs: line, cwd, env = [] }) => ["  " + safe(name) + ": " + shown(line), ...(cwd ? ["      in the folder " + JSON.stringify(safe(cwd))] : []), ...(env.length ? ["      with the environment values " + env.map(safe).join(", ")] : [])];
+const WHERE = "The program is found on the PATH of the service, which may not be this terminal's. A folder that does not exist is left out.";
+/** Shows what a tool will start and asks. It is shown even with --yes and with --json, so it is in the caller's own record. */
+async function mayRun(context, tool) {
+  show(context, "This starts a program on this computer, as the user that runs Botkins:\n" + programLines(tool).join("\n") + "\n" + WHERE);
   return confirm(context, "Let Botkins start it?");
 }
 const TOOL_OPTIONS = {
   command: { type: "string", value: "program", about: "A program this computer starts (a local tool), such as npx" },
   cwd: { type: "string", value: "dir", about: "The folder the program starts in (a full path)" },
-  env: { type: "string", multiple: true, value: "NAME", about: "An environment value the program gets. Only its name: the value comes from --secrets or a hidden question" },
+  env: { type: "string", multiple: true, value: "NAME", about: "An environment value the program gets. Only its name, such as API_KEY: the value comes from --secrets or a hidden question" },
   url: { type: "string", value: "address", about: "A web address (a remote tool), starting with https://" },
   sse: { type: "boolean", about: "The web address speaks the older SSE form" },
-  header: { type: "string", multiple: true, value: "NAME", about: "A header sent to the web address. Only its name: the value comes from --secrets or a hidden question" },
+  header: { type: "string", multiple: true, value: "NAME", about: "A header sent to the web address. Only its name, such as Authorization: the value comes from --secrets or a hidden question" },
   "client-id": { type: "string", value: "id", about: "For a web address that signs in and does not let apps register themselves: the client ID" },
   scope: { type: "string", value: "text", about: "The sign-in's scopes, when the server needs them named" },
   "client-secret": { type: "boolean", about: "The client has a secret. Its value comes from --secrets or a hidden question" },
   secrets: { type: "string", value: "path", about: "A JSON file with the values: { \"env\": { NAME: value }, \"headers\": { NAME: value }, \"clientSecret\": value }. \"-\" reads standard input" },
   ...YES,
 };
-const toolLine = (tool) => (tool.kind === "command" ? shown(tool.runs) : tool.url);
+const toolLine = (tool) => (tool.kind === "command" ? shown(tool.runs) : safe(tool.url));
 const toolText = (tool) =>
   [
-    tool.name + (tool.enabled ? "" : " (off)") + "   " + tool.id,
-    (tool.kind === "command" ? "Starts: " : "Reaches: ") + toolLine(tool) + (tool.cwd ? "   (in " + tool.cwd + ")" : ""),
-    tool.env.length ? "Environment values: " + tool.env.join(", ") : null,
-    tool.headers.length ? "Headers: " + tool.headers.join(", ") : null,
-    tool.needs?.length ? "Needs its value again: " + tool.needs.join(", ") : null,
+    safe(tool.name) + (tool.enabled ? "" : " (off)") + "   " + tool.id,
+    (tool.kind === "command" ? "Starts: " : "Reaches: ") + toolLine(tool) + (tool.cwd ? "   (in " + JSON.stringify(safe(tool.cwd)) + ")" : ""),
+    tool.env.length ? "Environment values: " + tool.env.map(safe).join(", ") : null,
+    tool.headers.length ? "Headers: " + tool.headers.map(safe).join(", ") : null,
+    tool.needs?.length ? "Needs its value again: " + tool.needs.map(safe).join(", ") : null,
     tool.auth?.type === "oauth" ? "Sign-in: " + (tool.auth.signedIn ? "signed in" : "not signed in. A tool signs in through a browser: do it from a paired phone or from the app's window.") : null,
   ]
     .filter(Boolean)
@@ -125,20 +149,22 @@ export const tools = {
           const o = context.options;
           if ((o.command === undefined) === (o.url === undefined)) throw usage("Give --command <program> for a tool this computer starts, or --url <address> for one on the web.");
           let data;
+          const env = namesOnly(o.env, ENV_NAME, "--env", "API_KEY");
+          const headers = namesOnly(o.header, HEADER_NAME, "--header", "Authorization");
           if (o.command !== undefined) {
-            if (o.header?.length || o.sse || o["client-id"] !== undefined || o.scope !== undefined || o["client-secret"]) throw usage("--header, --sse, --client-id, --scope and --client-secret are for a web address.");
+            if (headers.length || o.sse || o["client-id"] !== undefined || o.scope !== undefined || o["client-secret"]) throw usage("--header, --sse, --client-id, --scope and --client-secret are for a web address.");
             const line = [o.command, ...args];
-            if (!(await mayRun(context, name, line, o.cwd))) return EXIT.failed;
-            const values = await secrets(context, { env: o.env ?? [] });
+            if (!(await mayRun(context, { name, runs: line, cwd: o.cwd, env }))) return EXIT.failed;
+            const values = await secrets(context, { env });
             data = { name, type: "stdio", command: o.command, args, ...(o.cwd !== undefined && { cwd: o.cwd }), env: values.env };
           } else {
-            if (args.length || o.cwd !== undefined || o.env?.length) throw usage("--cwd, --env and the arguments after -- are for a program.");
+            if (args.length || o.cwd !== undefined || env.length) throw usage("--cwd, --env and the arguments after -- are for a program.");
             if (o["client-secret"] && o["client-id"] === undefined) throw usage("A client secret needs its client ID (--client-id).");
-            const values = await secrets(context, { headers: o.header ?? [], clientSecret: o["client-secret"] === true });
+            const values = await secrets(context, { headers, clientSecret: o["client-secret"] === true });
             const signIn = o["client-id"] !== undefined || o.scope !== undefined;
             data = { name, type: o.sse ? "sse" : "http", url: o.url, headers: values.headers, ...(signIn && { oauth: { clientId: o["client-id"], scope: o.scope, ...(values.clientSecret && { clientSecret: values.clientSecret }) } }) };
           }
-          context.print(await context.client.call("tools.add", data), (tool) => "Added " + tool.name + ". Every bot has it now; `botkins bots tools <bot> --off " + tool.name + "` takes it from one. Try it with `botkins tools test " + tool.name + "`.");
+          context.print(await context.client.call("tools.add", data), (tool) => "Added " + safe(tool.name) + ". Every bot has it now; `botkins bots tools <bot> --off " + tool.name + "` takes it from one. Try it with `botkins tools test " + tool.name + "`.");
         },
       },
       edit: {
@@ -164,23 +190,29 @@ export const tools = {
           const local = before.kind === "command";
           if (local && (o.url !== undefined || o.header?.length || o["remove-header"]?.length || o["client-id"] !== undefined || o.scope !== undefined || o["client-secret"] || o["no-sign-in"])) throw usage(before.name + " is a program: --url, --header, --client-id, --scope and --client-secret are for a web address.");
           if (!local && (o.command !== undefined || newArgs !== undefined || o.cwd !== undefined || o.env?.length || o["remove-env"]?.length)) throw usage(before.name + " is a web address: --command, --cwd, --env and the arguments after -- are for a program.");
+          const env = namesOnly(o.env, ENV_NAME, "--env", "API_KEY");
+          const headers = namesOnly(o.header, HEADER_NAME, "--header", "Authorization");
           const patch = {};
           if (o.name !== undefined) patch.name = o.name;
           if (local) {
             const line = [o.command ?? before.command, ...(newArgs ?? before.args)];
-            // Shown again, and asked again, whenever what will run is not what was shown before.
-            if (JSON.stringify(line) !== JSON.stringify(before.runs) || (o.cwd !== undefined && o.cwd !== (before.cwd ?? ""))) {
-              if (!(await mayRun(context, o.name ?? before.name, line, o.cwd ?? before.cwd))) return EXIT.failed;
+            const gone = o["remove-env"] ?? [];
+            // Shown again, and asked again, whenever what will run is not what was shown before: another
+            // line, another folder, or an environment value that is new, changed or taken away
+            // (NODE_OPTIONS, LD_PRELOAD and PATH change what a program does as much as its line).
+            if (JSON.stringify(line) !== JSON.stringify(before.runs) || (o.cwd !== undefined && o.cwd !== (before.cwd ?? "")) || env.length || gone.length) {
+              const names = [...new Set([...before.env.filter((name) => !gone.includes(name)), ...env])];
+              if (!(await mayRun(context, { name: o.name ?? before.name, runs: line, cwd: o.cwd ?? before.cwd, env: names }))) return EXIT.failed;
             }
             if (o.command !== undefined) patch.command = o.command;
             if (newArgs !== undefined) patch.args = newArgs;
             if (o.cwd !== undefined) patch.cwd = o.cwd;
-            const values = await secrets(context, { env: o.env ?? [] });
-            if (o.env?.length || o["remove-env"]?.length) patch.env = { ...values.env, ...Object.fromEntries((o["remove-env"] ?? []).map((name) => [name, false])) };
+            const values = await secrets(context, { env });
+            if (env.length || gone.length) patch.env = { ...values.env, ...Object.fromEntries(gone.map((name) => [name, false])) };
           } else {
             if (o.url !== undefined) patch.url = o.url;
-            const values = await secrets(context, { headers: o.header ?? [], clientSecret: o["client-secret"] === true });
-            if (o.header?.length || o["remove-header"]?.length) patch.headers = { ...values.headers, ...Object.fromEntries((o["remove-header"] ?? []).map((name) => [name, false])) };
+            const values = await secrets(context, { headers, clientSecret: o["client-secret"] === true });
+            if (headers.length || o["remove-header"]?.length) patch.headers = { ...values.headers, ...Object.fromEntries((o["remove-header"] ?? []).map((name) => [name, false])) };
             if (o["no-sign-in"]) patch.oauth = null;
             else if (o["client-id"] !== undefined || o.scope !== undefined || values.clientSecret) patch.oauth = { ...(o["client-id"] !== undefined && { clientId: o["client-id"] }), ...(o.scope !== undefined && { scope: o.scope }), ...(values.clientSecret && { clientSecret: values.clientSecret }) };
           }
@@ -205,7 +237,7 @@ export const tools = {
         details: "A tool that is a program is shown before it is turned on, and needs your yes.",
         async run(context) {
           const tool = await context.client.call("tools.get", one(context, "Name the tool (its name or id)."));
-          if (tool.kind === "command" && !tool.enabled && !(await mayRun(context, tool.name, tool.runs, tool.cwd))) return EXIT.failed;
+          if (tool.kind === "command" && !tool.enabled && !(await mayRun(context, tool))) return EXIT.failed;
           context.print(await context.client.call("tools.enable", tool.id, true), (now) => now.name + " is on.");
         },
       },
@@ -218,36 +250,58 @@ export const tools = {
       },
       test: {
         summary: "Connect a tool once and list what it offers",
-        usage: "botkins tools test <tool>",
-        details: "A tool that is a program is started for this, as it is for a bot.",
+        usage: "botkins tools test <tool> [--yes]",
+        options: YES,
+        details: "A tool that is a program is started for this, as it is for a bot. One that is switched off is shown first and needs your yes, as `tools enable` does. The command ends with 1 when the tool did not connect.",
         async run(context) {
           const tool = await context.client.call("tools.get", one(context, "Name the tool (its name or id)."));
-          if (tool.kind === "command") context.note("Starting: " + shown(tool.runs));
-          context.print(await context.client.call("tools.test", tool.id), (result) => result.name + ": " + result.status + (result.tools?.length ? "\n" + result.tools.map((name) => "  " + name).join("\n") : ""));
+          if (tool.kind === "command") {
+            // One that is on was approved when it was added or switched on. One that is off was not, or not as it is now.
+            if (!tool.enabled) {
+              if (!(await mayRun(context, tool))) return EXIT.failed;
+            } else show(context, "Starting: " + shown(tool.runs));
+          }
+          const result = await context.client.call("tools.test", tool.id);
+          context.print(result, (done) => safe(done.name) + ": " + done.status + (done.tools?.length ? "\n" + done.tools.map((name) => "  " + safe(name)).join("\n") : ""));
+          return result.status === "connected" ? EXIT.ok : EXIT.failed;
         },
       },
       import: {
         summary: "Add the tools of a JSON file, such as another app's MCP settings",
         usage: "botkins tools import <file> [--yes]",
         options: YES,
-        details: "The file is { \"mcpServers\": { \"name\": { \"command\": \"npx\", \"args\": [\"…\"] } } }, or the same under \"servers\". \"-\" reads standard input. Each tool that is a program is shown before anything is added, and all of them need one yes. A tool whose name is taken is left out.",
+        details: "The file is { \"mcpServers\": { \"name\": { \"command\": \"npx\", \"args\": [\"…\"] } } }, or the same under \"servers\". \"-\" reads standard input. Every tool of the file is shown before anything is added: a program with its line, its folder and the names of its environment values, a web address with the names of its headers. One yes adds what was shown. A tool whose name is taken is left out.",
         async run(context) {
-          const json = await textFrom(context, one(context, "Name the JSON file, or - for standard input."), "file");
+          const file = one(context, "Name the JSON file, or - for standard input.");
+          let json = await textFrom(context, file, "file");
+          // A folder that the file gives beside itself ("cwd": "./server") is that folder, as in the app's window.
+          if (file !== "-") {
+            try {
+              const data = JSON.parse(json);
+              const list = data?.mcpServers ?? data?.servers ?? data;
+              for (const entry of Object.values(list && typeof list === "object" ? list : {})) {
+                const key = entry && typeof entry === "object" ? ["workingDirectory", "cwd"].find((name) => typeof entry[name] === "string" && entry[name] && !isAbsolute(entry[name])) : null;
+                if (key) entry[key] = resolve(dirname(resolve(file)), entry[key]);
+              }
+              json = JSON.stringify(data);
+            } catch {
+              // Not JSON: the service says so, in the app's own words.
+            }
+          }
           const found = await context.client.call("tools.import.preview", json);
           const fresh = found.filter((tool) => !tool.exists);
+          const taken = found.filter((tool) => tool.exists).map((tool) => tool.name);
+          if (!fresh.length) return void context.print({ added: [], skipped: taken, starts: [] }, () => "Nothing to add: each name in the file is taken (" + taken.map(safe).join(", ") + ").");
           const programs = fresh.filter((tool) => tool.kind === "command");
-          if (programs.length) {
-            context.note("These start a program on this computer, as the user that runs Botkins:");
-            for (const tool of programs) context.note("  " + tool.name + ": " + shown(tool.runs) + (tool.cwd ? "   (in " + tool.cwd + ")" : ""));
-            if (!(await confirm(context, "Add " + (fresh.length === 1 ? "it" : "all " + fresh.length + " tools") + " and let Botkins start " + (programs.length === 1 ? "it" : "them") + "?"))) return EXIT.failed;
-          }
-          context.print(await context.client.call("tools.import", json), (result) => (result.added.length ? "Added " + result.added.join(", ") + "." : "Nothing was added.") + (result.skipped.length ? " Left out, because the name is taken: " + result.skipped.join(", ") + "." : ""));
+          show(context, ["This file adds " + (fresh.length === 1 ? "this tool" : "these " + fresh.length + " tools") + ":", ...fresh.flatMap((tool) => (tool.kind === "command" ? programLines(tool) : ["  " + safe(tool.name) + ": reaches " + safe(tool.url), ...(tool.headers.length ? ["      with the headers " + tool.headers.map(safe).join(", ")] : [])])), ...(programs.length ? [(programs.length === 1 ? "One of them starts a program" : programs.length + " of them start programs") + " on this computer, as the user that runs Botkins. " + WHERE] : []), ...(taken.length ? ["Left out, because the name is taken: " + taken.map(safe).join(", ") + "."] : [])].join("\n"));
+          if (!(await confirm(context, "Add " + (fresh.length === 1 ? "it" : "these " + fresh.length + " tools") + (programs.length ? " and let Botkins start " + (programs.length === 1 ? "the program" : "the " + programs.length + " programs") : "") + "?"))) return EXIT.failed;
+          context.print(await context.client.call("tools.import", json), (result) => (result.added.length ? "Added " + result.added.map(safe).join(", ") + "." : "Nothing was added.") + (result.skipped.length ? " Left out: " + result.skipped.map(safe).join(", ") + " (the name is taken, or the limit of 50 tools is reached)." : ""));
         },
       },
       "sign-out": {
         summary: "Forget a tool's sign-in",
         usage: "botkins tools sign-out <tool>",
-        details: "A tool on the web signs in through a browser, which this command line does not have. Sign it in from a paired phone (Settings, Tools) or from the app's window.",
+        details: "Signing a tool in from this command line is not built yet. Until it is, sign it in from a paired phone (Settings, Tools) or from the app's window.",
         async run(context) {
           context.print(await context.client.call("tools.signOut", one(context, "Name the tool (its name or id).")), (tool) => tool.name + " is signed out.");
         },
@@ -355,9 +409,9 @@ export const tools = {
       "add-folder": {
         summary: "Add a skill from its folder, or link a folder of skills",
         usage: "botkins skills add-folder <path>",
-        details: "Give a full path in your home folder or on a plugged-in disk. A folder with a SKILL.md is copied into Botkins. A folder of such folders is linked and read where it is.",
+        details: "The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk (`botkins folders` lists what can be chosen); on a server, copy it there first. A folder with a SKILL.md is copied into Botkins. A folder of such folders is linked and read where it is. A plugin folder is not taken here: it can run commands.",
         async run(context) {
-          context.print(await context.client.call("skills.addFolder", one(context, "Give the folder's full path.")), (added) => (added.kind === "skill" ? "Added the skill " + added.name + "." : added.kind === "folder" ? "Linked " + added.name + " (" + added.count + " skill" + (added.count === 1 ? "" : "s") + ")." : "Linked the plugin folder " + added.name + "."));
+          context.print(await context.client.call("skills.addFolder", resolve(one(context, "Give the folder's path."))), (added) => (added.kind === "skill" ? "Added the skill " + added.name + "." : added.kind === "folder" ? "Linked " + added.name + " (" + added.count + " skill" + (added.count === 1 ? "" : "s") + ")." : "Linked the plugin folder " + added.name + "."));
         },
       },
       "remove-folder": {
@@ -427,7 +481,7 @@ export const botTools = {
     summary: "List what a bot's chat offers: its commands, skills and tools",
     usage: "botkins bots menu <bot> [--refresh]",
     options: { refresh: { type: "boolean", about: "Ask the model's runtime again" } },
-    details: "What a person gets when they type \"/\" in a chat with this bot. It opens a session with the bot's model, so the provider must be signed in.",
+    details: "What a person gets when they type \"/\" in a chat with this bot. It opens a session with the bot's model, so the provider must be signed in. Like each turn of the bot, that session starts the bot's tools that are programs and are on.",
     async run(context) {
       context.print(await context.client.call("bots.menu", one(context, "Name the bot (its name or id)."), context.options.refresh === true), (menu) => {
         const rows = (menu.choices ?? []).map((choice) => ["/" + choice.command, choice.kind ?? "", choice.source ?? "", (choice.description ?? "").slice(0, 60)]);

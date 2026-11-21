@@ -34,6 +34,12 @@ const text = (value, max, name) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("Enter a " + name + " of up to " + max + " characters.");
   return value.trim();
 };
+/** An environment variable's name, and a header's name (an HTTP token). */
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+/** Characters that change what a person sees when a word is printed: control characters, and the marks that turn text around. */
+export const UNSHOWN = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+
 /**
  * A map of names to strings. `null` keeps the value already stored under that name, which is
  * refused when `moved` says the server's destination changed. New values go through `seal`.
@@ -44,7 +50,13 @@ function pairs(value, existing = {}, name, { seal = (text) => text, moved = fals
   const out = {};
   for (const [key, item] of Object.entries(value)) {
     const k = key.trim();
-    if (!k || k.length > 200 || /[\0\n\r=]/.test(k)) throw new Error("Invalid " + name + " name: " + key.slice(0, 40));
+    // The word that was given is not repeated: it may be a value put where a name goes.
+    if (!k || k.length > 200 || /[\0\n\r=]/.test(k)) throw new Error("Invalid " + name + " name.");
+    // A name that is new must be a name: an environment variable's, or a header's (an HTTP token).
+    // So "API_KEY=sk-…" and "Authorization: Bearer …" are never saved as a key, where they would be
+    // shown. A name that is already stored is kept as it is.
+    if (item !== null && !Object.hasOwn(existing, k) && !(name === "header" ? HEADER_NAME : ENV_NAME).test(k))
+      throw new Error(name === "header" ? "A header is given by its name only, such as Authorization. Its value goes in the value." : "An environment value is given by its name only, such as API_KEY. Its value goes in the value.");
     if (item === null) {
       if (!Object.hasOwn(existing, k)) continue;
       // A saved key goes only where the person sent it. Otherwise an edit could point it somewhere else unseen.
@@ -125,6 +137,8 @@ export function serverField(data, existing, seal) {
     throw new Error("Invalid arguments for " + name);
   const cwd = data.cwd ?? data.workingDirectory;
   if (cwd != null && cwd !== "" && (typeof cwd !== "string" || !isAbsolute(cwd))) throw new Error("The working folder needs a full path.");
+  // (A path is shown to a person before the program starts: it must be one that can be shown as it is.)
+  if (typeof cwd === "string" && UNSHOWN.test(cwd)) throw new Error("The working folder's path has characters that can't be shown. Choose another folder.");
   const moved = !!existing && (existing.command !== command || JSON.stringify(existing.args ?? []) !== JSON.stringify(args));
   return { ...base, command, args: [...args], env: pairs(data.env, existing?.env, "environment", { seal, moved }), ...(cwd && { cwd }) };
 }
@@ -677,7 +691,7 @@ export class Integrations {
    * a skill folder (it holds SKILL.md) is copied into Botkins; a plugin folder or a folder of
    * skill folders stays where it is and is read from there.
    */
-  addFromFolder(path) {
+  addFromFolder(path, { plugins = true } = {}) {
     if (typeof path !== "string" || !isAbsolute(path)) throw new Error("Choose a folder.");
     let info;
     try {
@@ -702,6 +716,9 @@ export class Integrations {
       return { kind: "skill", name: skill.name || id };
     }
     if (isPlugin(path)) {
+      // A plugin folder can hold hooks and tools that run. A caller that shows nothing before it
+      // links (the command line's `skills add-folder`) does not take one.
+      if (!plugins) throw new Error("This folder is a plugin, which can run commands on this computer. It is not added as a folder of skills.");
       this.addFolder(this.skillState.plugins, path);
       this.changed();
       return { kind: "plugin", name: basename(path) };

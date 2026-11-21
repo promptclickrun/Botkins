@@ -625,7 +625,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // is taken only when the browser could have shown it.
     listFolders: (path) => folders.list(path),
     addProjectFolder: async (path) => workspace.projects.add((await folders.allowed(path)).path),
-    addSkillFolderAt: async (path) => workspace.integrations.addFromFolder((await folders.allowed(path)).path),
+    // (`options.plugins: false` refuses a plugin folder: for a caller that shows nothing before it links.)
+    addSkillFolderAt: async (path, options) => workspace.integrations.addFromFolder((await folders.allowed(path)).path, options?.plugins === false ? { plugins: false } : {}),
     addProject: async () => {
       const paths = await host.dialogs.open({ title: "Choose a project folder", properties: ["openDirectory", "createDirectory"] });
       return paths ? workspace.projects.add(paths[0]) : null;

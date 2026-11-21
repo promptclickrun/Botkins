@@ -23,6 +23,7 @@ export const REASONS = {
 
 /** The parts of the work that still owe commands, in the order they are built. When all are done, `owed` is no longer accepted. */
 export const PARTS = {
+  i: "a tool's sign-in from a terminal, with no browser on this computer",
   c: "plugins: the reviewed revision, settings, chosen bots, a folder plugin, sign-in",
   d: "projects, routines, tasks, the wiki, chats, preferences, credentials, usage, and the rest of a bot",
   e: "Spaces, panels and the team",
@@ -80,9 +81,11 @@ export const WORKSPACE = {
   testMcpServer: cmd("tools test"),
   importMcpServers: cmd("tools import"),
   signOutMcpServer: cmd("tools sign-out"),
-  // A tool's sign-in opens a browser on this computer and waits for it to come back. A host with
-  // no screen has none: there a paired phone signs the tool in and hands the sign-in over.
-  ...each("signInMcpServer cancelMcpSignIn", no("window")),
+  // A tool's sign-in from a terminal is owed (part i): the address is handed to the person, who
+  // signs in on another device and gives back where they were sent. Until then a paired phone
+  // signs a tool in and hands the sign-in over. (`tools sign-out` covers the tools a person added;
+  // the tools of a plugin, whose ids start with "plugin-", get theirs with the plugin commands.)
+  ...each("signInMcpServer cancelMcpSignIn", owed("i")),
   importMcpServerFile: no("window"), // a file dialog; `tools import <file>` reads the file itself
   skills: cmd("skills list"),
   readSkill: cmd("skills show"),
@@ -157,8 +160,8 @@ export const LINK = {
 
 /**
  * The service's own calls that change something, with the place of the argument that names the
- * thing (a bot, a device, a setting), a function that finds its name in what was given, or null
- * when there is none to name. A change made through
+ * thing (a bot, a device, a setting), a function that finds its name in what was given and what
+ * was answered, or null when there is none to name. A change made through
  * the socket leaves one line in the log: which call, which thing, never a value. When a bot
  * changed its own tools, a person can see it afterwards (`botkins logs`).
  */
@@ -194,23 +197,28 @@ export const CHANGES = {
   "relay.reset": null,
   "update.install": null,
   "tools.add": (args) => args?.[0]?.name,
-  "tools.edit": 0,
-  "tools.remove": 0,
-  "tools.enable": 0,
-  "tools.test": 0,
-  "tools.import": null,
-  "tools.signOut": 0,
-  "tools.forgetApprovals": null,
+  // (By the tool's name, which the answer has, whether the caller gave its name or its id.)
+  "tools.edit": (args, value) => value?.name ?? args?.[0],
+  "tools.remove": (args, value) => value?.name ?? args?.[0],
+  "tools.enable": (args, value) => value?.name ?? args?.[0],
+  // A test starts the tool's program: it is in the log, though it changes nothing that is kept.
+  "tools.test": (args, value) => value?.name ?? args?.[0],
+  "tools.import": (args, value) => some(value?.added),
+  "tools.signOut": (args, value) => value?.name ?? args?.[0],
+  "tools.forgetApprovals": (args) => args?.[0] ?? "every chat",
   "skills.save": (args) => args?.[0]?.name,
   "skills.remove": 0,
   "skills.enable": 0,
-  "skills.addFolder": null,
-  "skills.removeFolder": null,
+  "skills.addFolder": 0,
+  "skills.removeFolder": (args, value) => value?.path ?? args?.[0],
   "bots.tools.set": 0,
   "bots.access.set": 0,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list or in CHANGES. */
 export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "chat.respond", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "tools.list", "tools.get", "tools.import.preview", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+
+/** A few names for one line of the log: the first ones, then how many more. */
+const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);
 
 /** A short name that is safe to write in a log: an id or a name, one line, no more than 80 characters. Anything else is left out. */
 export const thingForLog = (value) => (typeof value === "string" && /^[^\u0000-\u001f\u007f]{1,80}$/.test(value) ? value : null);
