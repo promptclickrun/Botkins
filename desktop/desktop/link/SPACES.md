@@ -117,10 +117,12 @@ A space with no entry in `team.spaces` is private.
 - A member is sent a panel or a card only when its bot is visible to their role, as now.
 - Projects stay the owner's. A member never sets or is sent `projectId`.
 - A bot's turn works for people: the chat's starter and the person who sent the message. Its panel tools see only spaces both can open, and write only to spaces both can change (`narrower`, as `team-turn.mjs` does for limits).
+- **A member's role applies to a bot that works for them**, with the `today` scope: `view` to see spaces, `create` to publish a new panel, `use` to update one, `manage` to set a routine, `delete` to remove one. A turn for two people needs the action from each member of the two.
+- **Cards.** `board_post` needs only that the turn's people can open spaces (`view`) and can change that Feed, Ideas or Goals: a card is how a bot tells a person something. `board_list` and `board_update` see a bot's cards only in spaces the turn's people can open.
 
-**Chats that belong to a space.** A chat started by `spaces.newPanel` or `spaces.ask` is its starter's (`createdBy`, as `createChat` stamps). A panel's refresh chat is made with `createdBy = panel.createdBy`, so its alerts go to that chat's people and not to the owner by default. `chatFor` (`frames.mjs`) makes no chat for a read.
+**Chats that belong to a space.** A chat started by `spaces.newPanel` or `spaces.ask` is its starter's (`createdBy`, as `createChat` stamps). A panel's refresh chat is made with `createdBy = panel.createdBy`, so its alerts go to that chat's people and not to the owner by default. `chatFor` (`frames.mjs`) makes no chat for a read: for a panel whose chat is gone, `link.frame.chat` answers `{ chatId: null }`.
 
-**Whose limits a refresh runs under.** Every refresh, by hand or by routine, runs as the panel's bot under the narrower of the limits of the panel's `createdBy` and of the person who pressed Refresh or last set the routine (`setBy`). So a member who writes a routine's prompt on the owner's panel never gets the owner's tools.
+**Whose limits a refresh runs under.** Every refresh, by hand or by routine, runs as the panel's bot under the narrower of the limits of the panel's `createdBy` and of the person who pressed Refresh or last set the routine (`setBy`). The app writes the refresh in that person's name (`author` on its message; the owner has none, as now), so `accessForTurn` gives the narrower limits with no new rule. So a member who writes a routine's prompt on the owner's panel never gets the owner's tools.
 
 **When a member is removed**, the spaces they made pass to the owner (`createdBy` is dropped) and become private; their link copies are deleted; routines they set are paused; their grants and their view go. Their notes stay, with their name.
 
@@ -143,7 +145,7 @@ A space with no entry in `team.spaces` is private.
 - **Hidden** is the panel's, for everyone. A hidden panel is listed under "Hidden" for people who can change the space, and is never in a link's copy.
 - **New panel.** `spaces.newPanel` starts a chat with the chosen bot, in that space, and sends the person's sentence as `/today-panel` does now. The apps open that chat, as now. `start` only adds one line to the request ("Make it a checklist."). `refresh`, when given, becomes the panel's routine as soon as the bot first publishes from that chat, with the person's sentence as its prompt.
 - **Ask about this space.** `spaces.ask` starts a chat with the chosen bot in that space. The bot is told the space's name and its panels' titles and keys, and may read them with `today_list`. With `panelId`, the ask is about that panel ("Ask Pip to change it").
-- **Bot tools.** `today_list`, `today_publish`, `today_routine` and `today_remove` take an optional `space` (an id or a name) and follow "A bot's turn works for people" above. Publishing a key that exists only in another space makes a new panel. A new tool `space_list` names the spaces the turn's people can open. `today_list` with `full` also answers a panel's `state`.
+- **Bot tools.** `today_list`, `today_publish`, `today_routine` and `today_remove` take an optional `space` (an id or a name) and follow "A bot's turn works for people" above. Publishing a key that exists only in another space makes a new panel. With a key and no `space`, `today_list`, `today_routine` and `today_remove` look in the chat's space first; when the key is not there and the bot has it in exactly one other space the people can open, they use that one. A new tool `space_list` names the spaces the turn's people can open. `today_list` with `full` also answers a panel's `state`.
 - **A bot is deleted.** Its panels go, in every space, as now. Each such space's `rev` goes up and its link copy is put out again.
 - **Notes.** People who may act in a space write short notes on a panel. A person removes their own notes. The maker and the owner remove any.
 - **The last line.** When a person changes a panel's state or writes a note, the app sets `last`. The apps show "Maya ticked Press kit · 2m" (`name`, then `label` with a small first letter), or "Maya changed this · 2m" without a label. `label` is the page's own words: plain text, at most 80 characters.
@@ -165,6 +167,12 @@ botkins.state.onChange(fn)          // fn(state) when someone else changed it; r
 - Only a panel's own views get its state. A custom view in a chat has none: `get` answers `{}` and `set` answers `false`.
 - A bot's `today_publish` keeps the state unless it passes `state`.
 - The `today-panel` skill teaches bots to keep what people change in `botkins.state`, and to pass a short `label`.
+- **On the wire** (the page a client gets from `link.frame.page` already has the bridge; the app that shows it answers its messages, as it does for `sendAnswer`):
+  - the page sends `{ commander: 1, type: "state", id }` for `get` and `{ commander: 1, type: "setState", id, patch, label? }` for `set`;
+  - the app answers each with `{ commander: 1, type: "result", id, value }`: the state object, or `true` or `false`;
+  - for a change someone else made, the app sends `{ commander: 1, type: "state", state }` to the frame;
+  - with no answer in 5 seconds, `get` gives `{}` and `set` gives `false`, so an app from before this never makes a page wait.
+- The app that shows the view applies the 3-second and once-a-second rule before it calls `spaces.patchState`.
 
 ## What each device is sent
 
@@ -235,7 +243,7 @@ Host-side only, never remote, on `backend.spaces`: `ensure(person)` (the four bu
 | `link.spaces.here(id \| null, panelId?)` | The caller is looking at this space (and this panel) now. Sent when it comes into view, every 30 seconds while it stays, and with `null` on leaving. Forgotten after 75 seconds of silence. Kept in memory only. |
 | `link.team.setLinkSharing(on)` | Owner only. Whether members may share by link. |
 
-**For the app on the host** (its own window has no device): the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `spacesFor(person)` → `SpaceSummary[]`, `spaceCan(spaceId, person)`, `shareSpace(person, id, input)`, `newSpaceLink(person, id)`, `arrangeSpaces(person, input)`, `seenSpace(person, id)`, `notifySpace(person, id, mode)`, `hereInSpace(person, id | null, panelId?)`, `setLinkSharing(on)`. `LinkHost` emits `"status"` when a list changes.
+**For the app on the host** (its own window has no device): the same as methods of `LinkHost`, each taking the person first (`"owner"` for the window): `spacesFor(person)` → `SpaceSummary[]`, `spaceCan(space, person)` (`space` is an id or the app's own `SpaceRecord`), `shareSpace(person, id, input)`, `newSpaceLink(person, id)`, `arrangeSpaces(person, input)`, `seenSpace(person, id)`, `notifySpace(person, id, mode)`, `hereInSpace(person, id | null, panelId?)`, `setLinkSharing(on)`. `LinkHost` emits `"status"` when a list changes.
 
 **Sentences the link answers with**, shown as they come: "This space no longer exists.", "This panel no longer exists.", "This item no longer exists.", "You can look at this space, not change it.", "Only the person who made this space can do that.", "The owner hasn't turned on sharing by link for members.", "Turn on the relay on your computer to share by link.", "That person's role can't open spaces. Change their role in Team settings first.", "That person is no longer on the team.", "This space isn't shared by link.", "Choose who can open this space.", "Choose Off, Once a day or Every change."
 
@@ -298,6 +306,7 @@ A person's "Notify me" for a space is Off, Once a day or Every change.
 - **Off** is the default for a space shared with all members, or by link, that the person did not make, and for a member's space as the owner sees it.
 - Nothing is sent to a person who is looking at that space now (`here`), or about their own change.
 - A person's devices are the devices with their member id, or the owner's devices; nothing addresses a member's devices as one today, so the sender goes through them.
+- **Who does what** (not built yet): the app says what happened, with one host-side call, `link.spaceEvent({ spaceId, panelId?, by, kind: "note" | "change", text?, label? })`. The link host picks who is told (who can open the space, their "Notify me", not `by`, not someone looking at it), keeps to one alert in 10 minutes for "Every change", and sends the once-a-day alert itself from what it already knows (each space's items and when each person last opened it).
 - Alerts are sealed like the others, kind `"space"`, and carry the space's id and the panel's so a tap opens there. The phone's notification choices gain "Spaces" (`PushPrefs.spaces`, on by default).
 
 ## Words on screen
