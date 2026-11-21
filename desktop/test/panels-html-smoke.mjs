@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { skipWelcome } from "./welcome-helper.mjs";
+import { openToday, showsSpaces } from "./spaces-helper.mjs";
 import { starterBots } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-html-"));
@@ -172,7 +173,7 @@ try {
   win = await skipWelcome(win);
   await win.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await size(1190, 830);
-  await win.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Today", exact: true }).click();
+  await openToday(win);
 
   // ---- The panel's page: a sandboxed frame from its own address, with its data.
   const panelEl = win.locator(".live-panel", { has: win.getByRole("heading", { name: "Acme dashboard" }) });
@@ -296,12 +297,18 @@ try {
     await size(1190, 830);
   }
 
-  // ---- sendAnswer puts the text in the panel's chat's message box, not sent.
+  // ---- sendAnswer hands the text over, not sent. On a computer with Spaces it waits in the ask
+  // bar of the panel's space, about that panel; without them, in the panel's chat's message box.
   await frame.click("#answer");
-  await expect(win.locator(".chathead").getByRole("heading", { name: "Pip" })).toBeVisible();
-  await expect(win.getByRole("combobox", { name: "Message", exact: true })).toHaveValue("Plan the launch for Acme");
+  if (await showsSpaces(win)) {
+    await expect(win.getByRole("textbox", { name: "Ask Pip to change it" })).toHaveValue("Plan the launch for Acme");
+    await expect(win.locator(".space-ask-about")).toContainText("Acme dashboard");
+  } else {
+    await expect(win.locator(".chathead").getByRole("heading", { name: "Pip" })).toBeVisible();
+    await expect(win.getByRole("combobox", { name: "Message", exact: true })).toHaveValue("Plan the launch for Acme");
+  }
   assert.equal((await snap()).chats.find((c) => c.id === "chat-panel").messages.length, 0, "the answer was not sent");
-  console.log("sendAnswer from the panel fills Panel chat's message box without sending.");
+  console.log("sendAnswer from the panel hands its text over without sending.");
 
   // ---- The chat card's page: same frame, inside the card.
   await win.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Chats", exact: true }).click();
@@ -327,7 +334,7 @@ try {
 
   // ---- A page that's gone shows a quiet note, not a broken frame.
   rmSync(join(data, "frames", smallFrame + ".html"));
-  await win.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Today", exact: true }).click();
+  await openToday(win);
   const note = win.locator(".live-panel", { has: win.getByRole("heading", { name: "Note" }) });
   await expect(note.getByText("This view didn't load.")).toBeVisible({ timeout: 15000 });
   await expect(note.getByRole("button", { name: "Try again" })).toBeVisible();

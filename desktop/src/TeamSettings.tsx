@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import { qrPath } from "../desktop/qr.mjs";
 import { BotAvatar } from "./Avatar";
-import { Group, Row, Sheet, errorText } from "./SettingsRows";
+import { Group, Row, Sheet, SwitchRow, errorText } from "./SettingsRows";
+import { hasSpaces } from "./spaces";
 import { useAsk } from "./Pages";
 import { when } from "./wikiModel";
 import type {
@@ -37,6 +38,8 @@ const SCOPES: { id: TeamScope; label: string; actions: string[] }[] = [
   { id: "plugins", label: "Plugins", actions: ["view", "use", "install", "manage", "uninstall"] },
   { id: "settings", label: "Settings", actions: ["view", "manage"] },
 ];
+/** A scope's name. With Spaces the key `today` stays, so saved roles keep working, and it is shown as Spaces. */
+const scopeLabel = (scope: (typeof SCOPES)[number], spaces: boolean) => (scope.id === "today" && spaces ? "Spaces" : scope.label);
 const ACTION_LABEL: Record<string, string> = {
   view: "Can view",
   chat: "Can chat",
@@ -86,6 +89,9 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [editingRole, setEditingRole] = useState<TeamRole>();
+  // "Members may share by link": shown as set at once, and put back if the computer refuses.
+  const [sharing, setSharing] = useState<boolean>();
+  useEffect(() => setSharing(undefined), [team?.linkSharing]);
   useEffect(() => {
     if (initialView) setView(initialView);
   }, [initialView]);
@@ -149,6 +155,26 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
           </div>
         </form>
       </Group>
+      {team.linkSharing !== undefined && (
+        <Group title="Spaces">
+          <SwitchRow
+            label="Members may share by link"
+            checked={sharing ?? team.linkSharing}
+            disabled={busy}
+            onChange={(on) => {
+              setSharing(on);
+              void run(async () => {
+                try {
+                  await api["link.team.setLinkSharing"](on);
+                } catch (e) {
+                  setSharing(undefined);
+                  throw e;
+                }
+              });
+            }}
+          />
+        </Group>
+      )}
       <div className="team-views" role="tablist" aria-label="Team">
         {VIEWS.map((item) => (
           <button
@@ -172,6 +198,7 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
         <RoleEditor
           role={editingRole}
           bots={state.bots}
+          spaces={hasSpaces(state)}
           back={() => setEditingRole(undefined)}
           {...actions}
         />
@@ -695,7 +722,8 @@ function RoleEditor({
   run,
   busy,
   back,
-}: Actions & { role: TeamRole; bots: Bot[]; back: () => void }) {
+  spaces,
+}: Actions & { role: TeamRole; bots: Bot[]; back: () => void; spaces: boolean }) {
   const [draft, setDraft] = useState(structuredClone(role));
   const allAgents = draft.bots === "all";
   const selected = Array.isArray(draft.bots) ? draft.bots : [];
@@ -741,7 +769,7 @@ function RoleEditor({
       <Group title="Permissions">
         {SCOPES.map((scope) => (
           <div className="team-scope" key={scope.id}>
-            <strong>{scope.label}</strong>
+            <strong>{scopeLabel(scope, spaces)}</strong>
             <div>
               {scope.actions.map((action) => (
                 <label key={action}>

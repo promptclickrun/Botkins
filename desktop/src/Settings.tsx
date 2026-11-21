@@ -36,6 +36,7 @@ import McpSettings, { CredentialsSettings } from "./McpSettings";
 import PhoneSettings from "./PhoneSettings";
 import VoiceSettings from "./VoiceSettings";
 import SidebarSettings from "./SidebarSettings";
+import { hasSpaces } from "./spaces";
 import TeamworkSettings from "./TeamworkSettings";
 import BotIntegrations from "./BotIntegrations";
 import BotMemory from "./BotMemory";
@@ -317,7 +318,7 @@ export default function Settings({
           {section === "appearance" && (
             <AppearanceSettings settings={preferences} change={changePreferences} fail={fail} />
           )}
-          {section === "sidebar" && <SidebarSettings settings={state.settings} fail={fail} />}
+          {section === "sidebar" && <SidebarSettings settings={state.settings} spaces={hasSpaces(state)} fail={fail} />}
           {section === "chats" && <>
             <ChatDisplaySettings settings={settings} />
             {(!memberHost || teamCan(state, "settings", "manage")) && <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />}

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
+import { openToday } from "./spaces-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-look-"));
 const shots = process.env.LOOK_SHOTS;
@@ -201,7 +202,10 @@ try {
       await page.getByRole("button", { name: "Create bot", exact: true }).click();
       await page.getByRole("dialog", { name: "Create a bot" }).waitFor();
     },
-    today: () => place("Today"),
+    today: async () => {
+      await openToday(page);
+      await page.waitForTimeout(250);
+    },
     // Work's three tabs, and Activity, which opens from its top.
     work: async () => {
       await place("Work");

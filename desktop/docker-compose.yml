@@ -6,7 +6,7 @@ name: botkins
 # instead. To update: `docker compose pull && docker compose up -d`.
 # Pair a phone with `docker compose exec botkins botkins pair`. See docs/terminal.md.
 #
-# `docker compose --profile display up -d` runs the earlier setup instead, for a phone that should
+# `docker compose --profile display up -d host workspace` runs the earlier setup instead, for a phone that should
 # see and control a screen: the `host` and `workspace` services (desktop/README.md). The two
 # setups keep separate data; run one of them.
 services:

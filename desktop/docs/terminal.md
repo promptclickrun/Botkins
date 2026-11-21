@@ -360,7 +360,7 @@ BOTKINS_PAIR_ADDRESS=192.168.1.20
 
 To keep the host key out of the data volume, give it as a Compose secret. The comments in `docker-compose.yml` show the lines.
 
-The earlier setup, with an Electron workspace on a virtual display, is still there for a phone that must see and control a screen. Start it with `docker compose --profile display up -d`. See [the display setup](../desktop/README.md). The two setups keep separate data. Run only one of them.
+The earlier setup, with an Electron workspace on a virtual display, is still there for a phone that must see and control a screen. Start it with `docker compose --profile display up -d host workspace`. The command names the two services, because a `docker compose up` without them also starts the terminal host. See [the display setup](../desktop/README.md). The two setups keep separate data. Run only one of them.
 
 ## Scripts and JSON
 
