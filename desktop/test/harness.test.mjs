@@ -841,8 +841,22 @@ test("planRequest refuses a request with no instructions, and never writes any i
   assert.equal(planRequest({ input: [{ role: "user", content: "hi" }], instructions: "Mine." }).instructions, "Mine.");
 });
 
+test("planRequest sends a function tool that doesn't say strict as not strict, and keeps what a tool does say", () => {
+  const schema = { type: "object", properties: { q: { type: "string", format: "strip" } } };
+  const out = planRequest({
+    instructions: "Sys",
+    input: "hi",
+    tools: [{ type: "function", name: "loose", parameters: schema }, { type: "function", name: "tight", strict: true, parameters: schema }, { type: "web_search" }],
+  });
+  assert.deepEqual(
+    out.tools.map((tool) => tool.strict),
+    [false, true, undefined],
+  );
+  assert.deepEqual(out.tools[0].parameters, schema, "the schema is sent as it was");
+});
+
 test("planRequest does not change the object it was given", () => {
-  const body = { store: true, stream: false, instructions: "Base.", input: [{ type: "message", role: "system", content: "S" }, { role: "user", content: "hi" }] };
+  const body = { store: true, stream: false, instructions: "Base.", input: [{ type: "message", role: "system", content: "S" }, { role: "user", content: "hi" }], tools: [{ type: "function", name: "t", parameters: {} }] };
   const before = structuredClone(body);
   planRequest(body);
   assert.deepEqual(body, before);
@@ -1238,6 +1252,13 @@ test("a failure before the Claude reply began is an Anthropic-style error with t
   const other = await http(failed.base, "/claude/v1/messages", { headers: failed.bearer, body: MESSAGES });
   assert.equal(other.status, 500);
   assert.deepEqual(other.json(), { type: "error", error: { type: "api_error", message: "The model said no." } });
+
+  // Out of extra usage is a billing error, which a harness doesn't retry.
+  const extra = await gateway(t, { mode: "extra" });
+  const billed = await http(extra.base, "/claude/v1/messages", { headers: extra.bearer, body: MESSAGES });
+  assert.equal(billed.status, 402);
+  assert.equal(billed.json().error.type, "billing_error");
+  assert.match(billed.json().error.message, /out of extra usage/);
 
   const nothing = await http(failed.base, "/claude/v1/messages", { headers: failed.bearer, body: { ...MESSAGES, model: undefined } });
   assert.equal(nothing.status, 400);

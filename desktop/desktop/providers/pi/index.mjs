@@ -50,6 +50,28 @@ function splitName(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? ""));
   return match ? [match[2], match[1]] : [String(name ?? "tool"), undefined];
 }
+/**
+ * Pi's words for a failed request ("402 {…}", "<provider> API error (400): {…}") as the
+ * provider's own message, which is what a person can act on. Anything else is kept as it is.
+ */
+export function errorText(text) {
+  const raw = String(text ?? "").trim();
+  const at = raw.indexOf("{");
+  if (at < 0) return raw;
+  try {
+    const body = JSON.parse(raw.slice(at));
+    const message = body?.error?.message ?? body?.message;
+    return typeof message === "string" && message ? message : raw;
+  } catch {
+    return raw;
+  }
+}
+/**
+ * Claude can bill a request as extra usage because of what its system prompt says, although the
+ * plan has room (Pi's own prompt did, until the extension left a section out: extension.mjs). So
+ * when one is refused for extra usage, the person is told where else their plan answers.
+ */
+export const EXTRA_USAGE = " If your Claude plan still has room, Claude may have counted this chat as extra usage because of what it was sent. The Copilot SDK harness (Settings › General › Harness) also answers on your plan.";
 const textOf = (content) =>
   (Array.isArray(content) ? content : [])
     .map((part) => (typeof part?.text === "string" ? part.text : part?.type === "image" ? "[image]" : ""))
@@ -263,7 +285,10 @@ class PiSession extends ProviderSession {
         await this.provider.write(live, await this.describe());
       }
       const reply = turn.text.trim();
-      if (!reply && turn.stopReason === "error") throw new Error(turn.error || "Pi couldn't get an answer from the model.");
+      if (!reply && turn.stopReason === "error") {
+        const said = errorText(turn.error) || "Pi couldn't get an answer from the model.";
+        throw new Error(/out of extra usage/i.test(said) ? said + EXTRA_USAGE : said);
+      }
       if (!reply && turn.stopReason === "length") throw new Error("Pi ran out of room before it could answer.");
       return { text: reply };
     } finally {

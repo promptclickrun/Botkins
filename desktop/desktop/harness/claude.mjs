@@ -447,6 +447,8 @@ const FAILURES = {
   server_error: [529, "overloaded_error", null],
 };
 function failure(code, detail) {
+  // Claude Code calls this one "unknown" (2.1.325). As a billing error it is final: a harness doesn't retry it.
+  if (/out of extra usage/i.test(detail ?? "")) return new PlanError(402, "billing_error", detail);
   const [status, type, message] = FAILURES[code] ?? [500, "api_error", null];
   return new PlanError(status, type, message ?? (detail || "Claude Code couldn't answer."));
 }
