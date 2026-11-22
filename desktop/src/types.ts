@@ -774,6 +774,11 @@ declare global {
       /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
       "plugins.refresh"?(): Promise<PluginMarketplace[]>;
       // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
+      "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
+      "piPackages.preview"(name: string): Promise<PiPackageVersion>;
+      "piPackages.list"(): Promise<InstalledPiPackage[]>;
+      "piPackages.install"(name: string, version: string): Promise<InstalledPiPackage>;
+      "piPackages.setEnabled"(name: string, version: string, enabled: boolean): Promise<InstalledPiPackage>;
       "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
       "agents.template"(id: string): Promise<MarketAgentTemplate>;
       // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in
@@ -1209,6 +1214,10 @@ export type PluginMarketplace = {
   error?: string;
 };
 /** An agent template in a marketplace ("agent-templates-v1"). The id is name@marketplace and opaque. */
+export type PiPackageListing = { name: string; description: string; types: string[] };
+export type PiPackageVersion = { name: string; version: string };
+export type InstalledPiPackage = PiPackageVersion & { enabled: boolean };
+
 export type MarketAgent = {
   id: string;
   /** The bot's name, shown as the title. */

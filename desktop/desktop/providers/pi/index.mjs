@@ -12,7 +12,8 @@
 // before every tool that isn't Botkins' own, and Botkins' rules and the person decide.
 //
 // The person's own Pi setup (~/.pi) is left alone: Pi runs with a folder of Botkins' own
-// (PI_CODING_AGENT_DIR), no extensions or skills of its own, and nothing from a project's .pi.
+// (PI_CODING_AGENT_DIR). Only Botkins and explicitly enabled marketplace packages are loaded.
+import { PiPackages } from "./packages.mjs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -231,7 +232,12 @@ class PiSession extends ProviderSession {
       prompt: (spec.instructions ?? "") + this.skills.instructions + (spec.context ?? "") + this.lost,
     };
   }
-  async start() {
+  start() {
+    // The slash menu and a turn can both need the same process as it starts.
+    this.starting ??= this.openProcess().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+  async openProcess() {
     const { provider, spec } = this;
     const tools = spec.handlers ? [...spec.tools, ...this.skills.tools] : [];
     this.bridge ??= await provider.bridge?.open(tools, spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
@@ -273,8 +279,9 @@ class PiSession extends ProviderSession {
         (files ? "\n\nAttached:\n" + files : "");
       this.emit("user.message", {});
       try {
-        await rpc.request({ type: "prompt", message: text }, 30000);
-        await settled;
+        const answer = await rpc.request({ type: "prompt", message: text }, 30000);
+        // An extension command can finish inside prompt() without starting an agent turn.
+        if (answer?.disposition !== "handled") await settled;
       } catch (error) {
         this.interrupt();
         throw error;
@@ -427,7 +434,19 @@ class PiSession extends ProviderSession {
   }
   async inventory() {
     const servers = Object.keys(this.spec.mcpServers ?? {}).map((name) => ({ name, status: "not started" }));
-    return buildInventory({ name: "Pi", tools: this.spec.tools, servers, native: skillChoices(this.skills.list), compact: true });
+    const inventory = buildInventory({ name: "Pi", tools: this.spec.tools, servers, native: skillChoices(this.skills.list), compact: true });
+    if (!this.provider.packages.activePaths().length) return inventory;
+    // Asking for the menu during a turn must never restart its process for a changed package.
+    const live = this.turn ? this.live : await this.start();
+    const { commands } = await live.rpc.request({ type: "get_commands" });
+    const taken = new Set(inventory.choices.flatMap((item) => [item.command, ...(item.aliases ?? [])]));
+    for (const cmd of commands ?? []) {
+      if (!cmd.name || taken.has(cmd.name) || cmd.sourceInfo?.path?.startsWith("builtin:")) continue;
+      inventory.choices.push({ name: cmd.name, command: cmd.name, aliases: [], kind: cmd.source === "skill" ? "Skill" : "Command",
+        source: "Pi", description: String(cmd.description ?? "").split("\n")[0].slice(0, 300), duringTurn: false, native: true });
+      taken.add(cmd.name);
+    }
+    return inventory;
   }
   resolvePrompt(prompt, run, chat, host) {
     return resolvePrompt(this, prompt, run, chat, host);
@@ -452,6 +471,18 @@ export class PiProvider extends ModelProvider {
     this.sessions = new SessionStore(dataDir && join(dataDir, "sessions.json"));
     // Botkins session id → { rpc, ref, key, file, session, timer }: the Pi process each conversation has.
     this.live = new Map();
+    this.packages = new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
+  }
+  async installPackage(source, dir) {
+    const file = await this.locate();
+    if (!file) throw new Error("Install Pi on this computer in Settings › General › Harness first.");
+    const env = await cliEnv({
+      PI_CODING_AGENT_DIR: dir, PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
+      // Older Pi versions can ask npm for a global install. Keep that prefix inside staging too.
+      npm_config_prefix: join(dir, "npm"), npm_config_registry: "https://registry.npmjs.org",
+    }, this.baseEnv);
+    const result = await run(file, ["install", source, "--no-approve"], { cwd: dir, env, timeoutMs: 120000 });
+    if (result.code !== 0) throw new Error("Pi couldn't install the package. " + (result.stderr || result.stdout).trim().slice(-600));
   }
   locate() {
     return findBinary("pi", { override: this.binary, env: this.baseEnv });
@@ -472,7 +503,8 @@ export class PiProvider extends ModelProvider {
     const { spec } = session;
     const target = session.target();
     // Pi takes its connections and model list once, at start: a change starts it again on its session file.
-    const key = hash([spec.folder, described.providers, spec.temporary]);
+    const packages = this.packages.activePaths();
+    const key = hash([spec.folder, described.providers, spec.temporary, packages]);
     let live = this.live.get(spec.sessionId);
     if (live && (live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
@@ -502,9 +534,10 @@ export class PiProvider extends ModelProvider {
       ...(spec.temporary ? ["--no-session"] : ["--session-dir", join(this.dataDir, "sessions"), "--session-id", ref]),
       "--model", target.provider + "/" + target.modelId,
       ...(wanted ? ["--thinking", wanted] : []),
-      // Nothing of the person's own Pi setup or of a project's .pi: Botkins supplies skills, tools and servers.
+      // Keep discovery off. Only the bundled extensions and explicitly enabled packages load.
       "--no-approve", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
       "-e", "builtin:mcp", "-e", EXTENSION,
+      ...packages.flatMap((path) => ["-e", path]),
     ];
     const env = await cliEnv({ PI_CODING_AGENT_DIR: join(this.dataDir, "agent"), PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0", PI_OFFLINE: "1", BOTKINS_PI_SESSION: live.file }, this.baseEnv);
     live.rpc = new PiRpc(file, args, { env, cwd: spec.folder });

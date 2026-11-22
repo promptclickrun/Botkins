@@ -106,6 +106,11 @@ export const WORKSPACE = {
   previewCadence: cmd("routines when"),
   changeSchedule: cmd("routines schedule"),
   // ── Plugins ──
+  "piPackages.browse": cmd("pi browse"),
+  "piPackages.preview": cmd("pi show"),
+  "piPackages.list": cmd("pi list"),
+  "piPackages.install": cmd("pi install"),
+  "piPackages.setEnabled": cmd("pi enable"),
   "plugins.marketplaces": cmd("plugins marketplaces"),
   "plugins.addMarketplace": cmd("plugins add-marketplace"),
   "plugins.removeMarketplace": cmd("plugins remove-marketplace"),
@@ -358,6 +363,8 @@ export const CHANGES = {
   "routines.resume": 0,
   "plugins.addMarketplace": null,
   "plugins.removeMarketplace": 0,
+  "piPackages.install": 0,
+  "piPackages.setEnabled": 0,
   "plugins.install": 0,
   "plugins.update": 0,
   "plugins.setEnabled": 0,
@@ -552,7 +559,7 @@ export const CHANGES = {
   "apps.remove": (args, value) => value?.slug ?? args?.[0],
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+export const READS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],

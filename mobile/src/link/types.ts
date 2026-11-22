@@ -1070,6 +1070,10 @@ export type PluginMarketplace = {
  * An agent template in a marketplace ("agent-templates-v1", docs/agent-templates.md). `id` is
  * opaque (`name@marketplace`): never read anything out of it. `name` is the bot's name and the title.
  */
+export type PiPackageListing = { name: string; description: string; types: string[] };
+export type PiPackageVersion = { name: string; version: string };
+export type InstalledPiPackage = PiPackageVersion & { enabled: boolean };
+
 export type MarketAgent = {
   id: string;
   name: string;
@@ -1575,6 +1579,11 @@ export type Calls = {
   "plugins.refresh"(): PluginMarketplace[];
   // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
   /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
+  "piPackages.preview"(name: string): PiPackageVersion;
+  "piPackages.list"(): InstalledPiPackage[];
+  "piPackages.install"(name: string, version: string): InstalledPiPackage;
+  "piPackages.setEnabled"(name: string, version: string, enabled: boolean): InstalledPiPackage;
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
   /** Refused with a sentence when the template is gone. */
   "agents.template"(id: string): MarketAgentTemplate;

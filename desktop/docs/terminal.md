@@ -960,3 +960,17 @@ CAUTION: The next step deletes your bots, chats, credentials and paired phones.
 3. Remove the data, the key and the user: `sudo rm -rf /var/lib/botkins /etc/botkins`, then `sudo userdel botkins`.
 
 For an installation for one user, the folders are `~/.local/share/botkins-terminal` (the program), `~/.local/bin/botkins` (the command), `~/.local/share/botkins` (the data) and `~/.config/botkins` (the key). On macOS the data is in `~/Library/Application Support/Botkins Terminal`, and the key is the keychain item `Botkins Terminal Host`.
+
+### Pi packages
+
+Use `botkins pi browse [<search>]` to search the Pi marketplace. Use
+`botkins pi show <package>` to see its exact version, then
+`botkins pi install <package>` to install it and turn it on. A noninteractive
+install takes `--yes --revision <version>`. The package can run code on this
+computer. Botkins keeps it in its own Pi profile and loads it on the next
+turn in every chat using the Pi harness.
+
+`botkins pi list` shows installed versions and whether they are on.
+`botkins pi disable <package>` turns one off and `botkins pi enable <package>`
+turns it back on. Desktop and paired phones offer the same controls in
+**Marketplace › Pi**.

@@ -204,3 +204,28 @@ test("the registry keeps a harness out of the model providers but finds it by id
   assert.deepEqual([pi.id, pi.harness, pi.installed, pi.version], ["pi", true, true, "1.6.0"]);
   assert.equal((await providers.status("pi")).id, "pi", "the install flow finds it");
 });
+
+test("a package change refreshes the next Pi turn and its slash commands", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  let enabled = false;
+  t.mock.method(provider.packages, "activePaths", () => enabled ? ["/fixture/pi-package"] : []);
+  const session = await provider.openSession(spec());
+  await session.send({ prompt: "before" });
+  const before = session.live;
+  enabled = true;
+  const { choices } = await session.inventory();
+  assert.ok(choices.some((c) => c.command === "skill:garden" && c.kind === "Skill"));
+  assert.ok(before.rpc.closed);
+  assert.equal(session.live.ref, before.ref);
+  const resolved = await session.resolvePrompt("/show-garden", {}, {}, {});
+  assert.equal(resolved.kind, "agent-prompt");
+  // A handled extension command has no model turn and no agent_settled event.
+  assert.deepEqual(await session.send({ prompt: resolved.prompt }, 100), { text: "" });
+  enabled = false;
+  assert.ok(!(await session.inventory()).choices.some((c) => c.command === "show-garden"));
+  const withPackage = session.live;
+  await session.send({ prompt: "after" });
+  assert.ok(withPackage.rpc.closed);
+  assert.equal(session.live.ref, before.ref);
+});

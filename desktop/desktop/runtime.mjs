@@ -24,7 +24,7 @@ import { usageCsv, usageReport } from "./usage.mjs";
 import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
-import { MCP_APP_METHODS, REMOTE_METHODS } from "./link/methods.mjs";
+import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
@@ -106,13 +106,13 @@ export const APP_UPDATE = "app-update-v1";
 export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
-export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS];
+export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1"];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -232,6 +232,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // the person installed, with the sign-in that tool keeps. Each stores which conversation is whose in its
   // own folder. The first provider is the default for model choices saved without one.
   bridge = new ToolBridge({ version: host.version });
+  const pi = new PiProvider({ dataDir: join(dataDir, "pi"), bridge });
   const every = [
     copilot,
     new CodexProvider({ dataDir: join(dataDir, "codex"), bridge, version: host.version }),
@@ -240,7 +241,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Agents that speak the Agent Client Protocol (desktop/providers/acp). Off until the person adds one.
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
     // Pi, a harness for the ChatGPT and Claude plans (Settings › Harness), not a model provider.
-    new PiProvider({ dataDir: join(dataDir, "pi"), bridge }),
+    pi,
   ];
   // BOTKINS_PROVIDERS=copilot,claude keeps only those (in that list's order here), for tests
   // that must not depend on which tools this computer happens to have.
@@ -341,6 +342,19 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   };
   const handlers = {
     ...pluginHandlers(workspace.plugins, savedCredentials),
+    "piPackages.browse": (query) => pi.packages.browse(query),
+    "piPackages.preview": (name) => pi.packages.preview(name),
+    "piPackages.list": () => pi.packages.list(),
+    "piPackages.install": async (name, version) => {
+      const pkg = await pi.packages.install(name, version);
+      workspace.clearCatalogs();
+      return pkg;
+    },
+    "piPackages.setEnabled": (name, version, enabled) => {
+      const pkg = pi.packages.setEnabled(name, version, enabled);
+      workspace.clearCatalogs();
+      return pkg;
+    },
     // Agent templates in the marketplaces ("agent-templates-v1", docs/agent-templates.md in the phone's code): reads only.
     "agents.browse": (query) => workspace.plugins.catalog.agents(query),
     "agents.template": (id) => workspace.plugins.catalog.agentTemplate(id),
