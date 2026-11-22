@@ -215,7 +215,7 @@ test("the registry keeps a harness out of the model providers but finds it by id
 });
 
 test("a package change refreshes the next Pi turn and its slash commands", { skip }, async (t) => {
-  const { provider } = setup();
+  const { provider, seen } = setup();
   t.after(() => provider.stop());
   let enabled = false;
   t.mock.method(provider.packages, "activePaths", () => enabled ? ["/fixture/pi-package"] : []);
@@ -227,6 +227,9 @@ test("a package change refreshes the next Pi turn and its slash commands", { ski
   assert.ok(choices.some((c) => c.command === "skill:garden" && c.kind === "Skill"));
   assert.ok(before.rpc.closed);
   assert.equal(session.live.ref, before.ref);
+  const [first, restarted] = seen().filter((entry) => entry.started).map((entry) => entry.started.args);
+  assert.ok(!first.includes("/fixture/pi-package"));
+  assert.equal(restarted[restarted.indexOf("/fixture/pi-package") - 1], "-e", "an active package is an extension path to Pi");
   const resolved = await session.resolvePrompt("/show-garden", {}, {}, {});
   assert.equal(resolved.kind, "agent-prompt");
   // A handled extension command has no model turn and no agent_settled event.

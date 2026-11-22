@@ -26,7 +26,7 @@ async function change(context, action) {
     context.stderr.write(
       (action === "install" ? "Pi will run pi install npm:" + source + ". " : "") +
         source +
-        " can run code on this computer in every Botkins chat using Pi.\n",
+        " can run code on this computer in every Botkins chat using Pi or OMP.\n",
     );
     if (yes && !revision)
       throw usage("--yes needs --revision <version>. Read the version with botkins pi show or botkins pi list.");

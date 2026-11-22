@@ -981,7 +981,7 @@ Use `botkins pi browse [<search>]` to search the Pi marketplace. Use
 `botkins pi install <package>` to install it and turn it on. A noninteractive
 install takes `--yes --revision <version>`. The package can run code on this
 computer. Botkins keeps it in its own Pi profile and loads it on the next
-turn in every chat using the Pi harness.
+turn in every chat using the Pi or OMP harness.
 
 `botkins pi list` shows installed versions and whether they are on.
 `botkins pi disable <package>` turns one off and `botkins pi enable <package>`
