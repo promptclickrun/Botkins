@@ -55,7 +55,7 @@ export const PREFERENCES = {
   "notifications.quietHours.from": { type: "clock", about: "The quiet hours start, as HH:MM" },
   "notifications.quietHours.to": { type: "clock", about: "The quiet hours end, as HH:MM" },
   "access.allBots": switches("Every bot can use every project"),
-  harness: choice(HARNESSES, "What runs a bot's turn: copilot (one for every plan), provider (each provider's own tool) or pi (the Pi program)"),
+  harness: choice(HARNESSES, "What runs a bot's turn: copilot (one for every plan), provider (each provider's own tool), pi (Pi) or omp (OMP)"),
   "background.keepRunning": switches("The desktop app keeps running when its window closes (for the app's window; this host runs as a service)"),
   "background.runAtStartup": switches("The desktop app starts with the computer (for the app's window; this host starts with `botkins service install`)"),
   "sidebar.order": { type: "list", values: SIDEBAR, about: "The order of the places in the side menu: " + SIDEBAR.join(", ") },
@@ -66,6 +66,7 @@ export const HARNESS_ABOUT = {
   copilot: "One harness runs every chat, and each plan answers its own model requests (the usual choice)",
   provider: "Each provider's own tool runs its chats",
   pi: "The Pi program runs the chats of ChatGPT and Claude plan models",
+  omp: "The OMP program runs the chats of ChatGPT and Claude plan models with Pi-compatible tools and OMP improvements",
 };
 /** The levels of "approval", from the one that asks the most to the one that asks nothing: a later one is looser. */
 export const APPROVAL_ORDER = ["ask", "read", "assisted", "all"];
@@ -196,7 +197,7 @@ export function prefsApi({ workspace, handlers }) {
 
     /**
      * What can run a bot's turn: { chosen, choices: [{ id, about }], programs: [...] }. `programs` are the harnesses that are a
-     * program of their own (Pi), each with whether it is installed. The choice is the preference `harness`.
+     * program of their own (Pi or OMP), each with whether it is installed. The choice is the preference `harness`.
      */
     async "preferences.harnesses"() {
       const programs = await handlers.harnesses();

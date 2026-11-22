@@ -17,8 +17,8 @@ import { PiPackages } from "./packages.mjs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
@@ -28,12 +28,36 @@ import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 
 export const PI_ID = "pi";
+export const OMP_ID = "omp";
 /** The bridge's name among a session's MCP servers. Its tools never ask. */
 export const BRIDGE = "botkins";
 /** How the extension asks for an approval (extension.mjs). */
 export const ASK = "botkins:permission";
-export const EXTENSION = join(dirname(fileURLToPath(import.meta.url)), "extension.mjs");
+const PROVIDER_DIR = dirname(fileURLToPath(import.meta.url));
+export const EXTENSION = join(PROVIDER_DIR, "extension.mjs");
+export const OMP_EXTENSION = join(PROVIDER_DIR, "..", "omp", "extension.mjs");
 export const INSTALL = { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" };
+export const OMP_INSTALL = { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" };
+const RUNTIMES = {
+  [PI_ID]: {
+    id: PI_ID,
+    name: "Pi",
+    binary: "pi",
+    description: "The Pi coding agent, as the harness for ChatGPT and Claude plans.",
+    install: INSTALL,
+    extension: EXTENSION,
+    sessionEnv: "BOTKINS_PI_SESSION",
+  },
+  [OMP_ID]: {
+    id: OMP_ID,
+    name: "OMP",
+    binary: "omp",
+    description: "OMP, the enhanced Pi coding agent, as the harness for ChatGPT and Claude plans.",
+    install: OMP_INSTALL,
+    extension: OMP_EXTENSION,
+    sessionEnv: "BOTKINS_OMP_SESSION",
+  },
+};
 /** Pi's thinking levels. Botkins' efforts are the same words. */
 const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effort : null);
@@ -46,11 +70,15 @@ const hash = (value) => createHash("sha256").update(JSON.stringify(value)).diges
 
 const READS = new Set(["read", "grep", "find", "ls"]);
 const WRITES = new Set(["write", "edit"]);
-/** [tool, MCP server or undefined] for a Pi tool name: MCP tools are "mcp__<server>__<tool>". */
+/** [tool, MCP server or undefined] for a Pi or OMP MCP tool name. */
 function splitName(name) {
-  const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? ""));
+  const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")) ?? /^mcp__([^_]+)_(.+)$/.exec(String(name ?? ""));
   return match ? [match[2], match[1]] : [String(name ?? "tool"), undefined];
 }
+const toolIdentity = (call) => {
+  const [fallbackName, fallbackServer] = splitName(call.toolName);
+  return { name: call.mcpToolName ?? fallbackName, server: call.mcpServerName ?? fallbackServer };
+};
 /**
  * Pi's words for a failed request ("402 {…}", "<provider> API error (400): {…}") as the
  * provider's own message, which is what a person can act on. Anything else is kept as it is.
@@ -85,23 +113,33 @@ function piServer(server) {
   if (server.type === "sse" || !server.url) return null;
   return { url: server.url, ...(server.headers && { headers: server.headers }), exposure: "direct" };
 }
+/** A Botkins MCP server record in OMP's native mcp.json format. */
+function ompServer(server) {
+  if (server.type === "stdio") return { type: "stdio", command: server.command, ...(server.args?.length && { args: server.args }), ...(server.env && Object.keys(server.env).length && { env: server.env }), ...(server.cwd && { cwd: server.cwd }) };
+  if (!server.url) return null;
+  return { type: server.type === "sse" ? "sse" : "http", url: server.url, ...(server.headers && { headers: server.headers }) };
+}
 
 /**
  * A `pi --mode rpc` process: commands in, events out, one JSON object per line. Lines are split on
  * LF only, as Pi's framing says: a JSON string may hold U+2028, which a line reader splits on.
  */
 export class PiRpc {
-  constructor(file, args, { env, cwd } = {}) {
+  constructor(file, args, { env, cwd, name = "Pi", protocolVersion } = {}) {
     this.next = 1;
     this.pending = new Map();
     this.listeners = new Set();
     this.stderr = "";
+    this.name = name;
+    this.protocolVersion = protocolVersion;
+    this.negotiated = false;
+    this.chunks = new Map();
     this.child = spawn(file, args, { env, cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(file) });
     this.exited = new Promise((resolve) => {
       const done = (error) => {
         if (this.closed) return;
         this.closed = true;
-        const reason = error ?? new Error(this.stderr.trim().split("\n").slice(-3).join("\n") || "Pi stopped.");
+        const reason = error ?? new Error(this.stderr.trim().split("\n").slice(-3).join("\n") || this.name + " stopped.");
         // Like any provider's process that stopped: a turn it was running is retried once (desktop/workspace.mjs).
         if (!error) reason.code = "BOTKINS_PROVIDER_EXIT";
         for (const { reject, timer } of this.pending.values()) {
@@ -128,7 +166,7 @@ export class PiRpc {
     });
   }
   write(message) {
-    if (this.closed) throw new Error("Pi has stopped.");
+    if (this.closed) throw new Error(this.name + " has stopped.");
     this.child.stdin.write(JSON.stringify(message) + "\n");
   }
   /** Sends a command and resolves its response's `data`; rejects when Pi refuses it. */
@@ -137,7 +175,7 @@ export class PiRpc {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error("Pi took too long to answer."));
+        reject(new Error(this.name + " took too long to answer."));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
@@ -161,9 +199,14 @@ export class PiRpc {
       const waiting = this.pending.get(message.id);
       this.pending.delete(message.id);
       clearTimeout(waiting.timer);
-      if (message.success === false) waiting.reject(new Error(message.error || "Pi refused " + message.command + "."));
+      if (message.success === false) waiting.reject(new Error(message.error || this.name + " refused " + message.command + "."));
       else waiting.resolve(message.data);
       return;
+    }
+    if (message.type === "rpc_chunk") return this.receiveChunk(message);
+    if (message.type === "ready" && this.protocolVersion === 2 && !this.negotiated && message.supportedProtocolVersions?.includes?.(2)) {
+      this.negotiated = true;
+      void this.request({ type: "negotiate_protocol", protocolVersion: 2 }, 15000).catch((error) => console.error("OMP protocol negotiation:", error.message));
     }
     for (const listener of this.listeners) {
       try {
@@ -171,6 +214,34 @@ export class PiRpc {
       } catch (error) {
         console.error("Pi event:", error.message);
       }
+    }
+  }
+  receiveChunk(message) {
+    const id = String(message.chunkId ?? "");
+    const count = Number(message.count);
+    const index = Number(message.index);
+    const total = Number(message.byteLength);
+    const data = typeof message.data === "string" ? Buffer.from(message.data, "base64") : null;
+    if (!id || !Number.isSafeInteger(count) || count < 1 || count > 10000 || !Number.isSafeInteger(index) || index < 0 || index >= count || !Number.isSafeInteger(total) || total < 1 || total > 67_108_864 || !data) return;
+    let chunks = this.chunks.get(id);
+    if (!chunks) {
+      chunks = { count, total, received: 0, parts: new Array(count) };
+      this.chunks.set(id, chunks);
+    }
+    if (chunks.count !== count || chunks.total !== total || chunks.parts[index]) {
+      this.chunks.delete(id);
+      return;
+    }
+    chunks.parts[index] = data;
+    chunks.received++;
+    if (chunks.received !== count) return;
+    this.chunks.delete(id);
+    const joined = Buffer.concat(chunks.parts);
+    if (joined.length !== total) return;
+    try {
+      this.receive(joined.toString("utf8"));
+    } catch (error) {
+      console.error("OMP chunk:", error.message);
     }
   }
   on(listener) {
@@ -210,10 +281,10 @@ class PiSession extends ProviderSession {
   emit(type, data) {
     for (const handler of this.handlers) handler({ type, data });
   }
-  /** The plan connection and model this session's model is on, in Pi's terms. */
+  /** The plan connection and model this session's model is on, in the harness's terms. */
   target(model = this.model) {
     const connection = this.spec.inference?.providers?.find((each) => each.name === model.source) ?? this.spec.inference?.providers?.[0];
-    if (!connection) throw new Error("Pi runs ChatGPT and Claude plan models. Choose one of those for this chat.");
+    if (!connection) throw new Error(this.provider.name + " runs ChatGPT and Claude plan models. Choose one of those for this chat.");
     return { provider: connection.name, modelId: model.model };
   }
   /** What the extension reads (extension.mjs): the connections, the MCP servers and the instructions. */
@@ -222,10 +293,13 @@ class PiSession extends ProviderSession {
     const servers = {};
     for (const [name, server] of Object.entries(await serversWithTokens(spec))) {
       if (name === BRIDGE) continue;
-      const entry = piServer(server);
+      const entry = this.provider.serverRecord(server);
       if (entry) servers[name] = entry;
     }
-    if (this.bridge) servers[BRIDGE] = { url: this.bridge.url, headers: this.bridge.headers, exposure: "direct" };
+    if (this.bridge) {
+      const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
+      if (entry) servers[BRIDGE] = entry;
+    }
     return {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
       servers,
@@ -243,7 +317,7 @@ class PiSession extends ProviderSession {
     this.bridge ??= await provider.bridge?.open(tools, spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
     this.bridge?.set(tools);
     const known = provider.sessions.get(spec.sessionId);
-    // A conversation Pi doesn't hold (new to Pi, or its folder moved) goes on from Botkins' transcript.
+    // A conversation the harness doesn't hold (new to it, or its folder moved) goes on from Botkins' transcript.
     if (spec.established && spec.hasReplies && (!known || known.folder !== spec.folder)) this.lost = transcriptContext(spec);
     const described = await this.describe();
     this.live = await provider.process(this, described);
@@ -259,13 +333,13 @@ class PiSession extends ProviderSession {
       const live = await this.start();
       if (this.stopRequested || this.closed) return { text: "" };
       const { rpc } = live;
-      const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null });
+      const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map() });
       const settled = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("Pi took too long to answer.")), timeoutMs);
+        const timer = setTimeout(() => reject(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
         const off = rpc.on((event) => {
           if (event.type === "botkins_exit") return reject(event.error);
           this.event(event);
-          if (event.type === "agent_settled") resolve(event);
+          if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) resolve(event);
         });
         stop = () => {
           clearTimeout(timer);
@@ -287,16 +361,16 @@ class PiSession extends ProviderSession {
         throw error;
       }
       if (this.lost) {
-        // Pi has the conversation in its own session now.
+        // The harness has the conversation in its own session now.
         this.lost = "";
         await this.provider.write(live, await this.describe());
       }
       const reply = turn.text.trim();
       if (!reply && turn.stopReason === "error") {
-        const said = errorText(turn.error) || "Pi couldn't get an answer from the model.";
+        const said = errorText(turn.error) || this.provider.name + " couldn't get an answer from the model.";
         throw new Error(/out of extra usage/i.test(said) ? said + EXTRA_USAGE : said);
       }
-      if (!reply && turn.stopReason === "length") throw new Error("Pi ran out of room before it could answer.");
+      if (!reply && turn.stopReason === "length") throw new Error(this.provider.name + " ran out of room before it could answer.");
       return { text: reply };
     } finally {
       stop();
@@ -327,6 +401,11 @@ class PiSession extends ProviderSession {
       case "message_end": {
         const message = event.message ?? {};
         if (message.role !== "assistant") return;
+        const finalText = textOf(message.content);
+        if (!turn.text && finalText) {
+          turn.text = finalText;
+          this.emit("assistant.message_delta", { deltaContent: finalText });
+        }
         turn.stopReason = message.stopReason ?? null;
         turn.error = message.errorMessage ?? null;
         turn.thinking = null;
@@ -334,14 +413,15 @@ class PiSession extends ProviderSession {
         if (usage) {
           this.emit("assistant.usage", { inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0, cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0, model: this.model.model });
           const window = this.windowOf(this.model.model);
-          const used = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) + (usage.output ?? 0);
+          const used = usage.contextTokens ?? (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) + (usage.output ?? 0);
           if (window && used) this.emit("session.usage_info", { currentTokens: used, tokenLimit: window });
         }
         return;
       }
       case "tool_execution_start": {
         Object.assign(turn, { thinking: null, gap: true });
-        const [name, server] = splitName(event.toolName);
+        const metadata = turn.calls.get(event.toolCallId) ?? toolIdentity(event);
+        const { name, server } = metadata;
         const own = server === BRIDGE;
         this.emit("tool.execution_start", {
           toolCallId: event.toolCallId,
@@ -352,6 +432,7 @@ class PiSession extends ProviderSession {
         return;
       }
       case "tool_execution_end": {
+        turn.calls.delete(event.toolCallId);
         const output = textOf(event.result?.content) || (event.result?.details ? displayValue(event.result.details, 12000) : "");
         const success = !event.isError;
         this.emit("tool.execution_complete", { toolCallId: event.toolCallId, success, ...(output && { result: { content: output } }), ...(!success && { error: { message: output || "Failed" } }) });
@@ -370,7 +451,8 @@ class PiSession extends ProviderSession {
   async permission(call) {
     const handlers = this.spec.handlers;
     if (!handlers || !this.turn) return false;
-    const [name, server] = splitName(call.toolName);
+    const { name, server } = toolIdentity(call);
+    this.turn.calls?.set(call.toolCallId, { name, server });
     if (server === BRIDGE) return true;
     const input = call.input && typeof call.input === "object" ? call.input : {};
     const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
@@ -434,8 +516,8 @@ class PiSession extends ProviderSession {
   }
   async inventory() {
     const servers = Object.keys(this.spec.mcpServers ?? {}).map((name) => ({ name, status: "not started" }));
-    const inventory = buildInventory({ name: "Pi", tools: this.spec.tools, servers, native: skillChoices(this.skills.list), compact: true });
-    if (!this.provider.packages.activePaths().length) return inventory;
+    const inventory = buildInventory({ name: this.provider.name, tools: this.spec.tools, servers, native: skillChoices(this.skills.list), compact: true });
+    if (this.provider.runtime !== PI_ID || !this.provider.packages.activePaths().length) return inventory;
     // Asking for the menu during a turn must never restart its process for a changed package.
     const live = this.turn ? this.live : await this.start();
     const { commands } = await live.rpc.request({ type: "get_commands" });
@@ -443,7 +525,7 @@ class PiSession extends ProviderSession {
     for (const cmd of commands ?? []) {
       if (!cmd.name || taken.has(cmd.name) || cmd.sourceInfo?.path?.startsWith("builtin:")) continue;
       inventory.choices.push({ name: cmd.name, command: cmd.name, aliases: [], kind: cmd.source === "skill" ? "Skill" : "Command",
-        source: "Pi", description: String(cmd.description ?? "").split("\n")[0].slice(0, 300), duringTurn: false, native: true });
+        source: this.provider.name, description: String(cmd.description ?? "").split("\n")[0].slice(0, 300), duringTurn: false, native: true });
       taken.add(cmd.name);
     }
     return inventory;
@@ -460,16 +542,29 @@ export class PiProvider extends ModelProvider {
   /** A harness, not a model provider: Settings › Model providers doesn't list it. */
   harness = true;
   /**
-   * @param options.dataDir  Botkins' folder for Pi: its config folder, session files and the files the extension reads.
+   * @param options.dataDir  Botkins' folder for the harness: config, session files and extension data.
    * @param options.bridge   The tool bridge Botkins' tools are offered through.
-   * @param options.binary   For tests: the `pi` to run.
-   * @param options.env      For tests: what Pi runs with instead of this computer's environment.
+   * @param options.binary   For tests: the program to run.
+   * @param options.env      For tests: what the program runs with instead of this computer's environment.
+   * @param options.runtime  Internal: `pi` or `omp`.
    */
-  constructor({ dataDir, bridge, binary, env } = {}) {
+  constructor({ dataDir, bridge, binary, env, runtime = PI_ID } = {}) {
     super();
-    Object.assign(this, { dataDir: dataDir ?? join(tmpdir(), "botkins-pi"), bridge, binary, baseEnv: env });
-    this.sessions = new SessionStore(dataDir && join(dataDir, "sessions.json"));
-    // Botkins session id → { rpc, ref, key, file, session, timer }: the Pi process each conversation has.
+    const program = RUNTIMES[runtime];
+    if (!program) throw new Error("Unknown Pi-compatible harness " + runtime);
+    Object.assign(this, {
+      runtime,
+      program,
+      id: program.id,
+      name: program.name,
+      description: program.description,
+      dataDir: dataDir ?? join(tmpdir(), "botkins-" + runtime),
+      bridge,
+      binary,
+      baseEnv: env,
+    });
+    this.sessions = new SessionStore(dataDir && join(this.dataDir, "sessions.json"));
+    // Botkins session id → { rpc, ref, key, file, session, timer }: one process per conversation.
     this.live = new Map();
     this.packages = new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
   }
@@ -485,26 +580,68 @@ export class PiProvider extends ModelProvider {
     if (result.code !== 0) throw new Error("Pi couldn't install the package. " + (result.stderr || result.stdout).trim().slice(-600));
   }
   locate() {
-    return findBinary("pi", { override: this.binary, env: this.baseEnv });
+    return findBinary(this.program.binary, { override: this.binary, env: this.baseEnv });
   }
   async status() {
     const file = await this.locate();
     const version = file ? versionOf((await run(file, ["--version"], { env: await cliEnv({ PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1" }, this.baseEnv), timeoutMs: 15000 }).catch(() => ({ stdout: "" }))).stdout) : "";
-    // Another tool can be called `pi`; Pi answers --version with its version alone.
+    // The version answer distinguishes the harness from another program with the same command name.
     if (!version)
-      return { installed: false, connected: false, signIn: null, signOut: false, message: "Install Pi on this computer to use it as the harness.", ...(process.platform !== "win32" ? { install: INSTALL } : { install: { url: INSTALL.url } }) };
+      return {
+        installed: false,
+        connected: false,
+        signIn: null,
+        signOut: false,
+        message: "Install " + this.name + " on this computer to use it as the harness.",
+        ...(process.platform !== "win32" ? { install: this.program.install } : { install: { url: this.program.install.url } }),
+      };
     return { installed: true, version, connected: true, signIn: null, signOut: false };
   }
   async version() {
-    return "Pi " + ((await this.status()).version ?? "");
+    return this.name + " " + ((await this.status()).version ?? "");
   }
-  /** The Pi process for a session, started when it has none or when what it was started with changed. */
+  serverRecord(server) {
+    return this.runtime === OMP_ID ? ompServer(server) : piServer(server);
+  }
+  settled(event) {
+    return event.type === (this.runtime === OMP_ID ? "session_settled" : "agent_settled");
+  }
+  agentDir(spec) {
+    return this.runtime === OMP_ID ? join(this.dataDir, "agents", hash(spec.sessionId).slice(0, 24)) : join(this.dataDir, "agent");
+  }
+  launchArgs(live, spec, target, wanted, packages = []) {
+    if (this.runtime === OMP_ID) {
+      return [
+        "--mode", "rpc-ui",
+        ...(spec.temporary ? ["--no-session"] : ["--session-dir", join(this.dataDir, "sessions"), ...(live.ref ? ["--resume", live.ref] : [])]),
+        "--cwd", spec.folder,
+        "--allow-home",
+        "--model", target.provider + "/" + target.modelId,
+        ...(wanted ? ["--thinking", wanted] : []),
+        "--auto-approve", "--offline",
+        "--no-extensions", "--no-skills", "--no-rules",
+        "--config", live.config,
+        "-e", this.program.extension,
+      ];
+    }
+    return [
+      "--mode", "rpc",
+      ...(spec.temporary ? ["--no-session"] : ["--session-dir", join(this.dataDir, "sessions"), "--session-id", live.ref]),
+      "--model", target.provider + "/" + target.modelId,
+      ...(wanted ? ["--thinking", wanted] : []),
+      // Nothing of the person's own Pi setup or of a project's .pi: Botkins supplies skills, tools and servers.
+      "--no-approve", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
+      "-e", "builtin:mcp", "-e", this.program.extension,
+      ...packages.flatMap((path) => ["-e", path]),
+    ];
+  }
+  /** The harness process for a session, started when it has none or when its startup inputs changed. */
   async process(session, described) {
     const { spec } = session;
     const target = session.target();
-    // Pi takes its connections and model list once, at start: a change starts it again on its session file.
-    const packages = this.packages.activePaths();
-    const key = hash([spec.folder, described.providers, spec.temporary, packages]);
+    // Both harnesses take connections and package state at start; OMP also takes its isolated MCP config.
+    const packages = this.runtime === PI_ID ? this.packages.activePaths() : [];
+    const key = hash([spec.folder, described.providers, spec.temporary, packages, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
     let live = this.live.get(spec.sessionId);
     if (live && (live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
@@ -522,25 +659,42 @@ export class PiProvider extends ModelProvider {
       return live;
     }
     const file = await this.locate();
-    if (!file) throw new Error("Pi isn't installed. Install it in Settings › Harness, or choose another harness.");
-    const ref = this.sessions.get(spec.sessionId)?.ref ?? piSessionId(spec.sessionId);
+    if (!file) throw new Error(this.name + " isn't installed. Install it in Settings › Harness, or choose another harness.");
+    const remembered = this.sessions.get(spec.sessionId)?.ref;
+    const ref = this.runtime === OMP_ID ? remembered : remembered ?? piSessionId(spec.sessionId);
     const dir = join(this.dataDir, "run");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    live = { ref, key, file: join(dir, hash(spec.sessionId).slice(0, 24) + ".json"), session, timer: null };
+    const agentDir = this.agentDir(spec);
+    const launchDir = this.runtime === OMP_ID ? join(this.dataDir, "launch", hash(spec.sessionId).slice(0, 24)) : spec.folder;
+    if (this.runtime === OMP_ID) mkdirSync(launchDir, { recursive: true, mode: 0o700 });
+    live = {
+      ref,
+      key,
+      file: join(dir, hash(spec.sessionId).slice(0, 24) + ".json"),
+      config: join(agentDir, "botkins.yml"),
+      agentDir,
+      session,
+      timer: null,
+    };
     await this.write(live, described);
     const wanted = level(session.model.reasoningEffort);
-    const args = [
-      "--mode", "rpc",
-      ...(spec.temporary ? ["--no-session"] : ["--session-dir", join(this.dataDir, "sessions"), "--session-id", ref]),
-      "--model", target.provider + "/" + target.modelId,
-      ...(wanted ? ["--thinking", wanted] : []),
-      // Keep discovery off. Only the bundled extensions and explicitly enabled packages load.
-      "--no-approve", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
-      "-e", "builtin:mcp", "-e", EXTENSION,
-      ...packages.flatMap((path) => ["-e", path]),
-    ];
-    const env = await cliEnv({ PI_CODING_AGENT_DIR: join(this.dataDir, "agent"), PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0", PI_OFFLINE: "1", BOTKINS_PI_SESSION: live.file }, this.baseEnv);
-    live.rpc = new PiRpc(file, args, { env, cwd: spec.folder });
+    const args = this.launchArgs(live, spec, target, wanted, packages);
+    const env = await cliEnv({
+      PI_CODING_AGENT_DIR: live.agentDir,
+      ...(this.runtime === OMP_ID && {
+        // Keep inherited named profiles and overlays from redirecting an embedded Botkins run
+        // to the person's interactive OMP setup. PI_CONFIG_DIR is relative to the home folder.
+        PI_CONFIG_DIR: relative(homedir(), join(live.agentDir, "config-root")),
+        OMP_PROFILE: undefined,
+        PI_PROFILE: undefined,
+        PI_CONFIG_FILES: undefined,
+      }),
+      PI_SKIP_VERSION_CHECK: "1",
+      PI_TELEMETRY: "0",
+      PI_OFFLINE: "1",
+      [this.program.sessionEnv]: live.file,
+    }, this.baseEnv);
+    live.rpc = new PiRpc(file, args, { env, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
     live.rpc.on((event) => {
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
@@ -549,24 +703,33 @@ export class PiProvider extends ModelProvider {
       rmSync(live.file, { force: true });
     });
     this.live.set(spec.sessionId, live);
-    // The fewest at once: the conversation used longest ago lets go of its Pi.
+    // The fewest at once: the conversation used longest ago lets go of its harness.
     if (this.live.size > MAX_LIVE) {
       const idle = [...this.live.entries()].find(([, other]) => other !== live && !other.session?.turn);
       if (idle) this.release(idle[0]);
     }
-    // Pi answers once it has started; a Pi that can't start says why on its error output.
-    await live.rpc.request({ type: "get_state" }, 60000).catch(async (error) => {
+    // A process that cannot start says why on its error output.
+    let state;
+    try {
+      state = await live.rpc.request({ type: "get_state" }, 60000);
+      if (this.runtime === OMP_ID && state?.sessionId) live.ref = state.sessionId;
+    } catch (error) {
       this.live.delete(spec.sessionId);
       await live.rpc.close().catch(() => {});
-      throw new Error("Pi couldn't start. " + String(live.rpc.stderr.trim().split("\n").slice(-2).join(" ") || error.message).slice(0, 400));
-    });
+      throw new Error(this.name + " couldn't start. " + String(live.rpc.stderr.trim().split("\n").slice(-2).join(" ") || error.message).slice(0, 400));
+    }
     return live;
   }
-  /** Writes the file the extension reads, readable by this user only. */
+  /** Writes the files the extension and OMP read, each containing session secrets and user-only. */
   async write(live, described) {
+    mkdirSync(live.agentDir, { recursive: true, mode: 0o700 });
     writeFileSync(live.file, JSON.stringify(described), { mode: 0o600 });
+    if (this.runtime === OMP_ID) {
+      writeFileSync(join(live.agentDir, "mcp.json"), JSON.stringify({ mcpServers: described.servers }), { mode: 0o600 });
+      writeFileSync(live.config, "mcp:\n  enableProjectConfig: false\nenabledProviders: []\n", { mode: 0o600 });
+    }
   }
-  /** Pi's extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
+  /** The extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
   async dialog(live, request) {
     if (!["select", "confirm", "input", "editor"].includes(request.method)) return;
     const title = String(request.title ?? "");

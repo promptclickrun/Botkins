@@ -9,7 +9,7 @@ import { useCapability, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Button, EmptyState, Group, Label, Loading, Page, Row, T, useOnShow } from "@/ui";
-import { harnessChoices, piAction } from "./harnessChoices";
+import { harnessChoices, programAction } from "./harnessChoices";
 import { ChoiceRow } from "./shared";
 
 export { HARNESSES, harnessName } from "./harnessChoices";
@@ -20,15 +20,15 @@ export default function HarnessSettings() {
   const shown = useOnShow();
   const revision = useApp((state) => state.parts.revs?.providers);
   const capable = useCapability(SIGNIN_CAPABILITY);
-  const [pi, setPi] = useState<HarnessStatus>();
+  const [programs, setPrograms] = useState<HarnessStatus[]>([]);
   // Asked again when the screen shows, after an install, and when the computer's providers change.
   useEffect(() => {
     if (!shown) return;
     let live = true;
     api
       .harnesses()
-      .then((list) => live && setPi(list.find((item) => item.id === "pi")))
-      .catch(() => live && setPi(undefined));
+      .then((list) => live && setPrograms(list))
+      .catch(() => live && setPrograms([]));
     return () => {
       live = false;
     };
@@ -45,19 +45,20 @@ export default function HarnessSettings() {
         <EmptyState title="Not on this computer yet" text="Update the app on your computer." />
       </Page>
     );
-  const action = piAction(pi, capable);
+  const programOf = (id: string) => programs.find((program) => program.id === id);
+  const selectedProgram = settings.harness ? programOf(settings.harness) : undefined;
   return (
     <Page title="Harness">
       <View>
         <Label>What runs your bots</Label>
         <Group>
-          {harnessChoices(settings.harness, pi).map((harness) => (
+          {harnessChoices(settings.harness, programs).map((harness) => (
             <ChoiceRow
               key={harness.value}
               title={harness.title}
-              subtitle={harness.value === "pi" && pi && !pi.installed ? "Not installed on your computer" : harness.subtitle}
+              subtitle={programOf(harness.value) && !programOf(harness.value)?.installed ? "Not installed on your computer" : harness.subtitle}
               selected={settings.harness === harness.value}
-              warning={harness.value === "pi" && settings.harness === "pi" && !!pi && !pi.installed}
+              warning={settings.harness === harness.value && !!selectedProgram && !selectedProgram.installed}
               onPress={() => settings.harness !== harness.value && void attempt(api.setPreferences({ harness: harness.value }))}
             />
           ))}
@@ -66,32 +67,37 @@ export default function HarnessSettings() {
           A chat keeps its conversation when you switch. Its next reply starts on the other harness.
         </T>
       </View>
-      {pi && (
-        <View>
-          <Label>Pi</Label>
-          {pi.installed ? (
-            <Group>
-              <Row title="Installed on your computer" value={pi.version} />
-            </Group>
-          ) : (
-            <View style={{ gap: 8 }}>
-              <T variant="footnote" color="muted" style={{ paddingHorizontal: 4 }}>
-                {pi.message || "Pi isn't on your computer yet."}
-              </T>
-              {action === "install" && (
-                <Button
-                  title="Install Pi on your computer"
-                  icon={Download}
-                  size="lg"
-                  wide
-                  onPress={() => router.push({ pathname: "/models/signin", params: { id: pi.id, mode: "install", label: pi.name } })}
-                />
-              )}
-              {action === "guide" && <Button title="Install guide" icon={ExternalLink} variant="secondary" size="sm" onPress={() => void WebBrowser.openBrowserAsync(pi.install!.url)} />}
-            </View>
-          )}
-        </View>
-      )}
+      {programs.map((program) => {
+        const action = programAction(program, capable);
+        return (
+          <View key={program.id}>
+            <Label>{program.name}</Label>
+            {program.installed ? (
+              <Group>
+                <Row title="Installed on your computer" value={program.version} />
+              </Group>
+            ) : (
+              <View style={{ gap: 8 }}>
+                <T variant="footnote" color="muted" style={{ paddingHorizontal: 4 }}>
+                  {program.message || program.name + " isn't on your computer yet."}
+                </T>
+                {action === "install" && (
+                  <Button
+                    title={"Install " + program.name + " on your computer"}
+                    icon={Download}
+                    size="lg"
+                    wide
+                    onPress={() => router.push({ pathname: "/models/signin", params: { id: program.id, mode: "install", label: program.name } })}
+                  />
+                )}
+                {action === "guide" && (
+                  <Button title="Install guide" icon={ExternalLink} variant="secondary" size="sm" onPress={() => void WebBrowser.openBrowserAsync(program.install!.url)} />
+                )}
+              </View>
+            )}
+          </View>
+        );
+      })}
     </Page>
   );
 }

@@ -92,7 +92,7 @@ const usageView = (entry) => ({
 export function credentialsApi({ workspace, handlers, signIns }) {
   const saved = async () => (await handlers.savedCredentials()).entries;
   const providers = () => workspace.providers;
-  /** A model provider by its id, or by its name when exactly one has it. An install also reaches a harness that is a program of its own (Pi). */
+  /** A model provider by id/name; an install also reaches a program harness (Pi or OMP). */
   const provider = (ref, { harnesses = false } = {}) => {
     const wanted = text(ref, 200, "a provider's name or id");
     const list = harnesses ? [...providers().list, ...providers().harnesses] : providers().list;

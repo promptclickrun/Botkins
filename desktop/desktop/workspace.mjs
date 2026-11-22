@@ -1186,8 +1186,8 @@ export class Workspace {
     // A model of a provider the person switched off answers nothing, rather than quietly using it.
     if (!this.providers.isEnabled(owner))
       throw new Error(owner.name + " is switched off. Choose another model for this chat, or switch " + owner.name + " on in Settings › Model providers.");
-    // With one harness (the Copilot runtime, or Pi), it runs the turn and the model's own plan answers it.
-    // A recovered turn goes on where it ran; one saved before Pi says only whether Copilot hosted it.
+    // With one harness (Copilot SDK, Pi or OMP), it runs the turn and the model's own plan answers it.
+    // A recovered turn goes on where it ran; one saved before program harnesses says only whether Copilot hosted it.
     const via = previous ? (previous.via ?? (previous.hosted ? "copilot" : null)) : this.harness.via(choice);
     const runner = via ? this.harness.runner(choice, via) : null;
     const hosted = runner ? await this.harness.session(choice, via) : null;

@@ -139,20 +139,26 @@ test("preferences: a fixed list of keys, a value that fits, and a log line with 
 
 test("preferences harnesses: the choices, the one that is set, and whether a harness program is installed", { skip }, async (t) => {
   const { botkins, client, running } = await service(t);
-  // A stand-in for Pi, a harness that is a program of its own: the answer must not depend on what this computer has installed.
-  running.runtime.handlers.harnesses = async () => [{ id: "pi", name: "Pi", harness: true, installed: true, version: "1.0.0", connected: true }];
+  // Stand-ins for the program harnesses: the answer must not depend on what this computer has installed.
+  running.runtime.handlers.harnesses = async () => [
+    { id: "pi", name: "Pi", harness: true, installed: true, version: "1.0.0", connected: true },
+    { id: "omp", name: "OMP", harness: true, installed: false, connected: false },
+  ];
   const shown = await botkins(["preferences", "harnesses"]);
   assert.equal(shown.exit, 0, shown.err);
   assert.match(shown.out, /^CHOICE +CHOSEN +WHAT IT IS\ncopilot +yes +One harness runs every chat/m);
   assert.match(shown.out, /^pi +- +The Pi program runs the chats/m);
   assert.match(shown.out, /^PROGRAM +INSTALLED +VERSION +NOTE\npi +yes +1\.0\.0 +-$/m);
   const before = (await botkins(["preferences", "harnesses", "--json"])).json();
-  assert.deepEqual([before.chosen, before.choices.map((entry) => entry.id), before.programs.map((entry) => [entry.id, entry.installed])], ["copilot", ["copilot", "provider", "pi"], [["pi", true]]]);
+  assert.deepEqual([before.chosen, before.choices.map((entry) => entry.id), before.programs.map((entry) => [entry.id, entry.installed])], ["copilot", ["copilot", "provider", "pi", "omp"], [["pi", true], ["omp", false]]]);
   assert.equal(before.programs[0].version, "1.0.0");
   // The choice is the preference `harness`: setting it moves the mark.
   assert.equal((await botkins(["preferences", "set", "harness", "pi"])).exit, 0);
   assert.equal((await client.call("preferences.harnesses")).chosen, "pi");
   assert.match((await botkins(["preferences", "harnesses"])).out, /^pi +yes +The Pi program/m);
+  assert.equal((await botkins(["preferences", "set", "harness", "omp"])).exit, 0);
+  assert.equal((await client.call("preferences.harnesses")).chosen, "omp");
+  assert.match((await botkins(["preferences", "harnesses"])).out, /^omp +yes +The OMP program/m);
   assert.equal((await botkins(["preferences", "harnesses", "extra"])).exit, 2);
   // Every program is a read: it leaves no line in the log.
   assert.deepEqual((await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("harnesses")), []);

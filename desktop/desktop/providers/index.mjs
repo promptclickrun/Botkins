@@ -37,7 +37,7 @@ export class Providers {
   constructor(list, { statusWait = 12000, modelsWait = 8000 } = {}) {
     if (!list?.length) throw new Error("Botkins needs at least one model provider.");
     for (const p of list) if (!(p instanceof ModelProvider) || !p.id) throw new Error("Invalid model provider");
-    // A harness (Pi) runs other providers' models and has none of its own: it is found by its id,
+    // A harness (Pi or OMP) runs other providers' models and has none of its own: it is found by its id,
     // for the conversations it runs, but it isn't one of the model providers.
     this.list = list.filter((p) => !p.harness);
     this.harnesses = list.filter((p) => p.harness);
@@ -131,7 +131,7 @@ export class Providers {
     if (provider.harness) return (await this.harnessStatuses()).find((s) => s.id === provider.id);
     return (await this.statuses()).find((s) => s.id === provider.id);
   }
-  /** Each harness (Pi), as statuses() reports a provider, with `harness: true`. */
+  /** Each Pi-compatible harness, as statuses() reports a provider, with `harness: true`. */
   async harnessStatuses() {
     return Promise.all(
       this.harnesses.map(async (provider) => {

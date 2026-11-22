@@ -1326,10 +1326,11 @@ const standIn = () => {
 const harness = (providers, choice = () => "copilot", gate = standIn()) => new Harness({ providers, choice, dir: root, bridge: null, gateway: gate });
 
 test("one harness is the usual choice, and a saved value that is not a harness is that choice", () => {
-  assert.deepEqual(HARNESSES, ["copilot", "provider", "pi"]);
+  assert.deepEqual(HARNESSES, ["copilot", "provider", "pi", "omp"]);
   assert.equal(harnessField("copilot"), "copilot");
   assert.equal(harnessField("provider"), "provider");
   assert.equal(harnessField("pi"), "pi");
+  assert.equal(harnessField("omp"), "omp");
   for (const value of ["opencode", "", "COPILOT", undefined, null, 3, {}]) assert.equal(harnessField(value), "copilot", String(value));
 });
 
@@ -1388,6 +1389,19 @@ test("with Pi chosen, Pi runs ChatGPT and Claude plan models, and every other mo
   const without = harness(registry(), () => "pi");
   assert.equal(without.via({ provider: "codex", model: "gpt-6-astra" }), null);
   assert.equal(without.runner({ provider: "codex", model: "gpt-6-astra" }), without.providers.byId.get("codex"));
+});
+
+test("with OMP chosen, OMP runs ChatGPT and Claude plan models through the same gateway contract", async () => {
+  const providers = registry({ ids: ["copilot", "codex", "claude", "opencode", "omp"], models: async () => CATALOG });
+  const one = harness(providers, () => "omp");
+  assert.equal(one.via({ provider: "codex", model: "gpt-6-astra" }), "omp");
+  assert.equal(one.via({ provider: "claude", model: "opus" }), "omp");
+  assert.equal(one.runner({ provider: "codex", model: "gpt-6-astra" }), providers.byId.get("omp"));
+  assert.equal(one.runner({ provider: "claude", model: "opus" }), providers.byId.get("omp"));
+  assert.equal(one.runner({ provider: "copilot", model: "gpt-5" }), providers.byId.get("copilot"));
+  const out = await one.session({ provider: "claude", model: "opus" }, "omp");
+  assert.deepEqual(out.model, { model: "opus", source: PI_PLANS.claude.name });
+  assert.deepEqual(out.inference.providers.map((provider) => provider.name), ["botkins-chatgpt", "botkins-claude"]);
 });
 
 test("Pi's session has a connection to the gateway for each plan with models, in Pi's own format", async () => {

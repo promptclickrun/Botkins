@@ -50,7 +50,7 @@ const KEYS = [
   ["notifications.quietHours.from", "HH:MM", "The quiet hours start"],
   ["notifications.quietHours.to", "HH:MM", "The quiet hours end"],
   ["access.allBots", "on | off", "Every bot can use every project"],
-  ["harness", "copilot | provider | pi", "What runs a bot's turn (`botkins preferences harnesses` lists the choices)"],
+  ["harness", "copilot | provider | pi | omp", "What runs a bot's turn (`botkins preferences harnesses` lists the choices)"],
   ["background.keepRunning", "on | off", "For the desktop app's window (this host runs as a service)"],
   ["background.runAtStartup", "on | off", "For the desktop app's window (this host starts with `botkins service install`)"],
   ["sidebar.order", "Home, Today, Chats, Work, Wiki", "The order of the places in the side menu"],
@@ -158,7 +158,7 @@ const preferences = {
     harnesses: {
       summary: "Show what can run a bot's turn, and which one is chosen",
       usage: "botkins preferences harnesses",
-      details: "The choice is the preference `harness`: `botkins preferences set harness <choice>`. The programs are the harnesses that are a program of their own (Pi): each says whether it is installed on this computer.",
+      details: "The choice is the preference `harness`: `botkins preferences set harness <choice>`. The programs are the harnesses that are a program of their own (Pi and OMP): each says whether it is installed on this computer.",
       async run(context) {
         if (context.args.length) throw usage("This command takes no words.");
         context.print(await context.client.call("preferences.harnesses"), (found) =>
