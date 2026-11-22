@@ -10,7 +10,7 @@ import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { authorize, chatPeople, filterParts, inChat, OWNER, personOf, sharedBotFlags, TEAM_METHODS, viewOf, withBotFlags, withChatFlags } from "../link-host/team.mjs";
 import { checkJoin, type FetchLike, LinkClient, pair, startJoin } from "../src/link/client";
-import { myPlace, myself, peopleRows, sharedLine, starterOf } from "../src/features/chat/people";
+import { myPlace, myself, peopleRows, sharedLine, speakerLabel, starterOf } from "../src/features/chat/people";
 import type { Bot, ChatSummary } from "../src/link/types";
 
 const real = fetch as unknown as FetchLike;
@@ -229,6 +229,26 @@ test("the phone's sheet lists a chat's people, and offers each person what they 
   assert.equal(sharedLine(people, { invited: ["m_b", "owner", "m_c"] }), "Shared with Ben and 2 others");
   assert.equal(sharedLine(people, {}), "");
   assert.equal(sharedLine(people, { invited: ["gone"] }), "");
+});
+
+test("a message names its writer only in a chat several people write in, and never for a routine", () => {
+  const people = [{ id: "owner", name: "Studio" }, { id: "m_a", name: "Ana" }];
+  const shared = { invited: ["m_a"] };
+  const mine = { role: "user" as const };
+  const ana = { role: "user" as const, author: { memberId: "m_a", name: "Ana" } };
+  // The owner's phone sees Ana's messages named; its own are not.
+  assert.equal(speakerLabel(ana, undefined, shared, people, "owner"), "Ana");
+  assert.equal(speakerLabel(mine, undefined, shared, people, "owner"), "");
+  // Ana's phone sees the owner's messages (no author) under the owner's name.
+  assert.equal(speakerLabel(mine, undefined, shared, people, "m_a"), "Studio");
+  assert.equal(speakerLabel(mine, undefined, shared, undefined, "m_a"), "Owner");
+  // A chat of one looks as it did; so do a bot's reply and a message nobody typed.
+  assert.equal(speakerLabel(ana, undefined, {}, people, "owner"), "");
+  assert.equal(speakerLabel({ role: "assistant" }, undefined, shared, people, "m_a"), "");
+  assert.equal(speakerLabel(mine, { scheduleId: 3 }, shared, people, "m_a"), "");
+  assert.equal(speakerLabel(mine, { panelId: "p" }, shared, people, "m_a"), "");
+  // A name the computer left out falls back to the team's list.
+  assert.equal(speakerLabel({ role: "user", author: { memberId: "m_a" } } as never, undefined, shared, people, "owner"), "Ana");
 });
 
 /** A computer with an owner's phone and two members' phones. */
