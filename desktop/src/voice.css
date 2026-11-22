@@ -1,4 +1,4 @@
-/* Voice: Settings › Voice, the composer's microphone and Live Voice button, and the live panel.
+/* Voice: Settings › Voice, the composer's microphone and Live Voice button, and the voice dock.
    Theme tokens only (src/tokens.css), so it reads in every theme, light and dark. */
 
 /* ------------------------------------------------------------ Settings › Voice */
@@ -232,7 +232,162 @@
   opacity: 0.9;
 }
 
-/* ------------------------------------------------------------ the live panel */
+/* ------------------------------------------------------------ the voice dock */
+/* Live voice in its own chat, in place of the message box (src/LiveVoice.tsx). The bot stands on
+   the dock's top edge, so the dock keeps that much room above itself. */
+.composer[hidden] {
+  display: none;
+}
+.voice-dock {
+  position: relative;
+  margin-top: 48px;
+  min-height: 68px;
+  padding: 10px 10px 10px 130px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.voice-dock-face {
+  position: absolute;
+  left: 12px;
+  bottom: 4px;
+  width: 108px;
+  height: 108px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.voice-dock-face:disabled {
+  cursor: default;
+}
+.voice-dock-who {
+  flex: none;
+  max-width: 46%;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.voice-dock-who strong {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-dock-who small {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.voice-dock-who small.live-error {
+  color: var(--danger);
+}
+.voice-dock-sound {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+.voice-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  flex: none;
+  color: var(--accent-text);
+}
+.voice-wave.you {
+  color: var(--success);
+}
+.voice-wave i {
+  display: block;
+  width: 3px;
+  min-height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.3;
+  transition: height 80ms linear, opacity 80ms linear;
+}
+.voice-wave i.on {
+  opacity: 0.9;
+}
+/* Push to talk: the sound strip is the button. */
+.voice-hold {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border: 0;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.voice-hold .voice-wave {
+  color: currentColor;
+}
+.voice-hold:active:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.voice-hold:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.voice-dock-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.voice-round {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.voice-round:hover {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.voice-round[aria-pressed="true"] {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.set-button.voice-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.live-error {
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--danger);
+}
+/* The old live voice panel's rule. Today's panels (class "live-panel today-panel") share the class
+   name and take their margin, shadow, grid and gap from it, so it stays as it was. */
 .live-panel {
   margin: 0 0 8px;
   padding: 12px 14px;
@@ -243,69 +398,25 @@
   display: grid;
   gap: 10px;
 }
-.live-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-.live-who {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-}
-.live-who strong {
-  font-size: calc(14px * var(--text-scale));
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.live-who small {
-  font-size: calc(12px * var(--text-scale));
-  color: var(--muted);
-}
-.live-panel .voice-meter {
-  height: 26px;
-  color: var(--accent-text);
-}
-.live-panel .voice-meter.you {
-  color: var(--success);
-}
-.live-panel .voice-meter i {
-  width: 4px;
-}
-.live-buttons {
-  display: flex;
-  gap: 6px;
-  flex: none;
-}
-.live-buttons button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.live-buttons button[aria-pressed="true"] {
-  background: var(--warning-soft);
-  color: var(--warning);
-}
-.live-error {
-  margin: 0;
-  font-size: calc(13px * var(--text-scale));
-  color: var(--danger);
-}
+/* A narrow window: the controls go under the name. */
 @media (max-width: 640px) {
-  .live-head {
+  .voice-dock {
     flex-wrap: wrap;
+    padding-left: 10px;
+    padding-top: 64px;
   }
-  .live-buttons {
-    width: 100%;
-    justify-content: flex-end;
+  .voice-dock-face {
+    bottom: auto;
+    top: -48px;
+  }
+  .voice-dock-who {
+    max-width: 100%;
+    flex: 1 1 100%;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .voice-meter i {
+  .voice-meter i,
+  .voice-wave i {
     transition: none;
   }
 }

@@ -1,7 +1,7 @@
 // Talking with a bot by turns, on the one voice button: the phone listens, what was said is sent to
 // the chat as a normal message, the bot's reply is read aloud, and the phone listens again. It uses
 // the dictation and the reading aloud chosen in Settings › Voice. Live voice, when it is on, takes
-// the button instead (full duplex; see Live.tsx).
+// the button instead (full duplex; see VoiceDock.tsx).
 //
 // One talk at a time, app-wide. It ends when the person ends it, when nothing is said twice in a
 // row, when the bot needs an answer on the screen, or when the chat's screen closes.

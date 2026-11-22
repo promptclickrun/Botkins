@@ -10,7 +10,10 @@ export type Line = { id: string; who: "you" | "bot"; text: string; final: boolea
 /** Runs a tool the voice called and answers with what the voice should hear (a string). */
 export type ToolRunner = (name: string, args: Record<string, unknown>) => Promise<string>;
 
-type Events = { status: LiveStatus; inputItem: string; line: Line; error: string };
+/** `level`: how loud whoever has the sound is, 0 to 1 (the bot while its sound plays, else the microphone). */
+type Events = { status: LiveStatus; inputItem: string; line: Line; error: string; level: number };
+/** The least time between two `level` events: the dock's sound strip needs no more. */
+export const LEVEL_EVERY_MS = 100;
 
 /** The part of a WebSocket a transport uses. React Native's and the tests' fake both fit. */
 export type SocketLike = {
@@ -113,12 +116,15 @@ export function argsOf(value: unknown): Record<string, unknown> {
 /** The transcript, the status and tool calls, the same for every transport. */
 export abstract class LiveBase implements LiveTransport {
   status: LiveStatus = "connecting";
-  private listeners: { [K in keyof Events]: Set<(value: Events[K]) => void> } = { status: new Set(), inputItem: new Set(), line: new Set(), error: new Set() };
+  private listeners: { [K in keyof Events]: Set<(value: Events[K]) => void> } = { status: new Set(), inputItem: new Set(), line: new Set(), error: new Set(), level: new Set() };
   private lines = new Map<string, Line>();
   private toolsRunning = 0;
   protected ended = false;
   /** When the microphone is sent (input.ts). A transport with its own clock or quiet replaces it. */
   protected gate = new MicGate("conversation");
+  /** The time, for pacing `level`. A transport given a clock of its own sets it. */
+  protected clock: () => number = Date.now;
+  private heard = { mic: 0, out: 0, told: 0 };
 
   constructor(protected readonly runTool: ToolRunner) {}
 
@@ -144,6 +150,16 @@ export abstract class LiveBase implements LiveTransport {
   }
   protected emit<K extends keyof Events>(event: K, value: Events[K]) {
     for (const listener of [...(this.listeners[event] as Set<(value: Events[K]) => void>)]) listener(value);
+  }
+
+  /** A transport says how loud the microphone or the bot's sound is now; listeners hear of it at a slow, even pace. */
+  protected hears(sound: { mic?: number; out?: number }) {
+    if (this.ended) return;
+    Object.assign(this.heard, sound);
+    const now = this.clock();
+    if (now - this.heard.told < LEVEL_EVERY_MS) return;
+    this.heard.told = now;
+    this.emit("level", this.heard.out > 0.02 ? this.heard.out : this.heard.mic);
   }
 
   protected setStatus(status: LiveStatus) {

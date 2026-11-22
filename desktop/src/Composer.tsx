@@ -12,7 +12,7 @@ import {
   useMentionables,
   type DraftMention,
 } from "./MentionMenu";
-import type { Attachment, Bot, BotVoice, Capability, MentionInput } from "./types";
+import type { Attachment, Bot, BotLook, BotVoice, Capability, MentionInput } from "./types";
 import { useComposerVoice } from "./ComposerVoice";
 import ProviderIcon, { hasProviderMark } from "./ProviderIcon";
 
@@ -42,8 +42,10 @@ type Props = {
   /** Records picked with "@" and "#", kept with the draft. */
   mentions?: DraftMention[];
   setMentions?: (list: DraftMention[]) => void;
-  /** The bot this composer talks to, for the Live Voice panel. */
+  /** The bot this composer talks to, for the voice dock. */
   botName?: string;
+  /** That bot's look, for the voice dock. */
+  botLook?: BotLook;
   /** That bot's voice of its own, if it has one: Live Voice starts with it. */
   botVoice?: BotVoice;
   /** Makes a chat to talk in when there is none yet (the home composer). */
@@ -68,6 +70,7 @@ export default function Composer({
   mentions = NO_MENTIONS,
   setMentions = () => {},
   botName,
+  botLook,
   botVoice,
   startChat,
 }: Props) {
@@ -142,7 +145,7 @@ export default function Composer({
   }, [listId, mentionAt, mentioning]);
   const quote = reply?.quote || "";
   // Dictation and Live Voice (src/ComposerVoice.tsx).
-  const voice = useComposerVoice({ chatId, botName, botVoice, draft, change, input, startChat });
+  const voice = useComposerVoice({ chatId, bot: members?.length ? undefined : { id: botId, look: botLook }, botName, botVoice, draft, change, input, startChat });
   // Enter guides an active reply. Queue explicitly saves a separate turn.
   const ready = !!draft.trim() || files.length > 0;
   function addFiles(list: Attachment[]) {
@@ -340,6 +343,8 @@ export default function Composer({
       )}
       <form
         className="composer"
+        // The voice dock (in `voice.strip`) stands in for the message box while live voice is on here.
+        hidden={voice.docked}
         onSubmit={(e) => {
           e.preventDefault();
           if (!sending) void submit();

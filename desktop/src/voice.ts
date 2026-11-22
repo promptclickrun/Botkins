@@ -302,6 +302,8 @@ export type LiveState = {
   /** The bot is working on a request (ask_bot). */
   working: boolean;
   muted: boolean;
+  /** The voice is heard. Off, the call goes on in silence and the chat still shows what is said. */
+  speaker: boolean;
   /** 0 to 1: the microphone's level, or the voice's while it speaks. */
   level: number;
   error: string;
@@ -335,6 +337,10 @@ export function closeLive() {
 }
 export function muteLive(on: boolean) {
   call?.mute(on);
+}
+/** Turns the voice's sound on or off; the call goes on either way. */
+export function speakerLive(on: boolean) {
+  call?.speaker(on);
 }
 /** Stops the bot's current answer and lets the person speak over it. */
 export function interruptLive() {
@@ -375,12 +381,18 @@ class PcmPlayer {
   sources = new Set<AudioBufferSourceNode>();
   out: GainNode;
   analyser: AnalyserNode;
+  /** The last step before the speakers: its gain is 0 while the person has the sound off. */
+  private heard: GainNode;
   constructor(public ctx: AudioContext) {
     this.out = ctx.createGain();
+    this.heard = ctx.createGain();
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 1024;
     this.out.connect(this.analyser);
-    this.out.connect(ctx.destination);
+    this.out.connect(this.heard).connect(ctx.destination);
+  }
+  silence(on: boolean) {
+    this.heard.gain.value = on ? 0 : 1;
   }
   play(data: string | Uint8Array, rate: number) {
     const bytes = typeof data === "string" ? unb64(data) : data;
@@ -449,7 +461,7 @@ class LiveCall {
   private lastElevenReply?: string;
 
   constructor(chatId: string, provider: string) {
-    this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, level: 0, error: "", inputMode: this.inputMode };
+    this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, speaker: true, level: 0, error: "", inputMode: this.inputMode };
     this.gate = new MicGate(this.inputMode, Date.now, provider === "elevenlabs" ? "silence" : "drop");
     live.set(this.state);
   }
@@ -528,6 +540,7 @@ class LiveCall {
     pc.ontrack = (e) => {
       const audio = (this.remote = new Audio());
       audio.autoplay = true;
+      audio.muted = !this.state.speaker;
       audio.srcObject = e.streams[0] ?? new MediaStream([e.track]);
       const source = this.ctx!.createMediaStreamSource(audio.srcObject as MediaStream);
       this.outAnalyser = this.ctx!.createAnalyser();
@@ -656,6 +669,7 @@ class LiveCall {
     const session = (this.session = await api.startLiveVoice(this.state.chatId, {}));
     if (this.ended) return this.stop();
     this.player = new PcmPlayer(this.ctx!);
+    this.applySpeaker();
     this.outAnalyser = this.player.analyser;
     let ws: WebSocket;
     if (session.kind === "openai-ws") {
@@ -843,6 +857,15 @@ class LiveCall {
     for (const track of this.mic?.getAudioTracks() ?? []) track.enabled = !on;
     this.update({ muted: on });
     this.applyMic();
+  }
+  /** The sound is cut where it leaves, after the meter, so the dock still shows the voice speaking. */
+  speaker(on: boolean) {
+    this.update({ speaker: on });
+    this.applySpeaker();
+  }
+  private applySpeaker() {
+    if (this.remote) this.remote.muted = !this.state.speaker;
+    this.player?.silence(!this.state.speaker);
   }
   private applyMic() {
     if (this.micTimer !== null) window.clearTimeout(this.micTimer);

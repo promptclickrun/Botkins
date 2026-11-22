@@ -11,7 +11,7 @@ import { OpenAIRealtime, OpenAISocketTransport, withTranscription } from "../src
 import { askBot, type ChatMessage, CUT_NOTE, LOOK_AT_PHONE, MAX_REPLY, replyText, STILL_WORKING } from "../src/features/voice/live/askBot";
 import { liveContext, locationFor, locationOn } from "../src/features/voice/live/context";
 import { BARGE_IN, CUT_SETTLE_MS, ECHO_TAIL_MS, MicGate, MIN_TURN_MS, pcmMs, RELEASE_TAIL_MS, silenceLike } from "../src/features/voice/live/input";
-import { type AudioFrame, type DuplexLike, type Line, type LiveStatus, textOf } from "../src/features/voice/live/types";
+import { type AudioFrame, type DuplexLike, LEVEL_EVERY_MS, type Line, type LiveStatus, textOf } from "../src/features/voice/live/types";
 import { WebRTCTransport } from "../src/features/voice/live/webrtc";
 import { FIRST_PART, LATER_PART_MAX, nextPhrase, speakable, splitForSpeech } from "../src/features/voice/speakable";
 
@@ -734,6 +734,32 @@ test("WebRTC: where turn detection stayed on, a release sends only silence and t
   transport.end();
 });
 
+test("a call reports how loud the sound is: the bot's while it plays, else the microphone's, at a slow pace", async () => {
+  const h = harness();
+  const c = clock();
+  const transport = new GeminiTransport({ url: "wss://x", setup: { setup: {} }, input: { sampleRate: 16000 }, output: { sampleRate: 24000 } }, h.audio, h.connect, h.tools, c.now);
+  const levels: number[] = [];
+  transport.on("level", (level) => levels.push(level));
+  const started = transport.start();
+  h.sockets[0]!.open();
+  h.sockets[0]!.receive({ setupComplete: {} });
+  await started;
+  h.audio.frame("MINE", 0.3);
+  h.audio.frame("MINE", 0.4);
+  assert.deepEqual(levels, [0.3], "one report, not one for every frame");
+  c.advance(LEVEL_EVERY_MS);
+  h.audio.output(0.6);
+  assert.deepEqual(levels, [0.3, 0.6], "the bot's sound takes over while it plays");
+  c.advance(LEVEL_EVERY_MS);
+  h.audio.output(0);
+  assert.deepEqual(levels, [0.3, 0.6, 0.4], "and the microphone's level is back once it is quiet");
+  transport.mute(true);
+  c.advance(LEVEL_EVERY_MS);
+  h.audio.frame("MINE", 0.5);
+  assert.equal(levels.at(-1), 0, "a muted microphone shows as silence");
+  transport.end();
+});
+
 test("Gemini: its own sound never reaches it; push to talk marks the person's turn by hand", async () => {
   const h = harness();
   const c = clock();
@@ -993,20 +1019,4 @@ test("ask_bot reads the reply when the spoken message already occupies its chat 
   chat.push({ role: "assistant", text: "It is noon.", runId: "r" });
   chat.push({ role: "user", text: "Thanks", voiceId: "call:u2" });
   assert.equal(await answer, "It is noon.");
-});
-
-test("the voice canvas keeps typed and spoken rows in order as the computer acknowledges them", async () => {
-  const { updateSpoken, voiceCanvas } = await import("../src/features/voice/live/history");
-  const one: Line = { id: "a:1", who: "you", text: "Fir", final: false };
-  const two: Line = { id: "a:2", who: "you", text: "Second", final: true };
-  let spoken = updateSpoken([], one, 1);
-  spoken = updateSpoken(spoken, two, 1);
-  spoken = updateSpoken(spoken, { ...one, text: "First", final: true }, 3);
-  const typed = { role: "user" as const, text: "Typed" };
-  const ack = { role: "user" as const, text: "Fir", voiceId: one.id, voicePartial: true as const };
-  const rows = (messages: any[]) => voiceCanvas(messages, 0, spoken).reverse().map(row => [row.key, row.message.text]);
-  const expected = [["m:0", "Typed"], ["v:a:1", "First"], ["v:a:2", "Second"]];
-  assert.deepEqual(rows([typed]), expected);
-  assert.deepEqual(rows([typed, ack]), expected);
-  assert.deepEqual(rows([typed, { ...ack, voicePartial: undefined, text: "First" }, { ...typed, voiceId: two.id, text: "Second" }]), expected);
 });

@@ -3,19 +3,23 @@
 // phone. The bot's sound plays by itself from the remote track; events go both ways as JSON on the
 // `oai-events` data channel.
 //
-// The phone has no level for the microphone here, only the provider's events. While the provider
+// The phone has no level of its own for either sound here, only the provider's events; the sound
+// strip's level is read from the connection's statistics a few times a second. While the provider
 // sends the bot's sound (`output_audio_buffer.started` to `.stopped`) and for its echo after, the
 // microphone track is off, so the bot can't hear itself; the person stops it with a tap. Push to
 // talk turns turn detection off and the track is on only while the button is held.
 import type { LiveSession } from "@/link/types";
 import { MIN_TURN_MS, RELEASE_TAIL_MS } from "./input";
 import { OpenAIRealtime, TRANSCRIBE_MODEL, turnsByHand } from "./openai";
-import { LiveBase, type ToolRunner } from "./types";
+import { LiveBase, obj, type ToolRunner } from "./types";
 
 type WebRTC = typeof import("react-native-webrtc");
 type Peer = InstanceType<WebRTC["RTCPeerConnection"]>;
 type Channel = ReturnType<Peer["createDataChannel"]>;
 type Stream = Awaited<ReturnType<WebRTC["mediaDevices"]["getUserMedia"]>>;
+
+/** How often the connection is asked for its sound levels. */
+const METER_MS = 150;
 
 export type Negotiate = (sdp: string) => Promise<Extract<LiveSession, { kind: "webrtc" }>>;
 
@@ -33,6 +37,8 @@ export class WebRTCTransport extends LiveBase {
   private sounding = false;
   /** The provider confirmed turn detection is off: a release commits the turn and asks for the answer. */
   private manual = false;
+  private meter: ReturnType<typeof setInterval> | null = null;
+  private reading = false;
   private reopen: ReturnType<typeof setTimeout> | null = null;
   private sending: ReturnType<typeof setTimeout> | null = null;
   /** How long the button has been held in this turn (a quick press again goes on with it). */
@@ -73,6 +79,34 @@ export class WebRTCTransport extends LiveBase {
     if (wait !== null && !this.ended) this.reopen = setTimeout(() => this.apply(), wait + 5);
   }
 
+  /**
+   * How loud the bot's sound and the microphone are, from the connection's own statistics
+   * (`audioLevel` of the incoming sound and of the microphone's source). A build that gives no
+   * such numbers reports nothing, and the dock's sound strip then keeps its still shapes.
+   */
+  private async readLevels() {
+    const peer = this.peer;
+    if (!peer || this.reading) return;
+    this.reading = true;
+    try {
+      const stats: unknown = await peer.getStats();
+      const sound: { mic?: number; out?: number } = {};
+      for (const report of stats instanceof Map ? stats.values() : []) {
+        const { type, kind, audioLevel } = obj(report);
+        if (kind !== "audio" || typeof audioLevel !== "number") continue;
+        if (type === "inbound-rtp") sound.out = audioLevel;
+        else if (type === "media-source") sound.mic = this.muted ? 0 : audioLevel;
+      }
+      if (this.peer === peer && (sound.mic !== undefined || sound.out !== undefined)) this.hears(sound);
+    } catch {
+      // No statistics from this build: the strip goes without a level.
+      if (this.meter) clearInterval(this.meter);
+      this.meter = null;
+    } finally {
+      this.reading = false;
+    }
+  }
+
   private send(event: Record<string, unknown>) {
     if (this.channel?.readyState === "open") this.channel.send(JSON.stringify(event));
   }
@@ -104,6 +138,7 @@ export class WebRTCTransport extends LiveBase {
       const input = { transcription: { model: TRANSCRIBE_MODEL }, ...(this.input === "push" && { turn_detection: null }) };
       this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
       this.setStatus("listening");
+      this.meter ??= setInterval(() => void this.readLevels(), METER_MS);
     });
     channel.addEventListener("message", (event: { data: unknown }) => this.protocol.handle(event.data));
     // The other end closed the session's channel (the computer ended the call): this end closes too.
@@ -182,6 +217,8 @@ export class WebRTCTransport extends LiveBase {
   }
 
   protected close() {
+    if (this.meter) clearInterval(this.meter);
+    this.meter = null;
     if (this.reopen) clearTimeout(this.reopen);
     if (this.sending) clearTimeout(this.sending);
     this.reopen = null;

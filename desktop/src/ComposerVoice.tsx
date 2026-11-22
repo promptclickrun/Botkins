@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { AudioLines, Info, Mic, Square } from "lucide-react";
 import { Recorder, startLive, useLive, voiceError } from "./voice";
 import { effectiveLive } from "./botVoice";
+import type { BotAvatarProps } from "./Avatar";
 import type { BotVoice } from "./types";
-import LivePanel, { Meter } from "./LiveVoice";
+import LiveVoice, { Meter } from "./LiveVoice";
 import "./voice.css";
 
 const api = window.botkins;
@@ -14,9 +15,12 @@ type Note = { text: string; settings?: boolean; error?: boolean };
 /**
  * The composer's voice: the microphone (dictation into the message box, never sent by itself) and
  * the Live Voice button. `strip` goes above the message box; `mic` and `live` are its buttons.
+ * While live voice is on in this chat, `strip` holds the voice dock and `docked` tells the composer
+ * to leave its message box out, until the person asks to type.
  */
 export function useComposerVoice({
   chatId,
+  bot,
   botName,
   botVoice,
   draft,
@@ -25,6 +29,8 @@ export function useComposerVoice({
   startChat,
 }: {
   chatId?: string;
+  /** The bot the voice dock shows. */
+  bot?: BotAvatarProps["bot"];
   botName?: string;
   /** The bot's voice of its own, if it has one. */
   botVoice?: BotVoice;
@@ -39,6 +45,16 @@ export function useComposerVoice({
   const [note, setNote] = useState<Note | null>(null);
   const language = useRef<string | undefined>(undefined);
   const liveState = useLive();
+  // The dock's keyboard button puts the message box back while the call goes on. Each call starts docked.
+  const [typing, setTyping] = useState(false);
+  const calling = !!liveState;
+  useEffect(() => {
+    if (!calling) setTyping(false);
+  }, [calling]);
+  const docked = !!liveState && !!chatId && liveState.chatId === chatId && !typing;
+  useEffect(() => {
+    if (typing) input.current?.focus();
+  }, [typing, input]);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   // The meter while recording.
@@ -211,9 +227,10 @@ export function useComposerVoice({
       </div>
     );
   return {
+    docked,
     strip: (
       <>
-        {liveState && <LivePanel chatId={chatId} botName={botName ?? ""} />}
+        {liveState && <LiveVoice chatId={chatId} bot={bot} botName={botName ?? ""} typing={typing} setTyping={setTyping} />}
         {strip}
       </>
     ),
