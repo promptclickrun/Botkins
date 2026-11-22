@@ -123,15 +123,16 @@ test("a grant that is incomplete or oversized is refused and saves nothing", asy
 
 test("adopting a sign-in is for a remote server that signs in with OAuth, and then checks the server", async (t) => {
   const { remote, ws, id, ask, grant } = await setup(t, {}, { oauth: true });
-  // The check connects to the server like Test does; here it is a stand-in that reports what the server would.
+  // The check connects to the server like Test does; here it is a stand-in that answers only with the phone's sign-in.
   const checked = [];
-  ws.probe = async (overrides) => {
-    checked.push(Object.keys(overrides.mcpServers));
-    return {
-      servers: [{ name: "words", status: (await ask())?.accessToken === "phone-access" ? "connected" : "needs-auth" }],
-      choices: [{ kind: "Tool", source: "words", name: "words-secret_word" }],
-    };
-  };
+  ws.mcpApps.connect = (server) => ({
+    tools: async () => {
+      checked.push([server.name]);
+      if ((await ask())?.accessToken !== "phone-access") throw Object.assign(new Error("Unauthorized"), { status: 401 });
+      return [{ name: "secret_word" }];
+    },
+    close: async () => {},
+  });
   assert.deepEqual(await ws.integrations.adoptSignIn(id, grant), { status: "connected", tools: ["secret_word"] });
   assert.deepEqual(checked, [["words"]]);
   assert.equal(ws.snapshot().mcpServers[0].auth.signedIn, true);

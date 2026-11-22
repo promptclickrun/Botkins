@@ -2,7 +2,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Workspace } from "./starter.mjs";
 import { parseServers, parseSkill, serverField, slug } from "../desktop/integrations.mjs";
 import { readProfile, writeProfile } from "../desktop/bot-profile-files.mjs";
@@ -74,6 +76,24 @@ test("an MCP server is saved once for every bot, and its secrets never reach the
   ws.integrations.removeServer(id);
   assert.deepEqual(ws.bot("pip").mcpOff, []);
   assert.throws(() => ws.integrations.server(id), /no longer exists/);
+});
+
+test("a tool test connects to the server itself, whatever harness the bots use", async (t) => {
+  const { ws } = setup(t);
+  // No bot at all: the test never opens a bot's session.
+  ws.state.bots.splice(0);
+  const fixture = fileURLToPath(new URL("./fixtures/sample-mcp.mjs", import.meta.url));
+  const local = ws.integrations.saveServer({ name: "sample", type: "stdio", command: process.execPath, args: [fixture] });
+  assert.deepEqual(await ws.integrations.testServer(local), { status: "connected", tools: ["review_note", "read_sample"] });
+
+  const refusing = createServer((_req, res) => res.writeHead(401).end()).listen(0, "127.0.0.1");
+  t.after(() => refusing.close());
+  await new Promise((resolve) => refusing.once("listening", resolve));
+  const locked = ws.integrations.saveServer({ name: "locked", type: "http", url: "http://127.0.0.1:" + refusing.address().port + "/mcp" });
+  assert.deepEqual(await ws.integrations.testServer(locked), { status: "needs-auth", tools: [] });
+
+  const missing = ws.integrations.saveServer({ name: "missing", type: "stdio", command: join(tempDir(t), "no-such-program") });
+  assert.deepEqual(await ws.integrations.testServer(missing), { status: "failed", tools: [] });
 });
 
 test("MCP server input is checked, and JSON from other apps imports without clobbering", (t) => {
