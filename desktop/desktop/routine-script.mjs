@@ -70,6 +70,22 @@ export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = pr
   };
 }
 
+/**
+ * Whether a finished script said that nothing needs the bot: it exited 0 and its last line is
+ * `{"wakeAgent": false}`. The run then ends quietly, with no model turn and no notification.
+ */
+export function sleepsAgent(result) {
+  if (result.exitCode !== 0 || result.stopped || result.timedOut || result.error) return false;
+  const last = result.output.trimEnd().split(/\r?\n/).at(-1)?.trim();
+  if (!last?.startsWith("{")) return false;
+  try {
+    const value = JSON.parse(last);
+    return value !== null && typeof value === "object" && value.wakeAgent === false;
+  } catch {
+    return false;
+  }
+}
+
 /** One line about how a script ended, such as "The script finished (exit code 0)." */
 export function scriptEnding(result) {
   if (result.error) return "The script could not start: " + result.error;
