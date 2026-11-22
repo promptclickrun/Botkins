@@ -70,7 +70,7 @@ Pair the phone app, and your team goes with you.
 - **Skills.** Teach every bot a task once with a `SKILL.md` folder.
 - **MCP servers.** Add local or remote servers. Sign in with a key, a header or OAuth.
 - **Plugins.** Browse GitHub plugin catalogs. Review what a plugin declares before you install it.
-- **Marketplace.** Connect more than 1,000 apps through your own Composio account.
+- **Marketplace.** Connect more than 1,000 apps through your own Composio account. Open **Marketplace › Pi** on desktop or a paired phone to browse Pi packages, review a version, and turn it on for Pi chats on that computer.
 - **Mac tools.** Let bots read or send iMessage and Mail. Each send asks you first.
 - **Voice.** Dictate, hear replies read aloud, or talk live with a bot. Use OpenAI, Azure, ElevenLabs, Gemini or your own server.
 

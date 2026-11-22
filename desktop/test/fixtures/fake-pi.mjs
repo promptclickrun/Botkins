@@ -73,6 +73,12 @@ process.stdin.on("data", (chunk) => {
         dialogs.get(command.id)?.(command);
         dialogs.delete(command.id);
         break;
+      case "get_commands":
+        ok({ commands: args.includes("/fixture/pi-package") ? [
+          { name: "skill:garden", description: "Garden skills", source: "skill" },
+          { name: "show-garden", description: "Show the garden", source: "extension" },
+        ] : [] });
+        break;
       case "get_state":
         ok({ model: { provider: model[0], id: model[1] }, thinkingLevel: thinking });
         break;
@@ -85,6 +91,10 @@ process.stdin.on("data", (chunk) => {
         ok();
         break;
       case "prompt":
+        if (command.message === "/show-garden") {
+          ok({ disposition: "handled" });
+          break;
+        }
         ok({ disposition: "started" });
         void turn(command.message);
         break;

@@ -9,7 +9,7 @@
 // that it still matches the copy.
 //
 //   node scripts/build-link-client.mjs                  compile the approved local copy
-//   node scripts/build-link-client.mjs ../botkins        import the approved phone sources, then compile
+//   node scripts/build-link-client.mjs ../mobile        import the approved phone sources, then compile
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const phone = resolve(process.argv[2] ?? join(root, "..", "botkins"));
+const phone = resolve(process.argv[2] ?? join(root, "..", "mobile"));
 const from = join(phone, "src", "link");
 const copy = join(root, "desktop", "remote", "client");
 const out = join(root, "desktop", "remote", "link-client.mjs");
