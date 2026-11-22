@@ -858,7 +858,7 @@ export type Preferences = {
   teamwork?: boolean;
   /** Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0 for off. Missing on an older computer. */
   autoSummarize?: number;
-  /** Settings › Experimental › Proactive agent. Missing on a computer without "proactive-agent-v1". */
+  /** Settings › Experimental › Proactive agent: the computer's switch. Each bot's own is the `proactive` part. Missing on a computer without "proactive-agent-v2". */
   proactive?: ProactiveSettings;
   providers?: Record<string, { enabled: boolean }>;
   /**
@@ -1020,7 +1020,28 @@ export type Meta = {
 
 /** Everything the phone keeps in step with the desktop, by part name. */
 export type ProactiveWatch = "runs" | "tasks" | "requests";
-export type ProactiveSettings = { enabled: boolean; botId: string | null; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
+export type ProactiveSettings = { enabled: boolean };
+/** What a bot's Proactive agent is set to. */
+export type ProactiveBotSettings = { enabled: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/**
+ * One bot's agent as this phone is sent it. The owner is sent `person` ("owner", or the member it works for). A member is sent
+ * `mine` for their own agents and, for another person's, only `{ enabled, taken }`: every other field may be missing, and a
+ * computer may add more.
+ */
+export type ProactiveBot = Partial<ProactiveBotSettings> & {
+  enabled: boolean;
+  person?: string;
+  mine?: boolean;
+  taken?: boolean;
+  /** The agent's routine's chat (Check now is `runRoutine` on it). */
+  chatId?: string;
+  lastSweepAt?: number;
+  pings?: number;
+  day?: string;
+  log?: ProactiveLog[];
+};
+export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
@@ -1039,8 +1060,8 @@ export type Parts = {
   /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
   spaces?: SpaceSummary[];
   tasks: BotTask[];
-  /** The Proactive agent's log, owner only ("proactive-agent-v1"). */
-  proactive?: { chatId?: string; pings?: number; log: ProactiveLog[] };
+  /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
+  proactive?: ProactivePart;
   projects: Project[];
   mcp: McpServer[];
   skills: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
@@ -1411,6 +1432,11 @@ export type Calls = {
   duplicateBot(id: string): string;
   setBotAccess(botId: string, grant: BotAccessGrant): void;
   setBotIntegrations(botId: string, off: { skillsOff?: string[]; mcpOff?: string[] }): void;
+  /**
+   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2".
+   * A role that manages the bot may; the agent works for the person who set it up, and is theirs alone to change (the owner may change any).
+   */
+  setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): void;
   botMemory(botId: string): string;
   setBotMemory(botId: string, text: string): void;
   saveTemplate(botId: string, name?: string): string;

@@ -20,6 +20,8 @@ const FOR_A_PERSON = {
   "spaces.read": 1, "spaces.create": 1, "spaces.rename": 2, "spaces.remove": 1, "spaces.setProject": 2, "spaces.setPanelProject": 2,
   "spaces.newPanel": 1, "spaces.ask": 1, "spaces.movePanel": 2, "spaces.patchState": 3, "spaces.note": 2, "spaces.removeNote": 2,
   changePanel: 2, routine: 2, refreshPanel: 1, boardAct: 3,
+  // A bot's Proactive agent works for the person who sets it up.
+  setBotProactive: 2,
 };
 
 export function deviceCall({ workspace, handlers, folders }) {

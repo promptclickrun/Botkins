@@ -119,6 +119,8 @@ export function snapshotOf(parts, own = {}) {
     // Admin mode as the other computer keeps it for this device, when this device is its owner's.
     ...(parts.meta?.you?.kind === "owner" && typeof parts.meta.you.admin === "boolean" && { adminMode: parts.meta.you.admin }),
     tasks: parts.tasks ?? [],
+    // The Proactive agent: the computer's switch and each bot's agent (a member is sent only their own).
+    ...(parts.proactive && { proactive: parts.proactive }),
     projects: parts.projects ?? [],
     mcpServers: parts.mcp ?? [],
     plugins: parts.plugins ?? [],

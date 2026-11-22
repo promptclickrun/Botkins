@@ -49,7 +49,7 @@ A new team starts with one group, **Everyone** (`g_everyone`, role Guest).
 
 Always owner only, whatever the role: provider sign-in and keys (`signIn`, `auth`, `providers`, `setProviderEnabled`, `connectProviderService`…), `credentials`, `removeCredential`, every `link.devices.*`, `link.screen.*`, `link.device.*` (the phone tools), `link.push.test`, projects, wiki, tasks, folders (`listFolders`), `setBotAccess`, `setBotIntegrations`, `botMemory`, `setBotMemory`, templates import and export, and every `link.team.*` management call. A member's `setPreferences` with `settings.manage` may change only the display fields listed in `MEMBER_PREFERENCE_FIELDS`. It never changes `approval`, `access`, `teamwork`, the link or voice keys.
 
-Bot-scoped calls (`createChat`, `send`, `updateBot`, `deleteBot`…) also need the bot to be visible to the role. Chat-scoped calls (`send`, `stop`, `renameChat`, `deleteChat`, `respond`…) also need `chat.createdBy === memberId`. A member never answers a `permission` or `secure` prompt. Those go to the owner (see "Bots and identity").
+Bot-scoped calls (`createChat`, `send`, `updateBot`, `setBotProactive`, `deleteBot`…) also need the bot to be visible to the role. Chat-scoped calls (`send`, `stop`, `renameChat`, `deleteChat`, `respond`…) also need `chat.createdBy === memberId`. A member never answers a `permission` or `secure` prompt. Those go to the owner (see "Bots and identity").
 
 ### What a member is sent
 
@@ -62,6 +62,7 @@ The host filters parts for each member session before sealing (`filterParts(part
 - `settings`: with `settings.view`, only `MEMBER_PREFERENCE_FIELDS`. Otherwise empty.
 - `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
 - `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
+- `proactive`: with `agents.manage`, the computer's switch and the settings and log of the Proactive agents that member set up for the bots their role sees (`memberProactive`); for another person's only that it is there. See CONTRACT.md, "A bot's Proactive agent".
 - Never: `credentials`, `phones`, `asks` of the owner's chats, `voice` keys, `host` screen state, `projects`, `tasks`, wiki.
 - `team`: `{ me: { memberId, name, group: { id, name }, role: { name, perms, bots } }, team: { name } }`. Owner devices get the full team (below).
 - `meta.you`: `{ kind: "member", memberId, name }` or `{ kind: "owner" }`.

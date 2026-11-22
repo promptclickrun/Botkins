@@ -114,7 +114,7 @@ export default function Settings() {
 
       <Group>
         {owner && <Row leading={<IconTile icon={ChartColumn} color={colors.ink2} />} title="Usage" chevron onPress={() => router.push("/settings/usage")} />}
-        {owner && meta?.capabilities.includes("proactive-agent-v1") && (
+        {owner && meta?.capabilities.includes("proactive-agent-v2") && (
           <Row leading={<IconTile icon={FlaskConical} color={colors.ink2} />} title="Experimental" value={settings?.proactive?.enabled ? "Proactive agent on" : undefined} chevron onPress={() => router.push("/settings/experimental" as Href)} />
         )}
         <Row leading={<IconTile icon={Info} color={colors.ink2} />} title="About" chevron onPress={() => router.push("/settings/about")} />

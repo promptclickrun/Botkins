@@ -56,6 +56,16 @@ const placeText = (bot) =>
     "Section: " + (bot.section ? named(bot.section.name) : "none"),
   ].join("\n");
 
+/** A bot's Proactive agent as `bots proactive` shows it. */
+const proactiveText = (view) =>
+  [
+    named(view.name) + ": the Proactive agent is " + (view.enabled ? "on" : "off") + (view.enabled && !view.computerOn ? " but paused (the computer's switch is off: `botkins preferences set proactive.enabled on`)" : "") + ".",
+    "Checks for changes every " + view.every + " minutes. " + (view.sweepHours ? "Looks around its own sources every " + view.sweepHours + " hours." : "Never looks around its own sources.") + " At most " + view.maxPerDay + " alerts a day.",
+    "Alerts go to " + (view.deliver === "feed" ? "the Feed" : "its chat") + " of " + (view.person === "owner" ? "the owner" : "a team member") + ". Watches: " + (view.watch.length ? view.watch.join(", ") : "nothing") + ".",
+    ...(view.instructions ? ["Rules: " + safe(view.instructions).replace(/\s+/g, " ").slice(0, 200)] : []),
+    ...(view.pings !== undefined && view.enabled ? ["Alerts today: " + view.pings + " of " + view.maxPerDay + "."] : []),
+  ].join("\n");
+
 const agentLine = (agent) => agent.added ? "a bot already" : agent.problem ? "can't be added" : "new";
 
 /** What bringing in the agents shows: each one's own words, as they will steer the bot. */
@@ -149,6 +159,57 @@ export const botsCommands = {
           if (o.section !== undefined && o["no-section"]) throw usage("Give --section or --no-section, not both.");
           const patch = { ...(pinned !== undefined && { pinned }), ...(hidden !== undefined && { hidden }), ...(teamwork !== undefined && { teamwork }), ...(o.section !== undefined && { section: o.section }), ...(o["no-section"] && { section: null }) };
           context.print(Object.keys(patch).length ? await call(context, "bots.flags.set", ref, patch) : await call(context, "bots.flags", ref), placeText);
+        },
+      },
+      proactive: {
+        summary: "Show or change a bot's Proactive agent (experimental)",
+        usage: "botkins bots proactive <bot> [on | off] [--every <minutes>] [--look-around <hours>] [--max-alerts <n>] [--deliver <chat|feed>] [--watch <runs,tasks,requests|none>] [--rules <text> | --rules-file <path>] [--reset] [--yes]",
+        arguments: [{ name: "bot", required: true }, { name: "state", required: false }],
+        options: {
+          every: { type: "string", value: "minutes", about: "Minutes between its checks for changes: 15, 30, 60 or 120 (a check with nothing new uses no model)" },
+          "look-around": { type: "string", value: "hours", about: "Hours between its looks around its own sources: 0 (never), 1, 2, 3, 6 or 12 (each look uses the model)" },
+          "max-alerts": { type: "string", value: "n", about: "The most alerts it gives in a day: 3, 6, 10 or 20" },
+          deliver: { type: "string", value: "chat|feed", about: "Where alerts go: the bot's chat with the person, or their Feed" },
+          watch: { type: "string", value: "list", about: "What Botkins watches for it: runs, tasks, requests, or none" },
+          rules: { type: "string", value: "text", about: "Your own rules for what is worth telling you (up to 2000 characters)" },
+          "rules-file": { type: "string", value: "path", about: "Read the rules from a file. \"-\" reads standard input" },
+          reset: { type: "boolean", about: "Forget this bot's Proactive settings and routine" },
+          ...YES,
+        },
+        details: "Each bot has its own Proactive agent: with no option this shows it. `on` and `off` turn this bot's agent on and off; the computer's switch is the preference `proactive.enabled` and pauses every bot's agent without forgetting its settings. Turning an agent on is shown first and needs your yes (--yes with no terminal), because the bot then wakes with nobody watching, reads what its tools reach and messages you. Its routine is \"Proactive agent\" in `botkins routines list`; `botkins routines run \"Proactive agent\"` checks now. Only what you name changes.",
+        async run(context) {
+          const [ref, word, ...extra] = context.args;
+          if (ref === undefined || extra.length) throw usage("Name the bot (its name or id), and on or off to turn its agent on or off.");
+          const o = context.options;
+          if (word !== undefined && !["on", "off"].includes(word.toLowerCase())) throw usage("Say on or off, or leave it out.");
+          if (o.rules !== undefined && o["rules-file"] !== undefined) throw usage("Give --rules or --rules-file, not both.");
+          const number = (flag, what) => {
+            if (o[flag] === undefined) return {};
+            if (!/^\d{1,4}$/.test(o[flag].trim())) throw usage("--" + flag + " takes a number of " + what + ".");
+            return { [flag]: Number(o[flag]) };
+          };
+          const given = { ...number("every", "minutes"), ...number("look-around", "hours"), ...number("max-alerts", "alerts") };
+          const patch = {
+            ...(word !== undefined && { enabled: word.toLowerCase() === "on" }),
+            ...(given.every !== undefined && { every: given.every }),
+            ...(given["look-around"] !== undefined && { sweepHours: given["look-around"] }),
+            ...(given["max-alerts"] !== undefined && { maxPerDay: given["max-alerts"] }),
+            ...(o.deliver !== undefined && { deliver: o.deliver.trim().toLowerCase() }),
+            ...(o.watch !== undefined && { watch: o.watch.trim().toLowerCase() === "none" ? [] : o.watch.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean) }),
+            ...(o.rules !== undefined && { instructions: o.rules }),
+            ...(o["rules-file"] !== undefined && { instructions: (await textFrom(context, o["rules-file"], "file")).replace(/\r?\n$/, "") }),
+          };
+          stdinMeansYes(context, o["rules-file"]);
+          if (o.reset && Object.keys(patch).length) throw usage("Give --reset alone, or the settings to change.");
+          const before = await call(context, "bots.proactive", ref);
+          let agreed = false;
+          if (patch.enabled === true && !before.enabled) {
+            show(context, "Turning on a bot's Proactive agent lets " + named(before.name) + " wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model.");
+            if (!(await confirm(context, "Turn on the Proactive agent for " + named(before.name) + "?"))) return EXIT.failed;
+            agreed = true;
+          }
+          const shown = o.reset ? await call(context, "bots.proactive.set", ref, null) : Object.keys(patch).length ? await call(context, "bots.proactive.set", ref, patch, ...(agreed ? [{ agreed: true }] : [])) : before;
+          context.print(shown, (view) => proactiveText(view));
         },
       },
       memory: {
