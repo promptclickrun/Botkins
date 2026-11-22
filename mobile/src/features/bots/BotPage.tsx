@@ -11,7 +11,7 @@ import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability,
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
-import { AvatarMotion, BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
 import { BotArtifacts } from "@/features/artifacts/ArtifactBits";
 import { sectionOf } from "@/features/home/arrange";
 import { usePhoneVoice } from "@/features/voice/prefs";
@@ -41,6 +41,7 @@ function EditButton({ id }: { id: string }) {
 
 function BotDetail({ bot }: { bot: Bot }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const canFiles = useCapability("files-v1");
   const state = useBotActivity(bot.id);
   const bots = useBots();
@@ -98,6 +99,7 @@ function BotDetail({ bot }: { bot: Bot }) {
   return (
     <Page>
       <Stack.Screen options={{ headerRight: canManage ? () => <EditButton id={bot.id} /> : undefined }} />
+      {prompt.node}
 
       <View style={{ alignItems: "center", gap: space.lg }}>
         <BotAvatar bot={bot} state={state} size={136} />
@@ -147,7 +149,7 @@ function BotDetail({ bot }: { bot: Bot }) {
         {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
         {canArrange && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
         {canManage && !member && sections && (
-          <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event)}>
+          <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event, prompt.ask)}>
             <View accessible accessibilityRole="button" accessibilityLabel={"Section, " + (section?.name ?? "None")} accessibilityHint="Moves the bot to a section">
               <Row leading={<IconTile icon={Folder} color={colors.ink2} />} title="Section" value={section?.name ?? "None"} chevron />
             </View>

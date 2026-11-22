@@ -3,12 +3,12 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { Ellipsis } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Linking, Modal, Platform, View } from "react-native";
+import { Alert, Linking, Modal, View } from "react-native";
 import type { WikiPage as Page_, WikiTree, WikiVersion } from "@/link/types";
 import { isConversation, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
-import { EmptyState, Group, Label, Loading, Page, Row, Sheet, space, T, Tap, useTheme } from "@/ui";
+import { EmptyState, Group, Label, Loading, Page, Row, Sheet, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
 import { forgetPage, loadPage, moveCached, useWikiPage, useWikiTree } from "./data";
 import { dateTime, fileOf, folderName, folderOf, fromTemplate, GUIDE, isGenerated, message, NAME_LINK, pageLookup, pageTitle, resolveLink, resolveName, sectionOf, sections, slug, when, withTitle } from "./model";
 import { type LinkKind, Prose } from "./Prose";
@@ -154,22 +154,13 @@ async function createAt(path: string, title: string, tree: WikiTree | undefined)
 
 function PageMenu({ page, tree }: { page: Page_; tree?: WikiTree }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const fixed = page.path === GUIDE || !!page.generated;
   const movable = !fixed && !page.template;
   const here = folderOf(page.path);
   const places = [...(tree ? sections(tree) : []), ...(here ? [""] : [])].filter((folder) => folder !== here);
 
-  const rename = () =>
-    Alert.prompt(
-      "Rename page",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Rename", onPress: (value?: string) => void renamePage(page, value?.trim() ?? "") },
-      ],
-      "plain-text",
-      page.title,
-    );
+  const rename = () => prompt.ask({ title: "Rename page", value: page.title, confirm: "Rename", onSubmit: (title) => void renamePage(page, title) });
   const remove = () =>
     Alert.alert("Delete “" + pageTitle(page) + "”?", "Links to it will show as not written yet.", [
       { text: "Cancel", style: "cancel" },
@@ -193,7 +184,7 @@ function PageMenu({ page, tree }: { page: Page_; tree?: WikiTree }) {
             title: "Rename or move",
             image: "folder",
             subactions: [
-              ...(Platform.OS === "ios" ? [{ id: "rename", title: "Rename…", image: "pencil" }] : []),
+              { id: "rename", title: "Rename…", image: "pencil" },
               ...places.map((folder) => ({ id: "to:" + folder, title: "Move to " + (folder ? folderName(folder) : "the top") })),
             ],
           },
@@ -204,6 +195,8 @@ function PageMenu({ page, tree }: { page: Page_; tree?: WikiTree }) {
   ];
   if (!actions.length) return null;
   return (
+    <>
+    {prompt.node}
     <MenuView
       actions={actions}
       onPressAction={({ nativeEvent }) => {
@@ -219,6 +212,7 @@ function PageMenu({ page, tree }: { page: Page_; tree?: WikiTree }) {
         <Ellipsis size={22} color={colors.ink} strokeWidth={2.2} />
       </View>
     </MenuView>
+    </>
   );
 }
 

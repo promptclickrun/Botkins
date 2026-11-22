@@ -8,7 +8,7 @@ import type { BoardScroll } from "@/features/home/BotBoard";
 import type { ChatSummary } from "@/link/types";
 import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { AvatarMotion, Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTheme } from "@/ui";
+import { AvatarMotion, Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTextPrompt, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
 import { useChatSplit } from "./split";
@@ -126,6 +126,7 @@ function ChatsFrame({ children, scroll, scrollEnabled, actions, inner }: { child
 
 function ChatListScreen() {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const chats = useChats();
   const allBots = useBots();
   const synced = useApp((state) => state.synced);
@@ -209,8 +210,9 @@ function ChatListScreen() {
             <SearchField value={query} onChange={setQuery} />
             {(archived.length > 0 || (sections && canChat)) && (
               <View style={{ flexDirection: "row", gap: space.sm }}>
-                {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection()} />}
+                {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
                 {archived.length > 0 && <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />}
+                {prompt.node}
               </View>
             )}
           </View>

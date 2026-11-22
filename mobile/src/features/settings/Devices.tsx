@@ -10,7 +10,7 @@ import { deviceSubtitle, deviceTitle } from "@/features/pair/person";
 import { useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
-import { brand, Group, IconTile, Label, Row } from "@/ui";
+import { brand, Group, IconTile, Label, Row, useTextPrompt } from "@/ui";
 
 /** "This phone", "Connected", or when it was last heard from. */
 function statusOf(device: PairedDevice): string {
@@ -28,6 +28,7 @@ export function Devices() {
   const capabilities = usePart("meta")?.capabilities;
   const supported = capabilities?.includes("devices-v1");
   const named = capabilities?.includes("device-person-v1");
+  const prompt = useTextPrompt();
   // The part changes when a device is paired, renamed or removed: the list is read again then.
   const phones = usePart("phones");
   const [devices, setDevices] = useState<PairedDevice[]>();
@@ -47,38 +48,22 @@ export function Devices() {
   if (!supported || !devices?.length) return null;
 
   const changePerson = (device: PairedDevice) =>
-    Alert.prompt(
-      device.person ? "Change name" : "Add name",
-      "Who this " + (device.kind === "desktop" ? "computer" : "phone") + " belongs to",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Save",
-          onPress: (person?: string) => {
-            const next = person?.trim();
-            if (next && next !== device.person) void attempt(api["link.devices.setPerson"](device.id, next)).then((list) => list && setDevices(list));
-          },
-        },
-      ],
-      "plain-text",
-      device.person ?? "",
-    );
+    prompt.ask({
+      title: device.person ? "Change name" : "Add name",
+      message: "Who this " + (device.kind === "desktop" ? "computer" : "phone") + " belongs to",
+      value: device.person ?? "",
+      onSubmit: (next) => {
+        if (next !== device.person) void attempt(api["link.devices.setPerson"](device.id, next)).then((list) => list && setDevices(list));
+      },
+    });
   const rename = (device: PairedDevice) =>
-    Alert.prompt(
-      "Rename device",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Save",
-          onPress: (name?: string) => {
-            if (name?.trim() && name.trim() !== device.name) void attempt(api["link.devices.rename"](device.id, name.trim())).then((list) => list && setDevices(list));
-          },
-        },
-      ],
-      "plain-text",
-      device.name,
-    );
+    prompt.ask({
+      title: "Rename device",
+      value: device.name,
+      onSubmit: (name) => {
+        if (name !== device.name) void attempt(api["link.devices.rename"](device.id, name)).then((list) => list && setDevices(list));
+      },
+    });
   const remove = (device: PairedDevice) =>
     Alert.alert("Remove " + deviceTitle(device) + "?", "It can't reach your computer until it is paired again.", [
       { text: "Cancel", style: "cancel" },
@@ -95,6 +80,7 @@ export function Devices() {
 
   return (
     <View>
+      {prompt.node}
       <Label>Devices</Label>
       <Group>
         {devices.map((device) => (
