@@ -306,8 +306,10 @@ function tellAddresses() {
 async function syncActivities() {
   if (!Activities) return;
   try {
-    // A card that ended by itself (Apple ends one after hours) would otherwise stay on the Lock Screen.
-    await Activities.dismissEnded?.();
+    // A card that ended by itself (Apple ends one after hours) would otherwise stay on the Lock
+    // Screen. Only with the app in front: a card that just ended keeps its final state a few minutes,
+    // and this also runs when a push wakes the app in the background.
+    if (AppState.currentState === "active") await Activities.dismissEnded?.();
     for (const { chatId, token } of await Activities.tokens()) addresses.set(chatId, token);
     for (const chatId of await Activities.running()) if (!shown.has(chatId)) shown.set(chatId, null);
   } catch {
@@ -379,15 +381,17 @@ async function followActivities() {
 const drawn = new Map<string, string>(); // card key → what it last showed, as JSON
 
 /**
- * While the app runs, the phone draws the cards itself (the computer holds back then). With one card
- * for all Botkins it starts that card while the app is in front and something is at work; with one
- * per Botkin, a card for each Botkin at work. It brings each up to date, and ends a card once every
- * chat on it has ended (it shows how for a few minutes) or nothing is left on it. Any other card
- * (a chat's, or a Botkin's from before the card for all) is ended once its turn is over, or at once
- * when there is a card for all.
+ * While the app is in front, the phone draws the cards itself (the computer holds back then, and
+ * takes over the moment the app leaves: the phone knows a turn's steps only for the chat on screen).
+ * With one card for all Botkins it starts that card while something is at work; with one per
+ * Botkin, a card for each Botkin at work. It brings each up to date, and ends a card with nothing
+ * left on it. A card whose chats have all ended is left to the computer, which shows it done for a
+ * minute and then ends it; one found already over when the app opens (left from before) is ended at
+ * once. Any other card (a chat's, or a Botkin's from before the card for all) is ended once its
+ * turn is over, or at once when there is a card for all.
  */
 async function followCards(previews: boolean, mode: "all" | "bots") {
-  if (!Activities?.updateCard || !Activities.endCard) return;
+  if (!Activities?.updateCard || !Activities.endCard || AppState.currentState !== "active") return;
   const state = useApp.getState();
   const known = { parts: state.parts, running: state.running, texts: state.texts };
   const host = state.pairing?.serverId ?? null;
@@ -448,14 +452,15 @@ async function followCards(previews: boolean, mode: "all" | "bots") {
       continue;
     }
     const text = JSON.stringify([card.state, card.detail]);
-    if (drawn.get(key) !== text) {
-      drawn.set(key, text);
-      await Activities.updateCard(key, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance).catch(() => {});
-    }
-    if (cardOver(card.state)) {
+    // A card this app never drew (it was there when the app opened) whose chats have all ended.
+    if (!drawn.has(key) && cardOver(card.state)) {
       void Activities.endCard(key, OVER_SECONDS).catch(() => {});
       forgetActivity(key);
+      continue;
     }
+    if (drawn.get(key) === text) continue;
+    drawn.set(key, text);
+    await Activities.updateCard(key, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance).catch(() => {});
   }
 }
 

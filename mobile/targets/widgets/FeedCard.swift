@@ -56,7 +56,10 @@ extension CardModel {
     // The word on the right already says how it ended.
     case "done", "failed": return words(chat)?.r ?? botName(chat) ?? label(chat)
     case "needs-you": return label(chat)
-    default: return [botName(chat), label(chat)].compactMap { $0 }.joined(separator: " · ")
+    default:
+      // With its steps shown under it (FeedStream), the row needn't say the current one again.
+      if chats.count == 1, words(chat)?.s?.isEmpty == false, let name = botName(chat) { return name }
+      return [botName(chat), label(chat)].compactMap { $0 }.joined(separator: " · ")
     }
   }
 }
@@ -187,6 +190,45 @@ struct FeedStrip: View {
   }
 }
 
+/// What one chat is doing, under its row when the card has only that chat: its last two steps as
+/// they run, and the latest sentence of thinking. Nothing when the phone can't read them.
+struct FeedStream: View {
+  let model: CardModel
+  let chat: CardChat
+  let island: Bool
+
+  var body: some View {
+    let words = model.words(chat)
+    let steps = Array((words?.s ?? []).suffix(island ? 1 : 2))
+    VStack(alignment: .leading, spacing: 2) {
+      ForEach(steps, id: \.self) { step in
+        HStack(spacing: 8) {
+          Image(systemName: stepSymbol(step.k)).font(.system(size: 11)).frame(width: 14)
+          Text(step.l).lineLimit(1)
+          Spacer(minLength: 4)
+          if step.d == 1 {
+            Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Tone.ok)
+          } else if step.d == 2 {
+            Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Tone.bad)
+          }
+        }
+        .font(.system(size: 13, weight: step.d == 0 ? .semibold : .regular))
+        .foregroundStyle(step.d == 0 ? Color.white : Tone.muted)
+        .frame(height: 18)
+      }
+      if let thought = words?.th {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+          Image(systemName: "sparkle").font(.system(size: 10)).foregroundStyle(Tone.amber)
+          Text(thought).italic().lineLimit(1)
+        }
+        .font(.system(size: 12.5))
+        .foregroundStyle(Tone.muted)
+      }
+    }
+    .padding(.leading, 38)
+  }
+}
+
 /// The rows, or the request and a line for the rest. Shared by the Lock Screen and the expanded
 /// island (`island`: one-line rows, and no line for the rest under a request).
 struct FeedBody: View {
@@ -201,9 +243,13 @@ struct FeedBody: View {
         if !rest.isEmpty && !island { FeedStrip(model: model, chats: rest) }
       }
     } else {
-      VStack(spacing: island ? 2 : 4) {
+      VStack(alignment: .leading, spacing: island ? 2 : 4) {
         ForEach(model.chats, id: \.id) { chat in
           Link(destination: Links.chat(chat.id, host: model.host)) { FeedRow(model: model, chat: chat, compact: island) }
+        }
+        // One chat at work: what it is doing, step by step.
+        if model.chats.count == 1, let only = model.first, only.phase == "working" || only.phase == "thinking" {
+          FeedStream(model: model, chat: only, island: island)
         }
       }
     }
