@@ -60,6 +60,8 @@ The host filters parts for each member session before sealing (`filterParts(part
 - `panels`, `board`: with `today.view`. Otherwise empty.
 - `skills`, `mcp`, `plugins`: with that scope's first action. Never a secret value, a command line, an env var, a header or a file path.
 - `settings`: with `settings.view`, only `MEMBER_PREFERENCE_FIELDS`. Otherwise empty.
+- `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
+- `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
 - Never: `credentials`, `phones`, `asks` of the owner's chats, `voice` keys, `host` screen state, `projects`, `tasks`, wiki.
 - `team`: `{ me: { memberId, name, group: { id, name }, role: { name, perms, bots } }, team: { name } }`. Owner devices get the full team (below).
 - `meta.you`: `{ kind: "member", memberId, name }` or `{ kind: "owner" }`.
