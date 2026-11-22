@@ -1,7 +1,7 @@
 // The people in a chat ("team-people-v1"): who started it and who was invited. Plain logic for the
 // chat's "Invite" and the sheet "People in this chat" (no React Native imports; tested by
 // tests/team-people.test.ts). The rules themselves are the computer's (link-host/team.mjs).
-import type { ChatSummary, Parts, Person } from "@/link/types";
+import type { ChatSummary, Message, Parts, Person, RunSummary } from "@/link/types";
 
 export const OWNER = "owner";
 
@@ -52,4 +52,25 @@ export function sharedLine(people: Person[], chat: Pick<ChatSummary, "invited">)
   const names = (chat.invited ?? []).map((id) => people.find((person) => person.id === id)?.name).filter((name): name is string => !!name);
   if (!names.length) return "";
   return "Shared with " + (names.length === 1 ? names[0] : names.length === 2 ? names.join(" and ") : names[0] + " and " + (names.length - 1) + " others");
+}
+
+/**
+ * The small name over someone else's message in a chat several people write in, as the desktop app
+ * shows it; "" in a chat of one, for this phone's own person, and for a message nobody typed (a
+ * routine's or a panel refresh's). A message with no `author` is the owner's. Reads tolerantly: a
+ * name the computer left out falls back to the team list, then to "Owner".
+ */
+export function speakerLabel(
+  message: Pick<Message, "role" | "author">,
+  run: Pick<RunSummary, "scheduleId" | "panelId"> | undefined,
+  chat: Pick<ChatSummary, "createdBy" | "invited"> | undefined,
+  people: Person[] | undefined,
+  me: string,
+): string {
+  if (message.role !== "user" || !chat || run?.scheduleId != null || run?.panelId) return "";
+  if (new Set([starterOf(chat), ...(chat.invited ?? [])]).size < 2) return "";
+  const id = message.author?.memberId || OWNER;
+  if (id === me) return "";
+  const named = typeof message.author?.name === "string" ? message.author.name.trim() : "";
+  return named || people?.find((person) => person.id === id)?.name || (id === OWNER ? "Owner" : "");
 }

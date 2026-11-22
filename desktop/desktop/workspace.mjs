@@ -83,7 +83,7 @@ import { Proactive } from "./proactive.mjs";
 import { Templates } from "./templates.mjs";
 import { readWorkspace } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
-import { memberCanSpaces, memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
+import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
 
 // This identifier only correlates a local bubble with its echo. The host still owns every queue and run ID.
@@ -841,7 +841,7 @@ export class Workspace {
           const attachments = validateAttachments(item.attachments);
           const mentioned = refs.list.filter(m => m.kind === "file" && !attachments.some(a => a.path === m.path))
             .map(m => ({ kind: "file", path: m.path, name: m.label }));
-          const authored = memberPrompt(item.text, item.author, this.teamOf());
+          const authored = this.speakerPrompt(item.text, chat, null, { author: item.author }, { line: false });
           const accepted = await task.deliverSteer({ prompt: quotedPrompt(authored, item.quote) + (refs.context || ""), attachments: [...attachments, ...mentioned] });
           if (!accepted) break;
           commitInterim(chat, task.run, task);
@@ -1129,6 +1129,33 @@ export class Workspace {
         if (!allows(action)) throw new Error("The role of the person this is for doesn't allow that. The owner can change it in Team settings.");
       },
     };
+  }
+  /** Who is in the turn, for `speakerContext`: the chat's people, the turn's writer, and whether no person wrote it. */
+  speakerOf(chat, run, task, options) {
+    const { createdBy, invited } = this.chatPeople(chat.id);
+    const automatic = !!run && (run.scheduleId != null || !!run.panelId || !!run.taskId);
+    return { team: this.teamOf(), humans: [createdBy, ...invited], author: task?.author, automatic, ...options };
+  }
+  /** A turn's text with who it is from (desktop/team-turn.mjs `speakerPrompt`). */
+  speakerPrompt(text, chat, run, task, options) {
+    return speakerPrompt(text, this.speakerOf(chat, run, task, options));
+  }
+  /** The one line that tells a model who the turn is for, for a teammate or any session Botkins starts. */
+  speakerLine(chat, run, task, options) {
+    return speakerContext(this.speakerOf(chat, run, task, options)).line;
+  }
+  /**
+   * For a group chat's catch-up: a function from a message to its speaker's name when several people
+   * write in the chat, else "" (the catch-up then says "Person"). A message nobody wrote, a
+   * routine's, has none.
+   */
+  speakerNamer(chat) {
+    const automatic = new Set(this.state.runs.filter((run) => run.chatId === chat.id && (run.scheduleId != null || run.panelId || run.taskId)).map((run) => run.id));
+    const idOf = (message) => (message.role === "user" && !automatic.has(message.runId) ? message.author?.memberId ?? "owner" : null);
+    const { createdBy, invited } = this.chatPeople(chat.id);
+    const people = new Set([createdBy, ...invited, ...chat.messages.map(idOf).filter(Boolean)]);
+    const team = this.teamOf();
+    return (message) => (people.size > 1 && idOf(message) ? personName(team, idOf(message)) : "");
   }
   /** A member as the author of a message: { memberId, name }, with the name the team has for them. */
   memberAuthor(memberId) {
@@ -1539,7 +1566,8 @@ export class Workspace {
     }
     delete checkpoint.eventId;
     this.save();
-    const prompt = memberPrompt(input.prompt, task.author, this.teamOf());
+    const chat = this.chat(run.chatId);
+    const prompt = this.speakerPrompt(input.prompt, chat, run, task, { labelled: isGroup(chat) });
     return session.send({ ...input, ...(prompt !== input.prompt && { prompt }) }, 600000, onReady);
   }
   /**
@@ -1726,7 +1754,7 @@ export class Workspace {
           }
         }
       });
-      const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots) });
+      const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots, this.speakerNamer(chat)) });
       if (task.stopped) return "";
       if (!text && !botSteps(run.steps).length && !task.stream?.trim()) throw new Error(bot.name + " finished without a reply.");
       return text;

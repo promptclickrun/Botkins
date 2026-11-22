@@ -8,7 +8,7 @@ import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
 import type { Artifact, Bot, Message, Run, Step } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
-import { useChat } from "@/state/hooks";
+import { useChat, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { clockTime } from "@/state/time";
@@ -20,6 +20,7 @@ import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
+import { myself, speakerLabel } from "./people";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
 import { FACE_INDENT, mostIcon } from "./WorkRows";
@@ -153,7 +154,7 @@ function Stamp({ time, align }: { time?: number; align: "flex-start" | "flex-end
   );
 }
 
-export function UserBubble({ message, index, timestamps, id, actions, paths, media }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[] }) {
+export function UserBubble({ message, index, timestamps, id, actions, paths, media, speaker }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[]; /** Who wrote it, in a chat several people write in. */ speaker?: string }) {
   const { colors } = useTheme();
   const selecting = useSelecting((state) => state.id === id);
   // A Today item the person chose to discuss is a card here: it comes as a record the computer kept
@@ -167,6 +168,11 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
   const above = message.quote || message.answer?.title;
   return (
     <View style={{ alignItems: "flex-end", gap: 4, paddingLeft: "16%" }}>
+      {!!speaker && (
+        <T variant="caption" weight="600" color="muted" numberOfLines={1}>
+          {speaker}
+        </T>
+      )}
       {!!above && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" }} accessibilityLabel={(message.answer ? "Answered: " : "Replying to: ") + above}>
           <CornerDownRight size={13} color={colors.faint} strokeWidth={2.2} />
@@ -338,13 +344,17 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
   const { message, run, end, latest } = item;
   // Whose voice reads it: the bot that wrote it, or the chat's bot.
-  const chatBot = useChat(chatId)?.botId;
+  const chat = useChat(chatId);
+  const chatBot = chat?.botId;
   const speaker = message.botId ?? chatBot;
+  // In a chat several people write in, a person's message says who wrote it.
+  const people = usePart("team")?.people;
+  const me = myself(usePart("meta"));
   // Paths the computer knows become links, and a reply's MEDIA: attachments are drawn where they were
   // written (under the text in the person's own message). A reply still
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
-  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
+  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} speaker={speakerLabel(message, run, chat, people, me)} />;
   if (message.role === "command") return <CommandBlock message={message} />;
   // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).
   const worked = item.workUnder && run && run.status !== "Working";

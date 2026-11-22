@@ -7,7 +7,7 @@
 // Rules:
 // - Settings › Teamwork turns it on or off for the whole app; a bot can be kept out of it.
 // - A teammate needs access to the chat's project to be asked there.
-// - A teammate gets only the message written for it, never the chat.
+// - A teammate gets only the message written for it, never the chat, and one line saying whose request it is.
 // - A teammate can't ask further teammates, so requests never loop.
 // - Up to 8 asks per reply, and the same message is never sent to the same teammate twice.
 // - Anything a teammate needs approved is asked in the chat it was called from.
@@ -113,7 +113,10 @@ export class Teamwork {
     };
     asks.push(entry);
     this.ws.notify();
+    // The teammate is told whose request this is, as the asker was (desktop/team-turn.mjs).
+    const whose = this.ws.speakerLine(chat, run, task, { helping: true });
     const prompt =
+      (whose ? whose + "\n" : "") +
       "Message from " + bot.name + " (" + bot.role + "):\n" + body +
       (entry.expecting ? "\n\nWhat they need back: " + entry.expecting : "") +
       (optional(constraints) ? "\n\nConstraints: " + optional(constraints) : "");
