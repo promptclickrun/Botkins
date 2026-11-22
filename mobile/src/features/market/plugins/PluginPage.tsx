@@ -1,6 +1,6 @@
 // A plugin's page: what it is, what it adds and everything it runs on the computer, then Install.
-// Once installed: its status, the computer's own sentence when it switched the plugin off or
-// something is wrong, on and off, its settings (with where each value goes), the bots that use it,
+// Once installed: its status, the computer's own sentence when something is wrong (or when an
+// older computer switched the plugin off), on and off, its settings (with where each value goes), the bots that use it,
 // Update and Remove. A switch-on and a choice of bots send the revision that was on the screen.
 import { router, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
@@ -15,7 +15,7 @@ import { attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { BotAvatar, Button, EmptyState, Field, Group, IconTile, Label, Loading, Page, Row, space, T, useTheme } from "@/ui";
 import { installHref, loadPreview, pluginCalls, updateHref, useInstalledPlugin, useOlderComputer, usePluginMarketplaces, usePluginsReady, usePreview } from "./calls";
-import { botsLine, byLine, consent, fieldState, hostOf, needsReview, safeLink, sentToLines, statusLine } from "./logic";
+import { botsLine, byLine, consent, fieldState, hostOf, switchedOff, safeLink, sentToLines, statusLine } from "./logic";
 import { Said, WhatItAdds, Warnings } from "./parts";
 
 /**
@@ -68,7 +68,7 @@ export default function PluginPage() {
   // What is shown is what is decided about: the installed plugin's own description, else the preview's.
   const shown = installed ?? preview!;
   // The computer's sentence, whole: why it switched the plugin off, or what is wrong.
-  const review = !!installed && needsReview(installed);
+  const review = !!installed && switchedOff(installed);
   const said = installed && (review || installed.status === "error") ? installed.detail : undefined;
   return (
     <Page title={shownText(about.name)} caption={installed ? statusLine(installed, { page: true }) : by}>
@@ -81,7 +81,7 @@ export default function PluginPage() {
       {!!about.description && <T variant="body">{about.description}</T>}
       <Warnings lines={installed?.warnings ?? preview?.warnings} />
 
-      {/* A plugin the computer switched off is looked at first: its reason, all that it runs, then "Turn on". */}
+      {/* A plugin an older computer switched off shows its reason, all that it runs, then "Turn on". */}
       {review && <WhatItAdds about={shown} installed older={older} />}
       {installed ? (
         <Installed plugin={installed} older={older} />

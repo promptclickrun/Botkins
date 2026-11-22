@@ -34,7 +34,7 @@ export function placeOf(list: Pick<FolderList, "path" | "roots">): string | unde
 /** What the skills page says after a folder was added, in the computer's own words. */
 export function addedSkillsNote(result: { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean }): string {
   if (result.kind === "skill") return "Added the skill " + result.name + ".";
-  // A plugin folder is installed as a plugin, switched off: its page shows what it runs, with "Turn on".
+  // A plugin folder is installed as a plugin, on (an older computer added it off).
   if (result.kind === "plugin") return "Added the plugin " + result.name + "." + (result.enabled === false ? " It is off until you turn it on." : "");
   const count = result.count ?? 0;
   return "Linked " + result.name + " (" + count + (count === 1 ? " skill" : " skills") + ").";

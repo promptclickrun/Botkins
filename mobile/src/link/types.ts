@@ -1173,7 +1173,7 @@ export type InstalledPlugin = PluginListing & {
   /** `value` only for a field that is not secret. */
   config: (PluginField & { set: boolean; value?: string })[];
   status: "ready" | "needs-config" | "needs-sign-in" | "error";
-  /** A sentence for needs-sign-in and error, and for a plugin the computer switched off (`enabled: false`, with any status). */
+  /** A sentence for needs-sign-in and error. A computer up to 0.17.2 also gave one for a plugin it switched off itself (`enabled: false`); a newer one switches nothing off and puts its reason first in `warnings`. */
   detail?: string;
   /** "Hooks run only for bots on the Copilot SDK." */
   limits?: string;
@@ -1469,7 +1469,7 @@ export type Calls = {
   /** Stops using a linked skills folder or plugin (the folder itself is left alone). */
   removeSkillFolder(id: string): void;
   /** Adds a skill, a plugin or a folder of skills from a folder chosen in the folder browser. Needs "folders-v1". */
-  /** A plugin folder is never linked: it is installed as a plugin, switched off (`id`, `enabled: false`; "plugin-starts-v1"). */
+  /** A plugin folder is never linked: it is installed as a plugin (`id`, `enabled`; "plugin-starts-v1"). It arrives on; a computer up to 0.17.2 added it off. */
   addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean };
   renameProject(id: string, name: string): void;
   /** What changed in a project's folder, one file's changes as text, and committing all of it. */

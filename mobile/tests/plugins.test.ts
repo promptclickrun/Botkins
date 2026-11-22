@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { PLUGIN_METHODS, REMOTE_METHODS, remoteArgs } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { botsLine, byLine, readPages, refreshFailure, configValues, consent, fieldState, groupHooks, hookFacts, hookWords, hostOf, isMarketplaceSource, matchInstalled, missingFields, needsReview, noticeKey, notRunRows, otherFilesRows, pluginChips, reviewNotice, runLine, runsOnComputer, safeLink, sentToLines, showsAll, shownWord, skillsNotices, statusLine, timeLimit, toolFacts, toolLine } from "../src/features/market/plugins/logic";
+import { botsLine, byLine, readPages, refreshFailure, configValues, consent, fieldState, groupHooks, hookFacts, hookWords, hostOf, isMarketplaceSource, matchInstalled, missingFields, noticeKey, notRunRows, otherFilesRows, pluginChips, reviewNotice, runLine, runsOnComputer, safeLink, sentToLines, showsAll, shownWord, skillsNotices, statusLine, switchedOff, timeLimit, toolFacts, toolLine } from "../src/features/market/plugins/logic";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { InstalledPlugin, PluginContents, PluginField, PluginListing, PluginMarketplace, PluginPreview } from "../src/link/types";
 import { addedSkillsNote } from "../src/state/fileText";
@@ -137,7 +137,7 @@ test("where a setting goes, what is not run, and the other files", () => {
   assert.equal(otherFilesRows({ otherFiles: { count: 0, bytes: 0, files: [] } }), undefined);
 });
 
-test("a plugin the computer switched off reads \"Needs review\", and each notice is shown one time", () => {
+test("a plugin an older computer switched off reads \"Needs review\", and each notice is shown one time", () => {
   const plugin = (more: Partial<InstalledPlugin>): InstalledPlugin => ({ id: "p", name: "keepsake", marketplace: "m", installed: true, enabled: true, bots: "all", contents: { ...empty, skills: ["memory"] }, config: [], status: "ready", installedAt: 1, ...more });
   const held = "Botkins switched this plugin off. An earlier version did not show all that it starts.";
   assert.equal(statusLine(plugin({ enabled: false, detail: held })), "Off · Needs review");
@@ -146,14 +146,14 @@ test("a plugin the computer switched off reads \"Needs review\", and each notice
   // An error keeps the computer's sentence in a list; on the plugin's page the sentence is shown whole under the name.
   assert.equal(statusLine(plugin({ enabled: false, status: "error", detail: "The installed files of this plugin are not the files that were reviewed." })), "The installed files of this plugin are not the files that were reviewed.");
   assert.equal(statusLine(plugin({ status: "error", detail: "x" }), { page: true }), "Something is wrong with this plugin.");
-  assert.ok(needsReview(plugin({ enabled: false, detail: held })) && !needsReview(plugin({ enabled: false })) && !needsReview(plugin({ detail: "Sign in." })));
+  assert.ok(switchedOff(plugin({ enabled: false, detail: held })) && !switchedOff(plugin({ enabled: false })) && !switchedOff(plugin({ detail: "Sign in." })));
   // An entry in error that no update repairs (a linked folder that could not be copied) has nothing to review: it is not counted, and can only be removed.
   const stuck = plugin({ id: "linked-1", enabled: false, status: "error", detail: "The folder could not be read." });
-  assert.equal(needsReview(stuck), false);
+  assert.equal(switchedOff(stuck), false);
   assert.equal(reviewNotice([stuck], "mac-1", []), undefined);
   assert.deepEqual(skillsNotices([stuck], "mac-1", []), []);
-  // One an update repairs is looked at: Update first, then "Turn on".
-  assert.ok(needsReview(plugin({ enabled: false, status: "error", repair: "update", detail: "Its installed files could not be read." })));
+  // Nor is one an update repairs: a newer computer switches nothing off, so one that is off was switched off by the person. Its way back is Update.
+  assert.equal(switchedOff(plugin({ enabled: false, status: "error", repair: "update", detail: "The installed files of this plugin could not be read." })), false);
 
   const list = [plugin({ id: "a", enabled: false, detail: held }), plugin({ id: "b", name: "team-skills", enabled: false, detail: held }), plugin({ id: "c", enabled: false, detail: held, contents: empty }), plugin({ id: "d" })];
   const notice = reviewNotice(list, "mac-1", []);
@@ -526,20 +526,18 @@ test("an OAuth tool needs a sign-in on the computer, a local tool has a default,
   }
 });
 
-test("a folder plugin arrives turned off, showing what it runs", async () => {
+test("a folder plugin arrives turned on, showing what it runs", async () => {
   const setup = await paired();
   const { link, client, until, plugin } = setup;
   try {
     const added = await client.call<InstalledPlugin>("plugins.addFolder", "/Users/demo/team-skills");
-    assert.equal(added.enabled, false);
+    assert.equal(added.enabled, true);
     assert.equal(added.marketplace, "folder");
     assert.equal(added.folder, "/Users/demo/team-skills");
     assert.deepEqual(added.contents.hooks.map((hook) => hook.event), ["sessionStart"]);
-    await until(() => plugin(added.id)?.enabled === false, "the folder plugin");
+    await until(() => plugin(added.id)?.enabled === true, "the folder plugin");
     const preview = await client.call<PluginPreview>("plugins.preview", added.id);
-    assert.ok(preview.warnings?.length, "what it runs, before it is turned on");
-    await client.call("plugins.setEnabled", added.id, true);
-    await until(() => plugin(added.id)?.enabled === true, "turned on");
+    assert.ok(preview.warnings?.length, "what it runs");
     assert.equal(await setup.refusal(client.call("plugins.addFolder", "/Users/demo/team-skills")), "That folder is already added.");
     assert.match((await setup.refusal(client.call("plugins.addFolder", "/etc"))) ?? "", /home folder/);
     // A folder plugin is a copy of the folder: update takes a fresh copy, the one that was looked at.
@@ -680,32 +678,30 @@ test("a switch-on and a choice of bots name the revision the person looked at", 
   }
 });
 
-test("plugins the computer switched off: a linked folder, one not shown whole before, and a copy that needs an update", async () => {
+test("after the computer's update: notes as warnings on plugins that stay on, and a copy that needs an update", async () => {
   await inMode("held", async () => {
     const setup = await paired();
     const { link, client, until, plugin, plugins, parts } = setup;
     try {
       await until(() => plugins().length === 4, "the installed plugins");
-      // The folder that was linked for its skills is a plugin now, off, with the computer's sentence and its path.
+      // The folder that was linked for its skills is a plugin now, still on, its note first among the warnings.
       const linked = plugin("code-review@folder")!;
-      assert.deepEqual([linked.enabled, linked.folder, linked.status], [false, "/Users/demo/.plugins/code-review", "ready"]);
-      assert.match(linked.detail ?? "", /^This plugin folder was linked for its skills\./);
+      assert.deepEqual([linked.enabled, linked.folder, linked.status, linked.detail], [true, "/Users/demo/.plugins/code-review", "ready", undefined]);
+      assert.match(linked.warnings?.[0] ?? "", /^This plugin folder was linked for its skills\./);
       assert.equal((parts.skills as { plugins: { path: string }[] }).plugins.some((item) => item.path === linked.folder), false, "no longer a linked folder");
-      // One an earlier version did not show whole.
+      // One an earlier version did not show whole: on too, with its note.
       const guard = plugin("git-guard@awesome-copilot")!;
-      assert.equal(guard.enabled, false);
-      assert.match(guard.detail ?? "", /^Botkins switched this plugin off\./);
-      // The phone's words for the moment, one time.
-      assert.deepEqual([statusLine(linked), statusLine(guard)], ["Off · Needs review", "Off · Needs review"]);
-      const notice = reviewNotice(plugins(), "mac", [])!;
-      assert.equal(notice.title, "Botkins switched off 2 plugins");
-      assert.deepEqual(skillsNotices(plugins(), "mac", []).map((one) => one.title), ["Skills from code-review are off"]);
-
-      // The person looks and turns it on: the reason is gone, and it reads as any plugin that is on.
-      await client.call("plugins.setEnabled", guard.id, true, { revision: guard.revision });
-      await until(() => plugin(guard.id)?.enabled === true, "turned on");
-      assert.equal(plugin(guard.id)!.detail, undefined);
-      assert.equal(reviewNotice(plugins(), "mac", [])?.title, "Botkins switched off 1 plugin");
+      assert.equal(guard.enabled, true);
+      assert.match(guard.warnings?.[0] ?? "", /^An earlier version of Botkins did not show everything/);
+      // Nothing was switched off, so the phone says nothing was.
+      assert.deepEqual([statusLine(linked), statusLine(guard)], ["Ready", "Ready"]);
+      assert.equal(reviewNotice(plugins(), "mac", []), undefined);
+      assert.deepEqual(skillsNotices(plugins(), "mac", []), []);
+      // A switch by the person ends the note.
+      await client.call("plugins.setEnabled", guard.id, false, { revision: guard.revision });
+      await until(() => plugin(guard.id)?.enabled === false, "turned off");
+      assert.doesNotMatch(plugin(guard.id)!.warnings?.[0] ?? "", /^An earlier version/);
+      assert.equal(statusLine(plugin(guard.id)!), "Off");
 
       // A copy that is not the reviewed files: an error with the mark "an update is the repair", and no mark of a whole description.
       const runner = plugin("test-runner@awesome-copilot")!;
@@ -751,15 +747,17 @@ test("a computer from before plugin-starts-v1: no mark, so the phone asks first 
   });
 });
 
-test("a plugin folder picked under Skills is installed as a plugin, switched off, and never linked", async () => {
+test("a plugin folder picked under Skills is installed as a plugin, switched on, and never linked", async () => {
   const setup = await paired();
   const { link, client, until, plugin, parts } = setup;
   try {
     const added = await client.call<{ kind: string; name: string; id?: string; enabled?: boolean }>("addSkillFolderAt", "/Users/demo/Code/review-kit");
-    assert.deepEqual(added, { kind: "plugin", name: "review-kit", id: "review-kit@folder", enabled: false });
-    await until(() => plugin("review-kit@folder")?.enabled === false, "the plugin, off");
+    assert.deepEqual(added, { kind: "plugin", name: "review-kit", id: "review-kit@folder", enabled: true });
+    await until(() => plugin("review-kit@folder")?.enabled === true, "the plugin, on");
     assert.deepEqual(plugin("review-kit@folder")!.contents.hooks.map((hook) => [hook.event, hook.command, hook.timeoutSec]), [["preToolUse", "sh ${PLUGIN_ROOT}/check.sh", 5]]);
     assert.equal((parts.skills as { folders: { path: string }[] }).folders.some((folder) => folder.path === "/Users/demo/Code/review-kit"), false);
+    assert.equal(addedSkillsNote({ kind: "plugin", name: "review-kit", id: "review-kit@folder", enabled: true }), "Added the plugin review-kit.");
+    // An older computer added it off.
     assert.equal(addedSkillsNote({ kind: "plugin", name: "review-kit", id: "review-kit@folder", enabled: false }), "Added the plugin review-kit. It is off until you turn it on.");
     assert.equal(addedSkillsNote({ kind: "plugin", name: "old-kit" }), "Added the plugin old-kit.");
   } finally {

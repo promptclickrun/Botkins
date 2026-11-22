@@ -78,7 +78,13 @@ earlier section differ, this one holds.
   when it is another one by then ("This plugin is not the one that was looked at: its revision is
   another one now. Look at it again."). The link passes that third argument only as nothing or
   `{ revision }` with 64 hex characters.
-- **A plugin the computer switched off** has `enabled: false` and a `detail` sentence, with any
+- **Nothing is switched off by the computer** (the owner's rule of 2026-11-21: warn, never block,
+  unless it truly looks malicious with high confidence). Where nobody was shown all that a plugin
+  starts (an earlier version did not show it whole, a hook that runs now and did not before, a
+  folder that was linked for its skills), the computer's note is the first of its `warnings`, and
+  the plugin stays as the person has it. A switch by the person, on or off, ends the note. The one
+  refusal of a switch-on is a copy whose files are not the reviewed ones.
+- **A plugin a computer up to 0.17.2 switched off** has `enabled: false` and a `detail` sentence, with any
   `status`. It does so one time after the app's update for a plugin whose description has anything
   the old one did not show, for a hook that did not run before and runs now, for a folder that was
   linked for its skills, and when the installed files could not be read. The client shows the
@@ -87,7 +93,8 @@ earlier section differ, this one holds.
   read. A client offers Update also when the source did not change, reads the preview and sends its
   revision as for any update; the update writes the files again and keeps the settings.
 - **A plugin folder is never linked as a folder of skills.** `addSkillFolderAt` with a plugin folder
-  installs it as a plugin, switched off, and answers `{ kind: "plugin", name, id, enabled: false }`.
+  installs it as a plugin, switched on, and answers `{ kind: "plugin", name, id, enabled: true }`
+  (a computer up to 0.17.2 answered `enabled: false`). `plugins.addFolder` adds it on too.
   An old link that could not be copied is an installed entry in error whose `id` starts with
   `linked-`; only `plugins.uninstall` works on it.
 - **An approval card** for a bot's own plugin request holds the plugin's whole description in its
@@ -97,7 +104,7 @@ earlier section differ, this one holds.
 **The phone's words** (final for the phone, 2026-11-21; the window says "this computer" or the
 computer's name where the phone says "your computer"):
 
-- A plugin the computer switched off: **Off · Needs review**. One notice on Marketplace › Plugins,
+- A plugin a computer up to 0.17.2 switched off: **Off · Needs review**. One notice on Marketplace › Plugins,
   shown one time and closed with **OK**: **Botkins switched off 3 plugins** / "Botkins now shows
   everything a plugin runs on your computer. Review each one, then turn it on."
 - One notice in Settings › Skills for each such plugin that has skills: **Skills from <name> are
@@ -255,7 +262,7 @@ type InstalledPlugin = PluginListing & {
   contents: PluginContents;
   config: (PluginField & { set: boolean; value?: string })[];   // `value` only for non-secret fields
   status: "ready" | "needs-config" | "needs-sign-in" | "error";
-  detail?: string;                   // a sentence for needs-sign-in and error, and for a plugin the computer switched off (enabled: false)
+  detail?: string;                   // a sentence for needs-sign-in and error (and, up to 0.17.2, for a plugin the computer switched off)
   limits?: string;                   // "Hooks run only for bots on the Copilot SDK."
   updateAvailable?: true;
   folder?: string;                   // for a folder plugin: its path on the computer, to show
