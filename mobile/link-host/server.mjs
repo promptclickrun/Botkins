@@ -19,7 +19,7 @@ import { DeviceTools } from "./device.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
-import { baseParts, CHAT_PAGE, chatPart, lightPart, quietLive, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
+import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_MS, chatPart, chunkDelta, lightPart, quietLive, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
 import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
@@ -63,7 +63,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "text-streaming-off-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -209,9 +209,11 @@ export class LinkHost extends EventEmitter {
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, demoSpaceLinks = false, spaceLinkTiming, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
     super();
     Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
+    // How often a phone that asked for text in chunks gets it, and how long text may wait for a sentence's end (tests set shorter ones).
+    this.chunkTiming = { every: CHUNK_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
     this.relayLink = null;
     this.store = new LinkStore(dir, { protect, reveal });
@@ -2062,6 +2064,12 @@ export class LinkHost extends EventEmitter {
     // A phone that asked for no text streaming ("text-streaming-off-v1") gets the indicators only, and no text:
     // text growing alone wakes nothing. The reply comes whole in its chat's page.
     const quiet = !!cursors || session.noText;
+    // A phone that asked for chunks ("text-chunks-v1") gets text cut at complete sentences and lines, at most
+    // once per `every` ms: about ten times fewer relay messages. Text with no end in sight goes after `holdMax`.
+    const chunks = session.textMode === "chunks";
+    const now = Date.now();
+    const loose = chunks && session.heldSince !== undefined && now - session.heldSince >= this.chunkTiming.holdMax;
+    let held = false;
     let textOnly = true;
     const parts = [];
     const versions = {};
@@ -2085,13 +2093,23 @@ export class LinkHost extends EventEmitter {
       }
       // A member reads the text of their own chats only: their view holds null for any other chat.
       const shown = values === this.parts || (values.get("chat:" + chat)?.json ?? "null") !== "null";
-      const delta = textDelta(shown ? this.texts.get(chat) : undefined, cursor);
+      const text = shown ? this.texts.get(chat) : undefined;
+      let delta = textDelta(text, cursor);
+      if (chunks && delta) {
+        const cut = chunkDelta(text, delta, cursor, loose);
+        delta = cut.delta;
+        held ||= cut.held;
+      }
       if (delta === undefined) continue;
       parts.push(JSON.stringify("text:" + chat) + ":" + JSON.stringify(delta));
     }
-    if (!parts.length) return null;
-    const remaining = (session.lastNews ?? 0) + TEXT_PUMP_MS - Date.now();
+    if (held) session.heldSince ??= now;
+    else delete session.heldSince;
+    // Held text with nothing to send yet: look again when it has waited long enough.
+    if (!parts.length) return held && throttle ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : null;
+    const remaining = (session.lastNews ?? 0) + (chunks ? this.chunkTiming.every : TEXT_PUMP_MS) - now;
     if (throttle && textOnly && remaining > 0) return remaining;
+    if (held) session.heldSince = now;
     session.lastNews = Date.now();
     session.watchUntil = session.lastNews + MAX_WAIT;
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
@@ -2100,6 +2118,7 @@ export class LinkHost extends EventEmitter {
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     session.watching = watching;
     session.noText = text === false;
+    session.textMode = text === false ? "whole" : text === "chunks" ? "chunks" : "live";
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
     session.light = steps === "light";
     session.watchUntil = Date.now() + MAX_WAIT;

@@ -38,14 +38,15 @@ export type ChatPrefs = {
   /** The person chose `readAloud` on this phone. Until then it follows the computer's Settings › Voice. */
   readAloudPicked?: boolean;
   /**
-   * A reply as the bot writes it, when not through the relay (each update there costs a relay message).
-   * Otherwise a reply lands whole and is shown word by word here (src/features/chat/reveal.ts).
+   * A reply as the bot writes it. Through the relay (each update there costs a relay message) it comes in
+   * complete sentences every couple of seconds and is painted word by word here (src/features/chat/paint.ts).
+   * Off, a reply lands whole and is shown word by word (src/features/chat/reveal.ts).
    */
   textStreaming: boolean;
 };
 
-/** Whether a reply's text is followed as it is written, on this route. */
-export const textStreamingOn = (on: boolean, route: "direct" | "relay" | null) => on && route !== "relay";
+/** How a reply's text is followed on this route: as it is written, in chunks through the relay, or whole. */
+export const textMode = (on: boolean, route: "direct" | "relay" | null): "live" | "chunks" | "whole" => (!on ? "whole" : route === "relay" ? "chunks" : "live");
 
 export const chatPrefDefaults: ChatPrefs = {
   steps: "folded",

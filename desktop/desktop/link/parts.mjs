@@ -120,6 +120,88 @@ export function quietLive(live) {
   return { ...live, streams: flags(live.streams), thinking: flags(live.thinking) };
 }
 
+/** A phone that asked for text in chunks ("text-chunks-v1") gets text at most this often. */
+export const CHUNK_MS = 2000;
+/** Text held for want of a complete sentence goes anyway after this long, or once it is this long. */
+export const CHUNK_HOLD_MAX_MS = 6000;
+export const CHUNK_HOLD_MAX_CHARS = 1200;
+
+const SENTENCE_ENDS = ".!?…";
+const CLOSERS = "\"')]”’*_";
+const ABBREVIATIONS = new Set(["e.g", "i.e", "etc", "vs", "mr", "mrs", "dr", "st"]);
+const isSpace = (char) => /\s/.test(char);
+const isHigh = (code) => code >= 0xd800 && code <= 0xdbff;
+
+/** Whether the period at `at` ends a list marker ("12."), an abbreviation ("e.g.") or an initial ("J."). */
+function notSentenceEnd(text, at) {
+  const lineStart = text.lastIndexOf("\n", at - 1) + 1;
+  if (/^\s*\d+$/.test(text.slice(lineStart, at))) return true;
+  let start = at;
+  while (start > 0 && /[A-Za-z.]/.test(text[start - 1])) start--;
+  const word = text.slice(start, at);
+  return (word.length === 1 && /[A-Z]/.test(word)) || ABBREVIATIONS.has(word.toLowerCase());
+}
+
+/**
+ * Where to cut `text` between `from` and `to` so what is sent ends complete: after the last line end,
+ * or after the whitespace that follows a sentence's end. Inside a ``` code block only a line end counts.
+ * `from` when there is none.
+ */
+export function completeUpTo(text, from, to) {
+  const fences = [];
+  for (let at = text.indexOf("```"); at >= 0 && at < to; at = text.indexOf("```", at + 3)) fences.push(at);
+  const inCode = (at) => fences.filter((fence) => fence < at).length % 2 === 1;
+  for (let i = to - 1; i >= from; i--) {
+    if (text[i] === "\n") return i + 1;
+    if (!isSpace(text[i])) continue;
+    let end = i - 1;
+    while (end >= 0 && CLOSERS.includes(text[end])) end--;
+    if (end < 0 || !SENTENCE_ENDS.includes(text[end]) || inCode(end)) continue;
+    if (text[end] === "." && notSentenceEnd(text, end)) continue;
+    return i + 1;
+  }
+  return from;
+}
+
+/** The cut when nothing complete came for too long: after the last whitespace, or all of it. Never inside a surrogate pair. */
+export function looseUpTo(text, from, to) {
+  let cut = to;
+  for (let i = to - 1; i >= from; i--) {
+    if (isSpace(text[i])) {
+      cut = i + 1;
+      break;
+    }
+  }
+  if (cut > from && isHigh(text.charCodeAt(cut - 1))) cut--;
+  return cut;
+}
+
+/**
+ * A `textDelta` cut to complete sentences and lines, for a phone that asked for chunks. `loose` (held
+ * too long) cuts at a word instead when nothing is complete. `held` says text is left for later;
+ * `delta` is undefined when nothing is worth sending yet.
+ */
+export function chunkDelta(text, delta, cursor, loose) {
+  if (!delta) return { delta, held: false };
+  let held = false;
+  let any = false;
+  const cut = (field) => {
+    const { from, add } = delta[field];
+    const body = text[field];
+    const to = from + add.length;
+    let at = completeUpTo(body, from, to);
+    if (at === from && add && (loose || add.length > CHUNK_HOLD_MAX_CHARS)) at = looseUpTo(body, from, to);
+    if (at < to) held = true;
+    if (at > from) any = true;
+    return { from, add: body.slice(from, at) };
+  };
+  const next = { id: delta.id, stream: cut("stream"), thinking: cut("thinking") };
+  // Nothing new to show: a phone on this text already, or holding none, waits for more.
+  const caughtUp = cursor?.id === delta.id && cursor.stream === delta.stream.from && cursor.thinking === delta.thinking.from;
+  if (!any && (!cursor || caughtUp)) return { delta: undefined, held };
+  return { delta: next, held };
+}
+
 /** Missing UTF-16 suffixes for one watcher. Null clears a held body and undefined means caught up. */
 export function textDelta(text, cursor) {
   if (!text) return cursor ? null : undefined;

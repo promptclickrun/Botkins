@@ -18,7 +18,7 @@ async function until(check: () => boolean) {
   }
 }
 
-async function setup(t: TestContext, appends = true) {
+async function setup(t: TestContext, appends = true, chunkTiming?: { every: number; holdMax: number }) {
   const saved = process.env.BOTKINS_DEV_APPENDS;
   process.env.BOTKINS_DEV_APPENDS = appends ? "on" : "off";
   let backend;
@@ -29,7 +29,7 @@ async function setup(t: TestContext, appends = true) {
     else process.env.BOTKINS_DEV_APPENDS = saved;
   }
   const dir = mkdtempSync(join(tmpdir(), "botkins-stream-"));
-  const link = new LinkHost({ backend, relay: false, port: 0, dir });
+  const link = new LinkHost({ backend, relay: false, port: 0, dir, chunkTiming });
   await link.setEnabled(true);
   const clients: LinkClient[] = [];
   t.after(async () => {
@@ -320,6 +320,69 @@ test("with text streaming off a phone gets indicators only, is not woken by text
   text = true;
   client.textStreamingChanged();
   await until(() => held()?.stream === "next");
+});
+
+test("text in chunks comes at sentence or line ends, no more often than CHUNK_MS, and held text goes after the hold", async (t) => {
+  const { backend, link, phone } = await setup(t, true, { every: 300, holdMax: 900 });
+  const received: { at: number; news: Record<string, any> }[] = [];
+  const syncs: Record<string, unknown>[] = [];
+  const client = await phone(true, (news) => {
+    received.push({ at: Date.now(), news });
+    applyParts(news);
+  }, { textStreaming: () => "chunks" });
+  const sync = link.sync.bind(link);
+  link.sync = (session, args, gone) => {
+    syncs.push(args);
+    return sync(session, args, gone);
+  };
+  const chat = backend.state.chats.find((c) => !c.botIds);
+  const id = chat.id;
+  const stream = backend.state.streams;
+  const held = () => useApp.getState().texts[id]?.stream;
+  stream[id] = "One. Tw";
+  backend.changed();
+  client.watch([id]);
+  client.start();
+  await until(() => held() === "One. ");
+  assert.equal(syncs.at(-1)!.text, "chunks");
+  assert.ok(useApp.getState().parts.meta!.capabilities.includes("text-chunks-v1"));
+  for (const more of ["o is", " here.", " Three", "\n- a list ite", "m\n", "and then"]) {
+    stream[id] += more;
+    backend.changed();
+    await sleep(40);
+  }
+  await until(() => held() === "One. Two is here. Three\n- a list item\n");
+  const texts = received.filter((r) => r.news["text:" + id]);
+  for (const r of texts) {
+    assert.match(r.news["text:" + id].stream, /(\n|[.!?] )$/, "cut at a sentence or line end");
+  }
+  for (let i = 1; i < texts.length; i++) assert.ok(texts[i].at - texts[i - 1].at >= 280, "two chunks too close");
+  // Nothing more comes, and "and then" has no end: it goes once it was held too long.
+  const before = Date.now();
+  await until(() => held() === stream[id]);
+  assert.ok(Date.now() - before >= 400, "the held words waited for the hold");
+  delete stream[id];
+  chat.messages.push({ role: "assistant", text: "One. Two is here. Three\n- a list item\nand then" });
+  backend.changed();
+  await until(() => useApp.getState().chats[id]?.messages.at(-1)?.text?.endsWith("and then") === true);
+});
+
+test("a phone asks for chunks only from a computer that sends them, and whole text otherwise", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const meta = link.meta.bind(link);
+  link.meta = () => ({ ...meta(), capabilities: meta().capabilities.filter((c: string) => c !== "text-chunks-v1") });
+  const syncs: Record<string, unknown>[] = [];
+  const sync = link.sync.bind(link);
+  link.sync = (session, args, gone) => {
+    syncs.push(args);
+    return sync(session, args, gone);
+  };
+  const client = await phone(true, applyParts, { textStreaming: () => "chunks" });
+  const id = backend.state.chats[0].id;
+  client.watch([id]);
+  client.start();
+  await until(() => !!useApp.getState().parts.meta && syncs.length >= 2);
+  assert.equal(syncs.at(-1)!.text, false);
 });
 
 test("a team member who asks for appends gets indicators and text for their own chats only", async (t) => {

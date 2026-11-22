@@ -1,18 +1,21 @@
 // The turn a bot is working on now, drawn in parts in the order things happened (turn.ts), whatever
 // Steps says: each part's steps and thinking is a `WorkPart`, and the newest part is the `LiveTurn`
-// at the bottom. Failed only and Hidden narrow the steps. Under it, in every mode, the turn's status
+// at the bottom. Its reply's text in chunks (through the relay) is painted word by word (paint.ts). Failed only and Hidden narrow the steps. Under it, in every mode, the turn's status
 // line: the bot's face and its typing dots (FoldRow.tsx). A turn that will fold once it ends keeps
 // room under its text for the reply's row. The work keeps away from the screen's edge (`workWidth`).
 // Thinking and interim texts are `Aside`s. Requests and errors are shown elsewhere and always show.
 import { router } from "expo-router";
 import { StyleSheet, View } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import type { Bot, Step } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
+import { useTextMode } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { BotAvatar, Markdown, radius, space, T, Tap, useTheme } from "@/ui";
 import { Aside } from "./Aside";
 import { StepMark, TypingDots, workWidth } from "./bits";
 import { WorkLine } from "./Messages";
+import { usePainted } from "./paint";
 import { type Item, stepLabel } from "./turn";
 
 const SHOWN_STEPS = 4;
@@ -103,7 +106,9 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
-  const stream = item.text;
+  // Through the relay the text comes in chunks: it is painted word by word between them (paint.ts).
+  const still = useReducedMotion();
+  const stream = usePainted(chatId, item.text, useTextMode() === "chunks" && !still);
   const thinking = thinkingMode !== "hide" && !!item.thinking;
   return (
     <View style={{ gap: space.md }}>
