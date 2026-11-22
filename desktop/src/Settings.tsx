@@ -4,6 +4,7 @@ import {
   Bot as BotIcon,
   Boxes,
   ChartColumn,
+  FlaskConical,
   HardDrive,
   Info,
   KeyRound,
@@ -42,6 +43,7 @@ import BotIntegrations from "./BotIntegrations";
 import BotMemory from "./BotMemory";
 import PluginsSettings from "./PluginsSettings";
 import TeamSettings, { type TeamView } from "./TeamSettings";
+import ExperimentalSettings from "./ExperimentalSettings";
 import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
 
@@ -66,6 +68,7 @@ export type SectionId =
   | "usage"
   | "storage"
   | "account"
+  | "experimental"
   | "about";
 type BotView = "profile" | "model" | "capabilities" | "memory";
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
@@ -88,6 +91,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "storage", label: "Storage", icon: HardDrive },
   // The id stays "account" so /login and older callers still land here.
   { id: "account", label: "Model providers", icon: Boxes },
+  { id: "experimental", label: "Experimental", icon: FlaskConical },
   { id: "about", label: "About", icon: Info },
 ];
 
@@ -180,8 +184,11 @@ export default function Settings({
   const routineModels = !state.remote?.using || !!state.remote.using.capabilities?.includes("routine-models-v1");
   const sections = SECTIONS.filter((item) => {
     if (item.id === "team" && state.remote?.using) return false;
+    // A computer reached over the link may be older than this window: it says so in its capabilities.
+    if (item.id === "experimental" && state.remote?.using && !state.remote.using.capabilities?.includes("proactive-agent-v1")) return false;
     if (!memberHost) return true;
-    if (item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
+    if (item.id === "experimental" ||
+      item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
     if (item.id === "bots") return teamCan(state, "agents");
     if (item.id === "skills") return teamCan(state, "skills");
     if (item.id === "marketplace") return teamCan(state, "plugins");
@@ -198,7 +205,8 @@ export default function Settings({
       ...p,
       ...patch,
       appearance: { ...p.appearance, ...patch.appearance },
-    }));
+      ...(p.proactive && patch.proactive && { proactive: { ...p.proactive, ...patch.proactive } }),
+    }) as Preferences);
     try {
       await api.setPreferences(patch);
     } catch (e) {
@@ -541,6 +549,7 @@ export default function Settings({
               general={() => setSection("general")}
             />
           )}
+          {section === "experimental" && <ExperimentalSettings state={state} bots={bots} settings={preferences} change={changePreferences} />}
           {section === "about" && <About />}
           {error && (
             <p className="set-status error-text" role="alert">

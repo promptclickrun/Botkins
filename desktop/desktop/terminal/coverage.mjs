@@ -603,6 +603,8 @@ const FIXED_WORDS = {
   teamwork: onOff,
   // A login item on this computer: the person sees afterwards that a bot made Botkins start at login.
   "background.runAtStartup": onOff,
+  // An unattended bot that reads the person's sources: the log says when it was turned on.
+  "proactive.enabled": onOff,
 };
 const fixedWord = (key, value) => {
   const word = typeof key === "string" && Object.hasOwn(FIXED_WORDS, key) ? FIXED_WORDS[key](value) : null;
