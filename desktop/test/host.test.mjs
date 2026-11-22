@@ -67,7 +67,7 @@ test("only the desktop app's own files load Electron, and its host is checked wh
 });
 
 test("the headless host refuses what needs a desktop, and does the rest", async () => {
-  const host = headlessHost({ version: "1.2.3", packaged: true });
+  const host = headlessHost({ version: "1.2.3", packaged: true, env: {} });
   assert.equal(host.kind, "terminal");
   assert.equal(host.headless, true);
   assert.deepEqual(host.displayStatus(), { available: false, note: "This host has no display." });
