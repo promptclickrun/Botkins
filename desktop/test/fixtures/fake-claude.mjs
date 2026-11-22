@@ -163,6 +163,10 @@ lines.on("close", async () => {
   } else if (mode === "auth") {
     say({ type: "assistant", error: "authentication_failed", message: { content: [{ type: "text", text: "Please run /login" }] } });
     say({ type: "result", subtype: "success", is_error: true, result: "Please run /login" });
+  } else if (mode === "extra") {
+    // Claude Code 2.1.325's words when a request is billed as extra usage and none is left.
+    say({ type: "assistant", error: "unknown", message: { content: [{ type: "text", text: "API Error: 400 You're out of extra usage. Add more at claude.ai/settings/usage and keep going." }] } });
+    say({ type: "result", subtype: "success", is_error: true, result: "API Error: 400 You're out of extra usage. Add more at claude.ai/settings/usage and keep going." });
   } else if (mode === "failed") {
     say({ type: "result", subtype: "error_during_execution", is_error: true, result: "The model said no." });
   } else if (mode === "cut") {

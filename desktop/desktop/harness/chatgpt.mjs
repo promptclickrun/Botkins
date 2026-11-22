@@ -5,8 +5,11 @@
 // ChatGPT plan's Responses endpoint, the one Codex itself uses, and the stream comes back. The
 // request says who it is from (originator "botkins"), and usage counts against the person's plan.
 //
-// That endpoint differs from the public API in three ways, which are evened out here:
+// That endpoint differs from the public API in four ways, which are evened out here:
 //   - it takes the system prompt as `instructions`, never as a system message;
+//   - it takes a function tool that doesn't say `strict` as strict, and refuses the whole request
+//     when one schema isn't strict-ready (an MCP tool's `"format": "strip"`, measured). Pi leaves
+//     `strict` out, so such a tool is sent as not strict;
 //   - it streams without saying so in a header;
 //   - its last event can leave `output` empty although the items went by one at a time, and the
 //     runtime reads the reply from that last event.
@@ -51,9 +54,13 @@ export function chatgptSignIn({ home = process.env.CODEX_HOME || join(homedir(),
 
 const textOf = (content) => (typeof content === "string" ? content : Array.isArray(content) ? content.map((part) => part?.text ?? "").join("") : "");
 
-/** The request as the plan's endpoint takes it: system messages become `instructions`, nothing is stored, and it streams. */
+/**
+ * The request as the plan's endpoint takes it: system messages become `instructions`, a function
+ * tool that doesn't say whether it is strict is not, nothing is stored, and it streams.
+ */
 export function planRequest(body) {
   const out = { ...body, store: false, stream: true };
+  if (Array.isArray(out.tools)) out.tools = out.tools.map((tool) => (tool?.type === "function" && typeof tool.strict !== "boolean" ? { ...tool, strict: false } : tool));
   if (Array.isArray(out.input)) {
     const system = out.input.filter((item) => item?.role === "system" && (item.type === "message" || item.type === undefined));
     out.instructions = [typeof out.instructions === "string" ? out.instructions : "", ...system.map((item) => textOf(item.content))].filter(Boolean).join("\n\n");

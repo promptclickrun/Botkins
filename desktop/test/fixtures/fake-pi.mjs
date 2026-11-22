@@ -45,11 +45,15 @@ async function turn(text) {
     send({ type: "agent_settled", aborted: true });
     return;
   }
-  const reply = text.includes("fail") ? "" : "echo: " + text;
+  const reply = text.includes("fail") || text.includes("extra") ? "" : "echo: " + text;
+  // Pi's own words for a refused request: the status, then the provider's error as JSON.
+  const error = text.includes("extra")
+    ? '402 {"type":"error","error":{"type":"billing_error","message":"API Error: 400 You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}'
+    : "The plan said no.";
   for (const part of reply ? [reply.slice(0, 4), reply.slice(4)] : []) send({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: part } });
   send({
     type: "message_end",
-    message: { role: "assistant", content: [{ type: "text", text: reply }], stopReason: reply ? "stop" : "error", ...(!reply && { errorMessage: "The plan said no." }), usage: { input: 100, output: 7, cacheRead: 20, cacheWrite: 0, totalTokens: 127 } },
+    message: { role: "assistant", content: [{ type: "text", text: reply }], stopReason: reply ? "stop" : "error", ...(!reply && { errorMessage: error }), usage: { input: 100, output: 7, cacheRead: 20, cacheWrite: 0, totalTokens: 127 } },
   });
   send({ type: "agent_end", messages: [] });
   send({ type: "agent_settled", aborted: false });

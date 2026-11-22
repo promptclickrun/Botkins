@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PiProvider } from "../desktop/providers/pi/index.mjs";
+import { EXTRA_USAGE, PiProvider, errorText } from "../desktop/providers/pi/index.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
 
@@ -135,6 +135,23 @@ test("a model error with no reply fails the turn with the plan's words", { skip 
   const session = await provider.openSession(spec());
   await assert.rejects(session.send({ prompt: "fail please" }), /The plan said no\./);
   await provider.stop();
+});
+
+test("a refused request fails the turn with the provider's own message, and Claude's extra usage says where the plan answers", { skip }, async () => {
+  const { provider } = setup();
+  const session = await provider.openSession(spec());
+  const failed = await session.send({ prompt: "extra please" }).catch((error) => error);
+  assert.match(failed.message, /^API Error: 400 You're out of extra usage\. /, "the JSON around it is gone");
+  assert.ok(failed.message.endsWith(EXTRA_USAGE));
+  await provider.stop();
+});
+
+test("errorText reads the provider's message out of Pi's error and keeps any other text", () => {
+  assert.equal(errorText('botkins-chatgpt API error (400): {"error":{"message":"Bad schema.","type":"invalid_request_error"}}'), "Bad schema.");
+  assert.equal(errorText('500 {"type":"error","error":{"type":"api_error","message":"Down."}}'), "Down.");
+  assert.equal(errorText("The plan said no."), "The plan said no.");
+  assert.equal(errorText("Odd {not json"), "Odd {not json");
+  assert.equal(errorText(undefined), "");
 });
 
 test("the next turn reuses the running Pi, and a new model goes to it with set_model", { skip }, async () => {
