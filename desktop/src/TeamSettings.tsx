@@ -5,6 +5,7 @@ import {
   Copy,
   Laptop,
   Link,
+  Pencil,
   Plus,
   Smartphone,
   Trash2,
@@ -517,6 +518,25 @@ function Members({ team, update, run, busy }: Actions) {
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                className="set-button"
+                aria-label={"Rename " + member.name}
+                disabled={busy}
+                onClick={() =>
+                  void dialogs
+                    .ask({
+                      title: "Rename " + member.name,
+                      confirm: "Rename",
+                      field: { label: "Name", value: member.name, max: 60 },
+                    })
+                    .then((name) => {
+                      if (name && name !== member.name) void run(async () => update(await api.renameTeamMember(member.id, name)));
+                    })
+                }
+              >
+                <Pencil size={13} /> Rename
+              </button>
               <button
                 type="button"
                 className="set-button danger"

@@ -8,7 +8,11 @@ import { formatCode } from "@/link/pairing";
 import { useOnline, usePart, useCapability } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
-import { Badge, Button, Dot, EmptyState, Group, haptic, IconButton, IconTile, Label, Loading, Page, QrCode, Row, Segmented, space, T, useTheme } from "@/ui";
+import { Badge, Button, Dot, EmptyState, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Page, QrCode, Row, Segmented, space, T, useTextPrompt, useTheme } from "@/ui";
+import { memberActions, memberChoice } from "./memberMenu";
+
+/** The computer takes a member's name up to this long. */
+const MEMBER_NAME_MAX = 60;
 
 function pickGroup(groups: TeamGroup[], title: string, current: string, done: (id: string) => void) {
   Alert.alert(title, undefined, [
@@ -196,6 +200,17 @@ function Invites({ teamName, groups, invites, online }: { teamName: string; grou
 
 function Members({ members, groups, online }: { members: Member[]; groups: TeamGroup[]; online: boolean }) {
   const { colors } = useTheme();
+  const canRename = useCapability("member-rename-v1");
+  const prompt = useTextPrompt();
+  const rename = (member: Member) =>
+    prompt.ask({
+      title: "Rename " + member.name,
+      value: member.name,
+      max: MEMBER_NAME_MAX,
+      onSubmit: (name) => {
+        if (name !== member.name) void attempt(api["link.team.renameMember"](member.id, name), "Member renamed");
+      },
+    });
   const move = (member: Member) =>
     pickGroup(groups, "Move " + member.name, member.groupId, (groupId) => {
       if (groupId !== member.groupId) void attempt(api["link.team.moveMember"](member.id, groupId), "Member moved");
@@ -205,22 +220,31 @@ function Members({ members, groups, online }: { members: Member[]; groups: TeamG
       { text: "Cancel", style: "cancel" },
       { text: "Remove", style: "destructive", onPress: () => void attempt(api["link.team.removeMember"](member.id), "Member removed") },
     ]);
+  const choose = (member: Member, event: string) => {
+    const choice = memberChoice(event);
+    if (choice?.do === "rename") rename(member);
+    else if (choice?.do === "remove") remove(member);
+    else if (choice?.do === "move" && choice.groupId !== member.groupId) void attempt(api["link.team.moveMember"](member.id, choice.groupId), "Member moved");
+  };
   return (
     <View>
       <Label>Members</Label>
       {members.length ? (
         <Group flat inset={space.lg}>
           {members.map((member) => (
-            <Row
-              key={member.id}
-              title={member.name}
-              subtitle={[groups.find((group) => group.id === member.groupId)?.name, member.devices?.length ? member.devices.map((device) => device.name).join(", ") : "No devices"].filter(Boolean).join(" · ")}
-              trailing={<View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}><View style={{ flexDirection: "row", gap: 4 }}>{member.devices?.map((device) => <Dot key={device.id} tone={device.connected ? "success" : "neutral"} />)}</View><IconButton icon={UserMinus} label={"Remove " + member.name} color={colors.danger} disabled={!online} onPress={() => remove(member)} /></View>}
-              onPress={!online ? undefined : () => move(member)}
-            />
+            // A hold opens the member's menu; a tap still moves them to a group.
+            <HoldMenu key={member.id} title={member.name} actions={online ? memberActions(member, groups, canRename) : []} onPressAction={({ nativeEvent }) => choose(member, nativeEvent.event)}>
+              <Row
+                title={member.name}
+                subtitle={[groups.find((group) => group.id === member.groupId)?.name, member.devices?.length ? member.devices.map((device) => device.name).join(", ") : "No devices"].filter(Boolean).join(" · ")}
+                trailing={<View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}><View style={{ flexDirection: "row", gap: 4 }}>{member.devices?.map((device) => <Dot key={device.id} tone={device.connected ? "success" : "neutral"} />)}</View><IconButton icon={UserMinus} label={"Remove " + member.name} color={colors.danger} disabled={!online} onPress={() => remove(member)} /></View>}
+                onPress={!online ? undefined : () => move(member)}
+              />
+            </HoldMenu>
           ))}
         </Group>
       ) : <T variant="subhead" color="muted" style={{ paddingHorizontal: space.xs }}>No members yet</T>}
+      {prompt.node}
     </View>
   );
 }

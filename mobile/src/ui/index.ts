@@ -22,6 +22,7 @@ export { LinkBanner, Loading, Page, Sheet, TAB_BAR_ROOM } from "./Screen";
 export { SelectableText } from "./SelectableText";
 export { Slider } from "./Slider";
 export { Tap } from "./Tap";
+export { type TextPromptOptions, useTextPrompt } from "./TextPrompt";
 export { T } from "./Text";
 export { badgeColors, BODY_FONT, brand, type ControlMetrics, type ControlSize, CONTROLS, DISPLAY_FONT, lift, radius, slopFor, space, TEXT_SIZES, type Theme, type TypeScale, tint, type as typeScale, useTheme, useType } from "./theme";
 export { DEFAULT_FONT, type FontId, fontsFor } from "./fonts";

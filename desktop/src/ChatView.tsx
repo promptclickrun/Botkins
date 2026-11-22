@@ -60,7 +60,7 @@ import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
 import { blockedBots } from "./access";
 import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
 import { PeopleDialog } from "./ChatPeople";
-import { chatPeopleView } from "./peopleView";
+import { authorName, chatPeopleView } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
@@ -574,7 +574,7 @@ export default function ChatView({
           <span className="speaker-name">{group ? nameOf(m) : bot.name}</span>
         </b>
       ) : m.role === "user" ? (
-        <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author?.name ?? "You"}</b>
+        <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
       ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
@@ -934,7 +934,7 @@ export default function ChatView({
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)}>
-              {message.author && <b className="member-speaker">{message.author.name}</b>}
+              {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
               <RichText text={message.text} files={files} />
               <Attachments list={message.attachments} />
             </article>
@@ -981,7 +981,7 @@ export default function ChatView({
                         </b>
                       )
                     ) : m.role === "user" ? (
-                      <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author?.name ?? "You"}</b>
+                      <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
                     ) : (
                       <b className="command-label">Command output</b>
                     )}

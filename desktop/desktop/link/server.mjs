@@ -64,7 +64,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -336,6 +336,7 @@ export class LinkHost extends EventEmitter {
       "link.team.moveMember": async (_session, a) => this.moveMember(a[0], a[1]),
       "link.team.removeMember": async (_session, a) => this.removeMember(a[0]),
       "link.team.rename": async (_session, a) => this.renameTeam(a[0]),
+      "link.team.renameMember": async (_session, a) => this.renameMember(a[0], a[1]),
       "link.team.inviteToChat": async (_session, a) => this.inviteToChat(a[0], a[1]),
       "link.team.removeFromChat": async (_session, a) => this.removeFromChat(a[0], a[1]),
       // Spaces: sharing, and the caller's own view of the list. The caller is the person.
@@ -1207,6 +1208,19 @@ export class LinkHost extends EventEmitter {
     if (!team.groups.some((item) => item.id === groupId)) throw new Failure("Choose a group that still exists.");
     member.groupId = groupId;
     this.store.save();
+    this.teamChanged();
+    return this.team();
+  }
+  /**
+   * The owner renames a member ("member-rename-v1"). The member and each of their devices take the
+   * name, as when a member's device sets its person, and every session is told at once. The name
+   * has the rules of the team's: trimmed, up to 60 characters, no control characters.
+   */
+  renameMember(memberId, name) {
+    const clean = typeof name === "string" ? name.trim() : "";
+    if (!clean || clean.length > 60 || /[\u0000-\u001f\u007f]/.test(clean)) throw new Failure("Give the member a name of up to 60 characters.");
+    if (!this.store.renameMember(memberId, clean)) throw new Failure("That member is no longer on the team.");
+    this.dirty = true;
     this.teamChanged();
     return this.team();
   }

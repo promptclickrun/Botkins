@@ -988,6 +988,7 @@ export type UsageReport = {
  * "team-people-v1" (the people in a chat: `ChatSummary.invited`, `link.team.inviteToChat` and
  * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
  * view of bots and chats, kept by the computer for them).
+ * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
@@ -1694,6 +1695,7 @@ export type Calls = {
   "link.team.moveMember"(memberId: string, groupId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.removeMember"(memberId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.rename"(name: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.renameMember"(memberId: string, name: string): Extract<TeamPart, { roles: Role[] }>;
   /** A custom view (an html block) as its bot wrote it, and its data. Needs "frames-v1". */
   "link.frame.page"(frame: string): { html: string; data: unknown };
   /** The chat a custom view's answer goes to, for a view in a Today panel. */

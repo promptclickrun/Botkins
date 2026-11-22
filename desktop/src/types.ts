@@ -1043,6 +1043,7 @@ declare global {
       moveTeamMember(id: string, groupId: string): Promise<OwnerTeam>;
       removeTeamMember(id: string): Promise<OwnerTeam>;
       renameTeam(name: string): Promise<OwnerTeam>;
+      renameTeamMember(id: string, name: string): Promise<OwnerTeam>;
       /** Shows a paired computer's workspace in this window, or this computer's own (null). */
       useRemoteHost(id: string | null): Promise<unknown>;
       forgetRemoteHost(id: string): Promise<void>;

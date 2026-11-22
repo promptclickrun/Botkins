@@ -76,7 +76,7 @@ A paired phone can do what the person can do in the app, so pairing is a full-tr
 
 ## Teams
 
-Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
+Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember`, `renameMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
 
 `MEMBER_PREFERENCE_FIELDS` is deliberately limited to `appearance`, `foldTools`, `showThinking`, `linkPreviews` and `readAloud`; no approval, access, teamwork, link, provider or voice setting is member-writable.
 
