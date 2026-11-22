@@ -185,7 +185,7 @@ export default function Settings({
   const sections = SECTIONS.filter((item) => {
     if (item.id === "team" && state.remote?.using) return false;
     // A computer reached over the link may be older than this window: it says so in its capabilities.
-    if (item.id === "experimental" && state.remote?.using && !state.remote.using.capabilities?.includes("proactive-agent-v1")) return false;
+    if (item.id === "experimental" && state.remote?.using && !state.remote.using.capabilities?.includes("proactive-agent-v2")) return false;
     if (!memberHost) return true;
     if (item.id === "experimental" ||
       item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;

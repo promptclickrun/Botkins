@@ -366,8 +366,8 @@ export type State = {
   adminMode?: boolean;
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
-  /** The Proactive agent's routine and what it did (desktop/proactive.mjs). */
-  proactive?: { chatId?: string; lastSweepAt?: number; pings?: number; day?: string; log: ProactiveLog[] };
+  /** The Proactive agent: the computer's switch, and each bot's agent with what it did (desktop/proactive.mjs). Missing on an older computer. */
+  proactive?: ProactivePart;
   /** Project workspaces. One with a folder is also a coding project. */
   projects?: Project[];
   /** MCP servers every bot can use (Settings › MCP servers). Secret values never reach the page. */
@@ -413,7 +413,7 @@ export type ChatSchedule = {
   enabled?: boolean;
   /** Set on routines: named scheduled tasks in their own "Routine · <name>" chat (desktop/routines.mjs). */
   routine?: boolean;
-  /** The Proactive agent's routine: Botkins keeps it, and it is changed in Settings › Experimental. */
+  /** A Proactive agent's routine: Botkins keeps it, and it is changed on the bot's profile. */
   proactive?: boolean;
   /** Where a routine's result goes besides its own chat. Missing means its own chat. */
   deliver?: RoutineDelivery;
@@ -764,6 +764,8 @@ declare global {
       revealSkill(name: string): Promise<void>;
       /** Which skills (names) and MCP servers (ids) one bot leaves out. */
       setBotIntegrations(botId: string, patch: { skillsOff?: string[]; mcpOff?: string[] }): Promise<void>;
+      /** Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2". */
+      setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): Promise<void>;
       // Marketplace plugins (`plugins-v1`, docs/plugins.md). Dotted names match the link contract.
       "plugins.marketplaces"(): Promise<PluginMarketplace[]>;
       "plugins.addMarketplace"(source: string): Promise<PluginMarketplace>;
@@ -1722,13 +1724,15 @@ export type Preferences = {
    * for off (desktop/summaries.mjs). Missing on an older computer.
    */
   autoSummarize?: number;
-  /** Settings › Experimental › Proactive agent (desktop/proactive.mjs). Missing on an older computer. */
+  /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
   proactive?: ProactiveSettings;
 };
 export type ProactiveWatch = "runs" | "tasks" | "requests";
-export type ProactiveSettings = {
+/** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
+export type ProactiveSettings = { enabled: boolean };
+/** What a bot's Proactive agent is set to (desktop/proactive-settings.mjs). */
+export type ProactiveBotSettings = {
   enabled: boolean;
-  botId: string | null;
   /** Minutes between checks: 15, 30, 60 or 120. */
   every: number;
   /** Hours between looks around the bot's own sources; 0 for never. */
@@ -1738,6 +1742,23 @@ export type ProactiveSettings = {
   watch: ProactiveWatch[];
   instructions: string;
 };
+/**
+ * One bot's agent as this window is sent it. The owner is sent `person` ("owner", or the member it works for); a member is
+ * sent `mine` for their own agents and for another person's only `{ enabled, taken }`, so every other field may be missing.
+ */
+export type ProactiveBot = Partial<ProactiveBotSettings> & {
+  enabled: boolean;
+  person?: string;
+  mine?: boolean;
+  taken?: boolean;
+  /** The agent's routine's chat. */
+  chatId?: string;
+  lastSweepAt?: number;
+  pings?: number;
+  day?: string;
+  log?: ProactiveLog[];
+};
+export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 /** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
