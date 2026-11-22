@@ -7,7 +7,7 @@ A host serves many clients at once. Each client has its own credential. Pairing 
 ## Words
 
 - **Host**: the computer whose Botkins app holds the bots, chats and settings. It runs `LinkHost`.
-- **Client**: a paired device. Its `kind` is `"phone"` or `"desktop"`.
+- **Client**: a paired device. Its `kind` is `"phone"`, `"desktop"` or `"gadget"` (a small device that talks with a bot; see "Gadgets").
 - **Pairing**: the one step that makes a device a client. It is a full-trust step: a client can do what the person can do in the app on the host.
 
 ## Use the client library, do not write a second one
@@ -126,7 +126,8 @@ type PairedDevice = {
   name: string;          // the device ("iPhone 17 Pro")
   person?: string;       // who it belongs to ("Jordan"; device-person-v1). Absent until someone gives one
   platform: string;
-  kind: "phone" | "desktop";
+  kind: "phone" | "desktop" | "gadget";
+  gadget?: { board?: string; firmware?: string; botId?: string }; // a gadget's board and firmware, as it said them, and its bot (gadgets-v1)
   createdAt: number;     // when it was paired (ms)
   lastSeenAt: number;    // when it last made a call (ms; written at most once a minute)
   connected: boolean;    // heard from in the last 90 seconds
@@ -324,6 +325,15 @@ type AppUpdate = {
 - **The screen.** `link.screen.*` shows the host's screen. A desktop client may use it under the same rule as a phone (the host's person allows view or control).
 - **Secrets.** As for a phone: a client saves a credential or links a field, then sends `{ $credential: id }`. No call returns a secret.
 - **Which host is in use.** Show `meta.name` (the host's name) wherever the client shows data from a host, and let the person switch between "This Mac" and each paired host. Keep one `Pairing` and one `LinkClient` for each host.
+
+## Gadgets (`gadgets-v1`)
+
+A gadget is a small device with a microphone, a speaker and maybe a screen that talks with a bot. It is a client of kind `"gadget"`, and the owner's, like the owner's phone. Its whole contract, with the link's bytes for firmware that has no client library, is `gadget/docs/contract.md`. What a client of the other two kinds needs to know:
+
+- **A gadget is paired by introduction, with no code.** An owner device that read a gadget's public key (over a cable, or Bluetooth) calls `link.gadgets.add({ publicKey, name?, board?, botId? })` and hands the answer, `{ deviceId, serverId, serverKey, name, hosts }`, to the gadget. It is the owner's call only. The app on the host does the same with `link.addGadget(…)`.
+- **It is in the device list** with `kind: "gadget"`, `platform: "esp32"` and `gadget: { board?, firmware?, botId? }`. Rename and remove work as for any device. Show it as a gadget, not as a phone.
+- **Its chats are the owner's own chats.** A phone lists them, opens them and answers in them like any other.
+- **A gadget follows two parts, `meta` and `gadget`,** in place of the app's parts, and makes its own calls (`link.gadget.*`). Those are refused for a phone or a desktop ("Only a gadget can do that.").
 
 ## The relay
 

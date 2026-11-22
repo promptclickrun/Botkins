@@ -1297,11 +1297,43 @@ export type PushTarget = { token: string; env: "production" | "sandbox"; start?:
  * `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"), given when
  * it paired or set by the owner ("device-person-v1"). A device paired before has none.
  */
-export type PairedDevice = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean; current?: boolean };
+export type PairedDevice = {
+  id: string;
+  name: string;
+  person?: string;
+  platform: string;
+  kind: "phone" | "desktop" | "gadget";
+  /** A gadget's board and firmware, as it said them, and the bot it talks with ("gadgets-v1"). */
+  gadget?: { board?: string; firmware?: string; botId?: string };
+  createdAt: number;
+  lastSeenAt: number;
+  connected: boolean;
+  current?: boolean;
+};
+/**
+ * What a gadget is handed once a trusted device named it by its key ("gadgets-v1",
+ * "link.gadgets.add"): who the computer is and where to find it. With its own secret key that is
+ * a gadget's whole `Pairing`.
+ */
+export type GadgetIntroduction = { deviceId: string; serverId: string; serverKey: string; name: string; hosts: string[] };
+/** The part a gadget follows in place of the app's parts (gadget/docs/contract.md). */
+export type GadgetPart = {
+  name: string;
+  bot: { id: string; name: string; look?: BotkinLook } | null;
+  bots: { id: string; name: string }[];
+  chat: { id: string; title: string } | null;
+  phase: "idle" | "working" | "writing" | "request";
+  doing?: string;
+  request?: { id: string; kind: AgentRequest["kind"]; title: string; preview?: string; choices?: string[]; remember?: true; freeform?: true };
+  queued?: number;
+  /** The newest reply, as plain words. `parts` is how many pieces "link.gadget.speak" reads it in. */
+  reply?: { id: string; text: string; parts: number };
+  voice: { hear: boolean; speak: boolean; live?: LiveProvider };
+};
 export type PhoneRecord = {
   name: string;
   /** What the device is. Missing on an older computer, where every paired device is a phone. */
-  kind?: "phone" | "desktop";
+  kind?: "phone" | "desktop" | "gadget";
   platform?: string;
   /** The computer keeps this phone's presence key: it paired directly, with a build that has one ("screen-grant-v1"). */
   presence?: true;
@@ -1668,6 +1700,8 @@ export type Calls = {
   /** Sends a file to the computer for the next message. `data` is base64, at most about 3 MB a call; a larger file goes in parts with the same `id`. */
   /** The devices paired with the computer. Needs "devices-v1". */
   "link.devices.list"(): PairedDevice[];
+  /** Pairs a gadget by introduction ("gadgets-v1"): its public key (X25519, base64url) as it gave it over a cable or Bluetooth. */
+  "link.gadgets.add"(input: { publicKey: string; name?: string; board?: string; botId?: string }): GadgetIntroduction;
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
   /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */
