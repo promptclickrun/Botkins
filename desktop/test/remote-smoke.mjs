@@ -1,5 +1,5 @@
 // Using another computer's Botkins from the window, with two copies of the app on data folders of
-// their own: B pairs to A from Settings, the switcher and the line across the top, the host's own
+// their own: B pairs to A from Settings › Computers and teams, the switcher and the line across the top, the host's own
 // list of devices (type, rename), the host going away and coming back, and the host removing B.
 // No model turn is run and nothing leaves this computer. Run it after `npm run build`:
 //   node test/remote-smoke.mjs
@@ -59,22 +59,22 @@ try {
   await a.page.evaluate(() => window.botkins.createChat("pip"));
   await a.page.evaluate(() => window.botkins.saveSavedCredential({ name: "Fixture login", kind: "login", value: "fixture-vault-secret" }));
   const url = (await a.page.evaluate(() => window.botkins.startPhonePairing())).pairing.url;
-  // B: Settings › Phone › Other computers, paste the link, Pair.
-  await settingsPhone(b);
-  const dialog = b.page.getByRole("dialog");
-  const block = dialog.locator(".set-group", { hasText: "Other computers" });
-  await block.waitFor({ timeout: 30000 });
-  await block.scrollIntoViewIfNeeded();
-  await b.shot("1-b-settings-other-computers-empty.png");
+  // B: Settings › Computers and teams, Connect another computer, paste the link, Connect.
+  await b.page.getByRole("button", { name: "Settings", exact: true }).first().click();
+  await b.page.getByRole("tablist", { name: "Settings" }).getByRole("tab", { name: "Computers and teams", exact: true }).click();
+  const block = b.page.getByRole("dialog").locator("#set-pane");
+  await block.getByText("This computer", { exact: true }).waitFor({ timeout: 30000 });
+  await b.shot("1-b-settings-computers-empty.png");
+  await block.getByRole("button", { name: "Connect another computer", exact: true }).click();
   await block.getByLabel("Pairing link").fill(url);
-  await block.getByRole("button", { name: "Pair", exact: true }).click();
+  await block.getByRole("button", { name: "Connect", exact: true }).click();
   await block.getByText("Paired with", { exact: false }).waitFor({ timeout: 30000 });
-  await block.scrollIntoViewIfNeeded();
+  await block.getByRole("button", { name: "Use Studio Mac", exact: true }).waitFor();
   await b.shot("2-b-settings-paired.png");
   // A wrong code says so.
   await block.getByLabel("Address of the other computer").fill("127.0.0.1:" + PORT);
   await block.getByLabel("Pairing code").fill("WRONGCODE234");
-  await block.getByRole("button", { name: "Pair", exact: true }).click();
+  await block.getByRole("button", { name: "Connect", exact: true }).click();
   const refusal = await block.getByRole("alert").textContent({ timeout: 30000 });
   assert.match(refusal, /code/i, "a code that isn't right is refused in words");
   await b.page.keyboard.press("Escape");

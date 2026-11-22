@@ -488,7 +488,12 @@ export class RemoteHosts {
       return null;
     }
     const host = this.find(id);
-    if (this.current === host.id && this.client) return this.inUse();
+    if (this.current === host.id && this.client) {
+      // Choosing the computer in use again while it can't be reached is Try again: it is looked
+      // for at once, at every address, also one where a different computer answered before.
+      if (this.state !== "online") this.client.wake("network");
+      return this.inUse();
+    }
     this.stop();
     this.current = host.id;
     this.state = "connecting";

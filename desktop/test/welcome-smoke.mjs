@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
+import { setUpHere } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-welcome-"));
 const shots = process.env.WELCOME_SHOTS;
@@ -171,6 +172,8 @@ try {
   await start();
   await welcome().waitFor();
   await expect(page.getByRole("heading", { name: "Home", exact: true })).toHaveCount(0);
+  // The first question is how Botkins is used here: this smoke sets it up on this computer.
+  await setUpHere(page);
   await expect(button("Get started").or(page.getByRole("button", { name: /^Sign in /, disabled: false })).first()).toBeVisible({ timeout: 30000 });
 
   // 2. The three main choices: ChatGPT, Claude and GitHub Copilot, in that order and as equals,

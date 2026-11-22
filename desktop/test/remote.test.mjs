@@ -283,6 +283,25 @@ test("using a host shows its bots and chats, sends the window's calls there, and
   assert.deepEqual([b.remote.inUse(), b.remote.state, b.remote.snapshot().bots], [null, "idle", []]);
 });
 
+test("choosing the host in use again while it isn't online is Try again: the same link looks for it at once", async (t) => {
+  const a = await host(t);
+  const b = client(t);
+  const { id } = await b.remote.pair({ address: a.address, code: a.link.startPairing().code });
+  b.remote.use(id);
+  const link = b.remote.client;
+  let wakes = [];
+  const wake = link.wake.bind(link);
+  link.wake = (reason) => (wakes.push(reason), wake(reason));
+  assert.equal(b.remote.state, "connecting");
+  b.remote.use(id);
+  assert.deepEqual(wakes, ["network"], "not online yet: it is tried again, every address included");
+  assert.equal(b.remote.client, link, "with the same link, not a new one");
+  await until("the host to answer", () => b.remote.state === "online");
+  wakes = [];
+  b.remote.use(id);
+  assert.deepEqual(wakes, [], "online: nothing to try again");
+});
+
 test("the paired hosts and the one in use are remembered when the app is opened again", async (t) => {
   const a = await host(t);
   const sealed = { wrap: (text) => "sealed:" + Buffer.from(text).toString("base64"), unwrap: (data) => Buffer.from(String(data).replace(/^sealed:/, ""), "base64").toString() };
