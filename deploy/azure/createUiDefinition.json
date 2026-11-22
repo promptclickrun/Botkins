@@ -190,6 +190,7 @@
             "label": "SSH user name",
             "visible": "[steps('server').allowSsh]",
             "defaultValue": "azureuser",
+            "toolTip": "Any name except botkins, which is the account the Botkins service runs as.",
             "osPlatform": "Linux",
             "constraints": {
               "required": true

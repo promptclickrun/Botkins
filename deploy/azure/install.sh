@@ -24,7 +24,8 @@
 #   --screen on|off  turn Screen access on or off
 #   --update         also install the latest Botkins release and Node.js 24
 #   --ref <ref>      the branch or tag the sources are now at, to keep in the settings
-set -euo pipefail
+# -E: the ERR trap below also fires inside functions.
+set -Eeuo pipefail
 
 pair=1 screen_set= update=0 ref_set=
 while [ $# -gt 0 ]; do
@@ -83,6 +84,14 @@ export DEBIAN_FRONTEND=noninteractive
 # The Custom Script extension may run this without HOME. git and npm want one.
 export HOME=${HOME:-/root}
 apt() { apt-get -o DPkg::Lock::Timeout=600 -yq "$@"; }
+# On first boot, apt-daily can hold the package lists' lock, which the timeout above doesn't cover.
+apt_update() {
+  for i in $(seq 1 60); do
+    if apt-get -o DPkg::Lock::Timeout=600 update -q; then return 0; fi
+    sleep 10
+  done
+  fail "apt-get update kept failing"
+}
 ARCH=$(dpkg --print-architecture)
 
 # The Botkins service runs as a system user named botkins. An earlier deployment could name the
@@ -102,7 +111,7 @@ if [ -f /etc/botkins/botkins.env ]; then
 fi
 
 say "Installing packages"
-apt-get -o DPkg::Lock::Timeout=600 update -q
+apt_update
 apt install ca-certificates curl git gnupg python3
 
 # Node.js 24 for the relay and Claude Code. Botkins uses it too. It comes from nodejs.org and is
@@ -177,7 +186,7 @@ if ! command -v caddy >/dev/null; then
   say "Installing Caddy"
   curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" >/etc/apt/sources.list.d/caddy-stable.list
-  apt-get -o DPkg::Lock::Timeout=600 update -q
+  apt_update
   apt install caddy
 fi
 {
@@ -202,6 +211,9 @@ if ! command -v botkins >/dev/null || [ "$deployment" -eq 1 ] || [ "$update" -eq
   sh "$SRC/desktop/install/install.sh" --no-start
 fi
 say "Configuring Botkins"
+# Stopped, the command writes the settings itself, with the release just installed. A running older
+# release would check them instead, and it doesn't know the newer settings. The restart below starts it.
+systemctl stop botkins.service 2>/dev/null || true
 botkins config set name "$NAME"
 botkins config set link.announce false
 botkins config set relay.url "https://$FQDN"
@@ -209,7 +221,12 @@ botkins config set relay.enabled true
 # Phones reach this server only through this relay, so a phone may turn on Screen access through it.
 # A release older than this setting refuses it. Everything else still works, and
 # `botkins-server update` sets it once the release has it.
-botkins config set relay.own true || say "This Botkins release has no relay.own yet, so the phone can't turn the screen on through the relay. Later: botkins-server update"
+if ! out=$(botkins config set relay.own true 2>&1); then
+  case "$out" in
+    *"is not a setting"*) say "This Botkins release has no relay.own yet, so a phone can't turn the screen on through the relay. Later: botkins-server update" ;;
+    *) fail "botkins config set relay.own: $out" ;;
+  esac
+fi
 
 install -d -m 0755 /etc/systemd/system/botkins.service.d
 install -m 0644 "$SRC/deploy/azure/systemd/botkins.service.d/50-azure.conf" /etc/systemd/system/botkins.service.d/
