@@ -14,10 +14,17 @@ import { LinkClient, pair, parsePairingUrl } from "../desktop/remote/link-client
 import { seedBots } from "./starter.mjs";
 
 const binary = ["/usr/bin/chromium", "/usr/bin/google-chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find(existsSync);
+const linuxDisplay = process.platform !== "linux" || /^[\w.-]*:\d+(\.\d+)?$/.test(process.env.DISPLAY ?? "");
 
 for (const split of [false, true]) {
   const topology = split ? "separate vault and workspace processes" : "a terminal host";
-  const skip = !binary || (split && (process.platform !== "linux" || !existsSync("/usr/bin/xdotool")));
+  const skip = !binary
+    ? "Chromium or Google Chrome is not installed"
+    : !linuxDisplay
+      ? "The Linux screen browser needs an X11 DISPLAY"
+      : split && (process.platform !== "linux" || !existsSync("/usr/bin/xdotool"))
+        ? "The split screen-browser test needs Linux xdotool"
+        : false;
   test("a chat fills a saved login privately with " + topology, { skip, timeout: 30000 }, t => browserLogin(t, split));
 }
 
