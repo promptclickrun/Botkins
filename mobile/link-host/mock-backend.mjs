@@ -245,6 +245,8 @@ export function seed() {
     skills: { folders: [{ id: "folder-team", path: "/Users/demo/team-skills" }], plugins: [{ id: "plugin-review", path: "/Users/demo/.plugins/code-review" }], disabled: [] },
     wiki: { revision: 1 },
     providers: { revision: 1 },
+    // The Proactive agent: the computer's switch, and each bot's agent by bot id (the desktop's desktop/proactive.mjs).
+    proactive: { enabled: false, bots: {} },
     settings: {
       model: { model: "auto" },
       appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default", avatarAnimations: true },
@@ -263,7 +265,7 @@ export function seed() {
       teamwork: true,
       // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
       autoSummarize: 10,
-      proactive: { enabled: false, botId: null, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" },
+      proactive: { enabled: false },
       harness: "copilot",
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, grok: { enabled: false } },
     },
@@ -1194,7 +1196,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1996,11 +1998,13 @@ export class MockBackend {
         if (process.env.BOTKINS_DEV_STARTUP === "refuse" && next.runAtStartup !== settings.background.runAtStartup) throw new Error("This computer wouldn't change what starts with it.");
         rest.background = next;
       }
-      // The Proactive agent takes part of its setting, as the desktop's desktop/proactive-settings.mjs does.
+      // The Proactive agent's switch for the computer takes `enabled` only, as the desktop's desktop/proactive-settings.mjs does.
       if (rest.proactive) {
-        const next = { ...settings.proactive, ...rest.proactive };
-        if (next.enabled && !next.botId) throw new Error("Choose the bot that is the Proactive agent.");
-        rest.proactive = next;
+        const unknown = Object.keys(rest.proactive).find((key) => key !== "enabled");
+        if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown + ". A bot's own settings are changed on its profile.");
+        if (typeof (rest.proactive.enabled ?? settings.proactive.enabled) !== "boolean") throw new Error("Choose on or off");
+        rest.proactive = { enabled: rest.proactive.enabled ?? settings.proactive.enabled };
+        this.state.proactive.enabled = rest.proactive.enabled;
       }
       Object.assign(settings, rest);
       if (appearance) Object.assign(settings.appearance, appearance, appearance.colorTheme !== undefined && { themePicked: true }, appearance.font !== undefined && { fontPicked: true });
@@ -2075,6 +2079,28 @@ export class MockBackend {
       const bot = this.bot(id);
       if (skillsOff) bot.skillsOff = skillsOff;
       if (mcpOff) bot.mcpOff = mcpOff;
+    },
+    // A bot's Proactive agent, for the person who calls: the one who first sets it up is the one it works for (the desktop's desktop/proactive.mjs).
+    setBotProactive(id, patch) {
+      this.bot(id);
+      const person = this.caller.id;
+      const held = this.state.proactive.bots[id];
+      if (person !== "owner" && held && held.person !== person) throw new Error("This bot's Proactive agent is set up for someone else.");
+      if (patch === null) {
+        delete this.state.proactive.bots[id];
+        return null;
+      }
+      const usual = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" };
+      if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid Proactive agent setting");
+      const unknown = Object.keys(patch).find((key) => !Object.hasOwn(usual, key));
+      if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
+      const owner = (held?.person ?? person) === "owner";
+      // A member's agent never looks around the computer's own accounts, and tasks are the owner's.
+      const next = { ...(held ?? { ...usual, ...(!owner && { sweepHours: 0, watch: ["runs", "requests"] }) }), ...patch, person: held?.person ?? person };
+      if (!owner && next.sweepHours !== 0) throw new Error("Only the owner can turn on look-around: it reads the computer's own tools and accounts.");
+      if (!owner) next.watch = next.watch.filter((watch) => watch !== "tasks");
+      this.state.proactive.bots[id] = next;
+      return null;
     },
     botMemory(id) {
       return this.memory.get(id) ?? (id === "bot-mira" ? "- Prefers short lists\n- Launch is on the 24th\n- Weekly review happens on Fridays" : "");

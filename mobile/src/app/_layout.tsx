@@ -117,6 +117,7 @@ export default function RootLayout() {
               <Stack.Screen name="bot/[id]/memory" options={tall} />
               <Stack.Screen name="bot/[id]/voice" options={tall} />
               <Stack.Screen name="bot/[id]/capabilities" />
+              <Stack.Screen name="bot/[id]/proactive" />
               <Stack.Screen name="bot/access" />
               <Stack.Screen name="today" />
               <Stack.Screen name="today/new" options={half} />
