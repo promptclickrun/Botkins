@@ -248,7 +248,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
     // Pi-compatible harnesses for the ChatGPT and Claude plans, not model providers.
     pi,
-    new OmpProvider({ dataDir: join(dataDir, "omp"), bridge }),
+    new OmpProvider({ dataDir: join(dataDir, "omp"), bridge, packages: pi.packages }),
   ];
   // BOTKINS_PROVIDERS=copilot,claude keeps only those (in that list's order here), for tests
   // that must not depend on which tools this computer happens to have.

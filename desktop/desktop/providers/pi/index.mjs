@@ -549,8 +549,10 @@ export class PiProvider extends ModelProvider {
    * @param options.binary   For tests: the program to run.
    * @param options.env      For tests: what the program runs with instead of this computer's environment.
    * @param options.runtime  Internal: `pi` or `omp`.
+   * @param options.packages The Marketplace › Pi packages to load. Pi owns them; OMP is given Pi's, so
+   *                         a package turned on in the Marketplace reaches both harnesses.
    */
-  constructor({ dataDir, bridge, binary, env, runtime = PI_ID } = {}) {
+  constructor({ dataDir, bridge, binary, env, runtime = PI_ID, packages } = {}) {
     super();
     const program = RUNTIMES[runtime];
     if (!program) throw new Error("Unknown Pi-compatible harness " + runtime);
@@ -568,7 +570,7 @@ export class PiProvider extends ModelProvider {
     this.sessions = new SessionStore(dataDir && join(this.dataDir, "sessions.json"));
     // Botkins session id → { rpc, ref, key, file, session, timer }: one process per conversation.
     this.live = new Map();
-    this.packages = new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
+    this.packages = packages ?? new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
   }
   async installPackage(source, dir) {
     const file = await this.locate();
@@ -611,7 +613,9 @@ export class PiProvider extends ModelProvider {
   agentDir(spec) {
     return this.runtime === OMP_ID ? join(this.dataDir, "agents", hash(spec.sessionId).slice(0, 24)) : join(this.dataDir, "agent");
   }
+  /** Each active package is an extension path to both harnesses (a folder whose package.json lists `pi.extensions`). */
   launchArgs(live, spec, target, wanted, packages = []) {
+    const loadPackages = packages.flatMap((path) => ["-e", path]);
     if (this.runtime === OMP_ID) {
       return [
         "--mode", "rpc-ui",
@@ -624,6 +628,7 @@ export class PiProvider extends ModelProvider {
         "--no-extensions", "--no-skills", "--no-rules",
         "--config", live.config,
         "-e", this.program.extension,
+        ...loadPackages,
       ];
     }
     return [
@@ -634,7 +639,7 @@ export class PiProvider extends ModelProvider {
       // Nothing of the person's own Pi setup or of a project's .pi: Botkins supplies skills, tools and servers.
       "--no-approve", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
       "-e", "builtin:mcp", "-e", this.program.extension,
-      ...packages.flatMap((path) => ["-e", path]),
+      ...loadPackages,
     ];
   }
   /** The harness process for a session, started when it has none or when its startup inputs changed. */
@@ -642,7 +647,7 @@ export class PiProvider extends ModelProvider {
     const { spec } = session;
     const target = session.target();
     // Both harnesses take connections and package state at start; OMP also takes its isolated MCP config.
-    const packages = this.runtime === PI_ID ? this.packages.activePaths() : [];
+    const packages = this.packages.activePaths();
     const key = hash([spec.folder, described.providers, spec.temporary, packages, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
     let live = this.live.get(spec.sessionId);
     if (live && (live.key !== key || live.rpc.closed)) {
