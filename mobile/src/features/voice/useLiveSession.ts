@@ -22,7 +22,7 @@ import { endLiveCall } from "./liveCall";
 import { readLocation } from "./location";
 import { audioModule, duplexAudio, keepAwakeModule, webrtcModule } from "./native";
 import { loadPhoneVoice, usePhoneVoice } from "./prefs";
-import { botVoiceOf, UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "./state";
+import { botVoiceOf, UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported, voiceSettings } from "./state";
 import { effectiveLive } from "./botVoice";
 import { stopSpeech } from "./tts";
 
@@ -210,6 +210,7 @@ export function useLiveSession({ chatId, botId, computer }: { chatId: string; bo
               return session;
             },
             run,
+            voiceSettings()?.stt.language,
           );
           next.setInput(mode);
           attach(next);

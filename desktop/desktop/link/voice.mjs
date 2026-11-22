@@ -152,6 +152,52 @@ export function wavFromPcm(pcm, sampleRate = 24000) {
   return Buffer.concat([header, pcm]);
 }
 
+/** A recording shorter than this (ms) is a tap, not speech. */
+const MIN_CLIP_MS = 250;
+/** A recording whose loudest 20 ms stay under this level (RMS, 0 to 1 of full scale; about -40 dBFS) has no speech in it. */
+const SPEECH_RMS = 0.01;
+
+/**
+ * Whether a 16-bit PCM WAV recording can hold speech: false when it is shorter than a tap or never gets
+ * louder than a quiet room. Speech models answer silence with an invented word ("Qué"), so such a clip
+ * is not sent to one. A recording this can't read (another format or encoding) is true: the provider judges it.
+ */
+export function wavHasSpeech(wav) {
+  if (wav.length < 44 || wav.toString("latin1", 0, 4) !== "RIFF" || wav.toString("latin1", 8, 12) !== "WAVE") return true;
+  let rate = 0;
+  let channels = 0;
+  for (let at = 12; at + 8 <= wav.length; ) {
+    const id = wav.toString("latin1", at, at + 4);
+    const size = wav.readUInt32LE(at + 4);
+    const body = at + 8;
+    if (id === "fmt ") {
+      if (size < 16 || body + 16 > wav.length) return true;
+      channels = wav.readUInt16LE(body + 2);
+      rate = wav.readUInt32LE(body + 4);
+      if (wav.readUInt16LE(body) !== 1 || wav.readUInt16LE(body + 14) !== 16 || !channels || !rate) return true;
+    } else if (id === "data") {
+      if (!rate) return true;
+      // A file still being written, or streamed, says 0 or too much: the data is what is there.
+      const end = size && body + size <= wav.length ? body + size : wav.length;
+      const samples = Math.floor((end - body) / 2);
+      if ((samples / channels / rate) * 1000 < MIN_CLIP_MS) return false;
+      const window = Math.max(1, Math.round(rate * 0.02)) * channels;
+      for (let from = 0; from < samples; from += window) {
+        const to = Math.min(samples, from + window);
+        let sum = 0;
+        for (let i = from; i < to; i++) {
+          const value = wav.readInt16LE(body + i * 2) / 32768;
+          sum += value * value;
+        }
+        if (Math.sqrt(sum / (to - from)) >= SPEECH_RMS) return true;
+      }
+      return false;
+    }
+    at = body + size + (size & 1);
+  }
+  return true;
+}
+
 const xml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 /** A language as the OpenAI routes want it: "en-US" is "en" (the page only keeps regional codes for Chinese). */
 const iso = (language) => (/^zh-/i.test(language) ? language.toLowerCase() : language.split("-")[0].toLowerCase());
@@ -660,7 +706,7 @@ export class Voice {
 
   // ── Speech to text ──────────────────────────────────────────────────────────────────────────
 
-  /** audio: Buffer; format: wav, m4a, mp3 or webm. Returns { text }. */
+  /** audio: Buffer; format: wav, m4a, mp3 or webm. Returns { text }; a WAV with no speech in it is { text: "" } without asking the provider. */
   async transcribe({ audio, format, language } = {}) {
     const { provider, model, language: chosenLanguage } = this.data.stt;
     if (provider === "device") throw new Failure(DEVICE);
@@ -670,6 +716,7 @@ export class Voice {
     if (language != null && (typeof language !== "string" || !LANGUAGE.test(language))) throw new Failure("That language isn't valid.");
     const lang = language || chosenLanguage;
     const buffer = Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength);
+    if (format === "wav" && !wavHasSpeech(buffer)) return { text: "" };
     const file = () => new Blob([buffer], { type: FORMATS[format] });
     let result;
     if (provider === "local") {
@@ -1004,10 +1051,13 @@ export class Voice {
 
   /**
    * The OpenAI realtime session. Over WebRTC the audio formats are negotiated, so they are left out.
-   * What the person says is transcribed too, so the caller can show both sides of the talk.
+   * What the person says is transcribed too, so the caller can show both sides of the talk, in the language chosen for speech to text when there is one.
    */
   openaiSession({ model, voice, instructions, tools }, socket) {
-    const session = { type: "realtime", model, ...(instructions && { instructions }), output_modalities: ["audio"], audio: { input: { turn_detection: { type: "semantic_vad" }, transcription: { model: DEFAULTS.openai.stt } }, output: { voice } } };
+    // The chosen language is a hint, so a silent turn can't be heard as another language.
+    const { language } = this.data.stt;
+    const transcription = { model: DEFAULTS.openai.stt, ...(language && { language: language.split("-")[0].toLowerCase() }) };
+    const session = { type: "realtime", model, ...(instructions && { instructions }), output_modalities: ["audio"], audio: { input: { turn_detection: { type: "semantic_vad" }, transcription }, output: { voice } } };
     if (socket) {
       session.audio.input.format = { type: "audio/pcm", rate: 24000 };
       session.audio.output.format = { type: "audio/pcm", rate: 24000 };

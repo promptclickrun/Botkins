@@ -22,14 +22,18 @@ type Hooks = {
   session?(session: Record<string, unknown>): void;
 };
 
-/** Turns on the person's transcript, which is off unless the session asks for it. */
 export const TRANSCRIBE_MODEL = "gpt-transcribe";
-export function withTranscription(session: Record<string, unknown>): Record<string, unknown> {
+
+/** The transcript request: the model, and the person's language (primary subtag) so silence can't be read as another one. */
+export const transcription = (language?: string) => ({ model: TRANSCRIBE_MODEL, ...(language && { language: language.split("-")[0]!.toLowerCase() }) });
+
+/** Turns on the person's transcript, which is off unless the session asks for it. */
+export function withTranscription(session: Record<string, unknown>, language?: string): Record<string, unknown> {
   const inner = obj(session.session);
   const audio = obj(inner.audio);
   const input = obj(audio.input);
   if (input.transcription !== undefined) return session;
-  return { ...session, session: { ...inner, audio: { ...audio, input: { ...input, transcription: { model: TRANSCRIBE_MODEL } } } } };
+  return { ...session, session: { ...inner, audio: { ...audio, input: { ...input, transcription: transcription(language) } } } };
 }
 
 /**
@@ -284,6 +288,7 @@ export class OpenAISocketTransport extends LiveBase {
       this.sending = null;
     } else {
       this.turnMs = 0;
+      this.startTurn();
       if (this.responding || this.gate.botSounding()) this.interrupt();
       this.send({ type: "input_audio_buffer.clear" });
     }
@@ -299,7 +304,7 @@ export class OpenAISocketTransport extends LiveBase {
     this.sending = setTimeout(() => {
       this.sending = null;
       if (this.ended) return;
-      if (held < MIN_TURN_MS) {
+      if (held < MIN_TURN_MS || this.quietTurn) {
         this.send({ type: "input_audio_buffer.clear" });
         return;
       }

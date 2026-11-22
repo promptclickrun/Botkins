@@ -342,6 +342,30 @@ test("OpenAI transcription: route, bearer key, model, languages[] for gpt-transc
   assert.deepEqual(fields(net.last()), { file: "(file)", model: "whisper-1" });
 });
 
+/** `ms` of 16 kHz mono PCM16: a steady tone `loud` high (0 is silence). */
+const clip = (ms: number, loud: number) => {
+  const pcm = Buffer.alloc((16 * ms) * 2);
+  if (loud) for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(loud * Math.sin(i / 3)), i * 2);
+  return wavFromPcm(pcm, 16000);
+};
+
+test("transcription never asks the provider about a clip that is too short or has no speech in it", async () => {
+  // A silent clip is what makes a speech model invent a word ("Qué"), and a language to go with it.
+  const { voice, net } = make({ "POST api.openai.com/v1/audio/transcriptions": () => ({ text: "Qué" }) });
+  voice.setKey("openai", KEY);
+  voice.set({ stt: { provider: "openai" } });
+  assert.deepEqual(await voice.transcribe({ audio: clip(1000, 0), format: "wav" }), { text: "" }, "silence");
+  assert.deepEqual(await voice.transcribe({ audio: clip(1000, 100), format: "wav" }), { text: "" }, "room noise");
+  assert.deepEqual(await voice.transcribe({ audio: clip(100, 8000), format: "wav" }), { text: "" }, "a tap");
+  assert.equal(net.seen.length, 0);
+  assert.deepEqual(await voice.transcribe({ audio: clip(1000, 8000), format: "wav" }), { text: "Qué" }, "speech goes through");
+  assert.equal(net.seen.length, 1);
+  // A recording this module can't read (not a PCM WAV) is the provider's to judge.
+  await voice.transcribe({ audio: WAV, format: "wav" });
+  await voice.transcribe({ audio: MP3, format: "mp3" });
+  assert.equal(net.seen.length, 3);
+});
+
 test("Azure OpenAI transcription: deployment route, api-version, api-key header", async () => {
   const { voice, net } = make({ "POST contoso.openai.azure.com/openai/deployments/whisper%20one/audio/transcriptions": () => ({ text: "azure words" }), "POST contoso.openai.azure.com/openai/deployments/stt1/audio/transcriptions": () => ({ text: "azure words" }) });
   voice.set({ stt: { provider: "azure", language: "en-GB" }, providers: { azure: { kind: "openai", endpoint: "https://contoso.openai.azure.com/", sttDeployment: "stt1" } } });
@@ -878,6 +902,15 @@ test("live with OpenAI and the caller's offer: the computer posts it with the re
   const odd = make({ "POST api.openai.com/v1/realtime/calls": () => new Response("<html>") });
   odd.voice.setKey("openai", KEY);
   await assert.rejects(odd.voice.live({ provider: "openai", sdp: offer }), { message: "OpenAI sent back something unexpected." });
+});
+
+test("live with OpenAI: the chosen language is a hint to the person's transcript, so silence can't flip it", async () => {
+  const { voice, net } = make({ "POST api.openai.com/v1/realtime/calls": () => new Response("v=0\r\no=openai 2 2 IN IP4 0.0.0.0\r\n") });
+  voice.setKey("openai", KEY);
+  voice.set({ stt: { language: "en-US" } });
+  await voice.live({ provider: "openai", sdp: "v=0\r\n" });
+  const session = JSON.parse(String((net.last().body as FormData).get("session")));
+  assert.deepEqual(session.audio.input.transcription, { model: "gpt-transcribe", language: "en" });
 });
 
 test("live with OpenAI and no offer: a short-lived secret and the session.update to send first", async () => {

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { api } from "@/state/link";
 import { showToast } from "@/state/store";
+import { hasSpeech } from "./clip";
 import { audioModule, canRecognize, canRecord, fileSystemModule, recognitionModule } from "./native";
 import { nextPhrase } from "./speakable";
 import { stopSpeech } from "./tts";
@@ -158,6 +159,9 @@ async function startRecording(handlers: Handlers): Promise<Session | null> {
   let closed = false;
   let sending = false;
   const started = Date.now();
+  // The loudest level of the recording, so a clip with no speech in it is never sent to be read.
+  let peak = 0;
+  let metered = false;
   const meter = setInterval(() => {
     let status;
     try {
@@ -166,7 +170,12 @@ async function startRecording(handlers: Handlers): Promise<Session | null> {
       return;
     }
     // Metering is in decibels, about -60 (quiet) to 0 (loud).
-    if (typeof status.metering === "number") handlers.setLevel(Math.max(0, Math.min(1, (status.metering + 60) / 60)));
+    if (typeof status.metering === "number") {
+      const level = Math.max(0, Math.min(1, (status.metering + 60) / 60));
+      metered = true;
+      peak = Math.max(peak, level);
+      handlers.setLevel(level);
+    }
     // The limit stops the recorder by itself; then the recording is sent.
     if ((!status.isRecording && Date.now() - started > 1000) || Date.now() - started > (MAX_RECORDING + 1) * 1000) void send();
   }, 100);
@@ -198,6 +207,8 @@ async function startRecording(handlers: Handlers): Promise<Session | null> {
     const uri = await close();
     try {
       if (!uri) throw new Error("Nothing was recorded.");
+      // A tap, or a clip as quiet as the room: a speech model would make up a word for it. Without metering only the length is known.
+      if (!hasSpeech(Date.now() - started, metered ? peak : 1)) return;
       const data = await new fs.File(uri).base64();
       const language = voiceSettings()?.stt.language;
       const { text } = await api["link.voice.transcribe"]({ audio: data, format: Platform.OS === "ios" ? "wav" : "m4a", language: language || undefined });

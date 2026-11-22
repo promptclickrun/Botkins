@@ -20,8 +20,8 @@ export function planFor(provider: LiveProvider, kit: Pick<Kit, "webrtc" | "duple
   return kit.duplex ? "socket" : null;
 }
 
-export function webrtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner): WebRTCTransport {
-  return new WebRTCTransport(kit.webrtc!, negotiate, tools, kit.route);
+export function webrtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string): WebRTCTransport {
+  return new WebRTCTransport(kit.webrtc!, negotiate, tools, kit.route, language);
 }
 
 /** The socket transport for a session the computer set up without an offer. */
