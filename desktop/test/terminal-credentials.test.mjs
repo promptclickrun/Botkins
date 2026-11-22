@@ -408,19 +408,32 @@ test("a provider's tool is installed with the command it names: shown first, a y
   assert.match((await botkins(["providers", "install", "grok", "--yes"])).err, /can't be installed from Botkins\. Its guide: https:\/\/example\.com\/guide/);
   assert.match((await botkins(["providers", "install", "nobody", "--yes"])).err, /There is no model provider called nobody\./);
 
-  // Pi is a harness, not a model provider, and the window installs it the same way: it has its command here too.
+  // Program harnesses are not model providers, and the window installs them the same way.
   const fakePi = { id: "pi", name: "Pi", harness: true };
-  registry.harnesses.push(fakePi);
+  const fakeOmp = { id: "omp", name: "OMP", harness: true };
+  registry.harnesses.push(fakePi, fakeOmp);
   registry.byId.set("pi", fakePi);
+  registry.byId.set("omp", fakeOmp);
   t.after(() => {
     registry.harnesses.splice(registry.harnesses.indexOf(fakePi), 1);
+    registry.harnesses.splice(registry.harnesses.indexOf(fakeOmp), 1);
     registry.byId.delete("pi");
+    registry.byId.delete("omp");
   });
-  registry.status = async (id) => (id === "pi" ? { id, installed: false, connected: false, install: { url: "https://pi.dev", command: "printf 'pi'" } } : status.call(registry, id));
+  registry.status = async (id) =>
+    id === "pi"
+      ? { id, installed: false, connected: false, install: { url: "https://pi.dev", command: "printf 'pi'" } }
+      : id === "omp"
+        ? { id, installed: false, connected: false, install: { url: "https://omp.sh", command: "printf 'omp'" } }
+        : status.call(registry, id);
   const pi = await botkins(["providers", "install", "pi"]);
   assert.equal(pi.exit, 2, pi.err);
   assert.match(pi.err, /to install Pi:\n {2}printf 'pi'\nThe provider's guide: https:\/\/pi\.dev\n/);
   assert.equal((await client.call("providers.installPlan", "pi")).id, "pi");
+  const omp = await botkins(["providers", "install", "omp"]);
+  assert.equal(omp.exit, 2, omp.err);
+  assert.match(omp.err, /to install OMP:\n {2}printf 'omp'\nThe provider's guide: https:\/\/omp\.sh\n/);
+  assert.equal((await client.call("providers.installPlan", "omp")).id, "omp");
   registry.status = async (id) => (id !== "grok" ? status.call(registry, id) : existsSync(marker) ? { id, installed: true, version: "2.0.0", connected: false } : { id, installed: false, connected: false, install });
   // The command is the provider's own: a caller on the socket cannot name another, and must say which one it looked at.
   install = { command: "printf 'fine\\n'; touch " + JSON.stringify(marker) };

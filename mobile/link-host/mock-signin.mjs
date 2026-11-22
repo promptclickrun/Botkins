@@ -154,17 +154,19 @@ export class DemoSignIns {
     if (now.installed) throw new Error(provider.name + " is already installed.");
     if (!provider.install?.command) throw new Error(provider.name + " can't be installed from Botkins. Its guide: " + provider.install?.url);
     const session = this.open(provider.id, "install");
-    const pi = provider.id === "pi";
-    const version = pi ? "1.6.0" : "1.4.0";
-    const lines = pi
+    const harness = provider.id === "pi" || provider.id === "omp";
+    const version = provider.id === "omp" ? "19.1.0" : provider.id === "pi" ? "1.6.0" : "1.4.0";
+    const lines = provider.id === "pi"
       ? ["$ " + provider.install.command, "No terminal detected; continuing without confirmation.", "Installing @earendil-works/pi-coding-agent 1.6.0…", "Linked ~/.local/bin/pi"]
-      : ["$ " + provider.install.command, "Downloading " + provider.name + " CLI 1.4.0 for macOS (arm64)…", "Verifying checksum…", "Installed to ~/.local/bin/grok"];
+      : provider.id === "omp"
+        ? ["$ " + provider.install.command, "Fetching latest OMP release…", "Verifying checksum…", "Installed to ~/.local/bin/omp"]
+        : ["$ " + provider.install.command, "Downloading " + provider.name + " CLI 1.4.0 for macOS (arm64)…", "Verifying checksum…", "Installed to ~/.local/bin/grok"];
     this.run(session, async () => {
       for (const text of lines) {
         if (!(await this.pause(session, 700))) return;
         this.emit(session, { type: "output", text });
       }
-      this.set(provider.id, { installed: true, version, connected: pi });
+      this.set(provider.id, { installed: true, version, connected: harness });
       this.finish(session, { result: { installed: true, version } });
     });
     return { session: session.id };

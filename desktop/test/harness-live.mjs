@@ -4,6 +4,7 @@
 //   node test/harness-live.mjs            both plans, then the same Claude model on its own harness
 //   HARNESS_PLANS=codex node test/…       one plan
 //   HARNESS_PI=1 node test/…              also each plan with Pi as the harness (Pi installed here)
+//   HARNESS_OMP=1 node test/…             also each plan with OMP as the harness (OMP installed here)
 // Set BOTKINS_BINARY to test a packaged app. The data folder is the test's own.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -16,7 +17,8 @@ import { seedApp } from "./starter.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-harness-"));
 seedApp(dir);
 const withPi = process.env.HARNESS_PI === "1";
-const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,codex,claude" + (withPi ? ",pi" : "") };
+const withOmp = process.env.HARNESS_OMP === "1";
+const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot,codex,claude" + (withPi ? ",pi" : "") + (withOmp ? ",omp" : "") };
 delete env.ELECTRON_RUN_AS_NODE;
 const binary = process.env.BOTKINS_BINARY;
 const plans = (process.env.HARNESS_PLANS ?? "codex,claude").split(",");
@@ -92,6 +94,19 @@ try {
       assert.equal(result.ranOn, "pi", plan + ": Pi ran the turn");
       assert.match(result.reply, /harness (heron|finch)/i);
       console.log(plan + ": Pi ran a turn on " + result.asked + " with tools " + JSON.stringify(result.steps) + " and the reply was " + JSON.stringify(result.reply));
+    }
+  }
+  if (withOmp) {
+    // OMP as the harness: the same gateway/model contract as Pi, through OMP's RPC-UI adapter.
+    await page.evaluate(() => window.botkins.setPreferences({ harness: "omp" }));
+    for (const plan of plans) {
+      const mine = models.filter((m) => m.provider === plan && m.available);
+      const model = mine.find((m) => /haiku|mini|luna|nano/i.test(m.id + m.name)) ?? mine.find((m) => m.recommended) ?? mine[0];
+      const result = { asked: model.name + " (" + model.id + ")", ...(await turn(model, plan === "codex" ? "tern" : "swift")) };
+      assert.equal(result.status, "Completed", plan + " in OMP: " + JSON.stringify(result));
+      assert.equal(result.ranOn, "omp", plan + ": OMP ran the turn");
+      assert.match(result.reply, /harness (tern|swift)/i);
+      console.log(plan + ": OMP ran a turn on " + result.asked + " with tools " + JSON.stringify(result.steps) + " and the reply was " + JSON.stringify(result.reply));
     }
   }
   assert.deepEqual(errors, [], "no page errors");

@@ -1,6 +1,6 @@
 // The harness: what runs a bot's turn (the loop, the tools, the approvals) around the model.
 //
-// Settings › General offers two (settings.harness):
+// Settings › General offers four choices (settings.harness):
 //   "copilot"   One harness for every plan. The Copilot runtime runs the turn, and the model's own
 //               plan answers the model requests: GitHub Copilot's models as always, a ChatGPT plan
 //               and a Claude plan through the gateway (gateway.mjs). Skills, tools, MCP servers
@@ -11,6 +11,8 @@
 //   "pi"        Pi (pi.dev, desktop/providers/pi) runs the turns of ChatGPT and Claude plan
 //               models, and the plan answers through the same gateway. GitHub Copilot's models
 //               stay on the Copilot runtime, which their plan needs.
+//   "omp"       OMP (omp.sh), the enhanced Pi harness, runs the same plan models through the
+//               same gateway and Botkins safety layer.
 //
 // OpenCode and the ACP agents are whole agents, not model endpoints, so they always run
 // themselves, whichever is chosen.
@@ -19,7 +21,7 @@ import { Gateway } from "./gateway.mjs";
 import { chatgptSignIn } from "./chatgpt.mjs";
 import { friendlyModel } from "../modelnames.mjs";
 
-export const HARNESSES = ["copilot", "provider", "pi"];
+export const HARNESSES = ["copilot", "provider", "pi", "omp"];
 export const DEFAULT_HARNESS = "copilot";
 /** A saved choice made whole: anything unknown is the usual one. */
 export const harnessField = (value) => (HARNESSES.includes(value) ? value : DEFAULT_HARNESS);
@@ -28,6 +30,9 @@ export const harnessField = (value) => (HARNESSES.includes(value) ? value : DEFA
 export const HOST = "copilot";
 /** The harness provider Pi (desktop/providers/pi). */
 export const PI = "pi";
+/** The enhanced Pi harness OMP (desktop/providers/omp). */
+export const OMP = "omp";
+const PI_COMPATIBLE = new Set([PI, OMP]);
 /**
  * The plans the Copilot runtime can use for model requests, by the provider whose plan it is:
  * the name the runtime knows the connection by, and the format it speaks to the gateway.
@@ -101,7 +106,7 @@ export function piModel(model, compat) {
 export class Harness {
   /**
    * @param options.providers  The registry (desktop/providers/index.mjs).
-   * @param options.choice     () => "copilot" | "provider" | "pi", the person's setting.
+   * @param options.choice     () => "copilot" | "provider" | "pi" | "omp", the person's setting.
    * @param options.dir        The data folder, for Claude Code's working folder.
    * @param options.bridge     The local tool server, which lists the runtime's tools to Claude Code.
    * @param options.version    Botkins' version.
@@ -135,21 +140,25 @@ export class Harness {
   get pi() {
     return this.providers.byId.get(PI) ?? null;
   }
+  /** OMP, when this app has it. */
+  get omp() {
+    return this.providers.byId.get(OMP) ?? null;
+  }
   /**
    * Which harness runs a selection's turns when it isn't the model's own provider: "copilot" (the
-   * Copilot runtime), "pi", or null. Only a plan the gateway carries can be run by another.
+   * Copilot runtime), "pi", "omp", or null. Only a plan the gateway carries can be run by another.
    */
   via(selection) {
     const owner = this.providers.for(selection);
     if (!Object.hasOwn(PLANS, owner.id)) return null;
     const choice = harnessField(this.choice());
     if (choice === "copilot" && this.host && owner !== this.host) return HOST;
-    if (choice === "pi" && this.pi) return PI;
+    if (PI_COMPATIBLE.has(choice) && this.providers.byId.has(choice)) return choice;
     return null;
   }
   /** The provider that runs a selection's turns (`route` as via() says, when known). */
   runner(selection, route = this.via(selection)) {
-    return route === PI ? this.pi : route === HOST ? this.host : this.providers.for(selection);
+    return PI_COMPATIBLE.has(route) ? this.providers.byId.get(route) : route === HOST ? this.host : this.providers.for(selection);
   }
   /**
    * What the Copilot runtime is given to run a selection of another provider's plan:
@@ -171,8 +180,8 @@ export class Harness {
       if (id === owner.id && !list.some((model) => model.id === selection.model)) list.push({ id: selection.model, name: friendlyModel(selection.model), efforts: selection.reasoningEffort ? [selection.reasoningEffort] : [] });
       return list;
     };
-    if (route === PI) {
-      // Pi is given a connection for each plan that has models, with those models (extension.mjs).
+    if (PI_COMPATIBLE.has(route)) {
+      // Pi and OMP are given a connection for each plan that has models, with those models.
       const providers = Object.entries(PI_PLANS)
         .map(([id, each]) => ({ id, each, models: listed(id) }))
         .filter(({ models }) => models.length)

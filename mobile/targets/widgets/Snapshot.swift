@@ -241,5 +241,5 @@ enum LimitWords {
     usage.name ?? providerNames[usage.provider] ?? usage.provider
   }
 
-  static let providerNames = ["copilot": "Copilot", "codex": "ChatGPT", "claude": "Claude", "opencode": "OpenCode", "grok": "Grok", "kiro": "Kiro", "antigravity": "Antigravity", "fx": "fx", "cursor": "Cursor", "pi": "Pi"]
+  static let providerNames = ["copilot": "Copilot", "codex": "ChatGPT", "claude": "Claude", "opencode": "OpenCode", "grok": "Grok", "kiro": "Kiro", "antigravity": "Antigravity", "fx": "fx", "cursor": "Cursor", "pi": "Pi", "omp": "OMP"]
 }

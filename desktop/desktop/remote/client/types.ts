@@ -664,9 +664,10 @@ export type Preferences = {
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
-   * "provider": each provider's own tool (Codex for ChatGPT, Claude Code for Claude). Missing on an older computer.
+   * "provider": each provider's own tool (Codex for ChatGPT, Claude Code for Claude).
+   * "pi" and "omp" run the plan models through that program. Missing on an older computer.
    */
-  harness?: "copilot" | "provider";
+  harness?: "copilot" | "provider" | "pi" | "omp";
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
 };

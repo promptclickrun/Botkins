@@ -37,7 +37,7 @@ export type ModelInfo = {
   /** The provider's own price or speed class. */
   tier?: string;
 };
-/** A harness that is a program of its own (Pi), as harnesses() reports it. */
+/** A harness that is a program of its own (Pi or OMP), as harnesses() reports it. */
 export type HarnessStatus = {
   id: string;
   name: string;
@@ -851,10 +851,10 @@ export type Preferences = {
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
-   * "provider": each provider's own tool (Codex for ChatGPT, Claude Code for Claude). "pi": Pi for
-   * ChatGPT and Claude plans (harnesses() says whether it is installed). Missing on an older computer.
+   * "provider": each provider's own tool (Codex for ChatGPT, Claude Code for Claude). "pi" and "omp"
+   * run ChatGPT and Claude plans (harnesses() says whether each is installed). Missing on an older computer.
    */
-  harness?: "copilot" | "provider" | "pi";
+  harness?: "copilot" | "provider" | "pi" | "omp";
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
 };
@@ -1419,7 +1419,7 @@ export type Calls = {
   /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */
   setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
   providers(refresh?: boolean): ProviderStatus[];
-  /** The harnesses that are programs of their own (Pi): installed, version, and how to install. Unknown on an older computer. */
+  /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;

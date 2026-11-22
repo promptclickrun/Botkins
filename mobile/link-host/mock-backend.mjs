@@ -44,9 +44,10 @@ const PROVIDERS = [
   { id: "grok", name: "Grok", description: "Grok, through the Grok CLI.", default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://x.ai/cli", command: "curl -fsSL https://example.com/demo/grok-install.sh | bash" }, message: "Install the Grok CLI on your computer." },
 ];
 
-// The harnesses that are programs of their own (harnesses()): Pi, not on the demo computer until the phone installs it.
+// The harnesses that are programs of their own, absent until the phone installs them.
 const HARNESS_TOOLS = [
   { id: "pi", name: "Pi", description: "The Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" }, message: "Install Pi on your computer to use it as the harness." },
+  { id: "omp", name: "OMP", description: "OMP, the enhanced Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" }, message: "Install OMP on your computer to use it as the harness." },
 ];
 
 const SKILLS = [
@@ -1961,7 +1962,7 @@ export class MockBackend {
     appInfo: () => ({ version: this.updates?.current ?? "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};
-      if ("harness" in rest && !["copilot", "provider", "pi"].includes(rest.harness)) throw new Error("Choose a harness");
+      if ("harness" in rest && !["copilot", "provider", "pi", "omp"].includes(rest.harness)) throw new Error("Choose a harness");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       const settings = this.state.settings;

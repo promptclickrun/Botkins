@@ -60,7 +60,7 @@ export const WORKSPACE = {
   listFolders: cmd("folders"),
   // ── Model providers and models ──
   providers: cmd("providers list"),
-  harnesses: cmd("preferences harnesses"), // the programs that can run a turn (Pi) and which choice of the preference `harness` is set
+  harnesses: cmd("preferences harnesses"), // the programs that can run a turn (Pi and OMP) and which choice of the preference `harness` is set
   setProviderEnabled: cmd("providers enable"),
   providerServices: cmd("providers services"),
   ...each("providerSignInStart providerSignInRead providerSignInInput providerSignInCancel", cmd("providers login")),
