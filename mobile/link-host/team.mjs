@@ -215,6 +215,9 @@ const POLICY = {
   "composio.accounts": "owner",
   "composio.connect": "owner",
   "composio.removeAccount": "owner",
+  // A chat's Connect card uses the computer's own Composio account: its owner presses Connect.
+  "composio.cardOpen": "owner",
+  "composio.cardCheck": "owner",
   "link.sync": ["agents", "view"],
   "link.messages": ["agents", "chat"],
   "link.step": ["agents", "chat"],

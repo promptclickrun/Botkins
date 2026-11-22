@@ -460,6 +460,15 @@ export type PanelBlock =
   | { type: "line"; label: string; labels: string[]; series: { name: string; values: number[] }[] }
   | { type: "html"; frame: string; height: number };
 export type Card = { id: string; title: string; blocks: PanelBlock[]; replies: string[] };
+/**
+ * A bot asked the person to connect a Composio app (the computer's desktop/connects.mjs). The card
+ * holds only the app and where it stands; the page to sign in on goes to the owner who presses Connect.
+ * needed: not connected yet. waiting: a sign-in page is open. sign_in: the computer isn't signed in to
+ * Composio. unavailable: the chat's bot can no longer use Composio.
+ */
+export type ConnectStatus = "needed" | "waiting" | "connected" | "failed" | "expired" | "sign_in" | "unavailable";
+export type ConnectCard = { id: string; toolkit: string; name: string; logo?: string; status: ConnectStatus; note?: string; updatedAt: number; resumed?: boolean };
+export type ConnectCardState = { card: string; app: string; status: ConnectStatus; note?: string };
 export type RunSummary = {
   id: string;
   chatId: string;
@@ -481,6 +490,8 @@ export type Run = RunSummary & {
   steps?: Step[];
   cards?: Card[];
   apps?: { id: string; title: string; description: string; sendsAnswers: boolean }[];
+  /** Composio apps the bot asked the person to connect in this turn. */
+  connects?: ConnectCard[];
   options?: { label: string; prompt: string; description?: string }[];
   reasoning?: Reasoning[];
   todos?: Todo[];
@@ -1527,6 +1538,11 @@ export type Calls = {
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
   /** Refused with a sentence when the template is gone. */
   "agents.template"(id: string): MarketAgentTemplate;
+  // ---- A chat's Connect card (the computer's desktop/connects.mjs): the computer's own Composio account, so its owner only
+  /** Connect: starts or joins the app's sign-in. `url` is the page to open while it waits. */
+  "composio.cardOpen"(chatId: string, cardId: string): ConnectCardState & { url?: string };
+  /** Looks at the card again (back from the browser); the computer goes on with the chat once the app is connected. */
+  "composio.cardCheck"(chatId: string, cardId: string): ConnectCardState;
   // Spaces ("spaces-v1"; docs/spaces.md). The app's calls, then the link's own.
   "spaces.read"(id: string): SpaceContent;
   /** A new private space, pinned for its maker. Answers its id. */

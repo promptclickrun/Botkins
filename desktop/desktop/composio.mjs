@@ -77,7 +77,7 @@ function statusOf(value) {
   const status = typeof value === "string" ? value.toLowerCase() : "";
   if (status === "active") return "active";
   if (status === "initiated" || status === "initializing" || status === "pending") return "pending";
-  if (status === "failed" || status === "expired") return "failed";
+  if (status === "failed" || status === "expired" || status === "inactive" || status === "revoked") return "failed";
   return "other";
 }
 
@@ -96,26 +96,63 @@ function accountsOf(value) {
   return out;
 }
 
-/** The JSON a tool answered with: { successful, data, error }. */
-function payloadOf(result) {
-  const text = result?.content?.find?.((part) => part?.type === "text" && typeof part.text === "string")?.text;
-  let body;
-  try {
-    body = text ? JSON.parse(text) : result?.structuredContent;
-  } catch {
-    body = undefined;
+/**
+ * The JSON a tool answered with: { successful, data, error }. Valid structured output is read
+ * first; the JSON-in-text form Composio sends today when there is none.
+ */
+export function payloadOf(result) {
+  const structured = result?.structuredContent;
+  let body = structured && typeof structured === "object" && !Array.isArray(structured) ? structured : undefined;
+  if (!body) {
+    const text = result?.content?.find?.((part) => part?.type === "text" && typeof part.text === "string")?.text;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      body = undefined;
+    }
   }
   if (!body || typeof body !== "object") throw new ComposioError("Composio answered in a way the app doesn't know.");
   if (result.isError || body.successful === false) throw new ComposioError(typeof body.error === "string" && body.error.length < 160 ? body.error : "Composio couldn't do that.");
   return body.data && typeof body.data === "object" ? body.data : {};
 }
 
-/** One app's entry in data.results (an object by slug; an array is accepted too). */
-function resultFor(data, slug) {
-  const results = data.results;
-  if (Array.isArray(results)) return results.find((entry) => entry && (entry.toolkit === slug || entry.name === slug));
-  if (results && typeof results === "object") return results[slug];
-  return undefined;
+/** An https address, unchanged, or null. */
+export function httpsUrl(value) {
+  if (typeof value !== "string" || value.length > 4096) return null;
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * COMPOSIO_MANAGE_CONNECTIONS' `data.results`, by app slug. Each entry has the app's own status
+ * (`status`: "active", "pending" for initiated, "failed", "other", or null when the reply names
+ * none), the page to sign in on (`redirectUrl`, https only and unchanged), the account an attempt
+ * made (`accountId`), the accounts the reply listed and Composio's error. `results` may be an
+ * object by slug or an array of entries that name their toolkit; an entry that names no app is dropped.
+ */
+export function connectionResults(data) {
+  const results = data?.results;
+  const entries = Array.isArray(results) ? results.map((entry) => [entry?.toolkit ?? entry?.name, entry]) : results && typeof results === "object" ? Object.entries(results) : [];
+  const out = {};
+  for (const [key, entry] of entries) {
+    const slug = typeof key === "string" ? key.toLowerCase() : "";
+    if (!SLUG.test(slug) || !entry || typeof entry !== "object" || out[slug]) continue;
+    const accounts = accountsOf(entry.accounts);
+    const named = typeof entry.connected_account_id === "string" && entry.connected_account_id && entry.connected_account_id.length <= 200 ? entry.connected_account_id : undefined;
+    const accountId = named ?? accounts.find((account) => account.status === "pending")?.id;
+    const error = [entry.error_message, entry.error].find((text) => typeof text === "string" && text.trim());
+    out[slug] = {
+      status: entry.status === undefined || entry.status === null ? null : statusOf(entry.status),
+      redirectUrl: httpsUrl(entry.redirect_url ?? entry.redirectUrl),
+      ...(accountId && { accountId }),
+      accounts,
+      ...(error && { error: error.trim().slice(0, 160) }),
+    };
+  }
+  return out;
 }
 
 // ── Server-sent events ───────────────────────────────────────────────────────────────────────
@@ -383,21 +420,38 @@ export function createComposio(workspace, { now = Date.now, catalogUrl = CATALOG
       const out = {};
       for (let i = 0; i < valid.length; i += BATCH) {
         const batch = valid.slice(i, i + BATCH);
-        const data = await manage(batch.map((name) => ({ name, action: "list" })));
-        for (const slug of batch) out[slug] = accountsOf(resultFor(data, slug)?.accounts);
+        const results = connectionResults(await manage(batch.map((name) => ({ name, action: "list" }))));
+        for (const slug of batch) out[slug] = results[slug]?.accounts ?? [];
       }
       return out;
     },
 
-    /** Starts connecting an app: the page the person signs in on, and the account it will become. */
+    /**
+     * Where one app stands: its own status as Composio states it (null when the reply only
+     * listed accounts), and its accounts. A chat's Connect card decides with this (desktop/connects.mjs).
+     */
+    async connection(slug) {
+      if (typeof slug !== "string" || !SLUG.test(slug)) throw new ComposioError("That app can't be found.");
+      const entry = connectionResults(await manage([{ name: slug, action: "list" }]))[slug];
+      return { status: entry?.status ?? null, accounts: entry?.accounts ?? [] };
+    },
+
+    /**
+     * Starts connecting an app: the page the person signs in on, the account it will become
+     * (the one Composio names for this attempt, else the pending one it listed), and the app's
+     * status when Composio says it is already active or the attempt failed.
+     */
     async connect(slug) {
       if (typeof slug !== "string" || !SLUG.test(slug)) throw new ComposioError("That app can't be found.");
-      const data = await manage([{ name: slug, action: "add" }]);
-      const entry = resultFor(data, slug) ?? {};
-      const url = typeof entry.redirect_url === "string" ? entry.redirect_url : typeof entry.redirectUrl === "string" ? entry.redirectUrl : null;
-      const accounts = accountsOf(entry.accounts);
-      const pendingId = accounts.find((account) => account.status === "pending")?.id ?? (typeof entry.connected_account_id === "string" ? entry.connected_account_id : undefined);
-      return { redirectUrl: url && /^https:\/\//i.test(url) ? url : null, ...(pendingId && { pendingId }), accounts };
+      const entry = connectionResults(await manage([{ name: slug, action: "add" }]))[slug];
+      const pendingId = entry?.accountId;
+      return {
+        redirectUrl: entry?.redirectUrl ?? null,
+        ...(pendingId && { pendingId }),
+        accounts: entry?.accounts ?? [],
+        ...(entry?.status && { status: entry.status }),
+        ...(entry?.error && { error: entry.error }),
+      };
     },
 
     async removeAccount(slug, accountId) {
@@ -410,15 +464,25 @@ export function createComposio(workspace, { now = Date.now, catalogUrl = CATALOG
   };
 }
 
-/** The window's and the link's calls ("composio.*"). */
+/**
+ * The window's and the link's calls ("composio.*"). They share the workspace's client when it has
+ * one, so the chat's Connect cards and Marketplace › Apps use one Composio session.
+ */
 export function composioHandlers(workspace, options) {
-  const apps = createComposio(workspace, options);
+  const apps = workspace.composio ?? createComposio(workspace, options);
+  const cards = () => {
+    if (!workspace.connects) throw new ComposioError("This computer can't connect apps from a chat.");
+    return workspace.connects;
+  };
   const handlers = {
     "composio.catalog": (options) => apps.catalog(options),
     "composio.connected": () => apps.connected(),
     "composio.accounts": (slugs) => apps.accounts(slugs),
     "composio.connect": (slug) => apps.connect(slug),
     "composio.removeAccount": (slug, accountId) => apps.removeAccount(slug, accountId).then(() => undefined),
+    // A chat's Connect card (desktop/connects.mjs): start or join its sign-in, and look again.
+    "composio.cardOpen": (chatId, cardId) => cards().open(chatId, cardId),
+    "composio.cardCheck": (chatId, cardId) => cards().check(chatId, cardId),
   };
   for (const name of COMPOSIO_METHODS) if (!handlers[name]) throw new Error("composio.mjs has no handler for " + name + ".");
   return handlers;

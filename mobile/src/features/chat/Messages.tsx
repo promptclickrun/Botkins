@@ -18,6 +18,7 @@ import { useMessageLinks } from "@/features/artifacts/data";
 import type { MessagePart } from "@/features/artifacts/logic";
 import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
+import { ConnectCard } from "./ConnectCard";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { claimAt, useRevealed } from "./reveal";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
@@ -98,9 +99,12 @@ function Replies({ replies, onSend }: { replies: string[]; onSend: (text: string
 
 function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boolean; rich: boolean; onSend: (text: string) => void; onDraft?: (text: string) => void }) {
   const { colors } = useTheme();
+  // A Connect card is an action, not a picture: it shows with rich cards off too.
+  const connects = run.connects?.map((card) => <ConnectCard key={card.id} chatId={run.chatId} card={card} />);
   if (!rich)
     return (
       <>
+        {connects}
         {run.cards?.map((card) => (
           <View key={card.id} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <LayoutGrid size={14} color={colors.faint} strokeWidth={2.2} />
@@ -113,6 +117,7 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
     );
   return (
     <>
+      {connects}
       {run.cards?.map((card) => (
         <View key={card.id} style={{ gap: space.md }}>
           <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: space.lg, gap: space.md }}>

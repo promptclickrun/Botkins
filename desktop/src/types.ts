@@ -184,6 +184,8 @@ export type Run = {
   id: string;
   /** HTML apps the bot showed in this turn. */
   apps?: AppCard[];
+  /** Composio apps the bot asked the person to connect in this turn. */
+  connects?: ConnectCard[];
   chatId: string;
   title: string;
   time: number;
@@ -766,8 +768,12 @@ declare global {
       /** Each app's accounts, by slug (at most 50 apps). An app with none maps to []. */
       "composio.accounts"(slugs: string[]): Promise<Record<string, ComposioAccount[]>>;
       /** Starts connecting an app: the page to finish on (open it in the browser), and the account it will become. */
-      "composio.connect"(slug: string): Promise<{ redirectUrl: string | null; pendingId?: string; accounts: ComposioAccount[] }>;
+      "composio.connect"(slug: string): Promise<{ redirectUrl: string | null; pendingId?: string; accounts: ComposioAccount[]; status?: ComposioAccount["status"]; error?: string }>;
       "composio.removeAccount"(slug: string, accountId: string): Promise<void>;
+      /** Connect on a chat's card: starts or joins the app's sign-in. `url` is the page to open while it waits. */
+      "composio.cardOpen"(chatId: string, cardId: string): Promise<ConnectCardState & { url?: string }>;
+      /** Looks at a chat's card again (back from the browser), and goes on with the chat once it is connected. */
+      "composio.cardCheck"(chatId: string, cardId: string): Promise<ConnectCardState>;
       /** Native folder chooser for local plugin installs. Remote hosts do not expose this method. */
       pickPluginFolder?(): Promise<string | null>;
       /** Folder-browser fallback for a paired/remote host when no native chooser is available. */
@@ -1768,6 +1774,16 @@ export type ProjectChanges =
 
 /** An HTML app a bot showed in a turn, as its card in the chat. */
 export type AppCard = { id: string; title: string; description: string; sendsAnswers: boolean };
+
+/**
+ * A bot asked the person to connect a Composio app (desktop/connects.mjs). The card holds only the
+ * app and where it stands; the page to sign in on is given to the owner who presses Connect.
+ * needed: not connected yet. waiting: a sign-in page is open. sign_in: Botkins isn't signed in to
+ * Composio. unavailable: the chat's bot can no longer use Composio.
+ */
+export type ConnectStatus = "needed" | "waiting" | "connected" | "failed" | "expired" | "sign_in" | "unavailable";
+export type ConnectCard = { id: string; toolkit: string; name: string; logo?: string; status: ConnectStatus; note?: string; updatedAt: number; resumed?: boolean };
+export type ConnectCardState = { card: string; app: string; status: ConnectStatus; note?: string };
 
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";

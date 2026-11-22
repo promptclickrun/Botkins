@@ -51,6 +51,46 @@ async function waitForAccount(context, started, known) {
   return null;
 }
 
+const CARD_WORDS = { connected: "is connected. The chat goes on.", needed: "isn't connected yet.", failed: "wasn't connected.", expired: "wasn't connected: the page expired.", sign_in: "can't be connected until Composio is signed in.", unavailable: "can't be connected: this chat's bot can't use Composio." };
+
+/** `apps connect <app> --chat <chat>`: presses Connect on the chat's card, and with --wait follows it until it settles. */
+async function connectCard(context) {
+  const chat = context.options.chat;
+  const started = await context.client.call("apps.connect", context.args[0], { chat });
+  const name = safe(started.name);
+  if (!started.page || !context.options.wait) {
+    return void context.print(started, (view) => (view.page ? "Open this page to connect " + name + ":\n  " + safe(view.page) + "\n\n`botkins apps connect " + view.slug + " --chat " + view.chat + " --wait` waits for it." : name + " " + (CARD_WORDS[view.status] ?? "is waiting.") + (view.note ? " " + safe(view.note) : "")));
+  }
+  if (context.json) context.line({ slug: started.slug, name: started.name, chat: started.chat, card: started.card, page: started.page }, "");
+  else context.stdout.write("Open this page to connect " + name + ":\n  " + safe(started.page) + "\n\nWaiting for " + name + "…\n");
+  let stop = () => {};
+  const stopped = new Promise((resolve) => (stop = resolve));
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    stop();
+  };
+  process.once("SIGINT", cancel);
+  let view = started;
+  try {
+    const since = Date.now();
+    while (view.status === "waiting" && Date.now() - since < 10 * 60_000) {
+      await sleep(Date.now() - since < 120_000 ? 3000 : 10_000, stopped);
+      if (cancelled) break;
+      try {
+        view = await context.client.call("apps.card", started.slug, chat);
+      } catch (error) {
+        context.note(safe(error.message));
+      }
+    }
+  } finally {
+    process.off("SIGINT", cancel);
+  }
+  if (view.status !== "connected") throw new CliError(name + " " + (CARD_WORDS[view.status] ?? "wasn't connected.") + (view.note ? " " + safe(view.note) : ""), EXIT.failed, "NOT_CONNECTED");
+  if (context.json) context.line({ slug: view.slug, chat: view.chat, card: view.card, status: view.status }, "");
+  else context.stdout.write(name + " " + CARD_WORDS.connected + "\n");
+}
+
 const appsGroup = {
   summary: "The apps of your Composio account: list them, see their accounts, connect and remove one",
   commands: {
@@ -103,12 +143,16 @@ const appsGroup = {
     },
     connect: {
       summary: "Start connecting an app: print the page to sign in on",
-      usage: "botkins apps connect <app> [--wait]",
+      usage: "botkins apps connect <app> [--wait] [--chat <chat>]",
       arguments: [{ name: "app", required: true }],
-      options: { wait: { type: "boolean", about: "Wait until the new account is connected (ten minutes at most; Ctrl-C stops)" } },
-      details: SIGN_IN + "\n\nOpen the page in a browser, on any computer, and sign in to the app there. With --wait the command ends when the new account is connected, and an account that was never finished is taken away again.",
+      options: {
+        wait: { type: "boolean", about: "Wait until the new account is connected (ten minutes at most; Ctrl-C stops)" },
+        chat: { type: "string", value: "chat", about: "Press Connect on the card a bot showed in this chat (`botkins chat list` gives its id); the chat goes on once the app is connected" },
+      },
+      details: SIGN_IN + "\n\nOpen the page in a browser, on any computer, and sign in to the app there. With --wait the command ends when the new account is connected, and an account that was never finished is taken away again.\n\nWith --chat it is the chat's Connect card: the window, a phone and this command share one page, and the card shows how it stands.",
       async run(context) {
         if (context.args.length !== 1) throw usage("Give the app to connect (see `botkins apps list`).");
+        if (context.options.chat !== undefined) return connectCard(context);
         const before = context.options.wait ? Object.values(await context.client.call("apps.accounts", [context.args[0]]))[0]?.accounts ?? [] : [];
         const known = new Set(before.filter(isActive).map((account) => account.id));
         const started = await context.client.call("apps.connect", context.args[0]);

@@ -62,6 +62,8 @@ for (const name of [
   "composio.accounts",
   "composio.connect",
   "composio.removeAccount",
+  "composio.cardOpen",
+  "composio.cardCheck",
   // Spaces ("spaces-v1"): the app's calls, then the link's.
   "spaces.read",
   "spaces.create",
