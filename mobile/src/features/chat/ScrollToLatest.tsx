@@ -9,7 +9,8 @@ import { Glass, slopFor, Tap, useTheme } from "@/ui";
 
 const SIZE = 40;
 
-export function ScrollToLatest({ shown, onPress }: { shown: boolean; onPress: () => void }) {
+/** `bottom`: how far over the chat's bottom it floats, clear of the message box that floats there too. */
+export function ScrollToLatest({ shown, onPress, bottom = 10 }: { shown: boolean; onPress: () => void; bottom?: number }) {
   const { colors } = useTheme();
   const there = useSharedValue(shown ? 1 : 0);
   useEffect(() => {
@@ -17,7 +18,7 @@ export function ScrollToLatest({ shown, onPress }: { shown: boolean; onPress: ()
   }, [shown, there]);
   const style = useAnimatedStyle(() => ({ opacity: there.value, transform: [{ scale: 0.8 + there.value * 0.2 }] }));
   return (
-    <Animated.View pointerEvents={shown ? "box-none" : "none"} style={[{ position: "absolute", left: 0, right: 0, bottom: 10, alignItems: "center" }, style]} accessibilityElementsHidden={!shown} importantForAccessibility={shown ? "auto" : "no-hide-descendants"}>
+    <Animated.View pointerEvents={shown ? "box-none" : "none"} style={[{ position: "absolute", left: 0, right: 0, bottom, alignItems: "center" }, style]} accessibilityElementsHidden={!shown} importantForAccessibility={shown ? "auto" : "no-hide-descendants"}>
       <Tap onPress={onPress} disabled={!shown} sink={0.92} hitSlop={slopFor(SIZE)} accessibilityLabel="Scroll to latest message">
         {/* The glass only draws: the press belongs to the button around it (glass that takes touches itself keeps them). */}
         <View pointerEvents="none">

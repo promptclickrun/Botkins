@@ -1,12 +1,15 @@
 import { randomUUID } from "expo-crypto";
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
+import { HeaderHeightContext } from "expo-router/react-navigation";
+import { LinearGradient } from "expo-linear-gradient";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
+import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
 import { useStore } from "zustand";
+import { ScrollViewMarker } from "react-native-screens/experimental";
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
@@ -16,7 +19,7 @@ import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Chip, EmptyState, IconButton, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useShape, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
@@ -24,7 +27,7 @@ import { VoiceDock } from "../voice/VoiceDock";
 import { completions } from "./completion";
 import { createChatViewport, HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
-import { GroupFace, StatusMotion, workWidth } from "./bits";
+import { GroupFace, workWidth } from "./bits";
 import { arrived, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
@@ -35,6 +38,7 @@ import { drafts, keepDraft, useChatSplit } from "./split";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
+import { CAPSULE, StatusCapsule } from "./StatusCapsule";
 import { EndedNote, type MessageActions, MessageRow, UserBubble } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
 import { Aside } from "./Aside";
@@ -245,7 +249,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
   const row = item.kind === "message" ? (
     <MessageRow item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
   ) : item.kind === "work" ? (
-    <WorkPart chatId={chatId} item={item} />
+    <WorkPart chatId={chatId} bot={bot} item={item} />
   ) : item.kind === "text" ? (
     <TurnText item={item} />
   ) : item.kind === "screen" ? (
@@ -253,19 +257,19 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
   ) : item.kind === "ended" ? (
     <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
   ) : item.kind === "fold" ? (
-    <FoldRow chatId={chatId} bot={bot} group={group} bots={bots} item={item} hold={holdFold} />
+    <FoldRow chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} hold={holdFold} />
   ) : item.kind === "thought" ? (
     <View style={workWidth}>
-      <Aside kind="thinking" text={item.text} />
+      <Aside kind="thinking" text={item.text} bot={bot} />
     </View>
   ) : (
     <ActiveLiveLeaf chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
   );
-  return <StatusMotion.Provider value={inView}>{row}</StatusMotion.Provider>;
+  return row;
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
-function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, parked, setParked, sendText, draftText, messageActions, openPanel, emptyView }: RowProps & {
+function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, parked, setParked, sendText, draftText, messageActions, openPanel, emptyView, room}: RowProps & {
   view: ChatView;
   pending: (Message & { clientMessageId: string })[];
   runPart?: Run | null;
@@ -279,6 +283,11 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   parked: boolean;
   setParked: (parked: boolean) => void;
   emptyView?: ReactNode;
+  /**
+   * What floats over the list's ends: the see-through bar and banners at the top, the message box at
+   * the bottom. The rows scroll under them. `button`: where Scroll to latest floats, clear of the status capsule too.
+   */
+  room: { top: number; bottom: number; button: number };
 }) {
   const { colors } = useTheme();
   // The newest message is out of view: the button that goes back to it shows.
@@ -287,6 +296,12 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const [viewport] = useState(createChatViewport);
   // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
   const viewPosition = useRef(0.5);
+  // How far from the list's edge it sits: a reply shown from its beginning clears the bar and banners over the list (room.top).
+  const viewOffset = useRef(0);
+  const edges = useRef(room);
+  useEffect(() => {
+    edges.current = room;
+  });
   // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
   const scrolled = useRef(0);
   const listBox = useRef<ComponentRef<typeof View>>(null);
@@ -294,8 +309,9 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const measureList = () => listBox.current?.measureInWindow((_x, top, _w, height) => (frame.current = { top, height }));
   // The list is inverted: a larger offset shows older rows, so content moves down by as much.
   const holdFold = useCallback<FoldHold>(({ was, top, bottom }) => {
-    const box = frame.current;
-    if (!box.height || !Number.isFinite(was + top + bottom)) return;
+    const { top: over, bottom: under } = edges.current;
+    const box = { top: frame.current.top + over, height: frame.current.height - over - under };
+    if (box.height <= 0 || !Number.isFinite(was + top + bottom)) return;
     // Keep the line where it was tapped, as long as the fold's end stays in view; never push the line out of the top.
     let shift = was - top;
     shift = Math.min(shift, box.top + box.height - bottom);
@@ -366,6 +382,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
     const timer = setTimeout(() => {
       scrollTries.current = 0;
       viewPosition.current = 0.5;
+      viewOffset.current = 0;
       list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
       router.setParams({ at: undefined });
     }, 300);
@@ -403,65 +420,78 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
       setParked(true);
       scrollTries.current = 0;
       viewPosition.current = 1;
-      list.current?.scrollToIndex({ index, viewPosition: 1, animated: !still });
+      // Inverted: a negative offset moves the reply's top down, clear of what floats at the top.
+      viewOffset.current = -edges.current.top;
+      list.current?.scrollToIndex({ index, viewPosition: 1, viewOffset: viewOffset.current, animated: !still });
     }, SETTLE_MS);
     return () => clearTimeout(timer);
   }, [view, runPart, data, completionPosition, onShow, inFront, awayNow, chatId, still, list, setParked]);
 
+  // A turn under way: the status capsule floats over the message box.
+  const turnLive = streaming || !!underWay(runPart);
   if (emptyView) return emptyView;
   return (
     <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
-      <FlatList
-        ref={list}
-        inverted
-        viewabilityConfig={VIEWABILITY}
-        onViewableItemsChanged={viewport.onViewableItemsChanged}
-        // How far the newest message is out of view. While a reply is written and the person has
-        // scrolled up to read, the list stays where they are (maintainVisibleContentPosition
-        // below), and the button offers the way back.
-        onScroll={(event) => {
-          scrolled.current = event.nativeEvent.contentOffset.y;
-          const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
-          if (next !== away.current) {
-            away.current = next;
-            setAway(next);
-          }
-        }}
-        scrollEventThrottle={64}
-        // Back at the newest content by their own hand: the list follows it again.
-        onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
-        data={data}
-        keyExtractor={(item) => item.key}
-        renderItem={({ item }) => (
-          <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
-            draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport}
-            active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
-        )}
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: space.lg }}
-        ItemSeparatorComponent={Gap}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        showsVerticalScrollIndicator={false}
-        maintainVisibleContentPosition={parked ? { minIndexForVisible: 0 } : { minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
-        onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
-        // A message not drawn yet: go near it by the rows' average height, then to it.
-        onScrollToIndexFailed={(info) => {
-          list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-          if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, animated: !still }), 160);
-        }}
-        onEndReachedThreshold={0.6}
-        ListHeaderComponent={pending.length ? (
-          <View style={{ gap: space.xl, marginTop: data.length ? space.xl : 0 }}>
-            {pending.map(message => <UserBubble key={message.clientMessageId} id={message.clientMessageId}
-              message={message} index={-1} timestamps={timestamps} media={[]} />)}
-          </View>
-        ) : undefined}
-        ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
-        initialNumToRender={12}
-        windowSize={11}
-      />
+      <EdgeFree>
+        <FlatList
+          ref={list}
+          inverted
+          viewabilityConfig={VIEWABILITY}
+          onViewableItemsChanged={viewport.onViewableItemsChanged}
+          // How far the newest message is out of view. While a reply is written and the person has
+          // scrolled up to read, the list stays where they are (maintainVisibleContentPosition
+          // below), and the button offers the way back.
+          onScroll={(event) => {
+            scrolled.current = event.nativeEvent.contentOffset.y;
+            const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
+            if (next !== away.current) {
+              away.current = next;
+              setAway(next);
+            }
+          }}
+          scrollEventThrottle={64}
+          // Back at the newest content by their own hand: the list follows it again.
+          onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
+          data={data}
+          keyExtractor={(item) => item.key}
+          renderItem={({ item }) => (
+            <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
+              draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport}
+              active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
+          )}
+          style={{ flex: 1 }}
+          // Inverted: the content's top is the screen's bottom, under the message box.
+          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: space.lg + room.bottom, paddingBottom: space.lg + room.top }}
+          ItemSeparatorComponent={Gap}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          // The room for the bar and the message box is the content's own padding (room): the system
+          // adding the bar's height again would land at the wrong end of the inverted list.
+          contentInsetAdjustmentBehavior="never"
+          showsVerticalScrollIndicator={false}
+          maintainVisibleContentPosition={parked ? { minIndexForVisible: 0 } : { minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+          onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
+          // A message not drawn yet: go near it by the rows' average height, then to it.
+          onScrollToIndexFailed={(info) => {
+            list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+            if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, viewOffset: viewOffset.current, animated: !still }), 160);
+          }}
+          onEndReachedThreshold={0.6}
+          ListHeaderComponent={pending.length ? (
+            <View style={{ gap: space.xl, marginTop: data.length ? space.xl : 0 }}>
+              {pending.map(message => <UserBubble key={message.clientMessageId} id={message.clientMessageId}
+                message={message} index={-1} timestamps={timestamps} media={[]} />)}
+              {/* A message sent while the turn runs sits under its status line's room: it keeps clear of the capsule over the message box. */}
+              {turnLive && <View style={{ height: CAPSULE }} />}
+            </View>
+          ) : undefined}
+          ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
+          initialNumToRender={12}
+          windowSize={11}
+        />
+      </EdgeFree>
       <ScrollToLatest
+        bottom={room.button}
         shown={awayNow}
         onPress={() => {
           setParked(false);
@@ -765,6 +795,15 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
   const bottomInset = insets.bottom + (paneId ? shape.tabRoom : 0);
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
+  // T3 Code's open chat: on a phone with Liquid Glass the bar is see-through and the chat scrolls
+  // under it, behind a soft fade, and the message box floats over the chat on glass. The bar's
+  // height, the banners under it and the box are measured so the rows can rest clear of them.
+  const glassBar = !paneId && hasGlass();
+  const barHeight = useContext(HeaderHeightContext) ?? 0;
+  const [paneBar, setPaneBar] = useState(0);
+  const [banners, setBanners] = useState(0);
+  const [dock, setDock] = useState(0);
+  const topBar = glassBar ? barHeight : paneId ? paneBar : 0;
 
   if (leaving) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />;
   if (!chat)
@@ -784,7 +823,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   );
   const header = paneId ? (
     // Beside the list there is no navigation bar: the pane draws the same title and menu itself.
-    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }}>
+    // It floats over the chat as the see-through bar does, with no line under it.
+    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs }}>
       {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
       <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
         <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
@@ -796,6 +836,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       options={{
         headerTitle: () => <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={measured ? 206 : 150} docked={docked} />,
         headerRight: () => barEnd,
+        // See-through. The chat's list turns the system's edge effect off (EdgeFree), and the fade under the bar is drawn here (Fade).
+        ...(glassBar && { headerTransparent: true, headerStyle: { backgroundColor: "transparent" } }),
       }}
     />
   );
@@ -804,71 +846,86 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // second page, and the chat keeps to the first, clear of the fold.
   const project = projects?.find((item) => item.id === chat.projectId);
   const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
+  const room = { top: topBar + banners, bottom: dock, button: dock + (working ? CAPSULE + space.sm : 0) + space.sm };
   const column = (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      {header}
-      <RoutineBanner chat={chat} />
-      <View style={{ paddingHorizontal: space.lg }}>
-        <LinkBanner />
-      </View>
-      {!view && !pending.length ? (
-        <View style={{ flex: 1, justifyContent: "center" }}>
-          <Loading />
-        </View>
-      ) : (
-        <ChatTimelineList
-          chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
-          at={at} list={list} parked={parked} setParked={setParked} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
-          emptyView={empty && (
-            <View style={{ flex: 1 }}>
-              <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
-            </View>
-          )}
-        />
-      )}
-      {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
-      <View style={{ paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
-        {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
-        {canChat && requests.length > 0 && (
-          <View style={{ paddingHorizontal: space.md }}>
-            <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} count={requests.length} />
-          </View>
-        )}
-        {side && (
-          <View style={{ paddingHorizontal: space.md }}>
-            <SideAnswer side={side} onDismiss={() => setSide(null)} />
-          </View>
-        )}
-        {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={steerable} />}
-        {canChat ? (
-          <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
-            <TalkBar chatId={chatId} />
-            <VoiceDock chatId={chatId} />
-            {!docked && <Composer
-              chatId={chatId}
-              botId={chat.botId}
-              group={group}
-              members={chat.botIds}
-              bots={bots}
-              pinned={pinned}
-              onUnpin={unpin}
-              quote={quote}
-              onUnquote={() => setQuote("")}
-              value={text}
-              onChange={setText}
-              onSend={(options, mentions) => send(text, options, true, mentions)}
-              onStop={() => void attempt(api.stop(chatId))}
-              working={working}
-              placeholder={"Message " + (group ? chat.title || "the group" : (bot?.name ?? "your bot"))}
-              model={model}
-              inputRef={input}
-            />}
+      {!paneId && header}
+      {/* The chat fills this; the bar, the banners and the message box float over it. */}
+      <View style={{ flex: 1 }}>
+        {!view && !pending.length ? (
+          <View style={{ flex: 1, justifyContent: "center" }}>
+            <Loading />
           </View>
         ) : (
-          <T variant="footnote" color="muted" center style={{ paddingVertical: space.md }}>
-            You can view, not chat
-          </T>
+          <ChatTimelineList
+            chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
+            at={at} list={list} parked={parked} setParked={setParked} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
+            room={room}
+            emptyView={empty && (
+              <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
+                <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
+              </View>
+            )}
+          />
         )}
+        {topBar > 0 && <Fade edge="top" cover={topBar} />}
+        {paneId && header}
+        <View onLayout={(event) => setBanners(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: topBar, left: 0, right: 0 }}>
+          <RoutineBanner chat={chat} />
+          <View style={{ paddingHorizontal: space.lg }}>
+            <LinkBanner />
+          </View>
+        </View>
+        <Fade edge="bottom" cover={dock} />
+        {canChat && working && (
+          <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: dock + space.sm }}>
+            <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />
+          </View>
+        )}
+        {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
+        <View onLayout={(event) => setDock(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
+          {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
+          {canChat && requests.length > 0 && (
+            <View style={{ paddingHorizontal: space.md }}>
+              <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} count={requests.length} />
+            </View>
+          )}
+          {side && (
+            <View style={{ paddingHorizontal: space.md }}>
+              <SideAnswer side={side} onDismiss={() => setSide(null)} />
+            </View>
+          )}
+          {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={steerable} />}
+          {canChat ? (
+            <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
+              <TalkBar chatId={chatId} />
+              <VoiceDock chatId={chatId} />
+              {!docked && <Composer
+                chatId={chatId}
+                botId={chat.botId}
+                group={group}
+                members={chat.botIds}
+                bots={bots}
+                pinned={pinned}
+                onUnpin={unpin}
+                quote={quote}
+                onUnquote={() => setQuote("")}
+                value={text}
+                onChange={setText}
+                onSend={(options, mentions) => send(text, options, true, mentions)}
+                onStop={() => void attempt(api.stop(chatId))}
+                working={working}
+                placeholder={"Message " + (group ? chat.title || "the group" : (bot?.name ?? "your bot"))}
+                model={model}
+                inputRef={input}
+              />}
+            </View>
+          ) : (
+            <T variant="footnote" color="muted" center style={{ paddingVertical: space.md }}>
+              You can view, not chat
+            </T>
+          )}
+        </View>
       </View>
       <Animated.View style={spacer} />
     </View>
@@ -887,6 +944,42 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
 
 function Gap() {
   return <View style={{ height: space.xl }} />;
+}
+
+const NO_EDGES = { top: "hidden", bottom: "hidden", left: "hidden", right: "hidden" } as const;
+
+/**
+ * Turns iOS 26's scroll edge effect off for the list inside. Behind the see-through bar the system
+ * blurs the chat's content where it passes under the bar, but the list is inverted (flipped), so
+ * the blur covered all of the chat below the bar instead. The fade under the bar is drawn by the
+ * screen (Fade). The marker holds exactly one child, and it must be the list itself.
+ */
+function EdgeFree({ children }: { children: ReactNode & {} }) {
+  if (Platform.OS !== "ios") return children;
+  return (
+    <ScrollViewMarker style={{ flex: 1 }} scrollEdgeEffects={NO_EDGES}>
+      {children}
+    </ScrollViewMarker>
+  );
+}
+
+/**
+ * The page's color under what floats over the chat: the bar at the top, the message box at the
+ * bottom. It is solid under them (`cover`), so the rows never show through the title or the
+ * buttons, and fades out over a short soft edge beyond, so there is no hard line where the chat ends.
+ */
+const FADE_EDGE = 28;
+function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
+  const { colors } = useTheme();
+  if (cover <= 0) return null;
+  const top = edge === "top";
+  return (
+    <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height: cover + FADE_EDGE, ...(top ? { top: 0 } : { bottom: 0 }) }}>
+      {!top && <LinearGradient colors={[tint(colors.canvas, 0), colors.canvas]} style={{ height: FADE_EDGE }} />}
+      <View style={{ height: cover, backgroundColor: colors.canvas }} />
+      {top && <LinearGradient colors={[colors.canvas, tint(colors.canvas, 0)]} style={{ height: FADE_EDGE }} />}
+    </View>
+  );
 }
 
 /** In a conversation the current status supplies the motion; the Botkins keep their state poses. */

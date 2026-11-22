@@ -3,19 +3,29 @@ import {
   Activity,
   AppWindow,
   Ban,
+  Bot,
   Brain,
   Check,
   ChevronDown,
+  ChevronRight,
   Circle,
   CircleAlert,
+  Eye,
+  Globe,
   ListChecks,
   LoaderCircle,
+  Search,
+  SquarePen,
   Terminal,
   Users,
+  Wrench,
+  X,
 } from "lucide-react";
+import { toolKind } from "../desktop/tool-kind.mjs";
 import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
+import { RichText } from "./RichText";
 import { Block } from "./Today";
 import type { Run, Step, Subagent, Todo } from "./types";
 
@@ -181,51 +191,149 @@ export function StepList({ steps }: { steps: Step[] }) {
   );
 }
 
-/** Text the bot wrote while a turn was moving between tools. It is deliberately quieter than a
- * reply, while retaining its position in the transcript when the turn timeline capability is on. */
+/** Text the bot wrote while a turn was moving between tools. It reads like a reply (the same
+ * Markdown at the same size) in the second ink, with no box, label or mark, and keeps its place
+ * in the turn, apart from the bot's thinking. */
 export function InterimUpdate({ text, onToggle, display = "open" }: { text: string; onToggle?: () => void; display?: "open" | "folded" | "hidden" }) {
   const value = text.trim();
   if (!value || display === "hidden") return null;
   return (
-    <div className="assistant interim-update" onClick={onToggle}>
-      <span className="interim-mark" aria-hidden="true" />
-      <p>{display === "folded" ? newestWords(value, 320) : value}</p>
+    <article className="assistant interim-update" onClick={onToggle}>
+      <RichText text={display === "folded" ? newestWords(value, 320) : value} />
+    </article>
+  );
+}
+
+/** One thought in a turn's work: quiet muted text, no box. The live turn shows only its newest
+ * thought, in the lead row (`latestThought`); an opened fold or every-step mode shows each one. */
+export function ReasoningUpdate({ text, title = "Thinking", display = "open" }: { text: string; title?: string; display?: "open" | "folded" | "hidden" }) {
+  // A summary's heading and paragraphs read as lines, without blank lines between them.
+  const value = plain(text).trim().replace(/\n\s*\n/g, "\n");
+  if (!value || display === "hidden") return null;
+  return (
+    <p className={"work-thought" + (display === "folded" ? " folded" : "")} aria-label={title}>
+      {display === "folded" ? newestWords(value) : value}
+    </p>
+  );
+}
+
+/** The last line of the bot's thinking so far, for the live lead row. */
+export function latestThought(text = "") {
+  const line = plain(text).split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
+  return newestWords(line, 280);
+}
+
+/** The icon for each kind of work (tool-kind.mjs, which the work summaries use too). */
+const KIND_ICONS: Record<string, typeof Wrench> = {
+  command: Terminal,
+  read: Eye,
+  write: SquarePen,
+  edit: SquarePen,
+  "search-files": Search,
+  web: Globe,
+  "web-page": Globe,
+  helper: Bot,
+};
+
+/** The icon for what a step did: a server's tool, or a kind without its own icon, is a wrench. */
+function stepIcon(step: Step) {
+  if (step.source) return Wrench;
+  return KIND_ICONS[toolKind(step.name) ?? ""] ?? Wrench;
+}
+
+/** A turn's steps as bare rows: an icon for the kind, the label on one line. A running step is
+ * drawn in ink, a failed one with a faded danger icon and a small X. A row opens to its input
+ * and output. */
+export function WorkSteps({ steps }: { steps: Step[] }) {
+  if (!steps.length) return null;
+  return (
+    <ol className="work-steps">
+      {steps.map((s) => {
+        const Icon = stepIcon(s);
+        const failed = s.status === "Failed";
+        const running = s.status === "Running";
+        const label = (s.source ? s.source + " / " : "") + (s.label || s.name);
+        const detail = s.input || s.progress || s.output;
+        return (
+          <li key={s.id} className={"work-step" + (running ? " running" : "") + (failed ? " failed" : "")}>
+            <details>
+              <summary title={s.name + " · " + s.status}>
+                <span className="work-step-icon" aria-hidden="true"><Icon size={16} /></span>
+                <span className="work-step-label">{label}</span>
+                {failed && <X size={12} className="work-step-failed" aria-label="Failed" />}
+              </summary>
+              {detail && (
+                <div className="step-detail">
+                  {s.input && (
+                    <>
+                      <b>Input</b>
+                      <pre>{s.input}</pre>
+                    </>
+                  )}
+                  {s.progress && <p>{s.progress}</p>}
+                  {s.output && (
+                    <>
+                      <b>Output</b>
+                      <pre>{s.output}</pre>
+                    </>
+                  )}
+                </div>
+              )}
+            </details>
+            {running && (s.progress || s.output) && (
+              <code className="work-step-output">{(s.progress || s.output || "").trim().split("\n").at(-1)?.slice(-220)}</code>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** The top of a live turn: the bot's still face, what it is doing in ink, then its newest thought. */
+export function LiveLead({ avatar, label, thought }: { avatar: ReactNode; label: string; thought?: string }) {
+  return (
+    <div className="work-lead" role="status">
+      {avatar}
+      <p>
+        <b>{label}</b>
+        {thought && <> · {thought}</>}
+      </p>
     </div>
   );
 }
 
-/** One reasoning/update segment in a timeline. It intentionally does not repeat the whole run. */
-export function ReasoningUpdate({ text, title = "Thinking and updates", display = "open" }: { text: string; title?: string; display?: "open" | "folded" | "hidden" }) {
-  const value = text.trim();
-  if (!value || display === "hidden") return null;
-  const shown = display === "folded" ? newestWords(value) : value;
-  return (
-    <section className="reasoning timeline-reasoning" aria-label={title}>
-      <div className="reasoning-head"><Brain size={14} /><span>{title}</span></div>
-      <p className={"reasoning-text" + (display === "folded" ? " folded" : "")}>{shown}</p>
-    </section>
-  );
+/** "0:42" or "1:04:05", counting up once a second from `since`. Only this text re-renders. */
+function Elapsed({ since }: { since: number }) {
+  const s = Math.max(0, Math.floor((useNow(true) - since) / 1000));
+  const two = (n: number) => String(n).padStart(2, "0");
+  return <>{s >= 3600 ? Math.floor(s / 3600) + ":" + two(Math.floor(s / 60) % 60) : Math.floor(s / 60)}:{two(s % 60)}</>;
 }
 
-/** The fixed-height row under a reply. Opening it reveals the exact in-order timeline entries. */
+/**
+ * The row under a turn. Live, it is the status line: "Crumb is coding · 0:42 · 3 steps".
+ * Finished, it is the fold: the bot's still face, "Worked for 41s · 5 steps" and a chevron,
+ * opening to the turn's work in order, with Details for everything the chat settings hide.
+ */
 export function TimelineFold({
   line,
   live = false,
+  since,
   body,
   detailsBody,
   avatar,
-  intent,
   count,
   onDetails,
 }: {
   line: string;
   live?: boolean;
+  /** When the live turn started, for its clock. */
+  since?: number;
   body?: ReactNode;
   /** The complete work timeline, including content hidden by the chat preferences. */
   detailsBody?: ReactNode;
-  /** The Botkin's live face. The activity pulse remains the fallback for older callers. */
+  /** The bot's still face, at the start of the finished row. */
   avatar?: ReactNode;
-  intent?: string;
   count?: string;
   onDetails?: () => void;
 }) {
@@ -242,11 +350,13 @@ export function TimelineFold({
   return (
     <section className={"timeline-fold" + (live ? " live" : "")} aria-label={live ? "Turn status" : "Turn activity"}>
       <button className="timeline-fold-line" aria-expanded={live ? undefined : open} onClick={toggle}>
-        {live ? (avatar ?? <span className="activity-pulse" aria-hidden="true" />) : <Activity size={14} />}
-        {live && <span className="typing-dots" aria-label="Typing" aria-hidden="true"><i /><i /><i /></span>}
-        <span className={live ? "work-intent" : undefined}>{live ? (intent?.trim() || line) : line}</span>
-        {count && <span className="work-count">{count}</span>}
-        {!live && <small>{open ? "Hide work" : "Show work"}</small>}
+        {!live && avatar}
+        <span>
+          {line}
+          {live && since !== undefined && <> · <Elapsed since={since} /></>}
+          {count && " · " + count}
+        </span>
+        {!live && <ChevronRight size={14} className="fold-chevron" aria-hidden="true" />}
       </button>
       {open && !live && (
         <div className="timeline-fold-body">
@@ -283,7 +393,7 @@ export function ToolTrail({
   run: Run;
   fold: boolean;
   bot?: string;
-  /** The working bot's small avatar, acting out its state; shown in place of the spinner while live. */
+  /** The working bot's small still face, shown while live. */
   avatar?: ReactNode;
   onToggle?: () => void;
   /** The four Settings › Chat › Steps choices. `fold` remains for older callers. */
@@ -312,9 +422,8 @@ export function ToolTrail({
     return (
       <section className="tool-trail work-live" aria-label="Tool activity">
         <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
-          {avatar ?? <LoaderCircle size={15} className="spin" />}
+          {avatar ?? <Activity size={15} />}
           <strong>{bot}</strong>
-          <span className="typing-dots" aria-label="Typing" aria-hidden="true"><i /><i /><i /></span>
           <span className="work-intent">{intent?.trim() || "Working…"}</span>
           {count > 0 && <span className="work-count">{count + plural}</span>}
         </button>
