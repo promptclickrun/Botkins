@@ -1,0 +1,6 @@
+dependencies:
+  idf: ">=6.0"
+  # Both pinned to releases licensed Apache-2.0. esp_codec_dev from 1.5.11 on is under the
+  # "Espressif Modified MIT" licence (use with Espressif chips only); 1.5.10 is the last Apache-2.0 one.
+  espressif/esp_codec_dev: "==1.5.10"
+  espressif/esp_lcd_co5300: "==2.2.0"
