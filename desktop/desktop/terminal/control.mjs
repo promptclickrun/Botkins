@@ -9,6 +9,8 @@
 // reason that it has none (desktop/terminal/coverage.mjs).
 //
 // Every value is plain JSON: `--json` prints it as it is.
+import { introduce, serialLines } from "../link/gadget-setup.mjs";
+import { Failure } from "../link/tools.mjs";
 import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
@@ -300,6 +302,29 @@ export function controlApi(service) {
       const found = device(ref);
       phone.removePhone(found.id);
       return { removed: found.id, name: found.name };
+    },
+    /**
+     * Sets a gadget up over a USB port of this computer (gadget/docs/contract.md): reads its key,
+     * pairs it by introduction and hands it the Wi-Fi network. The password goes to the gadget and nowhere else.
+     */
+    async "gadgets.add"([{ port, name, bot: botRef, wifi } = {}] = []) {
+      if (!link.status().enabled) throw new ControlError("Phone access is off, so a gadget couldn't reach this computer. " + (service.inApp ? "Turn it on in the app's Settings, under Phone." : "Turn it on with `botkins config set link.enabled true`."), "LINK_OFF");
+      if (typeof link.addGadget !== "function") throw new ControlError("This version of Botkins has no gadgets yet.", "UNSUPPORTED");
+      const path = text(port, 200, "the gadget's serial port");
+      const botId = botRef === undefined ? undefined : bot(botRef).id;
+      if (wifi !== undefined && (typeof wifi?.ssid !== "string" || !wifi.ssid || wifi.ssid.length > 32 || typeof wifi.password !== "string" || wifi.password.length > 64)) throw new ControlError("Give the Wi-Fi network's name and its password.", "BAD_ARGUMENT");
+      let io;
+      try {
+        io = serialLines(path);
+        const done = await introduce({ io, add: (input) => link.addGadget(input), ...(wifi && { wifi }), ...(name !== undefined && { name: text(name, 60, "the gadget a name") }), ...(botId && { botId }) });
+        return { ...deviceView(device(done.deviceId)), board: done.board, firmware: done.firmware, mac: done.mac };
+      } catch (error) {
+        // The introducer's sentences are for a person (a cable, a password, a network); anything else is this computer's own trouble.
+        if (error instanceof ControlError) throw error;
+        throw new ControlError(error instanceof Failure ? error.message : "That didn't work on this computer.", "GADGET_SETUP");
+      } finally {
+        io?.close();
+      }
     },
 
     // ── Bots ─────────────────────────────────────────────────────────────────────────────────

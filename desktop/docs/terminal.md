@@ -610,6 +610,20 @@ botkins devices set-person <device> <person>
 botkins devices remove <device>
 ```
 
+### Add a gadget
+
+A gadget is a small device with a microphone and a speaker that talks with a bot. It is paired over its USB cable, with no code:
+
+```sh
+botkins gadgets add /dev/ttyACM0 --wifi "Home network"
+```
+
+The command asks for the network's password and does not show it. It reads the gadget's key, pairs it, hands it the network and waits until the gadget reaches this host over Wi-Fi. Leave `--wifi` out for a gadget that already has its network. `--name` gives it a name and `--bot` the bot it talks with first.
+
+- The gadget and the host must be on the same network. Phone access must be on (`botkins config set link.enabled true`).
+- A gadget is one of your own devices: a bot may do in its chats what it may do in any of yours. Whoever holds the gadget can talk to your bots until you unpair it with `botkins devices remove`.
+- `botkins devices list` shows a gadget with the kind `gadget`.
+
 ## Configure the host
 
 The settings of the host are in `config.json` in the data folder. The service checks the whole file before it uses it. A file with a mistake does not start the service, and `botkins doctor` names each mistake.

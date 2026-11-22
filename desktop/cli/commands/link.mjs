@@ -1,6 +1,6 @@
 // Phones and other devices: pairing, the paired devices, and the relay for away from home.
 import { ago, CliError, EXIT, table, usage } from "../output.mjs";
-import { confirm } from "./input.mjs";
+import { confirm, secret } from "./input.mjs";
 
 // The longest a pairing code may stay open: a day (desktop/terminal/control.mjs checks the same).
 const MAX_PAIR_MINUTES = 24 * 60;
@@ -82,6 +82,29 @@ export const link = {
           if (context.args.length !== 1) throw usage("Name the device (its name or id).");
           if (!(await confirm(context, "Unpair " + context.args[0] + "? It will have to pair again to use this host."))) return EXIT.failed;
           context.print(await context.client.call("devices.remove", context.args[0]), (gone) => "Unpaired " + gone.name + ".");
+        },
+      },
+    },
+  },
+  gadgets: {
+    summary: "Set up a gadget: a small device that talks with a bot",
+    details: "A gadget is paired over its USB cable, with no code. It then reaches this host over Wi-Fi, so both must be on the same network. A gadget is one of the owner's devices: `botkins devices list` shows it, and `botkins devices remove` unpairs it.",
+    commands: {
+      add: {
+        summary: "Set up the gadget on a USB port of this computer",
+        usage: "botkins gadgets add <serial port> [--name <name>] [--bot <bot>] [--wifi <network>]",
+        options: {
+          name: { type: "string", value: "name", about: "What to call the gadget (its board's name)" },
+          bot: { type: "string", value: "bot", about: "The bot it talks with first (the first bot)" },
+          wifi: { type: "string", value: "network", about: "The Wi-Fi network to give it. The password is asked for, hidden, or read from standard input" },
+        },
+        details: "The serial port is the gadget's USB port, such as /dev/cu.usbmodem101 on a Mac or /dev/ttyACM0 on Linux. Leave --wifi out for a gadget that already has its network. Pairing a gadget is a full-trust step, as pairing a phone is: whoever holds the gadget can talk to your bots until you remove it.",
+        async run(context) {
+          if (context.args.length !== 1) throw usage("Name the gadget's serial port.");
+          const o = context.options;
+          const wifi = o.wifi === undefined ? undefined : { ssid: o.wifi, password: await secret(context, "Password for " + o.wifi) };
+          const added = await context.client.call("gadgets.add", { port: context.args[0], ...(o.name !== undefined && { name: o.name }), ...(o.bot !== undefined && { bot: o.bot }), ...(wifi && { wifi }) });
+          context.print(added, (gadget) => gadget.name + " is set up and online (" + [gadget.board, gadget.firmware && "firmware " + gadget.firmware].filter(Boolean).join(", ") + ").");
         },
       },
     },
