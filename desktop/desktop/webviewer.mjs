@@ -69,22 +69,67 @@ export function guardViewerSession(session) {
 
 // This function runs in Chromium's isolated world in the guest's current main document.
 // The debugger passes values as structured arguments. The script source contains no secrets.
-function fillNamedInputs(url, fields, values) {
-  if (location.href !== url || document.visibilityState !== "visible") return false;
-  const inputs = [];
+function browserForm(action, url, fields, values, token) {
+  if (document.visibilityState !== "visible" || location.protocol !== "https:" || location.username || location.password) return false;
+  const address = location.origin + location.pathname;
+  if (action === "bind") {
+    if (address !== url) return false;
+    // This random mark lives only in this document's isolated world. Reloading even the
+    // exact same URL invalidates approval, as does switching tabs or starting a new browser.
+    globalThis.botkinsFormDocument ??= crypto.randomUUID();
+    return { url: location.href, token: globalThis.botkinsFormDocument };
+  }
+  if (action === "fill" && (location.href !== url || (token && globalThis.botkinsFormDocument !== token))) return false;
+
+  const inputs = new Map();
+  for (const input of document.querySelectorAll("input")) {
+    const key = input.name || input.id;
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) || key in Object.prototype || input.disabled || input.readOnly ||
+        !input.checkVisibility({ opacityProperty: true, visibilityProperty: true }) || !["text", "email", "password", "tel", "search", "number"].includes(input.type)) continue;
+    inputs.set(key, inputs.has(key) ? null : input);
+  }
+  if (action === "inspect") return { url: address, fields: [...inputs].filter(([, input]) => input).slice(0, 64).map(([key, input]) => ({ key, type: input.type })) };
+  const selected = [];
   for (const field of fields) {
     if (!Object.hasOwn(values, field.key)) continue;
-    const matches = [...document.getElementsByName(field.key)].filter(input => input instanceof HTMLInputElement &&
-      ["text", "email", "password", "tel", "search", "number"].includes(input.type) && input.checkVisibility() && !input.disabled && !input.readOnly);
-    if (matches.length !== 1) return false;
-    inputs.push([matches[0], values[field.key]]);
+    const input = inputs.get(field.key);
+    if (!input) return false;
+    selected.push([input, values[field.key]]);
   }
-  for (const [input, value] of inputs) input.value = value;
-  for (const [input] of inputs) {
+  for (const [input, value] of selected) input.value = value;
+  for (const [input] of selected) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
   return true;
+}
+
+/** Runs only our fixed function in the current main document, outside the website’s JS world. */
+export async function callInPage(send, fn, args, signal) {
+  const { frameTree } = await send("Page.getFrameTree");
+  const { executionContextId } = await send("Page.createIsolatedWorld", {
+    frameId: frameTree.frame.id, worldName: "Botkins secure input",
+  });
+  signal?.throwIfAborted();
+  const { result, exceptionDetails } = await send("Runtime.callFunctionOn", {
+    executionContextId, functionDeclaration: fn.toString(), returnByValue: true,
+    arguments: args.map(value => ({ value })),
+  });
+  if (exceptionDetails) throw new Error("The requested fields are unavailable.");
+  return result?.value;
+}
+
+export function inspectForm(send) {
+  return callInPage(send, browserForm, ["inspect"]);
+}
+
+export function bindForm(send, url) {
+  return callInPage(send, browserForm, ["bind", url]);
+}
+
+export async function fillPageFields(send, plan, values, signal) {
+  const filled = await callInPage(send, browserForm, ["fill", plan.document?.url ?? plan.url, plan.fields, values, plan.document?.token ?? null], signal);
+  if (filled !== true) throw new Error("The requested fields are unavailable.");
 }
 
 export async function fillSecurePage(guest, plan, values, signal) {
@@ -92,16 +137,7 @@ export async function fillSecurePage(guest, plan, values, signal) {
   if (guest.isDestroyed() || guest.getURL() !== plan.url || debuggerApi.isAttached()) throw new Error("Open the requested page.");
   debuggerApi.attach();
   try {
-    const { frameTree } = await debuggerApi.sendCommand("Page.getFrameTree");
-    const { executionContextId } = await debuggerApi.sendCommand("Page.createIsolatedWorld", {
-      frameId: frameTree.frame.id, worldName: "Botkins secure input",
-    });
-    signal.throwIfAborted();
-    const { result, exceptionDetails } = await debuggerApi.sendCommand("Runtime.callFunctionOn", {
-      executionContextId, functionDeclaration: fillNamedInputs.toString(), returnByValue: true,
-      arguments: [plan.url, plan.fields, values].map(value => ({ value })),
-    });
-    if (exceptionDetails || result?.value !== true) throw new Error("The requested fields are unavailable.");
+    await fillPageFields(debuggerApi.sendCommand.bind(debuggerApi), plan, values, signal);
   } finally {
     if (!guest.isDestroyed() && debuggerApi.isAttached()) debuggerApi.detach();
   }

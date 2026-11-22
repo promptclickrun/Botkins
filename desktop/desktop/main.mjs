@@ -17,7 +17,7 @@ import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
 import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
-import { FRAME_CSP } from "./frames.mjs";
+import { FRAME_CSP, guardedFramePage } from "./frames.mjs";
 import { guardedPage, unshadow } from "./view-guard.mjs";
 import { adoptFolder, APP_NAME, dataHome, env } from "./home.mjs";
 import { canvasColor } from "./preferences.mjs";
@@ -296,7 +296,7 @@ else
     });
     // Html blocks of panels and cards load from botkins-app://frame-<id>/ into sandboxed frames
     // in the app's window (desktop/frames.mjs), with rules of their own.
-    session.defaultSession.protocol.handle(APP_SCHEME, (request) => {
+    session.defaultSession.protocol.handle(APP_SCHEME, async (request) => {
       const url = new URL(request.url);
       if (url.hostname.startsWith("media-")) return artifactMedia.response(request);
       // An MCP App's view, with the policy made from what its server declared (desktop/mcp-apps.mjs).
@@ -315,7 +315,14 @@ else
       const id = /^frame-([0-9a-f-]{36})$/.exec(url.hostname)?.[1];
       try {
         if (!id || (url.pathname !== "/" && url.pathname !== "/index.html")) throw new Error("Not found");
-        return new Response(workspace.frames.page(id), {
+        const client = remote.client;
+        let html;
+        if (remote.inUse()) {
+          const page = await remote.call("link.frame.page", [id]);
+          if (remote.client !== client) throw new Error("The paired computer changed.");
+          html = guardedFramePage(page.html, page.data);
+        } else html = workspace.frames.page(id);
+        return new Response(html, {
           headers: {
             "content-type": "text/html; charset=utf-8",
             "content-security-policy": FRAME_CSP,

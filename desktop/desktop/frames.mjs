@@ -155,6 +155,11 @@ export function frameFields({ html, data }) {
   return { html, json };
 }
 
+/** Applies the desktop sandbox bridge to a local or paired host’s raw panel page. */
+export function guardedFramePage(html, data) {
+  return guardedPage(framePage(unshadow(html), data));
+}
+
 export class Frames {
   constructor(ws) {
     this.ws = ws;
@@ -196,7 +201,7 @@ export class Frames {
   /** The page the frame loads, bridge included. */
   /** The page as the window's frame loads it: the guard first, then the bridge, then what the bot wrote. */
   page(id) {
-    return guardedPage(framePage(unshadow(this.html(id)), this.data(id)));
+    return guardedFramePage(this.html(id), this.data(id));
   }
   remove(ids) {
     const gone = new Set(ids);

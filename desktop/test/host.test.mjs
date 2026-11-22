@@ -3,6 +3,7 @@
 // through the host they were given.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -10,6 +11,7 @@ import { checkHost, HOST_MEMBERS, HostUnavailable, missingMembers, unavailable }
 import { DESKTOP_ONLY, headlessHost } from "../desktop/host/headless.mjs";
 import { Failure } from "../desktop/link/tools.mjs";
 import { createRuntime } from "../desktop/runtime.mjs";
+import { desktopUpdates } from "../desktop/mac-update.mjs";
 import { LinkClient, pair } from "../desktop/remote/link-client.mjs";
 import { fakeHost } from "./fake-host.mjs";
 
@@ -38,6 +40,22 @@ test("a host that leaves a member out is named for it", () => {
   assert.deepEqual(missingMembers(broken).sort(), ["dialogs.save", "pdf", "version"]);
   assert.throws(() => checkHost(broken), /This host is missing: .*dialogs\.save/);
   assert.deepEqual(missingMembers({}), Object.keys(HOST_MEMBERS));
+});
+
+test("the Mac's automatic update choice survives a workspace restart", async t => {
+  const host = fakeHost();
+  host.updates = options => desktopUpdates({ ...options, mac: true, app: { getVersion: () => host.version }, native: new EventEmitter() });
+  const options = { host, dataDir: tempDir(t), trial: true, link: { port: 0, announce: false } };
+  const first = await createRuntime(options);
+  try {
+    assert.equal(first.handlers.appUpdateStatus().auto, false);
+    assert.equal(first.handlers.setAppUpdateAuto(true).auto, true);
+  } finally { await first.stop(); }
+  const reopened = await createRuntime(options);
+  try {
+    assert.equal(reopened.handlers.appUpdateStatus().auto, true);
+    assert.equal(reopened.handlers.setAppUpdateAuto(false).auto, false);
+  } finally { await reopened.stop(); }
 });
 
 test("what a host can't do is one sentence, and one of the link's own failures", () => {

@@ -8,7 +8,7 @@ const ttl = 5 * 60_000;
 const operations = {
   https_form: "POST these fields as a form to",
   bearer_get: "Send this value as an Authorization bearer token in a GET request to",
-  page_fill: "Fill the named inputs on the open side-pane page at",
+  page_fill: "Fill the named inputs on the open browser page at",
   git_read: "Check read access to this Git repository using its HTTPS refs endpoint and a bearer token at",
 };
 const text = { type: "string" };
@@ -97,7 +97,8 @@ export async function performSecureUse(plan, values, adapters = {}) {
 export class SecureInputs {
   #grants = new Map();
   #inFlight = new Map();
-  constructor(ws, use) {
+  constructor(ws, use, { formBrowser, savedLogins, pageUnavailable } = {}) {
+    Object.assign(this, { formBrowser, savedLogins, pageUnavailable });
     this.ws = ws;
     this.use = use ?? performSecureUse;
   }
@@ -114,13 +115,30 @@ export class SecureInputs {
     const active = () => {
       if (task.stopped || task.ended || this.ws.closing || this.ws.active.get(chat.id) !== task) throw new Error("This turn has ended.");
     };
+    const privateChat = () => {
+      if (this.ws.accessForTurn(chat, task).member) return false;
+      if (!this.ws.peopleOf) return true;
+      // The split workspace relies on the link host for invites. An expired team snapshot
+      // cannot establish that an owner chat is private.
+      try { return this.ws.peopleOf(chat.id)?.invited?.length === 0; } catch { return false; }
+    };
+    const checkPrivate = () => {
+      active();
+      if (!privateChat()) throw new Error("Use a private owner chat for this operation.");
+    };
     const request = defineTool("request_secure_input", {
-      description: "Ask privately for labeled values for one specific operation and HTTPS destination. page_fill matches visible inputs by their HTML name. https_form posts keyed fields. bearer_get and git_read take one bearer token. You receive one-time handles. Never request secrets in chat.",
+      description: "Ask the person to pick a saved credential from the Botkins vault or enter a private value for this HTTPS destination. For page_fill, use the visible HTML input names from browser_form on a screen host, or open the desktop chat’s side_pane_web viewer. https_form posts keyed fields. bearer_get and git_read take one bearer token. You receive one-time handles. Never request secrets in chat.",
       parameters: { type: "object", additionalProperties: false, required: ["title", "operation", "url", "fields"],
         properties: { title: text, operation: { type: "string", enum: Object.keys(operations) }, url: text, fields: { type: "array", minItems: 1, maxItems: 8, items: fieldSchema } } },
       handler: async args => {
         active();
         const plan = describe(args);
+        if (plan.operation === "page_fill" && this.pageUnavailable) throw new Error(this.pageUnavailable);
+        if (plan.operation === "page_fill" && this.formBrowser) {
+          checkPrivate();
+          plan.document = await this.formBrowser.bind(chat.id, plan.url);
+          checkPrivate();
+        }
         const answer = await this.ws.interactions.request(chat, task, { kind: "secure", title: plan.title, fields: plan.fields,
           botId: bot.id, detail: operations[plan.operation] + " " + plan.url + "\n" + plan.fields.map(f => f.label + " → " + f.key).join("\n") }, ttl);
         if (answer.action !== "accept") return JSON.stringify({ cancelled: true, message: "Request closed. Use an updated Botkins window or phone to answer a new secure request." });
@@ -136,14 +154,21 @@ export class SecureInputs {
       },
     });
     const use = defineTool("use_secure_input", {
-      description: "Apply all handles from one secure request to the exact operation the person approved. Returns completion only.",
-      parameters: { type: "object", additionalProperties: false, required: ["handles"], properties: { handles: { type: "array", items: text, minItems: 1, maxItems: 8 } } },
+      description: "Pass the handles object from request_secure_input unchanged to apply the operation the person approved. Returns completion only.",
+      parameters: { type: "object", additionalProperties: false, required: ["handles"], properties: { handles: { anyOf: [
+        { type: "object", additionalProperties: text, minProperties: 1, maxProperties: 8 },
+        { type: "array", items: text, minItems: 1, maxItems: 8 },
+      ] } } },
       handler: async ({ handles }) => {
         active();
-        const grant = Array.isArray(handles) && this.#grants.get(handles[0]);
+        const list = Array.isArray(handles);
+        const ids = handles && typeof handles === "object" ? Object.values(handles) : [];
+        const grant = this.#grants.get(ids[0]);
         if (!grant || grant.task !== task || grant.botId !== bot.id || grant.expires <= Date.now() ||
-            handles.length !== Object.keys(grant.handles).length || new Set(handles).size !== handles.length ||
-            !handles.every(h => this.#grants.get(h) === grant)) throw new Error("These handles are incomplete, expired or unavailable for this turn.");
+            ids.length !== Object.keys(grant.handles).length ||
+            !Object.entries(grant.handles).every(([key, id]) => list ? ids.includes(id) : Object.hasOwn(handles, key) && handles[key] === id))
+          throw new Error("These handles are incomplete, expired or unavailable for this turn.");
+        if (grant.plan.document && !privateChat()) throw new Error("Open the screen browser in a private owner chat.");
         this.#forget(grant); // Reserve before awaiting. An ambiguous network failure must never replay a submission.
         const controller = new AbortController();
         this.#inFlight.set(controller, chat.id);
@@ -157,6 +182,37 @@ export class SecureInputs {
         }
       },
     });
-    return [request, use];
+    const tools = [request, use];
+    if ((this.formBrowser || this.savedLogins) && privateChat()) {
+      if (this.formBrowser) tools.push(defineTool("browser_form", {
+        description: "Open an HTTPS sign-in page in this chat’s browser on the host screen, inspect visible field names, or close it. For passwords and saved vault items use request_secure_input with page_fill, then use_secure_input. No field values are returned.",
+        parameters: { type: "object", required: ["action"], additionalProperties: false, properties: { action: { type: "string", enum: ["open", "inspect", "close"] }, url: text } },
+        skipPermission: false,
+        handler: async ({ action, url }) => {
+          checkPrivate();
+          if (action === "open" || action === "inspect") {
+            const page = action === "open" ? await this.formBrowser.open(chat.id, url) : await this.formBrowser.inspect(chat.id);
+            checkPrivate();
+            return JSON.stringify(page);
+          }
+          if (action !== "close") throw new Error("Choose open, inspect or close.");
+          await this.formBrowser.close(chat.id);
+          return JSON.stringify({ closed: true });
+        },
+      }));
+      if (this.savedLogins) tools.push(defineTool("find_saved_credentials", {
+        description: "Find Botkins vault entry names saved for an HTTPS site. Only names and kinds are returned. A person picks the credential in request_secure_input before use.",
+        parameters: { type: "object", required: ["url"], additionalProperties: false, properties: { url: text } },
+        handler: async ({ url }) => {
+          checkPrivate();
+          const origin = new URL(url);
+          if (origin.protocol !== "https:" || origin.username || origin.password) throw new Error("Give the HTTPS site address.");
+          const entries = await this.savedLogins(chat.id, origin.origin);
+          checkPrivate();
+          return JSON.stringify(entries.map(({ name, kind }) => ({ name, kind })));
+        },
+      }));
+    }
+    return tools;
   }
 }

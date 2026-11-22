@@ -21,9 +21,11 @@ test("a secure answer reaches only its approved operation and leaves a label-onl
     response = JSON.parse(await session.tool("request_secure_input", form));
     assert.deepEqual(Object.keys(response.handles), ["username", "password"]);
     await assert.rejects(async () => session.tool("use_secure_input", { handles: Object.values(response.handles).slice(0, 1) }));
-    const args = { handles: Object.values(response.handles) };
-    used = await session.tool("use_secure_input", args);
-    await assert.rejects(async () => session.tool("use_secure_input", args));
+    const { username, password } = response.handles;
+    for (const handles of [{ username }, { username: password, password: username }, [username, username]])
+      await assert.rejects(async () => session.tool("use_secure_input", { handles }));
+    used = await session.tool("use_secure_input", response);
+    await assert.rejects(async () => session.tool("use_secure_input", { handles: [username, password] }));
     checked = true;
     return { data: { content: "Signed in." } };
   });
@@ -164,4 +166,38 @@ test("a paired client can answer a single-field request with a vault reference",
   await use.handler({ handles: Object.values(result.handles) });
   assert.equal(received, true);
   for (const output of [result, updates, logs, ws.snapshot()]) assert.ok(!JSON.stringify(output).includes(canary));
+});
+
+test("a private interactive chat discovers site-matched vault labels and screen forms through the harness tool bridge", async t => {
+  const { ToolBridge } = await import("../desktop/providers/toolbridge.mjs");
+  const bridge = new ToolBridge();
+  t.after(() => bridge.stop());
+  const dir = mkdtempSync(join(tmpdir(), "botkins-vault-tools-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ws = new Workspace(dir, fakeClient().client, () => {}, {
+    savedLogins: (chatId, origin) => {
+      assert.equal(chatId, chat.id);
+      assert.equal(origin, "https://example.org");
+      return [{ name: "Example login", kind: "login" }];
+    },
+    formBrowser: { inspect: async () => ({ url: form.url, fields: [] }) },
+  });
+  const chat = ws.chat(ws.createChat("pip")), task = {}, run = { id: "r" };
+  ws.active.set(chat.id, task);
+  const tools = () => ws.sessionTools(ws.bot("pip"), chat, run, task);
+  const endpoint = await bridge.open(tools());
+  const rpc = async (method, params) => (await (await fetch(endpoint.url, {
+    method: "POST", headers: { ...endpoint.headers, "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  })).json()).result;
+  const names = (await rpc("tools/list")).tools.map(tool => tool.name);
+  for (const name of ["browser_form", "find_saved_credentials", "request_secure_input", "use_secure_input"]) assert.ok(names.includes(name), name);
+  const call = async (name, args) => JSON.parse((await rpc("tools/call", { name, arguments: args })).content[0].text);
+  assert.deepEqual(await call("find_saved_credentials", { url: form.url }), [{ name: "Example login", kind: "login" }]);
+  assert.deepEqual(await call("browser_form", { action: "inspect" }), { url: form.url, fields: [] });
+  ws.peopleOf = () => ({ invited: ["member"] });
+  assert.ok(!tools().some(tool => tool.name === "find_saved_credentials"));
+  assert.equal((await rpc("tools/call", { name: "find_saved_credentials", arguments: { url: form.url } })).isError, true);
+  ws.peopleOf = () => undefined; // The split workspace has lost contact with the host that knows the invites.
+  assert.ok(!tools().some(tool => tool.name === "browser_form"));
 });

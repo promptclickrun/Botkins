@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { desktopUpdates } from "../desktop/mac-update.mjs";
 import { AppUpdates, latestRelease, updateTools } from "../desktop/updates.mjs";
 import { installLinuxTarball, isLinuxTarballExecutable, linuxUnitAvailable } from "../desktop/linux-update.mjs";
 import { performUpdate } from "../desktop/linux-service/botkins-update-helper.mjs";
@@ -300,4 +301,44 @@ test("agent update tools use the active person's turn and wait for its reply", a
   task.stopped = true;
   await assert.rejects(install.handler({}), /turn has ended/);
   assert.deepEqual(updateTools(updates, {}, { scheduleId: 0 }, task), []);
+});
+
+test("an opted-in packaged Mac stages the public release it checked and hands it to Squirrel when idle", async () => {
+  let on = false, idle = false;
+  const restarted = Promise.withResolvers();
+  const feeds = [];
+  const driver = Object.assign(new EventEmitter(), {
+    setFeedURL: feed => feeds.push(feed),
+    checkForUpdates: async () => ({ isUpdateAvailable: true, updateInfo: { version: "1.2.0" } }),
+    downloadUpdate: async () => {},
+    quitAndInstall: () => restarted.resolve(),
+  });
+  const updates = desktopUpdates({
+    mac: true, app: { getVersion: () => "1.0.0" }, native: new EventEmitter(),
+    auto: { get: () => on, set: value => { on = value; } }, idle: () => idle, autoPollMs: 5,
+    latest: async () => ({ version: "1.2.0", assets: ["latest-mac.yml", "Botkins-1.2.0-universal-mac.zip"] }),
+    getDriver: async () => driver,
+  });
+  assert.equal(updates.status().auto, false);
+  assert.equal(updates.setAuto(true).auto, true);
+  assert.equal((await updates.check()).status, "available");
+  assert.deepEqual(feeds, []);
+  idle = true;
+  const deadline = setTimeout(() => restarted.reject(new Error("Mac did not restart")), 1500);
+  try { await restarted.promise; } finally { clearTimeout(deadline); }
+  assert.deepEqual(feeds, [{ provider: "generic", url: "https://github.com/promptclickrun/Botkins/releases/download/v1.2.0/" }]);
+});
+
+test("a Mac running on a read-only volume explains how to install its update", async () => {
+  const driver = Object.assign(new EventEmitter(), {
+    setFeedURL() {},
+    checkForUpdates: async () => ({ isUpdateAvailable: true, updateInfo: { version: "1.2.0" } }),
+    downloadUpdate: async () => { throw Object.assign(new Error("read-only volume"), { code: "EROFS" }); },
+  });
+  const updates = desktopUpdates({ mac: true, app: { getVersion: () => "1.0.0" }, native: new EventEmitter(),
+    latest: async () => ({ version: "1.2.0", assets: ["latest-mac.yml", "Botkins-1.2.0-universal-mac.zip"] }),
+    getDriver: async () => driver,
+  });
+  await assert.rejects(updates.install(), /Applications/);
+  assert.equal(updates.status().status, "error");
 });

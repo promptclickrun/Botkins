@@ -63,6 +63,7 @@ const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max
 const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effort : null);
 /** A conversation lets go of its Pi after this long unused; the next turn starts it again on the same session. */
 const IDLE_MS = 15 * 60 * 1000;
+const TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_LIVE = 8;
 /** Pi's session ids: letters, digits, `.`, `_` and `-`, starting and ending with a letter or digit. */
 const piSessionId = (id) => (/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/.test(id) ? id : uuidFor(id));
@@ -298,7 +299,8 @@ class PiSession extends ProviderSession {
     }
     if (this.bridge) {
       const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
-      if (entry) servers[BRIDGE] = entry;
+      // Pi defaults to 60 seconds per MCP call. A person has five minutes to answer a secure prompt.
+      if (entry) servers[BRIDGE] = this.provider.runtime === PI_ID ? { ...entry, timeout: TURN_TIMEOUT_MS / 1000 } : entry;
     }
     return {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
@@ -324,7 +326,7 @@ class PiSession extends ProviderSession {
     if (!spec.temporary && !known) provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
     return this.live;
   }
-  async send(message, timeoutMs = 600000) {
+  async send(message, timeoutMs = TURN_TIMEOUT_MS) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;

@@ -13,12 +13,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkHost, unavailable } from "./index.mjs";
+import { ScreenBrowser } from "./form-browser.mjs";
 import { x11Screen } from "./x11screen.mjs";
 
 /** What stays desktop-only, by the name `botkins doctor` and the docs give it. */
 export const DESKTOP_ONLY = [
   "Viewing and controlling the screen, unless the service is given an X11 display (DISPLAY)",
-  "The app's window: side panes, html apps in their own window, the website viewer and typing a saved credential into a page",
+  "The app's window: side panes, html apps in their own window, the side-pane website viewer (Linux with X11 can fill a form in Chromium on its screen)",
   "File and folder dialogs, opening a file or a link on the computer, and the clipboard",
   "Desktop notifications (a paired phone is still notified)",
   "Dictation and live voice in the app's own window (a phone's voice still works)",
@@ -58,6 +59,7 @@ export function headlessHost({ version, packaged = false, keys = async () => nul
     fetch,
     notifications: null,
     images: null,
+    ...(x11 && { formBrowser: new ScreenBrowser({ env }) }),
     screen: x11 ?? {
       displays: refuseLater("Viewing the screen"),
       capture: refuseLater("Viewing the screen"),

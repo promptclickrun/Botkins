@@ -167,7 +167,7 @@ export class Workspace {
     this.notify = notify;
     // "turn" fires with {chat, run} when a reply finishes; "request" fires with an approval or question view.
     this.events = new EventEmitter();
-    this.secureInputs = new SecureInputs(this, options?.secureUse);
+    this.secureInputs = new SecureInputs(this, options?.secureUse, options);
     this.interactions = new Interactions(this);
     this.active = new Map();
     this.locks = new Map();
@@ -1042,7 +1042,7 @@ export class Workspace {
       (chat.helper ? "" : "\nUse today_* for persistent dashboard panels and today_routine for recurring updates. Confirm actions after the tool succeeds." + clarificationMessage(this.state.settings)) +
       (interactive
         ? "\nChoose the simplest useful presentation. Use render_card for inline charts, tables or interactive HTML blocks; show_app for a self-contained HTML app launched from chat. Use side_pane_show (rich_ui or table) for content to keep beside the conversation, and side_pane_web for a website." +
-          "\nUse request_secure_input for passwords, tokens and sign-in fields. Apply the returned handles with use_secure_input. Never ask for a secret in chat or a custom form." +
+          "\nUse the Botkins vault for passwords, tokens and sign-in fields. When offered, find_saved_credentials finds names saved for a site. The person selects the saved value in request_secure_input. For browser forms use browser_form if offered, otherwise the desktop chat’s side_pane_web viewer. Apply the one-time handles with use_secure_input. Never ask for a secret in chat, read a password field back, or send a credential through shell commands or the clipboard." +
           (this.connects.serverFor(bot, chat) ? "\nWhen a Composio app needs connecting or authorization, call request_app_connection with its toolkit slug instead of sharing a connection link." : "") +
           "\nWrite reusable deliverables, including complete HTML files, to the workspace. Link their absolute paths in chat; use MEDIA: for images, audio or video. Files appear in Artifacts." +
           '\nWhen operating the computer, open side_pane_show with kind "screen" so the person can follow on a paired phone if they allow viewing. Screen access is their choice.' +

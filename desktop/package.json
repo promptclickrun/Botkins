@@ -66,8 +66,7 @@
     "publish": {
       "provider": "github",
       "owner": "promptclickrun",
-      "repo": "Botkins",
-      "private": true
+      "repo": "Botkins"
     }
   },
   "dependencies": {

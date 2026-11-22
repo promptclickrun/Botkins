@@ -86,7 +86,7 @@ export function CredentialsIntro() {
 export default function SavedCredentials() {
   const [managers, setManagers] = useState<PasswordManagerStatus[]>();
   const [checking, setChecking] = useState(false);
-  const [list, setList] = useState<{ locked: boolean; entries: SavedCredential[] }>();
+  const [list, setList] = useState<{ locked?: boolean; entries: SavedCredential[] }>();
   const [checks, setChecks] = useState<Record<string, { ok: boolean; message?: string } | "checking">>({});
   const [unlockedHere, setUnlockedHere] = useState<PasswordManagerId[]>([]);
   const [editing, setEditing] = useState<SavedCredential | "new">();

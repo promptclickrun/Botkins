@@ -1356,6 +1356,20 @@ export class LinkHost extends EventEmitter {
   chatOf(chatId) {
     return (this.backend.snapshot().chats ?? []).find((chat) => chat.id === chatId);
   }
+  /** Only an existing private owner chat may discover entry labels for one exact HTTPS origin. */
+  loginNames(chatId, origin) {
+    const chat = this.chatOf(chatId);
+    if (!chat) return [];
+    const { createdBy, invited } = chatPeople(this.store.data.team, chat);
+    if (createdBy !== OWNER || invited.length || typeof origin !== "string" || !origin.startsWith("https://")) return [];
+    return this.credentials.list().filter(entry => {
+      if (!entry.website) return false;
+      try {
+        const site = new URL(entry.website.includes("://") ? entry.website : "https://" + entry.website);
+        return site.origin === origin;
+      } catch { return false; }
+    }).map(({ name, kind }) => ({ name, kind }));
+  }
   /** Who started a chat and who was invited. An unknown chat is the owner's, with nobody invited. */
   chatPeople(chatId) {
     return chatPeople(this.store.data.team, this.chatOf(chatId) ?? { id: chatId });

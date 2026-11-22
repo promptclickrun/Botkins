@@ -27,6 +27,9 @@ try {
   app = await _electron.launch({ args: [fixture], env, timeout: 30000 });
   const page = await home(app);
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
+  const credential = await page.evaluate(() => window.botkins.saveSavedCredential({
+    name: "Smoke login", kind: "login", value: "smoke-only-password",
+  }));
   const chatId = await page.evaluate(() => window.botkins.createChat("pip"));
   await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getAllWindows()[0].webContents.send("open-chat", id), chatId);
   await page.getByRole("combobox", { name: "Message", exact: true }).waitFor();
@@ -42,7 +45,7 @@ try {
     const [ask, use] = ws.secureInputs.tools(bot, chat, run, task);
     globalThis.smokeResult = ask.handler({ title: "Website login", operation: "page_fill", url, fields: [
       { key: "username", label: "Username", kind: "text" }, { key: "password", label: "Password", kind: "password" },
-    ] }).then(result => use.handler({ handles: Object.values(JSON.parse(result).handles) }))
+    ] }).then(result => use.handler(JSON.parse(result)))
       .catch(error => ({ error: error.message })).finally(() => ws.active.delete(chatId));
   }, { chatId, url });
   const panel = page.getByRole("region", { name: "Secure input request" });
@@ -55,7 +58,7 @@ try {
   const password = panel.getByLabel("Password", { exact: true });
   await expect(password).toHaveAttribute("type", "password");
   await panel.getByLabel("Username", { exact: true }).fill("smoke-only-user");
-  await password.fill("smoke-only-password");
+  await panel.getByLabel("Use a saved credential for Password").selectOption(credential);
   await panel.getByRole("button", { name: "Allow this use" }).click();
   const result = await app.evaluate(() => globalThis.smokeResult);
   assert.equal(result, '{"applied":true}', JSON.stringify(result));

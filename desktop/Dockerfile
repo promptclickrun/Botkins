@@ -17,6 +17,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     tini \
+    chromium \
     xvfb \
     openbox \
     xdotool \

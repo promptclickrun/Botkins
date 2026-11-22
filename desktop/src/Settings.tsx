@@ -661,9 +661,18 @@ function About() {
         <Row label="Updates" help={problem || update?.message || label || "Botkins checks GitHub Releases automatically."}>
           {(id) => <div>
             <button id={id} className="secondary" disabled={working || status === "downloading" || status === "restarting"} onClick={() => void updateAction(!!update?.canInstall)}>{update?.canInstall ? "Update and restart" : "Check for updates"}</button>
-            {status === "available" && !update?.canInstall && <button className="secondary" onClick={() => void api.openAppRelease()}>Open release</button>}
+            {(status === "error" || (status === "available" && !update?.canInstall)) && <button className="secondary" onClick={() => void api.openAppRelease()}>Open release</button>}
           </div>}
         </Row>
+        {typeof update?.auto === "boolean" && <SwitchRow label="Install updates automatically"
+          help="Restart to install a signed update when your bots are idle." checked={update.auto} disabled={working}
+          onChange={async (on) => {
+            setWorking(true);
+            setProblem("");
+            try { setUpdate(await api.setAppUpdateAuto(on)); }
+            catch (error) { setProblem(errorText(error)); }
+            finally { setWorking(false); }
+          }} />}
         <ValueRow label="Electron" value={info?.electron ?? "…"} />
         <ValueRow label="Chromium" value={info?.chrome ?? "…"} />
         <ValueRow label="Platform" value={info ? platform[info.platform] ?? info.platform : "…"} />

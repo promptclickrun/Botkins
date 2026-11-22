@@ -30,6 +30,7 @@ import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artif
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
 import { FOLDERS, Folders } from "./folders.mjs";
+import { ScreenBrowser } from "./host/form-browser.mjs";
 import { deviceCall } from "./device-call.mjs";
 import { PLUGINS, PLUGIN_STARTS, pluginHandlers } from "./plugins.mjs";
 import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
@@ -53,6 +54,7 @@ import { LOOKS_CAPABILITY } from "./looks.mjs";
 import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS } from "./routines.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
+import { LoginLookups } from "./headless/login-lookups.mjs";
 import { spaceEventQueue } from "./headless/space-events.mjs";
 import { BOARD_MENTIONS } from "./mentions.mjs";
 import { computerName, nearby } from "./nearby.mjs";
@@ -143,6 +145,7 @@ export const isSplitHost = (platform = process.platform, env = process.env) => p
 export async function createRuntime({ host, dataDir, trial = false, pushed = () => {}, link: linkOptions = {}, copilot: copilotOptions = {} }) {
   // The two-container host: this process is the workspace, and the public link is another container.
   const splitHost = isSplitHost();
+  const formBrowser = host.formBrowser ?? (splitHost ? new ScreenBrowser() : null);
   let workspace,
     // Signing a provider in without a browser here, and installing its tool: from a phone, or the
     // terminal host's command line (desktop/terminal/signin.mjs). A token pasted there is kept in the vault.
@@ -266,7 +269,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // terminal host's key store on a server. A host with none (a development or trial run) answers
   // null, and the key is kept in a file in the run's own data folder.
   const keys = await host.keys({ dataDir, trial });
-  const updates = host.updates();
+  const updates = host.updates({
+    auto: {
+      get: () => workspace?.state.settings.autoInstallUpdates === true,
+      set: (on) => { workspace.state.settings.autoInstallUpdates = on; workspace.save(); },
+    },
+    idle: () => !!workspace && !workspace.closing && workspace.active.size === 0,
+  });
   /** The update service, for a call that needs one. A copy that can't look for updates says so. */
   const updating = () => {
     if (!updates) throw new Error("This copy of Botkins doesn't look for updates.");
@@ -276,6 +285,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // of it through the socket (desktop/headless/team-cut.mjs). It is kept in memory only, and what
   // the workspace asks about the team is answered from it. Everywhere else the link is here.
   const heldTeam = splitHost ? new HeldCut() : null;
+  const loginLookups = splitHost ? new LoginLookups() : null;
   const spaceEvents = splitHost ? spaceEventQueue() : null;
   const told = heldTeam && teamFromCut(heldTeam, (chatId) => workspace.state.chats.find((chat) => chat.id === chatId));
   workspace = new Workspace(dataDir, providers, notify, {
@@ -291,7 +301,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // On the two-container host the link is in the other container: the event waits for its next look (headless/space-events.mjs).
     spaceEvent: spaceEvents ? spaceEvents.add : (event) => link?.spaceEvent?.(event),
     notifiesOwner: told ? told.notifiesOwner : (chatId) => link?.notifiesOwner?.(chatId),
-    secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => host.window.fillSecurePage(plan, values, signal) }),
+    formBrowser,
+    savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
+    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
+    secureUse: (plan, values, { signal }) => performSecureUse(plan, values, {
+      signal, fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
+    }),
     ...(keys && {
       vaultKey: keys,
       // Keys an earlier version encrypted into the workspace file are read once, to move them into the vault.
@@ -1052,7 +1067,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Spaces, for the link itself and never for a device: a person's four built-in spaces, the
     // copy of a space that a link opens, and (`release`) what stays to do when a member leaves the team.
     // The cut of the team that the link's container tells this one (the two-container host only).
-    ...(heldTeam && { teamCut: heldTeam }),
+    ...(heldTeam && { teamCut: heldTeam, loginLookups }),
     // What people did in a space since the link's last look (the two-container host only).
     ...(spaceEvents && { takeSpaceEvents: spaceEvents.take }),
     spaces: {
@@ -1215,6 +1230,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     stop() {
       stopAnnouncing();
       workspace.closing = true;
+      updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();
       closeWorkspaceSocket?.();
@@ -1225,7 +1241,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);
       voiceDesk.close();
-      return Promise.allSettled([signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]);
+      return Promise.allSettled([formBrowser?.stop(), signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]);
     },
   };
 }
