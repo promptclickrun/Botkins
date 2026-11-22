@@ -1,3 +1,4 @@
+import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
 export type Bot = {
   id: string;
@@ -186,6 +187,8 @@ export type Run = {
   apps?: AppCard[];
   /** Composio apps the bot asked the person to connect in this turn. */
   connects?: ConnectCard[];
+  /** Tools with an MCP App view that ran in this turn. */
+  mcpApps?: McpAppCard[];
   chatId: string;
   title: string;
   time: number;
@@ -784,6 +787,11 @@ declare global {
       "composio.cardOpen"(chatId: string, cardId: string): Promise<ConnectCardState & { url?: string }>;
       /** Looks at a chat's card again (back from the browser), and goes on with the chat once it is connected. */
       "composio.cardCheck"(chatId: string, cardId: string): Promise<ConnectCardState>;
+      // An MCP App's view in a chat ("mcp-apps-v1"): what it shows, and its calls to the server its card came from
+      "mcpApps.view"(chatId: string, cardId: string, options?: { html?: boolean }): Promise<McpAppView>;
+      /** The tool's whole result for the view, or `needsApproval` when the person must allow it first (then call again with `approved`). */
+      "mcpApps.callTool"(chatId: string, cardId: string, name: string, args: Record<string, unknown>, options?: { approved?: boolean }): Promise<{ result: McpToolResult } | { needsApproval: { tool: string; title: string; server: string } }>;
+      "mcpApps.readResource"(chatId: string, cardId: string, uri: string): Promise<ReadResourceResult>;
       /** Native folder chooser for local plugin installs. Remote hosts do not expose this method. */
       pickPluginFolder?(): Promise<string | null>;
       /** Folder-browser fallback for a paired/remote host when no native chooser is available. */
@@ -1796,6 +1804,22 @@ export type AppCard = { id: string; title: string; description: string; sendsAns
 export type ConnectStatus = "needed" | "waiting" | "connected" | "failed" | "expired" | "sign_in" | "unavailable";
 export type ConnectCard = { id: string; toolkit: string; name: string; logo?: string; status: ConnectStatus; note?: string; updatedAt: number; resumed?: boolean };
 export type ConnectCardState = { card: string; app: string; status: ConnectStatus; note?: string };
+
+/** The card of a tool with an MCP App view (desktop/mcp-apps.mjs): what anyone in the chat may see. The view's data stays on the computer. */
+export type McpAppCard = { id: string; server: string; tool: string; title: string; summary: string; at: number };
+/** A tool's result as MCP gives it: what the model read is `content`; the view also gets the rest. */
+export type McpToolResult = CallToolResult;
+/** What a view is shown with: the tool, its input and its result as they were, and the origins it may reach. */
+export type McpAppView = {
+  id: string;
+  server: string;
+  tool: { name: string; title?: string; description?: string; inputSchema: Record<string, unknown>; _meta?: Record<string, unknown> };
+  input: Record<string, unknown>;
+  result: McpToolResult;
+  csp: { resourceDomains: string[]; connectDomains: string[] };
+  prefersBorder?: boolean;
+  html?: string;
+};
 
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";

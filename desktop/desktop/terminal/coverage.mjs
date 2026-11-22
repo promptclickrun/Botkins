@@ -130,6 +130,8 @@ export const WORKSPACE = {
   "composio.removeAccount": cmd("apps remove"),
   // A chat's Connect card: `apps connect <app> --chat <chat>` presses Connect on that chat's card and waits for it.
   ...each("composio.cardOpen composio.cardCheck", cmd("apps connect")),
+  // An MCP App's view in a chat: what it shows and what it asks of its own server, while the window or a phone shows it.
+  ...each("mcpApps.view mcpApps.callTool mcpApps.readResource", no("window's own")),
   // ── Tools (MCP servers) and skills ──
   saveMcpServer: cmd("tools add"),
   setMcpServerEnabled: cmd("tools enable"),

@@ -64,6 +64,9 @@ for (const name of [
   "composio.removeAccount",
   "composio.cardOpen",
   "composio.cardCheck",
+  "mcpApps.view",
+  "mcpApps.callTool",
+  "mcpApps.readResource",
   // Spaces ("spaces-v1"): the app's calls, then the link's.
   "spaces.read",
   "spaces.create",

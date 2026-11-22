@@ -18,6 +18,7 @@ import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs"
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
 import { FRAME_CSP } from "./frames.mjs";
+import { guardedPage, unshadow } from "./view-guard.mjs";
 import { adoptFolder, APP_NAME, dataHome, env } from "./home.mjs";
 import { canvasColor } from "./preferences.mjs";
 import { computerName } from "./nearby.mjs";
@@ -87,6 +88,17 @@ const appSnapshot = () => {
     remote: { using, hosts: remote?.list() ?? [] },
   };
 };
+/** Whether a frame may load this address: an html block's page or an MCP App's view, from botkins-app://. */
+const isViewAddress = (address) => address.startsWith(APP_SCHEME + "://frame-") || address.startsWith(APP_SCHEME + "://mcpview-");
+/** The card of the MCP App view whose frame loaded from this address, or null. */
+function viewIdOf(address) {
+  try {
+    const url = new URL(address);
+    return url.protocol === APP_SCHEME + ":" ? (/^mcpview-([0-9a-f-]{36})$/.exec(url.hostname)?.[1] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 /** The id of the custom view whose frame loaded from this address, or null. */
 function frameIdOf(address) {
   try {
@@ -205,7 +217,7 @@ function openWindow() {
   win.webContents.on("will-navigate", (e) => e.preventDefault());
   // The window frames pages of html blocks and nothing else; a frame never goes anywhere.
   win.webContents.on("will-frame-navigate", (event) => {
-    if (!event.isMainFrame && !event.url.startsWith(APP_SCHEME + "://frame-")) event.preventDefault();
+    if (!event.isMainFrame && !isViewAddress(event.url)) event.preventDefault();
   });
   win.on("close", (event) => {
     if (!quitting && !updateQuit && keepInBackground()) {
@@ -287,6 +299,19 @@ else
     session.defaultSession.protocol.handle(APP_SCHEME, (request) => {
       const url = new URL(request.url);
       if (url.hostname.startsWith("media-")) return artifactMedia.response(request);
+      // An MCP App's view, with the policy made from what its server declared (desktop/mcp-apps.mjs).
+      const view = /^mcpview-([0-9a-f-]{36})$/.exec(url.hostname)?.[1];
+      if (view) {
+        try {
+          if (url.pathname !== "/" && url.pathname !== "/index.html") throw new Error("Not found");
+          const page = workspace.mcpApps.page(view);
+          return new Response(guardedPage(unshadow(page.html)), {
+            headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": page.csp, "cache-control": "no-store", "x-content-type-options": "nosniff", "x-dns-prefetch-control": "off", "referrer-policy": "no-referrer" },
+          });
+        } catch {
+          return new Response("Not found", { status: 404 });
+        }
+      }
       const id = /^frame-([0-9a-f-]{36})$/.exec(url.hostname)?.[1];
       try {
         if (!id || (url.pathname !== "/" && url.pathname !== "/index.html")) throw new Error("Not found");
@@ -305,9 +330,15 @@ else
       }
     });
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-      // A frame in this window shows a page of an html block and nothing else, whoever asks.
-      if (details.resourceType === "subFrame" && !details.url.startsWith(APP_SCHEME + "://frame-")) return callback({ cancel: true });
+      // A frame in this window shows a page of an html block or an MCP App's view, and nothing else, whoever asks.
+      if (details.resourceType === "subFrame" && !isViewAddress(details.url)) return callback({ cancel: true });
       const from = details.frame?.url ?? "";
+      // An MCP App's view reaches itself, inline data, and the https origins its server declared (desktop/mcp-apps.mjs).
+      const view = viewIdOf(from);
+      if (view) {
+        const own = from.split("/").slice(0, 3).join("/") + "/";
+        return callback({ cancel: !(details.url.startsWith(own) || /^(data|blob):/i.test(details.url) || workspace.mcpApps.reaches(view, details.url)) });
+      }
       // Belt and braces with the frame's own rules: it loads itself and inline data, nothing else.
       if (from.startsWith(APP_SCHEME + "://")) {
         const own = from.split("/").slice(0, 3).join("/") + "/";

@@ -40,3 +40,62 @@
 .connect-card .connect-error {
   color: var(--danger);
 }
+
+/* The view of an MCP App in a chat (McpAppCard.tsx): a header with the tool and its server, then the view. */
+.mcp-app-card {
+  display: grid;
+  gap: 10px;
+}
+.mcp-app-card.borderless {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.mcp-app-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+}
+.mcp-app-head strong {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-app-head small {
+  margin-left: auto;
+  font-size: calc(12px * var(--text-scale));
+}
+.mcp-app-frame iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+/* Waiting for the view: a still, empty band (no animation). */
+.mcp-app-frame.loading {
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.mcp-app-frame.loading iframe {
+  opacity: 0;
+}
+.mcp-app-fallback,
+.mcp-app-ask {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.mcp-app-ask span {
+  flex: 1;
+  min-width: 12em;
+  color: var(--ink);
+}
