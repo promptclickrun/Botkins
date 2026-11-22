@@ -147,7 +147,8 @@ export function mcpAppPage(view: McpAppView, nestedGuard: string): string {
     // The app's theme reaches the view through MCP Apps' host context; the page's defaults follow the phone.
     "<style>:root{color-scheme:light dark}html,body{margin:0;background:transparent}</style>" +
     "<script>" + nestedGuard + "</script>";
-  return "<!doctype html><html><head>" + head + "</head><body>" + (view.html ?? "") + "</body></html>";
+  // A shadow root made from markup would hide a frame from the guard: the attribute that makes one is renamed, as on the computer.
+  return "<!doctype html><html><head>" + head + "</head><body>" + String(view.html ?? "").replace(/shadowroot/gi, "data-no-shadowroot") + "</body></html>";
 }
 
 /**

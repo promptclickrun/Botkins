@@ -104,4 +104,5 @@ test("the page has the app's policy first, with only the https and wss origins t
   assert.ok(page.startsWith("<!doctype html><html><head><meta charset=\"utf-8\">"));
   assert.ok(page.includes("<body><!doctype html><html><head><script>/* view */"));
   assert.equal(deliver({ a: "</script>" }), 'window.__botkinsMcp("{\\"a\\":\\"</script>\\"}");true;');
+  assert.ok(!/<template shadowrootmode/i.test(mcpAppPage({ ...VIEW, html: '<template shadowrootmode="open"><iframe></iframe></template>' }, "")), "no shadow root from markup hides a frame");
 });

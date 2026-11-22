@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Workspace } from "./starter.mjs";
-import { proxyName, resultText, serverKey, viewCsp } from "../desktop/mcp-apps.mjs";
+import { proxyName, resultText, serverKey, Upstream, viewCsp } from "../desktop/mcp-apps.mjs";
+import { linkCapabilities } from "../desktop/runtime.mjs";
 import { MCP_URL } from "../desktop/composio.mjs";
 
 const SERVER = fileURLToPath(new URL("./fixtures/mcp-app-server.mjs", import.meta.url));
@@ -87,8 +88,8 @@ test("a server is looked at once, then run by Botkins: the harness doesn't get i
 
   const { tools } = await turn();
   assert.deepEqual(Object.keys(tools).sort(), ["clock__echo", "clock__get_time", "clock__set_alarm"], "a tool for the view only is not the model's");
-  assert.equal(tools.clock__get_time.skipPermission, true, "a tool that only reads doesn't ask");
-  assert.equal(tools.clock__set_alarm.skipPermission, false, "a tool that may change something asks as before");
+  // Botkins asks for these itself, on every harness (some never ask for a Botkins tool).
+  assert.equal(tools.clock__set_alarm.skipPermission, true);
 
   // A whole turn: the harness gets no "clock" server, and the bot gets its tools with Botkins' own.
   const chatId = ws.createChat(bot.id);
@@ -123,7 +124,8 @@ test("a tool with a view: the model reads text only, the card keeps the actual r
   ws.mcpApps.page(card.id);
   assert.equal(calls("get_time"), 1, "showing the card again reads what was kept");
 
-  // A plain tool keeps its text result and makes no card.
+  // A plain tool keeps its text result and makes no card (it isn't marked read-only: the chat allows all here).
+  ws.chat(chatId).approval = "all";
   assert.equal(await tools.clock__echo.handler({ text: "hi" }), "hi");
   assert.equal(run.mcpApps.length, 1);
 });
@@ -216,7 +218,9 @@ test("Composio's own connection tool, run by Botkins, shows a Connect card and k
     catalog: async () => ({ toolkits: [{ slug: "github", name: "GitHub", logo: null, noAuth: false }] }),
     connection: async () => ({ status: null, accounts: [] }),
   };
-  const { run, tools } = await turn();
+  const { chatId, run, tools } = await turn();
+  // Composio's tool isn't marked read-only, so it asks as any such tool does: this chat allows all.
+  ws.chat(chatId).approval = "all";
   const told = await tools.composio__COMPOSIO_MANAGE_CONNECTIONS.handler({ toolkits: [{ name: "github", action: "add" }] });
   assert.deepEqual(asked.map(([name]) => name), ["COMPOSIO_MANAGE_CONNECTIONS"], "Composio is asked once");
   assert.ok(!told.includes("ln_private"), "the model never reads the page");
@@ -227,4 +231,46 @@ test("Composio's own connection tool, run by Botkins, shows a Connect card and k
   assert.equal(run.connects[0].toolkit, "github");
   assert.ok(!JSON.stringify(ws.state).includes("ln_private"));
   assert.ok(bot);
+});
+
+test("a tool the model calls that may change something asks the person first, as the harness did, on every harness", async (t) => {
+  const { ws, calls, turn, discovered } = setup(t);
+  await discovered();
+  const { chatId, tools } = await turn();
+  const asked = [];
+  const real = ws.interactions.permission.bind(ws.interactions);
+  ws.interactions.permission = async (chat, task, request) => (asked.push(request), { allow: false });
+  await assert.rejects(tools.clock__set_alarm.handler({ at: "7:00" }), /didn't allow clock \/ set_alarm/);
+  assert.equal(calls("set_alarm"), 0, "nothing reaches the server without a yes");
+  assert.deepEqual({ kind: asked[0].kind, label: asked[0].label, remember: asked[0].remember }, { kind: "mcp", label: "clock / set_alarm", remember: ["MCP tool clock/set_alarm", "clock", "set_alarm"] }, "the same request, and the same Always allow, as the harness's");
+  // A tool that only reads doesn't ask.
+  await tools.clock__get_time.handler({});
+  assert.equal(asked.length, 1);
+  // The chat allows everything: no question.
+  ws.interactions.permission = real;
+  ws.chat(chatId).approval = "all";
+  assert.equal(await tools.clock__set_alarm.handler({ at: "7:00" }), "Alarm set.");
+  assert.equal(calls("set_alarm"), 1);
+});
+
+test("a paired device is told about views only when the link carries their calls", () => {
+  assert.ok(linkCapabilities().includes("mcp-apps-v1"));
+  assert.ok(!linkCapabilities(new Set(["mcpApps.view"])).includes("mcp-apps-v1"));
+});
+
+test("a view's policy leaves out addresses, local names and wildcards over a whole suffix", () => {
+  const csp = viewCsp({ connectDomains: ["https://127.0.0.1:8443", "wss://10.0.0.1", "https://printer.local", "https://x.internal", "https://API.Example.com:443"], resourceDomains: ["https://*.co.uk", "https://*.com", "https://*.cdn.example.com"] });
+  assert.deepEqual(csp.connectDomains, ["https://api.example.com"]);
+  assert.deepEqual(csp.resourceDomains, ["https://*.cdn.example.com"]);
+});
+
+test("a connection closed while it is still opening stops the server it started", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-upstream-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const upstream = new Upstream({ id: "s", name: "clock", type: "stdio" }, { type: "stdio", command: process.execPath, args: [SERVER], env: { BOTKINS_TEST_LOG: join(dir, "log") } });
+  const opening = upstream.open();
+  await upstream.close();
+  await assert.rejects(opening, /disconnected/);
+  await assert.rejects(upstream.open(), /disconnected/, "a closed connection never opens again");
+  assert.equal(upstream.client, null);
 });

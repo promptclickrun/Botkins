@@ -48,17 +48,23 @@ export function McpAppCard({ chatId, card }: { chatId: string; card: Card }) {
     const frame = ref.current?.contentWindow;
     if (!view || !frame) return;
     let open = true;
+    // One question at a time: a second one while the first is open is answered no.
+    let asking = false;
     const question = (text: string, yes: string) =>
-      new Promise<boolean>((resolve) =>
-        setAsk({
+      asking
+        ? Promise.resolve(false)
+        : new Promise<boolean>((resolve) => {
+          asking = true;
+          setAsk({
           text,
           yes,
           answer: (allowed) => {
+            asking = false;
             setAsk(null);
             resolve(allowed);
           },
-        }),
-      );
+        });
+      });
     const context: McpUiHostContext = { theme: theme(), platform: "desktop", displayMode: "inline", availableDisplayModes: ["inline"], toolInfo: { tool: { ...view.tool, inputSchema: { type: "object", ...view.tool.inputSchema } } }, containerDimensions: { maxHeight: MAX } };
     const bridge = new AppBridge(null, { name: "Botkins", version: "1" }, { openLinks: {}, serverTools: {}, serverResources: {} }, { hostContext: context });
     bridge.oncalltool = async (params) => {

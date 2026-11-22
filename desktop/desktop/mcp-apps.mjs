@@ -31,6 +31,8 @@ import { join } from "node:path";
 import { Client, SSEClientTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { defineTool } from "./providers/provider.mjs";
+import { displayValue } from "./display.mjs";
+import { searchPath } from "./providers/cli.mjs";
 import { composioServer, connectionResults, payloadOf } from "./composio.mjs";
 
 /** The capability a window or a phone checks before it asks for a view. */
@@ -47,6 +49,8 @@ const OPEN_MS = 15_000;
 /** How long a turn waits for the routed servers it already knows to answer before it falls back to the harness. */
 const READY_MS = 4_000;
 const IDLE_MS = 15 * 60_000;
+/** How long a server that couldn't be reached is left alone: its turns go to the harness meanwhile. */
+const RETRY_MS = 60_000;
 const ID = /^[0-9a-f-]{36}$/;
 
 const str = (value) => (typeof value === "string" ? value : "");
@@ -65,6 +69,20 @@ export function visibilityOf(tool) {
 }
 
 /**
+ * Whether an origin names a host on the internet: not an address (IPv4), not a name that only means
+ * something on this network (.local, .lan, .internal, .localhost, .home.arpa), and a wildcard only
+ * under a name of at least two labels (`https://*.example.com`, never `https://*.co.uk` or `https://*.com`).
+ */
+function publicHost(origin) {
+  const host = origin.split("://")[1].replace(/:\d+$/, "");
+  const name = host.replace(/^\*\./, "");
+  if (/^[\d.]+$/.test(name) || /\.(local|lan|internal|localhost|home\.arpa|test|invalid)$/.test(name) || name === "localhost") return false;
+  const labels = name.split(".");
+  if (host.startsWith("*.") && (labels.length < 2 || (labels.length === 2 && labels[0].length <= 3 && labels[1].length <= 3))) return false;
+  return labels.length >= 2;
+}
+
+/**
  * The view's content security policy: what the server declared, cut to what Botkins allows. Origins
  * are https (and wss for connections), one host each, a leading "*." at most; nothing else is kept.
  * Scripts and styles may be inline. There are no nested frames, no forms sent anywhere and no base URL.
@@ -73,8 +91,9 @@ export function viewCsp(csp) {
   const origins = (list, schemes) =>
     (Array.isArray(list) ? list : [])
       .filter((item) => typeof item === "string" && item.length <= 200)
-      .map((item) => item.trim().replace(/\/+$/, ""))
-      .filter((item) => new RegExp("^(" + schemes.join("|") + ")://(\\*\\.)?[a-z0-9-]+(\\.[a-z0-9-]+)+(:\\d{1,5})?$", "i").test(item))
+      .map((item) => item.trim().replace(/\/+$/, "").toLowerCase())
+      .filter((item) => new RegExp("^(" + schemes.join("|") + ")://(\\*\\.)?[a-z0-9-]+(\\.[a-z0-9-]+)+(:\\d{1,5})?$").test(item) && publicHost(item))
+      .map((item) => item.replace(/^(https:\/\/[^/]+):443$|^(wss:\/\/[^/]+):443$/, "$1$2"))
       .slice(0, MAX_DOMAINS);
   const resources = [...new Set(origins(csp?.resourceDomains, ["https"]))];
   const connect = [...new Set(origins(csp?.connectDomains, ["https", "wss"]))];
@@ -122,7 +141,8 @@ export function proxyName(server, tool) {
 
 /** What makes a server the same server: its kind, its address or program, and which secrets it uses. */
 export function serverKey(server) {
-  const shape = { type: server.type, url: server.url, command: server.command, args: server.args, cwd: server.cwd, env: Object.keys(server.env ?? {}).sort(), headers: Object.keys(server.headers ?? {}).sort(), oauth: !!server.oauth };
+  // The secrets are kept as references to the vault: a new value is a new reference, so the key changes with it.
+  const shape = { type: server.type, url: server.url, command: server.command, args: server.args, cwd: server.cwd, env: server.env ?? {}, headers: server.headers ?? {}, oauth: !!server.oauth };
   return createHash("sha256").update(JSON.stringify(shape)).digest("hex").slice(0, 24);
 }
 
@@ -144,10 +164,11 @@ export class Upstream {
     this.list = null;
     this.used = Date.now();
   }
-  transport() {
+  /** `path` is the folders a program is looked for in: the login shell's too, as for the harness's tools (an app opened from Finder has a short PATH). */
+  transport(path) {
     const config = this.config;
     if (config.type === "stdio")
-      return new StdioClientTransport({ command: config.command, args: config.args ?? [], env: { ...getDefaultEnvironment(), ...(config.env ?? {}) }, ...(config.workingDirectory && { cwd: config.workingDirectory }), stderr: "ignore" });
+      return new StdioClientTransport({ command: config.command, args: config.args ?? [], env: { ...getDefaultEnvironment(), ...(path && { PATH: path }), ...(config.env ?? {}) }, ...(config.workingDirectory && { cwd: config.workingDirectory }), stderr: "ignore" });
     const origin = new URL(config.url).origin;
     // The server's headers, and its sign-in's token for its own address only. A refused token is renewed once.
     const fetch = async (url, init = {}) => {
@@ -170,9 +191,10 @@ export class Upstream {
     };
     return config.type === "sse" ? new SSEClientTransport(new URL(config.url), { fetch }) : new StreamableHTTPClientTransport(new URL(config.url), { fetch });
   }
-  /** Connects once; a second caller waits for the first. */
+  /** Connects once; a second caller waits for the first. A closed connection never opens again. */
   open() {
     this.used = Date.now();
+    if (this.closed) return Promise.reject(new Error(this.server.name + " was disconnected. Try again."));
     if (this.client) return Promise.resolve(this.client);
     this.opening ??= (async () => {
       const client = new Client(
@@ -187,7 +209,12 @@ export class Upstream {
         if (this.client === client) this.client = null;
         this.list = null;
       };
-      await client.connect(this.transport(), { timeout: OPEN_MS });
+      await client.connect(this.transport(this.config.type === "stdio" ? await searchPath() : undefined), { timeout: OPEN_MS });
+      // Closed while it was connecting: what just started is stopped too (a stdio server's program).
+      if (this.closed) {
+        await client.close().catch(() => {});
+        throw new Error(this.server.name + " was disconnected. Try again.");
+      }
       this.client = client;
       return client;
     })().finally(() => {
@@ -219,6 +246,7 @@ export class Upstream {
     return client.readResource({ uri }, { timeout: OPEN_MS });
   }
   async close() {
+    this.closed = true;
     const client = this.client;
     this.client = null;
     this.list = null;
@@ -238,6 +266,10 @@ export class McpApps {
     /** server id → { key, views: boolean } */
     this.known = this.read();
     this.looking = new Map();
+    /** server id → when it last couldn't be reached: it is tried again after RETRY_MS. */
+    this.failed = new Map();
+    /** run → how many views its calls started reading, kept here rather than in the synced run. */
+    this.started = new WeakMap();
     this.timer = setInterval(() => this.sweep(), 60_000);
     this.timer.unref?.();
   }
@@ -305,7 +337,7 @@ export class McpApps {
   /** Looks at a server's tools in the background, once per settings, and keeps whether it has views. */
   discover(server) {
     const key = server.id + " " + serverKey(server);
-    if (this.known[server.id]?.key === serverKey(server) || this.looking.has(key)) return;
+    if (this.known[server.id]?.key === serverKey(server) || this.looking.has(key) || Date.now() - (this.failed.get(server.id) ?? -Infinity) < RETRY_MS) return;
     const work = (async () => {
       const upstream = this.upstream(server);
       try {
@@ -313,12 +345,13 @@ export class McpApps {
         const views = tools.some((tool) => viewOf(tool));
         this.remember(server, views);
         if (!views) {
-          this.upstreams.delete(server.id);
+          if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
           await upstream.close();
         }
       } catch {
-        // A server that can't be reached is looked at again on a later turn.
-        this.upstreams.delete(server.id);
+        // A server that can't be reached is looked at again a while later, not at every turn.
+        this.failed.set(server.id, Date.now());
+        if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
         await upstream.close();
       }
     })().finally(() => this.looking.delete(key));
@@ -339,11 +372,17 @@ export class McpApps {
         this.discover(server);
         continue;
       }
+      // A server that couldn't be reached a moment ago goes to the harness, without a wait each turn.
+      if (Date.now() - (this.failed.get(server.id) ?? -Infinity) < RETRY_MS) continue;
       const upstream = this.upstream(server);
       waits.push(
         upstream.tools().then(
           (tools) => routed.set(server.name, { server, upstream, tools }),
-          () => {},
+          () => {
+            this.failed.set(server.id, Date.now());
+            if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
+            void upstream.close();
+          },
         ),
       );
     }
@@ -365,11 +404,11 @@ export class McpApps {
           defineTool(name, {
             description: clip(str(tool.description) || str(tool.title) || tool.name, 2000) + " (" + server.name + ")",
             parameters: tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} },
-            // A tool that only reads runs without asking; any other asks as the harness would.
-            skipPermission: tool.annotations?.readOnlyHint === true,
+            // Botkins asks itself (in `invoke`), the same way on every harness: some never ask for a Botkins tool.
+            skipPermission: true,
             handler: async (args = {}) => {
               if (task?.stopped || this.ws.closing || (chat && task && this.ws.active.get(chat.id) !== task)) throw new Error("This turn is no longer active");
-              return this.invoke({ bot, chat, run }, server, upstream, tool, args);
+              return this.invoke({ bot, chat, run, task }, server, upstream, tool, args);
             },
           }),
         );
@@ -378,8 +417,17 @@ export class McpApps {
     return out;
   }
 
-  /** A call the model made: the text it reads, and a card when the tool has a view. */
-  async invoke({ bot, chat, run }, server, upstream, tool, args) {
+  /**
+   * A call the model made: the text it reads, and a card when the tool has a view. A tool that may
+   * change something asks first, as the harness asked for the server's tools before: by the chat's
+   * approvals, with the same "Always allow" (desktop/interactions.mjs).
+   */
+  async invoke({ bot, chat, run, task }, server, upstream, tool, args) {
+    if (tool.annotations?.readOnlyHint !== true) {
+      const label = server.name + " / " + tool.name;
+      const decision = chat && task ? await this.ws.interactions.permission(chat, task, { kind: "mcp", toolName: tool.name, title: "Use " + label + "?", label, preview: displayValue(args, Infinity), remember: ["MCP tool " + server.name + "/" + tool.name, server.name, tool.name], readOnly: false }) : { allow: false };
+      if (!decision.allow) throw new Error("The person didn't allow " + label + ".");
+    }
     const result = await upstream.call(tool.name, args);
     if (server === composioServer(this.ws.integrations?.servers) && tool.name === "COMPOSIO_MANAGE_CONNECTIONS" && chat && run) {
       const told = await this.connectCards(bot, chat, run, result);
@@ -431,7 +479,10 @@ export class McpApps {
 
   /** Reads the tool's view through the same connection and puts its card on the turn. */
   async card({ chat, run, server, upstream, tool, uri, args, result, text }) {
-    if ((run.mcpApps?.length ?? 0) >= MAX_CARDS) return;
+    // Counted before the view is read, so calls side by side can't pass the limit together.
+    const started = (this.started.get(run) ?? run.mcpApps?.length ?? 0) + 1;
+    this.started.set(run, started);
+    if (started > MAX_CARDS) return;
     const read = await upstream.read(uri);
     const item = (read?.contents ?? []).find((entry) => entry?.uri === uri) ?? read?.contents?.[0];
     if (!item || str(item.mimeType).toLowerCase().replace(/\s+/g, "") !== VIEW_MIME) throw new Error("That isn't an MCP App view.");
@@ -440,6 +491,7 @@ export class McpApps {
     const ui = item._meta?.ui ?? {};
     const payload = {
       server: server.id,
+      key: serverKey(server),
       uri,
       tool: { name: tool.name, ...(tool.title && { title: tool.title }), ...(tool.description && { description: clip(str(tool.description), 2000) }), inputSchema: tool.inputSchema ?? { type: "object" }, ...(tool._meta && { _meta: tool._meta }) },
       input: args ?? {},
@@ -527,6 +579,8 @@ export class McpApps {
     const bot = this.ws.state.bots.find((item) => item.id === chat.botId);
     const server = (this.ws.integrations?.servers ?? []).find((item) => item.id === payload.server);
     if (!bot || !server?.enabled || (bot.mcpOff ?? []).includes(server.id) || !this.ws.accessForTurn(chat).mcp) throw new Error("This chat's bot can't use " + card.server + " any more.");
+    // The server was changed since (another address or program): the view's calls don't follow it there.
+    if (payload.key && payload.key !== serverKey(server)) throw new Error(card.server + " has changed since this view was made.");
     return { server, upstream: this.upstream(server), payload };
   }
 
