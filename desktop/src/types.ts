@@ -722,7 +722,7 @@ declare global {
       // Settings › Credentials: saved credentials and password managers (desktop/savedcredentials.mjs).
       // None of these ever returns a value.
       /** Every saved credential, by name. `locked`: they can be listed but not changed or read. */
-      savedCredentials(): Promise<{ locked: boolean; entries: SavedCredential[] }>;
+      savedCredentials(): Promise<{ locked?: boolean; entries: SavedCredential[] }>;
       /** Adds one typed in here, or changes one (`id`). `value: null` keeps the saved value. Returns the id. */
       saveSavedCredential(input: SavedCredentialInput): Promise<string>;
       removeSavedCredential(id: string): Promise<void>;
@@ -939,6 +939,7 @@ declare global {
       cancelProviderService(id: string, serviceId: string): Promise<void>;
       /** Removes the key or sign-in the provider stored for a service. */
       disconnectProviderService(id: string, serviceId: string): Promise<void>;
+      setAppUpdateAuto(on: boolean): Promise<AppUpdate>;
       appUpdateStatus(): Promise<AppUpdate>;
       checkAppUpdate(): Promise<AppUpdate>;
       installAppUpdate(): Promise<AppUpdate>;
@@ -1623,7 +1624,7 @@ export type PhoneLink = {
     permissions: { system: boolean; screenRecording: boolean; accessibility: boolean };
   };
 };
-export type AppUpdate = { status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error"; current: string; latest?: string; message?: string; canInstall: boolean };
+export type AppUpdate = { auto?: boolean; status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error"; current: string; latest?: string; message?: string; canInstall: boolean };
 export type AppInfo = { version: string; electron: string; chrome: string; platform: string };
 export type Appearance = {
   /** System, light or dark. */

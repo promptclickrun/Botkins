@@ -56,7 +56,7 @@ export function workspaceRequest(socketPath, method, args = []) {
         resolve(value);
       } catch (error) { reject(error); }
     });
-    req.setTimeout(method === "state" ? 5000 : 120000, () => req.destroy(new Error("The workspace did not answer.")));
+    req.setTimeout(method === "state" || method === "loginNames" ? 5000 : 120000, () => req.destroy(new Error("The workspace did not answer.")));
     req.on("error", reject);
     req.end(JSON.stringify({ method, args }));
   });

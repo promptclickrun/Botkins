@@ -16,6 +16,7 @@ import { workspaceActions } from "../desktop/headless/workspace.mjs";
 import { phonePage } from "../desktop/phonepage.mjs";
 import { REMOTE_METHODS } from "../desktop/link/methods.mjs";
 import { LinkHost } from "../desktop/link/index.mjs";
+import { LoginLookups } from "../desktop/headless/login-lookups.mjs";
 import { LinkClient, isRelayHost, pair, parsePairingUrl, relayFetch } from "../desktop/remote/link-client.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { Workspace } from "./starter.mjs";
@@ -41,6 +42,31 @@ function stubWorkspace() {
   };
   return { backend, state, displays, calls, contexts, changed: () => change() };
 }
+
+test("the split workspace gets only the matching vault names for a private owner's chat", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-names-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lookups = new LoginLookups();
+  const fixture = stubWorkspace();
+  fixture.state.chats.push({ id: "chat", createdBy: "owner" });
+  const actions = workspaceActions({ ...fixture.backend, loginLookups: lookups }, () => {});
+  t.after(actions.unsubscribe);
+  let host;
+  const { backend, refresh } = headlessBackend(actions.dispatch, "test", { loginNames: (chatId, origin) => host.loginNames(chatId, origin) });
+  host = new LinkHost({ dir, backend, port: 0, relay: false });
+  t.after(() => host.stop());
+  await host.credentials.save({ name: "Work login", kind: "login", website: "https://example.org/login", value: "fixture-private" });
+  await host.credentials.save({ name: "Another login", kind: "login", website: "https://elsewhere.example", value: "another-private" });
+  const lookup = async chatId => {
+    const result = lookups.find(chatId, "https://example.org");
+    await refresh();
+    return result;
+  };
+  assert.deepEqual(await lookup("chat"), [{ name: "Work login", kind: "login" }]);
+  assert.deepEqual(await lookup("missing"), []);
+  host.store.data.team.chats.chat = ["a-member"];
+  assert.deepEqual(await lookup("chat"), []);
+});
 
 
 test("the public link reads workspace changes and loses display availability on disconnect", async (t) => {

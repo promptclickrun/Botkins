@@ -9,7 +9,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron } from "@playwright/test";
-import { seedApp } from "./starter.mjs";
+import { fakeClient } from "./fake-copilot.mjs";
+import { openToday } from "./spaces-helper.mjs";
+import { Workspace, seedApp } from "./starter.mjs";
 import { freePort } from "./free-port.mjs";
 import { home } from "./welcome-helper.mjs";
 
@@ -23,6 +25,12 @@ const until = async (what, check, ms = 60000) => { const limit = Date.now() + ms
 const launch = async (name, more = {}, kept = null) => {
   const dir = kept ?? mkdtempSync(join(tmpdir(), "botkins-two-" + name + "-"));
   if (!kept) seedApp(dir);
+  if (name === "a" && !kept) {
+    const ws = new Workspace(join(dir, "data"), fakeClient().client, () => {});
+    ws.panels.write("pip", "fixture", { key: "summary", title: "Sales summary", blocks: [
+      { type: "html", html: "<p id='summary'></p><script>botkins.getData().then(d => summary.textContent = d.total)</script>", data: { total: "42 sales" } },
+    ] });
+  }
   const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", ...more };
   delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
@@ -49,6 +57,7 @@ try {
   await a.page.evaluate(() => window.botkins.setPhoneLink(true));
   await a.page.evaluate(() => window.botkins.renamePhoneLinkComputer("Studio Mac"));
   await a.page.evaluate(() => window.botkins.createChat("pip"));
+  await a.page.evaluate(() => window.botkins.saveSavedCredential({ name: "Fixture login", kind: "login", value: "fixture-vault-secret" }));
   const url = (await a.page.evaluate(() => window.botkins.startPhonePairing())).pairing.url;
   // B: Settings › Phone › Other computers, paste the link, Pair.
   await settingsPhone(b);
@@ -97,7 +106,17 @@ try {
   assert.match((await banner.textContent()).replace(/\s+/g, " "), /Using Studio Mac · Connected/);
   assert.equal(await switcher.getAttribute("aria-label"), "Computer: Studio Mac. Connected. Switch computer");
   assert.deepEqual((await b.snap()).bots.map((bot) => bot.id), (await a.snap()).bots.map((bot) => bot.id), "the window shows the host's bots");
+  const choices = await b.page.evaluate(() => window.botkins.savedCredentials());
+  assert.deepEqual(choices.entries.map(entry => entry.name), ["Fixture login"]);
+  assert.ok(!JSON.stringify(choices).includes("fixture-vault-secret"));
   await b.shot("4-b-using-studio-mac.png");
+  for (const computer of [a, b]) {
+    await openToday(computer.page);
+    await computer.page.frameLocator(".space-page iframe").getByText("42 sales").waitFor({ timeout: 8000 }).catch(error => {
+      throw new Error((computer === a ? "Local" : "Paired") + " Space panel did not render: " + error.message);
+    });
+    await computer.page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Home", exact: true }).click();
+  }
   // The app is closed and opened again on the same folder: it is back on Studio Mac by itself,
   // with nothing chosen anew and no pairing step.
   const folder = b.dir;

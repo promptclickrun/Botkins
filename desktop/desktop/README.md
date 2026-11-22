@@ -22,6 +22,7 @@ BOTKINS_HOST_NAME=Studio server
 1. On first start, the host opens a short-lived pairing code. Read it in your server terminal with `docker compose exec host cat /run/botkins-owner/pairing.json`. In the phone's pairing screen, enter the advertised address and code, or open the pairing URL on the phone. The code and URL are private.
 2. To pair another phone or replace an expired code, run `docker compose kill -s SIGUSR2 host` and read the file again.
 3. In the paired phone's screen settings, choose **View**. Confirm with the phone's biometric or passcode prompt and open the screen. Choose **Control** and confirm again to click or type on the virtual display. **Off** takes effect immediately for all paired devices. The chosen mode survives restarts. A phone paired before presence-key enrollment needs to pair again to enable viewing or control.
+4. To sign in to a site, ask a bot in a private owner chat to open it on the screen. The workspace includes Chromium and the `browser_form` tool. Pick the saved credential on your paired device when Botkins shows the destination and fields. The link host resolves your choice and the workspace fills the browser.
 
 The phone reports whether the virtual display is available and which device last changed access. If the display is unavailable, run `docker compose ps` and `docker compose logs workspace`. To stop both services and keep their data, run `docker compose down`. The workspace and the phone link have separate persistent volumes.
 

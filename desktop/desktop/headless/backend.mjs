@@ -66,7 +66,7 @@ export function callContext(context) {
  * desktop/headless/team-cut.mjs), or null when there is none to tell. The revision goes with every
  * call and every look, and the whole cut is sent whenever the workspace does not hold that one.
  */
-export function headlessBackend(rawRequest, version, { team = () => null, log = (line) => console.error(line), clock = () => performance.now(), spaceEvent } = {}) {
+export function headlessBackend(rawRequest, version, { team = () => null, log = (line) => console.error(line), clock = () => performance.now(), spaceEvent, loginNames } = {}) {
   const changes = new EventEmitter();
   // The revision the workspace last said it holds.
   let held = null;
@@ -260,6 +260,13 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
         // the one that holds it. Handed over before the change is told, so that nothing that listens there can lose it.
         handSpaceEvents(next.spaceEvents, spaceEvent);
         if (changed) changes.emit("change");
+        // A workspace from before vault lookup asks for nothing. Each new request
+        // gets one answer. A missed reply can be repeated on the next refresh.
+        if (loginNames && Array.isArray(next.loginLookups))
+          await Promise.allSettled(next.loginLookups.slice(0, 8).map(async ({ id, chatId, origin }) => {
+            if (typeof id === "string" && typeof chatId === "string")
+              await rawRequest("loginNames", [id, loginNames(chatId, origin)]);
+          }));
       } catch {
         // The workspace may come back from an older image. A name that is a promise about the
         // workspace's own code is therefore not told while it cannot be reached. The other names

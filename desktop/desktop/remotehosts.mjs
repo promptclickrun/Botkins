@@ -545,6 +545,12 @@ export class RemoteHosts {
       const chat = (this.parts.chats ?? []).find((item) => item.id === args[0]);
       return { createdBy: chat?.createdBy ?? "owner", invited: Array.isArray(chat?.invited) ? [...chat.invited] : [] };
     }
+    if (name === "savedCredentials") {
+      // The paired host already sends its owner the picker entries over the sealed link.
+      // Only that host can resolve a selected reference when it receives the approval.
+      if (host.member || this.state !== "online" || !Array.isArray(this.parts.credentials)) throw new Error("The paired host’s saved credentials are unavailable.");
+      return { entries: this.parts.credentials };
+    }
     name = LINK_NAMES[name] ?? name;
     if (!name.startsWith("link.") && !REMOTE_METHODS.has(name)) throw new Error("That can only be done on " + host.name + " itself.");
     if (this.state === "revoked") throw new Error(host.name + " no longer knows this computer. Pair again to use it.");

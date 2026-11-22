@@ -278,6 +278,8 @@ export class Agents {
   }
   /** Removes the provider session history behind deleted chats. Missing sessions are fine. */
   async deleteSessions(chats, extra = []) {
+    const browser = this.ws.secureInputs?.formBrowser;
+    if (browser) await Promise.all(chats.map(chat => browser.close(chat.id)));
     // A group chat has one session per member (desktop/groups.mjs); any chat may hold teammates' sessions.
     const sessions = chats.flatMap((c) => [
       ...(isGroup(c)

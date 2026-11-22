@@ -130,6 +130,15 @@ test("Botkins' own tools never ask, and MCP tools ask as MCP tools", { skip }, a
   assert.equal(await session.permission({ toolName: "bash", input: { command: "ls" } }), false);
 });
 
+test("Pi keeps the Botkins tool call open for the full secure prompt", async () => {
+  const { provider } = setup();
+  const session = await provider.openSession(spec());
+  session.bridge = { url: "http://127.0.0.1:1/mcp/fixture", headers: {} };
+  const { servers } = await session.describe();
+  assert.ok(servers.botkins.timeout > 5 * 60, "Pi's timeout in seconds must outlast the secure prompt");
+  assert.equal(servers.files.timeout, undefined);
+});
+
 test("a model error with no reply fails the turn with the plan's words", { skip }, async () => {
   const { provider } = setup();
   const session = await provider.openSession(spec());

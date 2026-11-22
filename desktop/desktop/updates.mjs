@@ -1,22 +1,8 @@
 // Update sources are fixed by the application. A chat, tool argument or release note cannot supply a URL.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import semver from "semver";
 import { defineTool } from "./providers/provider.mjs";
 
-export const repository = { owner: "promptclickrun", repo: "Botkins" };
 export const releasePage = "https://github.com/promptclickrun/Botkins/releases/latest";
-const run = promisify(execFile);
-export async function githubToken() {
-  for (const file of ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "gh"]) {
-    try {
-      const { stdout } = await run(file, ["auth", "token", "--hostname", "github.com"], { timeout: 5000, windowsHide: true });
-      if (stdout.trim()) return stdout.trim();
-    } catch { /* Another installation may be on PATH. */ }
-  }
-  return "";
-}
-
 // Finding the latest release.
 //
 // GitHub's API names a release and every file in it in one answer, but it answers an address
@@ -25,8 +11,8 @@ export async function githubToken() {
 // through no fault of its own. The release page itself has no such limit: /releases/latest
 // answers with a redirect to the latest stable release, and what that release holds is in its
 // own SHA256SUMS (the list an install checks the signature of anyway). So that is the way
-// taken first, and the API is the second try. With a sign-in (the desktop app, where GitHub CLI
-// is signed in) the API is asked first: it is not limited that way, and names every file.
+// taken first by the apps, and the API is the second try. An explicitly authenticated caller
+// asks the API first, which names every file.
 //
 // Each way either answers or says why not (`cause` below). An answer is never made out of a
 // failure: a list that did not come is not an empty list, and a file that could not be asked
@@ -95,7 +81,7 @@ async function latestFromPage({ fetcher, mac }) {
 
 /**
  * The latest stable release: { version, assets: [file names] }.
- * @param options.token  A GitHub sign-in, when there is one (the desktop app asks GitHub CLI).
+ * @param options.token  An optional GitHub sign-in for an authenticated caller.
  * @param options.mac    True for the Mac app, which installs from files that only it needs to hear of.
  */
 export async function latestRelease({ fetcher = fetch, token, mac = false }) {
@@ -120,7 +106,7 @@ export class AppUpdates {
    * @param options.unitMissing  What to say when that tarball is there and the updater isn't set up.
    * @param options.cannotInstall  What to say when asked to install and this copy can't. The desktop app's own words when left out.
    * @param options.auto   { get() → boolean, set(on) }: the choice to install a new release without
-   *   being asked, on a host that can (the terminal host). Left out, the host never does, and
+   *   being asked, on hosts with automatic installation. Left out, the host never does, and
    *   `status()` has no `auto`.
    * @param options.idle   () → true when no turn is under way: an install the host starts by itself waits for that.
    * @param options.last   () → how the last install ended ({ at, from, to, ok, message? }), or null.
@@ -130,12 +116,12 @@ export class AppUpdates {
   constructor({ current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable = async () => true, notify = () => {},
     linuxAsset = (version, arch) => "botkins-desktop-" + version + (arch === "arm64" ? "-arm64" : "") + ".tar.gz",
     unitMissing = "Linux updates need the Botkins systemd updater unit.",
-    cannotInstall, auto, idle = () => true, last = () => null, autoPollMs = 30_000, log = () => {},
+    cannotInstall, installFailure, auto, idle = () => true, last = () => null, autoPollMs = 30_000, log = () => {},
     words = {
       check: "Check the installed Botkins desktop version against the latest stable GitHub release.",
       install: "When the person asks to update Botkins, download its signed update and restart the app after this reply.",
     } }) {
-    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify, linuxAsset, unitMissing, cannotInstall, auto, idle, last, autoPollMs, log, words });
+    Object.assign(this, { current, mac, linux, arch, latest, stage, restart, linuxUnitAvailable, notify, linuxAsset, unitMissing, cannotInstall, installFailure, auto, idle, last, autoPollMs, log, words });
     this.state = { status: "idle", current, canInstall: false };
     this.watchers = new Set();
   }
@@ -275,23 +261,23 @@ export class AppUpdates {
         Promise.resolve(afterTurn).catch(() => {}).then(() => setImmediate(() => {
           // Looked at again at the last moment: the check and the staging above take time, and
           // a turn that began meanwhile is not cut short for an update nobody asked for just now.
-          if (unasked && !this.idle()) {
+          if (unasked && (!this.auto?.get() || !this.idle())) {
             this.state = { ...info };
             return void this.autoInstall();
           }
-          Promise.resolve().then(() => this.restart({ unasked })).catch(() => this.failedInstall());
+          Promise.resolve().then(() => this.restart({ unasked })).catch(error => this.failedInstall(error));
         }));
         return this.state;
-      } catch {
-        this.failedInstall();
+      } catch (error) {
+        this.failedInstall(error);
         throw new Error(this.state.message);
       }
     })().finally(() => { this.installing = null; });
     return this.installing;
   }
 
-  failedInstall() {
-    this.state = { ...this.state, status: "error", canInstall: false, message: "The update could not be installed. Check your connection and GitHub access, then try again." };
+  failedInstall(error) {
+    this.state = { ...this.state, status: "error", canInstall: false, message: this.installFailure?.(error) ?? "The update could not be installed. Check your connection and GitHub access, then try again." };
   }
 }
 

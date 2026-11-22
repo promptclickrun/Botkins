@@ -802,6 +802,18 @@ The earlier setup, with an Electron workspace on a virtual display, is still the
 
 On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View** and **Control**, as they do with the desktop app. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
 
+For a fresh Debian VM, install the screen tools and a browser, then start Botkins on a private virtual display as the service user:
+
+```sh
+sudo apt-get install chromium xvfb xauth xdotool ffmpeg
+xvfb-run -a -s "-screen 0 1440x900x24 -nolisten tcp" botkins serve
+```
+
+For an existing systemd service, put the same wrapper in a service override (`systemctl edit botkins.service`, or `systemctl --user edit botkins.service` for a user service). Under `[Service]`, clear `ExecStart=` and set it again to `/usr/bin/xvfb-run -a -s "-screen 0 1440x900x24 -nolisten tcp"` followed by the **existing service command and arguments** from `systemctl cat botkins.service`. Restart the service. Xvfb and Chromium then run under the service’s account and share its private temporary directory. The Compose display workspace already includes Chromium.
+
+In a private owner chat, ask the bot to open the login page and use a saved credential. Its `browser_form` tool opens or inspects the page on the host screen and returns the site, path and visible field keys. The secure request lets you pick the saved password and approve the destination. Botkins fills the fields in that browser. You can finish the login on the screen and close the browser from the same chat. The browser uses a temporary profile and a private pipe. The bot needs no Python environment, pip package or WebSocket script.
+
+
 ## Scripts and JSON
 
 Each command accepts `--json`. It then prints one JSON document, which is the value from the service. A command that follows a stream (`logs -f`, a sign-in) prints one JSON line for each item.
@@ -915,7 +927,7 @@ The terminal host has no window and no screen. These features report "… is not
 
 - Viewing and controlling the screen from a phone, unless the service has an X11 display. See [A screen without Docker](#a-screen-without-docker).
 - Unlocking a password manager, choosing one of its items, linking a saved credential to a field of it, and using a saved credential by reference. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone." These need a person at the app, because the terminal host's socket cannot know that a person is there.
-- The window of the app: side panes drawn in the app, HTML apps in their own window, the website viewer, and typing a saved credential into a page. A phone still draws side panes itself.
+- The app window draws side panes, HTML apps and the website viewer. A phone draws its own side panes. On a Linux host with Chromium and an X11 display, the bot can fill an approved credential into the browser on that screen.
 - File and folder dialogs, opening a file or a link on the computer, and the clipboard. A phone uses the calls that need no dialog.
 - Desktop notifications. A paired phone still gets its notifications.
 - Dictation and live voice in the window of the app. Voice on a phone still works.

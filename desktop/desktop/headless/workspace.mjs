@@ -19,10 +19,12 @@ export function workspaceActions(backend, inject) {
       const version = epoch + "/" + revision;
       // What people did in a space since the last look: told once, then forgotten. One look takes at most LOOK_LIMIT; the rest wait for the next (headless/space-events.mjs).
       const spaceEvents = backend.takeSpaceEvents?.(LOOK_LIMIT) ?? [];
+      const loginLookups = backend.loginLookups?.requests();
       return {
         version, display: displays.some((d) => d.width > 0 && d.height > 0),
         team: backend.teamCut?.heard(teamRev) ?? null,
         ...(spaceEvents.length && { spaceEvents }),
+        ...(loginLookups?.length && { loginLookups }),
         ...(version !== known && { snapshot: backend.snapshot(), capabilities: backend.capabilities }),
       };
     },
@@ -42,6 +44,7 @@ export function workspaceActions(backend, inject) {
       if (!backend.teamCut) throw new Error("Unknown workspace action.");
       return backend.teamCut.take(cut, rev);
     },
+    loginNames: (id, entries) => backend.loginLookups?.answer(id, entries),
     // The app's own half of Spaces, asked by the link itself: a person's built-in spaces, what
     // stays to do when a member leaves, and the copy of a space that a link opens.
     spaces(name, ...args) {

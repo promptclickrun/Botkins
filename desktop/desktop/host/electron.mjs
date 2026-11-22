@@ -132,8 +132,8 @@ export function electronHost({ window, showWindow, viewing, fillSecurePage, star
       // `adopted`: a key was opened with the earlier entry, so what holds it is saved again under Botkins' own.
       return Object.assign(keyStore(own, earlier), { adopted: earlier.size > 0 });
     },
-    updates() {
-      const updates = desktopUpdates({ app, native: autoUpdater, notify: version => {
+    updates({ auto, idle }) {
+      const updates = desktopUpdates({ app, native: autoUpdater, auto, idle, notify: version => {
         if (!Notification.isSupported()) return;
         const note = new Notification({ title: "Botkins update available", body: "Version " + version + " is available. Click to review it." });
         note.on("click", async () => {

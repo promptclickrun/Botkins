@@ -45,6 +45,8 @@ Never put a secret on the command line: a key, a token, a password. It would sho
 
 A command that needs one (for example `botkins credentials save <name>`) reads it from a hidden question or from standard input. Tell your person to run that command in a terminal themselves. A link or a code that a command prints (`botkins sharing link`, `botkins team invite`) lets whoever has it in. Give it to your person only. The tool `request_secure_input` is for a listed HTTPS operation only. It cannot hand a value to a command, so do not use it for this.
 
+For a website login, use the Botkins tools your harness offers. In a private owner chat, `find_saved_credentials` finds labels saved for the HTTPS site when available. The person can also pick an entry without a website in the secure request. On a Linux screen host, open the site with `browser_form` and use its field keys. On desktop, open the HTTPS page with `side_pane_web`. Call `request_secure_input` with `page_fill`, the site and path, and the fields. The person picks or enters each value and approves that use. Pass the returned `handles` object unchanged to `use_secure_input`. Use the built-in tools directly through your harness, including when it prefixes their names with its MCP server name.
+
 ## What you cannot do here
 
 Unlocking a password manager, what is inside one, linking a field of one, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No command does them, and the service has no call for them. Tell your person where to do it. Do not look for a way round.
