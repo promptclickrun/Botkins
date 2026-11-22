@@ -170,7 +170,12 @@ function rowPhase(row, state) {
 }
 const PLAIN = { "needs-you": "Needs you", thinking: "Thinking", working: "Working", done: "Done", failed: "Stopped" };
 
-/** What a chat is doing now, in a few words (sealed: a step's name is the bot's content). */
+/**
+ * What a chat is doing now, in a few words (sealed: a step's name is the bot's content): the step
+ * that runs, else what the bot says it is doing, else the step it did last. A step takes moments
+ * and the thinking between two takes most of a turn, so without that last one a row would say
+ * "Working…" nearly all the time.
+ */
 function rowLabel(row, state) {
   if (row.request) return clip(firstLine(row.request.title), 60) || "Needs you";
   if (!row.working) return endedWord(row.run);
@@ -179,7 +184,9 @@ function rowLabel(row, state) {
   if (step) return clip(firstLine(step.label || step.name), 60) || "Working…";
   const intent = firstLine(state.intents?.[row.chat.id]);
   if (intent) return clip(intent, 60);
-  return (row.run.steps?.length ?? 0) > 0 ? "Working…" : "Thinking…";
+  const last = row.run.steps?.[row.run.steps.length - 1];
+  if (last) return clip(firstLine(last.label || last.name), 60) || "Working…";
+  return "Thinking…";
 }
 
 /** The newest message of the turn that is the reply (not text written on the way). */

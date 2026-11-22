@@ -70,6 +70,16 @@ autoUpdater.on("before-quit-for-update", () => {
 
 // The chat open in the window, as the page last said (handlers.viewing).
 let viewingChat = null;
+/**
+ * Tells the other computer in use whether this window is in front, and with which chat, so that it
+ * doesn't ping a phone for a reply the person is reading here. Said again whenever the window
+ * comes to the front or leaves it: a window left behind must not keep a phone quiet.
+ */
+function tellWatching() {
+  if (!remote?.inUse()) return;
+  const front = !!win && !win.isDestroyed() && win.isVisible() && win.isFocused();
+  void remote.call("link.push.presence", [front, viewingChat ?? undefined]).catch(() => {});
+}
 const viewerGuests = new Set();
 /**
  * What the window shows: this computer's workspace, or the state of the other computer in use
@@ -231,6 +241,7 @@ function openWindow() {
   });
   win.on("show", syncTray);
   win.on("hide", syncTray);
+  for (const change of ["focus", "blur", "show", "hide"]) win.on(change, tellWatching);
   win.loadFile(html);
 }
 const teamUrlFrom = (argv) => argv.find((value) => typeof value === "string" && parseJoinUrl(value));
@@ -387,10 +398,8 @@ else
         viewingChat = typeof chatId === "string" && chatId ? chatId : null;
         // While another computer is in use: it sends the messages of the chat on screen, and
         // learns that this window has it in front (so it doesn't ping a phone for that chat).
-        if (remote.inUse()) {
-          remote.watch(viewingChat ? [viewingChat] : []);
-          void remote.call("link.push.presence", [!!win && !win.isDestroyed() && win.isFocused(), viewingChat ?? undefined]).catch(() => {});
-        }
+        if (remote.inUse()) remote.watch(viewingChat ? [viewingChat] : []);
+        tellWatching();
       },
       // Other computers' Botkins this app uses (Settings › Computers and teams, the first launch and the switcher). A phone can't make these calls.
       remoteHosts: () => ({ using: remote.inUse(), hosts: remote.list() }),

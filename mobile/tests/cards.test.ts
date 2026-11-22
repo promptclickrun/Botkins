@@ -154,6 +154,19 @@ test("a card with several chats has one row each and no steps; one that needs th
   assert.equal(cardOver(card.state), false);
 });
 
+test("between two steps a row says what the bot did last, never only that it is working", () => {
+  // A step takes moments; the thinking between two takes most of a turn.
+  const state = world();
+  for (const step of state.runs[0].steps!) step.status = "Done";
+  const row = (id: string) => botCard(state, "patch", { now: NOW })!.detail!.c.find((item) => item.id === id)!;
+  assert.equal(row("login").l, "Running npm test", "the newest step");
+  assert.equal(row("pr").l, "Thinking…", "nothing done yet");
+  state.intents.login = "Checking the token's renewal";
+  assert.equal(row("login").l, "Checking the token's renewal", "what the bot says it is doing comes first");
+  state.runs[0].steps![2].status = "Running";
+  assert.equal(row("login").l, "Running npm test", "and a step that runs before that");
+});
+
 test("a card whose chats all ended says done, with the reply's first line", () => {
   const state = world();
   state.chats = state.chats.filter((chat) => chat.id === "log");
@@ -235,6 +248,100 @@ test("one card for all Botkins stays under Apple's 4 KB however long the words a
   // What a push adds around the content: the event, the dates, the relevance and an alert.
   const around = 400;
   assert.ok(Buffer.byteLength(JSON.stringify(card.state)) + sealedLength + around < 4096);
+});
+
+// ── What the widget extension decodes (targets/widgets) ────────────────────────────────────────
+
+type SwiftField = { type: string; optional: boolean };
+/** The stored properties of the Swift struct `name` in `source`: each one's type, and whether it may be missing. */
+function swiftFields(source: string, name: string): Record<string, SwiftField> {
+  const open = source.indexOf("{", source.indexOf("struct " + name));
+  assert.ok(open > 0, "the Swift struct " + name);
+  const fields: Record<string, SwiftField> = {};
+  let depth = 0;
+  for (const line of source.slice(open + 1).split("\n")) {
+    // Only the struct's own lines: not a nested struct's, an initializer's or a function's.
+    const field = depth === 0 ? /^\s*(?:public )?(?:var|let) (\w+): ([^={]+?)\s*$/.exec(line) : null;
+    if (field) fields[field[1]!] = { type: field[2]!.replace(/\?$/, ""), optional: field[2]!.endsWith("?") };
+    depth += (line.match(/\{/g)?.length ?? 0) - (line.match(/\}/g)?.length ?? 0);
+    if (depth < 0) break;
+  }
+  return fields;
+}
+
+/**
+ * What stops Swift's JSONDecoder from decoding `value` as `struct`, as it comes out of JSON. iOS drops
+ * a push whose content-state doesn't decode, and a sealed part that doesn't is shown as no words at all.
+ * A key Swift doesn't declare counts too (the card would never show it), unless it is in `extra`.
+ */
+function decodeProblems(value: unknown, struct: string, structs: Record<string, Record<string, SwiftField>>, extra: string[] = [], path = struct): string[] {
+  const fields = structs[struct]!;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return [path + " is not an object"];
+  const problems: string[] = [];
+  const fitsType = (item: unknown, type: string, at: string): boolean => {
+    if (type === "String") return typeof item === "string";
+    if (type === "Int") return Number.isInteger(item);
+    if (type === "Double") return typeof item === "number";
+    if (type === "Bool") return typeof item === "boolean";
+    const list = /^\[(\w+)\]$/.exec(type);
+    if (list) return Array.isArray(item) && item.every((entry, index) => fitsType(entry, list[1]!, at + "[" + index + "]"));
+    if (!structs[type]) return false;
+    const inner = decodeProblems(item, type, structs, extra, at);
+    problems.push(...inner);
+    return true;
+  };
+  for (const [key, field] of Object.entries(fields)) {
+    const item = (value as Record<string, unknown>)[key];
+    if (item === undefined || item === null) {
+      if (!field.optional) problems.push(path + "." + key + " is missing");
+    } else if (!fitsType(item, field.type, path + "." + key)) problems.push(path + "." + key + " is not " + field.type);
+  }
+  for (const key of Object.keys(value)) if (!fields[key] && !extra.includes(key)) problems.push(path + "." + key + " is not in the Swift type");
+  return problems;
+}
+
+test("what the computer sends decodes as the widget extension's Swift types", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { activityState } = await import("../link-host/push.mjs");
+  const attributes = readFileSync(new URL("../targets/widgets/BotkinActivityAttributes.swift", import.meta.url), "utf8");
+  const sealed = readFileSync(new URL("../targets/widgets/Sealed.swift", import.meta.url), "utf8");
+  const plain = { ContentState: swiftFields(attributes, "ContentState"), Chat: swiftFields(attributes, "Chat") };
+  const words = { CardDetail: swiftFields(sealed, "CardDetail"), Chat: swiftFields(sealed, "Chat"), Step: swiftFields(sealed, "Step"), Ask: swiftFields(sealed, "Ask") };
+  // The parser reads the files as they are: these are the properties every card needs.
+  assert.deepEqual(Object.keys(plain.ContentState).filter((key) => !plain.ContentState[key]!.optional), ["phase", "label", "steps", "startedAt"]);
+  assert.deepEqual(Object.keys(words.Chat).filter((key) => !words.Chat[key]!.optional), ["id", "t", "l"]);
+
+  const worlds: [string, ReturnType<typeof world>][] = [["as it is", world()]];
+  const asking = world();
+  asking.requests.push({ id: "ask", chatId: "login", botId: "patch", kind: "permission", title: "Run a command", preview: "git push --force", remember: "git push" });
+  asking.requests.push({ id: "ask2", chatId: "week", botId: "mira", kind: "question", title: "Which day?", choices: ["Tue 10:00", "Wed 2:00"], freeform: true });
+  worlds.push(["with requests", asking]);
+  const single = world();
+  single.chats = single.chats.filter((chat) => chat.id === "login");
+  worlds.push(["one chat at work", single]);
+  const ended = world();
+  ended.chats = ended.chats.filter((chat) => chat.id === "log");
+  worlds.push(["all ended", ended]);
+  // A step with no time and a run with none of its own: neither may put a null where Swift wants a number.
+  const bare = world();
+  bare.chats = bare.chats.filter((chat) => chat.id === "login");
+  for (const step of bare.runs[0].steps!) delete (step as { started?: number }).started;
+  worlds.push(["steps without a time", bare]);
+
+  for (const [name, state] of worlds) {
+    for (const botId of ["patch", null]) {
+      const card = botCard(state, botId, { now: NOW, look: looks });
+      if (!card) continue;
+      const wire = JSON.parse(JSON.stringify({ ...card.state, sealed: "…" }));
+      assert.deepEqual(decodeProblems(wire, "ContentState", plain), [], name + ": the card's state");
+      // `x` (the approval looks destructive) is read by the notification extension only.
+      assert.deepEqual(decodeProblems(JSON.parse(JSON.stringify(card.detail)), "CardDetail", words, ["x"]), [], name + ": the sealed words");
+    }
+  }
+  // A chat's own card (an older phone's): the same Swift type, the first five properties.
+  for (const run of [world().runs[0], { ...world().runs[2] }, null]) {
+    assert.deepEqual(decodeProblems(JSON.parse(JSON.stringify(activityState(world(), "login", run, true))), "ContentState", plain), []);
+  }
 });
 
 // ── The phone's side (src/state/cards.ts) ──────────────────────────────────────────────────────
