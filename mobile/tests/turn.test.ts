@@ -12,7 +12,7 @@ import { type FetchLike, LinkClient, pair, type Pairing } from "../src/link/clie
 import { parsePairingUrl } from "../src/link/pairing";
 import type { ChatDetail, Live, Message, PanePanel, Run, Step, Subagent } from "../src/link/types";
 import { helperDetail, latestTurn, railLabel } from "../src/features/chat/helpers";
-import { answerText, chatTimeline, endingOf, type Item, markKeys, noteMarks, type RunMarks, stepLabel, TIMELINE_V1, type TimelineInput, underWay, workSummary } from "../src/features/chat/turn";
+import { answerText, chatTimeline, createTimelineRunSelector, endingOf, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, markKeys, noteMarks, type RunMarks, stepLabel, TIMELINE_V1, type TimelineInput, underWay, workSummary } from "../src/features/chat/turn";
 import { mergeChat } from "../src/state/store";
 
 const T0 = 1_700_000_000_000;
@@ -58,6 +58,8 @@ test("a steer from a computer without the capability lands between the steps aro
   const marks: RunMarks = { marks: { "s:a": 0, "s:b": 9, [markKeys(live, [ask, steer]).at(-1)!]: 9, "s:c": 22 }, text: "Checking. Now staging. Almost" };
   const shown = chatTimeline(input({ messages: [ask, steer], running: live, live: { stream: "Checking. Now staging. Almost" }, marks: { r1: marks } }));
   assert.deepEqual(shape(shown), ["user:Do the thing", "steps:a", "text:Checking.", "steps:b", "user:Use staging", "text:Now staging.", "live:c|Almost", "fold"]);
+  const leaf = shown.find((item) => item.kind === "live");
+  assert.ok(leaf?.kind === "live" && leaf.liveFrom === 22, "the active leaf retains the legacy body's cut offset");
 
   // After the turn: the steps fold into work lines in place, and the reply comes last.
   const done = run({ status: "Completed", finished: at(9), steps: steps.map((s) => ({ ...s, status: "Done", finished: s.started + 500 })) });
@@ -403,6 +405,86 @@ test("a long turn's earlier work rows are kept when the run arrives again with o
   // The steps before the interim text did not change: that row is the same object, though its run is a new one.
   assert.equal(work(second.items)[0], work(first.items)[0]);
   assert.equal(second.items.find((item) => item.kind === "text"), first.items.find((item) => item.kind === "text"));
+});
+
+test("the structural timeline leaves the active body at its real offset for both host descriptors", () => {
+  const earlier: Message = { role: "assistant", text: "Already done.", runId: "r0", time: at(-2) };
+  const previous = run({ id: "r0", status: "Completed", finished: at(-1) });
+  const activeRun = run({ id: "r1", time: at(1), steps: [step("a", 2)] });
+  const messages = [
+    { role: "user" as const, text: "Earlier", runId: "r0", time: at(-3) },
+    earlier,
+    { ...ask, time: at(1) },
+  ];
+  for (const timeline of [false, true]) {
+    const ownership = indexMessageOwnership(messages);
+    const structural = chatTimeline(input({ messages, runs: { r0: previous }, running: activeRun, live: { stream: "Hello", thinking: "" }, timeline, ownership }));
+    const live = structural.find((item) => item.kind === "live");
+    assert.ok(live?.kind === "live", "the active leaf is present");
+    assert.equal(live.liveFrom, 0, "a descriptor with no earlier body cut starts at zero");
+    assert.deepEqual(shape(structural), ["user:Earlier", "assistant:Already done.", "user:Do the thing", "live:a|Hello", "fold"]);
+  }
+});
+
+test("an empty active run keeps a leaf slot for the first body append", () => {
+  const current = run({ steps: [] });
+  const items = chatTimeline(input({ messages: [ask], running: current, live: { stream: "", thinking: "" }, livePlaceholder: true }));
+  assert.ok(items.some((item) => item.kind === "live"), "the body-only leaf has a stable slot before its first text");
+});
+
+test("a chat keeps its structural run for ordinary appends and publishes changed metadata and completed bodies", () => {
+  const select = createTimelineRunSelector();
+  const first = run({ reasoning: [{ id: "r", text: "Start", started: 1 }] });
+  assert.equal(select(first), first);
+  const more = { ...first, reasoning: [{ ...first.reasoning![0], text: "Start here" }] };
+  assert.equal(select(more), first);
+  const finishedThought = { ...more, reasoning: [{ ...more.reasoning[0], finished: 2 }] };
+  assert.equal(select(finishedThought), finishedThought);
+  const done = { ...finishedThought, status: "Completed" };
+  assert.equal(select(done), done);
+  const corrected = { ...done, reasoning: [{ ...done.reasoning[0], text: "Revised" }] };
+  assert.equal(select(corrected), corrected);
+});
+
+test("a live slot contributes a row only when its segment has something visible", () => {
+  const current = run({ steps: [] });
+  const item: Extract<Item, { kind: "live" }> = { kind: "live", key: "live", run: current, steps: [], text: "", thinking: "", liveFrom: 6, reasoningIds: [], bodyMode: "segment" };
+  assert.equal(liveRowVisible(item, { stream: "before  ", thinking: "Already above the steer" }, current, SHOW), false);
+  assert.equal(liveRowVisible(item, { stream: "before  after", thinking: "" }, current, SHOW), true);
+  const raw = { ...item, bodyMode: "raw" as const, reasoningIds: undefined, liveFrom: 0 };
+  assert.equal(liveRowVisible(raw, { stream: "", thinking: "Thinking" }, current, { ...SHOW, thinking: "hide" }), false);
+  assert.equal(liveRowVisible(raw, { stream: "", thinking: "Thinking" }, current, SHOW), true);
+});
+
+test("the newest thought stays attached to its work row if a steer arrives while it grows", () => {
+  const current = run({ reasoning: [{ id: "thought", text: "Looking", started: at(1) }] });
+  const steer: Message = { role: "user", text: "Check this too", steeredRunId: current.id, time: at(2) };
+  const items = chatTimeline(input({ timeline: true, messages: [ask, steer], running: current, live: { stream: "Reply" } }));
+  const work = items.find((item) => item.kind === "work");
+  const tail = items.find((item) => item.kind === "live");
+  assert.deepEqual(work?.reasoningIds, ["thought"]);
+  assert.deepEqual(tail?.reasoningIds, []);
+});
+
+test("the active leaf records only reasoning after its last structural boundary", () => {
+  const current = run({ steps: [step("a", 1)], reasoning: [{ id: "old", text: "Earlier", started: at(0.5) }, { id: "new", text: "Latest", started: at(2) }] });
+  const steer: Message = { role: "user", text: "Keep going", steeredRunId: "r1", time: at(1.5) };
+  const items = chatTimeline(input({ timeline: true, messages: [ask, steer], running: current, live: { stream: "Reply", thinking: "" } }));
+  const live = items.find((item) => item.kind === "live");
+  assert.ok(live?.kind === "live");
+  assert.deepEqual(live.reasoningIds, ["new"]);
+});
+
+test("active leaf body resolution keeps segmented, empty and raw reasoning cases distinct", () => {
+  const runNow = run({ reasoning: [{ id: "a", text: "First", started: at(1) }, { id: "b", text: "Second", started: at(2) }] });
+  const segmented = { kind: "live", key: "live", run: runNow, steps: [], thinking: "old", text: "", liveFrom: 6, bodyMode: "segment" } as Extract<Item, { kind: "live" }>;
+  assert.deepEqual(resolveLiveBody(segmented, { stream: "Hello\n  code", thinking: "raw" }, runNow), { text: "code", thinking: "raw" });
+  const raw = { ...segmented, bodyMode: "raw", liveFrom: 0 } as Extract<Item, { kind: "live" }>;
+  assert.deepEqual(resolveLiveBody(raw, { stream: "  code", thinking: "raw" }, runNow), { text: "  code", thinking: "raw" });
+  const multi = { ...segmented, reasoningIds: ["a", "b"] } as Extract<Item, { kind: "live" }>;
+  assert.equal(resolveLiveBody(multi, { stream: "", thinking: "ignored" }, runNow).thinking, "First\n\nSecond");
+  const empty = { ...segmented, reasoningIds: [] } as Extract<Item, { kind: "live" }>;
+  assert.equal(resolveLiveBody(empty, { stream: "", thinking: "stale raw" }, runNow).thinking, "", "an explicit empty trailing segment does not repeat old thinking");
 });
 
 test("the worked example in docs/turn-timeline.md reads as the doc says, from either computer", () => {

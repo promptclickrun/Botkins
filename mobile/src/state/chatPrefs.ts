@@ -37,11 +37,7 @@ export type ChatPrefs = {
   readAloud: boolean;
   /** The person chose `readAloud` on this phone. Until then it follows the computer's Settings › Voice. */
   readAloudPicked?: boolean;
-  /**
-   * A reply as the bot writes it. Through the relay (each update there costs a relay message) it comes in
-   * complete sentences every couple of seconds and is painted word by word here (src/features/chat/paint.ts).
-   * Off, a reply lands whole and is shown word by word (src/features/chat/reveal.ts).
-   */
+  /** A reply as the bot writes it. Through the relay this requests sentence-sized updates; the phone shows each received update whole. */
   textStreaming: boolean;
 };
 

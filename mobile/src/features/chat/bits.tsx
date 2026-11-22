@@ -1,11 +1,11 @@
 // Small pieces the chat screens share: step status marks, group avatars, a quiet preview of a
 // message, the bot's typing dots, and how far the bot's work keeps from the screen's edge.
-import { Ban, Check, Circle, X } from "lucide-react-native";
-import { useLayoutEffect } from "react";
-import { ActivityIndicator, Animated, Easing, useAnimatedValue, View, type ViewStyle } from "react-native";
+import { Ban, Check, Circle, Clock3, X } from "lucide-react-native";
+import { createContext, useContext, useLayoutEffect } from "react";
+import { Animated, Easing, useAnimatedValue, View, type ViewStyle } from "react-native";
 import type { Bot, Step } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
-import { BotAvatar, space, useOnShow, useTheme } from "@/ui";
+import { BotAvatar, space, useTheme } from "@/ui";
 import { useReducedMotion } from "@/ui/BotAvatar";
 
 /**
@@ -15,46 +15,26 @@ import { useReducedMotion } from "@/ui/BotAvatar";
  */
 export const workWidth: ViewStyle = { maxWidth: 600, marginRight: space.huge + space.lg };
 
-function Dot({ delay }: { delay: number }) {
+/** A visible status gets one native pulse when its activity changes, then holds still. */
+export const StatusMotion = createContext(false);
+
+export function TypingDots({ status }: { status?: string }) {
   const { colors } = useTheme();
-  // Only a dot that can be seen moves (useOnShow), and Reduce Motion stills it.
-  const seen = useOnShow();
-  const still = useReducedMotion() || !seen;
+  const visible = useContext(StatusMotion);
+  const reduced = useReducedMotion();
   const phase = useAnimatedValue(0);
   useLayoutEffect(() => {
     phase.setValue(0);
-    if (still) return;
-    const legMs = 320;
-    const duration = 2 * legMs + 260;
-    const ease = Easing.inOut(Easing.quad);
-    const bounce = Animated.loop(Animated.timing(phase, {
-      delay, duration, toValue: 2, useNativeDriver: true, isInteraction: false,
-      // Phase 0 to 1 rises, 1 to 2 falls, then phase 2 holds until the next iteration.
-      easing: (t) => {
-        const leg = t * duration / legMs;
-        if (leg < 1) return ease(leg) / 2;
-        return (1 + ease(Math.min(leg - 1, 1))) / 2;
-      },
-    }));
-    bounce.start();
-    return () => bounce.stop();
-  }, [delay, phase, still]);
-  const inputRange = [0, 1, 2];
-  const style = {
-    opacity: phase.interpolate({ inputRange, outputRange: [0.35, 1, 0.35] }),
-    transform: [{ translateY: phase.interpolate({ inputRange, outputRange: [0, -2.5, 0] }) }],
-  };
-  return <Animated.View style={[{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.muted }, style]} />;
-}
-
-/** Three dots that bounce in turn while the bot works. */
-export function TypingDots() {
+    if (!visible || reduced) return;
+    const pulse = Animated.timing(phase, { toValue: 1, duration: 620, easing: Easing.inOut(Easing.quad), useNativeDriver: true, isInteraction: false });
+    pulse.start();
+    return () => pulse.stop();
+  }, [phase, reduced, visible, status]);
+  const opacity = phase.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 1, 0.55] });
   return (
-    <View style={{ flexDirection: "row", gap: 4, paddingTop: 2 }}>
-      <Dot delay={0} />
-      <Dot delay={150} />
-      <Dot delay={300} />
-    </View>
+    <Animated.View style={{ flexDirection: "row", gap: 4, paddingTop: 2, opacity }}>
+      {[0, 1, 2].map((dot) => <View key={dot} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.muted }} />)}
+    </Animated.View>
   );
 }
 
@@ -70,14 +50,14 @@ export function plainPreview(text: string): string {
     .trim();
 }
 
-/** A step's state as a small mark: a spinner while running, a check when done, a cross when it failed. */
+/** A step's state stays readable throughout a long command without continuously animating each row. */
 export function StepMark({ status, size = 16 }: { status: Step["status"]; size?: number }) {
   const { colors } = useTheme();
   const box = { width: size + 4, height: size + 4, alignItems: "center", justifyContent: "center" } as const;
   if (status === "Running")
     return (
       <View style={box} accessibilityLabel="Running">
-        <ActivityIndicator size="small" color={colors.muted} style={{ transform: [{ scale: size / 20 }] }} />
+        <Clock3 size={size} color={colors.muted} strokeWidth={2.2} />
       </View>
     );
   if (status === "Done")

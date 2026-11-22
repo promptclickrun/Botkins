@@ -3,7 +3,7 @@
 import { PendingSends } from "../../link-host/pending-sends";
 import { create } from "zustand";
 import type { LinkRoute, LinkState, Pairing } from "@/link/client";
-import type { ChatDetail, Live, Message, ModelInfo, Parts, ProviderStatus, Run, SkillInfo } from "@/link/types";
+import type { ChatDetail, Live, Message, ModelInfo, Parts, ProviderStatus, ReasoningView, Run, SkillInfo } from "@/link/types";
 
 /** A chat's messages as loaded so far: a run of them ending at the newest. */
 export type ChatView = {
@@ -151,6 +151,14 @@ export function applyParts(incoming: Record<string, unknown>) {
         chats = { ...chats, [id]: value ? mergeChat(chats[id], value as ChatDetail) : undefined };
       } else if (name.startsWith("run:")) {
         running = { ...running, [name.slice(4)]: (value as Run | null) ?? null };
+      } else if (name.startsWith("reasoning:")) {
+        const id = name.slice(10);
+        const held = running[id];
+        const view = value as ReasoningView | null;
+        if (held && (!view || held.id === view.run)) {
+          if (view) running = { ...running, [id]: { ...held, reasoning: view.items } };
+          else if (held.status === "Working") running = { ...running, [id]: { ...held, reasoning: undefined } };
+        }
       } else {
         if (parts === state.parts) parts = { ...parts };
         Object.assign(parts, { [name]: value });

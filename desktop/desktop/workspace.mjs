@@ -1,4 +1,5 @@
 import { addUserMessage, recordVoiceLine } from "./link/voice-history.mjs";
+import { reasoningPreview } from "./link/reasoning-preview.mjs";
 import { commitInterim, finishReply, wholeMessage } from "./transcript.mjs";
 import { stripVTControlCharacters } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
@@ -1694,11 +1695,7 @@ export class Workspace {
           if (type.startsWith("assistant.reasoning")) {
             const entry = run.reasoning?.find((r) => r.id === data?.reasoningId);
             if (entry) entry.botId ??= bot.id;
-            task.thinking = (run.reasoning ?? [])
-              .filter((r) => r.botId === bot.id && r.text)
-              .map((r) => r.text)
-              .join("\n\n")
-              .slice(-4000);
+            task.thinking = reasoningPreview(run.reasoning ?? [], bot.id);
           }
           this.notify();
         } else {

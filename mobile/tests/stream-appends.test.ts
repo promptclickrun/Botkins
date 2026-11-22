@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
+import { compactWorkingRun, reasoningDelta } from "../link-host/parts.mjs";
 import { checkJoin, LinkClient, type LinkOptions, pair, startJoin } from "../src/link/client";
 import { applyParts, useApp } from "../src/state/store";
 import { activityLabel, botActivity, chatActivity, needsYou, panelRefreshing } from "../src/state/sessionActivity";
@@ -155,6 +156,200 @@ test("legacy sync and invalid opt-ins retain the full live bytes", async (t) => 
   assert.equal(expired.parts[key].stream.from, 0);
   const oversized = await sync({ [id]: { id: quiet.parts[key].id, stream: 500, thinking: 4 } });
   assert.equal(oversized.parts[key].thinking.from, 0);
+});
+
+test("negotiated reasoning appends do not replay a working run", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const client = await phone(true, undefined, { lightSteps: true });
+  const chat = backend.state.chats.find((c) => !c.botIds)!;
+  const id = chat.id;
+  backend.state.streams[id] = "reply";
+  backend.state.thinking[id] = "thinking";
+  backend.state.runs = [{ id: "run-reasoning", chatId: id, status: "Working", steps: [{ id: "tool", name: "bash", input: "x".repeat(900), status: "Running", started: 1 }], reasoning: [{ id: "thought", text: "first", started: 1 }] }];
+  backend.changed();
+  const first = await client.call<any>("link.sync", {
+    epoch: link.epoch,
+    watch: [id],
+    reasoningWatch: [id],
+    appends: { [id]: { id: "initial", stream: 0, thinking: 0 } },
+    steps: "light",
+    wait: 0,
+  });
+  assert.ok(first.parts.meta.capabilities.includes("reasoning-appends-v1"));
+  const text = first.parts["text:" + id];
+  backend.state.thinking[id] += " next";
+  backend.state.runs[0].reasoning[0].text += " next";
+  backend.changed();
+  const next = await client.call<any>("link.sync", {
+    epoch: link.epoch,
+    have: first.v,
+    watch: [id],
+    reasoningWatch: [id],
+    appends: { [id]: { id: text.id, stream: text.stream.add.length, thinking: text.thinking.add.length } },
+    steps: "light",
+    wait: 0,
+  });
+  assert.equal(next.parts["run:" + id], undefined, "reasoning-only changes do not resend the whole run");
+  assert.deepEqual(next.parts["reasoning:" + id].items, [{ id: "thought", started: 1, from: 5, add: " next" }]);
+  let latest = next;
+  let thinkingOffset = text.thinking.add.length + 5;
+  let reasoningOffset = 10;
+  let bytes = JSON.stringify(next.parts).length;
+  for (let update = 2; update <= 100; update++) {
+    backend.state.thinking[id] += " x";
+    backend.state.runs[0].reasoning[0].text += " x";
+    backend.changed();
+    const news = await client.call<any>("link.sync", {
+      epoch: link.epoch,
+      have: latest.v,
+      watch: [id],
+      reasoningWatch: [id],
+      appends: { [id]: { id: text.id, stream: text.stream.add.length, thinking: thinkingOffset } },
+      steps: "light",
+      wait: 0,
+    });
+    assert.equal(news.parts["run:" + id], undefined);
+    bytes += JSON.stringify(news.parts).length;
+    latest = news;
+    thinkingOffset += 2;
+    reasoningOffset += 2;
+  }
+  assert.ok(bytes < 100 * 500, "100 reasoning updates stay bounded to deltas");
+  backend.state.runs[0].steps[0].input += " changed";
+  backend.changed();
+  const afterToolBody = await client.call<any>("link.sync", {
+    epoch: link.epoch,
+    have: latest.v,
+    watch: [id],
+    reasoningWatch: [id],
+    appends: { [id]: { id: text.id, stream: text.stream.add.length, thinking: thinkingOffset } },
+    steps: "light",
+    wait: 0,
+  });
+  assert.equal(afterToolBody.parts["run:" + id], undefined, "long invisible tool-body changes stay compact");
+});
+
+test("whole mode negotiates compact light runs and explicit reasoning without reply bodies", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const client = await phone(true);
+  const id = backend.state.chats.find((c) => !c.botIds)!.id;
+  backend.state.runs = [{ id: "run-whole", chatId: id, status: "Working", steps: [{ id: "tool", name: "bash", input: "x".repeat(900), status: "Running", started: 1 }], reasoning: [{ id: "thought", text: "thinking", started: 1 }] }];
+  backend.changed();
+  const args = { epoch: link.epoch, watch: [id], text: false, steps: "light", reasoningWatch: [], wait: 0 };
+  const compact = await client.call<any>("link.sync", args);
+  assert.equal(compact.parts["run:" + id].reasoning, undefined);
+  assert.equal(compact.parts["run:" + id].steps[0].more, true);
+  assert.equal(compact.parts["reasoning:" + id], undefined);
+
+  const detailed = await client.call<any>("link.sync", { ...args, have: compact.v, reasoningWatch: [id] });
+  assert.deepEqual(detailed.parts["reasoning:" + id].items.map((item: any) => item.add), ["thinking"]);
+  assert.equal(detailed.parts["run:" + id], undefined);
+
+  const full = await client.call<any>("link.sync", { epoch: link.epoch, have: detailed.v, watch: [id], text: false, wait: 0, reasoningWatch: [] });
+  assert.equal(full.parts["run:" + id].steps[0].input.length, 900);
+  assert.equal(full.parts["run:" + id].reasoning, undefined);
+});
+
+test("a lost reasoning clear is replayed until acknowledged, then the phone stays quiet", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const client = await phone(true);
+  const id = backend.state.chats[0].id;
+  const key = "reasoning:" + id;
+  backend.state.runs = [{ id: "clearing", chatId: id, status: "Working", reasoning: [{ id: "thought", started: 1, text: "One" }] }];
+  backend.changed();
+  const read = (have: Record<string, number>) => client.call<any>("link.sync", { epoch: link.epoch, have, watch: [id], appends: {}, reasoningWatch: [id], wait: 0 });
+  const first = await read({});
+  assert.equal(first.parts[key].items[0].add, "One");
+  backend.state.runs[0].reasoning = undefined;
+  backend.changed();
+  assert.equal((await read(first.v)).parts[key], null);
+  const retry = await read(first.v);
+  assert.equal(retry.parts[key], null);
+  assert.deepEqual((await read(retry.v)).parts, {});
+});
+
+test("reasoning revisions reset equal-length replacements and remove missing items", () => {
+  const previous = { run: "run", items: [{ id: "a", text: "old!", started: 1 }, { id: "empty", text: "", started: 2 }, { id: "gone", text: "bye", started: 3 }] };
+  const current = { run: "run", items: [{ id: "a", text: "new!", started: 1 }, { id: "empty", text: "", started: 2 }] };
+  const replaced = reasoningDelta(current, previous)!;
+  assert.equal(replaced.reset, undefined);
+  assert.equal(replaced.items.find((item: any) => item.id === "a").from, 0);
+  assert.deepEqual(replaced.remove, ["gone"]);
+  assert.deepEqual(reasoningDelta(current, previous), replaced);
+  assert.equal(reasoningDelta(current, current), undefined);
+  const compact = compactWorkingRun({ status: "Working", reasoning: [{ id: "a", text: "hidden", started: 1 }], steps: [{ id: "long", name: "bash", input: "x".repeat(401), output: "y".repeat(401) }, { id: "short", name: "bash", input: "ok" }, { id: "ask", name: "ask_user", input: "?" }] });
+  assert.equal(compact.reasoning, undefined);
+  assert.equal(compact.steps[0].more, true);
+  assert.equal(compact.steps[1].input, "ok");
+  assert.equal(compact.steps[2].input, "?");
+});
+
+test("a long reasoning turn bounds its cursor without replaying the acknowledged prefix", () => {
+  const items = Array.from({ length: 129 }, (_, index) => ({ id: "t" + index, text: "x", started: index }));
+  const previous = { run: "run", items };
+  assert.equal(reasoningDelta(previous, previous), undefined);
+  const current = [{ id: "t0", text: "z", started: 0 }, ...items.slice(1), { id: "t129", text: "y", started: 129 }];
+  const next = reasoningDelta({ run: "run", items: current }, previous)!;
+  assert.deepEqual(next.items.map((item: any) => item.id), ["t0", "t129"]);
+  assert.equal(next.items[0].from, 0);
+  assert.equal(next.items[1].from, 0);
+});
+
+test("a completion snapshot wins over a trailing reasoning clear", () => {
+  const completed = { id: "done", chatId: "c-done", status: "Completed", reasoning: [{ id: "thought", text: "authoritative", started: 1, finished: 2 }] };
+  applyParts({ "run:c-done": completed });
+  applyParts({ "reasoning:c-done": null });
+  assert.deepEqual(useApp.getState().running["c-done"]?.reasoning, completed.reasoning);
+});
+
+test("a complete snapshot from an older host can remove reasoning during the same run", () => {
+  const run = { id: "older", chatId: "older-chat", status: "Working" };
+  applyParts({ "run:older-chat": { ...run, reasoning: [{ id: "one", started: 1, text: "Before" }] } });
+  applyParts({ "run:older-chat": run });
+  assert.equal(useApp.getState().running["older-chat"]?.reasoning, undefined);
+});
+
+test("a rolling thinking preview never replays an unchanged reply and follows the current group speaker", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const chat = backend.state.chats[0];
+  const id = chat.id;
+  const first = { id: "one", started: 1, text: "Old thought", botId: "first" };
+  const last = { id: "two", started: 2, text: "123456789.".repeat(399), botId: "second" };
+  const run = { id: "rolling", chatId: id, status: "Working", reasoning: [first, last] };
+  const reply = "The reply so far. ".repeat(300);
+  backend.state.runs = [run];
+  backend.state.speakers[id] = last.botId;
+  backend.state.streams[id] = reply;
+  backend.state.thinking[id] = last.text;
+  backend.changed();
+  const textParts: { stream: { add: string }; thinking: { add: string } }[] = [];
+  const news = link.news.bind(link);
+  link.news = (...args) => {
+    const result = news(...args);
+    const text = result?.text && JSON.parse(result.text).parts["text:" + id];
+    if (text) textParts.push(text);
+    return result;
+  };
+  let visible: { stream: string; thinking: string } | undefined;
+  const client = await phone(true, (parts) => {
+    if ("text:" + id in parts) visible = parts["text:" + id] as typeof visible;
+  }, { lightSteps: true });
+  client.watch([id]);
+  client.start();
+  await until(() => visible?.stream === reply && visible?.thinking === last.text);
+  textParts.length = 0;
+  for (const suffix of [" first extension.", " another extension."]) {
+    last.text += suffix;
+    backend.state.thinking[id] = last.text.slice(-4000);
+    backend.changed();
+    await until(() => visible?.thinking === backend.state.thinking[id]);
+  }
+  assert.equal(textParts.map((part) => part.stream.add).join(""), "", "sliding the preview never retransmits the reply");
+  assert.equal(textParts.map((part) => part.thinking.add).join(""), "", "the card and chat reuse the reasoning that arrived");
+  assert.equal(visible?.stream, reply);
+  backend.state.thinking[id] = "A provider-specific preview";
+  backend.changed();
+  await until(() => visible?.thinking === "A provider-specific preview");
 });
 
 test("watch, unwatch, rewatch, renewed session and a restarted host reconstruct the phone's text", async (t) => {

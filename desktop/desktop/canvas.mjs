@@ -1,4 +1,5 @@
 import { associateHelper, helperId } from "./activity.mjs";
+import { reasoningPreview } from "./link/reasoning-preview.mjs";
 // Chat canvas helpers: reasoning, usage, context, todos, background helpers,
 // attachments, fork context and the plain-language work summary.
 import { statSync } from "node:fs";
@@ -6,8 +7,6 @@ import { basename, isAbsolute } from "node:path";
 
 /** Reasoning kept per run, in characters. */
 export const REASONING_CAP = 20000;
-/** Live thinking text kept in the snapshot, in characters. */
-const LIVE_CAP = 4000;
 export const MAX_ATTACHMENTS = 10;
 
 function reasoningSize(run) {
@@ -39,12 +38,7 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
           entry.text = data.content.slice(0, Math.max(0, room));
         entry.finished = Date.now();
       }
-      if (task)
-        task.thinking = run.reasoning
-          .map((r) => r.text)
-          .filter(Boolean)
-          .join("\n\n")
-          .slice(-LIVE_CAP);
+      if (task) task.thinking = reasoningPreview(run.reasoning);
       return true;
     }
     case "assistant.intent": {

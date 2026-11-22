@@ -47,7 +47,7 @@ export type Item =
     }
   /** What the bot did between two things it said or the person said: steps, and its thinking while the turn runs. */
   /** `run` is for its id only: a row kept by `reuseItems` can hold the run as it was a moment ago. */
-  | { kind: "work"; key: string; run: Run; steps: Step[]; thinking: string; live: boolean; /** A finished part's line ("Ran 2 commands"). */ label: string }
+  | { kind: "work"; key: string; run: Run; steps: Step[]; thinking: string; /** The newest thought can still grow after a steer placed it in this row. */ reasoningIds?: string[]; live: boolean; /** A finished part's line ("Ran 2 commands"). */ label: string }
   /** Text the bot wrote before it moved on: an interim message, or a piece this phone noted from an older computer. */
   | { kind: "text"; key: string; text: string; /** The turn ended right after it. */ unfinished?: boolean }
   /** The bot's thinking in a finished turn, where it began (Every step). */
@@ -56,7 +56,7 @@ export type Item =
   | { kind: "screen"; key: string; panel: PanePanel }
   | { kind: "ended"; key: string; run: Run; ending: Ending; /** The newest turn, and nothing under way: Try again is offered. */ retry: boolean }
   /** The end of the turn under way: its latest steps and thinking, and the text being written. */
-  | { kind: "live"; key: "live"; run?: Run; steps: Step[]; thinking: string; text: string; /** Room under the text for the reply's row, so it stays put when it becomes the reply. */ reserve?: true }
+  | { kind: "live"; key: "live"; run?: Run; steps: Step[]; thinking: string; text: string; /** IDs of reasoning bodies in this active segment, after its last structural boundary. */ reasoningIds?: string[]; /** The body offset already represented by legacy text rows. */ liveFrom?: number; /** A group/fallback body is raw; a single-turn body starts after its cut and trims its leading separator. */ bodyMode?: "raw" | "segment"; /** Room under the text for the reply's row, so it stays put when it becomes the reply. */ reserve?: true }
   /**
    * A folded turn's work in one line (fold.ts), under its reply. While a turn runs (`live`, in every
    * Steps mode), its status line: the bot's face, its typing dots and `count`. The key stays when it ends.
@@ -95,7 +95,100 @@ export type TimelineInput = {
   /** The side pane's tabs of kind "screen". */
   screens?: PanePanel[];
   prefs: TurnPrefs;
+  /** Message ownership built by the structural timeline. Reusing it avoids one full scan per run. */
+  ownership?: MessageOwnership;
+  /** Keeps an active leaf row in the structural list while its body is still empty. */
+  livePlaceholder?: boolean;
 };
+
+export type MessageOwnership = {
+  owners: (string | undefined)[];
+  byRun: Map<string, number[]>;
+};
+
+/** Index the loaded messages once: a run's block can then take its messages without rescanning. */
+export function indexMessageOwnership(messages: Message[]): MessageOwnership {
+  const owners: (string | undefined)[] = [];
+  const byRun = new Map<string, number[]>();
+  messages.forEach((message, index) => {
+    const owner = personOf(message) ?? message.runId;
+    owners.push(owner);
+    if (!owner) return;
+    const indices = byRun.get(owner);
+    if (indices) indices.push(index);
+    else byRun.set(owner, [index]);
+  });
+  return { owners, byRun };
+}
+
+export type LiveBody = { stream: string; thinking: string } | undefined;
+
+type MaybeRun = Run | null | undefined;
+
+function sameWorkingStructure(before: Run, next: Run): boolean {
+  if (before.status !== "Working" || next.status !== "Working") return false;
+  const keys = Object.keys(next) as (keyof Run)[];
+  if (keys.length !== Object.keys(before).length || keys.some((key) => key !== "reasoning" && before[key] !== next[key])) return false;
+  if (before.reasoning === next.reasoning) return true;
+  const old = before.reasoning ?? [];
+  const thoughts = next.reasoning ?? [];
+  return old.length === thoughts.length && thoughts.every((thought, i) => {
+    const prior = old[i];
+    if (prior === thought) return true;
+    if (prior.id !== thought.id || prior.started !== thought.started || prior.finished !== thought.finished || prior.botId !== thought.botId) return false;
+    if (prior.text === thought.text) return true;
+    return i === thoughts.length - 1 && /\S/.test(prior.text) === /\S/.test(thought.text);
+  });
+}
+
+/** Keep one mounted chat's list stable while its newest reasoning item grows. */
+export function createTimelineRunSelector() {
+  let input: MaybeRun;
+  let selected: MaybeRun;
+  return (next: MaybeRun): MaybeRun => {
+    if (input === next) return selected;
+    if (!input || !next || !sameWorkingStructure(input, next)) selected = next;
+    input = next;
+    return selected;
+  };
+}
+
+/** The thought IDs belong to a particular side of a steer, interim message or screen. */
+export function segmentThinking(ids: string[], run: Run): string {
+  const thoughts = run.reasoning ?? [];
+  if (!ids.length) return "";
+  const last = thoughts.at(-1);
+  if (ids.length === 1 && last?.id === ids[0]) return last.text.trim();
+  const byId = new Map(thoughts.map((thought) => [thought.id, thought.text]));
+  return ids.map((id) => byId.get(id)?.trim()).filter(Boolean).join("\n\n");
+}
+
+/** Resolves only the active leaf's body; structural rows never call this. */
+export function resolveLiveBody(item: Extract<Item, { kind: "live" }>, body: LiveBody, latestRun?: Run | null): Pick<Extract<Item, { kind: "live" }>, "text" | "thinking"> {
+  const from = item.liveFrom ?? 0;
+  const text = body ? (item.bodyMode === "raw" ? body.stream : body.stream.slice(from).replace(/^\s+/, "")) : item.text;
+  if (item.reasoningIds && item.run?.id && latestRun?.id === item.run.id) {
+    return { text, thinking: segmentThinking(item.reasoningIds, latestRun) };
+  }
+  return { text, thinking: body?.thinking ?? item.thinking };
+}
+
+/** A reserved leaf has no separator or height until it can draw a step, thought or reply. */
+export function liveRowVisible(item: Extract<Item, { kind: "live" }>, body: LiveBody, run: MaybeRun, prefs: TurnPrefs): boolean {
+  if (!item.run) return true;
+  if (prefs.steps !== "hide" && item.steps.some((step) => prefs.steps !== "failed" || step.status === "Failed")) return true;
+  if (body && (item.bodyMode === "raw" ? !!body.stream : /\S/.test(body.stream.slice(item.liveFrom ?? 0)))) return true;
+  if (prefs.thinking === "hide") return false;
+  if (item.reasoningIds && run?.id === item.run.id) {
+    const ids = item.reasoningIds;
+    const last = run.reasoning?.at(-1);
+    if (!ids.length) return false;
+    if (last && ids.at(-1) === last.id && /\S/.test(last.text)) return true;
+    const inSegment = new Set(ids);
+    return !!run.reasoning?.some((thought) => inSegment.has(thought.id) && /\S/.test(thought.text));
+  }
+  return !!(body?.thinking ?? item.thinking);
+}
 
 /** The run part is the turn under way only while it is working; otherwise it is a turn that ended without a reply. */
 export const underWay = (run: Run | null | undefined): Run | undefined => (run?.status === "Working" ? run : undefined);
@@ -260,7 +353,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
   for (let i = messages.length - 1; i >= 0 && !lastAsked; i--) if (messages[i].role === "user" && messages[i].runId) lastAsked = messages[i].runId;
 
   // Which messages belong to which run: the person's message that started it, what came in during it, its replies.
-  const owners = messages.map((message) => personOf(message) ?? message.runId);
+  const ownership = input.ownership ?? indexMessageOwnership(messages);
+  const owners = ownership.owners;
   const screens = [...(input.screens ?? [])];
   const placed = new Set<string>();
   const done = new Set<string>();
@@ -274,8 +368,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
   const asides = prefs.thinking !== "hide";
   const shownSteps = (steps: Step[]) => (prefs.steps === "hide" ? [] : prefs.steps === "failed" ? steps.filter((step) => step.status === "Failed") : steps);
   /** The newest part of the turn under way. With a run, nothing to draw means no row: the status line under it is the bot's face. */
-  const live = (run: Run | undefined, steps: Step[], thinking: string, text: string): Item[] =>
-    run && !text && !thinking && !shownSteps(steps).length ? [] : [{ kind: "live", key: "live", run, steps, thinking, text, ...(folding && { reserve: true as const }) }];
+  const live = (run: Run | undefined, steps: Step[], thinking: string, text: string, liveFrom = 0, reasoningIds?: string[], bodyMode: "raw" | "segment" = "segment"): Item[] =>
+    run && !text && !thinking && !shownSteps(steps).length && !input.livePlaceholder ? [] : [{ kind: "live", key: "live", run, steps, thinking, ...(reasoningIds !== undefined && { reasoningIds }), text, liveFrom, bodyMode, ...(folding && { reserve: true as const }) }];
   /** Under a turn under way, in every mode: its status line, which becomes the fold line where the turn folds. */
   const statusLine = (run: Run): Item => {
     const own = (run.steps ?? []).filter((step) => !step.agentId);
@@ -286,7 +380,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
   const block = (runId: string) => {
     done.add(runId);
     const run = runOf(runId);
-    const mine = messages.map((_, i) => i).filter((i) => owners[i] === runId);
+    const mine = ownership.byRun.get(runId) ?? [];
     const isLive = streaming && !!run && run.id === current?.id;
     const starts = mine.filter((i) => messages[i].role === "user" && messages[i].runId === runId && personOf(messages[i]) === undefined);
     const start = starts[0];
@@ -310,7 +404,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
       if (last?.kind === "message" && replies.length && messages[replies.at(-1)!] === last.message) {
         items[items.length - 1] = { ...last, end: true, workUnder: !folding && !!run && (!!run.summary || !!run.steps?.length) };
       }
-      if (isLive) items.push(...live(run, run?.steps ?? [], asides ? (input.live?.thinking ?? "") : "", input.live?.stream ?? ""));
+      if (isLive) items.push(...live(run, run?.steps ?? [], asides ? (input.live?.thinking ?? "") : "", input.live?.stream ?? "", 0, undefined, "raw"));
       if (isLive && run) items.push(statusLine(run));
       items.push(...note());
       return;
@@ -342,15 +436,17 @@ export function chatTimeline(input: TimelineInput): Item[] {
       if (!steps.length && !thoughts.length) return;
       const thinking = thoughts.map((thought) => thought.text.trim()).filter(Boolean).join("\n\n");
       segments.push({ steps, thinking });
-      pushWork(steps, thinking, "w" + run.id + ":" + (steps[0]?.id ?? thoughts[0]?.id));
+      const growing = run.reasoning?.at(-1);
+      const reasoningIds = isLive && growing && thoughts.includes(growing) ? thoughts.map((thought) => thought.id) : undefined;
+      pushWork(steps, thinking, "w" + run.id + ":" + (steps[0]?.id ?? thoughts[0]?.id), false, reasoningIds);
       steps = [];
       thoughts = [];
     };
-    const pushWork = (list: Step[], thinking: string, key: string, whole = false) => {
+    const pushWork = (list: Step[], thinking: string, key: string, whole = false, reasoningIds?: string[]) => {
       if (isLive) {
         const shown = prefs.steps === "hide" ? [] : prefs.steps === "failed" ? list.filter((step) => step.status === "Failed") : list;
         if (!shown.length && !thinking) return;
-        items.push({ kind: "work", key, run, steps: list, thinking, live: true, label: "" });
+        items.push({ kind: "work", key, run, steps: list, thinking, ...(reasoningIds && { reasoningIds }), live: true, label: "" });
         return;
       }
       if (prefs.steps === "hide") return;
@@ -410,7 +506,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
     if (isLive) {
       // The newest part goes with the text being written, at the bottom.
       const thinking = thoughts.map((thought) => thought.text.trim()).filter(Boolean).join("\n\n") || (!run.reasoning?.length && prefs.thinking !== "hide" ? (input.live?.thinking ?? "") : "");
-      items.push(...live(run, steps, thinking, rest.replace(/^\s+/, "")));
+      items.push(...live(run, steps, thinking, rest.replace(/^\s+/, ""), offset, run.reasoning?.length ? thoughts.map((thought) => thought.id) : undefined));
       items.push(statusLine(run));
       return;
     }
@@ -516,7 +612,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
   // The turn under way when none of its messages is loaded yet.
   if (streaming && !items.some((item) => item.kind === "live" || (item.kind === "fold" && item.live))) {
     const run = current;
-    items.push(...live(run, run?.steps?.filter((step) => !step.agentId) ?? [], asides ? (input.live?.thinking ?? "") : "", input.live?.stream ?? ""));
+    items.push(...live(run, run?.steps?.filter((step) => !step.agentId) ?? [], asides ? (input.live?.thinking ?? "") : "", input.live?.stream ?? "", 0, undefined, "raw"));
     if (run) items.push(statusLine(run));
   }
 
