@@ -23,6 +23,11 @@ export const avatarMotion = {
   sad: "once",
 } as const satisfies Record<AvatarState, "rest" | "loop" | "once">;
 
+/** The phone's setting and its accessibility preference both override a caller's motion request. */
+export function avatarCanMove(enabled: boolean, reducedMotion: boolean, requested: boolean) {
+  return enabled && !reducedMotion && requested;
+}
+
 // The owner can tune the shared rest beat and the spread of starts within it.
 export const REST_BEAT_MS = 30_000;
 export const REST_SPREAD_MS = 900;

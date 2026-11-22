@@ -133,6 +133,9 @@ test("the demo computer keeps part of the side menu and Background, and can refu
 
   await backend.call("setPreferences", [{ appearance: { colorTheme: "fern" } }]);
   assert.equal(backend.state.settings.appearance.themePicked, true);
+  await backend.call("setPreferences", [{ appearance: { avatarAnimations: false } }]);
+  assert.equal(backend.state.settings.appearance.avatarAnimations, false);
+  await assert.rejects(backend.call("setPreferences", [{ appearance: { avatarAnimations: "no" } }]));
   await assert.rejects(backend.call("setPreferences", [{ appearance: { bubble: "red" } }]));
 
   const was = process.env.BOTKINS_DEV_STARTUP;

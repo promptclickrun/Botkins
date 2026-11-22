@@ -34,6 +34,7 @@ const KEYS = [
   ["appearance.textSize", "small | default | large | larger", "The size of the text"],
   ["appearance.font", list(THEMES.fonts.map((font) => font.id)), "The font"],
   ["appearance.bubble", "theme | #rrggbb", "The color of your messages"],
+  ["appearance.avatarAnimations", "on | off", "Animate bot avatars while they work"],
   ["foldTools", "on | off", "Fold the steps of a finished reply into one line"],
   ["showThinking", "on | off", "Show the bot's thinking"],
   ["onboarded", "on | off", "The welcome is done"],

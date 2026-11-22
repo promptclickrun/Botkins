@@ -40,6 +40,7 @@ export const PREFERENCES = {
   "appearance.textSize": choice(TEXT_SIZES, "The size of the text"),
   "appearance.font": choice(FONT_IDS, "The font"),
   "appearance.bubble": { type: "color", about: "The color of your messages: theme, or a color such as #3366cc" },
+  "appearance.avatarAnimations": switches("Animate bot avatars while they work"),
   foldTools: switches("Fold the steps of a finished reply into one line"),
   showThinking: switches("Show the bot's thinking"),
   onboarded: switches("The welcome is done"),

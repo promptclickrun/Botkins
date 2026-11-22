@@ -831,6 +831,8 @@ export type Appearance = {
   font?: string;
   fontPicked?: boolean;
   textSize?: "small" | "default" | "large" | "larger";
+  /** Missing on older computers means the desktop's usual default: on. */
+  avatarAnimations?: boolean;
 };
 export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
 export type Preferences = {

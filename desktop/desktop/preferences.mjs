@@ -53,6 +53,7 @@ export function appearanceField(saved) {
   appearance.font = fontPick ?? DEFAULT_FONT;
   appearance.fontPicked = fontPick != null;
   if (!(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) appearance.bubble = "theme";
+  if (typeof appearance.avatarAnimations !== "boolean") appearance.avatarAnimations = true;
   return appearance;
 }
 
@@ -114,6 +115,8 @@ export const defaultSettings = {
     font: "system",
     fontPicked: false,
     bubble: "theme",
+    // Large avatars draw a still pose while idle; active and outcome states can move.
+    avatarAnimations: true,
     // Background presets from before themes. Kept as saved, for an earlier version to read.
     lightBackground: "cream",
     darkBackground: "charcoal",
@@ -187,6 +190,7 @@ export function changeSettings(settings, patch) {
           !THEME_IDS.includes(appearance.colorTheme) ||
           !TEXT_SIZES.includes(appearance.textSize) ||
           !FONT_IDS.includes(appearance.font) ||
+          typeof appearance.avatarAnimations !== "boolean" ||
           !Object.hasOwn(LIGHT_BACKGROUNDS, appearance.lightBackground) ||
           !Object.hasOwn(DARK_BACKGROUNDS, appearance.darkBackground) ||
           !(

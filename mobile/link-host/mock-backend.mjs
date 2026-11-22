@@ -247,7 +247,7 @@ export function seed() {
     providers: { revision: 1 },
     settings: {
       model: { model: "auto" },
-      appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default" },
+      appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default", avatarAnimations: true },
       foldTools: true,
       showThinking: true,
       linkPreviews: false,
@@ -1981,6 +1981,7 @@ export class MockBackend {
       if ("autoSummarize" in rest && !(rest.autoSummarize === 0 || (Number.isInteger(rest.autoSummarize) && rest.autoSummarize >= 5 && rest.autoSummarize <= 30))) throw new Error("Choose off, or every 5 to 30 turns.");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
+      if (appearance?.avatarAnimations !== undefined && typeof appearance.avatarAnimations !== "boolean") throw new Error("Invalid appearance choice");
       const settings = this.state.settings;
       // The side menu and Background take part of their setting, as the desktop's do (its desktop/preferences.mjs).
       if (rest.sidebar) {
