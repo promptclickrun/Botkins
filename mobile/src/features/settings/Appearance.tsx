@@ -5,6 +5,7 @@ import { type Href, router } from "expo-router";
 import { ChevronsUpDown, Monitor, Moon, PanelBottom, SunMoon, Sun, Vibrate } from "lucide-react-native";
 import { Platform, StyleSheet, View } from "react-native";
 import { useMember, useSettings } from "@/state/hooks";
+import { AVATAR_ANIMATIONS_WARNING } from "@/state/avatarPrefs";
 import { type Prefs, setPrefs, usePrefs } from "@/state/prefs";
 import { BotAvatar, brand, Button, type Colors, DEFAULT_FONT, type FontId, fontsFor, Group, IconTile, Label, Page, radius, Row, Segmented, Slider, space, T, Tap, TEXT_SIZES, THEMES, type ThemeDef, themeById, useTheme } from "@/ui";
 
@@ -187,6 +188,7 @@ export default function Appearance() {
   const textSize = usePrefs((prefs) => prefs.textSize);
   const controlSize = usePrefs((prefs) => prefs.controlSize);
   const haptics = usePrefs((prefs) => prefs.haptics);
+  const avatarAnimations = usePrefs((prefs) => prefs.avatarAnimations);
   const paired = !!useSettings();
   const member = useMember();
   const fixed = { maxFontSizeMultiplier: 1 } as const;
@@ -253,6 +255,12 @@ export default function Appearance() {
       </View>
 
       <Group>
+        <Row
+          title="Avatar animations"
+          subtitle={avatarAnimations ? AVATAR_ANIMATIONS_WARNING : undefined}
+          toggled={avatarAnimations}
+          onToggle={(next) => setPrefs({ avatarAnimations: next })}
+        />
         <Row leading={<IconTile icon={Vibrate} color={brand.rose} />} title="Haptics" toggled={haptics} onToggle={(next) => setPrefs({ haptics: next })} />
         <Row leading={<IconTile icon={PanelBottom} color={brand.rose} />} title="Tabs" subtitle="Their order in the bar" chevron onPress={() => router.push("/settings/tabs" as Href)} />
       </Group>

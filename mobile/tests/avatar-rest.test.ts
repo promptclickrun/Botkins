@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { avatarBeat, avatarMotion, nextPass, REST_BEAT_MS, REST_LATE_MS, REST_SPREAD_MS, schedulePasses, scheduleRestPasses } from "../src/ui/avatarRest";
+import { AVATAR_ANIMATIONS_WARNING, readAvatarAnimations } from "../src/state/avatarPrefs";
+import { avatarBeat, avatarCanMove, avatarMotion, nextPass, REST_BEAT_MS, REST_LATE_MS, REST_SPREAD_MS, schedulePasses, scheduleRestPasses } from "../src/ui/avatarRest";
 
 test("only working states loop, resting states pause, and outcomes play once", () => {
   for (const state of ["thinking", "planning", "browsing", "coding", "working", "retrying", "talking", "listening"] as const)
@@ -9,6 +10,19 @@ test("only working states loop, resting states pause, and outcomes play once", (
     assert.equal(avatarMotion[state], "rest", state);
   for (const state of ["completed", "happy", "error", "like", "love", "laugh", "sad"] as const)
     assert.equal(avatarMotion[state], "once", state);
+});
+
+test("phone avatar animation is off unless the person enables it", () => {
+  assert.equal(readAvatarAnimations(undefined), false, "older saved preferences");
+  assert.equal(readAvatarAnimations("yes"), false, "invalid saved preferences");
+  assert.equal(readAvatarAnimations(true), true);
+  assert.equal(readAvatarAnimations(false), false);
+  assert.equal(AVATAR_ANIMATIONS_WARNING, "May consume battery faster on this phone");
+  assert.ok(AVATAR_ANIMATIONS_WARNING.split(" ").length >= 5 && AVATAR_ANIMATIONS_WARNING.split(" ").length <= 8);
+  assert.equal(avatarCanMove(false, false, true), false, "the preference wins");
+  assert.equal(avatarCanMove(true, true, true), false, "Reduce Motion wins");
+  assert.equal(avatarCanMove(true, false, false), false, "the screen may hold still");
+  assert.equal(avatarCanMove(true, false, true), true);
 });
 
 test("all resting characters wait for the next wall-clock beat, with fixed offsets", () => {

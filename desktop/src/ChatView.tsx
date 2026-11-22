@@ -894,7 +894,7 @@ export default function ChatView({
           )}
           {chat.messages.length === 0 && !pending.length && !group && (
             <div className="emptychat">
-              <BotAvatar bot={bot} state={face} size={136} animated />
+              <BotAvatar bot={bot} state={face} size={136} animated={face !== "idle"} />
               <h2>What can {bot.name} help with?</h2>
               <p>{bot.role}</p>
               <div className="starters">

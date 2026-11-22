@@ -105,6 +105,20 @@ export default function Window() {
         </View>
       )}
 
+      {look.avatarAnimations !== undefined && (
+        <View>
+          <Label>Avatars</Label>
+          <Group>
+            <Row
+              title="Avatar animations"
+              toggled={look.avatarAnimations}
+              disabled={!online}
+              onToggle={(avatarAnimations) => setLook({ avatarAnimations })}
+            />
+          </Group>
+        </View>
+      )}
+
       <View>
         <Label>Your messages</Label>
         <Group>

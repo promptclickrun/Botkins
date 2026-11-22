@@ -9,7 +9,7 @@ import { DEFAULT_FONT, DEFAULT_THEME, FONT_IDS, THEME_IDS, appearanceField, canv
 
 const catalog = JSON.parse(readFileSync(new URL("../desktop/themes.json", import.meta.url), "utf8"));
 const theme = (id) => catalog.themes.find((t) => t.id === id);
-const usual = { theme: "system", colorTheme: "ink", themePicked: false, textSize: "default", font: "system", fontPicked: false, bubble: "theme", lightBackground: "cream", darkBackground: "charcoal" };
+const usual = { theme: "system", colorTheme: "ink", themePicked: false, textSize: "default", font: "system", fontPicked: false, bubble: "theme", avatarAnimations: true, lightBackground: "cream", darkBackground: "charcoal" };
 
 test("the themes are Botkins, the six named after the kit's palettes, Paper and Ink; Ink is what a new person sees", () => {
   assert.deepEqual(THEME_IDS, ["botkins", "honey", "fern", "tidepool", "bluebell", "fig", "paper", "ink"]);
@@ -95,6 +95,16 @@ test("a theme counts once the person picks it; until then the app wears Ink", ()
   assert.throws(() => changeSettings(settings, { appearance: { textSize: "huge" } }), /Invalid appearance/);
   assert.throws(() => changeSettings(settings, { appearance: { font: "comic" } }), /Invalid appearance/);
   assert.throws(() => changeSettings(settings, { appearance: "dark" }), /Invalid appearance/);
+});
+
+test("avatar animations start on for desktop and older settings, and accept an explicit off", () => {
+  assert.equal(defaultSettings.appearance.avatarAnimations, true);
+  assert.equal(appearanceField(undefined).avatarAnimations, true);
+  assert.equal(appearanceField({ avatarAnimations: false }).avatarAnimations, false);
+  assert.equal(appearanceField({ avatarAnimations: "no" }).avatarAnimations, true);
+  const settings = changeSettings(structuredClone(defaultSettings), { appearance: { avatarAnimations: false } });
+  assert.equal(settings.appearance.avatarAnimations, false);
+  assert.throws(() => changeSettings(settings, { appearance: { avatarAnimations: "no" } }), /Invalid appearance/);
 });
 
 test("an appearance saved by an earlier version keeps a look the person chose, and moves to Ink when they had not chosen", () => {

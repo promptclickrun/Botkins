@@ -217,6 +217,13 @@ export function AppearanceSettings({ settings, change, fail }: Props) {
           </div>
         </div>
       </Group>
+      <Group title="Avatars">
+        <SwitchRow
+          label="Avatar animations"
+          checked={a.avatarAnimations !== false}
+          onChange={(on) => void update({ avatarAnimations: on })}
+        />
+      </Group>
       <Group title="Conversations">
         <SwitchRow
           label="Show link previews"
