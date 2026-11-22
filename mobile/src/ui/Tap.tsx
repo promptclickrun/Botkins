@@ -18,7 +18,7 @@ export type TapProps = Omit<PressableProps, "style" | "children"> & {
 export const InHoldMenu = createContext(false);
 const nothing = () => {};
 /** A little sooner than iOS opens a held menu, so the hold is already "not a tap" when the menu shows. */
-const HOLD_MS = 350;
+export const HOLD_MS = 350;
 
 /** Anything pressable: it sinks a little under the finger and gives a light tap. */
 export function Tap({ children, style, sink = 0.97, feel = "tap", onPress, disabled, ...props }: TapProps) {

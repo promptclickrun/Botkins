@@ -12,6 +12,7 @@ export { Field } from "./Field";
 export { Glass, hasGlass } from "./Glass";
 export { haptic } from "./haptics";
 export { HoldMenu } from "./HoldMenu";
+export { TextHoldMenu } from "./LinkHold";
 export { type FrameState, HtmlFrame } from "./HtmlFrame";
 export { Group, type GroupProps, IconTile, Label, Row, switchColors } from "./List";
 export { Markdown, type PathLinks } from "./Markdown";

@@ -24,7 +24,7 @@ import { myself, speakerLabel } from "./people";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
 import { FACE_INDENT, mostIcon } from "./WorkRows";
-import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, Chip, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, TextHoldMenu, useTheme } from "@/ui";
 
 export type { Item };
 
@@ -229,7 +229,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
             <SelectableText text={rest} markdown={false} color={colors.onBubble} onDone={() => useSelecting.getState().id === id && select(null)} />
           </View>
         ) : (
-          <HoldMenu
+          <TextHoldMenu
             actions={[
               { id: "copy", title: "Copy", image: "doc.on.doc" },
               { id: "select", title: "Select text", image: "text.cursor" },
@@ -246,7 +246,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
                 <Markdown text={rest} inline color={colors.onBubble} paths={paths} />
               </View>
             </DoubleTap>
-          </HoldMenu>
+          </TextHoldMenu>
         ))}
       {media.length > 0 && <ArtifactChips items={media} align="flex-end" />}
       {timestamps && <Stamp time={message.time} align="flex-end" />}
@@ -305,7 +305,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
       </View>
     );
   return (
-    <HoldMenu
+    <TextHoldMenu
       actions={[
         { id: "copy", title: "Copy", image: "doc.on.doc" },
         { id: "select", title: "Select text", image: "text.cursor" },
@@ -333,7 +333,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
           <Markdown text={message.text} plain={!markdown} paths={paths} />
         )}
       </DoubleTap>
-    </HoldMenu>
+    </TextHoldMenu>
   );
 }
 
