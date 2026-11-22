@@ -20,8 +20,13 @@ const config: ExpoConfig = {
       // The native stack sets the icon color for the visible screen, including on iOS 27.
       UIViewControllerBasedStatusBarAppearance: true,
       // The desktop link is plain HTTP on the local network (or a tailnet); every message on it
-      // is encrypted by the app itself (src/link).
-      NSAppTransportSecurity: { NSAllowsLocalNetworking: true },
+      // is encrypted by the app itself (src/link). The tailnet range (Tailscale's 100.64.0.0/10) is
+      // listed on its own: with only NSAllowsLocalNetworking, an iPhone sent nothing to a computer's
+      // tailnet address (Safari on the same phone reached it) and stayed on the relay.
+      NSAppTransportSecurity: {
+        NSAllowsLocalNetworking: true,
+        NSExceptionDomains: { "100.64.0.0/10": { NSExceptionAllowsInsecureHTTPLoads: true } },
+      },
       // App Store Connect reads this encryption declaration for each build.
       ITSAppUsesNonExemptEncryption: false,
       NSLocalNetworkUsageDescription: "Botkins finds and connects to your computer on your local network.",
