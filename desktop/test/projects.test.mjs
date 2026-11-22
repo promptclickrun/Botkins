@@ -246,11 +246,11 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
   // (Live speech in the history is named only when the link carries recordVoiceLine.)
-  const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS && name !== "spaces-v1" && name !== "voice-history-v1" && name !== "market-refresh-v1" && name !== "mcp-apps-v1");
+  const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS && name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1");
   assert.deepEqual(linkCapabilities(new Set()), others);
   assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact"])), others);
   // (Spaces are named the same way, only when the link carries their calls: test/spaces-host.test.mjs.)
-  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES.filter((name) => name !== "spaces-v1" && name !== "voice-history-v1" && name !== "market-refresh-v1" && name !== "mcp-apps-v1"));
+  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES.filter((name) => name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1"));
   // ("market-refresh-v1" is named only when the link carries plugins.refresh.)
   assert.ok(linkCapabilities(new Set(["plugins.refresh"])).includes("market-refresh-v1"));
   const files = join(dir, "files");

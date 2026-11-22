@@ -681,10 +681,10 @@ test("a phone's Codex transcript is recorded in its chat and hangup keeps the la
   ws.recordVoiceLine = (...args) => writes.push(args);
   const desk = new VoiceDesk({ voice: fakeVoice, workspace: () => ws });
   desk.noteSession("codex-1", { chatId: "chat-1" });
-  desk.heardUser("codex-1", "What ", false);
-  desk.heardUser("codex-1", "time", false);
-  desk.heardUser("codex-1", "What time?", true);
-  desk.heardUser("codex-1", "Tomorrow", false);
+  desk.heard("codex-1", "What ", false);
+  desk.heard("codex-1", "time", false);
+  desk.heard("codex-1", "What time?", true);
+  desk.heard("codex-1", "Tomorrow", false);
   desk.forget("codex-1");
   assert.deepEqual(writes.map(([chatId, , text, final]) => [chatId, text, final]), [
     ["chat-1", "What ", false], ["chat-1", "What time", false], ["chat-1", "What time?", true],
@@ -700,14 +700,40 @@ test("desktop speech keeps overlapping items separate and finalizes the last rev
   ws.recordVoiceLine = (...args) => writes.push(args);
   const desk = new VoiceDesk({ voice: fakeVoice, workspace: () => ws });
   const { id } = await desk.startLive("chat-1");
-  desk.heardUser(id, "One", false, { item: "u1" });
-  desk.heardUser(id, "Two", false, { item: "u2" });
-  desk.heardUser(id, "One!", true, { item: "u1" });
-  desk.heardUser(id, " stale", false, { item: "u1" });
-  desk.heardUser(id, "Twenty", false, { item: "u2", replace: true });
+  desk.heard(id, "One", false, { item: "u1" });
+  desk.heard(id, "Two", false, { item: "u2" });
+  desk.heard(id, "One!", true, { item: "u1" });
+  desk.heard(id, " stale", false, { item: "u1" });
+  desk.heard(id, "Twenty", false, { item: "u2", replace: true });
   desk.endLive(id);
   assert.deepEqual(writes.map(([, key, words, final]) => [key, words, final]), [
     [id + ":item-u1", "One", false], [id + ":item-u2", "Two", false], [id + ":item-u1", "One!", true],
     [id + ":item-u2", "Twenty", false], [id + ":item-u2", "Twenty", true],
   ]);
+});
+
+test("Codex item transcripts stream once when the flat events are also delivered", async t => {
+  const peer = fakeCodex();
+  const ws = fakeWorkspace();
+  const { recordVoiceLine } = await import("../desktop/link/voice-history.mjs");
+  ws.recordVoiceLine = (chatId, ...line) => recordVoiceLine(ws.chat(chatId), ...line);
+  const desk = new VoiceDesk({ workspace: () => ws });
+  const codex = new CodexVoice({
+    spawn: async () => peer,
+    onSession: (id, about) => desk.noteSession(id, about),
+    onEvent: (id, e) => {
+      if (e.type === "transcript") desk.heard(id, e.text, e.final, e);
+    },
+  });
+  const { id } = await codex.live({ sdp: "v=0 offer", chatId: "chat-1" });
+  t.after(() => codex.end(id));
+  const event = (type, data) => peer.send("thread/realtime/" + type, { threadId: "thread-9", ...data });
+  const utterance = { type: "transcriptSegment", id: "a", role: "assistant", text: "" };
+  event("item/started", { item: utterance });
+  event("item/transcript/delta", { itemId: "a", delta: "Hel" });
+  assert.equal(ws.chat("chat-1").messages[0]?.text, "Hel");
+  event("transcript/delta", { role: "assistant", delta: "Hel" });
+  event("item/completed", { item: { ...utterance, text: "Hello!" } });
+  event("transcript/done", { role: "assistant", text: "Hello!" });
+  assert.deepEqual(ws.chat("chat-1").messages.map(m => [m.role, m.text]), [["assistant", "Hello!"]]);
 });

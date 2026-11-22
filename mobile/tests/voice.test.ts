@@ -969,6 +969,7 @@ test("live with ElevenLabs: tools and the agent are made once, reused after a re
   const created = json(net.seen.find((s) => s.url.pathname === "/v1/convai/agents/create")!);
   assert.equal(created.name, "Botkins");
   assert.ok(created.conversation_config.conversation.client_events.includes("tentative_user_transcript"));
+  assert.ok(created.conversation_config.conversation.client_events.includes("agent_chat_response_part"));
   assert.deepEqual(created.conversation_config.agent.prompt.tool_ids, ["tool_1", "tool_2"]);
   assert.deepEqual(created.platform_settings.overrides.conversation_config_override, { agent: { first_message: true, language: true, prompt: { prompt: true, tool_ids: true } }, tts: { voice_id: true } });
   for (const s of net.seen) assert.equal(s.headers.get("xi-api-key"), "xi-eleven-key-12345");

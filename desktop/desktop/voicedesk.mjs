@@ -2,6 +2,7 @@
 // reading replies aloud). Everything that reaches a speech provider goes through the link's Voice
 // (desktop/link/voice.mjs, see VOICE.md), so this computer and its paired phones share one set of
 // choices and keys. This file only shapes what the page needs: plain data, never a key.
+import { VoiceTurns } from "./link/voice-history.mjs";
 import { Failure } from "./link/tools.mjs";
 import { cleanBotVoice, effectiveTts, liveInstructions as sharedLiveInstructions, MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
 
@@ -89,7 +90,7 @@ export function liveInstructions(bot, profile = "") {
     "You are the voice of " + name + ", a bot the person works with. Speak as " + name + ", in the first person, warmly and briefly: this is a spoken conversation, so no lists, no Markdown, and one or two sentences unless asked for more. Never say that you are ChatGPT, Gemini or another assistant.",
     "You only do the talking. For anything beyond small talk (a question about their work, anything to look up, do, remember or change, or anything that needs " +
       name +
-      "'s memory, tools or files), call the ask_bot tool once with the request in the person's own words, say a few words such as \"One moment\" while it works, and then tell them what it answered in your own words. Never make up what the bot would say.",
+      "'s memory, tools or files), call the ask_bot tool once with the request in the person's own words, wait for the result, and then tell them what it answered in your own words. Never make up what the bot would say.",
     "Sometimes the tool answers that " +
       name +
       " needs the person's approval, has a question for them, or is still working. Say exactly that, and that the request is on their screen: you can't approve or answer for them, and you don't call the tool again for the same request. When you are then told that " +
@@ -253,7 +254,8 @@ export class VoiceDesk {
       const instructions = sharedLiveInstructions({ bot, messages, bots: workspace.state.bots ?? [], notes });
       // `about` reaches the Codex helper, which names the bot to its voice and says whose chat the session is for (noteSession).
       session = await this.voice.live({ ...(typeof sdp === "string" && sdp && { sdp }), instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name }, override: cleanBotVoice(bot.voice)?.live });
-      this.sessions.set(session.id, { ...this.sessions.get(session.id), chatId: chat.id, own: true });
+      const entry = this.sessions.get(session.id) ?? {};
+      this.sessions.set(session.id, Object.assign(entry, { chatId: chat.id, own: true }));
     } finally {
       this.starting--;
       // Tool calls that came in while it started: their session is known now, or never will be.
@@ -283,37 +285,43 @@ export class VoiceDesk {
   isOwn(sessionId) {
     return this.sessions.get(String(sessionId ?? ""))?.own === true;
   }
-  /** Codex delivers deltas here directly. The window also sends snapshots or deltas from its providers. */
-  heardUser(id, text, final, { item, replace } = {}) {
+  /** Codex and the window send deltas or whole revisions, sometimes interleaved across speakers. */
+  heard(id, text, final, { role = "user", item, replace, started } = {}) {
     const session = this.sessions.get(id);
-    if (!session || typeof text !== "string" || typeof final !== "boolean") return;
+    if (!session || typeof text !== "string" || typeof final !== "boolean" || !["assistant", "user"].includes(role)) return;
     const ws = this.workspaceOf();
     if (!ws.state.chats.some(chat => chat.id === session.chatId) || (session.author && !ws.inChat(session.chatId, session.author.memberId))) return;
-    session.line ??= 1;
-    session.partial ??= new Map();
-    session.finished ??= new Set();
-    const key = typeof item === "string" && item.length > 0 && item.length <= 128 ? "item-" + item : String(session.line);
-    if (session.finished.has(key)) return;
-    const previous = session.partial.get(key) ?? "";
+    const turns = session.speech ??= new VoiceTurns(id);
+    const lane = (session[role] ??= { number: 1, partial: new Map(), finished: new Set() });
+    const named = typeof item === "string" && item.length > 0 && item.length <= 128;
+    const key = named ? "item-" + item : String(lane.number);
+    if (lane.finished.has(key) && !(role === "assistant" && final && replace)) return;
+    if (started) {
+      if (role === "user") turns.start(key);
+      else turns.output(key);
+      if (!text) return;
+    }
+    const previous = lane.partial.get(key)?.text ?? "";
     const words = (final ? text || previous : replace ? text : previous + text).slice(0, 32000);
     if (!words.trim()) return;
-    const voiceId = id + ":" + key;
-    ws.recordVoiceLine(session.chatId, voiceId, words, final, session.author);
-    session.lastSpeech = { id: voiceId, text: words };
+    const voiceId = role === "user" ? turns.input(key) : id + ":assistant-" + key;
+    const options = role === "assistant" ? turns.output(key) : undefined;
+    ws.recordVoiceLine(session.chatId, voiceId, words, final, session.author, options);
     if (final) {
-      session.partial.delete(key);
-      if (key.startsWith("item-")) session.finished.add(key);
-      else session.line++;
+      lane.partial.delete(key);
+      if (named) lane.finished.add(key);
+      else lane.number++;
+      if (role === "assistant") turns.finishOutput(key);
     } else {
-      session.partial.set(key, words);
+      lane.partial.set(key, { text: words, item });
     }
   }
   /** A session is over. Keep the last words even if the provider has not sent a final. */
   forget(sessionId) {
     const id = String(sessionId ?? "");
     const session = this.sessions.get(id);
-    for (const [key, text] of session?.partial ?? []) {
-      this.heardUser(id, text, true, { item: key.startsWith("item-") ? key.slice(5) : undefined });
+    for (const role of ["user", "assistant"]) {
+      for (const { text, item } of session?.[role]?.partial.values() ?? []) this.heard(id, text, true, { role, item });
     }
     this.sessions.delete(id);
   }
@@ -363,6 +371,7 @@ export class VoiceDesk {
     }
     const request = String(args?.request ?? args?.message ?? "").trim().slice(0, 32000);
     if (!request) return "The request was empty.";
+    const voiceId = (entry.speech ??= new VoiceTurns(id)).claim();
     let before = 0;
     let requestRunId;
     let done;
@@ -375,11 +384,8 @@ export class VoiceDesk {
       }
       before = chat.messages.length;
       try {
-        const heard = entry.lastSpeech;
-        const voiceId = heard?.text.trim() === request && heard.id !== entry.claimed ? heard.id : undefined;
-        done = Promise.resolve(workspace.send(chatId, request, { ...(voiceId && { voiceId }), ...(entry.author && { author: entry.author }) }));
-        if (voiceId) entry.claimed = voiceId;
-        const sent = voiceId && chat.messages.findLast(message => message.voiceId === voiceId);
+        done = Promise.resolve(workspace.send(chatId, request, { voiceId, ...(entry.author && { author: entry.author }) }));
+        const sent = chat.messages.findLast(message => message.voiceId === voiceId);
         requestRunId = (sent || chat.messages[before])?.runId;
         break;
       } catch (error) {
@@ -389,7 +395,7 @@ export class VoiceDesk {
       }
     }
     const reply = () => {
-      const said = chat.messages.slice(before).findLast((m) => m.role === "assistant" && !m.interim && m.text);
+      const said = chat.messages.slice(before).findLast((m) => m.role === "assistant" && !m.interim && m.text && (!requestRunId || m.runId === requestRunId));
       if (said) return cutForSpeech(speakable(said.text), SPOKEN_REPLY);
       // No reply: the run says why, when it knows.
       const run = (workspace.state.runs ?? []).find((r) => r.chatId === chatId && r.id === requestRunId);

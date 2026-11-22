@@ -228,6 +228,7 @@ export type Message = {
   /** One utterance in live voice, identified across partials and the final transcript. */
   voiceId?: string;
   voicePartial?: true;
+  voiceCaption?: string;
   role: "assistant" | "user" | "command";
   text: string;
   mentions?: Mention[];
@@ -1400,7 +1401,7 @@ export type Calls = {
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
-  recordVoiceLine(chatId: string, id: string, text: string, final: boolean): void;
+  recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;

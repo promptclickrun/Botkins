@@ -950,7 +950,7 @@ export class Voice {
     else if (choice === "gemini") session = await this.liveGemini({ model: model ?? DEFAULTS.geminiLive, voice: who ?? DEFAULTS.geminiVoice, instructions: prompt, tools: list });
     else session = await this.liveEleven({ voice: who, instructions: prompt, tools: list, firstMessage });
     // Only the oldest sessions are forgotten when too many are open; a Codex one is ended first.
-    this.sessions.set(session.id, { provider: choice, at: this.now() });
+    this.sessions.set(session.id, { provider: choice, at: this.now(), chatId: about?.chatId, deviceId: about?.deviceId, memberId: about?.author?.memberId });
     while (this.sessions.size > MAX_SESSIONS) this.endLive(this.sessions.keys().next().value);
     return session;
   }
@@ -1099,7 +1099,7 @@ export class Voice {
         name: "Botkins",
         conversation_config: {
           agent: { first_message: "", language: "en", prompt: { prompt: "You are a helpful voice assistant.", tool_ids: toolIds } },
-          conversation: { client_events: ["conversation_initiation_metadata", "audio", "interruption", "ping", "user_transcript", "tentative_user_transcript", "agent_response", "agent_response_correction", "client_tool_call"] },
+          conversation: { client_events: ["conversation_initiation_metadata", "audio", "interruption", "ping", "user_transcript", "tentative_user_transcript", "agent_chat_response_part", "agent_response", "agent_response_correction", "client_tool_call"] },
         },
         platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true, language: true, prompt: { prompt: true, tool_ids: true } }, tts: { voice_id: true } } } },
       };
@@ -1222,7 +1222,7 @@ export function liveInstructions({ bot, messages = [], bots = [], notes = {}, lo
   const place = location?.place ? location.place + (coords ? " (" + coords + ")" : "") : coords && "latitude " + location.latitude + ", longitude " + location.longitude;
   return [
     "You are the voice of " + name + ", a bot the person works with. Speak as " + name + ", in the first person, warmly and briefly: this is a spoken conversation, so no lists, no Markdown, and one or two sentences unless asked for more.",
-    "When the answer is already in the conversation below or in these notes, answer it yourself: what " + name + " already said or found, who you are, who the person is, where they are. Don't ask the bot again for something it already answered. Call the ask_bot tool only for new work: fresh or current information, anything to look up, do, change or remember, or when you aren't sure. Then call it once with the request in the person's own words, say a few words such as \"One moment\" while it works, and tell them what it answered in your own words. Never make up what the bot would say.",
+    "When the answer is already in the conversation below or in these notes, answer it yourself: what " + name + " already said or found, who you are, who the person is, where they are. Don't ask the bot again for something it already answered. Call the ask_bot tool only for new work: fresh or current information, anything to look up, do, change or remember, or when you aren't sure. Then call it once with the request in the person's own words, wait for the result, and tell them what it answered in your own words. Never make up what the bot would say.",
     userName && "The person's name is " + userName + ".",
     place && "The person is near " + place + ". Use it only when it helps, such as for the time, the weather or places nearby.",
     about && "About " + name + ":\n" + about,

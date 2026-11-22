@@ -320,3 +320,52 @@ test("live speech streams into the chat and reopens as one user message", (t) =>
   assert.deepEqual(restored.chat(id).messages.map(m => [m.role, m.text]), [["user", "Turn left."]]);
   assert.equal(restored.state.runs.filter(r => r.chatId === id).length, 0);
 });
+
+for (const late of [false, true]) {
+  test(`live voice keeps one turn when the transcript arrives ${late ? "after" : "before"} the tool`, async t => {
+    const { VoiceDesk } = await import("../desktop/voicedesk.mjs");
+    const { fakeClient } = await import("./fake-copilot.mjs");
+    const dir = mkdtempSync(join(tmpdir(), "voice-turn-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const { client, log } = fakeClient(async () => ({ data: { content: "Rain. [Forecast](https://example.com)" } }));
+    const open = () => new Workspace(dir, client, () => {});
+    const ws = open();
+    const chat = ws.createChat("pip");
+    const desk = new VoiceDesk({ workspace: () => ws });
+    desk.noteSession("call", { chatId: chat });
+    const heard = () => desk.heard("call", "Do I need my umbrella?", true, { item: "mic" });
+    if (!late) heard();
+    await desk.liveTool("call", "ask_bot", { request: "Check today's weather." });
+    if (late) heard();
+    const rows = w => w.chat(chat).messages.map(m => [m.role, m.voiceCaption ?? m.text]);
+    const expected = [["user", "Do I need my umbrella?"], ["assistant", "Rain. [Forecast](https://example.com)"]];
+    assert.deepEqual(rows(ws), expected);
+    assert.match(log.sent[0][1], /Check today's weather/);
+    desk.heard("call", "Bring", false, { role: "assistant", item: "recap" });
+    assert.deepEqual(rows(ws), [expected[0], ["assistant", "Bring"]]);
+    desk.heard("call", "Bring one.", true, { role: "assistant", item: "recap" });
+    assert.deepEqual(rows(open()), expected);
+    desk.heard("call", "Thanks", true, { item: "next" });
+    desk.heard("call", "Any", false, { role: "assistant", item: "direct" });
+    assert.deepEqual(rows(ws).slice(-2), [["user", "Thanks"], ["assistant", "Any"]]);
+    desk.heard("call", "time.", false, { role: "assistant", item: "direct" });
+    desk.forget("call");
+    assert.deepEqual(rows(open()).slice(-2), [["user", "Thanks"], ["assistant", "Anytime."]]);
+  });
+}
+
+test("a voice acknowledgement and tool share the input item even before its words arrive", async t => {
+  const { VoiceDesk } = await import("../desktop/voicedesk.mjs");
+  const { fakeClient } = await import("./fake-copilot.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "voice-overlap-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ws = new Workspace(dir, fakeClient().client, () => {});
+  const chat = ws.createChat("pip");
+  const desk = new VoiceDesk({ workspace: () => ws });
+  desk.noteSession("call", { chatId: chat });
+  desk.heard("call", "", false, { item: "input", started: true });
+  desk.heard("call", "Checking.", true, { role: "assistant", item: "ack" });
+  await desk.liveTool("call", "ask_bot", { request: "Check the list" });
+  desk.heard("call", "Anything on my list?", true, { item: "input" });
+  assert.deepEqual(ws.chat(chat).messages.map(m => m.text), ["Anything on my list?", "Checking.", "ok"]);
+});

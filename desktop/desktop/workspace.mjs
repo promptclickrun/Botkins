@@ -219,6 +219,8 @@ export class Workspace {
           delete message.runId;
           continue;
         }
+        delete message.voiceCaption;
+        if (message.voiceId && !message.runId) continue;
         if (message.role === "user") index++;
         if (history[index]) message.runId ??= history[index].id;
       }
@@ -656,8 +658,8 @@ export class Workspace {
   createGroupChat(botIds, title) {
     return createGroupChat(this, botIds, title);
   }
-  recordVoiceLine(chatId, id, text, final, author) {
-    if (!recordVoiceLine(this.chat(chatId), id, text, final, author)) return;
+  recordVoiceLine(chatId, id, text, final, author, options) {
+    if (!recordVoiceLine(this.chat(chatId), id, text, final, author, options)) return;
     if (final) this.save();
     else this.notify();
   }
@@ -721,12 +723,13 @@ export class Workspace {
       ...(quote && { quote }),
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
     }, voiceId);
-    run.recovery = { extra };
+    run.recovery = { extra, ...(message.voiceId && { voicePrompt: prompt }) };
     return this.startTurn(chat, bot, message, run, false);
   }
 
   startTurn(chat, bot, message, run, recovering) {
-    const { text: prompt, attachments = [], quote } = message;
+    const { attachments = [], quote } = message;
+    const prompt = run.recovery?.voicePrompt ?? message.text;
     const chatId = chat.id;
     const extra = run.recovery?.extra;
     const mentionedFiles = (message.mentions ?? [])

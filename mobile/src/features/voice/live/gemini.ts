@@ -25,6 +25,7 @@ export class GeminiTransport extends LiveBase {
   private youOpen = false;
   private confirmedInput = "";
   private botOpen = false;
+  private botLine = 0;
   private cancelled = new Set<string>();
   private speaker = true;
   private muted = false;
@@ -145,9 +146,11 @@ export class GeminiTransport extends LiveBase {
       }
       const output = str(obj(content.outputTranscription).text);
       if (output) {
+        if (!this.botOpen) this.botLine++;
         this.botOpen = true;
-        this.line("bot-" + this.turn, "bot", output, { append: true });
+        this.line("bot-" + this.botLine, "bot", output, { append: true });
       }
+      if (obj(content.outputTranscription).finished === true) this.closeBot();
       // Gemini heard the person (only what the phone sent: never the bot's own sound).
       if (content.interrupted === true) {
         this.generating = false;
@@ -174,7 +177,7 @@ export class GeminiTransport extends LiveBase {
     this.confirmedInput = "";
   }
   private closeBot() {
-    if (this.botOpen) this.line("bot-" + this.turn, "bot", "", { append: true, final: true });
+    if (this.botOpen) this.line("bot-" + this.botLine, "bot", "", { append: true, final: true });
     this.botOpen = false;
   }
 

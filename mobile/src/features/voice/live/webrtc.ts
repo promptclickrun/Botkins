@@ -48,6 +48,7 @@ export class WebRTCTransport extends LiveBase {
     this.protocol = new OpenAIRealtime({
       send: (event) => this.send(event),
       status: (status) => this.setStatus(status),
+      inputItem: id => this.emit("inputItem", id),
       line: (id, who, text, options) => this.line(id, who, text, options),
       tool: (name, args) => this.tool(name, args),
       error: (message) => this.emit("error", message),

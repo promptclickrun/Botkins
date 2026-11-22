@@ -16,6 +16,7 @@ import { AvatarMotion, BotAvatar, Button, haptic, IconButton, slopFor, space, T,
 import { RequestPanel } from "../chat/RequestPanel";
 import { chatAccess } from "./chatAccess";
 import { VoiceCanvas } from "./VoiceCanvas";
+import { VoiceTurns } from "../../../link-host/voice-history.mjs";
 import { type SpokenLine, updateSpoken, VoiceHistoryWriter } from "./live/history";
 import { liveContext } from "./live/context";
 import { chatTools, type Kit, type Line, type LiveStatus, type LiveTransport, planFor, socketTransport, webrtcTransport } from "./live/index";
@@ -74,6 +75,7 @@ function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; 
   const provider = voice ? effectiveLive(voice.live, botVoiceOf(botId)?.live).provider : null;
   const request = useApp((state) => state.parts.live?.requests.find((item) => item.chatId === chatId));
   const chat = useWatchedChat(chatId);
+  const savesTurns = useCapability("voice-turns-v1");
   const savesHistory = useCapability("voice-history-v1");
 
   const [status, setStatus] = useState<LiveStatus>("connecting");
@@ -113,15 +115,29 @@ function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; 
     const writer = new VoiceHistoryWriter(
       async line => {
         if (!sameComputer()) throw new Error("Computer changed.");
-        await api.recordVoiceLine(chatId, line.id, line.text, line.final);
+        if (line.who === "bot" && sessionId) {
+          await api.recordVoiceLine(chatId, line.id, line.text, line.final, { role: "assistant", sessionId, afterVoiceId: line.afterVoiceId });
+        } else await api.recordVoiceLine(chatId, line.id, line.text, line.final);
       },
       () => showToast("Couldn't save a voice message to this chat.", "error"),
     );
+    let turns: VoiceTurns | undefined;
+    const history = () => turns ??= new VoiceTurns(sessionId!);
     let lastSpeech: Line | undefined;
     let claimed: string | undefined;
     const heard = (line: Line) => {
       // Codex sends its transcript to the computer. Its watched chat already carries those words.
-      if (!sessionId || (line.who === "you" && provider === "codex" && savesHistory)) return;
+      if (!sessionId || (provider === "codex" && (savesTurns || line.who === "you" && savesHistory))) return;
+      if (savesTurns) {
+        const turn = history();
+        if (line.who === "you") writer.put({ ...line, id: turn.input("input-" + line.id) });
+        else {
+          const { afterVoiceId } = turn.output(line.id);
+          writer.put({ ...line, id: sessionId + ":output-" + line.id, afterVoiceId });
+          if (line.final) turn.finishOutput(line.id);
+        }
+        return;
+      }
       const snapshot = { ...line, id: sessionId + ":" + line.id };
       const state = useApp.getState();
       const at = state.chats[chatId]?.total ?? state.parts.chats?.find(chat => chat.id === chatId)?.count ?? 0;
@@ -132,7 +148,9 @@ function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; 
       }
     };
     const endSession = (id: string) => {
-      if (sameComputer()) void api["link.voice.endLive"](id).catch(() => {});
+      void writer.flush().then(() => {
+        if (sameComputer()) return api["link.voice.endLive"](id);
+      }).catch(() => {});
     };
     let routed = false;
     const attach = (next: LiveTransport) => {
@@ -149,6 +167,9 @@ function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; 
           }
         }),
         next.on("line", heard),
+        next.on("inputItem", item => {
+          if (sessionId && savesTurns && provider !== "codex") history().start("input-" + item);
+        }),
         next.on("error", (message) => {
           setProblem(message);
           // A problem the call lives through is shown for a moment.
@@ -159,6 +180,7 @@ function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; 
       );
     };
     const run = chatTools(chatAccess(chatId), undefined, text => {
+      if (savesTurns && sessionId) return history().claim();
       if (!lastSpeech || lastSpeech.id === claimed || lastSpeech.text.trim() !== text.trim()) return;
       claimed = lastSpeech.id;
       return claimed;
@@ -223,7 +245,7 @@ function LiveCall({ chatId, botId, computer }: { chatId: string; botId: string; 
       setCallStarted(false);
       void audioModule()?.setAudioModeAsync({ allowsRecording: false, shouldRouteThroughEarpiece: false }).catch(() => {});
     };
-  }, [ready, chatId, botId, provider, savesHistory, computer]);
+  }, [ready, chatId, botId, provider, savesHistory, savesTurns, computer]);
 
   // The phone stays awake while a call is being set up or is on. A call that ended or never started
   // leaves the screen open with its message, and the phone may sleep.

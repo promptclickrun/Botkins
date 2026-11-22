@@ -148,7 +148,7 @@ try {
         const c = (await snap()).chats.find((each) => each.id === chatId);
         return c.messages.some((m) => m.role === "assistant" && /heron/i.test(m.text)) && c;
       });
-      const asked = chat.messages.find((m) => m.role === "user");
+      const asked = chat.messages.find((m) => m.role === "user" && m.runId);
       const run1 = (await snap()).runs.find((r) => r.id === asked.runId);
       assert.equal(run1?.status, "Completed", "the handed-over request is a normal, finished turn");
       await until("the voice to say the bot's answer", () => /heron/i.test(spoken(said, "assistant").replace(intro, "")));

@@ -161,17 +161,27 @@ export class ElevenLabsTransport extends LiveBase {
         }
         return;
       }
+      case "agent_chat_response_part": {
+        const part = obj(message.text_response_part);
+        if (part.type === "delta" && str(part.response_id) && str(part.text)) {
+          this.lastBot = "bot-" + part.response_id;
+          this.line(this.lastBot, "bot", str(part.text), { append: true });
+        }
+        return;
+      }
       case "agent_response": {
-        const text = str(obj(message.agent_response_event).agent_response);
+        const event = obj(message.agent_response_event);
+        const text = str(event.agent_response);
         if (text) {
-          this.lastBot = "bot-" + ++this.count;
+          this.lastBot = "bot-" + (str(event.response_id) || ++this.count);
           this.line(this.lastBot, "bot", text, { final: true });
         }
         return;
       }
       case "agent_response_correction": {
-        const text = str(obj(message.agent_response_correction_event).corrected_agent_response);
-        if (text && this.lastBot) this.line(this.lastBot, "bot", text, { final: true });
+        const event = obj(message.agent_response_correction_event);
+        const id = str(event.response_id) ? "bot-" + event.response_id : this.lastBot;
+        if (id && str(event.corrected_agent_response)) this.line(id, "bot", str(event.corrected_agent_response), { final: true });
         return;
       }
       case "ping": {

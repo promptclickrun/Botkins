@@ -156,6 +156,8 @@ A session is kept by id until `endLive(id)` (the 32 newest are kept). `endLive` 
 
 A computer with `voice-history-v1` accepts `recordVoiceLine(chatId, voiceId, text, final)`. Send the current text of one user utterance on each update, using the same session-scoped ID through the final correction. The watched chat publishes the partial text, and the computer saves the final as a user message. For Codex, the computer receives and records the transcript directly. A matching `ask_bot` request can pass the same `voiceId` to `send` to run the request on that message.
 
+With `voice-turns-v1`, the phone ties the tool request to the input utterance by ID even when their words differ or the transcript arrives late. The same call accepts a fifth argument for assistant speech, `{ role: "assistant", sessionId, afterVoiceId? }`. The link checks the session, device and chat. A spoken reply streams into one assistant row. When the bot has already written its answer for that turn, its spoken caption uses that answer's row until speech finishes, then the full written answer is shown. Codex records both speakers on the computer. ElevenLabs agents created by Botkins request `agent_chat_response_part` for partials. Existing agents can enable that client event in ElevenLabs. [ElevenLabs client events](https://elevenlabs.io/docs/eleven-agents/customization/events/client-events)
+
 ## A voice of a bot's own (`bot-voice-v1`)
 
 A bot may keep a voice of its own, saved with the bot by the app (`bot.voice`, sent to phones in the `bots` part; `updateBot(id, { voice })` sets it and `voice: null` clears it):

@@ -12,7 +12,7 @@ export function commitInterim(chat, run, task) {
 
 export function finishReply(chat, run, task, final) {
   if (run.noOutput) return;
-  const segments = chat.messages.filter(m => m.interim && m.runId === run.id && m.botId === task.speaker);
+  const segments = chat.messages.filter(m => !m.voiceId && m.interim && m.runId === run.id && m.botId === task.speaker);
   const last = segments.at(-1);
   let text = final?.trim() || "";
   if (last) {
