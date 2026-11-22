@@ -1185,7 +1185,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -2329,7 +2329,10 @@ export class MockBackend {
     },
     setModel(scope, id, value) {
       if (scope === "global") this.state.settings.model = value ?? { model: "auto" };
-      else {
+      else if (scope === "routines") {
+        if (value) this.state.settings.routineModel = value;
+        else delete this.state.settings.routineModel;
+      } else {
         const target = scope === "bot" ? this.bot(id) : this.chat(id);
         if (value) target.model = value;
         else delete target.model;
@@ -2414,15 +2417,25 @@ export class MockBackend {
       const chat = this.chat(chatId);
       chat.title = "Routine · " + text(data.name, 80, "name");
       chat.lastScheduleId = 1;
-      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt: text(data.prompt, 4000, "prompt"), cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }) }];
+      // A script routine's prompt is its follow-up action's, needed only when that is on.
+      const script = data.script ? text(data.script, 20000, "script") : undefined;
+      const prompt = script && !data.followUp ? String(data.prompt ?? "").trim() : text(data.prompt, 4000, "prompt");
+      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(script && { script, followUp: data.followUp === true }) }];
+      if (data.model) chat.model = data.model;
       return chatId;
     },
     updateRoutine(id, patch) {
       const chat = this.chat(id);
       const entry = chat.schedules.find((s) => s.routine);
-      const { deliver, ...rest } = patch;
+      const { deliver, model, script, ...rest } = patch;
       Object.assign(entry, rest);
       if (deliver) entry.deliver = delivery(deliver);
+      if (script === null) {
+        delete entry.script;
+        delete entry.followUp;
+      } else if (script !== undefined) entry.script = text(script, 20000, "script");
+      if (model === null) delete chat.model;
+      else if (model) chat.model = model;
       chat.title = "Routine · " + entry.name;
     },
     setRoutineEnabled(id, enabled) {

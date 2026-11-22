@@ -415,10 +415,24 @@ export const workspace = {
   },
   models: {
     summary: "List the models the signed-in providers offer",
-    usage: "botkins models [--default <provider/model>]",
-    options: { default: { type: "string", value: "provider/model", about: "Make this the model a bot uses unless it has its own" } },
+    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>]",
+    options: {
+      default: { type: "string", value: "provider/model", about: "Make this the model a bot uses unless it has its own" },
+      routines: { type: "string", value: "provider/model", about: "Make this the Default routines model: routines use it unless they have their own. \"none\" clears it" },
+      effort: { type: "string", value: "level", about: "With --routines: the thinking level, such as low or high" },
+    },
+    details: "A routine uses its own model, else the Default routines model, else its bot's model, else the default model.",
     async run(context) {
-      if (context.options.default !== undefined) return void context.print(await context.client.call("models.default", context.options.default), (model) => "The default model is " + (model.provider ? model.provider + "/" : "") + model.model + ".");
+      const o = context.options;
+      if (o.effort !== undefined && o.routines === undefined) throw usage("--effort goes with --routines <provider/model>.");
+      if (o.routines !== undefined) {
+        const cleared = o.routines === "none";
+        if (cleared && o.effort !== undefined) throw usage("--effort goes with a model, not with none.");
+        return void context.print(await context.client.call("models.routines", cleared ? null : o.routines, o.effort), (model) =>
+          model ? "The Default routines model is " + (model.provider ? model.provider + "/" : "") + model.model + (model.reasoningEffort ? " · " + model.reasoningEffort : "") + "." : "Routines have no default model of their own: they use their bot's model, else the default model.",
+        );
+      }
+      if (o.default !== undefined) return void context.print(await context.client.call("models.default", o.default), (model) => "The default model is " + (model.provider ? model.provider + "/" : "") + model.model + ".");
       context.print(await context.client.call("models"), (models) => (models.length ? table(["MODEL", "NAME", "PROVIDER", ""], models.map((model) => [model.ref, model.name, model.providerName + (model.group ? " › " + model.group : ""), [model.recommended && "recommended", !model.available && "unavailable"].filter(Boolean).join(", ")])) : "No provider is signed in, so there are no models. See `botkins providers list`."));
     },
   },

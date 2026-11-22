@@ -350,6 +350,7 @@ export const CHANGES = {
   "providers.login": 0,
   "providers.logout": 0,
   "models.default": null,
+  "models.routines": null,
   "routines.run": 0,
   "routines.pause": 0,
   "routines.resume": 0,

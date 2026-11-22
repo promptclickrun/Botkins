@@ -7,14 +7,16 @@ import type { ModelChoice, ModelInfo } from "@/link/types";
 import { useBot, useCan, useChat, useModels, useProviders, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
-import { chooseModel, effortLabel, findModel, groupModels, modelKey } from "@/state/models";
+import { chooseModel, effectiveModel, effortLabel, findModel, groupModels, modelKey, routineDefault } from "@/state/models";
+import { heldRoutineModel } from "@/features/work/routineModel";
 import { useProviderUsage } from "@/state/providerUsage";
 import { Badge, Chip, EmptyState, Group, haptic, IconButton, Label, Loading, ProviderIcon, radius, Row, Sheet, space, T, Tap, useTheme } from "@/ui";
 import { contextFact } from "./facts";
 import { limitLine, limitTone, primaryLimit } from "./limits";
 import { defaultProviderOf, describeChoice } from "./shared";
 
-type Scope = "global" | "bot" | "chat";
+type Scope = "global" | "routines" | "bot" | "chat" | "routine";
+const SCOPES = ["routines", "bot", "chat", "routine"] as const;
 const same = (a: ModelChoice | null | undefined, b: ModelChoice | null | undefined) =>
   (a ?? null) === (b ?? null) || (!!a && !!b && a.model === b.model && (a.provider ?? "") === (b.provider ?? "") && (a.reasoningEffort ?? "") === (b.reasoningEffort ?? ""));
 
@@ -84,26 +86,47 @@ function Choice({
 /** What a model's row says under its name: its window when known, then its description. */
 const modelSubtitle = (model: ModelInfo) => (model.available ? [contextFact(model), model.description].filter(Boolean).join(" · ") || undefined : "Not on this account");
 
-/** Picks the model and thinking level for the computer, a bot, or a chat. */
+/**
+ * Picks the model and thinking level for the computer, its routines ("routines": the Default
+ * routines model), a bot, a chat, or a routine being edited ("routine": the choice goes back to the
+ * editor, which saves it with the routine; `id` is the routine's bot).
+ */
 export default function ModelPicker() {
+  const params = useLocalSearchParams<{ scope?: string }>();
   const canManage = useCan("agents", "manage");
-  if (!canManage) return <Sheet title="Model"><EmptyState title="Your team role can't change models" /></Sheet>;
+  // A routine's model is part of the routine: whoever may make or change routines picks it.
+  const canCreateRoutine = useCan("today", "create");
+  const canChangeRoutine = useCan("today", "manage");
+  const canRoutine = canCreateRoutine || canChangeRoutine;
+  if (!(params.scope === "routine" ? canRoutine : canManage)) return <Sheet title="Model"><EmptyState title="Your team role can't change models" /></Sheet>;
   return <Picker />;
 }
 
 function Picker() {
   const params = useLocalSearchParams<{ scope?: string; id?: string }>();
-  const scope: Scope = params.scope === "bot" || params.scope === "chat" ? params.scope : "global";
+  const scope: Scope = SCOPES.find((name) => name === params.scope) ?? "global";
   const chat = useChat(scope === "chat" ? params.id : undefined);
-  const bot = useBot(scope === "bot" ? params.id : chat?.botId);
+  const bot = useBot(scope === "bot" || scope === "routine" ? params.id : chat?.botId);
+  const held = scope === "routine" ? heldRoutineModel() : null;
   const { colors } = useTheme();
   const settings = useSettings();
   const models = useModels();
   const providers = useProviders();
   const defaultProvider = defaultProviderOf(providers);
 
-  const saved = (scope === "global" ? settings?.model : scope === "bot" ? bot?.model : chat?.model) ?? null;
-  const inherited = scope === "chat" ? (bot?.model ?? settings?.model) : scope === "bot" ? settings?.model : undefined;
+  const saved =
+    (scope === "global" ? settings?.model : scope === "routines" ? settings?.routineModel : scope === "bot" ? bot?.model : scope === "routine" ? held?.value : chat?.model) ?? null;
+  const routineChat = !!chat?.schedules?.some((entry) => entry.routine);
+  const inherited =
+    scope === "chat"
+      ? effectiveModel(settings, bot, chat ? { ...chat, model: undefined } : undefined)
+      : scope === "routine"
+        ? routineDefault(settings, bot)
+        : scope === "bot" || scope === "routines"
+          ? settings?.model
+          : undefined;
+  // What "no model of its own" is called here.
+  const inheritTitle = scope === "routines" ? "Use the global default" : scope === "routine" || routineChat ? "Use the routines default" : "Use default";
   const [choice, setChoice] = useState<ModelChoice | null>(saved);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -134,8 +157,13 @@ function Picker() {
 
   const pick = (model: ModelInfo) => setChoice(chooseModel(model, choice?.reasoningEffort));
   const save = async () => {
+    if (scope === "routine") {
+      held?.set(choice);
+      router.back();
+      return;
+    }
     setBusy(true);
-    const done = await attempt(api.setModel(scope, scope === "global" ? null : (params.id ?? null), choice).then(() => true));
+    const done = await attempt(api.setModel(scope, scope === "global" || scope === "routines" ? null : (params.id ?? null), choice).then(() => true));
     setBusy(false);
     if (done) router.back();
   };
@@ -144,7 +172,7 @@ function Picker() {
   const thinking = chosen && choice ? <Thinking model={chosen} effort={choice.reasoningEffort} onChange={(effort) => setChoice(chooseModel(chosen, effort))} /> : null;
 
   return (
-    <Sheet title="Model" action="Save" onAction={() => void save()} actionDisabled={same(choice, saved) || (scope === "global" && !choice)} actionLoading={busy} footer={thinking}>
+    <Sheet title="Model" action={scope === "routine" ? "Done" : "Save"} onAction={() => void save()} actionDisabled={same(choice, saved) || (scope === "global" && !choice)} actionLoading={busy} footer={thinking}>
       {!models ? (
         <Loading />
       ) : models.length === 0 ? (
@@ -165,7 +193,7 @@ function Picker() {
               {fallback && (
                 <Choice
                   leading={<ProviderIcon provider={fallback.provider} name={fallback.providerLabel} size={32} tile />}
-                  title="Use default"
+                  title={inheritTitle}
                   subtitle={fallback.label}
                   selected={choice === null}
                   onPress={() => setChoice(null)}

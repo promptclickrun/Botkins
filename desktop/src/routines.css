@@ -695,7 +695,9 @@
 }
 
 /* Whether a routine notifies when a run finishes. */
-.routine-notify {
+/* Inside the routine form, over `.routine-form label`'s grid: the switch beside its words. */
+.routine-notify,
+.routine-form .routine-notify {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -708,4 +710,48 @@
 .routine-notify span {
   display: grid;
   gap: 2px;
+}
+
+/* What a routine runs: its instructions, or a script with an optional follow-up action. */
+.routine-runs small {
+  display: block;
+  margin-top: 8px;
+}
+.routine-form textarea.routine-script,
+.routine-script-text {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: calc(12.5px * var(--text-scale));
+  line-height: 1.55;
+}
+.routine-form textarea.routine-script {
+  background: var(--surface);
+}
+.routine-script-text {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.routine-followup {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--canvas);
+}
+.routine-followup .counter {
+  margin-top: -8px;
+}
+.routine-model .model-picker {
+  margin: 0;
+}
+.routine-model-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }

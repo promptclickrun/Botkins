@@ -52,7 +52,7 @@ import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
 import SidePane, { paneAction, useNarrow, usePaneAsk } from "./SidePane";
-import { ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
+import { chatDefault, ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
 import { useModelCatalog } from "./providers";
 import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
 import { blockedBots } from "./access";
@@ -184,10 +184,10 @@ export default function ChatView({
     .map((id) => state.bots.find((b) => b.id === id))
     .filter((b): b is Bot => !!b);
   const group = (chat.botIds?.length ?? 0) >= 2;
-  // The model this chat runs on: its own choice, else its bot's, else the global default.
+  // The model this chat runs on: its own choice, else (a routine's chat) the routines default, else its bot's, else the global default.
   const { models } = useModelCatalog();
   const defaultProvider = useDefaultProvider();
-  const model = chat.model ?? bot.model ?? state.settings.model;
+  const model = chat.model ?? chatDefault(state.settings, chat, bot);
   const speaker = group ? state.bots.find((b) => b.id === state.speakers?.[chat.id]) : bot;
   const nameOf = (m: Message) =>
     m.botId ? (state.bots.find((b) => b.id === m.botId)?.name ?? "Removed bot") : bot.name;

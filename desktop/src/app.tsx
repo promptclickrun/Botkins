@@ -22,7 +22,7 @@ import Composer from "./Composer";
 import Today from "./Today";
 import BoardPanel from "./Board";
 import Settings from "./Settings";
-import ModelPicker, { modelLabel } from "./ModelPicker";
+import ModelPicker, { chatDefault, isRoutineChat, modelLabel } from "./ModelPicker";
 import ProviderIcon from "./ProviderIcon";
 import { isConnected, useModelCatalog, useProviders } from "./providers";
 import ChatView, { type SideAnswer } from "./ChatView";
@@ -535,14 +535,12 @@ function App() {
         draft={drafts[key] || ""}
         placeholder={placeholder}
         model={modelLabel(
-          (key !== "home" ? chat?.model : undefined) ??
-            target.model ??
-            state!.settings.model,
+          (key !== "home" ? chat?.model : undefined) ?? chatDefault(state!.settings, key !== "home" ? chat : undefined, target),
           models,
           defaultProvider,
         )}
         modelProvider={
-          ((key !== "home" ? chat?.model : undefined) ?? target.model ?? state!.settings.model)?.provider ?? defaultProvider
+          ((key !== "home" ? chat?.model : undefined) ?? chatDefault(state!.settings, key !== "home" ? chat : undefined, target))?.provider ?? defaultProvider
         }
         pickModel={() => void pickModel(key).catch(fail)}
         busy={state?.streams[key] !== undefined}
@@ -965,7 +963,8 @@ function App() {
               scope="chat"
               id={chat.id}
               value={chat.model}
-              inherited={bot.model ?? state.settings.model}
+              inherited={chatDefault(state.settings, chat, bot)}
+              inheritLabel={isRoutineChat(chat) ? "Use the routines default" : undefined}
               done={() => setModal("")}
               openProviders={() => settings("Account")}
             />

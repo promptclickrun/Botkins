@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { BrainCircuit, Check, Search } from "lucide-react";
-import type { ModelChoice, ModelInfo, ProviderStatus } from "./types";
+import type { Bot, Chat, ModelChoice, ModelInfo, Preferences, ProviderStatus } from "./types";
 import ProviderIcon from "./ProviderIcon";
 import { effortLabel, findModel, modelFacts, modelName, plainError, PROVIDER_NAMES, useModelCatalog, useProviders, useProviderUsage } from "./providers";
 import { pickerLine, useNow } from "./ProviderLimits";
@@ -11,6 +11,17 @@ export function modelLabel(choice: ModelChoice, models?: ModelInfo[], defaultPro
   return [modelName(choice, models, defaultProvider), choice.reasoningEffort && effortLabel(choice.reasoningEffort)]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** Whether a chat is a routine's own chat (desktop/routines.mjs). */
+export const isRoutineChat = (chat?: Chat) => !!chat?.schedules?.some((entry) => entry.routine);
+
+/**
+ * What a chat runs on when it has no model of its own: for a routine's chat the Default routines
+ * model, then its bot's, then the default model. Mirrors effectiveModel in desktop/workspace.mjs.
+ */
+export function chatDefault(settings: Preferences, chat: Chat | undefined, bot: Bot | undefined) {
+  return (isRoutineChat(chat) ? settings.routineModel : undefined) ?? bot?.model ?? settings.model;
 }
 
 /** The provider used for choices saved without one. */
@@ -88,26 +99,43 @@ function reveal(list: HTMLElement | null, el: HTMLElement | null) {
     list.scrollTop = el.offsetTop + el.offsetHeight - list.clientHeight;
 }
 
+/** What the choice of no model of its own is called, by scope. */
+const INHERIT_LABELS = {
+  routines: "Use the global default",
+  bot: "Use the global default",
+  chat: "Use the bot's default",
+  routine: "Use the routines default",
+} as const;
+
 /**
- * The model and thinking picker for the global default, a bot or a chat. Models are grouped under
- * their provider; the thinking levels are the chosen model's own. Saves with setModel.
+ * The model and thinking picker for the global default, the Default routines model, a bot, a chat
+ * or a routine. Models are grouped under their provider; the thinking levels are the chosen model's
+ * own. Saves with setModel, except for "routine": a routine's editor holds the choice (`onChange`)
+ * and saves it with the routine, so the picker has no form or Save button of its own there.
  */
 export default function ModelPicker({
   scope,
   id,
   value,
   inherited,
+  inheritLabel,
   done,
+  onChange,
   openProviders,
 }: {
-  scope: "global" | "bot" | "chat";
+  scope: "global" | "routines" | "bot" | "chat" | "routine";
   id: string | null;
   value?: ModelChoice;
   inherited?: ModelChoice;
+  /** The words for "no model of its own", when the scope's usual ones don't fit (a routine's chat). */
+  inheritLabel?: string;
   done?: () => void;
+  /** With scope "routine": each change of the choice (undefined is the routines default). */
+  onChange?: (choice: ModelChoice | undefined) => void;
   /** Opens Settings › Model providers. Without it the picker names the providers but offers no link. */
   openProviders?: () => void;
 }) {
+  const held = scope === "routine";
   const catalog = useModelCatalog();
   const { providers } = useProviders();
   // What is left of each provider's plan, for the line under its name.
@@ -166,7 +194,9 @@ export default function ModelPicker({
     setDirty(true);
     setSaved(false);
     setError("");
+    onChange?.(choice);
   };
+  const inheritText = scope === "global" ? "" : (inheritLabel ?? INHERIT_LABELS[scope]);
   /** Picks a model; a thinking level the new model doesn't have is dropped. */
   function pick(key: string) {
     if (key === INHERIT) return change(undefined);
@@ -190,7 +220,7 @@ export default function ModelPicker({
               ? order.length - 1
               : -2;
     if (next === -2) {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && !held) {
         e.preventDefault();
         e.currentTarget.closest("form")?.requestSubmit();
       }
@@ -222,12 +252,14 @@ export default function ModelPicker({
     ) : null;
 
   const levels = effectiveInfo?.efforts ?? [];
+  // A routine's picker sits inside the routine's own form, and a form can't hold another.
+  const Frame = held ? "div" : "form";
   return (
-    <form
+    <Frame
       className="model-picker"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (!ready || unavailable || (!!draft && !models.length)) return;
+        if (held || !ready || unavailable || (!!draft && !models.length)) return;
         setSaving(true);
         setError("");
         try {
@@ -303,7 +335,7 @@ export default function ModelPicker({
               role="option"
               id={optionId(INHERIT)}
               aria-selected={selected === INHERIT}
-              aria-label={scope === "bot" ? "Use the global default" : "Use the bot's default"}
+              aria-label={inheritText}
               aria-describedby={uid + "-inherit-desc"}
               className="mp-option mp-inherit"
               onClick={() => ready && pick(INHERIT)}
@@ -312,7 +344,7 @@ export default function ModelPicker({
                 {selected === INHERIT && <Check size={14} />}
               </span>
               <span className="mp-text">
-                <span className="mp-name">{scope === "bot" ? "Use the global default" : "Use the bot's default"}</span>
+                <span className="mp-name">{inheritText}</span>
                 <small id={uid + "-inherit-desc"}>
                   {inherited ? <ModelBadge choice={inherited} models={models} size={12} /> : "Not set"}
                 </small>
@@ -489,7 +521,7 @@ export default function ModelPicker({
           </button>
         </p>
       )}
-      {!empty && (
+      {!empty && !held && (
         <div className="model-save">
           <button className="primary" disabled={!ready || unavailable || (!!draft && !models.length)}>
             {saving ? "Saving…" : "Save model"}
@@ -497,7 +529,7 @@ export default function ModelPicker({
           {saved && <small role="status">Model saved.</small>}
         </div>
       )}
-    </form>
+    </Frame>
   );
 }
 

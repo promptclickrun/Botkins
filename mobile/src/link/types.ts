@@ -367,6 +367,10 @@ export type ChatSchedule = {
   notify?: boolean;
   createdAt?: number;
   finishedAt?: number;
+  /** A script routine's script: it runs on the computer with no model ("routine-scripts-v1"). */
+  script?: string;
+  /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
+  followUp?: boolean;
 };
 /**
  * Where a routine's result lands when a run finishes. "routine" (and nothing) keeps it in the
@@ -377,7 +381,21 @@ export type ChatSchedule = {
  */
 export type RoutineDelivery = { to: "none" | "routine" | "chat" | "feed" | "idea" | "goal"; chatId?: string; /** For "goal": which kind of goal. */ category?: string };
 /** `notify: false` keeps a routine quiet: no notification when a run finishes, on the computer or a phone. */
-export type RoutineInput = { botId: string; name: string; prompt: string; cadence: Cadence; timezone?: string; deliver?: RoutineDelivery; notify?: boolean };
+export type RoutineInput = {
+  botId: string;
+  name: string;
+  /** The instructions; on a script routine, its follow-up action's (needed only when `followUp` is on). */
+  prompt: string;
+  cadence: Cadence;
+  timezone?: string;
+  deliver?: RoutineDelivery;
+  notify?: boolean;
+  /** A script that runs on the computer with no model ("routine-scripts-v1"; the owner's only). null on an edit takes it away. */
+  script?: string | null;
+  followUp?: boolean;
+  /** The routine's own model, kept on its chat ("routine-models-v1"). null on an edit goes back to the Default routines model. */
+  model?: ModelChoice | null;
+};
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
@@ -792,6 +810,8 @@ export type Appearance = {
 export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
 export type Preferences = {
   model: ModelChoice;
+  /** The Default routines model ("routine-models-v1"): routines without their own use it before their bot's. */
+  routineModel?: ModelChoice;
   appearance: Appearance;
   foldTools: boolean;
   showThinking: boolean;
@@ -1377,7 +1397,8 @@ export type Calls = {
   respond(requestId: string, answer: { action: string; value?: string | CredentialRef; content?: Record<string, unknown> }): void;
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
-  setModel(scope: "global" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
+  /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */
+  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
   providers(refresh?: boolean): ProviderStatus[];
   /** The harnesses that are programs of their own (Pi): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];

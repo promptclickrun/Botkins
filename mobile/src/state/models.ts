@@ -26,7 +26,13 @@ export function modelName(choice: ModelChoice | undefined, models: ModelInfo[] =
 
 /** The choice in force for a chat: its own, else its bot's, else the computer's default. */
 export function effectiveModel(settings: Preferences | undefined, bot?: Bot, chat?: ChatSummary): ModelChoice | undefined {
-  return chat?.model ?? bot?.model ?? settings?.model;
+  if (chat?.model) return chat.model;
+  return chat?.schedules?.some((entry) => entry.routine) ? routineDefault(settings, bot) : (bot?.model ?? settings?.model);
+}
+
+/** What a routine with no model of its own runs on: the Default routines model, then its bot's, then the default model (desktop/workspace.mjs). */
+export function routineDefault(settings: Preferences | undefined, bot?: Bot): ModelChoice | undefined {
+  return settings?.routineModel ?? bot?.model ?? settings?.model;
 }
 
 export type ModelGroup = { provider: string; name: string; sections: { title?: string; models: ModelInfo[] }[] };

@@ -116,3 +116,15 @@ test("a routine's destination: No output only where the computer takes it, and n
   assert.equal(notifyLine("chat", true), "When a run finishes");
   assert.equal(notifyLine("chat", false), "This routine is quiet");
 });
+
+test("a routine's chat uses its own model, then the Default routines model, then its bot's and the default", async () => {
+  const { effectiveModel, routineDefault } = await import("../src/state/models");
+  const settings = { model: { model: "global" }, routineModel: { model: "routines" } } as Parameters<typeof routineDefault>[0];
+  const bot = { id: "pip", model: { model: "bots" } } as Bot;
+  const routineChat = { id: "r", botId: "pip", schedules: [{ id: 1, routine: true }] } as unknown as Parameters<typeof effectiveModel>[2];
+  const plainChat = { id: "c", botId: "pip" } as unknown as Parameters<typeof effectiveModel>[2];
+  assert.equal(effectiveModel(settings, bot, routineChat)?.model, "routines");
+  assert.equal(effectiveModel(settings, bot, plainChat)?.model, "bots", "other chats keep the bot's model");
+  assert.equal(effectiveModel(settings, bot, { ...routineChat!, model: { model: "own" } })?.model, "own");
+  assert.equal(routineDefault({ ...settings!, routineModel: undefined }, bot)?.model, "bots");
+});
