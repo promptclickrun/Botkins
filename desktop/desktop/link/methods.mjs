@@ -46,6 +46,12 @@ export const AGENT_METHODS = ["agents.browse", "agents.template"];
  */
 export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "composio.accounts", "composio.connect", "composio.removeAccount", "composio.cardOpen", "composio.cardCheck"];
 
+/**
+ * The view of an MCP App in a chat ("mcp-apps-v1", desktop/mcp-apps.mjs): what it shows, and the calls
+ * it makes to the server its card came from. Each names a chat and a card first.
+ */
+export const MCP_APP_METHODS = ["mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"];
+
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
@@ -111,6 +117,8 @@ export const REMOTE_METHODS = new Set([
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
   ...COMPOSIO_METHODS,
+  // The views of MCP Apps in chats ("mcp-apps-v1")
+  ...MCP_APP_METHODS,
 ]);
 
 const MAX_ATTACHMENTS = 10;
@@ -321,6 +329,28 @@ function marketArgs(method, args) {
   }
 }
 
+/** The arguments of a call from an MCP App's view, cut to its shape, or null when `method` is not one. */
+function mcpAppArgs(method, args) {
+  if (!MCP_APP_METHODS.includes(method)) return null;
+  const [chatId, cardId] = args;
+  if (!CARD_ID.test(chatId ?? "") || !CARD_ID.test(cardId ?? "")) refuse("That view can't be found.");
+  switch (method) {
+    case "mcpApps.view":
+      return [chatId, cardId, { html: plain(args[2]) && args[2].html === true }];
+    case "mcpApps.callTool": {
+      const [, , name, input = {}, options] = args;
+      if (typeof name !== "string" || !name || name.length > 128) refuse("Name the tool.");
+      if (!plain(input) || JSON.stringify(input).length > 200_000) refuse("Those arguments can't be sent.");
+      return [chatId, cardId, name, input, { approved: plain(options) && options.approved === true }];
+    }
+    case "mcpApps.readResource":
+      if (typeof args[2] !== "string" || !args[2] || args[2].length > 2048) refuse("That resource can't be read.");
+      return [chatId, cardId, args[2]];
+    default:
+      return null;
+  }
+}
+
 /** The arguments of a plugin call, cut to its shape, or null when `method` is not one. */
 function pluginArgs(method, args) {
   if (!PLUGIN_METHODS.includes(method)) return null;
@@ -401,7 +431,7 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? mcpAppArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
 }
 
 /**

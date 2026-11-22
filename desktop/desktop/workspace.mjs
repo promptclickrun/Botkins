@@ -71,6 +71,7 @@ import {
 import { Apps } from "./apps.mjs";
 import { createComposio } from "./composio.mjs";
 import { Connects } from "./connects.mjs";
+import { McpApps } from "./mcp-apps.mjs";
 import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
@@ -264,6 +265,8 @@ export class Workspace {
     // (desktop/composio.mjs, desktop/connects.mjs).
     this.composio = createComposio(this);
     this.connects = new Connects(this);
+    // MCP servers with interactive views run through Botkins' own client, and their views show in the chat (desktop/mcp-apps.mjs).
+    this.mcpApps = new McpApps(this, options?.mcpApps);
     // Panels a bot shows beside a chat (desktop/sidepane.mjs).
     this.sidepane = new SidePane(this, options?.sidePane);
     this.templates = new Templates(this);
@@ -1237,8 +1240,13 @@ export class Workspace {
     const pluginSpec = access.plugins
       ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
+    // Servers with views (and the Composio tool) are run by Botkins for this turn, when they answer;
+    // their tools come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs).
+    const routed = access.mcp ? await this.mcpApps.prepare(bot) : new Map();
+    const ownServers = access.mcp ? this.integrations.serversFor(bot) : {};
+    for (const name of routed.keys()) delete ownServers[name];
     const mcpServers = {
-      ...(access.mcp ? this.integrations.serversFor(bot) : {}),
+      ...ownServers,
       ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
     };
     const session = await provider.openSession({
@@ -1254,7 +1262,7 @@ export class Workspace {
       instructions: this.instructionsFor(chat, bot, run),
       // The bot's memory changes often; it is kept apart so a save doesn't reopen the session (desktop/memory.mjs).
       context: this.memory.context(bot),
-      tools: this.sessionTools(bot, chat, run, task),
+      tools: [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)],
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
       skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,

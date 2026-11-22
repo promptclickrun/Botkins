@@ -10,7 +10,7 @@ import { fakeClient, tempDir } from "./fake-copilot.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
 import { pluginHandlers } from "../desktop/plugins.mjs";
 import { LinkHost, qrPath, REMOTE_METHODS } from "../desktop/link/index.mjs";
-import { COMPOSIO_METHODS } from "../desktop/link/methods.mjs";
+import { COMPOSIO_METHODS, MCP_APP_METHODS } from "../desktop/link/methods.mjs";
 
 const source = (file) => readFileSync(new URL("../desktop/" + file, import.meta.url), "utf8");
 const preload = new Set([...source("preload.cjs").matchAll(/^ {2}"([\w.]+)",$/gm)].map((m) => m[1]));
@@ -25,6 +25,8 @@ if (shared.includes("...pluginHandlers(workspace.plugins, savedCredentials)")) {
 }
 // Marketplace › Apps: one factory gives every Composio call (desktop/composio.mjs).
 if (/\.\.\.composioHandlers\(/.test(shared)) for (const name of COMPOSIO_METHODS) handlers.add(name);
+// The view of an MCP App in a chat: one factory gives its calls (desktop/mcp-apps.mjs).
+if (/\.\.\.mcpAppHandlers\(/.test(shared)) for (const name of MCP_APP_METHODS) handlers.add(name);
 // The calls only Settings › Phone makes. A phone must never be able to make them.
 const PHONE_PAGE = ["remoteHosts", "pairRemoteHost", "useRemoteHost", "forgetRemoteHost", "renameRemoteHost", "renamePhone", "setPhonePerson", "phoneLink", "setPhoneLink", "startPhonePairing", "cancelPhonePairing", "removePhone", "renamePhoneLinkComputer", "setPhoneScreen", "setPhoneRelay", "resetPhoneRelay", "requestScreenPermission", "allowLocalNetwork", "macToolsStatus", "setMacTool", "grantMacTool", "voiceSettings", "setVoice", "setVoiceKey", "voiceOptions", "transcribe", "speak", "startDictation", "startLiveVoice", "liveVoiceTool", "endLiveVoice", "savedCredentials", "saveSavedCredential", "removeSavedCredential", "checkSavedCredential", "passwordManagers", "unlockPasswordManager", "lockPasswordManager", "passwordManagerVaults", "passwordManagerItems", "passwordManagerItem", "linkPasswordManagerField"];
 

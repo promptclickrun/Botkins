@@ -487,6 +487,21 @@ export type Card = { id: string; title: string; blocks: PanelBlock[]; replies: s
 export type ConnectStatus = "needed" | "waiting" | "connected" | "failed" | "expired" | "sign_in" | "unavailable";
 export type ConnectCard = { id: string; toolkit: string; name: string; logo?: string; status: ConnectStatus; note?: string; updatedAt: number; resumed?: boolean };
 export type ConnectCardState = { card: string; app: string; status: ConnectStatus; note?: string };
+/** The card of a tool with an MCP App view (the computer's desktop/mcp-apps.mjs): what anyone in the chat may see. */
+export type McpAppCard = { id: string; server: string; tool: string; title: string; summary: string; at: number };
+/** A tool's result as MCP gives it: `content` is what the model read; the view also gets the rest. */
+export type McpToolResult = { content: Record<string, unknown>[]; structuredContent?: Record<string, unknown>; _meta?: Record<string, unknown>; isError?: boolean };
+/** What a view is shown with: the tool, its input and its result as they were, the origins it may reach, and its page. */
+export type McpAppView = {
+  id: string;
+  server: string;
+  tool: { name: string; title?: string; description?: string; inputSchema: Record<string, unknown>; _meta?: Record<string, unknown> };
+  input: Record<string, unknown>;
+  result: McpToolResult;
+  csp: { resourceDomains: string[]; connectDomains: string[] };
+  prefersBorder?: boolean;
+  html?: string;
+};
 export type RunSummary = {
   id: string;
   chatId: string;
@@ -510,6 +525,8 @@ export type Run = RunSummary & {
   apps?: { id: string; title: string; description: string; sendsAnswers: boolean }[];
   /** Composio apps the bot asked the person to connect in this turn. */
   connects?: ConnectCard[];
+  /** Tools with an MCP App view that ran in this turn. */
+  mcpApps?: McpAppCard[];
   options?: { label: string; prompt: string; description?: string }[];
   reasoning?: Reasoning[];
   todos?: Todo[];
@@ -1564,6 +1581,12 @@ export type Calls = {
   "composio.cardOpen"(chatId: string, cardId: string): ConnectCardState & { url?: string };
   /** Looks at the card again (back from the browser); the computer goes on with the chat once the app is connected. */
   "composio.cardCheck"(chatId: string, cardId: string): ConnectCardState;
+  // ---- The view of an MCP App in a chat ("mcp-apps-v1", the computer's desktop/mcp-apps.mjs)
+  /** What the view is shown with; `html` asks for the page too. Showing it never runs the tool again. */
+  "mcpApps.view"(chatId: string, cardId: string, options?: { html?: boolean }): McpAppView;
+  /** A call from the view to its own server: the tool's result, or `needsApproval` when the person must allow it first (then call again with `approved`). */
+  "mcpApps.callTool"(chatId: string, cardId: string, name: string, args: Record<string, unknown>, options?: { approved?: boolean }): { result: McpToolResult } | { needsApproval: { tool: string; title: string; server: string } };
+  "mcpApps.readResource"(chatId: string, cardId: string, uri: string): { contents: Record<string, unknown>[] };
   // Spaces ("spaces-v1"; docs/spaces.md). The app's calls, then the link's own.
   "spaces.read"(id: string): SpaceContent;
   /** A new private space, pinned for its maker. Answers its id. */

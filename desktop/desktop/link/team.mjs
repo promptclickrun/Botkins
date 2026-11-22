@@ -218,6 +218,10 @@ const POLICY = {
   // A chat's Connect card uses the computer's own Composio account: its owner presses Connect.
   "composio.cardOpen": "owner",
   "composio.cardCheck": "owner",
+  // An MCP App's view in a chat: seeing it is the chat's; its calls use the computer's tool servers.
+  "mcpApps.view": ["agents", "chat"],
+  "mcpApps.callTool": ["mcp", "use"],
+  "mcpApps.readResource": ["mcp", "use"],
   "link.sync": ["agents", "view"],
   "link.messages": ["agents", "chat"],
   "link.step": ["agents", "chat"],
@@ -380,7 +384,7 @@ const SELF_METHODS = new Set([
   "link.unpair",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection"]);
+const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
 const CREATOR_METHODS = new Set(["renameChat", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */

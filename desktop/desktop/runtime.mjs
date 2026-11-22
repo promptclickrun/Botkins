@@ -33,6 +33,7 @@ import { deviceCall } from "./device-call.mjs";
 import { PLUGINS, PLUGIN_STARTS, pluginHandlers } from "./plugins.mjs";
 import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
 import { COMPOSIO_APPS, composioHandlers } from "./composio.mjs";
+import { MCP_APPS, mcpAppHandlers } from "./mcp-apps.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
@@ -345,6 +346,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "agents.template": (id) => workspace.plugins.catalog.agentTemplate(id),
     // Marketplace › Apps: the person's Composio apps through this computer's Composio tool (desktop/composio.mjs).
     ...composioHandlers(workspace),
+    // The view of an MCP App in a chat: what it shows, and the calls it makes to its own server (desktop/mcp-apps.mjs).
+    ...mcpAppHandlers(workspace),
     ...teamHandlers(() => link),
     ...chatSectionHandlers(() => link),
     pickPluginFolder: async () => {
@@ -1200,6 +1203,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       closeWorkspaceSocket?.();
       workspace.interactions.cancel();
       workspace.connects.close();
+      workspace.mcpApps.close();
       clearInterval(timer);
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);

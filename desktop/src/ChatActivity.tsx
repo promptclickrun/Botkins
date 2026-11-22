@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
+import { McpAppCard } from "./McpAppCard";
 import { Block } from "./Today";
 import type { Run, Step, Subagent, Todo } from "./types";
 
@@ -505,6 +506,9 @@ export function RunCards({
       ))}
       {run.connects?.map((card) => (
         <ConnectCard key={card.id} chatId={run.chatId} card={card} />
+      ))}
+      {run.mcpApps?.map((card) => (
+        <McpAppCard key={card.id} chatId={run.chatId} card={card} />
       ))}
       {run.cards?.map((card) => (
         <section className="chat-card" key={card.id} aria-label={card.title}>

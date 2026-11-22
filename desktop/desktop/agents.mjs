@@ -210,6 +210,8 @@ export class Agents {
       delete chat.helpers[id];
     }
     const chatIds = new Set(chats.map((c) => c.id));
+    // The views of MCP Apps in those chats are kept by their turns: removed before the turns are (desktop/mcp-apps.mjs).
+    this.ws.mcpApps?.removeChats([...chatIds]);
     this.state.bots = this.state.bots.filter((b) => b !== bot);
     this.state.chats = this.state.chats.filter((c) => !chatIds.has(c.id));
     this.state.runs = this.state.runs.filter((r) => !chatIds.has(r.chatId));
@@ -265,6 +267,7 @@ export class Agents {
     const chat = this.ws.chat(id);
     this.assertIdle([chat], "chat");
     this.state.chats = this.state.chats.filter((c) => c !== chat);
+    this.ws.mcpApps?.removeChats([id]);
     this.state.runs = this.state.runs.filter((r) => r.chatId !== id);
     for (const panel of this.state.panels) if (panel.refreshChatId === id) delete panel.refreshChatId;
     this.ws.catalogs.delete(id);

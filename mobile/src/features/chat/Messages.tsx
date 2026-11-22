@@ -19,6 +19,7 @@ import type { MessagePart } from "@/features/artifacts/logic";
 import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { ConnectCard } from "./ConnectCard";
+import { McpAppCard } from "./McpAppCard";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { claimAt, useRevealed } from "./reveal";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
@@ -101,10 +102,13 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
   const { colors } = useTheme();
   // A Connect card is an action, not a picture: it shows with rich cards off too.
   const connects = run.connects?.map((card) => <ConnectCard key={card.id} chatId={run.chatId} card={card} />);
+  // An MCP App's view; with rich cards off, its saved summary.
+  const views = run.mcpApps?.map((card) => <McpAppCard key={card.id} chatId={run.chatId} card={card} rich={rich} />);
   if (!rich)
     return (
       <>
         {connects}
+        {views}
         {run.cards?.map((card) => (
           <View key={card.id} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <LayoutGrid size={14} color={colors.faint} strokeWidth={2.2} />
@@ -118,6 +122,7 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
   return (
     <>
       {connects}
+      {views}
       {run.cards?.map((card) => (
         <View key={card.id} style={{ gap: space.md }}>
           <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: space.lg, gap: space.md }}>
