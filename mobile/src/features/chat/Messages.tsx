@@ -346,8 +346,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   return (
     <View style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      {shown !== message.text ? (
-        <Markdown text={shown} plain={!markdown} />
+      {message.voiceCaption || shown !== message.text ? (
+        <Markdown text={message.voiceCaption ?? shown} plain={!markdown} />
       ) : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}

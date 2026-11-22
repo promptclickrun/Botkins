@@ -6,6 +6,7 @@ import { argsOf, type Connect, type DuplexLike, LiveBase, type LiveStatus, type 
 type Hooks = {
   send(event: Record<string, unknown>): void;
   status(status: LiveStatus): void;
+  inputItem?(id: string): void;
   line(id: string, who: Line["who"], text: string, options?: { append?: boolean; final?: boolean }): void;
   tool(name: string, args: Record<string, unknown>): Promise<{ output: string; error: boolean }>;
   error(message: string): void;
@@ -66,7 +67,11 @@ export class OpenAIRealtime {
       case "response.created":
         this.hooks.responding?.(true);
         return;
+      case "input_audio_buffer.committed":
+        if (itemId) this.hooks.inputItem?.(itemId);
+        return;
       case "input_audio_buffer.speech_started":
+        if (itemId) this.hooks.inputItem?.(itemId);
         this.hooks.interrupted?.();
         this.hooks.status("listening");
         return;
@@ -175,6 +180,7 @@ export class OpenAISocketTransport extends LiveBase {
     this.protocol = new OpenAIRealtime({
       send: (event) => this.send(event),
       status: (status) => (status === "talking" ? undefined : this.setStatus(status)),
+      inputItem: id => this.emit("inputItem", id),
       line: (id, who, text, options) => this.line(id, who, text, options),
       tool: (name, args) => this.tool(name, args),
       error: (message) => this.emit("error", message),

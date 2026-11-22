@@ -293,7 +293,6 @@ function levelOf(analyser: AnalyserNode | null) {
 
 // ── Live voice ──────────────────────────────────────────────────────────────────────────────────
 
-export type LiveLine = { role: "user" | "assistant"; text: string; final: boolean };
 export type LiveState = {
   chatId: string;
   provider: string;
@@ -305,7 +304,6 @@ export type LiveState = {
   muted: boolean;
   /** 0 to 1: the microphone's level, or the voice's while it speaks. */
   level: number;
-  transcript: LiveLine[];
   error: string;
   inputMode: InputMode;
 };
@@ -438,6 +436,7 @@ class LiveCall {
   inputRate = 16000;
   outputRate = 16000;
   tools = 0;
+  private answeredCalls = new Set<string>();
   readonly inputMode = liveInputMode();
   gate: MicGate;
   private releaseTimer: number | null = null;
@@ -446,9 +445,11 @@ class LiveCall {
   private geminiInput = "";
   private geminiSpeaking = false;
   private lastElevenFinal?: number;
+  private elevenReplies = 0;
+  private lastElevenReply?: string;
 
   constructor(chatId: string, provider: string) {
-    this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, level: 0, transcript: [], error: "", inputMode: this.inputMode };
+    this.state = { chatId, provider, status: "connecting", speaking: null, working: false, muted: false, level: 0, error: "", inputMode: this.inputMode };
     this.gate = new MicGate(this.inputMode, Date.now, provider === "elevenlabs" ? "silence" : "drop");
     live.set(this.state);
   }
@@ -457,21 +458,11 @@ class LiveCall {
     this.state = { ...this.state, ...patch };
     live.set(this.state);
   }
-  /** The person's words go in the chat. The voice panel still captions the bot's replies. */
-  heard(role: "user" | "assistant", text: string, final: boolean, options?: { item?: string; replace?: boolean }) {
-    if (role === "user") {
-      // Codex sends these directly to VoiceDesk, including when the call is on a paired phone.
-      if (this.state.provider !== "codex" && this.session && !this.ended) {
-        void api.liveVoiceTranscript(this.session.id, text, final, options).catch(e => this.update({ error: voiceError(e) }));
-      }
-      return;
+  /** Codex records both speakers in the host. Other providers report their words from here. */
+  heard(role: "user" | "assistant", text: string, final: boolean, options?: { item?: string; replace?: boolean; started?: boolean }) {
+    if (this.state.provider !== "codex" && this.session && !this.ended) {
+      void api.liveVoiceTranscript(this.session.id, text, final, { role, ...options }).catch(e => this.update({ error: voiceError(e) }));
     }
-    if (!text) return;
-    const lines = [...this.state.transcript];
-    const last = lines.at(-1);
-    if (last && last.role === role && !last.final) lines[lines.length - 1] = { role, text: final ? text : last.text + text, final };
-    else lines.push({ role, text, final });
-    this.update({ transcript: lines.slice(-40) });
   }
   fail(e: unknown) {
     if (this.ended) return;
@@ -569,7 +560,6 @@ class LiveCall {
       if (event.type === "say") {
         if (!codex) this.later(event.text, (message) => channel.readyState === "open" && channel.send(JSON.stringify(message)));
       } else if (!codex) return;
-      else if (event.type === "transcript") this.heard(event.role, event.text, event.final);
       else if (event.type === "ended") event.reason ? this.fail(new Error(event.reason)) : this.end();
     });
     await pc.setRemoteDescription({ type: "answer", sdp: this.session.sdp });
@@ -590,8 +580,12 @@ class LiveCall {
         this.update({ status: "live" });
         return;
       case "input_audio_buffer.speech_started":
+        if (!codex && event.item_id) this.heard("user", "", false, { item: event.item_id, started: true });
         // The person talks over the voice: it stops at once.
         this.player?.flush();
+        return;
+      case "input_audio_buffer.committed":
+        if (!codex && event.item_id) this.heard("user", "", false, { item: event.item_id, started: true });
         return;
       case "output_audio_buffer.started":
         this.gate.playing(true);
@@ -618,15 +612,16 @@ class LiveCall {
         return;
       case "response.output_audio_transcript.delta":
       case "response.audio_transcript.delta":
-        if (!codex) this.heard("assistant", String(event.delta ?? ""), false);
+        if (!codex) this.heard("assistant", String(event.delta ?? ""), false, { item: event.item_id });
         return;
       case "response.output_audio_transcript.done":
       case "response.audio_transcript.done":
-        if (!codex) this.heard("assistant", String(event.transcript ?? ""), true);
+        if (!codex) this.heard("assistant", String(event.transcript ?? ""), true, { item: event.item_id });
         return;
       case "response.function_call_arguments.done": {
         // Codex answers its own tool calls; with a key, the page does.
-        if (codex || typeof event.call_id !== "string") return;
+        if (codex || typeof event.call_id !== "string" || this.answeredCalls.has(event.call_id)) return;
+        this.answeredCalls.add(event.call_id);
         void this.tool(String(event.name), event.arguments).then(({ text }) => {
           if (this.ended) return;
           send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: event.call_id, output: text } });
@@ -761,7 +756,7 @@ class LiveCall {
         this.geminiSpeaking = false;
       }
       if (content.outputTranscription?.text) this.heard("assistant", content.outputTranscription.text, false);
-      if (content.turnComplete) this.settleLine();
+      if (content.turnComplete || content.interrupted || content.outputTranscription?.finished) this.heard("assistant", "", true);
     }
     for (const fc of message.toolCall?.functionCalls ?? []) {
       void this.tool(String(fc.name), fc.args ?? {}).then(({ text, ok }) => {
@@ -813,9 +808,26 @@ class LiveCall {
         if (final) this.lastElevenFinal = event.event_id;
         return;
       }
-      case "agent_response":
-        this.heard("assistant", String(message.agent_response_event?.agent_response ?? ""), true);
+      case "agent_chat_response_part": {
+        const part = message.text_response_part;
+        if (part?.type === "delta" && part.response_id) {
+          this.lastElevenReply = part.response_id;
+          this.heard("assistant", String(part.text ?? ""), false, { item: part.response_id });
+        }
         return;
+      }
+      case "agent_response": {
+        const event = message.agent_response_event;
+        this.lastElevenReply = event?.response_id ?? "reply-" + ++this.elevenReplies;
+        this.heard("assistant", String(event?.agent_response ?? ""), true, { item: this.lastElevenReply });
+        return;
+      }
+      case "agent_response_correction": {
+        const event = message.agent_response_correction_event;
+        const item = event?.response_id ?? this.lastElevenReply;
+        if (item && event?.corrected_agent_response) this.heard("assistant", event.corrected_agent_response, true, { item, replace: true });
+        return;
+      }
       case "client_tool_call": {
         const callInfo = message.client_tool_call ?? {};
         void this.tool(String(callInfo.tool_name), callInfo.parameters ?? {}).then(({ text, ok }) => {
@@ -825,12 +837,6 @@ class LiveCall {
         return;
       }
     }
-  }
-
-  /** The line being spoken is complete. */
-  settleLine() {
-    const lines = this.state.transcript.map((l) => (l.final ? l : { ...l, final: true }));
-    this.update({ transcript: lines });
   }
 
   mute(on: boolean) {

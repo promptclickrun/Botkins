@@ -362,11 +362,13 @@ test("ElevenLabs: init, formats from the first message, pong, tools and interrup
   assert.deepEqual(seen.lines.get("you-1"), { id: "you-1", who: "you", text: "What's knew", final: false });
   socket.receive({ type: "user_transcript", user_transcription_event: { event_id: 3, user_transcript: "What's new?" } });
   socket.receive({ type: "audio", audio_event: { audio_base_64: "FFFF", event_id: 3 } });
-  socket.receive({ type: "agent_response", agent_response_event: { agent_response: "Not much" } });
+  socket.receive({ type: "agent_chat_response_part", text_response_part: { type: "delta", response_id: "r1", text: "Not" } });
+  assert.equal(seen.lines.get("bot-r1")?.text, "Not");
+  socket.receive({ type: "agent_response", agent_response_event: { response_id: "r1", agent_response: "Not much" } });
   socket.receive({ type: "agent_response_correction", agent_response_correction_event: { original_agent_response: "Not much", corrected_agent_response: "Not much at" } });
   assert.deepEqual(h.audio.played, ["FFFF"]);
   assert.equal(seen.lines.get("you-1")!.text, "What's new?");
-  assert.equal(seen.lines.get("bot-2")!.text, "Not much at");
+  assert.equal(seen.lines.get("bot-r1")!.text, "Not much at");
 
   socket.receive({ type: "interruption", interruption_event: { event_id: 5 } });
   socket.receive({ type: "audio", audio_event: { audio_base_64: "OLD", event_id: 4 } });

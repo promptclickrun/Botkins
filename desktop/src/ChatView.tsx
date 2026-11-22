@@ -560,7 +560,7 @@ export default function ChatView({
       ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.text} files={files} />}
+      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} />}
       <Attachments list={m.attachments} />
       {!!m.mentions?.length && (
         <MentionChips
@@ -958,7 +958,7 @@ export default function ChatView({
                       {m.role === "command" && m.plain ? (
                         <pre className="command-output">{m.text}</pre>
                       ) : (
-                        <RichText text={m.text} files={files} />
+                        <RichText text={m.voiceCaption ?? m.text} files={files} />
                       )}
                       <Attachments list={m.attachments} />
                     {!!m.mentions?.length && (

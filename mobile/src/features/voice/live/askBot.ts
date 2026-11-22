@@ -9,7 +9,7 @@ export const LOOK_AT_PHONE = "The bot needs the person to answer something first
 export const STILL_WORKING = "The bot is still working on it. Tell the person the answer will be in the chat.";
 export const NO_REPLY = "The bot finished without a written reply.";
 
-export type ChatMessage = { role: "assistant" | "user" | "command"; text: string; voiceId?: string; runId?: string; steeredRunId?: string };
+export type ChatMessage = { role: "assistant" | "user" | "command"; text: string; voiceId?: string; runId?: string; steeredRunId?: string; interim?: boolean };
 /** What the phone knows about the chat right now. */
 export type ChatSnapshot = {
   /** A turn is running or queued. */
@@ -68,7 +68,7 @@ export async function askBot(message: string, chat: ChatAccess, options: { timeo
     };
     const replies = (snapshot: ChatSnapshot) => {
       if (snapshot.busy) return [];
-      const after = snapshot.after(before).filter(item => !item.voiceId || item.runId || item.steeredRunId);
+      const after = snapshot.after(before).filter(item => !item.interim && (!item.voiceId || item.runId || item.steeredRunId));
       if (options.voiceId) {
         const heard = snapshot.after(0).find(item => item.voiceId === options.voiceId);
         const runId = heard?.runId ?? heard?.steeredRunId;

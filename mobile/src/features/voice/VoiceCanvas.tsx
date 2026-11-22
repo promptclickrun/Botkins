@@ -22,7 +22,7 @@ export function VoiceCanvas({ chatId, chat, spoken }: { chatId: string; chat?: C
         renderItem={({ item }) => item.message.role === "user" ? (
           <UserBubble id={chatId + ":" + item.key} index={item.index} message={item.message} timestamps={timestamps} media={[]} />
         ) : (
-          <Markdown text={item.message.text} plain={!markdown || item.message.role === "command"} />
+          <Markdown text={item.message.voiceCaption ?? item.message.text} plain={!markdown || item.message.role === "command"} />
         )}
         contentContainerStyle={{ paddingVertical: space.md, gap: space.md }}
         maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}

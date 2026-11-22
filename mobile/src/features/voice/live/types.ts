@@ -10,7 +10,7 @@ export type Line = { id: string; who: "you" | "bot"; text: string; final: boolea
 /** Runs a tool the voice called and answers with what the voice should hear (a string). */
 export type ToolRunner = (name: string, args: Record<string, unknown>) => Promise<string>;
 
-type Events = { status: LiveStatus; line: Line; error: string };
+type Events = { status: LiveStatus; inputItem: string; line: Line; error: string };
 
 /** The part of a WebSocket a transport uses. React Native's and the tests' fake both fit. */
 export type SocketLike = {
@@ -113,7 +113,7 @@ export function argsOf(value: unknown): Record<string, unknown> {
 /** The transcript, the status and tool calls, the same for every transport. */
 export abstract class LiveBase implements LiveTransport {
   status: LiveStatus = "connecting";
-  private listeners: { [K in keyof Events]: Set<(value: Events[K]) => void> } = { status: new Set(), line: new Set(), error: new Set() };
+  private listeners: { [K in keyof Events]: Set<(value: Events[K]) => void> } = { status: new Set(), inputItem: new Set(), line: new Set(), error: new Set() };
   private lines = new Map<string, Line>();
   private toolsRunning = 0;
   protected ended = false;
@@ -159,7 +159,7 @@ export abstract class LiveBase implements LiveTransport {
   protected line(id: string, who: Line["who"], text: string, options: { append?: boolean; final?: boolean } = {}) {
     if (this.ended || !id) return;
     const held = this.lines.get(id);
-    if (who === "you" && held?.final) return;
+    if (held?.final && (who === "you" || !options.final)) return;
     const words = options.append && held ? held.text + text : text;
     const next: Line = { id, who, text: options.final && !words.trim() && held ? held.text : words, final: !!options.final };
     if (!next.text.trim() && !held) return;
@@ -197,7 +197,7 @@ export abstract class LiveBase implements LiveTransport {
   end() {
     if (this.ended) return;
     for (const line of this.lines.values()) {
-      if (line.who === "you" && !line.final) this.line(line.id, line.who, line.text, { final: true });
+      if (!line.final) this.line(line.id, line.who, line.text, { final: true });
     }
     this.ended = true;
     try {

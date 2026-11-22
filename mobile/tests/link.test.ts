@@ -271,3 +271,27 @@ test("live microphone text reaches the watched chat before final and keeps one r
   assert.equal(detail()?.messages[0].voicePartial, undefined);
   assert.equal(detail()?.runs.length, 0);
 });
+
+test("the watched chat receives the voice's partial reply and final on one assistant row", async t => {
+  const { link } = await host();
+  t.after(() => link.stop());
+  const paired = await pair(fetcher, { hosts: [loopback(link)], code: link.startPairing().code }, device);
+  const { client, parts, until } = follow(paired);
+  t.after(() => client.stop());
+  await until(() => !!parts.chats, "the first state");
+  const chat = await client.call<string>("createChat", "bot-mira");
+  client.watch([chat]);
+  const messages = () => (parts["chat:" + chat] as ChatDetail | undefined)?.messages;
+  await client.call("recordVoiceLine", chat, "call:u", "Hello", true);
+  // Only the provider handshake is a stand-in. Session registration and dispatch use the real link.
+  link.voice.liveGemini = async () => ({ id: "call", kind: "gemini-ws" });
+  await client.call("link.voice.live", { provider: "gemini", chatId: chat, botId: "bot-mira" });
+  await assert.rejects(client.call("recordVoiceLine", chat, "other:a", "Wrong call", true, { role: "assistant", sessionId: "call" }), /doesn't belong/);
+  const write = (text: string, final: boolean) => client.call("recordVoiceLine", chat, "call:a", text, final, { role: "assistant", sessionId: "call" });
+  await write("Hi", false);
+  await until(() => messages()?.length === 2, "the growing reply");
+  assert.deepEqual(messages()?.map(m => [m.role, m.text]), [["user", "Hello"], ["assistant", "Hi"]]);
+  await write("Hi there.", true);
+  await until(() => messages()?.[1]?.text === "Hi there.", "the final words");
+  assert.equal(messages()?.length, 2);
+});

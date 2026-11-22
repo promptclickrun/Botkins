@@ -287,7 +287,7 @@ export class LinkHost extends EventEmitter {
         const spoken = await this.voice.speak({ text: a[0]?.text, voice: a[0]?.voice, speed: a[0]?.speed, override: this.botVoice(a[0]?.botId)?.tts });
         return { audio: spoken.audio.toString("base64"), format: spoken.format };
       },
-      "link.voice.live": (session, a) => this.liveVoice(a[0], session.principal),
+      "link.voice.live": (session, a) => this.liveVoice(a[0], session.principal, session.deviceId),
       "link.voice.endLive": async (_session, a) => this.voice.endLive(a[0]),
       "link.device.sources": async (session, a) => this.device.setSources(session.deviceId, a[0]),
       "link.device.answer": async (session, a) => this.device.answer(session.deviceId, a[0], a[1]),
@@ -456,7 +456,7 @@ export class LinkHost extends EventEmitter {
    * where the person is when the phone sent it (`context.location`, never logged). It is given one
    * tool, `ask_bot`; the phone runs that tool by sending the message to the chat.
    */
-  async liveVoice({ chatId, botId, provider, sdp, context } = {}, principal) {
+  async liveVoice({ chatId, botId, provider, sdp, context } = {}, principal, deviceId) {
     const { location } = liveContextOf(context);
     const state = this.backend.snapshot();
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
@@ -468,7 +468,7 @@ export class LinkHost extends EventEmitter {
     const notes = await this.liveNotes(chat.id, bot.id, principal?.kind === "member" ? principal.memberId : undefined);
     const instructions = liveInstructions({ bot, messages: chat.messages ?? [], bots: state.bots ?? [], notes, location });
     const author = principal?.kind === "member" ? { memberId: principal.memberId, name: principal.name } : undefined;
-    const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name, ...(author && { author }) }, override: cleanBotVoice(bot.voice)?.live });
+    const session = await this.voice.live({ provider, sdp, instructions, tools: [ASK_BOT], about: { chatId: chat.id, botId: bot.id, botName: bot.name, ...(deviceId && { deviceId }), ...(author && { author }) }, override: cleanBotVoice(bot.voice)?.live });
     return { ...session, tools: [ASK_BOT] };
   }
 
@@ -1739,6 +1739,18 @@ export class LinkHost extends EventEmitter {
     });
     if (refusal) throw new Failure(refusal);
     let forApp = args;
+    // Only the phone running this voice session can caption its bot in this chat.
+    if (method === "recordVoiceLine" && args[4] != null) {
+      const { sessionId, role, afterVoiceId } = args[4];
+      const live = this.voice.sessions.get(sessionId);
+      const belongs = id => typeof id === "string" && id.startsWith(sessionId + ":");
+      if (!live || live.provider === "codex" || live.chatId !== args[0] || live.deviceId !== session.deviceId ||
+          live.memberId !== (principal.kind === "member" ? principal.memberId : undefined) ||
+          role !== "assistant" || !belongs(args[1]) || (afterVoiceId !== undefined && !belongs(afterVoiceId))) {
+        throw new Failure("This transcript doesn't belong to this voice session.");
+      }
+      forApp = [...args.slice(0, 4), { role, afterVoiceId }];
+    }
     if (principal.kind === "member") {
       // A member's own view: kept here, not in the workspace, so it is nobody else's.
       if (method === "setChatFlags" || method === "reorderBots") return this.memberView(principal, method, args, state);

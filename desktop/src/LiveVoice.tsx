@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Mic, MicOff, PhoneOff, X } from "lucide-react";
 import { closeLive, endLive, interruptLive, muteLive, pressLive, releaseLive, useLive, type LiveState } from "./voice";
 import "./voice.css";
@@ -27,13 +27,9 @@ function title(state: LiveState, bot: string) {
   return state.muted ? "Muted" : "Listening";
 }
 
-/** The live voice panel over the composer: who is speaking, the meter, what was said, Mute and End. */
+/** The live voice panel over the composer: who is speaking, the meter, Mute and End. */
 export default function LivePanel({ chatId, botName }: { chatId?: string; botName: string }) {
   const state = useLive();
-  const lines = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    lines.current?.scrollTo({ top: lines.current.scrollHeight });
-  }, [state?.transcript]);
   const elsewhere = !!chatId && !!state && state.chatId !== chatId;
   const push = !!state && state.inputMode === "push" && !elsewhere;
   useEffect(() => {
@@ -116,16 +112,6 @@ export default function LivePanel({ chatId, botName }: { chatId?: string; botNam
           )}
         </div>
       </div>
-      {state.transcript.length > 0 && !elsewhere && (
-        <div className="live-transcript" ref={lines} aria-live="polite" aria-label="What was said">
-          {state.transcript.map((line, i) => (
-            <p key={i} className={line.final ? undefined : "partial"}>
-              <b>{line.role === "user" ? "You" : bot}</b>
-              {line.text}
-            </p>
-          ))}
-        </div>
-      )}
       {state.error && (
         <p className="live-error" role="alert">
           {state.error}

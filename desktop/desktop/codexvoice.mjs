@@ -131,6 +131,10 @@ export class CodexVoice {
       let answer;
       const answered = new Promise((resolve, reject) => (answer = { resolve, reject }));
       answered.catch(() => {});
+      // Newer app servers identify transcript items. Some also emit the older flat stream.
+      // Use one stream for this session so a second delivery cannot duplicate the words.
+      const roles = new Map();
+      let transcriptFormat;
       rpc.onNotification((method, params) => {
         if (!method.startsWith("thread/realtime/") || !session.threadId || params?.threadId !== session.threadId) return;
         if (method === "thread/realtime/sdp" && typeof params.sdp === "string") answer.resolve(params.sdp);
@@ -140,7 +144,21 @@ export class CodexVoice {
         } else if (method === "thread/realtime/closed") {
           answer.reject(new Error("Codex closed the live voice."));
           this.closed(session, null);
+        } else if (method === "thread/realtime/item/started" || method === "thread/realtime/item/completed") {
+          const item = params.item;
+          if (item?.type !== "transcriptSegment" || typeof item.id !== "string" || !["user", "assistant"].includes(item.role)) return;
+          transcriptFormat ??= "items";
+          if (transcriptFormat !== "items") return;
+          const final = method.endsWith("/completed");
+          if (final) roles.delete(item.id);
+          else roles.set(item.id, item.role);
+          this.onEvent(id, { type: "transcript", role: item.role, item: item.id, text: item.text ?? "", final, started: !final });
+        } else if (method === "thread/realtime/item/transcript/delta") {
+          const role = roles.get(params.itemId);
+          if (role && typeof params.delta === "string") this.onEvent(id, { type: "transcript", role, item: params.itemId, text: params.delta, final: false });
         } else if (method === "thread/realtime/transcript/delta" || method === "thread/realtime/transcript/done") {
+          transcriptFormat ??= "flat";
+          if (transcriptFormat !== "flat") return;
           const final = method.endsWith("/done");
           const text = final ? params.text : params.delta;
           if ((params.role === "user" || params.role === "assistant") && typeof text === "string" && (text || final)) this.onEvent(id, { type: "transcript", role: params.role, text, final });
