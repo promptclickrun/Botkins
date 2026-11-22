@@ -1196,6 +1196,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.closing = true;
       closeWorkspaceSocket?.();
       workspace.interactions.cancel();
+      workspace.connects.close();
       clearInterval(timer);
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);

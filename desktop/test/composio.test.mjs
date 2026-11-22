@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composioHandlers, createComposio, MCP_URL } from "../desktop/composio.mjs";
+import { composioHandlers, connectionResults, createComposio, MCP_URL, payloadOf } from "../desktop/composio.mjs";
 
 const SERVER = { id: "composio", name: "composio", type: "http", url: MCP_URL, enabled: true, oauth: {} };
 
@@ -150,4 +150,30 @@ test("the app list is served from disk at once, and checked again with its ETag 
   writeFileSync(join(dir, "composio-catalog.json"), "{");
   const third = createComposio({ fetch: async () => new Response("nope", { status: 500 }), dir }, { now: () => clock });
   await assert.rejects(third.catalog(), { message: "The app list didn't load." });
+});
+
+test("Composio's connection replies are read by app: structured or as text, with status-only entries kept apart", () => {
+  const reply = { successful: true, data: { results: { github: { toolkit: "github", status: "initiated", redirect_url: "https://connect.composio.dev/link/ln_1", connected_account_id: "ca_named", accounts: [{ id: "ca_other", status: "INITIATED" }] } } } };
+  // Valid structured output is read before the text beside it.
+  const both = { structuredContent: reply, content: [{ type: "text", text: JSON.stringify({ successful: true, data: { results: {} } }) }] };
+  const fromStructured = connectionResults(payloadOf(both));
+  assert.deepEqual(fromStructured.github, { status: "pending", redirectUrl: "https://connect.composio.dev/link/ln_1", accountId: "ca_named", accounts: [{ id: "ca_other", status: "pending" }] });
+  // Text only, as Composio sends today.
+  assert.deepEqual(connectionResults(payloadOf({ content: [{ type: "text", text: JSON.stringify(reply) }] })), fromStructured);
+
+  const results = connectionResults({
+    results: [
+      { toolkit: "gmail", status: "active" },
+      { toolkit: "slack", status: "failed", error_message: "  The workspace refused the app. " },
+      { toolkit: "notion", status: "initiated", redirect_url: "http://not-https.example/link" },
+      { toolkit: "Bad Slug!", status: "active" },
+      { name: "linear", accounts: [{ id: "ca_9", status: "ACTIVE" }] },
+    ],
+  });
+  assert.deepEqual(results.gmail, { status: "active", redirectUrl: null, accounts: [] });
+  assert.deepEqual(results.slack, { status: "failed", redirectUrl: null, accounts: [], error: "The workspace refused the app." });
+  assert.equal(results.notion.redirectUrl, null, "only an https page is kept");
+  assert.equal(results.linear.status, null, "a reply that only lists accounts names no status of its own");
+  assert.deepEqual(Object.keys(results).sort(), ["gmail", "linear", "notion", "slack"]);
+  assert.throws(() => payloadOf({ isError: true, content: [{ type: "text", text: JSON.stringify({ successful: false, error: "Nope" }) }] }), { message: "Nope" });
 });

@@ -304,7 +304,7 @@ function searchApps(toolkits: ComposioToolkit[], query: string, limit = Infinity
 // ── Pieces ──────────────────────────────────────────────────────────────────────────────────
 
 /** An app's logo, or its first letter on a tile when there is none or it doesn't load. */
-function AppLogo({ app, size = 40 }: { app: ComposioToolkit; size?: number }) {
+export function AppLogo({ app, size = 40 }: { app: Pick<ComposioToolkit, "name" | "logo">; size?: number }) {
   const [broken, setBroken] = useState(false);
   const style = { width: size, height: size, borderRadius: Math.round(size * 0.24) };
   // The window's policy lets pictures in from Composio's logo address only (index.html); any other is a letter.

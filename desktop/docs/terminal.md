@@ -261,8 +261,9 @@ botkins apps remove gmail <account> --yes
 
 - **`apps list [<search>]`** is Composio's public list, kept on this computer and checked again at most once an hour. `--category <id>` narrows it, `--categories` lists the categories, `--limit <n>` shows more. It needs no sign-in.
 - **`apps connect <app>`** prints the page to sign in to the app on. Open it in any browser. With `--wait` the command ends when the new account is connected (ten minutes at most; Ctrl-C stops), and an account that was never finished is taken away again.
+- **`apps connect <app> --chat <chat>`** presses Connect on the card a bot showed in that chat when it needed the app (`botkins chat list` gives the chat's id). The window, a phone and this command share one page for the app; with `--wait` the command follows the card until it is connected, and the chat goes on by itself.
 - `apps accounts <app>…` shows each account with its id and whether it is connected. `apps remove <app> <account>` removes one from your Composio account, after a yes (`--yes` with no terminal).
-- The log has `apps.connect` and `apps.remove` with the app's slug, never the page, an account or its email. Without the tool's sign-in, each command but `apps list` says "Sign in with Composio first."
+- The log has `apps.connect` and `apps.remove` with the app's slug (and the chat's id for a card), never the page, an account or its email. Without the tool's sign-in, each command but `apps list` says "Sign in with Composio first."
 
 ## The rest of the workspace
 

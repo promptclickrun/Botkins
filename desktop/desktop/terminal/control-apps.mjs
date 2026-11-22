@@ -7,7 +7,7 @@ import { ControlError } from "./socket.mjs";
 const SLUG = /^[a-z0-9_]{1,64}$/;
 const DEFAULT_LIMIT = 40;
 
-export function appsApi({ handlers }) {
+export function appsApi({ workspace, handlers }) {
   const catalog = () => handlers["composio.catalog"]();
   /** An app by its slug or its name, from the list Composio publishes. */
   const app = async (ref) => {
@@ -20,6 +20,20 @@ export function appsApi({ handlers }) {
     throw new ControlError("No app is called " + ref.trim() + ". See `botkins apps list`.", "NOT_FOUND");
   };
   const named = (toolkits, slug) => toolkits.find((kit) => kit.slug === slug)?.name ?? slug;
+  /** The newest Connect card for this app in a chat (desktop/connects.mjs). */
+  const cardIn = (kit, chatRef) => {
+    if (typeof chatRef !== "string" || !chatRef.trim()) throw new ControlError("Give the chat's id (`botkins chat list` lists them).", "BAD_ARGUMENT");
+    const chat = workspace.state.chats.find((item) => item.id === chatRef.trim());
+    if (!chat) throw new ControlError("There is no chat " + chatRef.trim() + ". See `botkins chat list`.", "NOT_FOUND");
+    for (const run of workspace.state.runs) {
+      if (run.chatId !== chat.id) continue;
+      const card = run.connects?.find((item) => item.toolkit === kit.slug);
+      if (card) return { chat, card };
+    }
+    throw new ControlError("That chat shows no card to connect " + kit.name + ".", "NOT_FOUND");
+  };
+  /** A card's state for the command line: never its page unless `page` is given. */
+  const cardView = (kit, chat, state, page) => ({ slug: kit.slug, name: kit.name, chat: chat.id, card: state.card, status: state.status, ...(state.note && { note: state.note }), ...(page && { page }) });
 
   return {
     /** The apps Composio connects, most used first: { categories, apps, total }. A search matches the name, the slug, then the description. */
@@ -63,12 +77,26 @@ export function appsApi({ handlers }) {
       const accounts = await handlers["composio.accounts"](apps.map((kit) => kit.slug));
       return Object.fromEntries(apps.map((kit) => [kit.slug, { name: kit.name, accounts: accounts[kit.slug] ?? [] }]));
     },
-    /** Starts connecting an app: { slug, name, page, pendingId?, accounts }. The person opens the page; `apps.accounts` shows when the account is active. */
-    "apps.connect": async ([ref]) => {
+    /**
+     * Starts connecting an app: { slug, name, page, pendingId?, accounts }. The person opens the page; `apps.accounts` shows when the account is active.
+     * With `{ chat }` it presses Connect on that chat's card instead: { slug, name, chat, card, status, page? }, and `apps.card` follows it.
+     */
+    "apps.connect": async ([ref, options = {}]) => {
       const kit = await app(ref);
+      if (options?.chat !== undefined) {
+        const { chat, card } = cardIn(kit, options.chat);
+        const state = await handlers["composio.cardOpen"](chat.id, card.id);
+        return cardView(kit, chat, state, state.url);
+      }
       if (kit.noAuth) throw new ControlError(kit.name + " needs no sign-in: it is ready.", "NOT_NEEDED");
       const started = await handlers["composio.connect"](kit.slug);
       return { slug: kit.slug, name: kit.name, page: started.redirectUrl, ...(started.pendingId && { pendingId: started.pendingId }), accounts: started.accounts };
+    },
+    /** Where a chat's Connect card for an app stands, looked at again: { slug, name, chat, card, status, note? }. */
+    "apps.card": async ([ref, chatRef]) => {
+      const kit = await app(ref);
+      const { chat, card } = cardIn(kit, chatRef);
+      return cardView(kit, chat, await handlers["composio.cardCheck"](chat.id, card.id));
     },
     /** Removes one account of an app from the person's Composio account. */
     "apps.remove": async ([ref, accountId]) => {

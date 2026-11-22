@@ -128,6 +128,8 @@ export const WORKSPACE = {
   "composio.accounts": cmd("apps accounts"),
   "composio.connect": cmd("apps connect"),
   "composio.removeAccount": cmd("apps remove"),
+  // A chat's Connect card: `apps connect <app> --chat <chat>` presses Connect on that chat's card and waits for it.
+  ...each("composio.cardOpen composio.cardCheck", cmd("apps connect")),
   // ── Tools (MCP servers) and skills ──
   saveMcpServer: cmd("tools add"),
   setMcpServerEnabled: cmd("tools enable"),
@@ -543,7 +545,7 @@ export const CHANGES = {
   "team.removeFromChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
   // ── Marketplace › Apps (control-apps.mjs) ──
   // By the app's slug: never the page to sign in on, an account's id or its email.
-  "apps.connect": (args, value) => value?.slug ?? args?.[0],
+  "apps.connect": (args, value) => (value?.chat ? value.slug + " (chat " + value.chat + ")" : (value?.slug ?? args?.[0])),
   "apps.remove": (args, value) => value?.slug ?? args?.[0],
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
@@ -565,7 +567,7 @@ export const MORE_READS = {
   // (The team)
   team: ["team.get", "team.roles", "team.role", "team.groups", "team.invites", "team.requests", "team.members", "team.chatPeople", "team.look"],
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
-  apps: ["apps.list", "apps.connected", "apps.accounts"],
+  apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
 };
 READS.push(...Object.values(MORE_READS).flat());
 

@@ -14,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import "./apps.css";
+import { ConnectCard } from "./ConnectCard";
 import { Block } from "./Today";
 import type { Run, Step, Subagent, Todo } from "./types";
 
@@ -501,6 +502,9 @@ export function RunCards({
             Open app
           </button>
         </section>
+      ))}
+      {run.connects?.map((card) => (
+        <ConnectCard key={card.id} chatId={run.chatId} card={card} />
       ))}
       {run.cards?.map((card) => (
         <section className="chat-card" key={card.id} aria-label={card.title}>

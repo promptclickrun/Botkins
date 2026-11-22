@@ -40,8 +40,11 @@ export const AGENT_METHODS = ["agents.browse", "agents.template"];
  * Marketplace › Apps on the computer: the apps of the person's Composio account, through the
  * computer's own Composio tool and its sign-in (desktop/composio.mjs). A phone signs in to Composio
  * itself; these are for a window that uses this computer from another one.
+ *
+ * "composio.cardOpen" and "composio.cardCheck" are a chat's Connect card (desktop/connects.mjs): they
+ * name a chat and a card, never an app's page or account.
  */
-export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "composio.accounts", "composio.connect", "composio.removeAccount"];
+export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "composio.accounts", "composio.connect", "composio.removeAccount", "composio.cardOpen", "composio.cardCheck"];
 
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
@@ -279,6 +282,8 @@ const holdsRef = (value, depth = 0) => depth <= 8 && value !== null && typeof va
 
 /** The arguments of an agent template call or a Composio call, cut to its shape, or null when `method` is not one. */
 const APP_SLUG = /^[a-z0-9_]{1,64}$/;
+/** A chat's id or a card's: what the app makes them of. */
+const CARD_ID = /^[A-Za-z0-9_-]{1,80}$/;
 function marketArgs(method, args) {
   if (!AGENT_METHODS.includes(method) && !COMPOSIO_METHODS.includes(method)) return null;
   const first = args[0];
@@ -306,6 +311,10 @@ function marketArgs(method, args) {
       return [first];
     case "composio.removeAccount":
       if (typeof first !== "string" || !APP_SLUG.test(first) || !pluginText(args[1], 200)) refuse("That account can't be found.");
+      return [first, args[1]];
+    case "composio.cardOpen":
+    case "composio.cardCheck":
+      if (!CARD_ID.test(first ?? "") || !CARD_ID.test(args[1] ?? "")) refuse("That card can't be found.");
       return [first, args[1]];
     default:
       return null;

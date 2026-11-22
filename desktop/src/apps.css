@@ -29,3 +29,14 @@
   font-weight: 600;
   color: var(--accent-text);
 }
+
+/* A chat's Connect card for a Composio app (ConnectCard.tsx): the app-card row with the app's logo. */
+.connect-card .connect-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--success);
+}
+.connect-card .connect-error {
+  color: var(--danger);
+}
