@@ -1,11 +1,12 @@
-// One Live Activity per Botkin while the app is open ("activity-bots-v1"; docs/live-cards.md).
+// The Live Activities the phone draws while the app is open: one for all Botkins ("activity-all-v1"),
+// or one per Botkin ("activity-bots-v1"; docs/live-cards.md).
 //
 // The computer draws the cards while the app is closed (link-host/push.mjs). While it is open, the
 // phone draws them from what it knows, with the same rules (link-host/cards.mjs), so a card looks
 // the same whichever side drew it. The phone has a turn's steps and thinking only for the chat it
 // follows (the one on screen); for the others a card shows the chat's title and what it is doing.
 // No React Native imports: tests/cards.test.ts runs it.
-import { botCard, type Card, type CardWorld } from "../../link-host/cards.mjs";
+import { botCard, type Card, type CardLook, type CardWorld } from "../../link-host/cards.mjs";
 import type { ChatSummary, Run, RunSummary } from "@/link/types";
 import type { PhoneParts } from "./store";
 
@@ -46,9 +47,18 @@ function replyOf(chat: ChatSummary, run: RunSummary) {
   return last.text;
 }
 
-/** A Botkin's card as the phone would draw it now, or null when it has no chat to show. */
-export function phoneCard(known: Known, botId: string, previews: boolean, now = Date.now()): Card | null {
-  return botCard(cardWorld(known), botId, { previews, now, reply: replyOf as never });
+/**
+ * A Botkin's card as the phone would draw it now (the card for all Botkins when `botId` is null), or
+ * null when it has no chat to show. `look` gives each Botkin's look for the card for all Botkins.
+ */
+export function phoneCard(known: Known, botId: string | null, previews: boolean, now = Date.now(), look?: (botId: string) => CardLook | undefined): Card | null {
+  return botCard(cardWorld(known), botId, { previews, now, reply: replyOf as never, look });
+}
+
+/** Whether the card for all Botkins should be started now: a chat is at work or waiting for the person. Not for chats that only ended. */
+export function hasWork(known: Known, now = Date.now()): boolean {
+  const card = botCard(cardWorld(known), null, { previews: false, now });
+  return !!card && card.state.chats.some((chat) => chat.phase !== "done" && chat.phase !== "failed");
 }
 
 /**

@@ -1,4 +1,4 @@
-# One Live Activity per Botkin, and answering from the Lock Screen (`activity-bots-v1`)
+# One Live Activity for all Botkins or one per Botkin, and answering from the Lock Screen (`activity-all-v1`, `activity-bots-v1`)
 
 What the computer and the phone send so each working Botkin has one card on the Lock Screen and
 in the Dynamic Island. The card shows that Botkin's chats, the steps as they run, the latest line
@@ -9,6 +9,39 @@ notification content extension.
 
 Everything here is additive. A computer whose link names `activity-bots-v1` in `meta.capabilities`
 does all of it. Without it, the phone keeps one card per chat, as before.
+
+## 0. One card for all Botkins (`activity-all-v1`)
+
+The owner's decisions (2026-11-22): one Live Activity for every Botkin's chats, drawn as one row per
+chat ("The Feed", direction B of the mocks; `targets/widgets/FeedCard.swift`). It goes away on its
+own. A request makes its sound through the card; a finished turn still gets its own notification.
+
+- **Asking.** A phone sends `cards: "all"` to a computer that names `activity-all-v1` and a build
+  that can draw it (`startAllCard` in the native module). Otherwise it asks for `"bots"` as below.
+- **Key.** `"all"`. Attributes `card: "all"`, `botName: "Botkins"`, no look.
+- **Rows.** The same rules as a Botkin's card (sections 3 to 5), across all Botkins. Each entry in
+  `chats` also has `bot` (the Botkin's id) and, when the computer has a look saved, `head`,
+  `palette`, `eyes` and (for four colors of the person's own) `colors`. The sealed rows add `b`, the
+  Botkin's name, and an ended row gets `r` (the reply's first line, at most 100) even with several
+  rows. The sealed part is kept under 2,000 bytes. A row without a look takes it, and its name, from
+  the widgets' snapshot.
+- **Starting.** Only the phone starts it, while the app is in front and a chat is at work or needs
+  the person. It is never started by a push: the computer could not change it until the app said
+  its address, and often the app never did. The computer keeps it up to date from then on.
+- **Ending.** Once every chat on it has ended, the computer (or the phone, while the app is in
+  front) ends it with its final state, which stays for four minutes. A card with nothing left on it
+  is ended at once. The computer also looks at its cards when it starts, so a card left from before
+  a restart is ended without waiting for a change. When the app comes to the front it ends any card
+  that is not its card for all Botkins, and takes away cards iOS ended by itself but left on the Lock
+  Screen (`dismissEnded`).
+- **A request.** While the phone has the card, the request's notification is not sent. The card's
+  first update that shows the request carries `aps.alert` (`"Botkins"`, `"A bot needs you"`) and
+  `sound`, which lights the screen and plays the sound. A request the card doesn't show is a
+  notification, as before. Without the card (Live Activities off, or none running) every request is
+  a notification.
+- **A finished turn** ends the card quietly and gets its notification, as before.
+
+These rules (the end, and the start at a restart) apply to a Botkin's card too.
 
 ## 1. A phone asks for cards per Botkin
 

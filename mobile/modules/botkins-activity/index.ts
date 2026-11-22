@@ -23,6 +23,11 @@ type Native = {
   end(chatId: string, state: ActivityState | null, lingerSeconds: number): Promise<void>;
   /** The chats that have an activity now. */
   running(): Promise<string[]>;
+  /**
+   * Takes away activities that have ended but still show on the Lock Screen (iOS keeps one there for
+   * hours after it ends by itself). Missing in an older build.
+   */
+  dismissEnded?(): Promise<void>;
   /** The address Apple delivers each running activity's updates to, for the ones that have one now. */
   tokens(): Promise<{ chatId: string; token: string }[]>;
   /** Saves (or with null removes) the key sealed alerts are opened with, where the notification extension can read it. */
@@ -40,6 +45,11 @@ type Native = {
    * Missing in a build from before one card per Botkin.
    */
   startCard?(about: CardAbout, state: string, detail: string | null, host: string | null, relevance: number): Promise<string>;
+  /**
+   * Starts the card for all Botkins ("activity-all-v1"; key "all"), the same way. Missing in a build
+   * from before it, which has no view for it either.
+   */
+  startAllCard?(state: string, detail: string | null, host: string | null, relevance: number): Promise<string>;
   updateCard?(key: string, state: string, detail: string | null, host: string | null, relevance: number): Promise<void>;
   /** Ends a card; its last state stays on the Lock Screen for `lingerSeconds`. */
   endCard?(key: string, lingerSeconds: number): Promise<void>;

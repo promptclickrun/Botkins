@@ -4,9 +4,9 @@
 // phone's half: it asks iOS for permission and for the address Apple delivers to, tells the
 // computer, keeps the key the notification extension opens sealed alerts with, says when the app
 // is in front (so the computer stays quiet about the chat on screen), opens the right chat when a
-// notification is tapped, and runs the Live Activities while the app is open: one per Botkin on a
-// computer that names "activity-bots-v1" (src/state/cards.ts, docs/live-cards.md), else one per
-// chat. When a push wakes the app in the background, it answers what bots asked the phone
+// notification is tapped, and runs the Live Activities while the app is open: one for all Botkins on
+// a computer that names "activity-all-v1", one per Botkin on one that names only "activity-bots-v1"
+// (src/state/cards.ts, docs/live-cards.md), else one per chat. When a push wakes the app in the background, it answers what bots asked the phone
 // (src/state/device.ts) and sends answers given on a card or a notification (src/state/answers.ts).
 import * as Application from "expo-application";
 import { type Href, router } from "expo-router";
@@ -20,7 +20,8 @@ import { type Pairing, pushKeyOf } from "@/link/client";
 import type { ActivityState, PushPrefs, RunSummary } from "@/link/types";
 import { activityView, LINGER_MS } from "./activity";
 import { sendAnswers, startAnswers } from "./answers";
-import { botsWithWork, MAX_CARDS, phoneCard } from "./cards";
+import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
+import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
 import { api, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
 import { useApp } from "./store";
@@ -58,8 +59,18 @@ export function usePushPrefs(): PushPrefs | null {
 }
 
 const canPush = () => !!useApp.getState().parts.meta?.capabilities.includes("push-v1");
-/** One Live Activity per Botkin: the computer can ("activity-bots-v1") and this build can draw them. */
-const cardsOn = () => !!useApp.getState().parts.meta?.capabilities.includes("activity-bots-v1") && typeof Activities?.startCard === "function";
+/**
+ * Which cards this phone asks for: one for all Botkins ("activity-all-v1"), one per Botkin
+ * ("activity-bots-v1"), or null for one per chat. Each needs the computer to name it and this build to draw it.
+ */
+function cardMode(): "all" | "bots" | null {
+  const capabilities = useApp.getState().parts.meta?.capabilities ?? [];
+  if (capabilities.includes("activity-all-v1") && typeof Activities?.startAllCard === "function") return "all";
+  if (capabilities.includes("activity-bots-v1") && typeof Activities?.startCard === "function") return "bots";
+  return null;
+}
+/** How long a card whose chats have all ended stays on the Lock Screen, in seconds (the computer's end push says the same). */
+const OVER_SECONDS = 240;
 const base64 = (bytes: Uint8Array) => {
   let text = "";
   for (const byte of bytes) text += String.fromCharCode(byte);
@@ -112,10 +123,10 @@ async function register(force = false) {
     // "development". A build from TestFlight or the App Store carries no profile to read (the answer
     // is null) and is always on production.
     const env = (await Application.getIosPushNotificationServiceEnvironmentAsync()) === "development" ? "sandbox" : "production";
-    const cards = cardsOn();
+    const cards = cardMode();
     const said = [pairing.serverId, pairing.deviceId, token.data, env, startToken ?? "", cards].join();
     if (said === registered && !force) return;
-    await api["link.push.register"]({ token: token.data, env, ...(startToken && { start: startToken }), ...(cards && { cards: "bots" as const }) });
+    await api["link.push.register"]({ token: token.data, env, ...(startToken && { start: startToken }), ...(cards && { cards }) });
     registered = said;
     usePush.setState({ status: "on", problem: null });
     tellPresence();
@@ -295,6 +306,8 @@ function tellAddresses() {
 async function syncActivities() {
   if (!Activities) return;
   try {
+    // A card that ended by itself (Apple ends one after hours) would otherwise stay on the Lock Screen.
+    await Activities.dismissEnded?.();
     for (const { chatId, token } of await Activities.tokens()) addresses.set(chatId, token);
     for (const chatId of await Activities.running()) if (!shown.has(chatId)) shown.set(chatId, null);
   } catch {
@@ -321,7 +334,8 @@ async function followActivities() {
   const prefs = pairing ? parts.phones?.[pairing.deviceId]?.push : undefined;
   // Before the computer has said what is going on, nothing is known: a card is left as it is.
   if (!prefs?.activities || !parts.live || !useApp.getState().synced) return;
-  if (cardsOn()) return followCards(prefs.previews);
+  const mode = cardMode();
+  if (mode) return followCards(prefs.previews, mode);
   const active = new Set(parts.live.active ?? []);
   const front = AppState.currentState === "active";
   // A turn in the chat on screen gets a card; it goes on when the person leaves the app.
@@ -360,57 +374,88 @@ async function followActivities() {
   }
 }
 
-// ── One card per Botkin ("activity-bots-v1") ────────────────────────────────────────────────────
+// ── One card for all Botkins ("activity-all-v1"), or one per Botkin ("activity-bots-v1") ──────────
 
 const drawn = new Map<string, string>(); // card key → what it last showed, as JSON
 
 /**
- * While the app runs, the phone draws each Botkin's card itself (the computer holds back then): it
- * starts one for each Botkin at work while the app is in front, brings each up to date, and ends a
- * card with nothing left on it. A card per chat from an older computer is ended once its turn is over.
+ * While the app runs, the phone draws the cards itself (the computer holds back then). With one card
+ * for all Botkins it starts that card while the app is in front and something is at work; with one
+ * per Botkin, a card for each Botkin at work. It brings each up to date, and ends a card once every
+ * chat on it has ended (it shows how for a few minutes) or nothing is left on it. Any other card
+ * (a chat's, or a Botkin's from before the card for all) is ended once its turn is over, or at once
+ * when there is a card for all.
  */
-async function followCards(previews: boolean) {
-  if (!Activities?.startCard || !Activities.updateCard || !Activities.endCard) return;
+async function followCards(previews: boolean, mode: "all" | "bots") {
+  if (!Activities?.updateCard || !Activities.endCard) return;
   const state = useApp.getState();
   const known = { parts: state.parts, running: state.running, texts: state.texts };
   const host = state.pairing?.serverId ?? null;
   const active = new Set(state.parts.live?.active ?? []);
+  const look = (botId: string) => {
+    const bot = state.parts.bots?.find((item) => item.id === botId);
+    return bot ? lookOf(bot) : undefined;
+  };
+  const cardOf = (key: string) => phoneCard(known, key === ALL_CARD ? null : key.slice(4), previews, Date.now(), key === ALL_CARD ? look : undefined);
   if (AppState.currentState === "active" && Activities.enabled()) {
-    for (const botId of botsWithWork(known)) {
-      const key = "bot:" + botId;
-      if (shown.has(key) || [...shown.keys()].filter((item) => item.startsWith("bot:")).length >= MAX_CARDS) continue;
-      const bot = state.parts.bots?.find((item) => item.id === botId);
-      const card = bot && phoneCard(known, botId, previews);
-      if (!bot || !card) continue;
-      const look = lookOf(bot);
-      shown.set(key, null);
-      drawn.set(key, JSON.stringify([card.state, card.detail]));
-      try {
-        await Activities.startCard({ botId, botName: bot.name, head: look.head, palette: look.palette, eyes: look.eyes ?? "oval", colors: look.colors ?? [] }, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance);
-      } catch {
-        shown.delete(key);
-        drawn.delete(key);
+    if (mode === "all") {
+      const card = !shown.has(ALL_CARD) && hasWork(known) ? cardOf(ALL_CARD) : null;
+      if (card && Activities.startAllCard) {
+        shown.set(ALL_CARD, null);
+        drawn.set(ALL_CARD, JSON.stringify([card.state, card.detail]));
+        try {
+          await Activities.startAllCard(JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance);
+        } catch {
+          shown.delete(ALL_CARD);
+          drawn.delete(ALL_CARD);
+        }
+      }
+    } else {
+      for (const botId of botsWithWork(known)) {
+        const key = "bot:" + botId;
+        if (shown.has(key) || [...shown.keys()].filter((item) => item.startsWith("bot:")).length >= MAX_CARDS) continue;
+        const bot = state.parts.bots?.find((item) => item.id === botId);
+        const card = bot && phoneCard(known, botId, previews);
+        if (!bot || !card || !Activities.startCard) continue;
+        const face = lookOf(bot);
+        shown.set(key, null);
+        drawn.set(key, JSON.stringify([card.state, card.detail]));
+        try {
+          await Activities.startCard({ botId, botName: bot.name, head: face.head, palette: face.palette, eyes: face.eyes ?? "oval", colors: face.colors ?? [] }, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance);
+        } catch {
+          shown.delete(key);
+          drawn.delete(key);
+        }
       }
     }
   }
   for (const key of [...shown.keys()]) {
-    if (!key.startsWith("bot:")) {
-      if (!active.has(key)) {
+    const ours = mode === "all" ? key === ALL_CARD : key.startsWith("bot:");
+    if (!ours) {
+      if (key.startsWith("bot:") || key === ALL_CARD) {
+        void Activities.endCard(key, 0).catch(() => {});
+        forgetActivity(key);
+      } else if (!active.has(key) || mode === "all") {
         void Activities.end(key, null, 0).catch(() => {});
         forgetActivity(key);
       }
       continue;
     }
-    const card = phoneCard(known, key.slice(4), previews);
+    const card = cardOf(key);
     if (!card) {
       void Activities.endCard(key, 0).catch(() => {});
       forgetActivity(key);
       continue;
     }
     const text = JSON.stringify([card.state, card.detail]);
-    if (drawn.get(key) === text) continue;
-    drawn.set(key, text);
-    void Activities.updateCard(key, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance).catch(() => {});
+    if (drawn.get(key) !== text) {
+      drawn.set(key, text);
+      await Activities.updateCard(key, JSON.stringify(card.state), card.detail && JSON.stringify(card.detail), host, card.relevance).catch(() => {});
+    }
+    if (cardOver(card.state)) {
+      void Activities.endCard(key, OVER_SECONDS).catch(() => {});
+      forgetActivity(key);
+    }
   }
 }
 

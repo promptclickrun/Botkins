@@ -5,8 +5,10 @@
 //   start(about, state) -> id          starts a chat's card (the app must be in front)
 //   update(chatId, state), end(chatId, state?, lingerSeconds), running() -> [key]
 //   startCard(about, state, detail, host, relevance) -> id     a Botkin's card ("activity-bots-v1")
+//   startAllCard(state, detail, host, relevance) -> id         the card for all Botkins ("activity-all-v1")
 //   updateCard(key, state, detail, host, relevance), endCard(key, lingerSeconds)
 //   tokens() -> [{ chatId: key, token }]   the address of every activity that has one now
+//   dismissEnded()                     takes away ended activities that still show on the Lock Screen
 //   setPushKey(base64 | null)          keeps the key where the notification extension can read it
 //   setPushKeys([{ host, key }])       keeps one key for each paired computer, in place of all kept before
 //   takeAnswers() -> [answer], answered(id, ok)   answers given on a card, the island or a notification
@@ -17,7 +19,7 @@
 //           answer { ...answer }       an answer was given while the app runs
 //
 // The views are in targets/widgets. Both sides share BotkinActivityAttributes. A card's key is the
-// chat's id, or "bot:" and the Botkin's id for a Botkin's card.
+// chat's id, "bot:" and the Botkin's id for a Botkin's card, or "all" for the card for all Botkins.
 import ActivityKit
 import CryptoKit
 import ExpoModulesCore
@@ -139,6 +141,21 @@ public final class BotkinsActivityModule: Module {
       return activity.id
     }
 
+    AsyncFunction("startAllCard") { (state: String, detail: String?, host: String?, relevance: Double) -> String in
+      guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+        throw Exception(name: "E_ACTIVITIES_OFF", description: "Live Activities are off for Botkins in Settings.")
+      }
+      // One card for all Botkins: it takes the place of any other card of ours.
+      for old in Activity<BotkinActivityAttributes>.activities {
+        await old.end(nil, dismissalPolicy: .immediate)
+      }
+      let attributes = BotkinActivityAttributes(chatId: "", botId: "", botName: "Botkins", head: "", palette: "", eyes: "", colors: [], card: "all")
+      let content = ActivityContent(state: try cardState(state, detail: detail, host: host), staleDate: Date().addingTimeInterval(staleAfter), relevanceScore: relevance)
+      let activity = try Activity.request(attributes: attributes, content: content, pushType: .token)
+      self.follow(activity)
+      return activity.id
+    }
+
     AsyncFunction("updateCard") { (key: String, state: String, detail: String?, host: String?, relevance: Double) in
       let next = try cardState(state, detail: detail, host: host)
       for activity in Activity<BotkinActivityAttributes>.activities where activity.attributes.key == key && live(activity) {
@@ -156,6 +173,14 @@ public final class BotkinsActivityModule: Module {
 
     AsyncFunction("running") { () -> [String] in
       Activity<BotkinActivityAttributes>.activities.filter(live).map { $0.attributes.key }
+    }
+
+    // iOS ends an activity by itself after some hours but leaves it on the Lock Screen for hours more,
+    // where nothing can change it. Asked for when the app starts and comes to the front.
+    AsyncFunction("dismissEnded") { () in
+      for activity in Activity<BotkinActivityAttributes>.activities where activity.activityState == .ended {
+        await activity.end(nil, dismissalPolicy: .immediate)
+      }
     }
 
     // Asked for when the app starts and when the computer is reached again: an address that came

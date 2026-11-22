@@ -185,9 +185,61 @@ test("the sealed part stays small however long the words are", () => {
   assert.equal(card.detail!.c[0].t.length, 60);
 });
 
+// ── One card for all Botkins ("activity-all-v1") ───────────────────────────────────────────────
+
+const looks = (botId: string) => (botId === "patch" ? { head: "tinker", palette: "fig", eyes: "oval", colors: [] } : { head: "luna", palette: "custom", eyes: "wink", colors: ["#111111", "#222222", "#333333", "#444444"] });
+
+test("one card for all Botkins: every Botkin's chats in one order, each row with its Botkin's look, the name only sealed", () => {
+  const state = world();
+  const card = botCard(state, null, { now: NOW, look: looks })!;
+  // Working chats by newest start across Botkins, then the ended one; the group chat and the routine never count.
+  assert.deepEqual(
+    card.state.chats.map((chat) => [chat.id, chat.bot, chat.head, chat.palette]),
+    [
+      ["pr", "patch", "tinker", "fig"],
+      ["login", "patch", "tinker", "fig"],
+      ["week", "mira", "luna", "custom"],
+    ],
+  );
+  assert.equal(card.state.more, 1, "the ended changelog chat is counted, not shown");
+  assert.deepEqual(card.state.chats[2].colors, ["#111111", "#222222", "#333333", "#444444"]);
+  assert.equal(card.state.chats[2].eyes, "wink");
+  assert.equal(card.state.chats[0].colors, undefined, "no colors for a kit palette");
+  // Each row's model is its own Botkin's: Mira has none, so the computer's default.
+  assert.equal(card.state.chats[2].provider, undefined);
+  assert.deepEqual(
+    card.detail!.c.map((row) => row.b),
+    ["Patch", "Patch", "Mira"],
+  );
+  const plain = JSON.stringify(card.state);
+  for (const name of ["Patch", "Mira"]) assert.ok(!plain.includes(name), "a Botkin's name is sealed: " + name);
+  // A request anywhere leads the card.
+  state.requests.push({ id: "ask", chatId: "week", botId: "mira", kind: "question", title: "Which day?", choices: ["Tue", "Wed"] });
+  const asking = botCard(state, null, { now: NOW, look: looks })!;
+  assert.equal(asking.state.chats[0].id, "week");
+  assert.equal(asking.state.phase, "needs-you");
+  assert.equal(asking.relevance, 100);
+  // Without a look (an older computer's bot), a row still has its Botkin's id.
+  assert.equal(botCard(state, null, { now: NOW })!.state.chats[0].head, undefined);
+  assert.equal(botCard(state, null, { now: NOW })!.state.chats[0].bot, "mira");
+});
+
+test("one card for all Botkins stays under Apple's 4 KB however long the words are", () => {
+  const state = world();
+  const long = "word ".repeat(400);
+  state.chats = state.chats.map((chat) => ({ ...chat, id: chat.id + "-".repeat(30), title: long }));
+  state.runs = state.runs.map((run) => ({ ...run, chatId: run.chatId + "-".repeat(30) }));
+  state.requests.push({ id: "ask", chatId: "week" + "-".repeat(30), botId: "mira", kind: "question", title: long, choices: ["a", "b"], freeform: true });
+  const card = botCard(state, null, { now: NOW, look: looks })!;
+  const sealedLength = Math.ceil((Buffer.byteLength(JSON.stringify(card.detail)) + 28) / 3) * 4;
+  // What a push adds around the content: the event, the dates, the relevance and an alert.
+  const around = 400;
+  assert.ok(Buffer.byteLength(JSON.stringify(card.state)) + sealedLength + around < 4096);
+});
+
 // ── The phone's side (src/state/cards.ts) ──────────────────────────────────────────────────────
 
-import { botsWithWork, cardWorld, MAX_CARDS, phoneCard } from "../src/state/cards";
+import { botsWithWork, cardWorld, hasWork, MAX_CARDS, phoneCard } from "../src/state/cards";
 
 /** What a phone knows of world(): summaries for every run, the detail and text only for the chat it follows ("login"). */
 function phoneKnows() {
@@ -240,6 +292,23 @@ test("cards start for Botkins at work, at most four, not for chats that only end
   known.parts.chats = known.parts.bots.map((bot: any) => ({ id: "c-" + bot.id, botId: bot.id, title: "x", time: NOW, count: 1 }));
   known.parts.runs = known.parts.bots.map((bot: any) => ({ id: "r-" + bot.id, chatId: "c-" + bot.id, status: "Working", time: NOW }));
   assert.equal(botsWithWork(known, NOW).length, MAX_CARDS);
+});
+
+test("the phone draws the same card for all Botkins as the computer, and starts it only for work", () => {
+  const state = world();
+  state.chats = state.chats.filter((chat) => chat.id === "login");
+  const known = phoneKnows();
+  known.parts.chats = known.parts.chats.filter((chat: any) => chat.id === "login");
+  const fromComputer = botCard(state, null, { now: NOW, look: looks })!;
+  const fromPhone = phoneCard(known, null, true, NOW, looks)!;
+  assert.deepEqual(fromPhone.state, fromComputer.state);
+  assert.deepEqual(fromPhone.detail, fromComputer.detail);
+
+  const all = phoneKnows();
+  assert.ok(hasWork(all, NOW));
+  all.parts.runs = all.parts.runs.map((run: any) => ({ ...run, status: "Completed", finished: NOW - MIN }));
+  all.running = {} as any;
+  assert.equal(hasWork(all, NOW), false, "only ended chats: no new card");
 });
 
 // ── Answers given away from the app (src/state/answerCall.ts) ──────────────────────────────────
