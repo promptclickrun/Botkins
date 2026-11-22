@@ -221,6 +221,15 @@ export function notifyField(value) {
 }
 
 /** What a bot is told about where its reply goes. */
+/**
+ * A routine's reply of exactly this word says the run found nothing worth saying: the run completes
+ * with no message, no delivery and no notification. A failed run still notifies. Bots are not told
+ * of it by default, so a reminder never goes quiet; a routine's instructions opt in by asking for it.
+ */
+export const SILENT = "[SILENT]";
+export const ROUTINE_SILENT = "routine-silent-v1";
+export const isSilent = (text) => typeof text === "string" && text.trim() === SILENT;
+
 const DESTINATION_NOTES = {
   none: "This routine has no output. Do the work, then finish without a reply.",
   chat: "Your reply will be sent to the person as a message in your chat with them.",
