@@ -65,6 +65,7 @@ function follow(pairing: Pairing) {
     },
   });
   client.watch([...watched.keys()]);
+  client.watchReasoning([...reasoningSheets.keys()]);
   client.start();
 }
 
@@ -338,6 +339,7 @@ export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | u
 
 // Chats on screen are watched; each screen counts once.
 const watched = new Map<string, number>();
+const reasoningSheets = new Map<string, number>();
 const watchers = new Set<() => void>();
 /** The chat on screen now (the last one opened), if any. */
 export const chatOnScreen = () => [...watched.keys()].at(-1);
@@ -346,17 +348,25 @@ export function onChatOnScreen(listener: () => void) {
   watchers.add(listener);
   return () => void watchers.delete(listener);
 }
-export function watchChat(id: string) {
-  watched.set(id, (watched.get(id) ?? 0) + 1);
-  client?.watch([...watched.keys()]);
-  for (const tell of watchers) tell();
+function watchId(counts: Map<string, number>, id: string, publish: () => void) {
+  counts.set(id, (counts.get(id) ?? 0) + 1);
+  publish();
   return () => {
-    const left = (watched.get(id) ?? 1) - 1;
-    if (left > 0) watched.set(id, left);
-    else watched.delete(id);
+    const left = (counts.get(id) ?? 1) - 1;
+    if (left > 0) counts.set(id, left);
+    else counts.delete(id);
+    publish();
+  };
+}
+export function watchChat(id: string) {
+  return watchId(watched, id, () => {
     client?.watch([...watched.keys()]);
     for (const tell of watchers) tell();
-  };
+  });
+}
+/** A visible Activity sheet can follow its reasoning even when chat replies arrive whole. */
+export function watchReasoning(id: string) {
+  return watchId(reasoningSheets, id, () => client?.watchReasoning([...reasoningSheets.keys()]));
 }
 
 /** Loads the page of messages before the ones a chat holds. */

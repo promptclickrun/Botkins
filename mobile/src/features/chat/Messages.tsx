@@ -21,7 +21,6 @@ import { boardKindLabel, splitBoardQuote } from "./compose";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
-import { claimAt, useRevealed } from "./reveal";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
 import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
 
@@ -337,8 +336,6 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   // written (under the text in the person's own message). A reply still
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
-  // A reply that landed whole while this chat was open is shown word by word (reveal.ts).
-  const shown = useRevealed(message.text ?? "", () => (message.role === "assistant" ? claimAt(chatId, item.index, message.text ?? "") : null));
   if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
   if (message.role === "command") return <CommandBlock message={message} />;
   // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).
@@ -346,8 +343,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   return (
     <View style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      {message.voiceCaption || shown !== message.text ? (
-        <Markdown text={message.voiceCaption ?? shown} plain={!markdown} />
+      {message.voiceCaption ? (
+        <Markdown text={message.voiceCaption} plain={!markdown} />
       ) : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}

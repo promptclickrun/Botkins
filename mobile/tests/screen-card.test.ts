@@ -3,7 +3,7 @@
 // words, and that the computer is told once when nothing shows the screen any more.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cardRole, cardSize, feedPlan, inWindow, newestScreen, PLANS, screenGate, screenLabel, screenLook, screenWatchers, type Seen, WORDS } from "../src/features/pane/screenLive";
+import { cardRole, cardSize, feedPlan, newestScreen, PLANS, screenGate, screenLabel, screenLook, screenWatchers, type Seen, WORDS } from "../src/features/pane/screenLive";
 import type { ChatPane, HostPart, PanePanel } from "../src/link/types";
 
 const panel = (id: string, kind: PanePanel["kind"] = "screen"): PanePanel => ({ id, kind, title: id, botId: "bot", createdAt: 1, updatedAt: 1 });
@@ -106,16 +106,6 @@ test("the words for each gate, and what VoiceOver reads", () => {
     assert.match(words, /^[A-Z]/);
     assert.doesNotMatch(words, /desktop|host/i);
   }
-});
-
-test("a card counts as in view while any of it is inside the window", () => {
-  assert.equal(inWindow({ y: 100, height: 200 }, 800), true);
-  assert.equal(inWindow({ y: -150, height: 200 }, 800), true);
-  assert.equal(inWindow({ y: 790, height: 200 }, 800), true);
-  assert.equal(inWindow({ y: -200, height: 200 }, 800), false);
-  assert.equal(inWindow({ y: 800, height: 200 }, 800), false);
-  // Not laid out (or not on screen at all): measured as zeros.
-  assert.equal(inWindow({ y: 0, height: 0 }, 800), false);
 });
 
 test("the card takes the chat's width at the screen's own proportions, and never most of the window", () => {

@@ -2,7 +2,6 @@
 import { useEffect, useMemo } from "react";
 import { botActivity, chatActivity, type AvatarState } from "./sessionActivity";
 import type { Bot, ChatSchedule, ChatSummary, ModelInfo, ProviderStatus, Scope, SkillInfo } from "@/link/types";
-import { textMode, useChatPrefs } from "./chatPrefs";
 import { api, watchChat } from "./link";
 import { type ChatView, type PhoneParts, useApp } from "./store";
 import { can } from "./team";
@@ -35,17 +34,6 @@ export const useCanArrange = () =>
   });
 /** Whether the computer's app names a capability (`meta.capabilities`). False until the computer has answered. */
 export const useCapability = (name: string) => useApp((state) => state.parts.meta?.capabilities.includes(name) ?? false);
-
-/** How a reply's text comes now, as the computer can send it: chunks or whole fall back as the link client does. */
-export function useTextMode(): "live" | "chunks" | "whole" {
-  const on = useChatPrefs((prefs) => prefs.textStreaming);
-  const route = useApp((state) => state.route);
-  const chunks = useCapability("text-chunks-v1");
-  const off = useCapability("text-streaming-off-v1");
-  const mode = textMode(on, route);
-  if (mode === "chunks" && !chunks) return off ? "whole" : "live";
-  return mode === "whole" && !off ? "live" : mode;
-}
 
 export { activityLabel, botActivity, chatActivity, type AvatarState } from "./sessionActivity";
 export function useBotActivity(botId: string): AvatarState {

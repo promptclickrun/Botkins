@@ -449,6 +449,12 @@ export type Step = {
 export type StepDetail = { input?: string; output?: string };
 export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
+/** One reasoning item's wire suffix for a phone following a working turn. */
+export type ReasoningAppend = Omit<Reasoning, "text"> & { from: number; add: string };
+/** Snapshot-diff reasoning updates ("reasoning-appends-v1"). */
+export type ReasoningDelta = { run: string; reset?: true; remove?: string[]; order?: string[]; items: ReasoningAppend[] };
+/** The expanded reasoning state held by the phone for one running chat. */
+export type ReasoningView = { run: string; items: Reasoning[] };
 /**
  * A helper a turn started ("In the background"). `id` is the id of the step that started it. With
  * "turn-timeline-v1": `prompt` is what it was asked, `intent` what it says it is doing now, and

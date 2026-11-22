@@ -1,11 +1,11 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useIsFocused, useLocalSearchParams } from "expo-router";
 import { Ban, Brain, ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleX, MessageCircle } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import type { Run, Step, StepDetail, TeamAsk, Todo } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useBots, useModels, useWatchedChat } from "@/state/hooks";
-import { api } from "@/state/link";
+import { api, watchReasoning } from "@/state/link";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
@@ -149,6 +149,10 @@ export default function RunActivity() {
   const saved = useApp((state) => state.chats[chatId]?.runs[runId]);
   const running = useApp((state) => state.running[chatId]);
   const run = running?.id === runId ? running : saved;
+  const focused = useIsFocused();
+  const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);
+  const needsReasoning = focused && !streamsReplies && running?.id === runId && running?.status === "Working";
+  useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
   const allBots = useBots();
   const models = useModels();
   const stepsMode = useChatPrefs((prefs) => prefs.steps);

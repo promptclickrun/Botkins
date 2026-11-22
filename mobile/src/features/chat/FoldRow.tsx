@@ -116,7 +116,7 @@ function Status({ chatId, bot, group, bots }: { chatId: string; bot?: Bot; group
   return (
     <>
       <BotAvatar bot={face} size={32} state={state} />
-      <TypingDots />
+      <TypingDots status={intent || state} />
       <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1, marginLeft: space.xs }}>
         {statusLead(intent)}
       </T>

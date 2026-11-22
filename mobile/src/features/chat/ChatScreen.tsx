@@ -6,11 +6,12 @@ import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, u
 import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
+import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useTextMode, useWatchedChat } from "@/state/hooks";
+import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
@@ -21,9 +22,9 @@ import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
 import { VoiceDock } from "../voice/VoiceDock";
 import { completions } from "./completion";
-import { HIDE_AT, showsAt } from "./scroll";
+import { createChatViewport, HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
-import { GroupFace, workWidth } from "./bits";
+import { GroupFace, StatusMotion, workWidth } from "./bits";
 import { arrived, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
@@ -37,25 +38,16 @@ import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { EndedNote, type MessageActions, MessageRow, UserBubble } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
 import { Aside } from "./Aside";
-import { chatTimeline, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
+import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
 import { endSelecting, selectionEnds } from "./selecting";
-import { arm, disarm, settle, snapReveals } from "./reveal";
 import { usePane } from "../pane/usePane";
 import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
 
 const EMPTY_CHAT: ChatView = { from: 0, total: 0, messages: [], runs: {} };
 const STARTERS = ["What can you do?", "Plan my day", "Summarize my week"];
-// The rows each open chat drew last, by key: a row that didn't change stays the same object (turn.ts, reuseItems).
-const drawn = new Map<string, Map<string, Item>>();
-function steady(chatId: string, items: Item[]): Item[] {
-  const kept = reuseItems(drawn.get(chatId), items);
-  drawn.set(chatId, kept.byKey);
-  return kept.items;
-}
-const forgetDrawn = (chatId: string) => void drawn.delete(chatId);
 
 function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; state: AvatarState; model: string; room: number; /** The bot is on the voice dock: the title leaves its face out, so it shows once. */ docked?: boolean }) {
   const { width } = useWindowDimensions();
@@ -64,7 +56,9 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
   const status = activityLabel(state) || model;
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, maxWidth: width - room }}>
-      {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} />}
+      <AvatarMotion on={false}>
+        {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} />}
+      </AvatarMotion>
       <View style={{ flexShrink: 1 }}>
         <T variant="name" numberOfLines={1}>
           {name}
@@ -195,7 +189,7 @@ function Hello({ chat, bot, bots, projects, settings, onPick }: { chat: ChatSumm
   return (
     <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" contentContainerStyle={{ flexGrow: 1, justifyContent: "center", alignItems: "center", padding: space.xl, gap: space.md }}>
       <Animated.View entering={FadeIn.duration(260)} style={{ alignItems: "center", gap: space.md }}>
-        <BotAvatar bot={bot} size={96} state="listening" />
+        <BotAvatar bot={bot} size={96} state="idle" />
         <View style={{ alignItems: "center", gap: 2 }}>
           <T variant="title2" center>
             {group ? chat.title || "Group chat" : (bot?.name ?? chat.title)}
@@ -219,6 +213,7 @@ function Hello({ chat, bot, bots, projects, settings, onPick }: { chat: ChatSumm
 
 /** How long the list must stay unchanged after a reply finishes before it is shown from its beginning. */
 const SETTLE_MS = 350;
+const VIEWABILITY = { viewAreaCoveragePercentThreshold: 0 };
 
 type RowProps = {
   chatId: string;
@@ -231,15 +226,30 @@ type RowProps = {
   openPanel: (id: string) => void;
 };
 
-const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold }: RowProps & { item: Item; holdFold: FoldHold }) {
-  return item.kind === "message" ? (
+function ActiveLiveLeaf({ chatId, bot, group, bots, item }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot>; item: Extract<Item, { kind: "live" }> }) {
+  // The list owns the structural row. Only this leaf subscribes to body appends, so history and
+  // FlatList data keep their identities while stream/reasoning text grows.
+  const body = useApp((state) => state.texts[chatId]);
+  const latestRun = useApp((state) => state.running[chatId]);
+  const resolved = resolveLiveBody(item, body, latestRun);
+  return <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={{ ...item, ...resolved }} />;
+}
+
+const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active }: RowProps & {
+  item: Item;
+  holdFold: FoldHold;
+  viewport: ReturnType<typeof createChatViewport>;
+  active: boolean;
+}) {
+  const inView = useStore(viewport.rows, (rows) => active && rows.has(item.key));
+  const row = item.kind === "message" ? (
     <MessageRow item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
   ) : item.kind === "work" ? (
     <WorkPart chatId={chatId} item={item} />
   ) : item.kind === "text" ? (
     <TurnText item={item} />
   ) : item.kind === "screen" ? (
-    <ScreenCard chatId={chatId} panel={item.panel} onOpen={() => openPanel(item.panel.id)} />
+    <ScreenCard chatId={chatId} panel={item.panel} inView={inView} onOpen={() => openPanel(item.panel.id)} />
   ) : item.kind === "ended" ? (
     <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
   ) : item.kind === "fold" ? (
@@ -249,8 +259,9 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
       <Aside kind="thinking" text={item.text} />
     </View>
   ) : (
-    <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
+    <ActiveLiveLeaf chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
   );
+  return <StatusMotion.Provider value={inView}>{row}</StatusMotion.Provider>;
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
@@ -273,6 +284,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // The newest message is out of view: the button that goes back to it shows.
   const away = useRef(false);
   const [awayNow, setAway] = useState(false);
+  const [viewport] = useState(createChatViewport);
   // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
   const viewPosition = useRef(0.5);
   // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
@@ -296,33 +308,41 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // an answer where it came, and how a turn ended when it didn't finish. Newest first for the inverted list.
   const timeline = useCapability(TIMELINE_V1);
   const panesOn = useCapability("side-pane-v1");
-  const marks = useTurnMarks(useShallow((all) => Object.fromEntries(
-    Object.entries(all).filter(([id]) => id === runPart?.id || Object.hasOwn(view.runs, id)),
+  const markPositions = useTurnMarks(useShallow((all) => Object.fromEntries(
+    Object.entries(all).filter(([id]) => id === runPart?.id || Object.hasOwn(view.runs, id)).map(([id, held]) => [id, held.marks]),
   )));
   const timestamps = useChatPrefs(prefs => prefs.timestamps);
   const stepsPref = useChatPrefs((prefs) => prefs.steps);
   const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
-  const textBody = useApp((state) => state.texts[chatId]);
-  const stream = streaming ? textBody?.stream : undefined;
-  const liveThinking = textBody?.thinking;
-  const panels = view.pane?.panels;
-  const data = useMemo(() => {
-    const screens = panesOn ? panels?.filter((panel) => panel.kind === "screen") : undefined;
-    const items = chatTimeline({
+  const streamOpen = useApp((state) => streaming && typeof state.texts[chatId]?.stream === "string");
+  const ownership = useMemo(() => indexMessageOwnership(view.messages), [view.messages]);
+  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref }), [stepsPref, thinkingPref]);
+  // A new step, steer, or page seals the current text into history using the latest snapshot.
+  // Body-only changes reach the active row directly and leave this list untouched.
+  const structural = useMemo(() => {
+    const state = useApp.getState();
+    const body = state.texts[chatId];
+    const marks = Object.fromEntries(Object.entries(markPositions).map(([id, positions]) => [id, { marks: positions, text: useTurnMarks.getState()[id]?.text ?? "" }]));
+    return chatTimeline({
       messages: view.messages,
       from: view.from,
       runs: view.runs,
-      running: runPart,
-      live: { stream, thinking: liveThinking },
-      marks,
-      timeline,
-      group,
-      screens,
-      prefs: { steps: stepsPref, thinking: thinkingPref },
+      running: state.running[chatId] ?? runPart,
+      live: { stream: streamOpen ? body?.stream : undefined, thinking: body?.thinking },
+      marks, timeline, group, prefs, ownership,
+      screens: panesOn ? view.pane?.panels?.filter((panel) => panel.kind === "screen") : undefined,
+      livePlaceholder: streamOpen,
     });
-    return steady(chatId, items).reverse();
-  }, [view, runPart, stream, liveThinking, marks, timeline, group, panesOn, panels, stepsPref, thinkingPref, chatId]);
-  useEffect(() => () => forgetDrawn(chatId), [chatId]);
+  }, [chatId, view, runPart, markPositions, timeline, group, panesOn, prefs, ownership, streamOpen]);
+  const liveItem = useMemo(() => structural.find((item) => item.kind === "live"), [structural]);
+  const showLive = useApp((state) => !liveItem || liveRowVisible(liveItem, state.texts[chatId], state.running[chatId], prefs));
+  const previous = useMemo(() => ({ byKey: new Map<string, Item>() }), [chatId]);
+  const data = useMemo(() => {
+    const items = showLive ? structural : structural.filter((item) => item !== liveItem);
+    const kept = reuseItems(previous.byKey, items);
+    previous.byKey = kept.byKey;
+    return kept.items.reverse();
+  }, [previous, structural, liveItem, showLive]);
   // Going to one message: earlier pages are loaded until it is there, then the list scrolls to it.
   const target = at !== undefined && /^\d{1,7}$/.test(at) ? Number(at) : undefined;
   const loads = useRef(0);
@@ -363,19 +383,6 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
     return () => subscription.remove();
   }, []);
   const still = useReducedMotion();
-  // Without text streaming a reply lands whole: one that comes while this chat is open is shown word by word (reveal.ts).
-  // In chunks it goes on from where the turn's painting was (paint.ts).
-  const mode = useTextMode();
-  const reveals = !still && mode !== "live";
-  const chunks = mode === "chunks";
-  const turnLive = streaming || !!underWay(runPart);
-  const chatEnd = view.from + view.messages.length;
-  useEffect(() => {
-    if (!reveals) disarm(chatId);
-    else if (turnLive) arm(chatId, chatEnd, chunks);
-    else settle(chatId);
-  }, [reveals, turnLive, chatId, chatEnd, chunks]);
-  useEffect(() => () => disarm(chatId), [chatId]);
   useEffect(() => {
     const step = completions.check(chatId, {
       mode: completionPosition,
@@ -403,14 +410,12 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
 
   if (emptyView) return emptyView;
   return (
-    <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}
-      onTouchStart={(event) => {
-        snapReveals();
-        selectionEnds.onTouchStart(event);
-      }}>
+    <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
       <FlatList
         ref={list}
         inverted
+        viewabilityConfig={VIEWABILITY}
+        onViewableItemsChanged={viewport.onViewableItemsChanged}
         // How far the newest message is out of view. While a reply is written and the person has
         // scrolled up to read, the list stays where they are (maintainVisibleContentPosition
         // below), and the button offers the way back.
@@ -423,14 +428,14 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           }
         }}
         scrollEventThrottle={64}
-        onScrollBeginDrag={snapReveals}
         // Back at the newest content by their own hand: the list follows it again.
         onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
         data={data}
         keyExtractor={(item) => item.key}
         renderItem={({ item }) => (
           <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
-            draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} />
+            draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport}
+            active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
         )}
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: space.lg }}
@@ -499,13 +504,15 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const settings = useSettings();
   const models = useModels();
   const state = useChatActivity(chatId);
-  const live = usePart("live");
-  const streaming = !!live && chatId in live.streams;
+  const streaming = useApp((state) => Object.hasOwn(state.parts.live?.streams ?? {}, chatId));
   // The chat's run part: the turn under way, or its newest turn when that ended without a reply.
-  const runPart = useApp((s) => s.running[chatId]);
+  const selectRun = useMemo(createTimelineRunSelector, [chatId]);
+  const runPart = useApp((state) => selectRun(state.running[chatId]));
   const turnRun = underWay(runPart);
-  const requests = useMemo(() => live?.requests.filter((request) => request.chatId === chatId) ?? [], [live, chatId]);
-  const queued = live?.queued[chatId];
+  const liveRequests = useApp((state) => state.parts.live?.requests);
+  const requests = useMemo(() => liveRequests?.filter((request) => request.chatId === chatId) ?? [], [liveRequests, chatId]);
+  const queued = useApp((state) => state.parts.live?.queued[chatId]);
+  const steerable = useApp((state) => !!state.parts.live?.steerable?.[chatId]);
   const working = streaming || !!turnRun;
   const group = !!chat?.botIds && chat.botIds.length > 1;
   const canChat = useCan("agents", "chat");
@@ -639,7 +646,6 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       setQuote("");
     }
     setText("");
-    snapReveals();
     onLeave.current.wrote = true;
     setParked(false);
     list.current?.scrollToOffset({ offset: 0, animated: true });
@@ -833,7 +839,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             <SideAnswer side={side} onDismiss={() => setSide(null)} />
           </View>
         )}
-        {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={!!live?.steerable?.[chatId]} />}
+        {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={steerable} />}
         {canChat ? (
           <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
             <TalkBar chatId={chatId} />
@@ -883,16 +889,16 @@ function Gap() {
   return <View style={{ height: space.xl }} />;
 }
 
-/** Avatars move on this screen (see `AvatarMotion`). */
-export default function ChatScreen() {
+/** In a conversation the current status supplies the motion; the Botkins keep their state poses. */
+export default function ChatScreen(props: { pane?: string; onLeave?: () => void; onList?: () => void }) {
   return (
-    <AvatarMotion>
-      <ChatScreenScreen />
+    <AvatarMotion on={false}>
+      <ChatScreenScreen {...props} />
     </AvatarMotion>
   );
 }
 
 /** A chat beside the Chats list, when there is room for two panes (see split.ts). */
 export function ChatPane({ id, onLeave, onList }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void }) {
-  return <ChatScreenScreen key={id} pane={id} onLeave={onLeave} onList={onList} />;
+  return <ChatScreen key={id} pane={id} onLeave={onLeave} onList={onList} />;
 }

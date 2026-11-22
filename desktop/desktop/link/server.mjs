@@ -19,7 +19,8 @@ import { DeviceTools } from "./device.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
-import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_MS, chatPart, chunkDelta, lightPart, quietLive, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
+import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_MS, chatPart, chunkDelta, compactWorkingRun, lightPart, quietLive, reasoningDelta, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
+import { reasoningPreview } from "./reasoning-preview.mjs";
 import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
 import { cleanRelayUrl, RelayHost, roomOf, signWithRelayKey, validRelayKey } from "./relay.mjs";
@@ -63,7 +64,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -92,6 +93,9 @@ function validCursors(value, watching) {
     watching.includes(chat) && isPlainObject(cursor) &&
     typeof cursor.id === "string" && cursor.id.length > 0 && cursor.id.length <= 128 &&
     offset(cursor.stream) && offset(cursor.thinking));
+}
+function validReasoningWatch(value) {
+  return Array.isArray(value) && value.length <= MAX_WATCH && value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128);
 }
 
 const SYSTEM_ERROR = "That didn't work on your computer.";
@@ -423,6 +427,7 @@ export class LinkHost extends EventEmitter {
     this.partsRev = 0; // goes up when a part changes
     this.teamRev = 0; // goes up when the team, or anyone's view, changes
     this.texts = new Map();
+    this.reasoningParts = new Map();
     this.version = 0;
     this.dirty = true;
     this.pairing = null;
@@ -1912,7 +1917,7 @@ export class LinkHost extends EventEmitter {
       protocol: PROTOCOL,
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
-      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => c !== "stream-appends-v1" || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
+      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
     };
   }
   /** The desktop changed: wake the phones that are waiting, at most once per PUMP_MS. */
@@ -1942,8 +1947,8 @@ export class LinkHost extends EventEmitter {
     this.pumping.unref?.();
   }
   /** Rebuilds the parts when something changed, or when a chat is watched for the first time. */
-  refresh(watching) {
-    if (!this.dirty && watching.every((id) => this.parts.has("chat:" + id))) return;
+  refresh(watching, reasoningWatch = []) {
+    if (!this.dirty && watching.every((id) => this.parts.has("chat:" + id)) && reasoningWatch.every((id) => this.reasoningParts.has(id))) return;
     const state = this.backend.snapshot();
     const ownLooks = typeof this.backend.setLook === "function";
     if (!ownLooks) this.store.syncLooks((state.bots ?? []).map((bot) => bot.id));
@@ -1985,14 +1990,21 @@ export class LinkHost extends EventEmitter {
     next.phones = Object.fromEntries(this.store.data.devices.map((device) => [device.id, { name: device.name, kind: device.kind, platform: device.platform, ...(device.presenceKey && { presence: true }), ...(this.push.view(device.id) && { push: this.push.view(device.id) }), sources: this.store.sources(device.id) }]));
     next.asks = this.device.asks();
     next.voice = this.voice.settings();
-    const ids = new Set(watching);
+    const ids = new Set([...watching, ...reasoningWatch]);
+    const wantedReasoning = new Set(reasoningWatch);
     // A following phone is briefly between polls while its answer is in flight. Another phone
     // opening a different chat must not discard its versions or force a text replay.
     const now = Date.now();
     for (const session of this.sessions.values()) {
-      if (session.watchUntil > now) for (const id of session.watching) ids.add(id);
+      if (session.watchUntil > now) {
+        for (const id of session.watching) ids.add(id);
+        for (const id of session.reasoningWatch ?? []) { ids.add(id); wantedReasoning.add(id); }
+      }
     }
-    for (const waiter of this.waiters) for (const id of waiter.watching) ids.add(id);
+    for (const waiter of this.waiters) {
+      for (const id of waiter.watching) ids.add(id);
+      for (const id of waiter.reasoningWatch ?? []) { ids.add(id); wantedReasoning.add(id); }
+    }
     const runs = runsByChat(state, [...ids]);
     for (const id of ids) {
       next["chat:" + id] = chatPart(state, id, runs.get(id));
@@ -2000,6 +2012,15 @@ export class LinkHost extends EventEmitter {
     }
     const texts = new Map();
     for (const id of ids) {
+      const runPartValue = next["run:" + id];
+      if (wantedReasoning.has(id)) {
+        const current = runPartValue?.status === "Working" && runPartValue.id && Array.isArray(runPartValue.reasoning)
+          ? { run: runPartValue.id, items: runPartValue.reasoning.map(({ id: itemId, text, started, finished, botId }) => ({ id: itemId, text, started, ...(finished !== undefined && { finished }), ...(botId && { botId }) })) }
+          : null;
+        const json = JSON.stringify(current);
+        const previous = this.reasoningParts.get(id);
+        if (!previous || previous.json !== json) this.reasoningParts.set(id, { version: ++this.version, json, snapshot: current });
+      }
       if (!Object.hasOwn(next.live.streams, id) && !Object.hasOwn(next.live.thinking, id)) continue;
       const stream = next.live.streams[id] ?? "";
       const thinking = next.live.thinking[id] ?? "";
@@ -2010,9 +2031,24 @@ export class LinkHost extends EventEmitter {
       const prev = this.texts.get(id);
       const continues = prev && prev.run === run && prev.boundary === boundary &&
         stream.startsWith(prev.stream) && thinking.startsWith(prev.thinking);
-      texts.set(id, { id: continues ? prev.id : this.epoch + "." + ++this.version, stream, thinking, run, boundary });
+      const text = { id: continues ? prev.id : this.epoch + "." + ++this.version, stream, thinking, run, boundary };
+      const items = wantedReasoning.has(id) && this.reasoningParts.get(id)?.snapshot?.items;
+      if (items?.length) {
+        const speaker = next.live.speakers[id];
+        const botId = speaker && items.some((item) => item.botId === speaker) ? speaker : undefined;
+        if (reasoningPreview(items, botId) === thinking) {
+          // The phone can draw this exact preview from its reasoning. Its reply cursor then
+          // lives independently of the desktop's rolling 4,000-character thinking window.
+          const last = prev?.projected;
+          const same = last && last.preview.run === run && last.preview.botId === botId &&
+            last.boundary === boundary && stream.startsWith(last.stream);
+          text.projected = { id: same ? last.id : this.epoch + "." + ++this.version, stream, thinking: "", boundary, preview: { run, ...(botId && { botId }) } };
+        }
+      }
+      texts.set(id, text);
     }
     this.texts = texts;
+    for (const id of this.reasoningParts.keys()) if (!wantedReasoning.has(id)) this.reasoningParts.delete(id);
     for (const [name, value] of Object.entries(next)) {
       const json = JSON.stringify(value ?? null);
       if (this.parts.get(name)?.json !== json) {
@@ -2037,24 +2073,28 @@ export class LinkHost extends EventEmitter {
   /** The parts one device may see, each with its version: the owner's are the computer's own, a member's are cut to their role. */
   viewParts(session, watching) {
     const principal = this.principal(session.deviceId);
+    const admin = principal?.kind === "owner" && principal.admin === true;
     // An owner device with Admin mode on is sent everything; the host's own calls too.
-    if (principal?.kind === "owner" && principal.admin) return this.parts;
+    const hasReasoning = session.reasoningNegotiated === true;
+    if (principal?.kind === "owner" && principal.admin && !hasReasoning) return this.parts;
     if (principal?.kind !== "owner" && principal?.kind !== "member") return new Map();
-    const key = principal.kind === "owner" ? "owner" : "member:" + principal.memberId;
+    const key = (admin ? "owner:admin" : principal.kind === "owner" ? "owner" : "member:" + principal.memberId) + (hasReasoning ? ":reasoning" : ":legacy") + (session.light ? ":light" : ":full");
     const previous = this.partViews.get(key) ?? new Map();
     // Nothing changed since this view was made for the same chats: it is still right.
-    const stamp = this.partsRev + ":" + this.teamRev + ":" + watching.join(",");
+    const stamp = this.partsRev + ":" + this.teamRev + ":" + watching.join(",") + ":" + (session.reasoningWatch ?? []).join(",") + ":" + (session.light ? "light" : "full");
     if (previous.stamp === stamp) return previous;
     // The computer's own indicators name every chat, so they stay out: a view's own are made below
     // from its own `live`, after it was cut to its chats.
     // The owner's cut keeps or drops a chat's page whole, so those (the largest parts) are not read
     // here: a kept one is sent as it is. A member's cut also changes what is inside one.
-    const whole = (name) => principal.kind === "owner" && (name.startsWith("chat:") || name.startsWith("run:"));
+    const whole = (name) => principal.kind === "owner" && (name.startsWith("chat:") || (!hasReasoning && name.startsWith("run:")));
     const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, whole(name) ? true : JSON.parse(part.json)]));
     const records = this.backend.snapshot().spaces;
     const team = this.store.data.team;
     const values =
-      principal.kind === "owner"
+      admin
+        ? raw
+        : principal.kind === "owner"
         ? ownerParts(raw, team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(OWNER) } : {})
         : filterParts(raw, principal, team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(principal.memberId) } : {});
     const put = (name, json) => {
@@ -2064,15 +2104,19 @@ export class LinkHost extends EventEmitter {
     put("quietLive", JSON.stringify(quietLive(values.live) ?? null));
     for (const name of this.names(watching)) {
       if (!(name in values)) continue;
-      put(name, whole(name) && values[name] === true ? this.parts.get(name).json : JSON.stringify(values[name] ?? null));
+      let json = whole(name) && values[name] === true ? this.parts.get(name).json : JSON.stringify(values[name] ?? null);
+      if (hasReasoning && name.startsWith("run:") && values[name] !== true) json = JSON.stringify(compactWorkingRun(values[name], session.light));
+      put(name, json);
     }
+    for (const name of previous.keys()) if (!this.parts.has(name)) previous.delete(name);
     previous.stamp = stamp;
     this.partViews.set(key, previous);
     return previous;
   }
   /** Missing parts as JSON, null when caught up, or milliseconds until a text-only flush. */
   news(known, watching, cursors, session, throttle) {
-    const values = this.viewParts(session, watching);
+    const partWatching = [...new Set([...watching, ...(session.reasoningWatch ?? [])])];
+    const values = this.viewParts(session, partWatching);
     // A phone that asked for no text streaming ("text-streaming-off-v1") gets the indicators only, and no text:
     // text growing alone wakes nothing. The reply comes whole in its chat's page.
     const quiet = !!cursors || session.noText;
@@ -2085,7 +2129,8 @@ export class LinkHost extends EventEmitter {
     let textOnly = true;
     const parts = [];
     const versions = {};
-    for (const name of this.names(watching)) {
+    const deliveredReasoning = [];
+    for (const name of this.names(partWatching)) {
       const part = values.get(quiet && name === "live" ? "quietLive" : name);
       if (!part) continue;
       versions[name] = part.v;
@@ -2096,24 +2141,43 @@ export class LinkHost extends EventEmitter {
       const light = session.light && (name.startsWith("chat:") || name.startsWith("run:"));
       parts.push(JSON.stringify(name) + ":" + (light ? (part.light ??= JSON.stringify(lightPart(JSON.parse(part.json)))) : part.json));
     }
-    for (const chat of cursors ? watching : []) {
-      const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
-      // Text the phone still holds is cleared once; then it holds none and is sent none.
-      if (session.noText) {
-        if (cursor) parts.push(JSON.stringify("text:" + chat) + ":null");
-        continue;
-      }
-      // A member reads the text of their own chats only: their view holds null for any other chat.
+    for (const chat of partWatching) {
       const shown = values === this.parts || (values.get("chat:" + chat)?.json ?? "null") !== "null";
-      const text = shown ? this.texts.get(chat) : undefined;
-      let delta = textDelta(text, cursor);
-      if (chunks && delta) {
-        const cut = chunkDelta(text, delta, cursor, loose);
-        delta = cut.delta;
-        held ||= cut.held;
+      const followsReasoning = session.reasoningWatch?.includes(chat);
+      if (cursors && watching.includes(chat)) {
+        const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
+        const raw = shown && !session.noText ? this.texts.get(chat) : undefined;
+        const text = followsReasoning && raw?.projected ? raw.projected : raw;
+        let delta = textDelta(text, cursor);
+        if (chunks && delta) {
+          const cut = chunkDelta(text, delta, cursor, loose);
+          delta = cut.delta;
+          held ||= cut.held;
+        }
+        if (text?.preview) {
+          // Establish the preview source even when the first incomplete reply chunk is held.
+          if (!delta && cursor?.id !== text.id) delta = { id: text.id, stream: { from: 0, add: "" }, thinking: { from: 0, add: "" } };
+          if (delta) delta.preview = text.preview;
+        }
+        if (delta !== undefined) parts.push(JSON.stringify("text:" + chat) + ":" + JSON.stringify(delta));
       }
-      if (delta === undefined) continue;
-      parts.push(JSON.stringify("text:" + chat) + ":" + JSON.stringify(delta));
+      if (!followsReasoning) continue;
+      const key = "reasoning:" + chat;
+      const part = shown ? this.reasoningParts.get(chat) : undefined;
+      const sent = session.reasoningSent.get(chat);
+      if (!part && !sent && !Object.hasOwn(known, key)) continue;
+      const version = part?.version ?? 0;
+      versions[key] = version;
+      if (sent?.version === version && known[key] === version) continue;
+      const snapshot = part?.snapshot ?? null;
+      const acknowledged = sent && known[key] === sent.version ? sent.snapshot : undefined;
+      // A disconnect can lose the clear itself. Re-send it until the phone acknowledges it.
+      const delta = snapshot ? reasoningDelta(snapshot, acknowledged)
+        : sent?.snapshot || (known[key] > 0 && known[key] !== version) ? null : undefined;
+      if (delta !== undefined) {
+        parts.push(JSON.stringify(key) + ":" + JSON.stringify(delta));
+        deliveredReasoning.push([chat, { version, snapshot }]);
+      }
     }
     if (held) session.heldSince ??= now;
     else delete session.heldSince;
@@ -2121,23 +2185,33 @@ export class LinkHost extends EventEmitter {
     if (!parts.length) return held && throttle ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : null;
     const remaining = (session.lastNews ?? 0) + (chunks ? this.chunkTiming.every : TEXT_PUMP_MS) - now;
     if (throttle && textOnly && remaining > 0) return remaining;
+    for (const [chat, sent] of deliveredReasoning) session.reasoningSent.set(chat, sent);
     if (held) session.heldSince = now;
     session.lastNews = Date.now();
     session.watchUntil = session.lastNews + MAX_WAIT;
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
   }
-  sync(session, { epoch, have, watch, wait, appends, steps, text }, gone) {
+  sync(session, request, gone) {
+    const { epoch, have, watch, wait, appends, steps, text, reasoningWatch } = request;
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     session.watching = watching;
     session.noText = text === false;
     session.textMode = text === false ? "whole" : text === "chunks" ? "chunks" : "live";
+    const previousReasoningWatch = session.reasoningWatch ?? [];
+    const acceptsAppends = this.backend.streamAppends !== false && validCursors(appends, watching);
+    session.reasoningNegotiated = this.backend.streamAppends !== false && validReasoningWatch(reasoningWatch) && (appends === undefined || acceptsAppends);
+    session.reasoningWatch = session.reasoningNegotiated ? [...new Set(reasoningWatch)] : [];
+    session.reasoningSent ??= new Map();
+    for (const id of previousReasoningWatch) if (!session.reasoningWatch.includes(id)) {
+      session.reasoningSent.delete(id);
+      this.dirty = true;
+    }
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
     session.light = steps === "light";
     session.watchUntil = Date.now() + MAX_WAIT;
     const known = epoch === this.epoch && have && typeof have === "object" ? have : {};
-    this.refresh(watching);
-    const cursors = this.backend.streamAppends !== false && validCursors(appends, watching)
-      ? (epoch === this.epoch ? appends : {}) : null;
+    this.refresh(watching, session.reasoningWatch);
+    const cursors = acceptsAppends ? (epoch === this.epoch ? appends : {}) : null;
     const news = () => this.news(known, watching, cursors, session, Number(wait) > 0);
     const now = news();
     const quiet = () => ({ epoch: this.epoch, v: null, parts: {} });
@@ -2150,6 +2224,7 @@ export class LinkHost extends EventEmitter {
         session,
         news,
         watching,
+        reasoningWatch: session.reasoningWatch,
         end: (news) => {
           clearTimeout(timer);
           this.waiters.delete(waiter);

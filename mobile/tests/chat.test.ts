@@ -2,44 +2,13 @@
 // reads in the text, a Today card as message text, teammates, dictation, the context window's
 // parts, the replies' totals, and a model's facts. Run by `npm test` (tsx).
 import assert from "node:assert/strict";
-import { HIDE_AT, SHOW_AT, showsAt } from "../src/features/chat/scroll";
+import { createChatViewport, HIDE_AT, SHOW_AT, showsAt } from "../src/features/chat/scroll";
 import { test } from "node:test";
 import type { BoardItem, Bot, ModelInfo, RunSummary } from "../src/link/types";
 import { boardMessage, boardQuote, findTrigger, joinDictation, mentionKey, teammates, tokenOf, toInput, withBoardQuote, arrived, waitingCopies } from "../src/features/chat/compose";
 import { chatRuns, contextParts, contextPercent, contextTone, tokens, usageSummary } from "../src/features/chat/contextMath";
 import { contextFact, effortRows, modelFacts } from "../src/features/models/facts";
-import { arm, claim, claimAt, disarm, notePainted, revealedText, revealMs, settle } from "../src/features/chat/reveal";
-import { PAINT_MS, paintedLength } from "../src/features/chat/paint";
 import { completeUpTo } from "../link-host/parts.mjs";
-
-test("a reply that lands whole is revealed in whole words, faster when it is short", () => {
-  assert.equal(revealMs(10), 300);
-  assert.equal(revealMs(200), 800);
-  assert.equal(revealMs(5000), 1200);
-  const text = "one two three four five six seven eight nine ten";
-  assert.equal(revealedText(text, 0), "");
-  let last = "";
-  for (let at = 0; at <= revealMs(text.length); at += 30) {
-    const shown = revealedText(text, at);
-    assert.ok(text.startsWith(shown) && shown.length >= last.length, "grows as a prefix");
-    assert.ok(shown === "" || shown === text || /\s/.test(text[shown.length]), "ends at a word: " + JSON.stringify(shown));
-    last = shown;
-  }
-  assert.equal(revealedText(text, revealMs(text.length)), text);
-  assert.equal(revealedText("oneword", 100), "oneword");
-});
-
-test("only a reply after the turn began while the chat was open is revealed, once", () => {
-  assert.equal(claim("c", 5), null, "not armed: history");
-  arm("c", 4);
-  assert.equal(claim("c", 3, 100), null, "older than the turn");
-  assert.equal(claim("c", 4, 100), 100);
-  assert.equal(claim("c", 4, 900), 100, "drawn again, it carries on");
-  settle("c", 1000);
-  assert.equal(claim("c", 5, 1200), 1200, "just after the turn ended");
-  assert.equal(claim("c", 6, 10_000), null, "long after");
-  disarm("c");
-});
 
 test("text in chunks is cut after a complete sentence or line", () => {
   const cut = (text: string, from = 0) => text.slice(0, completeUpTo(text, from, text.length));
@@ -54,36 +23,6 @@ test("text in chunks is cut after a complete sentence or line", () => {
   assert.equal(completeUpTo("Done. more words", 8, 16), 8, "nothing complete after the cursor");
 });
 
-test("a chunk is painted in whole words, all of it in PAINT_MS", () => {
-  const text = "one two three four five six seven eight";
-  let last = 0;
-  for (let at = 0; at < PAINT_MS; at += 30) {
-    const n = paintedLength(text, 0, at);
-    assert.ok(n >= last, "only grows");
-    assert.ok(n === 0 || n === text.length || /\s/.test(text[n]), "ends at a word");
-    last = n;
-  }
-  assert.equal(paintedLength(text, 0, PAINT_MS), text.length);
-  assert.equal(paintedLength(text, 8, 0), 8, "from what was painted");
-  assert.ok(paintedLength(text, 8, PAINT_MS / 2) > 8);
-});
-
-test("a reply painted in chunks is revealed from where the painting was", () => {
-  assert.equal(revealedText("Hello there world", 0, 6), "Hello ");
-  assert.equal(revealedText("Hello there world", revealMs(11), 6), "Hello there world");
-  arm("p", 2, true);
-  notePainted("p", "Hello ");
-  assert.deepEqual(claimAt("p", 2, "Hello there", 100), { at: 100, from: 6 });
-  disarm("p");
-  arm("p", 2, true);
-  notePainted("p", "Other ");
-  assert.equal(claimAt("p", 2, "Hello there", 100), null, "doesn't go on from it: whole");
-  disarm("p");
-  arm("p", 2);
-  notePainted("p", "Hello ");
-  assert.deepEqual(claimAt("p", 2, "Hello there", 100), { at: 100, from: 0 }, "landing whole: from the start");
-  disarm("p");
-});
 
 test("a trigger is the sigil word that ends at the caret", () => {
   assert.deepEqual(findTrigger("#", 1), { sigil: "#", query: "", start: 0, end: 1 });
@@ -256,4 +195,21 @@ test("a send that seemed to fail is not put back as a draft when the message did
   assert.equal(arrived("", { length: 0, waiting: 0 }, view, undefined), false);
   // A page that starts after the send's place is read from its start.
   assert.equal(arrived("ship it", { length: 10, waiting: 0 }, view, undefined), true);
+});
+
+test("activity and screen rows are visible only while this chat's list shows them", () => {
+  const chat = createChatViewport();
+  const beside = createChatViewport();
+  assert.equal(chat.rows.getState().has("status"), false);
+  chat.onViewableItemsChanged({ viewableItems: [{ key: "status" }, { key: "screen" }] });
+  const visible = chat.rows.getState();
+  assert.equal(visible.has("status"), true);
+  assert.equal(visible.has("screen"), true);
+  assert.equal(beside.rows.getState().has("status"), false);
+  // Replacing visible rows with the same keys (e.g. new streamed text) does not publish again.
+  chat.onViewableItemsChanged({ viewableItems: [{ key: "screen" }, { key: "status" }] });
+  assert.equal(chat.rows.getState(), visible);
+  chat.onViewableItemsChanged({ viewableItems: [{ key: "older" }] });
+  assert.equal(chat.rows.getState().has("status"), false);
+  assert.equal(chat.rows.getState().has("screen"), false);
 });

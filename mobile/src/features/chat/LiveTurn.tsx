@@ -1,22 +1,19 @@
 // The turn a bot is working on now, drawn in parts in the order things happened (turn.ts), whatever
 // Steps says: each part's steps and thinking is a `WorkPart`, and the newest part is the `LiveTurn`
-// at the bottom. Its reply's text in chunks (through the relay) is painted word by word (paint.ts). Failed only and Hidden narrow the steps. Under it, in every mode, the turn's status
+// at the bottom. Its reply's text arrives in complete updates (through the relay). Failed only and Hidden narrow the steps. Under it, in every mode, the turn's status
 // line: the bot's face and its typing dots (FoldRow.tsx). A turn that will fold once it ends keeps
 // room under its text for the reply's row. The work keeps away from the screen's edge (`workWidth`).
 // Thinking and interim texts are `Aside`s. Requests and errors are shown elsewhere and always show.
 import { router } from "expo-router";
 import { StyleSheet, View } from "react-native";
-import { useReducedMotion } from "react-native-reanimated";
 import type { Bot, Step } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
-import { useTextMode } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { BotAvatar, Markdown, radius, space, T, Tap, useTheme } from "@/ui";
 import { Aside } from "./Aside";
 import { StepMark, TypingDots, workWidth } from "./bits";
 import { WorkLine } from "./Messages";
-import { usePainted } from "./paint";
-import { type Item, stepLabel } from "./turn";
+import { type Item, segmentThinking, stepLabel } from "./turn";
 
 const SHOWN_STEPS = 4;
 /** The height of the row under a reply that holds Read aloud (MessageRow). */
@@ -27,7 +24,7 @@ function Typing({ bot, intent }: { bot?: Bot; intent?: string }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 36 }} accessibilityLabel={(bot?.name ?? "The bot") + " is thinking" + (intent ? ", " + intent : "")} accessibilityLiveRegion="polite">
       <BotAvatar bot={bot} size={32} state="thinking" />
-      <TypingDots />
+      <TypingDots status={intent} />
       {!!intent && (
         <T variant="subhead" color="muted" numberOfLines={1} style={{ flex: 1 }}>
           {intent}
@@ -76,13 +73,17 @@ function Steps({ chatId, runId, all, mode }: { chatId: string; runId?: string; a
 export function WorkPart({ chatId, item }: { chatId: string; item: Extract<Item, { kind: "work" }> }) {
   const stepsMode = useChatPrefs((prefs) => prefs.steps);
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
+  const thinking = useApp((state) => {
+    const run = state.running[chatId];
+    return item.reasoningIds && run?.id === item.run.id ? segmentThinking(item.reasoningIds, run) : item.thinking;
+  });
   if (!item.live) return <WorkLine chatId={chatId} runId={item.run.id} label={item.label} failed={stepsMode === "failed"} />;
   return (
     <View style={{ gap: space.md }}>
       <Steps chatId={chatId} runId={item.run.id} all={item.steps} mode={stepsMode} />
-      {thinkingMode !== "hide" && !!item.thinking && (
+      {thinkingMode !== "hide" && !!thinking && (
         <View style={workWidth}>
-          <Aside kind="thinking" text={item.thinking} />
+          <Aside kind="thinking" text={thinking} />
         </View>
       )}
     </View>
@@ -106,9 +107,9 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
-  // Through the relay the text comes in chunks: it is painted word by word between them (paint.ts).
-  const still = useReducedMotion();
-  const stream = usePainted(chatId, item.text, useTextMode() === "chunks" && !still);
+  // Relay chunks are received text, not a typewriter animation. Markdown keeps completed blocks
+  // cached while reparsing the active tail; the finished MessageRow performs the exact final parse.
+  const stream = item.text;
   const thinking = thinkingMode !== "hide" && !!item.thinking;
   return (
     <View style={{ gap: space.md }}>
@@ -130,11 +131,11 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
         // Laid out as the reply will be (MessageRow): the empty row is where Read aloud will be, so
         // the text stays where it is when it becomes the reply and the status line becomes the fold line.
         <View style={{ gap: space.sm }}>
-          <Markdown text={stream} plain={!markdown} />
+          <Markdown text={stream} plain={!markdown} streaming />
           <View style={{ height: READ_ALOUD_ROW }} />
         </View>
       ) : stream ? (
-        <Markdown text={stream} plain={!markdown} />
+        <Markdown text={stream} plain={!markdown} streaming />
       ) : (
         !item.run && <Typing bot={speaker} intent={intent} />
       )}

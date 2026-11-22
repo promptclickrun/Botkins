@@ -130,9 +130,6 @@ export function screenLabel(place: Place, look: Look): string {
   return WORDS.title + (look.line ? ". " + look.line : "");
 }
 
-/** Whether any of a view measured in the window (`measureInWindow`) is inside it. A view that isn't laid out measures as zeros. */
-export const inWindow = (rect: { y: number; height: number }, windowHeight: number) => rect.height > 0 && rect.y + rect.height > 0 && rect.y < windowHeight;
-
 /** The screen's proportions before the first picture says otherwise. */
 export const DEFAULT_RATIO = 16 / 10;
 

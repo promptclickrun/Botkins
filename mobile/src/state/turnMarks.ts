@@ -26,7 +26,11 @@ useApp.subscribe((state, before) => {
     // A group chat's members take turns, each with a text of its own: nothing to cut.
     if (!run || run.speakers?.length) continue;
     const priorMarks = (next ?? held)[run.id];
-    const noted = noteMarks(priorMarks, stream ?? "", markKeys(run, state.chats[chatId]?.messages ?? []));
+    const beforeRun = before.running[chatId];
+    const sameEntries = priorMarks && state.chats[chatId]?.messages === before.chats[chatId]?.messages &&
+      run.id === beforeRun?.id && run.steps === beforeRun.steps && run.reasoning === beforeRun.reasoning;
+    const keys = sameEntries ? [] : markKeys(run, state.chats[chatId]?.messages ?? []);
+    const noted = noteMarks(priorMarks, stream ?? "", keys);
     if (noted === priorMarks) continue;
     next ??= { ...held };
     delete next[run.id];

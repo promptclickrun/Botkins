@@ -214,6 +214,27 @@ export function textDelta(text, cursor) {
   return { id: text.id, stream: suffix("stream"), thinking: suffix("thinking") };
 }
 
+/** Missing suffixes for each reasoning item. `previous` is the last snapshot the host actually sent. */
+export function reasoningDelta(current, previous) {
+  if (!current) return previous ? null : undefined;
+  const reset = previous?.run !== current.run;
+  const previousItems = reset ? [] : previous.items;
+  const old = new Map(previousItems.map((item) => [item.id, item]));
+  const order = current.items.map((item) => item.id);
+  const currentIds = new Set(order);
+  const remove = previousItems.filter((item) => !currentIds.has(item.id)).map((item) => item.id);
+  const reordered = reset || order.length !== previousItems.length || order.some((id, i) => id !== previousItems[i].id);
+  const items = [];
+  for (const { text, ...meta } of current.items) {
+    const prior = old.get(meta.id);
+    if (prior && prior.text === text && prior.started === meta.started && prior.finished === meta.finished && prior.botId === meta.botId) continue;
+    const from = prior && text.startsWith(prior.text) ? prior.text.length : 0;
+    items.push({ ...meta, from, add: text.slice(from) });
+  }
+  if (!reordered && !remove.length && !items.length) return undefined;
+  return { run: current.run, ...(reset && { reset: true }), ...(remove.length && { remove }), ...(reordered && { order }), items };
+}
+
 /** Runs by chat id, newest first, for the chats asked for. */
 export function runsByChat(state, chatIds) {
   const wanted = new Map(chatIds.map((id) => [id, []]));
@@ -249,6 +270,13 @@ export function lightRun(run) {
 }
 /** A chat's page, or a chat's run part, with light steps. */
 export const lightPart = (part) => (!part ? part : Array.isArray(part.runs) ? { ...part, runs: part.runs.map(lightRun) } : lightRun(part));
+
+/** While a negotiated append client follows a run, body-sized fields are fetched at completion. */
+export function compactWorkingRun(run, light = true) {
+  if (!run || run.status !== "Working") return run;
+  const { reasoning: _reasoning, ...rest } = light ? lightRun(run) : run;
+  return rest;
+}
 
 /** One step's input and output, as a client that holds light steps asks for them. Null when the step is gone. */
 export function stepDetail(state, chatId, runId, stepId) {

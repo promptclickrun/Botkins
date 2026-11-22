@@ -7,6 +7,8 @@ import type { PairTarget } from "./pairing";
 import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
 import { sha256 } from "@noble/hashes/sha2.js";
+import type { ReasoningDelta, ReasoningView } from "./types";
+import { reasoningPreview } from "../../link-host/reasoning-preview.mjs";
 
 const PREFIX = "/botkins/v1/";
 export const PROTOCOL = 1;
@@ -347,9 +349,10 @@ const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRel
 type SyncNews = { epoch: string; v: Record<string, number> | null; parts: Record<string, unknown> };
 class Retry extends Error {}
 
-type HeldText = { id: string; stream: string; thinking: string };
+type PreviewSource = { run: string; botId?: string };
+type HeldText = { id: string; stream: string; thinking: string; preview?: PreviewSource };
 type Append = { from: number; add: string };
-type TextDelta = { id: string; stream: Append; thinking: Append };
+type TextDelta = { id: string; stream: Append; thinking: Append; preview?: PreviewSource };
 
 export type LinkOptions = {
   /** Opt in to boolean live indicators and expanded text:<chatId> parts for watched chats. */
@@ -404,7 +407,9 @@ export class LinkClient {
   private opening: Promise<Session> | null = null;
   private epoch = "";
   private texts = new Map<string, HeldText>();
+  private reasonings = new Map<string, ReasoningView>();
   private supportsAppends: boolean | undefined;
+  private supportsReasoning: boolean | undefined;
   private receivedFullLive = false;
   /** What the last sync asked for, as the option said it and as it was sent. */
   private sentMode: TextMode = "live";
@@ -413,6 +418,7 @@ export class LinkClient {
   private supportsChunks: boolean | undefined;
   private have: Record<string, number> = {};
   private watching: string[] = [];
+  private reasoningWatching: string[] = [];
   private running = false;
   // A late answer belongs to the lifetime that asked, even after a stop and restart.
   private lifetime: object | null = {};
@@ -523,6 +529,13 @@ export class LinkClient {
     this.watching = next;
     if (this.options.streamAppends && this.supportsAppends) delete this.have.live;
     // The waiting request is for the old set: ask again.
+    this.poll?.abort();
+  }
+  /** Requests detailed reasoning for these chats even when reply text is whole/off. */
+  watchReasoning(chatIds: string[]) {
+    const next = [...new Set(chatIds)].filter((id) => id.length > 0 && id.length <= 128).sort().slice(0, 4);
+    if (next.join("\n") === this.reasoningWatching.join("\n")) return;
+    this.reasoningWatching = next;
     this.poll?.abort();
   }
   /** The choice behind `textStreaming` changed: a waiting sync that asked otherwise asks again. */
@@ -668,8 +681,10 @@ export class LinkClient {
         // The computer's app restarted: nothing we hold is known to be current.
         this.epoch = reply.epoch;
         this.supportsAppends = undefined;
+        this.supportsReasoning = undefined;
         this.supportsChunks = undefined;
         this.have = {};
+        this.reasonings.clear();
       }
       const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, base };
       if (this.lifetime === lifetime) this.useSession(session);
@@ -736,6 +751,61 @@ export class LinkClient {
     }));
   }
 
+  private releaseReasoning(keep: string[]) {
+    const cleared: Record<string, null> = {};
+    for (const chat of this.reasonings.keys()) {
+      if (keep.includes(chat)) continue;
+      this.reasonings.delete(chat);
+      delete this.have["reasoning:" + chat];
+      cleared["reasoning:" + chat] = null;
+    }
+    if (Object.keys(cleared).length) this.options.onParts(cleared);
+  }
+
+  private expandReasoning(parts: Record<string, unknown>) {
+    const meta = parts.meta as { capabilities?: string[] } | undefined;
+    if (meta) this.supportsReasoning = meta.capabilities?.includes("reasoning-appends-v1") === true;
+    for (const [name, value] of Object.entries(parts)) {
+      if (!name.startsWith("reasoning:")) continue;
+      const chat = name.slice(10);
+      if (!value) {
+        this.reasonings.delete(chat);
+        continue;
+      }
+      const delta = value as ReasoningDelta;
+      const previous = this.reasonings.get(chat);
+      if (!delta.reset && previous?.run !== delta.run) {
+        delete this.have[name];
+        throw new Retry();
+      }
+      const byId = new Map((delta.reset || previous?.run !== delta.run ? [] : previous?.items ?? []).map((item) => [item.id, item]));
+      for (const id of delta.remove ?? []) {
+        byId.delete(id);
+      }
+      for (const item of delta.items ?? []) {
+        const held = byId.get(item.id);
+        if (item.from !== 0 && (!held || held.text.length !== item.from)) {
+          this.have = {};
+          this.texts.clear();
+          this.reasonings.clear();
+          throw new Retry();
+        }
+        const text = item.from === 0 ? item.add : held!.text + item.add;
+        byId.set(item.id, { id: item.id, text, started: item.started, ...(item.finished !== undefined && { finished: item.finished }), ...(item.botId && { botId: item.botId }) });
+      }
+      const items = delta.order ? delta.order.flatMap((id) => byId.has(id) ? [byId.get(id)!] : []) : [...byId.values()];
+      const view = { run: delta.run, items };
+      this.reasonings.set(chat, view);
+      parts[name] = view;
+    }
+    // A step may replace the compact run without changing its separately versioned reasoning.
+    for (const [chat, held] of this.reasonings) {
+      const run = parts["run:" + chat] as { id: string; status: string } | null | undefined;
+      const key = "reasoning:" + chat;
+      if (run?.status === "Working" && run.id === held.run && !(key in parts)) parts[key] = held;
+    }
+  }
+
   private expandText(parts: Record<string, unknown>, watching: string[], requested: boolean) {
     const meta = parts.meta as { capabilities?: string[] } | undefined;
     if (meta) this.supportsAppends = meta.capabilities?.includes("stream-appends-v1") === true;
@@ -781,8 +851,20 @@ export class LinkClient {
       };
       const stream = expand("stream");
       const thinking = expand("thinking");
-      this.texts.set(chat, { id: delta.id, stream, thinking });
+      this.texts.set(chat, { id: delta.id, stream, thinking, preview: delta.preview });
       parts[name] = { stream, thinking };
+    }
+  }
+
+  private publishThinkingPreviews(parts: Record<string, unknown>, watching: string[]) {
+    for (const chat of watching) {
+      const key = "text:" + chat;
+      if (!(key in parts) && !("reasoning:" + chat in parts)) continue;
+      const held = this.texts.get(chat);
+      const reasoning = this.reasonings.get(chat);
+      if (held?.preview) {
+        parts[key] = { stream: held.stream, thinking: reasoning?.run === held.preview.run ? reasoningPreview(reasoning.items, held.preview.botId) : "" };
+      }
     }
   }
 
@@ -815,10 +897,14 @@ export class LinkClient {
         this.sentMode = mode;
         this.sentText = text;
         const watching = this.watching;
+        const detailed = this.reasoningWatching;
         const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
           watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
         const appends = requestText ? { appends: this.cursors() } : {};
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
+        const requestReasoning = requestText && this.supportsReasoning !== false;
+        const reasoningWatch = requestReasoning ? [...new Set([...detailed, ...(text !== "whole" ? watching.slice(0, 4) : [])])].slice(0, 4) : [];
+        this.releaseReasoning(reasoningWatch);
+        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
         if (this.lifetime !== lifetime) break;
         failures = 0;
         this.setState("online");
@@ -827,11 +913,13 @@ export class LinkClient {
           this.epoch = news.epoch;
           this.have = {};
         }
-        if (this.options.streamAppends && watching !== this.watching) continue;
+        if (this.options.streamAppends && (watching !== this.watching || detailed !== this.reasoningWatching)) continue;
         if (news.v) {
           const meta = news.parts.meta as { capabilities?: string[] } | undefined;
           if (meta) this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
           if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
+          if (this.options.streamAppends) this.expandReasoning(news.parts);
+          if (requestReasoning && text !== "whole") this.publishThinkingPreviews(news.parts, watching);
           this.have = news.v;
           this.options.onParts(news.parts);
         }

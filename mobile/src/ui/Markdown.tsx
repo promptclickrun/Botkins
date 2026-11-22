@@ -3,17 +3,18 @@
 // HTML in a message is shown as text and images as links, as on the desktop: nothing remote is
 // loaded into a chat.
 //
-// Fast while a reply streams: each top-level block is its own memoized piece, so as text grows only
-// the last block renders again, and a code block is colored once, when its fence closes.
+// Fast while a reply streams: marked tokens for blank-line-separated top-level blocks are retained,
+// while marked lexes only the active tail until its Markdown shape is definitely closed.
 import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
 import { Check, ChevronDown, Copy, Info, Lightbulb, type LucideIcon, MessageSquareWarning, OctagonAlert, TriangleAlert } from "lucide-react-native";
 import { Marked, type Token, type Tokens } from "marked";
-import { Fragment, memo, type ReactNode, useMemo, useState } from "react";
+import { Fragment, memo, type ReactNode, useMemo, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, type TextStyle, View } from "react-native";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { haptic } from "./haptics";
 import { codePalette, type CodeRun, highlightCode } from "./highlight";
+import { parseStreamingMarkdown, type MarkdownStreamCache } from "./markdownCache";
 import { CELL_PAD, tableWidths } from "./tables";
 import { Tap } from "./Tap";
 import { type Colors, radius, space, type TypeScale, useTheme } from "./theme";
@@ -74,6 +75,7 @@ function splitFootnotes(text: string): { body: string; notes: Footnote[] } {
 /** Footnotes are numbered in the order they are first referred to. */
 function numberNotes(body: string, notes: Footnote[]): Map<string, number> {
   const numbers = new Map<string, number>();
+  if (!body.includes("[^") && notes.length === 0) return numbers;
   const prose = body.replace(/(`{3,}|~{3,})[\s\S]*?(?:\1|$)/g, "").replace(/`[^`\n]*`/g, "");
   const pattern = /\[\^([^\]\s]+)\]/g;
   for (let match = pattern.exec(prose); match; match = pattern.exec(prose)) if (!numbers.has(match[1])) numbers.set(match[1], numbers.size + 1);
@@ -500,12 +502,9 @@ function block(token: Token, ctx: Ctx, k: string): ReactNode {
 }
 
 /** One top-level block. It renders again only when its own source changes (or the look does). */
-const Block = memo(
-  function Block({ token, ctx, index }: { token: Token; ctx: Ctx; index: number }) {
-    return <>{block(token, ctx, "b" + index)}</>;
-  },
-  (a, b) => a.token.raw === b.token.raw && a.ctx === b.ctx && a.index === b.index,
-);
+const Block = memo(function Block({ token, ctx, index }: { token: Token; ctx: Ctx; index: number }) {
+  return <>{block(token, ctx, "b" + index)}</>;
+});
 
 const Footnotes = memo(function Footnotes({ notes, ctx }: { notes: Footnote[]; ctx: Ctx }) {
   const small: Ctx = { ...ctx, base: { ...ctx.base, ...ctx.scale.footnote, color: ctx.colors.muted } };
@@ -587,22 +586,32 @@ export type MarkdownProps = {
   wrapCode?: boolean;
   /** Paths that open something on a tap (a chat's artifacts). */
   paths?: PathLinks;
+  /** The text is still arriving. Only blocks followed by a blank-line separator are cached. */
+  streaming?: boolean;
 };
 
 /** Renders Markdown. Safe to re-render while a reply streams in. */
-export const Markdown = memo(function Markdown({ text, color, size = "body", plain, inline: inlineOnly, highlight, wrapCode, paths }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, color, size = "body", plain, inline: inlineOnly, highlight, wrapCode, paths, streaming = false }: MarkdownProps) {
   const { colors, type: scale } = useTheme();
   const prefHighlight = useChatPrefs((prefs) => prefs.highlight);
   const prefWrap = useChatPrefs((prefs) => prefs.wrapCode);
   const doHighlight = highlight ?? prefHighlight;
   const wrap = wrapCode ?? prefWrap;
   const base = useMemo<TextStyle>(() => ({ ...(size === "small" ? scale.subhead : scale.callout), color: color ?? colors.ink }), [size, color, colors, scale]);
+  const streamCache = useRef<MarkdownStreamCache | undefined>(undefined);
 
   const parsed = useMemo(() => {
     if (plain || inlineOnly) return null;
     const { body, notes } = splitFootnotes(text);
-    return { tokens: lex(body), notes, numbers: numberNotes(body, notes) };
-  }, [text, plain, inlineOnly]);
+    if (!streaming) {
+      streamCache.current = undefined;
+      const tokens = lex(body);
+      return { tokens, notes, numbers: numberNotes(body, notes) };
+    }
+    const result = parseStreamingMarkdown(body, lex, streamCache.current, notes.length > 0);
+    streamCache.current = result.cache;
+    return { tokens: result.tokens, notes, numbers: numberNotes(body, notes) };
+  }, [text, plain, inlineOnly, streaming]);
   // The numbering changes only when a new footnote appears, so blocks keep their memo while text streams.
   const noteKey = parsed ? [...parsed.numbers.keys()].join("\u0000") : "";
   const ctx = useMemo<Ctx>(() => {
