@@ -25,7 +25,7 @@ test("only sheets above a page leave it in view", () => {
   const names = ["(tabs)", "chat/[id]", "chat/model"];
   assert.equal(onShow([home, stack(0, ...names)]), false);
   assert.equal(onShow([stack(1, ...names, "chat/model-info")]), true);
-  assert.equal(onShow([stack(1, "(tabs)", "chat/[id]", "voice/live")]), false);
+  assert.equal(onShow([stack(1, "(tabs)", "chat/[id]", "bot/[id]")]), false);
 });
 
 test("only the selected tab is on show", () => {

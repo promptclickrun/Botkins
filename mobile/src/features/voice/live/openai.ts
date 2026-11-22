@@ -177,6 +177,7 @@ export class OpenAISocketTransport extends LiveBase {
   ) {
     super(runTool);
     this.gate = new MicGate("conversation", now);
+    this.clock = now;
     this.protocol = new OpenAIRealtime({
       send: (event) => this.send(event),
       status: (status) => (status === "talking" ? undefined : this.setStatus(status)),
@@ -223,6 +224,7 @@ export class OpenAISocketTransport extends LiveBase {
   private async startAudio() {
     this.subscriptions.push(
       this.audio.addListener("frame", (frame) => {
+        this.hears({ mic: this.muted ? 0 : frame.level });
         if (this.muted) return;
         const { send, barge } = this.gate.frame(frame.data, frame.level);
         // The person talked clearly over the bot: it stops before their words go.
@@ -230,6 +232,7 @@ export class OpenAISocketTransport extends LiveBase {
         for (const data of send) this.send({ type: "input_audio_buffer.append", audio: data });
       }),
       this.audio.addListener("output", (event) => {
+        this.hears({ out: event.level });
         this.gate.level(event.level);
         this.talking.level(event.level);
       }),

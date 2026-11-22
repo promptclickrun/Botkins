@@ -587,6 +587,7 @@ function App() {
         send={(options, onDispatch) => send(key, options, onDispatch)}
         stop={() => void api.stop(key).catch(fail)}
         botName={key !== "home" && (chat?.botIds?.length ?? 0) > 1 ? "The group" : target.name}
+        botLook={target.look}
         botVoice={target.voice}
         startChat={key === "home" ? () => newChat(target.id) : undefined}
         members={

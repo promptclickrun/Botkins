@@ -170,7 +170,6 @@ export default function RootLayout() {
               <Stack.Screen name="settings/team/role" options={tall} />
               <Stack.Screen name="tools/import" options={tall} />
               <Stack.Screen name="folders" options={tall} />
-              <Stack.Screen name="voice/live" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
               <Stack.Screen name="credentials/index" />
               <Stack.Screen name="credentials/[id]" options={tall} />
               <Stack.Screen name="credentials/manager/[id]" />

@@ -46,6 +46,7 @@ export class ElevenLabsTransport extends LiveBase {
     super(runTool);
     this.rates = { input: session.input.sampleRate, output: session.output.sampleRate };
     this.gate = new MicGate("conversation", now, "silence");
+    this.clock = now;
   }
 
   private send(message: Record<string, unknown>) {
@@ -92,6 +93,7 @@ export class ElevenLabsTransport extends LiveBase {
   private async startAudio() {
     this.subscriptions.push(
       this.audio.addListener("frame", (frame) => {
+        this.hears({ mic: this.muted ? 0 : frame.level });
         if (this.muted) return;
         const { send, barge } = this.gate.frame(frame.data, frame.level);
         // The person talked clearly over the agent: it stops here, and ElevenLabs hears them.
@@ -99,6 +101,7 @@ export class ElevenLabsTransport extends LiveBase {
         for (const data of send) this.send({ user_audio_chunk: data });
       }),
       this.audio.addListener("output", (event) => {
+        this.hears({ out: event.level });
         this.gate.level(event.level);
         this.talking.level(event.level);
       }),

@@ -45,6 +45,7 @@ export class GeminiTransport extends LiveBase {
   ) {
     super(runTool);
     this.gate = new MicGate("conversation", now);
+    this.clock = now;
   }
 
   private send(message: Record<string, unknown>) {
@@ -95,6 +96,7 @@ export class GeminiTransport extends LiveBase {
     const mimeType = "audio/pcm;rate=" + this.session.input.sampleRate;
     this.subscriptions.push(
       this.audio.addListener("frame", (frame) => {
+        this.hears({ mic: this.muted ? 0 : frame.level });
         if (this.muted) return;
         const { send, barge } = this.gate.frame(frame.data, frame.level);
         // The person talked clearly over the bot: it stops here, and Gemini hears them and stops too.
@@ -102,6 +104,7 @@ export class GeminiTransport extends LiveBase {
         for (const data of send) this.send({ realtimeInput: { audio: { data, mimeType } } });
       }),
       this.audio.addListener("output", (event) => {
+        this.hears({ out: event.level });
         this.gate.level(event.level);
         this.talking.level(event.level);
       }),

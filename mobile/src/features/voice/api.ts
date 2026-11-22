@@ -6,6 +6,7 @@ import { useDictationImpl } from "./dictation";
 import { canRecognize, canRecord } from "./native";
 import { liveProviderFor, useSttProvider, useVoiceSettings, useVoiceSupported, useBotVoiceSupported, voiceSupported } from "./state";
 import { speakText, stopSpeech, useSpeakingNow } from "./tts";
+import { startLiveCall } from "./liveCall";
 import { startTalk } from "./talk";
 
 export type Dictation = {
@@ -64,11 +65,14 @@ export function startChatVoice(chatId: string, botId: string) {
   else startTalk(chatId);
 }
 
-/** Opens live voice with a bot, in a chat. When it isn't set up yet, opens Settings › Voice instead. */
+/**
+ * Starts live voice with a bot, in its chat: the chat's screen then shows the voice dock in place of
+ * the message box (VoiceDock.tsx). When live voice isn't set up yet, opens Settings › Voice instead.
+ */
 export function openLiveVoice(chatId: string, botId: string) {
   if (!voiceSupported() || !liveProviderFor(botId)) {
     router.push("/settings/voice");
     return;
   }
-  router.push({ pathname: "/voice/live", params: { chatId, botId } });
+  startLiveCall(chatId, botId);
 }

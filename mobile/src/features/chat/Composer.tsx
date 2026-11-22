@@ -589,7 +589,7 @@ export function Composer({
             hitSlop={4}
             testID={voice ? "composer-voice" : "composer-send"}
             accessibilityLabel={mainLabel}
-            accessibilityHint={voice && !endVoice ? (liveReady ? "Opens live voice with the bot" : "Listens, sends what you say, and reads the reply aloud") : undefined}
+            accessibilityHint={voice && !endVoice ? (liveReady ? "Starts live voice in this chat" : "Listens, sends what you say, and reads the reply aloud") : undefined}
             style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: sendDisabled ? colors.lineStrong : colors.primary }}
           >
             {stop ? (

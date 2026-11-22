@@ -18,6 +18,8 @@ import { useTurnMarks } from "@/state/turnMarks";
 import { AvatarMotion, BotAvatar, Chip, EmptyState, IconButton, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useShape, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
+import { useLiveCall } from "../voice/liveCall";
+import { VoiceDock } from "../voice/VoiceDock";
 import { completions } from "./completion";
 import { HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
@@ -55,14 +57,14 @@ function steady(chatId: string, items: Item[]): Item[] {
 }
 const forgetDrawn = (chatId: string) => void drawn.delete(chatId);
 
-function ChatTitle({ chat, bot, bots, state, model, room }: { chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; state: AvatarState; model: string; room: number }) {
+function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; state: AvatarState; model: string; room: number; /** The bot is on the voice dock: the title leaves its face out, so it shows once. */ docked?: boolean }) {
   const { width } = useWindowDimensions();
   const group = !!chat.botIds && chat.botIds.length > 1;
   const name = group ? chat.title || "Group chat" : (bot?.name ?? chat.title);
   const status = activityLabel(state) || model;
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, maxWidth: width - room }}>
-      {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} /> : <BotAvatar bot={bot} size={30} state={state} />}
+      {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} />}
       <View style={{ flexShrink: 1 }}>
         <T variant="name" numberOfLines={1}>
           {name}
@@ -744,6 +746,14 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     [chatId],
   );
 
+  // Live voice in this chat takes the message box's place as the voice dock, until the person types.
+  const docked = useLiveCall((state) => state.call?.chatId === chatId && !state.call.typing);
+  // The dock's keyboard button puts the message box back with the keyboard up.
+  const typingInCall = useLiveCall((state) => state.call?.chatId === chatId && state.call.typing);
+  useEffect(() => {
+    if (typingInCall) input.current?.focus();
+  }, [typingInCall]);
+
   // The composer rides the keyboard; with the keyboard down it clears the home indicator.
   const keyboard = useReanimatedKeyboardAnimation();
   // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
@@ -771,14 +781,14 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }}>
       {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
       <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
-        <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} />
+        <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
       </View>
       {barEnd}
     </View>
   ) : (
     <Stack.Screen
       options={{
-        headerTitle: () => <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={measured ? 206 : 150} />,
+        headerTitle: () => <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={measured ? 206 : 150} docked={docked} />,
         headerRight: () => barEnd,
       }}
     />
@@ -827,7 +837,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         {canChat ? (
           <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
             <TalkBar chatId={chatId} />
-            <Composer
+            <VoiceDock chatId={chatId} />
+            {!docked && <Composer
               chatId={chatId}
               botId={chat.botId}
               group={group}
@@ -845,7 +856,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
               placeholder={"Message " + (group ? chat.title || "the group" : (bot?.name ?? "your bot"))}
               model={model}
               inputRef={input}
-            />
+            />}
           </View>
         ) : (
           <T variant="footnote" color="muted" center style={{ paddingVertical: space.md }}>
