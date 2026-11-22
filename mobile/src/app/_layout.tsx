@@ -1,7 +1,6 @@
 import "react-native-reanimated";
 import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef } from "react";
 import { Appearance } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -74,6 +73,7 @@ export default function RootLayout() {
     headerTintColor: colors.ink,
     headerStyle: { backgroundColor: colors.canvas },
     contentStyle: { backgroundColor: colors.canvas, ...sides },
+    statusBarStyle: theme.dark ? "light" : "dark",
   } as const;
   // A sheet fills the width on a narrow screen, rail and all; with room for two panes it is a card away from it.
   const sheet = { presentation: "formSheet", headerShown: false, sheetGrabberVisible: true, sheetCornerRadius: 28, contentStyle: { backgroundColor: colors.canvas, ...(shape.wide ? {} : sides) } } as const;
@@ -84,11 +84,10 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.canvas }}>
       <KeyboardProvider>
         <ThemeProvider value={navigation}>
-          <StatusBar style={theme.dark ? "light" : "dark"} />
           <Stack screenOptions={page}>
             {/* Each guard names where it leads. Without it, a phone with no computer was sent to the first open route by file name, which is the team join sheet. */}
             <Stack.Protected guard={!paired} redirectTo="/">
-              <Stack.Screen name="welcome" options={{ headerShown: false, animation: "fade" }} />
+              <Stack.Screen name="welcome" options={{ headerShown: false, animation: "fade", statusBarStyle: "dark" }} />
             </Stack.Protected>
             <Stack.Protected guard={paired} redirectTo="/welcome">
               <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: colors.canvas } }} />

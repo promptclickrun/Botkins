@@ -2,9 +2,8 @@
 // pointer and keyboard. Full screen, on black whatever the theme.
 import * as LocalAuthentication from "expo-local-authentication";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
-import { StatusBar } from "expo-status-bar";
 import { Monitor, MonitorOff, RefreshCw, X } from "lucide-react-native";
 import { type ComponentRef, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Platform, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
@@ -84,7 +83,7 @@ export default function Remote() {
 function Waiting() {
   return (
     <View style={[styles.fill, styles.center, { backgroundColor: chrome.stage }]}>
-      <StatusBar style="light" />
+      <Stack.Screen options={{ statusBarStyle: "light" }} />
       <ActivityIndicator color={chrome.ink} />
       <CloseCorner />
     </View>
@@ -93,9 +92,10 @@ function Waiting() {
 
 /** A screen with nothing to show: one line, at most one action, and Close. */
 function Gate({ title, text, icon, action, onAction }: { title: string; text?: string; icon?: boolean; action?: string; onAction?: () => void }) {
-  const { colors } = useTheme();
+  const { colors, dark } = useTheme();
   return (
     <View style={[styles.fill, styles.center, { backgroundColor: colors.canvas }]}>
+      <Stack.Screen options={{ statusBarStyle: dark ? "light" : "dark" }} />
       <EmptyState icon={icon ? MonitorOff : Monitor} title={title} text={text} action={action} onAction={onAction} />
       <CloseCorner themed />
     </View>
@@ -304,7 +304,7 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
 
   return (
     <View style={[styles.fill, { backgroundColor: chrome.stage }]}>
-      <StatusBar style="light" />
+      <Stack.Screen options={{ statusBarStyle: "light" }} />
       <View style={[styles.fill, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: laptop ? below : keyboardUp ? keyboardHeight + KEY_BAR_HEIGHT : insets.bottom }]}>
         {!!info?.problem && canView && <ProblemLine text={info.problem} />}
         {blocked ? (
