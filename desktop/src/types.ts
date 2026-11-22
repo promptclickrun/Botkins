@@ -415,6 +415,10 @@ export type ChatSchedule = {
   cadence?: Cadence;
   createdAt?: number;
   finishedAt?: number;
+  /** A script routine's script: it runs on the computer with no model ("routine-scripts-v1"). */
+  script?: string;
+  /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
+  followUp?: boolean;
 };
 export type Cadence =
   | { kind: "once"; date: string; time: string }
@@ -432,7 +436,13 @@ export type RoutineDelivery = {
 export type RoutineInput = {
   botId: string;
   name: string;
+  /** The instructions; on a script routine, its follow-up action's (needed only when `followUp` is on). */
   prompt: string;
+  /** A script to run with no model. null on an edit takes it away. */
+  script?: string | null;
+  followUp?: boolean;
+  /** The routine's own model (kept on its chat). null on an edit goes back to the Default routines model. */
+  model?: ModelChoice | null;
   cadence: Cadence;
   timezone?: string;
   /** Leave out or null for the routine's own chat (on an edit, null clears a destination). */
@@ -515,7 +525,7 @@ declare global {
       snapshot(): Promise<State>;
       models(): Promise<ModelInfo[]>;
       setModel(
-        scope: "global" | "bot" | "chat",
+        scope: "global" | "routines" | "bot" | "chat",
         id: string | null,
         value: ModelChoice | null,
       ): Promise<void>;
@@ -1626,6 +1636,8 @@ export type MacToolsStatus = {
 
 export type Preferences = {
   model: ModelChoice;
+  /** The Default routines model: routines without their own use it before their bot's (desktop/workspace.mjs, effectiveModel). */
+  routineModel?: ModelChoice;
   appearance: Appearance;
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
   /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */

@@ -434,3 +434,32 @@ test("`botkins help --json` describes the routine commands", { skip }, async () 
   assert.deepEqual(commands["routines schedule"].arguments.map((argument) => argument.name), ["chat", "number", "action"]);
   assert.match(commands["routines add"].details, /time zone/);
 });
+
+test("a script routine is shown whole before it is saved, and can take a follow-up action", { skip }, async () => {
+  await client.call("bots.add", { name: "Quill" });
+  const base = ["routines", "add", "Disk check", "--bot", "Quill", "--cadence", "daily", "--at", "03:00", "--timezone", "UTC"];
+  assert.match((await botkins([...base, "--follow-up", "--prompt", "p"])).err, /--follow-up goes with a script/);
+  assert.match((await botkins([...base, "--script", "df -h", "--follow-up"])).err, /Give the prompt/, "a follow-up action needs its prompt");
+  const asked = await botkins([...base, "--script", "df -h /\necho SCRIPT-LINE"]);
+  assert.equal(asked.exit, 2);
+  assert.match(asked.err, /^This routine runs a script on this computer on a schedule, with nobody watching\. Read the script\./);
+  assert.match(asked.err, /\n {2}Runs: a script on the computer, with no model\n {2}Script:\n {6}df -h \/\n {6}echo SCRIPT-LINE\n/);
+  const saved = (await botkins([...base, "--script", "df -h /", "--yes", "--json"])).json();
+  assert.deepEqual([saved.script, saved.followUp, saved.instructions], ["df -h /", false, ""]);
+  const edited = await botkins(["routines", "edit", saved.id, "--follow-up", "--prompt", "Warn me when the disk is full.", "--yes", "--json"]);
+  assert.equal(edited.exit, 0, edited.err);
+  assert.match(edited.err, /Changes: prompt, follow-up action/);
+  assert.match(edited.err, /Runs: a script on the computer, with no model, then a follow-up action/);
+  assert.deepEqual([edited.json().followUp, edited.json().instructions], [true, "Warn me when the disk is full."]);
+  const plain = (await botkins(["routines", "edit", saved.id, "--no-script", "--yes", "--json"])).json();
+  assert.equal(plain.script, undefined, "--no-script makes it a prompt routine again");
+  assert.equal((await botkins(["routines", "remove", saved.id, "--yes"])).exit, 0);
+});
+
+test("`models --routines` needs a model it knows, and `none` clears the routines default", { skip }, async () => {
+  assert.match((await botkins(["models", "--effort", "high"])).err, /--effort goes with --routines/);
+  assert.match((await botkins(["models", "--routines", "nobody/nothing"])).err, /No connected provider offers nobody\/nothing/);
+  const cleared = await botkins(["models", "--routines", "none"]);
+  assert.equal(cleared.exit, 0, cleared.err);
+  assert.match(cleared.out, /Routines have no default model of their own/);
+});

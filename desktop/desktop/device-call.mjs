@@ -37,7 +37,7 @@ export function deviceCall({ workspace, handlers, folders }) {
     if (member) {
       // These three take the member's id beside what the device sent; a handler never reads it from the device.
       if (name === "mentionables") return workspace.mentions.candidates(checked[0], checked[1], member.memberId);
-      if (name === "createRoutine") return workspace.panels.routines.create(checked[0] ?? {}, undefined, member.memberId);
+      if (name === "createRoutine") return workspace.panels.routines.createWithModel(checked[0] ?? {}, undefined, member.memberId);
       if (name === "duplicateRoutine") return workspace.panels.routines.duplicate(checked[0], checked[1], undefined, member.memberId);
     }
     if (Object.hasOwn(FOR_A_PERSON, name)) return handlers[name](...Array.from({ length: FOR_A_PERSON[name] }, (_, at) => checked[at]), member ? member.memberId : "owner");

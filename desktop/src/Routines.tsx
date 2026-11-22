@@ -18,8 +18,9 @@ import { BotAvatar } from "./Avatar";
 import { useAsk, type PageActions } from "./Pages";
 import { Choices } from "./Preferences";
 import { categories as goalCategories } from "./Board";
-import type { Bot, Cadence, Chat, ChatSchedule, Run, RoutineDelivery, State } from "./types";
+import type { Bot, Cadence, Chat, ChatSchedule, ModelChoice, Run, RoutineDelivery, State } from "./types";
 import { WorkBar, type WorkNav } from "./WorkBar";
+import ModelPicker, { ModelBadge } from "./ModelPicker";
 import "./routines.css";
 
 const api = window.botkins;
@@ -668,10 +669,22 @@ function RoutineDetail({
           </button>
         </form>
       )}
-      <section className="profile-card routine-instructions">
-        <h2>Instructions</h2>
-        <p>{entry.prompt}</p>
-      </section>
+      {entry.script && (
+        <section className="profile-card routine-instructions">
+          <h2>Script</h2>
+          <pre className="routine-script-text">{entry.script}</pre>
+        </section>
+      )}
+      {(!entry.script || entry.followUp) && (
+        <section className="profile-card routine-instructions">
+          <h2>{entry.script ? "Follow-up action" : "Instructions"}</h2>
+          <p>{entry.prompt}</p>
+          <p className="muted routine-model-line">
+            Model: <ModelBadge choice={chat.model ?? state.settings.routineModel ?? bot?.model ?? state.settings.model} size={13} />
+            {!chat.model && <span>· the routines default</span>}
+          </p>
+        </section>
+      )}
       <section className="routine-group" aria-label="Runs">
         <h2>
           Runs <small>{runs.length}</small>
@@ -723,6 +736,20 @@ function RoutineEditor({
   const [bot, setBot] = useState(item?.chat.botId ?? botId);
   const [name, setName] = useState(item?.entry.name ?? "");
   const [prompt, setPrompt] = useState(item?.entry.prompt ?? "");
+  // What runs: the instructions as a bot's turn, or a script with no model ("routine-scripts-v1").
+  // A computer this window reaches over the link may be older, and a team member never writes a script.
+  const using = state.remote?.using;
+  const scriptsAllowed = (!using || !!using.capabilities?.includes("routine-scripts-v1")) && !using?.member;
+  const modelsAllowed = !using || !!using.capabilities?.includes("routine-models-v1");
+  const [runs, setRuns] = useState<"instructions" | "script">(item?.entry.script ? "script" : "instructions");
+  const [script, setScript] = useState(item?.entry.script ?? "");
+  const [followUp, setFollowUp] = useState(item?.entry.followUp === true);
+  // The routine's own model; undefined uses the Default routines model.
+  const [model, setModel] = useState<ModelChoice | undefined>(item?.chat.model);
+  const scripted = runs === "script";
+  const needsPrompt = !scripted || followUp;
+  const botName = state.bots.find((b) => b.id === bot)?.name ?? "the bot";
+  const routinesDefault = state.settings.routineModel ?? state.bots.find((b) => b.id === bot)?.model ?? state.settings.model;
   const [cadence, setCadence] = useState<Cadence>(item?.entry.cadence ?? { kind: "weekdays", time: "09:00" });
   const [zone, setZone] = useState(item?.entry.timezone ?? localZone());
   const noOutputAllowed = !state.remote?.using || state.remote.using.capabilities?.includes("routine-no-output-v1");
@@ -764,7 +791,18 @@ function RoutineEditor({
         try {
           const deliver: RoutineDelivery | null =
             to === "routine" ? null : to === "chat" ? { to, ...(picked && { chatId: picked }) } : to === "goal" ? { to, category } : { to };
-          const data = { name: name.trim(), prompt: prompt.trim(), cadence, timezone: zone.trim(), deliver, notify: to === "none" ? false : notify };
+          // A model is sent only when it changed, so an edit never waits on the model list for nothing.
+          const modelChanged = JSON.stringify(model ?? null) !== JSON.stringify(item?.chat.model ?? null);
+          const data = {
+            name: name.trim(),
+            prompt: prompt.trim(),
+            cadence,
+            timezone: zone.trim(),
+            deliver,
+            notify: to === "none" ? false : notify,
+            ...(scripted ? { script, followUp } : item?.entry.script ? { script: null } : {}),
+            ...(modelsAllowed && modelChanged && { model: model ?? null }),
+          };
           if (item) {
             await api.updateRoutine(item.chat.id, data);
             done();
@@ -797,20 +835,91 @@ function RoutineEditor({
           Name
           <input required maxLength={80} value={name} placeholder="Morning inbox check" onChange={(e) => setName(e.target.value)} />
         </label>
-        <label>
-          Instructions
-          <textarea
-            required
-            rows={5}
-            maxLength={4000}
-            value={prompt}
-            placeholder="Summarize anything new in my inbox and remind me of today's deadlines."
-            onChange={(e) => setPrompt(e.target.value)}
-          />
-        </label>
-        <small className="counter" aria-live="off">
-          {prompt.length.toLocaleString()} / 4,000
-        </small>
+        {(scriptsAllowed || scripted) && (
+          <fieldset className="cadence routine-runs">
+            <legend>What runs</legend>
+            <Choices
+              label="What runs"
+              value={runs}
+              options={[
+                { id: "instructions", name: "Instructions" },
+                { id: "script", name: "Script" },
+              ]}
+              onChange={setRuns}
+            />
+            <small className="muted">
+              {scripted
+                ? "A script runs on this computer with no model. Turn on a follow-up action to have " + botName + " act on its output."
+                : botName + " follows your instructions in a model turn."}
+            </small>
+          </fieldset>
+        )}
+        {scripted ? (
+          <>
+            <label>
+              Script
+              <textarea
+                className="routine-script"
+                required
+                rows={6}
+                maxLength={20000}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                value={script}
+                placeholder={"df -h /\nls ~/Downloads | wc -l"}
+                onChange={(e) => setScript(e.target.value)}
+              />
+              <small className="muted">Runs with your shell in {botName}'s folder. Stops after 10 minutes. The output is kept with the run.</small>
+            </label>
+            <div className="routine-followup">
+              <label className="routine-notify">
+                <input type="checkbox" role="switch" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} />
+                <span>
+                  Follow-up action
+                  <small className="muted">After the script, {botName} gets its output and exit code, then follows these instructions.</small>
+                </span>
+              </label>
+              {followUp && (
+                <>
+                  <label>
+                    Instructions
+                    <textarea
+                      required
+                      rows={4}
+                      maxLength={4000}
+                      value={prompt}
+                      placeholder={'If the disk is over 90% full, tell me what to clean up. Otherwise reply "All good".'}
+                      onChange={(e) => setPrompt(e.target.value)}
+                    />
+                  </label>
+                  <small className="counter" aria-live="off">
+                    {prompt.length.toLocaleString()} / 4,000
+                  </small>
+                  {modelsAllowed && <RoutineModel key={bot} value={model} inherited={routinesDefault} change={setModel} />}
+                </>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <label>
+              Instructions
+              <textarea
+                required
+                rows={5}
+                maxLength={4000}
+                value={prompt}
+                placeholder="Summarize anything new in my inbox and remind me of today's deadlines."
+                onChange={(e) => setPrompt(e.target.value)}
+              />
+            </label>
+            <small className="counter" aria-live="off">
+              {prompt.length.toLocaleString()} / 4,000
+            </small>
+            {modelsAllowed && <RoutineModel key={bot} value={model} inherited={routinesDefault} change={setModel} />}
+          </>
+        )}
         <CadencePicker value={cadence} onChange={setCadence} />
         <ZoneInput value={zone} onChange={setZone} />
         <fieldset className="cadence routine-deliver">
@@ -855,9 +964,11 @@ function RoutineEditor({
           {cadenceSummary(cadence)}
           {preview.text ? " · " + preview.text : ""}
         </p>
-        <p className="muted">Each run uses one model turn. Botkins keeps running when you close its window.</p>
+        <p className="muted">
+          {scripted ? (followUp ? "The script runs without a model. The follow-up uses one model turn." : "The script runs without a model.") : "Each run uses one model turn."} Botkins keeps running when you close its window.
+        </p>
         <div className="profile-save">
-          <button className="primary" disabled={saving || !name.trim() || !prompt.trim()}>
+          <button className="primary" disabled={saving || !name.trim() || (needsPrompt && !prompt.trim()) || (scripted && !script.trim())}>
             {saving ? "Saving…" : item ? "Save routine" : "Create routine"}
           </button>
           <button type="button" className="secondary" onClick={() => done()}>
@@ -866,6 +977,15 @@ function RoutineEditor({
         </div>
       </div>
     </form>
+  );
+}
+
+/** A routine's model and thinking, with the app's own picker; the choice is saved with the routine. */
+function RoutineModel({ value, inherited, change }: { value?: ModelChoice; inherited?: ModelChoice; change: (choice: ModelChoice | undefined) => void }) {
+  return (
+    <div className="routine-model">
+      <ModelPicker scope="routine" id={null} value={value} inherited={inherited} onChange={change} />
+    </div>
   );
 }
 

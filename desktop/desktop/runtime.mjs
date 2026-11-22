@@ -48,7 +48,7 @@ import { DEFAULT_RELAY_URL } from "./link/relay.mjs";
 import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { LOOKS_CAPABILITY } from "./looks.mjs";
-import { ROUTINE_DELIVERY, ROUTINE_OWNER } from "./routines.mjs";
+import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS } from "./routines.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
 import { spaceEventQueue } from "./headless/space-events.mjs";
@@ -105,7 +105,7 @@ export const APP_UPDATE = "app-update-v1";
 export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
-export const CAPABILITIES = ["voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH];
+export const CAPABILITIES = ["voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -351,8 +351,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       const paths = await host.dialogs.open({ title: "Choose a plugin folder", properties: ["openDirectory"] });
       return paths ? paths[0] ?? null : null;
     },
-    createRoutine: (data) => routines.create(data),
-    updateRoutine: (id, data) => routines.update(id, data),
+    // `model` in data is the routine's own model, checked against the catalog (desktop/routines.mjs).
+    createRoutine: (data) => routines.createWithModel(data),
+    updateRoutine: (id, data) => routines.updateWithModel(id, data),
     setRoutineEnabled: (id, enabled) => routines.setEnabled(id, null, enabled),
     deleteRoutine: (id) => routines.remove(id),
     runRoutine: (id) => {
@@ -1194,6 +1195,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     stop() {
       stopAnnouncing();
       workspace.closing = true;
+      // A routine's script stops with Botkins; its run is ended when Botkins opens again.
+      routines.stopScripts();
       closeWorkspaceSocket?.();
       workspace.interactions.cancel();
       workspace.connects.close();

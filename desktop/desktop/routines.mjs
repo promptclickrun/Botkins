@@ -1,6 +1,15 @@
 // Routines: named, pausable scheduled tasks for any bot. Each routine is a `chat.schedules[]` entry with
 // `routine: true` in its own "Routine · <name>" chat, so `tickChatSchedules` is the only dispatcher.
+// A routine runs its instructions as a bot's turn, or a script (`script`) on this computer with no
+// model. A script routine may also have a follow-up action (`followUp` with instructions in
+// `prompt`): the bot then takes the run's turn with the script's output. A routine's own model is its
+// chat's (`chat.model`); without one it uses the Default routines model (`settings.routineModel`).
+import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { defineTool } from "./providers/provider.mjs";
+import { validateSelection } from "./preferences.mjs";
+import { runScript, scriptEnding, SCRIPT_LENGTH } from "./routine-script.mjs";
 import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
@@ -16,6 +25,16 @@ export const ROUTINE_DELIVERY = "routine-delivery-v1";
  * and is the owner's.
  */
 export const ROUTINE_OWNER = "routine-owner-v1";
+/**
+ * Says that a routine can run a script with no model (`script`), with an optional follow-up action
+ * (`followUp`), for a phone to check before it offers them. Only the owner adds or changes a script.
+ */
+export const ROUTINE_SCRIPTS = "routine-scripts-v1";
+/**
+ * Says that a routine can have its own model (`model` in createRoutine and updateRoutine, kept on
+ * its chat) and that setModel takes the scope "routines" (the Default routines model).
+ */
+export const ROUTINE_MODELS = "routine-models-v1";
 /** Where a routine's result can land. "routine" is its own chat and the historical default. */
 export const DELIVER_TARGETS = ["none", "routine", "chat", ...BOARD_KINDS];
 const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -133,6 +152,17 @@ export function compileCadence(value, zone, now = Date.now()) {
   return { cadence, timezone, recurring: true, cron, nextAt: nextTime(cron, timezone, now) };
 }
 
+/** A routine's script: undefined for none, else its text. Up to SCRIPT_LENGTH characters. */
+export function scriptField(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error("Write the script, or choose Instructions.");
+  if (value.length > SCRIPT_LENGTH) throw new Error("A script can have up to " + SCRIPT_LENGTH.toLocaleString("en-US") + " characters.");
+  return value.replace(/\r\n/g, "\n");
+}
+
+/** Whether a routine is a script routine with a follow-up action that has its instructions. */
+export const followsUp = (entry) => !!entry?.script && entry.followUp === true && !!entry.prompt;
+
 /** The person a routine belongs to: the team member who made it, else the computer's owner. */
 const personOf = (createdBy) => createdBy ?? "owner";
 
@@ -246,6 +276,8 @@ function upcoming(entry, now) {
 export class Routines {
   constructor(workspace) {
     this.ws = workspace;
+    // The scripts running now, so that Botkins ends them when it quits (stopScripts).
+    this.scripts = new Set();
     // A finished routine run goes where its routine says. Delivery never fails the run.
     workspace.events?.on("turn", ({ chat, run }) => {
       try {
@@ -278,12 +310,60 @@ export class Routines {
     if (!entry) throw new Error("Unknown schedule");
     return { chat, entry };
   }
+  /**
+   * A routine's checked fields. A script routine keeps `script` and `followUp`; its instructions
+   * (`prompt`, the follow-up's) are needed only when the follow-up is on, and kept when it is off.
+   */
   fields(data, now) {
+    const script = scriptField(data.script);
+    const followUp = !!script && data.followUp === true;
+    const prompt =
+      script && !followUp
+        ? typeof data.prompt === "string" && data.prompt.trim()
+          ? textField(data.prompt, 4000, "instructions: use up to 4,000 characters")
+          : ""
+        : textField(data.prompt, 4000, script ? "follow-up instructions: write what the bot does with the script's output, up to 4,000 characters" : "instructions: use up to 4,000 characters");
     return {
       name: textField(data.name, 80, "name: use up to 80 characters"),
-      prompt: textField(data.prompt, 4000, "instructions: use up to 4,000 characters"),
+      prompt,
+      ...(script && { script, followUp }),
       ...compileCadence(data.cadence, data.timezone, now),
     };
+  }
+  /** A model for a routine, checked against the catalog: undefined leaves it, null clears it. */
+  async modelField(value) {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    return validateSelection(await this.ws.models(), value);
+  }
+  /** Sets a routine's own model on its chat; null clears it, so the routine uses the routines default. */
+  setModel(chat, model) {
+    if (model === undefined) return;
+    if (model) chat.model = model;
+    else delete chat.model;
+  }
+  /**
+   * `create` with a model (`data.model`). The model is checked first, so an unavailable one saves
+   * nothing. The window, the command line and a phone make routines this way.
+   */
+  async createWithModel(data, now = Date.now(), createdBy) {
+    const model = await this.modelField(data?.model);
+    const chatId = this.create(data, now, createdBy);
+    if (model) {
+      this.setModel(this.ws.chat(chatId), model);
+      this.ws.save();
+    }
+    return chatId;
+  }
+  /** `update` with a model: `data.model` null goes back to the routines default. */
+  async updateWithModel(chatId, data, now = Date.now()) {
+    const model = await this.modelField(data?.model);
+    const entry = this.update(chatId, data, now);
+    if (model !== undefined) {
+      this.setModel(this.ws.chat(chatId), model);
+      this.ws.save();
+    }
+    return entry;
   }
   /**
    * Makes a routine. `createdBy` is the team member who made it (never taken from `data`): it is
@@ -292,6 +372,8 @@ export class Routines {
    */
   create(data, now = Date.now(), createdBy) {
     this.ws.bot(data.botId);
+    // A script runs on this computer, so only its owner writes one.
+    if (createdBy && data.script != null) throw new Error("Only the computer's owner can add a script to a routine.");
     const fields = this.fields(data, now);
     const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
     const notify = notifyField(data.notify);
@@ -309,8 +391,8 @@ export class Routines {
     // Whoever changes it, the result may only go to a chat of the routine's creator.
     const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
     const notify = notifyField(data.notify);
-    // A change of destination or of notifying alone leaves the schedule as it is, so a finished one-time routine can still take it.
-    if (["name", "prompt", "cadence", "timezone"].every((k) => data[k] === undefined)) {
+    // A change of destination, of notifying or of the model alone leaves the schedule as it is, so a finished one-time routine can still take it.
+    if (["name", "prompt", "cadence", "timezone", "script", "followUp"].every((k) => data[k] === undefined)) {
       this.setDeliver(entry, deliver);
       this.setNotify(entry, notify);
       this.ws.save();
@@ -322,9 +404,16 @@ export class Routines {
         prompt: data.prompt ?? entry.prompt,
         cadence: data.cadence ?? entry.cadence,
         timezone: data.timezone ?? entry.timezone,
+        // null takes the script away: the routine runs its instructions again.
+        script: data.script === undefined ? entry.script : data.script,
+        followUp: data.followUp ?? entry.followUp,
       },
       now,
     );
+    if (!fields.script) {
+      delete entry.script;
+      delete entry.followUp;
+    }
     Object.assign(entry, fields);
     this.setDeliver(entry, deliver);
     this.setNotify(entry, notify);
@@ -382,11 +471,29 @@ export class Routines {
     const { chatId: picked, ...rest } = entry.deliver ?? {};
     const keep = botId === chat.botId && (picked === undefined || this.ws.inChat(picked, personOf(createdBy)));
     const deliver = entry.deliver && (keep ? entry.deliver : rest);
-    return this.create(
-      { botId, name: entry.name, prompt: entry.prompt, cadence: entry.cadence, timezone: entry.timezone, deliver, ...(entry.notify === false && { notify: false }) },
+    const copy = this.create(
+      {
+        botId,
+        name: entry.name,
+        prompt: entry.prompt,
+        cadence: entry.cadence,
+        timezone: entry.timezone,
+        deliver,
+        ...(entry.notify === false && { notify: false }),
+        ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+      },
       now,
       createdBy,
     );
+    if (chat.model) {
+      this.ws.chat(copy).model = structuredClone(chat.model);
+      this.ws.save();
+    }
+    return copy;
+  }
+  /** Ends every script that is running (Botkins is quitting). */
+  stopScripts() {
+    for (const script of this.scripts) script.stop();
   }
   /** Next run for a cadence, for the editor preview. */
   preview(cadence, timezone, now = Date.now()) {
@@ -407,6 +514,9 @@ export class Routines {
       ...(entry.createdBy && { createdBy: entry.createdBy }),
       // Left out when the routine notifies, which is the usual way.
       ...(entry.notify === false && { notify: false }),
+      ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+      // The routine's own model; without one it uses the Default routines model.
+      ...(chat.model && { model: chat.model }),
     };
   }
   /** The line added to a routine run's turn so the bot writes for its destination. "" for the default. */
@@ -571,8 +681,9 @@ export class Routines {
   }
 }
 
-/** Sends a schedule entry's prompt as a turn in its chat; the run carries `scheduleId`. */
+/** Sends a schedule entry's prompt as a turn in its chat; the run carries `scheduleId`. A script routine runs its script first. */
 export function dispatch(ws, chat, entry, trigger) {
+  if (entry.routine && entry.script) return runScriptRoutine(ws, chat, entry, trigger);
   const title = chat.title;
   const turn = ws.send(chat.id, entry.prompt, {
     trigger,
@@ -585,4 +696,106 @@ export function dispatch(ws, chat, entry, trigger) {
     ws.save();
   }
   return turn;
+}
+
+/** What the bot is told of the script before its follow-up action. */
+function scriptNote(result) {
+  const output = result.output.trim();
+  return (
+    "[Before this turn, this routine's script ran on the person's computer. " + scriptEnding(result) +
+    (output ? " Its output" + (result.output.length >= 12000 ? " (the last part)" : "") + ":]\n```\n" + output + "\n```" : " It printed nothing.]")
+  );
+}
+
+/** A script-only run's reply: what the script printed, or how it failed. It goes where the routine's result goes. */
+function scriptReply(result) {
+  const output = result.output.trim().slice(-8000);
+  if (result.exitCode === 0) return output || scriptEnding(result);
+  return scriptEnding(result) + (output ? "\n\n```\n" + output + "\n```" : "");
+}
+
+/**
+ * A script routine's run. The script runs first, as the run's first step, while the chat is busy
+ * (a Stop ends it). With a follow-up action the bot then takes the same run's turn with the
+ * instructions and the script's output; without one the script's output is the run's reply.
+ */
+function runScriptRoutine(ws, chat, entry, trigger) {
+  if (ws.closing) throw new Error("Botkins is closing");
+  if (ws.active.has(chat.id)) throw new Error("Chat unavailable or already working");
+  const bot = ws.bot(chat.botId);
+  const routines = ws.panels.routines;
+  const followUp = followsUp(entry);
+  const time = Date.now();
+  const run = {
+    id: randomUUID(),
+    chatId: chat.id,
+    trigger,
+    scheduleId: entry.id,
+    title: entry.name,
+    time,
+    status: "Working",
+    detail: "",
+    // Set while the script runs: a restart then ends the run instead of starting its turn.
+    scriptRunning: true,
+    steps: [],
+    ...(routines.noOutput(chat, entry.id) && { noOutput: true }),
+  };
+  const message = { role: "user", text: followUp ? entry.prompt : "Run the routine's script.", runId: run.id, time };
+  const step = { id: "script-" + run.id, name: "Script", label: "Running the routine's script", input: entry.script.slice(0, 12000), status: "Running", started: time };
+  run.steps.push(step);
+  ws.state.runs.unshift(run);
+  chat.messages.push(message);
+  chat.time = time;
+  const folder = join(ws.dir, "files", bot.id);
+  mkdirSync(folder, { recursive: true });
+  const script = runScript(entry.script, { cwd: folder });
+  routines.scripts.add(script);
+  // The chat is busy while the script runs, as for a turn: the window shows it working, a schedule
+  // or Run now waits, a message is queued, and Stop ends the script (session.abort).
+  const task = {
+    run,
+    script: true,
+    stopped: false,
+    finishing: true,
+    intent: "Running the script",
+    stream: "",
+    thinking: "",
+    ready: Promise.resolve(null),
+    reads: new Set(),
+    helpers: [],
+    session: { abort: async () => script.stop() },
+  };
+  ws.active.set(chat.id, task);
+  ws.save();
+  task.done = script.done.then((result) => {
+    routines.scripts.delete(script);
+    step.status = result.exitCode === 0 ? "Done" : "Failed";
+    step.label = scriptEnding(result);
+    step.output = result.output || "(no output)";
+    step.finished = Date.now();
+    ws.active.delete(chat.id);
+    // A run that Botkins quit during keeps `scriptRunning`, and is ended when it opens again (Workspace's constructor).
+    if (ws.closing) return;
+    delete run.scriptRunning;
+    run.script = { exitCode: result.exitCode, ...(result.timedOut && { timedOut: true }) };
+    if (followUp && !task.stopped) {
+      const where = routines.destinationNote(chat, entry.id);
+      run.recovery = { extra: [scriptNote(result), where].filter(Boolean).join("\n\n") };
+      return ws.startTurn(chat, bot, message, run, false);
+    }
+    const failed = result.exitCode !== 0;
+    if (!run.noOutput && !task.stopped) chat.messages.push({ role: "assistant", text: scriptReply(result), runId: run.id, time: Date.now() });
+    run.status = task.stopped ? "Stopped" : failed ? "Needs you" : "Completed";
+    if (task.stopped) run.ending = "stopped";
+    else if (failed) run.ending = "failed";
+    run.detail = failed && !task.stopped ? scriptEnding(result) : "";
+    delete run.stopRequested;
+    run.finished = Date.now();
+    chat.time = run.finished;
+    if (run.status !== "Stopped") chat.unread = true;
+    ws.events.emit("turn", { chat, run });
+    ws.save();
+    if (ws.queues.has(chat.id)) setImmediate(() => ws.drain(chat.id));
+  });
+  return task.done;
 }

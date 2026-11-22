@@ -372,6 +372,12 @@ export function controlApi(service) {
       if (ref !== undefined) await workspace.setModel("global", null, await selection(ref));
       return state().settings.model ?? null;
     },
+    /** The Default routines model: `ref` sets it (with a thinking level, `effort`), null clears it, nothing reads it. */
+    "models.routines": async ([ref, effort]) => {
+      if (ref === null || ref === "") await workspace.setModel("routines", null, null);
+      else if (ref !== undefined) await workspace.setModel("routines", null, { ...(await selection(ref)), ...(effort && { reasoningEffort: String(effort) }) });
+      return state().settings.routineModel ?? null;
+    },
 
     // ── Chat ─────────────────────────────────────────────────────────────────────────────────
     "chat.open": ([ref]) => {
@@ -492,7 +498,7 @@ export function controlApi(service) {
   Object.assign(api, pluginsApi({ workspace, handlers, bot, signIns, log: (line) => log?.info?.(line) }));
   // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
   for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi]) {
-    for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns }))) {
+    for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns, selection }))) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;
     }

@@ -176,6 +176,8 @@ export default function Settings({
   const teamView = start.teamView ?? "requests";
   const member = memberTeam(state);
   const memberHost = !!member || state.remote?.using?.member === true;
+  // A computer this window reaches over the link may be older: routines have their own models from "routine-models-v1".
+  const routineModels = !state.remote?.using || !!state.remote.using.capabilities?.includes("routine-models-v1");
   const sections = SECTIONS.filter((item) => {
     if (item.id === "team" && state.remote?.using) return false;
     if (!memberHost) return true;
@@ -316,6 +318,13 @@ export default function Settings({
                   <ModelPicker scope="global" id={null} value={settings.model} openProviders={() => setSection("account")} />
                 </div>
               </Group>
+              {routineModels && (
+                <Group title="Default routines model" footer="Routines use this unless they choose their own. It comes before a bot's own default model.">
+                  <div className="set-row stacked set-picker">
+                    <ModelPicker scope="routines" id={null} value={settings.routineModel} inherited={settings.model} openProviders={() => setSection("account")} />
+                  </div>
+                </Group>
+              )}
               <HarnessSettings
                 settings={preferences}
                 change={changePreferences}

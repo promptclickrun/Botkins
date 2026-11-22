@@ -269,9 +269,34 @@ try {
   await wait(async () => (await snap()).panels[0].routine.cron).toBe("15 10 * * *");
   await expect(page.getByRole("dialog")).toBeHidden();
 
-  // Notifications settings persist and validate.
+  // A script routine with a follow-up action: the script runs with no model, as the run's first step.
+  await navTo("Work");
+  await main().getByRole("button", { name: "New routine", exact: true }).click();
+  await page.getByRole("heading", { name: "New routine" }).waitFor();
+  await main().getByLabel("Name", { exact: true }).fill("Disk check");
+  await main().getByRole("radiogroup", { name: "What runs" }).getByRole("radio", { name: "Script" }).click();
+  await main().getByRole("textbox", { name: /^Script/ }).fill("echo SMOKE-SCRIPT");
+  await main().getByRole("switch", { name: /Follow-up action/ }).check();
+  await main().getByLabel("Instructions", { exact: true }).fill("Tell me what the script said.");
+  await expect(main().getByRole("listbox", { name: "Model" }).or(main().getByText("No model provider is connected yet."))).toBeVisible();
+  await shot("routine-script-editor");
+  await button("Create routine").click();
+  await page.getByRole("heading", { name: "Disk check", level: 1 }).waitFor();
+  const scripted = (await routines()).find((x) => x.name === "Disk check");
+  assert.deepEqual([scripted.script, scripted.followUp, scripted.prompt], ["echo SMOKE-SCRIPT", true, "Tell me what the script said."]);
+  await expect(main().getByRole("heading", { name: "Follow-up action" })).toBeVisible();
+  await button("Run now").click();
+  await wait(async () => (await snap()).runs.find((x) => x.chatId === scripted.chatId)?.steps?.[0]?.status).toBe("Done");
+  assert.match((await snap()).runs.find((x) => x.chatId === scripted.chatId).steps[0].output, /SMOKE-SCRIPT/);
+  await page.evaluate((id) => window.botkins.stop(id), scripted.chatId);
+  await wait(async () => (await snap()).runs.find((x) => x.chatId === scripted.chatId).status, 60000).not.toBe("Working");
+  await shot("routine-script-detail");
+
+  // Notifications settings persist and validate. General has the Default routines model under the default model.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("Default routines model", { exact: true })).toBeVisible();
+  await shot("settings-general");
   await dialog.getByRole("tab", { name: "Notifications", exact: true }).click();
   await dialog.getByLabel(/^Replies/).uncheck();
   await wait(async () => (await snap()).settings.notifications.replies).toBe(false);

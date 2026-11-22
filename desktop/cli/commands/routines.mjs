@@ -54,6 +54,14 @@ const PROMPT_OPTIONS = {
   prompt: { type: "string", value: "text", about: "What the bot does at each time (up to 4,000 characters)" },
   file: { type: "string", value: "path", about: "Read the prompt from a file. \"-\" reads standard input" },
 };
+const RUN_OPTIONS = {
+  script: { type: "string", value: "text", about: "A script that runs on the computer with no model, in place of the prompt (up to 20,000 characters)" },
+  "script-file": { type: "string", value: "path", about: "Read the script from a file. \"-\" reads standard input" },
+  "follow-up": { type: "boolean", about: "With a script: after it, the bot follows the prompt, with the script's output" },
+  model: { type: "string", value: "provider/model", about: "The routine's own model (see `botkins models`). \"default\" uses the Default routines model" },
+  effort: { type: "string", value: "level", about: "With --model: the thinking level, such as low, medium or high" },
+};
+const RUN_DETAILS = " A routine runs its prompt as a bot's turn, or a script on the computer that runs Botkins (--script or --script-file), with no model, in your shell, in the bot's folder, for up to 10 minutes. With --follow-up the bot then follows the prompt with the script's output. A script is shown whole before it is saved. --model gives the routine its own model; without one it uses the Default routines model (`botkins models --routines`).";
 const RESULT_OPTIONS = {
   deliver: { type: "string", value: "where", about: "Where the result goes: routine (its own chat, the usual way), none, chat, feed, idea or goal" },
   chat: { type: "string", value: "chat", about: "With --deliver chat: which chat (its id or title). Without it: the bot's latest chat" },
@@ -99,6 +107,18 @@ async function promptFrom(context, needed) {
   if (!prompt.trim()) throw usage("The prompt is empty.");
   return prompt;
 }
+/** The script, from --script or --script-file; undefined when none is given. */
+async function scriptFrom(context) {
+  const o = context.options;
+  if (o.script !== undefined && o["script-file"] !== undefined) throw usage("Give the script one way: --script <text> or --script-file <path>.");
+  if (o["script-file"] === "-" && (context.args.includes("-") || o.file === "-")) throw usage("Only one of the prompt and the script can come from standard input.");
+  const script = o.script ?? (o["script-file"] !== undefined ? await textFrom(context, o["script-file"], "script file") : undefined);
+  if (script !== undefined && !script.trim()) throw usage("The script is empty.");
+  return script;
+}
+/** The model options as the socket takes them: { model, effort? }, or nothing. */
+const modelFrom = (o) => (o.model !== undefined ? { model: o.model, ...(o.effort !== undefined && { effort: o.effort }) } : o.effort !== undefined ? { effort: o.effort } : {});
+
 /** The one name of `routines add` and the one routine of the others, without the "-" that means standard input. */
 function words(context, what) {
   const given = context.args.filter((arg) => arg !== "-");
@@ -125,6 +145,19 @@ const timesLines = (routine, label) => {
 };
 /** A prompt for a screen: each line shown safely, indented. */
 const promptLines = (prompt) => String(prompt).split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    ")));
+/** What a routine runs, its model and its prompt, as lines: a script whole, because it runs on the computer. */
+const runLines = (routine) =>
+  routine.script
+    ? [
+        "Runs: a script on the computer, with no model" + (routine.followUp ? ", then a follow-up action" : ""),
+        "Script:",
+        ...promptLines(routine.script),
+        ...(routine.followUp ? [...modelLine(routine), "Follow-up prompt:", ...promptLines(routine.instructions)] : []),
+      ]
+    : [...modelLine(routine), "Prompt:", ...promptLines(routine.instructions)];
+/** The routine's own model, as a line; none when it uses the Default routines model. A review sends it as words already. */
+const modelLine = ({ model }) =>
+  model ? ["Model: " + safe(typeof model === "string" ? model : (model.provider ? model.provider + "/" : "") + model.model + (model.reasoningEffort ? " · " + model.reasoningEffort : ""))] : [];
 const whenLine = (routine) => safe(routine.meaning) + (routine.meaning !== routine.cadence && routine.schedule?.kind === "custom" ? "   (" + safe(routine.cadence) + ")" : "");
 
 /** A routine as it is, for `routines show`. */
@@ -139,8 +172,7 @@ const routineText = (routine) =>
     routine.lastRun ? "Last run: " + safe(routine.lastRun) : null,
     "Result goes: " + resultLine(routine),
     "Notifies: " + (routine.notify === false ? "no, it runs quietly" : "yes"),
-    "Prompt:",
-    ...promptLines(routine.instructions),
+    ...runLines(routine),
   ]
     .filter((line) => line !== null)
     .join("\n");
@@ -156,7 +188,13 @@ const agreedFast = (routine) => (routine.fastMinutes ? [{ fastSchedule: true }] 
 /** The routine as it will be, shown before it is saved. */
 const reviewText = (routine, adding) =>
   [
-    (adding ? "This routine runs a bot on a schedule, with nobody watching. It will be saved as:" : "This changes a routine that runs a bot on a schedule, with nobody watching. After the change it is:"),
+    (routine.script
+      ? adding
+        ? "This routine runs a script on this computer on a schedule, with nobody watching. Read the script. It will be saved as:"
+        : "This changes a routine that runs a script on this computer on a schedule, with nobody watching. Read the script. After the change it is:"
+      : adding
+        ? "This routine runs a bot on a schedule, with nobody watching. It will be saved as:"
+        : "This changes a routine that runs a bot on a schedule, with nobody watching. After the change it is:"),
     "  Name: " + safe(routine.name),
     "  Bot: " + safe(routine.bot),
     "  When: " + whenLine(routine),
@@ -166,8 +204,7 @@ const reviewText = (routine, adding) =>
     "  Result goes: " + resultLine(routine),
     "  Notifies: " + (routine.notify ? "yes" : "no, it runs quietly"),
     ...(adding ? [] : ["  Changes: " + routine.changes.join(", "), ...(routine.enabled ? [] : ["  It is paused. Turn it on with `botkins routines resume " + word(routine.name) + "`."])]),
-    "  Prompt:",
-    ...promptLines(routine.instructions).map((line) => "  " + line),
+    ...runLines(routine).map((line) => "  " + line),
   ].join("\n");
 
 const clip = (text, length) => {
@@ -216,23 +253,37 @@ export const routinesCommands = {
       },
       add: {
         summary: "Make a routine: a bot does a prompt on a schedule",
-        usage: "botkins routines add <name> --bot <bot> (--prompt <text> | --file <path> | -) (--cadence <kind> [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] | --cron <five fields>) [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--yes]",
+        usage: "botkins routines add <name> --bot <bot> (--prompt <text> | --file <path> | - | --script <text> | --script-file <path>) [--follow-up] [--model <provider/model>] [--effort <level>] (--cadence <kind> [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] | --cron <five fields>) [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--yes]",
         arguments: [{ name: "name", required: true }],
         options: {
           bot: { type: "string", value: "bot", about: "The bot that does the work (its name or id)" },
           ...PROMPT_OPTIONS,
+          ...RUN_OPTIONS,
           ...CADENCE_OPTIONS,
           ...RESULT_OPTIONS,
           quiet: { type: "boolean", about: "No notification when a run ends" },
           ...YES,
         },
-        details: CADENCE_DETAILS + " The prompt is a long text: give it with --prompt, with --file, or on standard input with the word -. The command shows the whole routine first (the bot, the schedule in words, the next two times and the prompt), because the bot then runs with nobody watching, and asks. With no terminal it needs --yes. A schedule that runs more often than a bot's own routine tool allows has one more line: how often it runs, and that each run uses the model and can cost money.",
+        details: CADENCE_DETAILS + RUN_DETAILS + " The prompt is a long text: give it with --prompt, with --file, or on standard input with the word -. The command shows the whole routine first (the bot, the schedule in words, the next two times and the prompt), because the bot then runs with nobody watching, and asks. With no terminal it needs --yes. A schedule that runs more often than a bot's own routine tool allows has one more line: how often it runs, and that each run uses the model and can cost money.",
         async run(context) {
           const name = words(context, "Give the routine a name, as one word in quotes.");
           const o = context.options;
           if (o.bot === undefined) throw usage("Name the bot that does the work: --bot <bot>.");
-          const prompt = await promptFrom(context, true);
-          const data = { bot: o.bot, name, prompt, cadence: cadenceFrom(o, true), ...(o.timezone !== undefined && { timezone: o.timezone }), ...(deliverFrom(o) && { deliver: deliverFrom(o) }), ...(o.quiet && { notify: false }) };
+          const script = await scriptFrom(context);
+          if (o["follow-up"] && script === undefined) throw usage("--follow-up goes with a script: --script <text> or --script-file <path>.");
+          // A script alone needs no prompt; its follow-up action does.
+          const prompt = await promptFrom(context, script === undefined || o["follow-up"] === true);
+          const data = {
+            bot: o.bot,
+            name,
+            ...(prompt !== undefined && { prompt }),
+            ...(script !== undefined && { script, followUp: o["follow-up"] === true }),
+            ...modelFrom(o),
+            cadence: cadenceFrom(o, true),
+            ...(o.timezone !== undefined && { timezone: o.timezone }),
+            ...(deliverFrom(o) && { deliver: deliverFrom(o) }),
+            ...(o.quiet && { notify: false }),
+          };
           const review = await context.client.call("routines.review", null, data);
           show(context, reviewText(review, true));
           if (!(await confirm(context, "Save this routine?"))) {
@@ -244,26 +295,36 @@ export const routinesCommands = {
       },
       edit: {
         summary: "Change a routine",
-        usage: "botkins routines edit <routine> [-] [--name <text>] [--prompt <text>] [--file <path>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--notify] [--yes]",
+        usage: "botkins routines edit <routine> [-] [--name <text>] [--prompt <text>] [--file <path>] [--script <text> | --script-file <path> | --no-script] [--follow-up | --no-follow-up] [--model <provider/model|default>] [--effort <level>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--notify] [--yes]",
         arguments: [{ name: "routine", required: true }],
         options: {
           name: { type: "string", value: "text", about: "A new name" },
           ...PROMPT_OPTIONS,
+          ...RUN_OPTIONS,
+          "no-script": { type: "boolean", about: "Take the script away: the routine runs its prompt as a bot's turn" },
+          "no-follow-up": { type: "boolean", about: "With a script: no follow-up action after it" },
           ...CADENCE_OPTIONS,
           ...RESULT_OPTIONS,
           quiet: { type: "boolean", about: "No notification when a run ends" },
           notify: { type: "boolean", about: "Notify when a run ends (the usual way)" },
           ...YES,
         },
-        details: "Only what you name changes. A schedule option changes that part of the schedule: `--at 10:00` moves a daily routine to ten o'clock, and a new --cadence replaces the schedule, so give its fields too. " + CADENCE_DETAILS + " The prompt can come from --prompt, --file, or standard input with the word -. The command shows the whole routine as it will be, and asks. With no terminal it needs --yes. A routine that is paused stays paused (`botkins routines resume`). A schedule that runs more often than a bot's own routine tool allows has one more line in what it shows: how often it runs, and that each run uses the model and can cost money.",
+        details: "Only what you name changes." + RUN_DETAILS + " A schedule option changes that part of the schedule: `--at 10:00` moves a daily routine to ten o'clock, and a new --cadence replaces the schedule, so give its fields too. " + CADENCE_DETAILS + " The prompt can come from --prompt, --file, or standard input with the word -. The command shows the whole routine as it will be, and asks. With no terminal it needs --yes. A routine that is paused stays paused (`botkins routines resume`). A schedule that runs more often than a bot's own routine tool allows has one more line in what it shows: how often it runs, and that each run uses the model and can cost money.",
         async run(context) {
           const ref = words(context, "Name the routine (its name or id).");
           const o = context.options;
           if (o.quiet && o.notify) throw usage("Give --quiet or --notify, not both.");
+          if (o["follow-up"] && o["no-follow-up"]) throw usage("Give --follow-up or --no-follow-up, not both.");
+          const script = await scriptFrom(context);
+          if (script !== undefined && o["no-script"]) throw usage("Give a script or --no-script, not both.");
           const prompt = await promptFrom(context, false);
           const patch = {
             ...(o.name !== undefined && { name: o.name }),
             ...(prompt !== undefined && { prompt }),
+            ...(script !== undefined && { script }),
+            ...(o["no-script"] && { script: null }),
+            ...((o["follow-up"] || o["no-follow-up"]) && { followUp: o["follow-up"] === true }),
+            ...modelFrom(o),
             ...(cadenceFrom(o, false) && { cadence: cadenceFrom(o, false) }),
             ...(o.timezone !== undefined && { timezone: o.timezone }),
             ...(deliverFrom(o) && { deliver: deliverFrom(o) }),

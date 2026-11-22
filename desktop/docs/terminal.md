@@ -349,6 +349,8 @@ botkins routines duplicate "Morning brief" --bot Orbit --name "Orbit's brief"
 botkins routines remove "Morning brief"
 botkins routines schedules
 botkins routines schedule "Daily standup" 1 pause
+botkins routines add "Disk check" --bot Nova --cadence daily --at 03:00 --script-file check.sh --follow-up --prompt "Warn me when the disk is over 90% full."
+botkins models --routines claude/claude-sonnet-5-5 --effort low
 ```
 
 - **A routine is named by its id or its name.** When two routines have a name, the command says which ones (their ids) and you use an id. `routines duplicate` gives the copy the same name unless you give `--name`.
@@ -358,6 +360,8 @@ botkins routines schedule "Daily standup" 1 pause
 - **`routines when` says what a schedule means.** It takes the same options, or a cron line as its one word, and prints the meaning, the zone and the next five times. It saves nothing.
 - **A prompt is a long text.** Give it with `--prompt <text>`, with `--file <path>`, or on standard input with the word `-`. The prompt shown on a screen is made safe: a control character is written as its number. `--json` has the text as it is (`instructions`).
 - **Where the result goes** is `--deliver routine` (the routine's own chat, the usual way), `none`, `chat` (with `--chat <chat>`, else the bot's latest chat), `feed`, `idea` or `goal` (with `--category`). `--quiet` stops the notification when a run ends, and `--notify` turns it back on.
+- **A routine can run a script in place of a prompt:** `--script <text>` or `--script-file <path>` (`-` reads standard input). The script runs on the computer that runs Botkins with no model, in your shell, in the bot's folder, for up to 10 minutes. With `--follow-up` the bot then follows the prompt, with the script's output and exit code; without it the script's output is the run's result. `routines edit` takes `--no-script` and `--no-follow-up`. The whole script is shown before it is saved. Only the computer's owner adds or changes a script: a bot's routine tools and a team member can't.
+- **A routine can have its own model:** `--model <provider/model>` with `--effort <level>` (see `botkins models`); `routines edit --model default` goes back to the Default routines model. `botkins models --routines <provider/model>` sets the Default routines model, and `--routines none` clears it. A routine uses its own model, else the Default routines model, else its bot's, else the default model.
 - `botkins routines show <routine>` shows one routine whole: the bot, the schedule, its next three times and its prompt. `routines pause`, `resume` and `run` are as before.
 - **`routines remove` asks first.** It removes the routine, its chat and every run it kept. With no terminal it needs `--yes`. `routines pause` stops a routine and keeps it.
 - **A chat can schedule a prompt for itself** (`/every` and `/after`). These are not routines. `routines schedules` lists them with a number for each. `routines schedule <chat> <number> pause|resume|delete` changes one, by the chat's id or title. Deleting asks first.

@@ -279,12 +279,14 @@ export class Workspace {
         }
         const chat = this.state.chats.find((c) => c.id === run.chatId);
         const message = chat?.messages.find((m) => m.runId === run.id && m.role === "user");
-        if (!run.stopRequested && message && this.state.bots.some((b) => b.id === chat.botId)) continue;
+        // A routine's script that Botkins closed during is not run again on its own (desktop/routines.mjs).
+        if (!run.stopRequested && !run.scriptRunning && message && this.state.bots.some((b) => b.id === chat.botId)) continue;
         if (chat) commitInterim(chat, run, { stream: run.recovery?.draft, speaker: isGroup(chat) ? run.recovery?.botId : undefined });
         run.ending = run.stopRequested ? "stopped" : "interrupted";
         run.status = run.stopRequested ? "Stopped" : "Interrupted";
-        run.detail = run.stopRequested ? "" : "The original message or bot is missing.";
+        run.detail = run.stopRequested ? "" : run.scriptRunning ? "Botkins closed while the script ran." : "The original message or bot is missing.";
         delete run.stopRequested;
+        delete run.scriptRunning;
         delete run.recovery;
         const panel = this.state.panels.find((p) => p.id === run.panelId);
         if (panel)
@@ -481,12 +483,28 @@ export class Workspace {
     this.state.settings = changeSettings(this.state.settings, patch);
     this.save();
   }
+  /**
+   * The model a chat's turn uses: the chat's own, then for a routine's chat the Default routines
+   * model, then the bot's own, then the default model.
+   */
   effectiveModel(chat) {
+    const routine = !!this.state.settings.routineModel && !!chat.schedules?.some((entry) => entry.routine);
     return (
-      chat.model ?? this.bot(chat.botId).model ?? this.state.settings.model
+      chat.model ?? (routine ? this.state.settings.routineModel : undefined) ?? this.bot(chat.botId).model ?? this.state.settings.model
     );
   }
+  /**
+   * Sets a model choice. `scope` is "global" (the default model), "routines" (the Default routines
+   * model, null clears it), "bot" or "chat" (null clears them). A routine's own model is its chat's.
+   */
   async setModel(scope, id, value) {
+    if (scope === "routines") {
+      if (value == null) delete this.state.settings.routineModel;
+      else this.state.settings.routineModel = validateSelection(await this.models(), value);
+      this.clearCatalogs();
+      this.save();
+      return;
+    }
     const target =
       scope === "global"
         ? this.state.settings

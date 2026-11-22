@@ -83,7 +83,7 @@ const scheduleWords = (entry) => {
  * @param handlers   `runtime.handlers`.
  * @param bot        (ref) → a bot, by id or by a name only one bot has (desktop/terminal/control.mjs).
  */
-export function routinesApi({ workspace, handlers, bot }) {
+export function routinesApi({ workspace, handlers, bot, selection }) {
   const state = () => workspace.state;
   const routines = () => workspace.panels.routines;
   const botName = (id) => state().bots.find((entry) => entry.id === id)?.name ?? null;
@@ -161,13 +161,26 @@ export function routinesApi({ workspace, handlers, bot }) {
     return { ...rest, chatId: chatNamed(state().chats.filter((item) => !item.temporary), chat, "botkins chat list").id };
   };
 
+  /** A routine's own model as words: "claude/claude-opus-5-5 · high". */
+  const modelWords = (model) => (model.provider ? model.provider + "/" : "") + model.model + (model.reasoningEffort ? " · " + model.reasoningEffort : "");
+  /** `data.model` ("provider/model", or null for the routines default) with `data.effort`, as the app's choice. Undefined leaves it. */
+  const modelOf = async (data) => {
+    if (data.model === undefined) {
+      if (data.effort !== undefined) throw new ControlError("A thinking level goes with a model: --model <provider/model> --effort <level>.", "BAD_ARGUMENT");
+      return undefined;
+    }
+    if (data.model === null || data.model === "default") return null;
+    return { ...(await selection(data.model)), ...(data.effort !== undefined && { reasoningEffort: String(data.effort) }) };
+  };
   /**
    * What a routine will be, and what to give the app to make it so. `found` is null for a new one. For a
    * change, `data` holds only what changes. Nothing is saved here; a refusal is the app's own sentence.
+   * A script is shown whole, because it runs on this computer with nobody watching.
    */
-  const plan = (found, data, now) => {
+  const plan = async (found, data, now) => {
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new ControlError("Give the routine as an object.", "BAD_ARGUMENT");
     const entry = found?.entry;
+    const model = await modelOf(data);
     const owner = found ? found.chat.botId : bot(data.bot).id;
     const cadence = data.cadence === undefined ? undefined : mergedCadence(found ? entry.cadence : {}, data.cadence);
     const input = {
@@ -175,10 +188,13 @@ export function routinesApi({ workspace, handlers, bot }) {
       prompt: data.prompt ?? entry?.prompt,
       cadence: cadence ?? entry?.cadence,
       timezone: data.timezone ?? entry?.timezone,
+      script: data.script === undefined ? entry?.script : data.script,
+      followUp: data.followUp ?? entry?.followUp,
     };
-    // A change of the result or of notifying alone leaves the schedule as it is, so a finished one-time routine can still take it (as the app does).
-    const keepsSchedule = found && ["name", "prompt", "cadence", "timezone"].every((key) => data[key] === undefined);
+    // A change of the result, of notifying or of the model alone leaves the schedule as it is, so a finished one-time routine can still take it (as the app does).
+    const keepsSchedule = found && ["name", "prompt", "cadence", "timezone", "script", "followUp"].every((key) => data[key] === undefined);
     const fields = keepsSchedule ? { ...input, recurring: entry.recurring, cron: entry.cron, nextAt: entry.nextAt } : checked(() => routines().fields(input, now));
+    const finalModel = model === undefined ? found?.chat.model : (model ?? undefined);
     const wanted = destination(data.deliver);
     // `routine`, which is the default, is never saved: the app answers undefined for it. A change to it then takes the old one away (null).
     const deliver = wanted === undefined ? undefined : (checked(() => deliveryField(wanted, workspace, owner, entry?.createdBy ?? "owner")) ?? null);
@@ -191,8 +207,21 @@ export function routinesApi({ workspace, handlers, bot }) {
           ...(data.timezone !== undefined && { timezone: data.timezone }),
           ...(deliver !== undefined && { deliver }),
           ...(notify !== undefined && { notify }),
+          ...(data.script !== undefined && { script: data.script }),
+          ...(data.followUp !== undefined && { followUp: data.followUp }),
+          ...(model !== undefined && { model }),
         }
-      : { botId: owner, name: data.name, prompt: data.prompt, cadence: data.cadence, timezone: data.timezone, ...(deliver && { deliver }), ...(notify === false && { notify: false }) };
+      : {
+          botId: owner,
+          name: data.name,
+          prompt: data.prompt,
+          cadence: data.cadence,
+          timezone: data.timezone,
+          ...(deliver && { deliver }),
+          ...(notify === false && { notify: false }),
+          ...(data.script != null && { script: data.script, followUp: data.followUp === true }),
+          ...(model && { model }),
+        };
     if (found && !Object.keys(app).length) throw new ControlError("Say what to change.", "BAD_ARGUMENT");
     const finalDeliver = deliver === undefined ? entry?.deliver : (deliver ?? undefined);
     const finalNotify = notify === undefined ? entry?.notify !== false : notify;
@@ -206,6 +235,9 @@ export function routinesApi({ workspace, handlers, bot }) {
         bot: botName(owner),
         botId: owner,
         instructions: fields.prompt,
+        ...(fields.script && { script: fields.script, followUp: fields.followUp === true }),
+        // Left out when the routine has no model of its own.
+        ...(finalModel && { model: modelWords(finalModel) }),
         cadence: describeCadence(fields.cadence),
         meaning: meaning(fields.cadence),
         schedule: fields.cadence,
@@ -225,6 +257,9 @@ export function routinesApi({ workspace, handlers, bot }) {
             ...(app.timezone !== undefined && fields.timezone !== entry.timezone ? ["time zone"] : []),
             ...(deliver !== undefined && JSON.stringify(finalDeliver ?? null) !== JSON.stringify(entry.deliver ?? null) ? ["result"] : []),
             ...(notify !== undefined && finalNotify !== (entry.notify !== false) ? ["notifying"] : []),
+            ...(data.script !== undefined && (fields.script ?? null) !== (entry.script ?? null) ? ["script"] : []),
+            ...(data.followUp !== undefined && (fields.followUp === true) !== (entry.followUp === true) ? ["follow-up action"] : []),
+            ...(model !== undefined && JSON.stringify(model ?? null) !== JSON.stringify(found.chat.model ?? null) ? ["model"] : []),
           ],
         }),
       },
@@ -239,7 +274,7 @@ export function routinesApi({ workspace, handlers, bot }) {
      * { bot, name, prompt, cadence, timezone?, deliver?, notify? }. With a routine, `data` holds only what
      * changes; `cadence` there is a part of a schedule laid over the old one. The answer has `next`, the first two times.
      */
-    "routines.review": ([ref, data]) => plan(ref === null || ref === undefined ? null : routine(ref), data, Date.now()).review,
+    "routines.review": async ([ref, data]) => (await plan(ref === null || ref === undefined ? null : routine(ref), data, Date.now())).review,
     /** What a cadence means, from the app's own preview: { summary, meaning, timezone, repeats, next }. `cadence` is { kind, time?, days?, date?, cron? }. */
     async "routines.when"([cadence, timezone]) {
       if (!cadence || typeof cadence !== "object" || Array.isArray(cadence)) throw new ControlError("Give the schedule as { kind, time?, days?, date?, cron? }.", "BAD_ARGUMENT");
@@ -255,7 +290,7 @@ export function routinesApi({ workspace, handlers, bot }) {
     },
     /** A new routine: { bot, name, prompt, cadence, timezone?, deliver?, notify? }. The answer is the routine whole. */
     async "routines.add"([data, mark]) {
-      const { app, review } = plan(null, data, Date.now());
+      const { app, review } = await plan(null, data, Date.now());
       if (review.fastMinutes && !agreed(mark)) throw needsAgreement(review.fastMinutes);
       const id = await handlers.createRoutine(app);
       return view(routine(id));
@@ -263,7 +298,7 @@ export function routinesApi({ workspace, handlers, bot }) {
     /** Changes a routine. `patch` holds only what changes (see `routines.review`). */
     async "routines.edit"([ref, patch, mark]) {
       const found = routine(ref);
-      const { app, review } = plan(found, patch, Date.now());
+      const { app, review } = await plan(found, patch, Date.now());
       if (review.fastMinutes && !agreed(mark)) throw needsAgreement(review.fastMinutes);
       await handlers.updateRoutine(found.chat.id, app);
       return view(routine(found.chat.id));

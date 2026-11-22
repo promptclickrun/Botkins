@@ -854,6 +854,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   else if (method === "routine" && args[1]?.action === "remove") action = "delete";
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
+  // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
+  if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
   if (method === "setPreferences") {
     const patch = args[0];
     if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some((field) => !MEMBER_PREFERENCE_FIELDS.includes(field))) return "Your team role can change display preferences only.";
