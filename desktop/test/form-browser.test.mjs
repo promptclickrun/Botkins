@@ -27,10 +27,17 @@ test("Linux screen hosts prefer packaged Chrome when a Chromium snapshot is also
 
 const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const binary = process.platform === "linux" ? screenBrowserExecutable() : existsSync(macChrome) && macChrome;
+const linuxDisplay = process.platform !== "linux" || /^[\w.-]*:\d+(\.\d+)?$/.test(process.env.DISPLAY ?? "");
 
 for (const split of [false, true]) {
   const topology = split ? "separate vault and workspace processes" : "a terminal host";
-  const skip = !binary || (split && (process.platform !== "linux" || !existsSync("/usr/bin/xdotool")));
+  const skip = !binary
+    ? "Chromium or Google Chrome is not installed"
+    : !linuxDisplay
+      ? "The Linux screen browser needs an X11 DISPLAY"
+      : split && (process.platform !== "linux" || !existsSync("/usr/bin/xdotool"))
+        ? "The split screen-browser test needs Linux xdotool"
+        : false;
   test("a chat fills a saved login privately with " + topology, { skip, timeout: 30000 }, t => browserLogin(t, split));
 }
 
