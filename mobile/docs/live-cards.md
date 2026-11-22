@@ -50,6 +50,20 @@ own. A request makes its sound through the card; a finished turn still gets its 
   so carries `aps.alert` (`"Botkins"`, `"All done"` or `"A chat stopped"`) and `sound`: the Dynamic
   Island opens and the sound plays. The turn's notification still comes, without `sound`. A turn
   that ends while others still work gets its notification as before, with its sound.
+  The card's sound doesn't wait on that notification: it also plays when the notification is left
+  out because the chat is open in the computer's own window. The card stays quiet only when the
+  person stopped the turn themselves, when finished replies are switched off, or when the app is in
+  front on that phone (the notification then keeps its sound).
+- **How the pushes are sent.** Apple holds a priority 5 push back to save power, most of all on a
+  locked phone, and allows only so many at priority 10. A push with an alert, and a change that
+  matters (a chat needs the person, a chat ended, a new turn, the app left the front), goes at 10.
+  Steps and thinking go at most every 2.5 seconds: at 10 when the last push at 10 was 15 seconds
+  ago or more (`ACTIVITY_LOUD_GAP_MS`), else at 5. The app declares
+  `NSSupportsLiveActivitiesFrequentUpdates`. A push's `timestamp` is the second rounded up, and
+  always later than the one before: Apple orders a card's updates by it, the phone's own too.
+- **A row's words** (`l`). The step that runs, else what the bot says it is doing, else the step it
+  did last, else "Thinking…". A step takes moments and the thinking between two takes most of a
+  turn, so a row never says only "Working…" once the turn has done something.
 - **The card's address** reaching the computer brings the whole card, never a chat's catch-up.
 
 The hold before the end, and the look at a restart, apply to a Botkin's card too (it never chimes).
