@@ -270,7 +270,7 @@ function App() {
   const look = state?.settings.appearance;
   useEffect(() => {
     if (look) applyAppearance(look);
-  }, [look?.theme, look?.colorTheme, look?.textSize, look?.font, look?.bubble]);
+  }, [look?.theme, look?.colorTheme, look?.darkColorTheme, look?.contrast, look?.textSize, look?.font, look?.bubble]);
   // The main process is told which chat is on screen, so a phone isn't pinged for a reply here.
   const onScreen = page === "Chats" && chatId && !modal ? chatId : null;
   useEffect(() => {

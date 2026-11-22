@@ -1,11 +1,11 @@
 import { saveChatDisplay } from "./chatDisplay";
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 import type { Preferences as Values, Appearance, HarnessStatus } from "./types";
 import { ProviderInstall } from "./ProviderSetup";
 import { Group, Row, SwitchRow, ValueRow } from "./SettingsRows";
-import { modeOf } from "./appearance";
-import { TEXT_SIZES, THEMES, fontShown, fontsHere, themeOf } from "./themes";
+import { modeOf, previewContrast } from "./appearance";
+import { type Mode, TEXT_SIZES, THEMES, type ThemeColors, fontShown, fontsHere, themeFor, themeOf } from "./themes";
 
 type Patch = Parameters<typeof window.botkins.setPreferences>[0];
 type Props = {
@@ -115,24 +115,102 @@ const MODES: { id: Appearance["theme"]; name: string }[] = [
   { id: "light", name: "Light" },
   { id: "dark", name: "Dark" },
 ];
+const HALVES: { id: Mode; name: string }[] = [
+  { id: "light", name: "Light mode" },
+  { id: "dark", name: "Dark mode" },
+];
 
-/** Settings › Appearance: the theme, light or dark, the text size, chat bubbles and what a conversation shows. */
+/** A theme in miniature, as the app draws it: the side menu, a reply, your bubble, the message box and its send button. */
+function ThemePane({ colors, half }: { colors: ThemeColors; half: "light" | "dark" }) {
+  return (
+    <span className={"theme-pane " + half} style={{ background: colors.canvas }}>
+      <i className="tp-menu" style={{ background: colors.sunken, borderColor: colors.line }} />
+      <i className="tp-mark" style={{ background: colors.primary }} />
+      <i className="tp-row on" style={{ background: colors.raised, borderColor: colors.line }} />
+      <i className="tp-row" style={{ background: colors.ink }} />
+      <i className="tp-bubble" style={{ background: colors.bubble }} />
+      <i className="tp-avatar" style={{ background: colors.accentSoft }} />
+      <i className="tp-text" style={{ background: colors.ink }} />
+      <i className="tp-text short" style={{ background: colors.muted }} />
+      <i className="tp-box" style={{ background: colors.surface, borderColor: colors.line }} />
+      <i className="tp-send" style={{ background: colors.primary }} />
+    </span>
+  );
+}
+
+/** Settings › Appearance: the theme for light and dark, contrast, font, text size, chat bubbles and what a conversation shows. */
 export function AppearanceSettings({ settings, change, fail }: Props) {
   const a = settings.appearance;
   const update = (p: Partial<Appearance>) => change({ appearance: p }).catch(fail);
   const toggle = (p: Patch) => void change(p).catch(fail);
   const mode = modeOf(a.theme);
-  const [hex, setHex] = useState(a.bubble === "theme" ? themeOf(a.colorTheme)[mode].bubble : a.bubble);
+  const darkTheme = a.darkColorTheme ?? null;
+  const separate = darkTheme !== null;
+  // With a theme of its own for dark mode, the cards pick for one mode at a time: the one showing, to start.
+  const [target, setTarget] = useState<Mode>(mode);
+  const picking: Mode = separate ? target : mode;
+  const pickedFor = (m: Mode) => (m === "dark" && darkTheme) || a.colorTheme;
+  const [hex, setHex] = useState(a.bubble === "theme" ? themeFor(a, mode)[mode].bubble : a.bubble);
+  const [contrast, setContrast] = useState(a.contrast ?? 0);
+  // The slider draws as it moves and saves once it rests. While a save waits, an older saved value
+  // coming back never moves the slider under the person's hand.
+  const pending = useRef<{ timer: number; value: number } | null>(null);
+  const saveContrast = (value: number) => {
+    pending.current = null;
+    void change({ appearance: { contrast: value } }).catch((e) => {
+      setContrast(a.contrast ?? 0);
+      previewContrast(a.contrast ?? 0);
+      fail(e);
+    });
+  };
+  const moveContrast = (value: number) => {
+    setContrast(value);
+    previewContrast(value);
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = { value, timer: window.setTimeout(() => saveContrast(value), 400) };
+  };
   useEffect(() => {
     if (a.bubble !== "theme") setHex(a.bubble);
   }, [a.bubble]);
+  useEffect(() => {
+    if (!pending.current) setContrast(a.contrast ?? 0);
+  }, [a.contrast]);
+  // Leaving the page saves a move that hasn't rested yet.
+  useEffect(
+    () => () => {
+      if (!pending.current) return;
+      clearTimeout(pending.current.timer);
+      void change({ appearance: { contrast: pending.current.value } }).catch(fail);
+    },
+    [],
+  );
+  const pick = (id: string) => void update(separate && picking === "dark" ? { darkColorTheme: id } : { colorTheme: id });
   return (
     <>
       <Group title="Theme">
-        <div className="theme-cards" role="radiogroup" aria-label="Theme" onKeyDown={rove}>
+        <div className="set-row">
+          <div className="set-label">
+            <span>Light or dark</span>
+          </div>
+          <div className="set-control">
+            <Choices label="Light or dark" value={a.theme} options={MODES} onChange={(theme) => void update({ theme })} />
+          </div>
+        </div>
+        {separate && (
+          <div className="set-row">
+            <div className="set-label">
+              <span>Choose the theme for</span>
+            </div>
+            <div className="set-control">
+              <Choices label="Choose the theme for" value={target} options={HALVES} onChange={setTarget} />
+            </div>
+          </div>
+        )}
+        <div className="theme-cards" role="radiogroup" aria-label={separate ? "Theme for " + picking + " mode" : "Theme"} onKeyDown={rove}>
           {THEMES.map((theme) => {
-            const colors = theme[mode];
-            const on = theme.id === a.colorTheme;
+            const on = theme.id === pickedFor(picking);
+            const light = theme.id === pickedFor("light");
+            const dark = theme.id === pickedFor("dark");
             return (
               <button
                 key={theme.id}
@@ -142,31 +220,51 @@ export function AppearanceSettings({ settings, change, fail }: Props) {
                 aria-label={theme.name}
                 tabIndex={on ? 0 : -1}
                 className={"theme-card" + (on ? " on" : "")}
-                onClick={() => void update({ colorTheme: theme.id })}
+                onClick={() => pick(theme.id)}
               >
-                {/* A small picture of the theme: its side menu and page, a line of ink, your bubble and its action color. */}
-                <span className="theme-swatch" style={{ background: colors.canvas }} aria-hidden="true">
-                  <i style={{ background: colors.sunken }} />
-                  <i style={{ background: colors.ink }} />
-                  <i style={{ background: colors.bubble }} />
-                  <i style={{ background: colors.accent }} />
+                {/* The theme's light half and dark half, split on a slant. */}
+                <span className="theme-wire" aria-hidden="true">
+                  <ThemePane colors={theme.light} half="light" />
+                  <ThemePane colors={theme.dark} half="dark" />
                 </span>
                 <span className="theme-name">
                   {on && <Check size={13} strokeWidth={2.5} aria-hidden="true" />}
                   {theme.name}
+                  {separate && (light || dark) && (
+                    <span className="theme-uses">
+                      {light && <em>Light</em>}
+                      {dark && <em>Dark</em>}
+                    </span>
+                  )}
                 </span>
               </button>
             );
           })}
         </div>
-        <div className="set-row">
-          <div className="set-label">
-            <span>Light or dark</span>
-          </div>
-          <div className="set-control">
-            <Choices label="Light or dark" value={a.theme} options={MODES} onChange={(theme) => void update({ theme })} />
-          </div>
-        </div>
+        <SwitchRow
+          label="Use a different theme in dark mode"
+          help={separate ? "Light: " + themeOf(a.colorTheme).name + " · Dark: " + themeOf(darkTheme).name : undefined}
+          checked={separate}
+          onChange={(on) => {
+            setTarget(on ? "dark" : mode);
+            void update({ darkColorTheme: on ? a.colorTheme : null });
+          }}
+        />
+        <Row label="Contrast" help="Stronger lines and clearer quiet text across the app.">
+          {(id, describedBy) => (
+            <input
+              id={id}
+              aria-describedby={describedBy}
+              type="range"
+              className="set-range"
+              min={0}
+              max={100}
+              step={5}
+              value={contrast}
+              onChange={(e) => moveContrast(Number(e.target.value))}
+            />
+          )}
+        </Row>
         <Row label="Font">
           {(id) => (
             // A face this computer lacks isn't listed, and a saved one shows as the system's face, which is what is drawn.

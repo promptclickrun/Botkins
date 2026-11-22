@@ -45,6 +45,9 @@ export function appearanceField(saved) {
   const picked = value.themePicked === true ? (named ?? preset) : value.themePicked === false ? null : named ? (named !== OLD_DEFAULT ? named : null) : preset;
   appearance.colorTheme = picked ?? DEFAULT_THEME;
   appearance.themePicked = picked != null;
+  // A theme for dark mode only, or null for the one theme in both.
+  appearance.darkColorTheme = THEME_IDS.includes(value.darkColorTheme) ? value.darkColorTheme : null;
+  if (!isContrast(appearance.contrast)) appearance.contrast = 0;
   if (!TEXT_SIZES.includes(appearance.textSize)) appearance.textSize = "default";
   // The font works the same way, in `fontPicked`: the system's face until the person picks one.
   // Before that was kept, any saved font but the old usual one counts as a pick.
@@ -57,9 +60,13 @@ export function appearanceField(saved) {
   return appearance;
 }
 
-/** The window's color before its page has drawn: the theme's canvas, light or dark. */
+/** How much stronger lines and quiet text are drawn: a whole number from 0 (as the theme draws them) to 100. */
+const isContrast = (value) => Number.isInteger(value) && value >= 0 && value <= 100;
+
+/** The window's color before its page has drawn: the canvas of the theme light or dark mode wears. */
 export function canvasColor(appearance, dark) {
-  const theme = THEMES.themes.find((t) => t.id === appearance?.colorTheme) ?? THEMES.themes.find((t) => t.id === DEFAULT_THEME);
+  const id = (dark && appearance?.darkColorTheme) || appearance?.colorTheme;
+  const theme = THEMES.themes.find((t) => t.id === id) ?? THEMES.themes.find((t) => t.id === DEFAULT_THEME);
   return theme[dark ? "dark" : "light"].canvas;
 }
 
@@ -109,6 +116,10 @@ export const defaultSettings = {
     // One of the themes in desktop/themes.json: Ink until the person picks one (themePicked).
     colorTheme: "ink",
     themePicked: false,
+    // A theme dark mode wears instead of colorTheme, or null for one theme in both.
+    darkColorTheme: null,
+    // Stronger lines and quiet text, 0 to 100 (src/themes.ts withContrast).
+    contrast: 0,
     textSize: "default",
     // One of the fonts in desktop/themes.json: the system's face until the person picks one
     // (fontPicked). "botkins" is the design kit's pairing.
@@ -188,6 +199,8 @@ export function changeSettings(settings, patch) {
         if (
           !["system", "light", "dark"].includes(appearance.theme) ||
           !THEME_IDS.includes(appearance.colorTheme) ||
+          !(appearance.darkColorTheme === null || THEME_IDS.includes(appearance.darkColorTheme)) ||
+          !isContrast(appearance.contrast) ||
           !TEXT_SIZES.includes(appearance.textSize) ||
           !FONT_IDS.includes(appearance.font) ||
           typeof appearance.avatarAnimations !== "boolean" ||

@@ -6,8 +6,8 @@
 // The themes are the phone app's, value for value (botkins: src/ui/themes.ts): the code between
 // the two marks below is that file with its types taken out. "botkins" is the design kit's own
 // look (design/botkins-kit/theme/tokens.json), "ink" is black on white and white on black, and the
-// others come from a few seed colors through makeTheme, which also keeps every text color
-// readable. To follow a change on the phone, copy its file in again between the marks.
+// others come from a hue and an action color through makeTheme, built in OKLCH, which also keeps
+// every text color readable. To follow a change on the phone, copy its file in again between the marks.
 // test/rename.test.mjs compares the result with the phone's file when that repo is beside this one.
 //
 //   node scripts/build-themes.mjs          writes the file
@@ -148,14 +148,6 @@ const inkDark = {
 // ---- Color math ------------------------------------------------------------------------------
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-const toHex = (channels) => "#" + channels.map((c) => Math.round(Math.max(0, Math.min(255, c))).toString(16).padStart(2, "0")).join("").toUpperCase();
-
-/** `a` moved toward `b` by `amount` (0 to 1). */
-export function mix(a, b, amount) {
-  const x = rgb(a);
-  const y = rgb(b);
-  return toHex(x.map((c, i) => c + (y[i] - c) * amount));
-}
 
 /** WCAG relative luminance of a #RRGGBB color. */
 export function luminance(hex) {
@@ -172,123 +164,150 @@ export function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** `color`, darkened or lightened (away from the first background) until it reads on every background. */
-function readable(color, backgrounds, min = 4.6) {
-  const toward = luminance(backgrounds[0]) > 0.4 ? "#000000" : "#FFFFFF";
-  let out = color;
-  for (let step = 1; step <= 50 && backgrounds.some((bg) => contrast(out, bg) < min); step++) out = mix(color, toward, step / 50);
+/** Linear sRGB channels of an OKLCH color (lightness 0 to 1, chroma, hue in degrees); outside 0 to 1 when out of gamut. */
+function oklchToLinear(l, c, h) {
+  const a = c * Math.cos((h * Math.PI) / 180);
+  const b = c * Math.sin((h * Math.PI) / 180);
+  const L = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const M = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const S = (l - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [4.0767416621 * L - 3.3077115913 * M + 0.2309699292 * S, -1.2684380046 * L + 2.6097574011 * M - 0.3413193965 * S, -0.0041960863 * L - 0.7034186147 * M + 1.707614701 * S];
+}
+
+/** An OKLCH color as #RRGGBB, its chroma lowered until the screen can show it. */
+function oklch(l, c, h) {
+  let chroma = c;
+  let channels = oklchToLinear(l, chroma, h);
+  while (chroma > 0 && channels.some((v) => v < -0.0005 || v > 1.0005)) {
+    chroma = Math.max(0, chroma - 0.002);
+    channels = oklchToLinear(l, chroma, h);
+  }
+  const encode = (v) => {
+    const x = Math.min(1, Math.max(0, v));
+    return x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055;
+  };
+  return "#" + channels.map((v) => Math.round(encode(v) * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+/** The OKLCH color made darker (step < 0) or lighter (step > 0) until it reads on every background. */
+function readable(l, c, h, backgrounds, min, step) {
+  let lightness = l;
+  let out = oklch(lightness, c, h);
+  while (backgrounds.some((bg) => contrast(out, bg) < min) && lightness > 0.02 && lightness < 0.99) {
+    lightness += step;
+    out = oklch(lightness, c, h);
+  }
   return out;
 }
 
-const WHITE = "#FFFFFF";
-const BLACK = "#000000";
 const rgba = (hex, alpha) => `rgba(${rgb(hex).join(",")},${alpha})`;
 
-// The kit's status hues, shared by every generated theme.
-const STATUS = { success: "#41633D", warning: "#865514", danger: "#9F3935", info: "#3B6A5D" };
+// Status hues, shared by every generated theme: clear, and never louder than the action color.
+const STATUS = { success: 150, warning: 70, danger: 27, info: 235 };
 
 // ---- The generator ---------------------------------------------------------------------------
 
-/** A full theme, light and dark, from a few seed colors. */
-export function makeTheme({ id, name, action, paper, ink: seedInk, tint = 0.05 }) {
-  // Light: near-white paper, warmed by the seed, with the seed's darkest color as the ink.
-  const canvas = mix(mix(WHITE, paper, 0.5), action, tint);
-  const surface = mix(mix(WHITE, paper, 0.15), action, tint * 0.4);
-  const ink = mix(seedInk, BLACK, 0.2);
-  const primary = readable(mix(action, seedInk, 0.15), [WHITE], 4.8);
-  const statusLight = (hue) => {
-    const soft = mix(surface, hue, 0.16);
-    return { text: readable(hue, [soft, canvas, surface]), soft };
-  };
-  const [ok, warn, bad, info] = [STATUS.success, STATUS.warning, STATUS.danger, STATUS.info].map(statusLight);
-  const accentSoft = mix(surface, action, 0.2);
+/**
+ * A full theme, light and dark, from a hue and an action color, built in OKLCH: every neutral
+ * leans toward the hue, the side menu is a step deeper than the page, and the dark mode is its
+ * own tinted night. Text colors are moved until they read (4.6:1, the tests ask 4.5).
+ */
+export function makeTheme({ id, name, hue, action, tint = 0.011, night = 0.026, bubble = 0.26, dusk = 0.225 }) {
+  const { hue: aH, chroma: aC } = action;
+  const ink = 0.016; // the text's own share of the hue
+
+  // Light: a near-white page with the hue in it, and the menu a step deeper.
+  const canvas = oklch(0.975, tint, hue);
+  const sunken = oklch(0.945, tint * 1.5, hue);
+  const surface = oklch(0.995, tint * 0.45, hue);
+  const lightInk = oklch(0.235, ink, hue);
+  const onLight = (l, c, h, extra = []) => readable(l, c, h, [canvas, sunken, surface, ...extra], 4.6, -0.005);
+  const accentSoft = oklch(0.935, aC * 0.24, aH);
+  const whiteReads = contrast(oklch(action.light, aC, aH), "#FFFFFF") >= 4.5;
+  const onPrimary = whiteReads ? "#FFFFFF" : oklch(0.22, aC * 0.35, aH);
+  const primary = readable(action.light, aC, aH, [onPrimary], 4.6, whiteReads ? -0.005 : 0.005);
+  const status = (make) =>
+    Object.fromEntries(Object.keys(STATUS).flatMap((key) => {
+      const [text, soft] = make(STATUS[key]);
+      return [[key, text], [key + "Soft", soft]];
+    }));
   const light = {
     canvas,
     surface,
-    sunken: mix(canvas, ink, 0.05),
-    raised: mix(surface, WHITE, 0.5),
-    ink,
-    ink2: mix(ink, canvas, 0.15),
-    muted: readable(mix(ink, canvas, 0.42), [mix(canvas, ink, 0.05), canvas, surface]),
-    faint: mix(ink, canvas, 0.55),
-    line: mix(canvas, ink, 0.08),
-    lineStrong: mix(canvas, ink, 0.2),
+    sunken,
+    raised: oklch(1, tint * 0.15, hue),
+    ink: lightInk,
+    ink2: oklch(0.335, ink * 0.9, hue),
+    muted: onLight(0.53, Math.max(tint * 2.2, ink * 0.8), hue),
+    faint: oklch(0.7, tint * 1.6, hue),
+    line: oklch(0.912, tint * 1.6, hue),
+    lineStrong: oklch(0.84, tint * 1.8, hue),
     accent: primary,
-    onAccent: WHITE,
+    onAccent: onPrimary,
     accentSoft,
-    accentText: readable(primary, [canvas, surface, accentSoft]),
+    accentText: onLight(action.light, aC, aH, [accentSoft]),
     primary,
-    onPrimary: WHITE,
-    success: ok.text,
-    successSoft: ok.soft,
-    warning: warn.text,
-    warningSoft: warn.soft,
-    danger: bad.text,
-    dangerSoft: bad.soft,
-    info: info.text,
-    infoSoft: info.soft,
-    bubble: mix(canvas, action, 0.14),
-    onBubble: ink,
-    scrim: rgba(ink, 0.42),
-    shadow: ink,
+    onPrimary,
+    ...status((h) => {
+      const soft = oklch(0.945, 0.035, h);
+      return [onLight(0.5, 0.13, h, [soft]), soft];
+    }),
+    bubble: oklch(0.93, aC * bubble, aH),
+    onBubble: lightInk,
+    scrim: rgba(lightInk, 0.42),
+    shadow: lightInk,
   };
 
-  // Dark: the seed's darkest color as the night, the paper as the ink, a lighter action color.
-  const night = mix(mix("#121212", seedInk, 0.45), action, tint);
-  const nightSurface = mix(night, mix(WHITE, action, 0.5), 0.06);
-  const dInk = mix(WHITE, paper, 0.55);
-  const onPrimary = mix(seedInk, BLACK, 0.45);
-  const dPrimary = readable(mix(action, WHITE, 0.32), [onPrimary], 4.8);
-  const statusDark = (hue) => {
-    const soft = mix(nightSurface, hue, 0.22);
-    return { text: readable(mix(hue, WHITE, 0.55), [soft, night, nightSurface]), soft };
-  };
-  const [dOk, dWarn, dBad, dInfo] = [STATUS.success, "#B07A2A", "#C0504A", STATUS.info].map(statusDark);
-  const dAccentSoft = mix(nightSurface, action, 0.28);
+  // Dark: a night in the theme's own hue, with a brighter action color on deep text.
+  const dCanvas = oklch(dusk, night, hue);
+  const dSunken = oklch(dusk - 0.028, night * 1.05, hue);
+  const dSurface = oklch(dusk + 0.036, night * 0.95, hue);
+  const darkInk = oklch(0.955, Math.min(0.014, ink * 0.35 + tint * 0.5), hue);
+  const onDark = (l, c, h, extra = []) => readable(l, c, h, [dCanvas, dSunken, dSurface, ...extra], 4.6, 0.005);
+  const dOnPrimary = oklch(0.19, aC * 0.3, aH);
+  const dPrimary = readable(action.dark, aC * 0.92, aH, [dOnPrimary], 4.8, 0.005);
+  const dAccentSoft = oklch(0.3, aC * 0.32, aH);
   const dark = {
-    canvas: night,
-    surface: nightSurface,
-    sunken: mix(night, BLACK, 0.25),
-    raised: mix(nightSurface, WHITE, 0.05),
-    ink: dInk,
-    ink2: mix(dInk, night, 0.1),
-    muted: readable(mix(dInk, night, 0.3), [nightSurface, night]),
-    faint: mix(dInk, night, 0.55),
-    line: mix(night, dInk, 0.1),
-    lineStrong: mix(night, dInk, 0.22),
+    canvas: dCanvas,
+    surface: dSurface,
+    sunken: dSunken,
+    raised: oklch(dusk + 0.072, night * 0.9, hue),
+    ink: darkInk,
+    ink2: oklch(0.87, Math.min(0.016, ink * 0.4 + night * 0.4), hue),
+    muted: onDark(0.71, Math.max(night * 1.1, ink * 0.4), hue),
+    faint: oklch(0.53, night * 1.1, hue),
+    line: oklch(dusk + 0.1, night * 1.05, hue),
+    lineStrong: oklch(dusk + 0.19, night * 1.1, hue),
     accent: dPrimary,
-    onAccent: onPrimary,
+    onAccent: dOnPrimary,
     accentSoft: dAccentSoft,
-    accentText: readable(dPrimary, [night, nightSurface, dAccentSoft]),
+    accentText: onDark(action.dark, aC * 0.92, aH, [dAccentSoft]),
     primary: dPrimary,
-    onPrimary,
-    success: dOk.text,
-    successSoft: dOk.soft,
-    warning: dWarn.text,
-    warningSoft: dWarn.soft,
-    danger: dBad.text,
-    dangerSoft: dBad.soft,
-    info: dInfo.text,
-    infoSoft: dInfo.soft,
-    bubble: mix(nightSurface, action, 0.2),
-    onBubble: dInk,
+    onPrimary: dOnPrimary,
+    ...status((h) => {
+      const soft = oklch(0.28, 0.045, h);
+      return [onDark(0.78, 0.11, h, [soft]), soft];
+    }),
+    bubble: oklch(dusk + 0.13, aC * (bubble + 0.08), aH),
+    onBubble: darkInk,
     scrim: "rgba(0,0,0,0.55)",
-    shadow: BLACK,
+    shadow: "#000000",
   };
   return { id, name, light, dark };
 }
 
 // ---- The themes ------------------------------------------------------------------------------
 
-/** Every theme, in the order the Appearance page shows them. Seeds come from the kit's palettes (customize.js). */
+/** Every theme, in the order the Appearance page shows them. Names come from the kit's palettes (customize.js). */
 export const THEMES = [
   { id: "botkins", name: "Botkins", light: botkinsLight, dark: botkinsDark },
-  makeTheme({ id: "honey", name: "Honey", action: "#DFA12E", paper: "#FFEBC5", ink: "#553819" }),
-  makeTheme({ id: "fern", name: "Fern", action: "#748848", paper: "#F4E8C4", ink: "#373722" }),
-  makeTheme({ id: "tidepool", name: "Tidepool", action: "#518477", paper: "#F6E7C7", ink: "#303B30" }),
-  makeTheme({ id: "bluebell", name: "Bluebell", action: "#738DA4", paper: "#F8E5CF", ink: "#32303C" }),
-  makeTheme({ id: "fig", name: "Fig", action: "#946079", paper: "#F7E1CF", ink: "#482D39" }),
-  makeTheme({ id: "paper", name: "Paper", action: "#3F5F8F", paper: "#E6E8EC", ink: "#1C1E22", tint: 0 }),
+  makeTheme({ id: "honey", name: "Honey", hue: 80, action: { hue: 70, chroma: 0.15, light: 0.62, dark: 0.8 } }),
+  makeTheme({ id: "fern", name: "Fern", hue: 135, action: { hue: 138, chroma: 0.14, light: 0.52, dark: 0.78 } }),
+  makeTheme({ id: "tidepool", name: "Tidepool", hue: 190, action: { hue: 188, chroma: 0.1, light: 0.52, dark: 0.78 } }),
+  makeTheme({ id: "bluebell", name: "Bluebell", hue: 255, action: { hue: 255, chroma: 0.15, light: 0.52, dark: 0.76 } }),
+  makeTheme({ id: "fig", name: "Fig", hue: 340, action: { hue: 345, chroma: 0.15, light: 0.5, dark: 0.74 } }),
+  // Paper: hardly any hue, a cool white by day and a blue-black at night.
+  makeTheme({ id: "paper", name: "Paper", hue: 250, action: { hue: 258, chroma: 0.17, light: 0.5, dark: 0.74 }, tint: 0.004, night: 0.01, bubble: 0.14, dusk: 0.19 }),
   { id: "ink", name: "Ink", light: inkLight, dark: inkDark, mono: true },
 ];
 
