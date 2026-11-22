@@ -25,6 +25,7 @@ import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
 import { VoiceDock } from "../voice/VoiceDock";
 import { completions } from "./completion";
+import { useChatScreenState } from "./useChatScreenState";
 import { createChatViewport, HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
@@ -525,7 +526,6 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const keyboardHeight = useKeyboardState((state) => state.height);
   const requestRoom = Math.max(200, Math.min(screenHeight * 0.6, screenHeight - (keyboardUp ? keyboardHeight : insets.bottom) - insets.top - 168));
   const chat = useChat(chatId);
-  const chatsLoaded = useApp((state) => !!state.parts.chats);
   const view = useWatchedChat(chatId);
   const pending = useSyncExternalStore(pendingSends.subscribe, () => pendingSends.rows(chatId));
   const bot = useBot(chat?.botId);
@@ -576,6 +576,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     if (board) router.setParams({ board: undefined });
   };
   const [leaving, setLeaving] = useState(false);
+  // Only while the chat isn't in the list: it is loading until the computer says it's gone, and blank on a page being left.
+  const missing = useChatScreenState(chatId, leaving || !focused);
   // A message being replied to (Reply in its menu): it goes with the next message as a quote.
   const [quote, setQuote] = useState(() => drafts.get(chatId)?.quote ?? "");
   useEffect(() => {
@@ -809,7 +811,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   if (!chat)
     return (
       <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
-        {chatsLoaded && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : <Loading />}
+        {missing === "gone" && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : missing === "loading" || paneId ? <Loading /> : null}
       </View>
     );
 
