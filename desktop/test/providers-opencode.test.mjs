@@ -11,6 +11,7 @@ import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { BRIDGE_PREFIX, OpenCodeProvider, sessionRules } from "../desktop/providers/opencode/index.mjs";
 import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
+import { until, watching } from "./quiet-turns.mjs";
 
 const PASSWORD = "test-password";
 
@@ -176,10 +177,10 @@ async function fakeOpenCode(t, play = async (turn) => turn.say("ok")) {
   return { url: "http://127.0.0.1:" + server.address().port, log, state, emit, drop, sent: (method, pattern) => log.requests.filter(([m, p]) => m === method && pattern.test(p)) };
 }
 
-async function setup(t, play, { dir = tempDir(t) } = {}) {
+async function setup(t, play, { dir = tempDir(t), quietCheckMs } = {}) {
   const fake = await fakeOpenCode(t, play);
   const bridge = new ToolBridge();
-  const provider = new OpenCodeProvider({ dataDir: join(dir, "opencode"), bridge, connect: async () => ({ url: fake.url, password: PASSWORD }), pollMs: 10 });
+  const provider = new OpenCodeProvider({ dataDir: join(dir, "opencode"), bridge, connect: async () => ({ url: fake.url, password: PASSWORD }), pollMs: 10, quietCheckMs });
   t.after(() => Promise.all([provider.stop(), bridge.stop()]));
   return { dir, provider, bridge, ...fake };
 }
@@ -524,6 +525,45 @@ test("a chat on an OpenCode model runs through the workspace with Botkins' tools
     () => assert.fail("the last provider stays on"),
     (error) => assert.match(error.message, /at least one/),
   );
+});
+
+test("an OpenCode turn that is quiet for a long time is not given up on, and ends when OpenCode no longer has its session", async (t) => {
+  let hold;
+  const { provider, log, sent } = await setup(t, async (turn) => {
+    turn.say("Working");
+    await new Promise((resolve) => (hold = resolve));
+  }, { quietCheckMs: 15 });
+  const session = await provider.openSession(spec());
+  const lookups = () => sent("GET", /^\/api\/session\/ses_\d+$/).length;
+  const quiet = watching(session.send({ prompt: "Go" }));
+  await until(() => hold, "the turn is quiet");
+  const before = lookups();
+  // Many quiet spells, each one answered by OpenCode: far more checks than the turn has seen events.
+  await until(() => lookups() >= before + 8, "OpenCode is asked whether it still has the session");
+  assert.equal(quiet.seen.state, "pending", "a quiet turn on a live session is not failed");
+  hold();
+  await quiet.done;
+  assert.deepEqual(quiet.seen.value, { text: "Working" });
+
+  // The session disappears from OpenCode while the turn is quiet.
+  hold = undefined;
+  const lost = watching(session.send({ prompt: "Again" }));
+  await until(() => hold, "the second turn is quiet");
+  log.sessions.clear();
+  await lost.done;
+  assert.equal(lost.seen.state, "failed");
+  assert.equal(lost.seen.value.code, "BOTKINS_SESSION_LOST");
+  assert.match(lost.seen.value.message, /no longer has this conversation/);
+  hold();
+});
+
+test("a caller that names a time limit gets it from OpenCode", async (t) => {
+  const { provider } = await setup(t, async (turn) => {
+    turn.say("Working");
+    await new Promise(() => {});
+  });
+  const session = await provider.openSession(spec());
+  await assert.rejects(session.send({ prompt: "Summarize" }, 60), (error) => error.code === "BOTKINS_TURN_TIMEOUT");
 });
 
 test("Stop, a lost event stream and a failed lookup never leave a turn running, hanging or orphaned", async (t) => {

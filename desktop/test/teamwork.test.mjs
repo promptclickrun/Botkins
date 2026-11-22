@@ -97,7 +97,7 @@ test("asking a teammate runs it in its own session and returns its reply to the 
   assert.deepEqual(log.deleted.sort(), [helper, id].sort());
 });
 
-test("a stalled teammate recovers its completed journal reply before failing the ask", async (t) => {
+test("a teammate whose session was lost recovers its completed journal reply before failing the ask", async (t) => {
   let helperEventId;
   const ctx = setup(
     t,
@@ -124,7 +124,7 @@ test("a stalled teammate recovers its completed journal reply before failing the
           }
           helperEventId = id + ":root";
           session.emit({ type: "user.message", id: helperEventId, data: { messageId: id + ":request" } });
-          throw Object.assign(new Error("simulated inactivity stall"), { code: "BOTKINS_SESSION_STALL" });
+          throw Object.assign(new Error("simulated lost session"), { code: "BOTKINS_SESSION_LOST" });
         },
         events: (id) => id.includes("-team-") ? [
           { type: "user.message", id: helperEventId, data: { messageId: id + ":request" } },

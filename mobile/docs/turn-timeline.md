@@ -107,8 +107,9 @@ Subagent += { prompt?: string; intent?: string; result?: string }   // each cut 
 Run += { ending?: "failed" | "timed-out" | "interrupted" | "stopped" }
 ```
 
-Set when a turn ends without finishing. "timed-out" is a stall or a deadline (`BOTKINS_SESSION_STALL`,
-OpenCode's "didn't finish in time"). The text written so far is kept as an interim message (section 1).
+Set when a turn ends without finishing. "timed-out" is a deadline that a caller named (`BOTKINS_TURN_TIMEOUT`,
+"didn't finish in time") or a request that got no answer (`ETIMEDOUT`). A turn is never failed for being quiet:
+a harness that is gone (its process exited, its connection closed, its session no longer exists) ends as "failed". The text written so far is kept as an interim message (section 1).
 
 ## 6. In the link (changed in this checkout; copy to `desktop/link/`)
 

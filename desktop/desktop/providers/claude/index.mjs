@@ -200,7 +200,12 @@ class ClaudeSession extends ProviderSession {
     };
   }
 
-  async send(message, timeoutMs = 600000) {
+  /**
+   * Sends one message. There is no time limit: the person stops a turn that runs long, and Claude
+   * Code's process ending (it exits, or its stream closes) ends the turn. `timeoutMs` is for a
+   * caller with nobody to stop it, such as a background summary.
+   */
+  async send(message, timeoutMs) {
     if (this.turn) throw new Error("This conversation is already working.");
     const { provider, spec } = this;
     const { query } = await provider.sdk();
@@ -237,11 +242,14 @@ class ClaudeSession extends ProviderSession {
       }),
       stderr: (text) => (turn.stderr = (turn.stderr + text).slice(-4000)),
     });
-    const timer = setTimeout(() => {
-      turn.timeout = Object.assign(new Error("Claude didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"});
-      abort.abort();
-    }, timeoutMs);
-    timer.unref?.();
+    let timer;
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        turn.timeout = Object.assign(new Error("Claude didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"});
+        abort.abort();
+      }, timeoutMs);
+      timer.unref?.();
+    }
     let result;
     const q = (turn.query = query({ prompt: input, options }));
     try {

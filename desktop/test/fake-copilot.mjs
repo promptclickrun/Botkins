@@ -54,7 +54,11 @@ export function fakeClient(reply = async () => ({ data: { content: "ok" } }), ex
       },
       listeners: () => handlers.size,
       rpc: extra.rpc?.(id, log) ?? {
-        model: { switchTo: async (params) => (log.models.push([id, params.modelId, params.reasoningEffort]), {}) },
+        model: {
+          switchTo: async (params) => (log.models.push([id, params.modelId, params.reasoningEffort]), {}),
+          // Only when a test supplies `extra.current`: the adapter asks it whether the session is still there.
+          ...(extra.current && { getCurrent: async () => extra.current(id, session) }),
+        },
         permissions: { setMode: async ({ mode }) => (log.modes.push([id, mode]), { success: true, mode }) },
       },
       /** Calls one of the session's current tools the way the runtime would. */

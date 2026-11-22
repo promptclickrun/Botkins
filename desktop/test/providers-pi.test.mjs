@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { EXTRA_USAGE, PiProvider, errorText } from "../desktop/providers/pi/index.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
+import { pass, until, watching } from "./quiet-turns.mjs";
 
 const skip = process.platform === "win32" && "The stand-in is a shell script.";
 const FIXTURE = fileURLToPath(new URL("./fixtures/fake-pi.mjs", import.meta.url));
@@ -137,6 +138,29 @@ test("Pi keeps the Botkins tool call open for the full secure prompt", async () 
   const { servers } = await session.describe();
   assert.ok(servers.botkins.timeout > 5 * 60, "Pi's timeout in seconds must outlast the secure prompt");
   assert.equal(servers.files.timeout, undefined);
+});
+
+test("a Pi turn that is quiet for hours is not given up on, and a caller's own limit still applies", { skip }, async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { provider } = setup();
+  // Pi waits for the person's answer: the turn is quiet, and Pi is alive.
+  let answer;
+  const session = await provider.openSession(spec({ handlers: { permission: () => new Promise((resolve) => (answer = resolve)) } }));
+  const sending = watching(session.send({ prompt: "run bash:ls" }));
+  await until(() => answer, "Pi is waiting for the person");
+  await pass(t, 3 * 60 * 60 * 1000);
+  assert.equal(sending.seen.state, "pending", "three hours of silence did not end the turn");
+  answer({ allow: true });
+  await sending.done;
+  assert.equal(sending.seen.state, "done");
+  // A caller with nobody to stop it (a background summary) can still name a limit.
+  answer = undefined;
+  const limited = watching(session.send({ prompt: "run bash:ls again" }, 60000));
+  await until(() => answer, "Pi is waiting again");
+  await pass(t, 60000);
+  await limited.done;
+  assert.match(limited.seen.value.message, /Pi took too long to answer/);
+  await provider.stop();
 });
 
 test("a model error with no reply fails the turn with the plan's words", { skip }, async () => {

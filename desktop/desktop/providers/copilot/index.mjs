@@ -34,6 +34,7 @@ import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { CopilotClient, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
 import { decide } from "./permissions.mjs";
 import { inventory, resolvePrompt } from "./commands.mjs";
 import { matchModel, readAgents } from "./agents.mjs";
@@ -43,9 +44,9 @@ import { copilotUsage } from "../../providerusage.mjs";
 
 const permissionMode = { all: "allow-all", assisted: "assisted" };
 const RUNTIME_SKILLS = ["customize-cloud-agent", "github-pr-media", "pr-stack"];
-// This is an inactivity limit. Every event from the session restarts it, so a build or a
-// sub-agent may run for as long as it keeps reporting progress.
-const DEFAULT_STALL_TIMEOUT_MS = 10 * 60 * 1000;
+// What the runtime's errors say when the session is gone: its connection closed, its process
+// exited, or it no longer holds the session. Any other error from a liveness check is no news.
+const GONE = /connection (?:is |got )?(?:closed|disposed)|not connected|(?:client|session) (?:is )?disconnected|session not found|server exited|\bEPIPE\b/i;
 // BOTKINS_TIMING=1 prints how long each runtime step took.
 const timed = env("TIMING")
   ? async (label, action) => {
@@ -262,9 +263,10 @@ class CopilotSession extends ProviderSession {
   }
   async send({ prompt, attachments, fleet }, timeoutMs, onReady) {
     const options = { prompt, ...(attachments?.length && { attachments: sdkAttachments(attachments) }) };
-    // Admit the message and use the session events for completion. The SDK's legacy completion
-    // timeout is a wall-clock deadline; active tool and sub-agent work must be allowed to outlive it.
-    const stallMs = timeoutMs ?? this.entry.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+    // Admit the message and use the session events for completion. The SDK's own completion
+    // timeout is a wall-clock deadline; a build or a sub-agent may run for as long as it takes. The
+    // turn ends when the reply is done, when the person stops it, or when the session is gone
+    // (watchQuiet asks after each quiet spell). `timeoutMs` is for a caller with nobody to stop it.
     let messageId;
     let requestStarted = false;
     let ended = false;
@@ -273,7 +275,8 @@ class CopilotSession extends ProviderSession {
     let idleBeforeSteer;
     let lastAssistant;
     let admitted = false;
-    let timer;
+    let deadline;
+    let watch;
     const buffered = [];
     let resolveOutcome;
     let rejectOutcome;
@@ -281,15 +284,6 @@ class CopilotSession extends ProviderSession {
       resolveOutcome = resolve;
       rejectOutcome = reject;
     });
-    const resetStall = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        rejectOutcome(Object.assign(
-          new Error("Copilot session stalled without an event for " + Math.round(stallMs / 1000) + " seconds."),
-          { code: "BOTKINS_SESSION_STALL" },
-        ));
-      }, Math.max(1, stallMs));
-    };
     const observe = (event) => {
       if (!event || typeof event !== "object" || event.agentId) return;
       if (event.type === "user.message" && event.data) {
@@ -337,9 +331,9 @@ class CopilotSession extends ProviderSession {
     };
     const onEvent = (event) => {
       // Activity before send() returns its message id still proves that the runtime is alive.
-      resetStall();
+      watch?.touch();
       // A transport can publish deltas and tool activity before its send response arrives. Those
-      // events keep the inactivity detector alive, but retaining every payload until correlation
+      // events show the runtime is alive, but retaining every payload until correlation
       // is known would make a slow admission an unbounded buffer. Keep only root events that can
       // affect the completion outcome; the rest are observed by the workspace's own listener.
       if (!admitted) {
@@ -349,11 +343,20 @@ class CopilotSession extends ProviderSession {
       else observe(event);
     };
     const off = this.sdk.on(onEvent);
-    resetStall();
+    // Stop ends the turn here at once, also while the message is not yet admitted.
+    this.current = { stop: () => rejectOutcome(new Error("The requested run was aborted before completion.")) };
+    watch = watchQuiet({
+      every: this.entry.quietCheckMs,
+      probe: () => this.alive(),
+      onDead: (reason) =>
+        rejectOutcome(Object.assign(new Error("Copilot stopped before it finished this reply (" + String(reason?.message ?? reason).trim() + ")."), { code: "BOTKINS_SESSION_LOST" })),
+    });
+    if (timeoutMs > 0)
+      deadline = setTimeout(() => rejectOutcome(Object.assign(new Error("Copilot didn't finish in time."), { code: "BOTKINS_TURN_TIMEOUT" })), timeoutMs);
     try {
-      // Race admission itself with the inactivity detector. A provider transport can hang before
-      // returning its message id; if so the stall must reject this call too. Keep a rejection
-      // handler on the admission branch because it may settle after the stall branch wins.
+      // Race admission itself with the outcome. A provider transport can hang before returning its
+      // message id; Stop or a lost session must end this call too. Keep a rejection handler on the
+      // admission branch because it may settle after the outcome branch wins.
       const admission = (async () => {
         if (fleet) {
           // session.idle waits for fleet's background helpers, so the turn ends when they all have.
@@ -387,11 +390,23 @@ class CopilotSession extends ProviderSession {
       return { text: response?.data?.content?.trim() || "" };
     } finally {
       ended = true;
-      clearTimeout(timer);
+      watch.stop();
+      clearTimeout(deadline);
+      this.current = null;
       off?.();
     }
   }
+  /** Asks the runtime whether this session is still there. Rejects only when it is gone. */
+  async alive() {
+    if (!this.sdk.rpc?.model?.getCurrent) return;
+    try {
+      await this.sdk.rpc.model.getCurrent();
+    } catch (error) {
+      if (GONE.test(String(error?.message ?? error))) throw error;
+    }
+  }
   abort() {
+    this.current?.stop();
     return this.sdk.abort();
   }
   async close({ discard = false } = {}) {
@@ -450,15 +465,16 @@ export class CopilotProvider extends ModelProvider {
    * @param options.keepWarmMs     How long a finished turn's session stays open. 0 closes it at once.
    * @param options.maxWarm        How many sessions may stay open.
    * @param options.connect        For tests: returns an SDK-shaped client instead of starting the runtime.
+   * @param options.quietCheckMs   How long a turn is quiet before the runtime is asked whether the session is still there.
    * @param options.github         () => { token?, useLoggedInUser? } | undefined: how the runtime signs in
    *                               to GitHub when it shouldn't use the person's saved sign-in (a trial run).
    *                               With a token it uses that; with useLoggedInUser false and no token it
    *                               runs signed out. Either way it leaves the keychain alone.
    * @param options.platform, options.sdk  For tests of how the runtime is started.
    */
-  constructor({ baseDirectory, userHome, workingDirectory, keepWarmMs = 0, maxWarm = 6, connect, github, platform = process.platform, sdk, stallTimeoutMs = DEFAULT_STALL_TIMEOUT_MS } = {}) {
+  constructor({ baseDirectory, userHome, workingDirectory, keepWarmMs = 0, maxWarm = 6, connect, github, platform = process.platform, sdk, quietCheckMs = QUIET_CHECK_MS } = {}) {
     super();
-    Object.assign(this, { baseDirectory, userHome, workingDirectory, keepWarmMs, maxWarm, connect, github, platform, stallTimeoutMs });
+    Object.assign(this, { baseDirectory, userHome, workingDirectory, keepWarmMs, maxWarm, connect, github, platform, quietCheckMs });
     this.sdk = sdk ?? { CopilotClient, RuntimeConnection };
     this.pool = new Map();
     // Disconnects in progress. A session opened while one runs is slow, so opens wait for them.
@@ -758,7 +774,7 @@ export class CopilotProvider extends ModelProvider {
       signature,
       model: modelKey(spec.model),
       inference: spec.inference,
-      stallTimeoutMs: this.stallTimeoutMs,
+      quietCheckMs: this.quietCheckMs,
       mode: permissionMode[spec.approval] ?? "manual",
       turn,
       busy: true,
