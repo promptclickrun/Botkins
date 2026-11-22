@@ -104,6 +104,17 @@ export function pluginsApi({ workspace, handlers, bot, signIns, log }) {
       await handlers["plugins.setEnabled"](found.id, on === true, revision == null ? undefined : { revision });
       return view(plugin(found.id));
     },
+    /**
+     * Adds a plugin from a folder. The app adds a folder switched on, because the window and the phone warn the person first.
+     * This socket cannot know that a person saw a warning, and a bot's shell is a caller too. So a plugin that runs commands
+     * here arrives switched off, and `plugins.setEnabled` switches it on with the revision that was looked at. A plugin that
+     * runs nothing arrives switched on.
+     */
+    async "plugins.addFolder"([path]) {
+      const added = await handlers["plugins.addFolder"](path, { enabled: false });
+      if (!pluginRuns(added.contents).length) await handlers["plugins.setEnabled"](added.id, true);
+      return view(plugin(added.id));
+    },
     "plugins.configure": ([ref, values]) => handlers["plugins.configure"](plugin(ref).id, values),
     /** Removing a plugin deletes its saved settings and sign-ins: that needs `options.agreed: true`. */
     "plugins.uninstall": ([ref, options]) => {

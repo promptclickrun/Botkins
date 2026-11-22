@@ -710,7 +710,7 @@ export class Integrations {
    * a skill folder (it holds SKILL.md) is copied into Botkins; a folder of skill folders stays
    * where it is and is read from there.
    * A plugin folder is not added here. A plugin can start commands, so it has one way in, the one
-   * that copies it, shows what it starts and adds it switched off (Plugins.addFolder). The
+   * that copies it and shows what it starts (Plugins.addFolder). The
    * refusal has `code: "PLUGIN_FOLDER"` and the `folder`, so that a caller can send it there.
    */
   addFromFolder(path) {

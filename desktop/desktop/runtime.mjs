@@ -322,14 +322,15 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
   const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null });
   // A folder a person adds for its skills. A plugin folder goes the plugins' way instead, which
-  // copies it, shows what it starts and adds it switched off: a plugin has no other way in.
+  // copies it and shows what it starts: a plugin has no other way in. It arrives switched on, as
+  // an installed plugin does (the owner's rule in desktop/plugins.mjs, NOTES).
   const addFolderOrPlugin = async (path, options) => {
     try {
       return workspace.integrations.addFromFolder(path);
     } catch (error) {
       if (error?.code !== "PLUGIN_FOLDER" || options?.plugins === false) throw error;
       const added = await workspace.plugins.addFolder(error.folder);
-      return { kind: "plugin", name: added.name, id: added.id, enabled: false };
+      return { kind: "plugin", name: added.name, id: added.id, enabled: added.enabled === true };
     }
   };
   const handlers = {

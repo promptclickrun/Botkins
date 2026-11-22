@@ -364,7 +364,7 @@ test("a folder that is a plugin is not taken as a folder of skills, and two skil
   assert.deepEqual(ws.integrations.folders().plugins, []);
   assert.deepEqual(ws.integrations.addFromFolder(make("both", { "SKILL.md": "---\nname: both\ndescription: A skill.\n---\nDo it.", "plugin.json": "{}" }), { plugins: false }), { kind: "skill", name: "both" });
   // No caller links a plugin folder any more. The app's own call (the window and a phone use it) sends the folder
-  // the plugins' way: it is copied, described and added switched off, and the answer says so.
+  // the plugins' way: it is copied, described and added switched on (the window and the phone warn first), and the answer says so.
   assert.throws(() => ws.integrations.addFromFolder(plugin), (error) => error.code === "PLUGIN_FOLDER");
   // (A trial service lets a caller choose folders below its own home folder only.)
   const hooked = join(paths.dataDir, "folders-home", "hooked");
@@ -374,9 +374,9 @@ test("a folder that is a plugin is not taken as a folder of skills, and two skil
   // (The socket has no way to the app's raw call: `call` is not a method of the service.)
   await assert.rejects(client.call("call", "addSkillFolderAt", [hooked]), { code: "UNKNOWN_METHOD" });
   const sent = await running.runtime.handlers.addSkillFolderAt(hooked);
-  assert.deepEqual([sent.kind, sent.name, sent.enabled], ["plugin", "hooked", false]);
+  assert.deepEqual([sent.kind, sent.name, sent.enabled], ["plugin", "hooked", true]);
   const [installed] = await client.call("plugins.list");
-  assert.deepEqual([installed.id, installed.enabled, installed.contents.hooks.map((hook) => hook.command)], [sent.id, false, ["touch /tmp/hooked"]]);
+  assert.deepEqual([installed.id, installed.enabled, installed.contents.hooks.map((hook) => hook.command)], [sent.id, true, ["touch /tmp/hooked"]]);
   // The command for skills still refuses it, with the same sentence.
   const refused = await botkins(["skills", "add-folder", hooked]);
   assert.equal(refused.exit, 1);

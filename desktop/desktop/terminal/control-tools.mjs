@@ -281,8 +281,8 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       try {
         return await handlers.addSkillFolderAt(folder, { plugins: false });
       } catch (error) {
-        // The plugins' own command takes such a folder: it adds it switched off and shows what it would run.
-        if (/This folder is a plugin/.test(String(error?.message))) throw new ControlError(error.message + " Add it with `botkins plugins add-folder`, which adds it switched off and shows what it runs.", "BAD_ARGUMENT");
+        // The plugins' own command takes such a folder: it shows what the plugin would run, and one that runs commands goes on only after a yes.
+        if (/This folder is a plugin/.test(String(error?.message))) throw new ControlError(error.message + " Add it with `botkins plugins add-folder`, which shows what it runs first.", "BAD_ARGUMENT");
         throw error;
       }
     },

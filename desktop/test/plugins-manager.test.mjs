@@ -12,7 +12,7 @@ import { CAPABILITIES } from "../desktop/runtime.mjs";
 /** A switch-on as a client makes it after a look: it names the revision of the installed copy. A plugin that runs commands is not switched on without it. */
 const switchOn = (plugins, id) => plugins.setEnabled(id, true, { revision: plugins.list().find((p) => p.id === id).revision });
 
-test("a copied folder needs activation and its settings survive restart behind the vault", async (t) => {
+test("a copied folder arrives switched on, and its settings survive restart behind the vault", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "botkins-plugin-settings-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const source = join(dir, "mine");
@@ -27,7 +27,8 @@ test("a copied folder needs activation and its settings survive restart behind t
   const open = () => new Workspace(join(dir, "data"), fakeClient().client, () => {});
   const ws = open();
   const added = await ws.plugins.addFolder(source);
-  assert.equal(added.enabled, false);
+  // On at once, as an installed plugin is: the window and the phone warn before a folder is added.
+  assert.equal(added.enabled, true);
   assert.equal(added.status, "needs-config");
   await ws.plugins.configure(added.id, { MEMORY_API_KEY: "synthetic-marker-907" });
   await ws.plugins.setBots(added.id, ["pip"]);
@@ -61,7 +62,8 @@ test("a bot in an approve-all chat still needs the person's approval and secure 
     }),
   );
   const ws = new Workspace(join(dir, "data"), fakeClient().client, () => {});
-  const plugin = await ws.plugins.addFolder(source);
+  // (Added switched off, so that the bot's proposal to switch it on is what the test looks at.)
+  const plugin = await ws.plugins.addFolder(source, { enabled: false });
   const bot = ws.bot("pip"),
     chat = ws.chat(ws.createChat(bot.id)),
     task = {},
@@ -207,7 +209,7 @@ test("an installed copy that was changed on disk is not used, the app says why, 
   assert.deepEqual(Object.keys((await again.plugins.session(again.bot("pip"), { id: "chat-1" })).hooks.handlers), ["onSessionStart"]);
 });
 
-test("a plugin installed by an earlier version that starts anything its description did not show is switched off until the person has looked", async (t) => {
+test("a plugin installed by an earlier version that starts anything its description did not show stays on, with a note that is shown as a warning", async (t) => {
   const { open, source, file } = managed(t);
   const long = "echo " + "a".repeat(400);
   const plugin = (name, files) => source(name, { "plugin.json": { name: name + "-fixture", version: "1.0.0" }, ...files });
@@ -244,42 +246,44 @@ test("a plugin installed by an earlier version that starts anything its descript
   writeFileSync(file, JSON.stringify(rows));
   const after = open();
   const byName = (name) => after.plugins.list().find((row) => row.name === name + "-fixture");
-  const state = (name) => [byName(name).enabled, byName(name).detail === undefined];
-  assert.deepEqual(state("remote"), [true, true]);
-  assert.deepEqual(state("short"), [true, true]);
+  const noted = (name) => (byName(name).warnings ?? []).some((line) => UNSEEN.test(line));
+  const state = (name) => [byName(name).enabled, byName(name).detail === undefined, noted(name)];
+  assert.deepEqual(state("remote"), [true, true, false]);
+  assert.deepEqual(state("short"), [true, true, false]);
+  // Botkins switches nothing off: what nobody was shown is the first warning, and the plugin stays on.
   for (const name of ["args", "long", "mixed"]) {
-    assert.equal(byName(name).enabled, false, name);
-    assert.match(byName(name).detail, /Botkins switched this plugin off\. An earlier version of Botkins did not show everything that this plugin starts/);
+    assert.deepEqual(state(name), [true, true, true], name);
+    assert.match(byName(name).warnings[0], UNSEEN);
   }
   // What it starts is now shown whole.
   assert.deepEqual(byName("args").contents.mcpServers.map((tool) => tool.args), [["-c", "touch /tmp/unseen"]]);
   assert.equal(byName("long").contents.hooks[0].command, long);
-  // A copy that cannot be read is off, with its own reason, and is not marked as read.
-  assert.equal(byName("gone").enabled, false);
-  assert.match(byName("gone").detail, /Its installed files could not be read, so Botkins cannot show what it starts\. Update the plugin to write its files again, then switch it on\./);
+  // A copy that cannot be read stays on as the person had it, with its own reason, and is not marked as read. (A session takes only a copy that is intact and ready, so it starts nothing.)
+  assert.equal(byName("gone").enabled, true);
+  assert.equal(byName("gone").status, "error");
+  assert.match(byName("gone").detail, /^The installed files of this plugin could not be read, so Botkins cannot show what it starts\. Update the plugin to write its files again\.$/);
   assert.equal(byName("gone").repair, "update");
   const stored = () => JSON.parse(readFileSync(file, "utf8"));
   const marked = (name) => stored().find((row) => row.preview.name === name + "-fixture").reading;
   assert.deepEqual(["remote", "args", "long", "short", "mixed"].map(marked), [3, 3, 3, 3, 3]);
   assert.equal(marked("gone"), undefined);
-  assert.equal(stored().find((row) => row.preview.name === "gone-fixture").heldBack, "unread");
-  // It cannot be switched on while it cannot be read.
-  await assert.rejects(after.plugins.setEnabled(byName("gone").id, true), /Its installed files could not be read/);
+  assert.deepEqual([stored().find((row) => row.preview.name === "gone-fixture").note, stored().find((row) => row.preview.name === "gone-fixture").heldBack], ["unread", undefined]);
+  // A switch-on cannot describe it while it cannot be read.
+  await assert.rejects(after.plugins.setEnabled(byName("gone").id, true), /could not be read/);
   // The reviewing is done once for what was read. The second open changes nothing more, and the one that was not read is tried again.
   await switchOn(after.plugins, byName("args").id);
   const before = JSON.stringify(stored());
   const third = open();
   assert.equal(JSON.stringify(stored()), before);
   const named = (name) => third.plugins.list().find((row) => row.name === name + "-fixture");
-  assert.deepEqual(["remote", "args", "long", "short", "mixed", "gone"].map((name) => named(name).enabled), [true, true, false, true, false, false]);
-  assert.equal(named("args").detail, undefined);
+  assert.deepEqual(["remote", "args", "long", "short", "mixed", "gone"].map((name) => named(name).enabled), [true, true, true, true, true, true]);
+  // The person's own switch is done with the note. The others keep it.
+  assert.equal((named("args").warnings ?? []).some((line) => UNSEEN.test(line)), false);
+  assert.match(named("long").warnings[0], UNSEEN);
   assert.equal(marked("gone"), undefined);
-  // An update writes its files again. The copy can then be read, and switching on clears the reason.
+  // An update writes its files again. The copy can then be read: the reason and the way back are done with, and it is on as it was.
   await third.plugins.update(named("gone").id, { revision: stored().find((row) => row.preview.name === "gone-fixture").revision });
-  // After the update it is off with no reason and no mark: the next thing is the person's "Turn on".
-  assert.deepEqual([named("gone").enabled, named("gone").repair, named("gone").detail], [false, undefined, undefined]);
-  await switchOn(third.plugins, named("gone").id);
-  assert.deepEqual([named("gone").enabled, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").heldBack], [true, undefined, 3, undefined]);
+  assert.deepEqual([named("gone").enabled, named("gone").repair, named("gone").detail, marked("gone"), stored().find((row) => row.preview.name === "gone-fixture").note], [true, undefined, undefined, 3, undefined]);
 });
 
 test("a changed copy is put right by an update, which writes the reviewed files again and keeps the settings", async (t) => {
@@ -327,7 +331,7 @@ test("every installed copy is checked at the start, not only up to the first bad
   assert.deepEqual(again.plugins.list().map((row) => row.status), ["error", "error", "error"]);
 });
 
-test("a plugin folder that was linked live becomes an installed plugin, switched off, and no session gets the folder itself", async (t) => {
+test("a plugin folder that was linked live becomes an installed plugin, on as it was with a note, and no session gets the folder itself", async (t) => {
   const { open, source } = managed(t);
   const folder = realpathSync(source("linked", { "plugin.json": { name: "linked-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "touch /tmp/linked" }] } }, "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\nA." }));
   const gone = join(folder, "..", "gone");
@@ -340,12 +344,14 @@ test("a plugin folder that was linked live becomes an installed plugin, switched
   const after = open();
   await after.plugins.queue;
   const [row] = after.plugins.list();
-  assert.deepEqual([row.name, row.enabled, row.folder], ["linked-fixture", false, folder]);
-  assert.match(row.detail, /This plugin folder was linked for its skills\. Botkins now keeps a copy of it and shows what it starts/);
+  assert.deepEqual([row.name, row.enabled, row.folder, row.detail], ["linked-fixture", true, folder, undefined]);
+  assert.match(row.warnings[0], /^This plugin folder was linked for its skills\. Botkins now keeps a copy of it and shows what it starts on this computer\.$/);
   assert.deepEqual(row.contents.hooks.map((hook) => hook.command), ["touch /tmp/linked"]);
   // The one that could be copied is no longer linked. The one that could not stays in the list, and is not used.
   assert.deepEqual(after.integrations.skillState.plugins.map((link) => link.path), [gone]);
-  assert.deepEqual(await after.plugins.session(after.bot("pip"), { id: "chat-1" }), { directories: [], mcpServers: {}, hooks: undefined });
+  // A session gets what Botkins wrote from the copy, never the linked folder itself.
+  const session = await after.plugins.session(after.bot("pip"), { id: "chat-1" });
+  assert.ok(session.directories.every((dir) => dir !== folder && !dir.startsWith(folder + "/")), JSON.stringify(session.directories));
   // A new link cannot be made: the folder goes the plugins' way.
   assert.throws(() => after.integrations.addFromFolder(folder), (error) => error.code === "PLUGIN_FOLDER" && error.folder === folder);
 });
@@ -571,13 +577,38 @@ test("the app names the capability that says its description of a plugin is what
   assert.ok(CAPABILITIES.includes(PLUGIN_STARTS));
 });
 
-const RUNS = { message: "This plugin runs commands on this computer. Look at what it starts before you switch it on. If the app does not show you that, update the app." };
+const UNSEEN = /^An earlier version of Botkins did not show everything that this plugin starts on this computer\. Look at what it starts\.$/;
+const NEWHOOK = /^A hook of this plugin did not run before this version of Botkins and runs now\. Look at what it starts\.$/;
 const ANOTHER = /This plugin is not the one that was looked at: its revision is another one now\. Look at it again\./;
+
+test("a plugin that a version up to 0.17.2 switched off by itself is on again, with the reason as a warning; one the person switched off stays off", async (t) => {
+  const { open, source, file } = managed(t);
+  const plugin = (name) => source(name, { "plugin.json": { name: name + "-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
+  const ws = open();
+  for (const name of ["unseen", "newhook", "linked", "mine"]) await ws.plugins.addFolder(plugin(name));
+  // The file as 0.17.2 kept it: three switched off by Botkins (`heldBack`), and one that the person switched off (no reason).
+  writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8")).map((row) => {
+    const name = row.preview.name.replace("-fixture", "");
+    return { ...row, enabled: false, ...(name !== "mine" && { heldBack: name }) };
+  })));
+  const after = open();
+  const byName = (name) => after.plugins.list().find((row) => row.name === name + "-fixture");
+  const stored = () => JSON.parse(readFileSync(file, "utf8"));
+  assert.match(byName("unseen").warnings[0], UNSEEN);
+  assert.match(byName("newhook").warnings[0], NEWHOOK);
+  assert.match(byName("linked").warnings[0], /^This plugin folder was linked for its skills\./);
+  for (const name of ["unseen", "newhook", "linked"]) {
+    assert.deepEqual([byName(name).enabled, byName(name).detail], [true, undefined], name);
+    const row = stored().find((entry) => entry.preview.name === name + "-fixture");
+    assert.deepEqual([row.enabled, row.note, row.heldBack], [true, name, undefined], name);
+  }
+  assert.equal(byName("mine").enabled, false, "the person's own choice of off stays");
+});
 
 test("a switch-on and a choice of bots can name the revision that was looked at, and the app compares it", async (t) => {
   const { open, source, file } = managed(t);
   const ws = open();
-  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "look-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "look-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }), { enabled: false });
   const { revision } = ws.plugins.records[0];
   const before = readFileSync(file, "utf8");
   // Another revision: refused, and nothing is kept.
@@ -594,36 +625,41 @@ test("a switch-on and a choice of bots can name the revision that was looked at,
   await ws.plugins.setBots(added.id, ["pip"], { revision });
   await ws.plugins.setEnabled(added.id, true, { revision });
   assert.deepEqual([ws.plugins.list()[0].enabled, ws.plugins.list()[0].bots], [true, ["pip"]]);
-  // None: a switch-off needs none, and for the bots too. (A switch-on of this plugin, which has a hook, is refused with none:
-  // nothing, null and an object with no revision. The tests on the sentence are below.)
-  await ws.plugins.setEnabled(added.id, false);
-  for (const none of [undefined, null, {}]) await assert.rejects(ws.plugins.setEnabled(added.id, true, none), RUNS);
-  assert.equal(ws.plugins.list()[0].enabled, false);
-  await ws.plugins.setEnabled(added.id, true, { revision });
+  // None: a switch-off needs none, and for the bots too. A switch-on of this plugin, which has a hook, works with none too:
+  // nothing, null and an object with no revision. Only a revision that is given is compared.
+  for (const none of [undefined, null, {}]) {
+    await ws.plugins.setEnabled(added.id, false);
+    await ws.plugins.setEnabled(added.id, true, none);
+    assert.equal(ws.plugins.list()[0].enabled, true, JSON.stringify(none));
+  }
   await ws.plugins.setBots(added.id, "all", {});
   await ws.plugins.setBots(added.id, ["pip"]);
   assert.deepEqual([ws.plugins.list()[0].enabled, ws.plugins.list()[0].bots], [true, ["pip"]]);
 });
 
-test("the app refuses a switch-on with no revision of a plugin that runs commands, whoever asks, and keeps nothing", async (t) => {
+test("the app switches on a plugin that runs commands with no revision, and compares a revision that is given", async (t) => {
   const { open, source, file } = managed(t);
   const ws = open();
-  const hook = await ws.plugins.addFolder(source("hook", { "plugin.json": { name: "hook-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
-  const tool = await ws.plugins.addFolder(source("tool", { "plugin.json": { name: "tool-fixture", version: "1.0.0" }, ".mcp.json": { mcpServers: { files: { command: "node", args: ["x.js"] } } } }));
-  const skills = await ws.plugins.addFolder(source("skills", { "plugin.json": { name: "skills-fixture", version: "1.0.0" }, "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\nA." }));
+  const off = { enabled: false };
+  const hook = await ws.plugins.addFolder(source("hook", { "plugin.json": { name: "hook-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }), off);
+  const tool = await ws.plugins.addFolder(source("tool", { "plugin.json": { name: "tool-fixture", version: "1.0.0" }, ".mcp.json": { mcpServers: { files: { command: "node", args: ["x.js"] } } } }), off);
+  const skills = await ws.plugins.addFolder(source("skills", { "plugin.json": { name: "skills-fixture", version: "1.0.0" }, "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\nA." }), off);
   const revisionOf = (id) => ws.plugins.list().find((row) => row.id === id).revision;
   const enabled = (id) => ws.plugins.list().find((row) => row.id === id).enabled;
   const stored = () => readFileSync(file, "utf8");
-  const before = stored();
-  // (a) No revision: refused with the sentence, for a hook and for a tool that is a program, and the plugin stays off.
+  // (a) No revision: it is switched on, for a hook and for a tool that is a program. The warnings come before it, where a person is
+  // (the window, the phone, the command line). It is kept.
   for (const id of [hook.id, tool.id]) {
-    await assert.rejects(ws.plugins.setEnabled(id, true), RUNS);
-    assert.equal(enabled(id), false);
+    await ws.plugins.setEnabled(id, true);
+    assert.equal(enabled(id), true);
+    assert.equal(JSON.parse(stored()).find((row) => row.preview.id === id).enabled, true);
+    await ws.plugins.setEnabled(id, false);
   }
-  assert.equal(stored(), before);
+  const before = stored();
   // (c) Another revision: the refusal for a plugin that is not the one that was looked at.
   await assert.rejects(ws.plugins.setEnabled(hook.id, true, { revision: "0".repeat(64) }), ANOTHER);
   assert.equal(enabled(hook.id), false);
+  assert.equal(stored(), before);
   // (b) The right revision: it works.
   for (const id of [hook.id, tool.id]) {
     await ws.plugins.setEnabled(id, true, { revision: revisionOf(id) });
@@ -640,7 +676,7 @@ test("the app refuses a switch-on with no revision of a plugin that runs command
   assert.equal(enabled(skills.id), true);
 });
 
-test("a switch-on with no revision comes after the refusals for a copy that was changed or cannot be read", async (t) => {
+test("a switch-on of a copy that was changed is refused, with a revision and with none", async (t) => {
   const { open, source } = managed(t);
   const ws = open();
   const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "order-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
@@ -684,7 +720,7 @@ test("an update that is under way finishes before a yes is compared, so an old y
   const { open, source, file } = managed(t);
   const ws = open();
   const folder = source("mine", { "plugin.json": { name: "race-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } });
-  const added = await ws.plugins.addFolder(folder);
+  const added = await ws.plugins.addFolder(folder, { enabled: false });
   const old = ws.plugins.records[0].revision;
   writeFileSync(join(folder, "hooks.json"), JSON.stringify({ hooks: { sessionStart: [{ command: "echo something else" }] } }));
   const { revision: newer } = await ws.plugins.preview(added.id);
@@ -704,7 +740,7 @@ test("an update that is under way finishes before a yes is compared, so an old y
   assert.deepEqual(ws.plugins.list()[0].bots, ["pip"]);
 });
 
-test("a hook that earlier versions never ran and runs now switches the plugin off once, with the reason", async (t) => {
+test("a hook that earlier versions never ran and runs now leaves the plugin on, with a note that is shown as a warning until the person switches it", async (t) => {
   const { open, source, file } = managed(t);
   // The old description had the hook by its command, and the hook has no settings of its own: nothing else is unseen.
   const alias = source("alias", { "plugin.json": { name: "alias-fixture", version: "1.0.0" }, "hooks.json": { hooks: { UserPromptSubmit: [{ command: "echo hi" }] } } });
@@ -716,15 +752,16 @@ test("a hook that earlier versions never ran and runs now switches the plugin of
   const stored = () => JSON.parse(readFileSync(file, "utf8"));
   const after = open();
   const byName = (workspace, name) => workspace.plugins.list().find((row) => row.name === name + "-fixture");
-  assert.equal(byName(after, "alias").enabled, false);
-  assert.match(byName(after, "alias").detail, /did not run before this version of Botkins and runs now/);
-  assert.equal(byName(after, "same").enabled, true);
-  assert.equal(byName(after, "same").detail, undefined);
-  // The person looks, and switches it on: it stays on at the next open.
+  const noted = (workspace, name) => (byName(workspace, name).warnings ?? []).some((line) => NEWHOOK.test(line));
+  assert.deepEqual([byName(after, "alias").enabled, byName(after, "alias").detail, noted(after, "alias")], [true, undefined, true]);
+  assert.match(byName(after, "alias").warnings[0], NEWHOOK);
+  assert.deepEqual([byName(after, "same").enabled, byName(after, "same").detail, noted(after, "same")], [true, undefined, false]);
+  assert.equal(stored().find((row) => row.preview.name === "alias-fixture").note, "newhook");
+  // The person switches it (here: on again, after a look): the note is done with, also at the next open.
   await switchOn(after.plugins, byName(after, "alias").id);
-  assert.equal(stored().find((row) => row.preview.name === "alias-fixture").heldBack, undefined);
+  assert.equal(stored().find((row) => row.preview.name === "alias-fixture").note, undefined);
   const third = open();
-  assert.deepEqual([byName(third, "alias").enabled, byName(third, "alias").detail, byName(third, "same").enabled], [true, undefined, true]);
+  assert.deepEqual([byName(third, "alias").enabled, noted(third, "alias"), byName(third, "same").enabled], [true, false, true]);
 });
 
 /** A marketplace of one plugin, for an install by name. */
@@ -789,18 +826,19 @@ test("a row marked 2 is looked at once for a hook that runs now, and not for wha
   writeFileSync(file, JSON.stringify(stored().map((row) => ({ ...row, reading: 2 }))));
   const after = open();
   const byName = (workspace, name) => workspace.plugins.list().find((row) => row.name === name + "-fixture");
+  const noted = (workspace, name) => (byName(workspace, name).warnings ?? []).some((line) => NEWHOOK.test(line) || UNSEEN.test(line));
   for (const name of ["prompt", "every"]) {
-    assert.equal(byName(after, name).enabled, false, name);
-    assert.match(byName(after, name).detail, /did not run before this version of Botkins and runs now/);
-    assert.equal(rowOf(name).heldBack, "newhook");
+    assert.deepEqual([byName(after, name).enabled, byName(after, name).detail], [true, undefined], name);
+    assert.match(byName(after, name).warnings[0], NEWHOOK);
+    assert.equal(rowOf(name).note, "newhook");
   }
-  for (const name of ["plain", "tool"]) assert.deepEqual([byName(after, name).enabled, byName(after, name).detail], [true, undefined], name);
+  for (const name of ["plain", "tool"]) assert.deepEqual([byName(after, name).enabled, byName(after, name).detail, noted(after, name)], [true, undefined, false], name);
   assert.deepEqual(["prompt", "every", "plain", "tool"].map((name) => rowOf(name).reading), [3, 3, 3, 3]);
-  // The person looks and switches it on: it stays so at the second open, and at a third.
+  // The person switches it after a look: the note is done with at the second open. The other one keeps its note, and stays on.
   await switchOn(after.plugins, byName(after, "prompt").id);
   const second = open();
-  assert.deepEqual([byName(second, "prompt").enabled, byName(second, "prompt").detail], [true, undefined]);
-  assert.equal(byName(second, "every").enabled, false, "what the person has not switched on stays off");
+  assert.deepEqual([byName(second, "prompt").enabled, noted(second, "prompt")], [true, false]);
+  assert.deepEqual([byName(second, "every").enabled, noted(second, "every")], [true, true], "what the person has not switched keeps its note");
   assert.deepEqual(["prompt", "every", "plain", "tool"].map((name) => rowOf(name).reading), [3, 3, 3, 3]);
   assert.equal(byName(open(), "prompt").enabled, true);
 });
@@ -1022,7 +1060,7 @@ test("a copy whose check could not be done is checked again when the list is ask
   const { chmodSync } = await import("node:fs");
   const { open, source } = managed(t);
   const ws = open();
-  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "recheck-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }));
+  const added = await ws.plugins.addFolder(source("mine", { "plugin.json": { name: "recheck-fixture", version: "1.0.0" }, "hooks.json": { hooks: { sessionStart: [{ command: "true" }] } } }), { enabled: false });
   const [row] = ws.plugins.records;
   assert.equal(row.enabled, false, "the plugin is off");
   t.mock.method(console, "warn", () => {});
