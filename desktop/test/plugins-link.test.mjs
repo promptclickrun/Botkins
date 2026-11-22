@@ -117,8 +117,9 @@ test("a paired phone manages plugin scope, versions and credentials over the pro
   assert.notEqual(newer.revision, preview.revision);
   await assert.rejects(call("update", id, { revision: preview.revision }));
   assert.equal((await call("update", id, { revision: newer.revision })).revision, newer.revision);
+  // A phone warns before it adds a folder, so the app adds it switched on, as an install is.
   const local = await call("addFolder", folder);
-  assert.equal(local.enabled, false);
+  assert.equal(local.enabled, true);
   await assert.rejects(call("addFolder", root));
   for (let retry = 0; retry < 100 && !captured.some((part) => part?.plugins?.some?.((p) => p.id === local.id)); retry++) await delay(35);
   assert.ok(captured.some((part) => part?.plugins?.some?.((p) => p.id === local.id)));

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { PluginCatalog, snapshotStamp, verifySnapshot } from "./plugin-catalog.mjs";
-import { describeStarts, folderReader, lineOf, pluginRuns, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
+import { describeStarts, folderReader, lineOf, pluginStarts, STARTS, startWarnings } from "./plugin-reading.mjs";
 import { MIN_SECRET_LENGTH, newStops, pluginSession, pluginOAuthServers, secretField } from "./plugin-runtime.mjs";
 
 export const PLUGINS = "plugins-v1";
@@ -31,15 +31,24 @@ const digest = (value) => createHash("sha256").update(value).digest("hex").slice
  * before: 3 means that look was made (see reviewOld).
  */
 const READING = 3;
-/** Why Botkins itself switched a plugin off. The person switches it on again after a look. */
-const HELD_BACK = {
-  unseen: "Botkins switched this plugin off. An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts, and switch it on again if you agree.",
-  unread: "Botkins switched this plugin off. Its installed files could not be read, so Botkins cannot show what it starts. Update the plugin to write its files again, then switch it on.",
-  newhook: "Botkins switched this plugin off. A hook of this plugin did not run before this version of Botkins and runs now. Look at what it starts, and switch it on again if you agree.",
-  linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
+/**
+ * What Botkins says about a plugin where nobody was shown all that it starts (a row's `note`). It is a warning with the
+ * plugin's other warnings, and the plugin stays as the person has it, on or off.
+ *
+ * The owner's rule of 2026-11-21: "warning a user as they enable a plugin is fine, but blocking them is not unless it truly
+ * looks malicious with a high confidence (supply chain, prompt injection or credential stealing for example)." So Botkins
+ * switches no plugin off by itself and refuses no switch-on. What it still refuses is a copy whose files are not the
+ * reviewed ones (CHANGED_COPY: the supply-chain case), and an install or update that names no revision or another one.
+ * Versions up to 0.17.2 switched a plugin off for these four reasons (`heldBack`): reviewOld switches those on again.
+ */
+const NOTES = {
+  unseen: "An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts.",
+  unread: "The installed files of this plugin could not be read, so Botkins cannot show what it starts. Update the plugin to write its files again.",
+  newhook: "A hook of this plugin did not run before this version of Botkins and runs now. Look at what it starts.",
+  linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer.",
 };
-/** A switch-on of a plugin that runs commands names the revision that was looked at. The app holds this rule itself, whoever calls. */
-const LOOK_FIRST = "This plugin runs commands on this computer. Look at what it starts before you switch it on. If the app does not show you that, update the app.";
+/** A copy that cannot be read cannot be described or started. */
+const UNREAD_COPY = "The installed files of this plugin could not be read, so Botkins cannot show what it starts. Update the plugin to write its files again, then switch it on.";
 const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
 /** The check of the copy could not be done (a read error). That says nothing about the files, so it is not "changed". */
 const UNREADABLE_COPY = "Botkins could not read the installed files of this plugin to check them. Try again. If it stays so, update the plugin: Botkins writes its files again and keeps your settings.";
@@ -219,9 +228,9 @@ export class Plugins {
    * The descriptions kept from before the one reading are made again from the copies. An old
    * description showed a local tool by its name and command only, a hook by its event and its
    * command cut at 300 characters, and a remote tool by its name and address. A plugin that is on
-   * and starts anything beyond that is switched off, with the reason, until the person has
-   * looked: nobody was shown the rest. A copy that cannot be read is not marked as read, so it
-   * is looked at again at the next start.
+   * and starts anything beyond that gets a note, which is shown as a warning: nobody was shown
+   * the rest. It stays on (see NOTES for the rule). A copy that cannot be read is not marked as
+   * read, so it is looked at again at the next start.
    *
    * A row that is marked 2 was described by the one reading already, so its description is
    * complete: only the second rule below applies to it, and then it is marked 3.
@@ -241,6 +250,14 @@ export class Plugins {
       return fresh.mcpServers.some(toolUnseen) || fresh.hooks.some(hookUnseen);
     };
     for (const row of this.records) {
+      // A version up to 0.17.2 switched this plugin off by itself, and the person never chose off (a switch by the person
+      // drops the reason). It goes on again, and the reason stays as a warning.
+      if (row.heldBack) {
+        if (NOTES[row.heldBack]) row.note = row.heldBack;
+        if (!row.enabled) row.enabled = true;
+        delete row.heldBack;
+        changed = true;
+      }
       if (row.reading === READING) continue;
       // The copy is checked before it is read: a description is never made from bytes that are not the reviewed ones.
       // Such a row is left as it is. It stays as it was kept, on or off, and the error it shows already keeps it from
@@ -250,19 +267,19 @@ export class Plugins {
       const fresh = this.described(row);
       const complete = row.reading === 2;
       if (!fresh) {
-        if (row.enabled) {
-          Object.assign(row, { enabled: false, heldBack: "unread" });
+        if (row.note !== "unread") {
+          row.note = "unread";
           changed = true;
         }
         continue;
       }
       const before = row.preview.contents ?? {};
-      if (!complete && row.enabled && unseen(fresh, before)) Object.assign(row, { enabled: false, heldBack: "unseen" });
+      if (!complete && row.enabled && unseen(fresh, before)) row.note = "unseen";
       // A hook that earlier versions never ran (a matcher that means every case, an event under its other spelling) runs
-      // now. The person agreed to a plugin whose hook, in fact, never ran: they look one time. What such a hook gets: the
+      // now. The person agreed to a plugin whose hook, in fact, never ran: a note tells them. What such a hook gets: the
       // person's prompt, which it can change or block; with a matcher of "*" on a tool event, the arguments and the result
       // of each tool call; and an agentStop hook can make the bot go on.
-      else if (row.enabled && fresh.newlyRun) Object.assign(row, { enabled: false, heldBack: "newhook" });
+      else if (row.enabled && fresh.newlyRun) row.note = "newhook";
       row.preview = this.refreshed(row.preview, fresh);
       row.reading = READING;
       changed = true;
@@ -286,7 +303,8 @@ export class Plugins {
   /**
    * A plugin folder that an earlier version linked live (Settings, Skills) was read by the
    * runtime itself, with its hooks and tools, on for every bot, and nobody was shown what it
-   * starts. Each one becomes an installed plugin: copied, described, switched off. One that
+   * starts. Each one becomes an installed plugin: copied, described, and on as it was, with a
+   * note that is shown as a warning. One that
    * cannot be copied stays in the list, where the person can remove it, and is not used.
    */
   async adoptLinked() {
@@ -295,7 +313,7 @@ export class Plugins {
       try {
         const { folder, preview, revision } = await this.catalog.addFolder(link.path);
         if (!this.records.some((row) => row.preview.id === preview.id))
-          this.save({ folder, preview, revision, sourceFolder: link.path, enabled: false, bots: "all", installedAt: Date.now(), refs: {}, reading: READING, heldBack: "linked" });
+          this.save({ folder, preview, revision, sourceFolder: link.path, enabled: true, bots: "all", installedAt: Date.now(), refs: {}, reading: READING, note: "linked" });
         this.ws.integrations.removeFolder(link.id);
         this.unadopted.delete(link.path);
       } catch (error) {
@@ -433,7 +451,9 @@ export class Plugins {
       const items = [...notRunItems(notRun), ...held.map((name) => ({ what: "tool", name, why: SECRET_IN_LINE }))];
       notRun = Array.isArray(notRun) ? items : { count: notRunCount(notRun) + held.length, items };
     }
-    const warnings = fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], notRun ?? []) : (preview.warnings ?? []);
+    // (What nobody was shown comes first. Files that could not be read are said in `detail`, with the way back, not here.)
+    const note = row.note === "unread" ? null : NOTES[row.note];
+    const warnings = [...(note ? [note] : []), ...(fresh ? startWarnings(fresh.mcpServers, fresh.hooks, preview.warnings ?? [], notRun ?? []) : (preview.warnings ?? []))];
     let servers = [];
     if (status === "ready") {
       try {
@@ -461,10 +481,9 @@ export class Plugins {
       // The way back for a copy that is changed, gone or not readable is an update: it writes the
       // reviewed files again and keeps the settings. A client offers Update from this mark, not
       // from the words of `detail`, also when the source did not change.
-      ...((changedCopy || unreadable || (row.heldBack === "unread" && !row.enabled)) && { repair: "update" }),
-      ...(row.heldBack && !row.enabled && { detail: HELD_BACK[row.heldBack] }),
+      ...((changedCopy || unreadable || (row.note === "unread" && !fresh)) && { repair: "update" }),
       ...(status === "error" && {
-        detail: unavailable ? "This computer could not open a saved plugin setting." : unreadable ? UNREADABLE_COPY : changedCopy && existsSync(row.folder) ? CHANGED_COPY : row.heldBack === "unread" && !row.enabled ? HELD_BACK.unread : "The installed plugin files could not be opened.",
+        detail: unavailable ? "This computer could not open a saved plugin setting." : unreadable ? UNREADABLE_COPY : changedCopy && existsSync(row.folder) ? CHANGED_COPY : row.note === "unread" ? NOTES.unread : "The installed plugin files could not be opened.",
       }),
       ...(status === "needs-sign-in" && { detail: "Sign in to the plugin’s remote tools on this computer." }),
       limits: limitsFor(preview),
@@ -531,11 +550,16 @@ export class Plugins {
       return this.public(row);
     });
   }
-  addFolder(path) {
+  /**
+   * Adds a plugin from a folder on this computer. It arrives switched on, as an installed plugin does: the window and the
+   * phone warn the person before they add it. `options.enabled: false` adds it switched off (the control socket, which
+   * cannot know that a person saw the warning: desktop/terminal/control-plugins.mjs).
+   */
+  addFolder(path, options) {
     return this.serialize(async () => {
       const { folder, preview, revision } = await this.catalog.addFolder(path);
       if (this.records.some((r) => r.preview.id === preview.id)) throw new Error("This folder is already installed.");
-      const row = { folder, preview, revision, sourceFolder: path, enabled: false, bots: "all", installedAt: Date.now(), refs: {}, reading: READING };
+      const row = { folder, preview, revision, sourceFolder: path, enabled: options?.enabled !== false, bots: "all", installedAt: Date.now(), refs: {}, reading: READING };
       this.save(row);
       return this.public(row);
     });
@@ -573,8 +597,8 @@ export class Plugins {
       if (typeof enabled !== "boolean") throw new Error("Choose on or off.");
       const before = this.get(id);
       this.lookedAt(before, options);
-      // (Switching on is the person's yes after a look: a reason Botkins switched it off for is done with.)
-      const { heldBack: _reason, ...row } = before;
+      // (A switch by the person, on or off, is their own choice: the note about what nobody was shown is done with.)
+      const { heldBack: _old, note: _reason, ...row } = before;
       let fresh;
       if (enabled && row.reading !== READING) {
         // The copy is checked before it is read. (A copy that is gone is "could not be read", below.)
@@ -582,20 +606,15 @@ export class Plugins {
         // A copy that could not be read at the start is read again now, not from what was kept.
         this.descriptions.delete(row.folder);
         fresh = this.described(row);
-        if (!fresh) throw new Error(HELD_BACK.unread);
-        // (The person looks at the fresh description before this yes, so the start does not ask again.)
+        if (!fresh) throw new Error(UNREAD_COPY);
+        // (The description is fresh now, so the start does not look at this row again.)
         row.reading = READING;
         row.preview = this.refreshed(row.preview, fresh);
       }
+      // The one refusal of a switch-on: the installed files are not the reviewed ones. A switch-on with no revision is not
+      // refused (see NOTES for the rule): the window, the phone and the command line warn before it, each in its own way,
+      // and a revision that is named is compared (lookedAt, above).
       if (enabled) this.assertIntact(row);
-      // A plugin that is off and runs commands here is switched on by a yes that names the revision of what was looked at.
-      // What it runs is read from the installed copy now, as the control socket reads it (pluginRuns). A plugin that is on
-      // already changes nothing, so it needs no yes.
-      if (enabled && !before.enabled && options?.revision === undefined) {
-        fresh ??= this.described(row);
-        if (!fresh) throw new Error(HELD_BACK.unread);
-        if (pluginRuns(fresh).length) throw new Error(LOOK_FIRST);
-      }
       this.save({ ...row, enabled });
     });
   }
@@ -605,7 +624,7 @@ export class Plugins {
       this.reviewed(options);
       const before = this.get(id);
       // The way back that a client offers is an update. Where the update cannot work either, the person is told the next step.
-      const repairing = this.checked.get(before.folder)?.ok === false || this.unreadable.has(before.folder) || before.heldBack === "unread";
+      const repairing = this.checked.get(before.folder)?.ok === false || this.unreadable.has(before.folder) || before.note === "unread";
       let material;
       try {
         material = await this.catalog.materialize(id, options.revision);
@@ -623,10 +642,10 @@ export class Plugins {
             : [],
         ),
       );
-      // (A plugin that was off because its files could not be read has files that can be read now: that reason, and the
-      // mark that an update is the way back, are done with. It stays off until the person switches it on.)
-      const { heldBack, ...kept } = before;
-      const row = { ...kept, ...(heldBack && heldBack !== "unread" && { heldBack }), folder: material.folder, revision: material.revision, preview: material.preview, refs, reading: READING };
+      // (A plugin whose files could not be read has files that can be read now: that note, and the mark that an update is
+      // the way back, are done with. It stays on or off as the person has it.)
+      const { heldBack: _old, note, ...kept } = before;
+      const row = { ...kept, ...(note && note !== "unread" && { note }), folder: material.folder, revision: material.revision, preview: material.preview, refs, reading: READING };
       const previousServers = this.knownOAuthServers(before);
       // The folder is the same one when the source did not change. The files were written again,
       // so what was cached about the old files is dropped and the copy is checked again.

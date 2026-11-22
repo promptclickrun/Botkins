@@ -483,13 +483,20 @@ export const pluginCommands = {
     },
   },
   "add-folder": {
-    summary: "Add a plugin from a folder on this computer, switched off",
+    summary: "Add a plugin from a folder on this computer",
     usage: "botkins plugins add-folder <path>",
-    details: "Give the folder's full path. Botkins copies the folder and adds the plugin switched off, so nothing of it runs. What it would run is shown. `botkins plugins enable` switches it on after your yes.",
+    details: "Give the folder's full path. Botkins copies the folder and adds the plugin. A plugin that runs nothing on this computer is on at once. A plugin that runs commands here is shown first: at a terminal you are asked if it goes on, and with no terminal it is added switched off, and `botkins plugins enable` switches it on with the revision that is printed.",
     async run(context) {
       const added = await context.client.call("plugins.addFolder", one(context, "Give the folder's full path."));
       const plugin = await context.client.call("plugins.get", added.id);
-      context.print(plugin, (now) => described(now) + "\nAdded, and switched off. Switch it on with `botkins plugins enable -- " + idWord(now.id) + "`." + idNote(now.id));
+      const text = described(plugin);
+      if (plugin.enabled) return void context.print(plugin, () => text + "\nAdded, and on.");
+      const off = (now) => text + "\nAdded, and switched off. Switch it on with `botkins plugins enable -- " + idWord(now.id) + "`." + idNote(now.id);
+      // It runs commands here. A person at a terminal is shown what it starts and asked. Nobody to ask: it stays off, and the answer says how it goes on.
+      if (!context.stdin.isTTY || context.json) return void context.print(plugin, off);
+      show(context, text);
+      if (!(await confirm(context, "Switch it on and let it run these on this computer?"))) return void context.print(plugin, () => "Added, and switched off. Switch it on with `botkins plugins enable -- " + idWord(plugin.id) + "`." + idNote(plugin.id));
+      context.print(await context.client.call("plugins.setEnabled", plugin.id, true, plugin.revision), (now) => "Added. " + called(now) + " is on.");
     },
   },
   "sign-in": {

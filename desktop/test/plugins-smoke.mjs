@@ -222,10 +222,11 @@ try {
   await page.getByRole("button", { name: "Back to plugins", exact: true }).click();
   await dialog.getByRole("tab", { name: /Installed \(1\)/ }).waitFor();
 
-  // Add the same source as a local folder plugin: the host leaves it off for review, and the
-  // renderer reflects the second State.plugins entry without a reload.
+  // Add the same source as a local folder plugin: the host switches it on, as an install does (the
+  // window warns before a folder is added), and the renderer reflects the second State.plugins
+  // entry without a reload.
   const local = await call("plugins.addFolder", plugin);
-  assert.equal(local.enabled, false);
+  assert.equal(local.enabled, true);
   await dialog.getByRole("tab", { name: /Installed \(2\)/ }).click();
   await dialog.locator(".plugin-listing", { hasText: "Computer" }).waitFor({ timeout: 30000 });
 

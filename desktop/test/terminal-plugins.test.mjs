@@ -261,7 +261,17 @@ test("a plugin that runs nothing installs with no question, a folder plugin is a
   assert.match(installed.json().revision, /^[a-f0-9]{64}$/);
   assert.equal((await botkins(["plugins", "enable", "notes"])).exit, 0, "and none to switch it on");
 
-  // A folder of this computer: added switched off, so nothing of it runs, with all that it would run shown.
+  // A folder of this computer that runs nothing here (skills only): added, and on at once.
+  const quiet = join(dir, "quiet");
+  write(join(quiet, "plugin.json"), { name: "quiet", version: "0.1.0" });
+  mkdirSync(join(quiet, "skills", "a"), { recursive: true });
+  writeFileSync(join(quiet, "skills", "a", "SKILL.md"), "---\nname: a\ndescription: A skill.\n---\nDo it.");
+  const addedQuiet = await botkins(["plugins", "add-folder", quiet]);
+  assert.equal(addedQuiet.exit, 0, addedQuiet.err);
+  assert.match(addedQuiet.out, /Added, and on\.\n?$/);
+  assert.equal((await client.call("plugins.get", "quiet")).enabled, true);
+  // A folder that runs commands here: the socket cannot know that a person saw what it runs, so with no terminal it is added
+  // switched off, so nothing of it runs, with all that it would run shown.
   const mine = join(dir, "mine");
   write(join(mine, "plugin.json"), { name: "mine", version: "0.1.0" });
   write(join(mine, "hooks", "hooks.json"), { hooks: { sessionStart: [{ hooks: [{ type: "command", bash: "sh ./start.sh" }] }] } });
