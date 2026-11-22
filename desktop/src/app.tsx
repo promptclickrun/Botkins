@@ -218,6 +218,9 @@ function App() {
   // A new chat nobody wrote in is archived when the person leaves it (src/emptyChat.ts). Only a
   // chat left on the same computer counts: after a switch, the id belongs to the other one.
   const lastShown = useRef({ host, id: "" });
+  // The empty chats this window took out of the archive to show again (selecting a bot with "Start
+  // a new chat"). Until the computer's answer arrives, the window still knows them as archived.
+  const reopenedChats = useRef(new Set<string>());
   const leaving = useRef({ state, drafts, sending });
   leaving.current = { state, drafts, sending };
   useEffect(() => {
@@ -225,7 +228,8 @@ function App() {
     lastShown.current = { host, id: chatId };
     const now = leaving.current;
     if (!before.id || before.id === chatId || before.host !== host || now.sending || !now.state) return;
-    if (leftEmpty(now.state.chats.find((c) => c.id === before.id), now.state, now.drafts[before.id]))
+    const reopened = reopenedChats.current.delete(before.id);
+    if (leftEmpty(now.state.chats.find((c) => c.id === before.id), now.state, now.drafts[before.id], reopened))
       void api.setChatFlags(before.id, { archived: true }).catch(() => {});
   }, [chatId, host]);
   // A reply that lands in the open chat marks it unread on the backend. It counts as read once the
@@ -404,7 +408,10 @@ function App() {
     // archived yet: the archiving of a chat just left may still be on its way.
     if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
       const blank = newChatToReuse(state.chats, b.id, state);
-      if (blank) void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
+      if (blank) {
+        if (blank.archived) reopenedChats.current.add(blank.id);
+        void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
+      }
       else void newChat(b.id).catch(fail);
       return;
     }

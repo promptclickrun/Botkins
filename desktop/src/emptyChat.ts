@@ -18,9 +18,12 @@ const blank = (chat: Chat, state: Busy) =>
  * Whether leaving this chat should archive it: an ordinary conversation (not a routine's or a
  * panel's chat) with no message from the person or a bot, that is not working and has nothing
  * queued. A chat the person pinned, gave a schedule or left typed text in is kept as it is.
+ * A chat that is archived already is left alone, unless this window just took it out (`reopened`).
  */
-export function leftEmpty(chat: Chat | undefined, state: Busy, draft = "") {
-  return !!chat && !chat.archived && blank(chat, state) && !draft.trim();
+export function leftEmpty(chat: Chat | undefined, state: Busy, draft = "", reopened = false) {
+  // `reopened`: this window took the chat out of the archive itself and may not have heard back
+  // yet, so what it knows of the chat can still say "archived". Leaving it then archives it again.
+  return !!chat && (!chat.archived || reopened) && blank(chat, state) && !draft.trim();
 }
 
 /**

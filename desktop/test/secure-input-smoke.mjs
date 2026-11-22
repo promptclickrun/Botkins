@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-secure-ui-"));
 const data = join(dir, "profile");
@@ -25,7 +25,7 @@ const url = "https://secure-input.invalid/sign-in";
 let app;
 try {
   app = await _electron.launch({ args: [fixture], env, timeout: 30000 });
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   const chatId = await page.evaluate(() => window.botkins.createChat("pip"));
   await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getAllWindows()[0].webContents.send("open-chat", id), chatId);

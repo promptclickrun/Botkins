@@ -1162,6 +1162,8 @@ export type SkillInfo = {
   enabled: boolean;
   editable?: boolean;
   folderId?: string;
+  /** Why no bot gets this skill on this computer, as the computer says it ("Needs the botkins command line on this host."). */
+  unavailable?: string;
 };
 export type SkillFolders = {
   folders: { id: string; path: string; missing: boolean; skills: number }[];

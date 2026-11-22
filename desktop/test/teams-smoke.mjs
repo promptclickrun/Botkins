@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { qrPath } from "../desktop/link/qr.mjs";
 import { _electron, expect } from "@playwright/test";
 import { LinkHost } from "../desktop/link/index.mjs";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -62,7 +62,7 @@ try {
     executablePath: process.env.BOTKINS_BINARY,
     env,
   });
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();

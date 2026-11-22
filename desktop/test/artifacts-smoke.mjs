@@ -7,7 +7,7 @@ import { crc32, deflateSync } from "node:zlib";
 import { join } from "node:path";
 import { fileDetails } from "../desktop/artifact-files.mjs";
 import { seedApp } from "./starter.mjs";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 
 /** A small picture of one colour, as a PNG file's bytes. */
 function png(width, height, [r, g, b]) {
@@ -36,7 +36,7 @@ const launch = () => _electron.launch({ args: executablePath ? [] : ["."], execu
 let app;
 try {
   app = await launch();
-  const first = await skipWelcome(await app.firstWindow());
+  const first = await home(app);
   await first.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await app.close();
   const workspacePath = join(dir, "data", "workspace.json");
@@ -94,7 +94,7 @@ try {
   ]));
 
   app = await launch();
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getAllWindows()[0].webContents.send("open-chat", id), chat.id);
   await expect(page.locator("aside.side-pane")).toBeVisible();

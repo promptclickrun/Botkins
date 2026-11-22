@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
 import { openToday, showsSpaces } from "./spaces-helper.mjs";
 import { starterBots } from "./starter.mjs";
 import { probeListeners, probePage } from "./webrtc-probe.mjs";
@@ -184,6 +184,8 @@ try {
     };
     shell.openExternal = async (url) => void globalThis.opened.push(url);
   });
+  // Signed in as a made-up account, so the app opens on Home whatever this computer's sign-in is.
+  await signedInAs(app);
   await win.reload();
   win = await skipWelcome(win);
   await win.getByRole("heading", { name: "Home", exact: true }).waitFor();

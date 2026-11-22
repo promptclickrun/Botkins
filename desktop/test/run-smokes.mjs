@@ -5,12 +5,14 @@
 //   node test/run-smokes.mjs plugins spaces   only these (names without "-smoke.mjs")
 //   node test/run-smokes.mjs --part=2/3       the second of three parts, to run parts side by side
 //   node test/run-smokes.mjs --list           the names, and what is left out where
+//   node test/run-smokes.mjs --live controls  as this computer is signed in, for a smoke that runs real model turns
 //
 // Before it: `npm ci` and `npm run build` in desktop/ (a smoke starts the built window with Electron).
 // Options: --logs=<folder> keeps each smoke's whole output there (else a folder in the system's
 // temporary place, named at the end when something failed); --minutes=<n> is the time limit for
 // one smoke (5). A smoke gets no sign-in, no keychain and no real model turn: the switches for
-// those are taken out of its environment here.
+// those are taken out of its environment here, and the app under it runs signed out
+// (BOTKINS_SIGNED_OUT=1), also on a computer whose owner is signed in.
 //
 // Each smoke keeps its files in a temporary folder of its own (the app's data folder and Electron's
 // own files are both there). One exception: teams-smoke makes desktop/.teams-smoke-<pid> and
@@ -25,12 +27,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktop = join(here, "..");
 
 /**
- * Smokes that are not run in some place, each with the reason. `where` is "ci" (a runner: the
- * environment has CI set), or a platform ("linux", "win32", "darwin"). A smoke is left out only
- * with a line that says so; nothing is left out without a word.
+ * Smokes that are not run in some place, each with the reason. `where` is "signed-out" (the smoke
+ * runs real model turns, so it runs only with --live, by hand), "ci" (a runner: the environment
+ * has CI set), or a platform ("linux", "win32", "darwin"). A smoke is left out only with a line
+ * that says so; nothing is left out without a word.
  */
 export const LEFT_OUT = [
   // { name: "phone", where: "linux", why: "it looks for the computer with macOS's own Bonjour tool" },
+  { name: "approvals", where: "signed-out", why: "it sends a message to a bot and waits for the real model to call a tool, which needs a signed-in account and uses it" },
+  { name: "controls", where: "signed-out", why: "it picks a real Copilot model and runs real turns on it for the /usage checks, which needs a signed-in account and uses it" },
 ];
 
 /**
@@ -51,8 +56,8 @@ export const allSmokes = () =>
     .sort();
 
 /** Why a smoke is left out here, or nothing. */
-export function leftOut(name, { ci = !!process.env.CI, platform = process.platform } = {}) {
-  return LEFT_OUT.find((one) => one.name === name && (one.where === "ci" ? ci : one.where === platform))?.why;
+export function leftOut(name, { ci = !!process.env.CI, platform = process.platform, live = false } = {}, list = LEFT_OUT) {
+  return list.find((one) => one.name === name && (one.where === "signed-out" ? !live : one.where === "ci" ? ci : one.where === platform))?.why;
 }
 
 /** Part `index` of `count` (1-based), by turns, so each part gets long and short smokes alike. */
@@ -124,18 +129,33 @@ async function main(argv) {
   }
   if (options.list) {
     for (const name of names) console.log(name + (leftOut(name) ? "   left out here: " + leftOut(name) : "") + (BY_CHANCE[name] ? "   one more try: " + BY_CHANCE[name] : ""));
+    console.log("\nWith --live, the smokes that are left out for running real model turns run too, signed in as this computer is.");
     return 0;
   }
+  const live = options.live === "1";
   const minutes = Number(options.minutes ?? 5);
   const logs = options.logs ?? mkdtempSync(join(tmpdir(), "botkins-smokes-"));
   mkdirSync(logs, { recursive: true });
   const env = { ...process.env };
   for (const key of NOT_FOR_A_SMOKE) delete env[key];
+  // Signed out, whatever this computer is signed in to: a smoke never uses a person's own token,
+  // and it gives the same result here and on a runner. A smoke that needs a signed-in window uses
+  // a stand-in (test/welcome-helper.mjs, `home`).
+  // With --live a smoke runs as this computer is signed in. That is for the smokes that run real
+  // model turns (LEFT_OUT, where "signed-out"), by hand, on a computer whose owner agrees to it.
+  if (!live) {
+    env.BOTKINS_SIGNED_OUT = "1";
+    delete env.BOTKINS_COPILOT_TOKEN;
+    // Only the provider that comes with the app starts, unless a smoke names others itself: the
+    // other providers are tools of this computer with sign-ins of their own, and a runner has none.
+    env.BOTKINS_PROVIDERS = "copilot";
+    delete env.COMMANDER_PROVIDERS;
+  }
 
   const started = Date.now();
   const tally = { pass: 0, fail: 0, time: 0, skip: 0 };
   for (const name of names) {
-    const why = leftOut(name);
+    const why = leftOut(name, { live });
     if (why) {
       tally.skip++;
       console.log("skip  " + name + ": left out here, because " + why);

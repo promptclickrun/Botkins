@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { skipWelcome, home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "botkins-market-apps-"));
@@ -30,7 +30,7 @@ async function openApps() {
   return dialog;
 }
 try {
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (error) => errors.push(error.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor({ timeout: 30000 });

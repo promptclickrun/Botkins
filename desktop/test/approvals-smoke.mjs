@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { createSources } from "./fixtures/sources.mjs";
 import { seedApp } from "./starter.mjs";
 
@@ -20,7 +20,7 @@ const app = await _electron.launch({
 });
 let chatId;
 try {
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   const button = (n) => page.getByRole("button", { name: n, exact: true });
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(760, 560));

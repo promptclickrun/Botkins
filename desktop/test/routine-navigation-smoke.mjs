@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { _electron, expect } from "@playwright/test";
 import { Workspace } from "./starter.mjs";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-last-chat-"));
 const env = { ...process.env, BOTKINS_DATA_DIR: dir };
@@ -15,7 +15,7 @@ let app;
 async function launch() {
   const executablePath = process.env.BOTKINS_BINARY;
   app = await _electron.launch({ args: executablePath ? [] : ["."], executablePath, env });
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   return page;
 }

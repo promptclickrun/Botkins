@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { _electron } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
 import { freePort } from "./free-port.mjs";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 
 const binary = process.env.BOTKINS_BINARY;
 const out = process.env.REMOTE_SHOTS || null;
@@ -26,7 +26,7 @@ const launch = async (name, more = {}, kept = null) => {
   const env = { ...process.env, BOTKINS_DATA_DIR: dir, BOTKINS_PROVIDERS: "copilot", ...more };
   delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   await page.setViewportSize({ width: 1180, height: 800 });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message.slice(0, 200)));

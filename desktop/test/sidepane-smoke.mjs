@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-sidepane-"));
@@ -23,7 +23,7 @@ const launch = () => _electron.launch({ args: ["."], env, timeout: 300000 });
 const long = { timeout: 120000 };
 
 let app = await launch();
-await (await skipWelcome(await app.firstWindow())).getByRole("heading", { name: "Home", exact: true }).waitFor(long);
+await (await home(app)).getByRole("heading", { name: "Home", exact: true }).waitFor(long);
 await app.close();
 
 // ---- The chats, in made-up words, and one stored page for a rich UI panel.
@@ -129,7 +129,7 @@ const paneWidth = () => pane().evaluate((el) => Math.round(el.getBoundingClientR
 
 app = await launch();
 try {
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor(long);

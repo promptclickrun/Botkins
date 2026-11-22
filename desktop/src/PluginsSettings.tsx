@@ -334,19 +334,22 @@ function PluginDetail({ selection, preview, previewLoading, installed, where, ma
     const held = heldBack(installed);
     const repair = installed.repair === "update";
     body = <>
-      {/* The computer's reason comes first, as it is: Botkins switched this plugin off, or an update is the way back. */}
+      {/* The computer's reason comes first, as it is: Botkins switched this plugin off, or an update is the way back.
+          The window itself never holds the switch back (the owner's rule, 2026-11-21: warn a person who turns a
+          plugin on, and block only what truly looks malicious). It offers Update first, asks, and shows the
+          computer's own answer when the computer refuses. */}
       {held && <p className="plugin-held" role="status"><ShieldAlert size={15} aria-hidden="true" /><span>{installed.detail}</span></p>}
       <Group title="Status">
         <div className="set-row">
           <div className="set-label">
             <span className="set-name">{held ? "Off · Needs review" : statusLabel(installed)}</span>
             {installed.detail && !held && installed.status !== "error" && <small>{installed.detail}</small>}
-            {repair && <small>Update this plugin first. Then you can turn it on.</small>}
+            {repair && <small>An update writes this plugin’s files again and keeps your settings.</small>}
             {installed.limits && <small>{installed.limits}</small>}
           </div>
           <div className="set-control">
             {repair && <button type="button" className="set-button primary" disabled={busy} onClick={() => onUpdate(installed)}>Update</button>}
-            <input type="checkbox" role="switch" className="switch set-switch" aria-label={installed.name + " enabled"} checked={installed.enabled} disabled={busy || (repair && !installed.enabled)} onChange={(e) => onEnabled(installed, e.target.checked)} />
+            <input type="checkbox" role="switch" className="switch set-switch" aria-label={installed.name + " enabled"} checked={installed.enabled} disabled={busy} onChange={(e) => onEnabled(installed, e.target.checked)} />
           </div>
         </div>
         {installed.status === "error" && !held && <div className="set-row"><small className="int-note bad"><i aria-hidden="true" />{installed.detail || "Plugin failed to load."} <button type="button" className="set-link int-more" onClick={onRetry}>Retry</button></small></div>}

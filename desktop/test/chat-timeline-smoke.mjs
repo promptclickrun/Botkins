@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-timeline-ui-"));
@@ -47,7 +47,7 @@ writeFileSync(workspaceFile, JSON.stringify(workspace));
 let app;
 try {
   app = await _electron.launch({ args: ["."], env });
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getAllWindows()[0].webContents.send("open-chat", id), chatId);
   await expect(page.locator(".chathead-title h2")).toContainText(bot.name);

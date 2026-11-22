@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-tasks-"));
@@ -18,7 +18,7 @@ seedApp(dir);
 delete env.ELECTRON_RUN_AS_NODE;
 const app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 try {
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 880));

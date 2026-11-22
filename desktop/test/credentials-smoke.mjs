@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const VALUE = "sk-smoke-VALUE-7f3a9c21d4";
@@ -71,7 +71,7 @@ async function shot(name) {
 
 try {
   app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1190, 830));

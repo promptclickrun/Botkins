@@ -65,9 +65,14 @@ import { chatSectionHandlers, withOwnerChatSections } from "./chat-sections-ipc.
 /**
  * How a trial run's Copilot runtime signs in to GitHub without the keychain: with the token in
  * BOTKINS_COPILOT_TOKEN, else the one the GitHub CLI hands out (`gh auth token`, which reads only
- * the GitHub CLI's own entry, as the GitHub CLI), else not at all.
+ * the GitHub CLI's own entry, as the GitHub CLI), else not at all. With BOTKINS_SIGNED_OUT=1, not
+ * at all.
  */
 export function trialGitHub() {
+  // BOTKINS_SIGNED_OUT=1: not at all, whatever this computer is signed in to. The window's smokes
+  // run so (test/run-smokes.mjs): they never use a person's own token, and they give the same
+  // result on a computer that is signed in and on one that is not.
+  if (env("SIGNED_OUT") === "1") return { useLoggedInUser: false };
   let token = env("COPILOT_TOKEN");
   if (!token) {
     for (const gh of ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"]) {
