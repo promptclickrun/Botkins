@@ -20,8 +20,6 @@ import { recordCanvas } from "./canvas.mjs";
 
 export const MAX_TEAM = 16;
 export const MAX_ASKS = 8;
-// Shorter than a turn's own ten minutes, so a slow teammate fails its ask before the turn times out.
-const ASK_TIMEOUT = 8 * 60 * 1000;
 const MESSAGE_MAX = 16000;
 const REPLY_MAX = 32000;
 
@@ -194,17 +192,17 @@ export class Teamwork {
           recordCanvas(run, null, null, { ...event, agentId: event.agentId ?? "teammate" });
         else recordActivity(entry, event, this.ws.notify);
       });
-      const { text } = await session.send({ prompt }, ASK_TIMEOUT);
+      const { text } = await session.send({ prompt });
       if (over()) throw stopped();
       if (!text) throw new Error("no reply came back");
       return text;
     } catch (error) {
-      if (error?.code === "BOTKINS_SESSION_STALL") {
+      if (error?.code === "BOTKINS_SESSION_LOST") {
         let recovered;
         try {
           recovered = await session?.completedReply?.(rootEventId);
         } catch {
-          // A disconnected journal cannot be recovered here; preserve the original stall error.
+          // A disconnected journal cannot be recovered here; preserve the original error.
         }
         if (typeof recovered === "string" && recovered.trim()) return recovered.trim();
       }

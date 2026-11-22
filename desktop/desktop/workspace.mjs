@@ -1462,7 +1462,7 @@ export class Workspace {
 
   retryConnection(error, run, task) {
     if (task.stopped || this.closing || run.recovery?.retried || (run.recovery?.commandStarted && !run.recovery.input)) return false;
-    const lost = error?.code === "BOTKINS_PROVIDER_EXIT" ||
+    const lost = error?.code === "BOTKINS_PROVIDER_EXIT" || error?.code === "BOTKINS_SESSION_LOST" ||
       /session is disconnected|session disconnected while waiting for a response|connection (?:got disposed|is closed)/i.test(error?.message);
     if (!lost && !(task.gateway && task.gateway !== this.harness.gateway.server)) return false;
     (run.recovery ??= {}).retried = true;
@@ -1470,15 +1470,15 @@ export class Workspace {
     return true;
   }
 
-  // A Copilot event stream can outlive the SDK's inactivity wait. Ask the provider's journal
-  // whether the turn actually completed before surfacing a stall as Needs you.
-  async recoverStalled(session, chat, run) {
+  // A session that is gone may have finished the reply before it went. Ask the provider's journal
+  // whether the turn actually completed before surfacing the loss as Needs you.
+  async recoverLost(session, chat, run) {
     if (!session || run.recovery?.eventId == null || typeof session.completedReply !== "function") return null;
     try {
       const text = await session.completedReply(run.recovery.eventId);
       return typeof text === "string" && text.trim() ? text.trim() : null;
     } catch (recoveryError) {
-      console.error("Recover stalled chat:", recoveryError.message);
+      console.error("Recover lost chat:", recoveryError.message);
       return null;
     }
   }
@@ -1567,7 +1567,8 @@ export class Workspace {
     this.save();
     const chat = this.chat(run.chatId);
     const prompt = this.speakerPrompt(input.prompt, chat, run, task, { labelled: isGroup(chat) });
-    return session.send({ ...input, ...(prompt !== input.prompt && { prompt }) }, 600000, onReady);
+    // No time limit: the person stops a turn that runs too long, and a turn whose harness is gone ends by itself.
+    return session.send({ ...input, ...(prompt !== input.prompt && { prompt }) }, undefined, onReady);
   }
   /**
    * A coding chat in Plan mode runs in Copilot's plan mode: the agent plans and asks before it
@@ -1759,8 +1760,8 @@ export class Workspace {
       return text;
     } catch (error) {
       failed = true;
-      if (error?.code === "BOTKINS_SESSION_STALL") {
-        const recovered = await this.recoverStalled(session, chat, run);
+      if (error?.code === "BOTKINS_SESSION_LOST") {
+        const recovered = await this.recoverLost(session, chat, run);
         if (recovered != null) { task.stream = ""; return recovered; }
       }
       if (session) await session.abort().catch(() => {});
@@ -1932,8 +1933,8 @@ export class Workspace {
       }
       run.status = "Completed";
     } catch (error) {
-      if (error?.code === "BOTKINS_SESSION_STALL") {
-        const recovered = await this.recoverStalled(session, chat, run);
+      if (error?.code === "BOTKINS_SESSION_LOST") {
+        const recovered = await this.recoverLost(session, chat, run);
         if (recovered != null) {
           task.stream = "";
           if (routine && isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
@@ -2013,5 +2014,5 @@ export class Workspace {
 }
 
 function turnEnding(error) {
-  return ["BOTKINS_SESSION_STALL", "BOTKINS_TURN_TIMEOUT", "ETIMEDOUT"].includes(error?.code) || error?.name === "TimeoutError" ? "timed-out" : "failed";
+  return ["BOTKINS_TURN_TIMEOUT", "ETIMEDOUT"].includes(error?.code) || error?.name === "TimeoutError" ? "timed-out" : "failed";
 }

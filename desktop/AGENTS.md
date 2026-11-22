@@ -10,3 +10,11 @@ A standing rule from the owner (2026-11-20): the terminal host's command line an
 - A control call that changes something is in `CHANGES` in `coverage.mjs`, so that it leaves a line in the log: which call, which thing, never a value.
 - A command that puts something on the host that runs commands (a plugin with hooks, a tool that starts a program) shows what will run first and needs the person's yes.
 - The guide for people and agents is `docs/terminal.md`. The phone has the same kind of rule in `mobile/AGENTS.md`, "Parity with the computer".
+
+## A turn is never failed for being quiet
+
+A standing rule from the owner: "We shouldn't be enforcing time outs if it's controllable." The person can stop any turn (Stop in the chat and on the phone, Stop on Work and Routines), so a turn, a routine or a task has no time limit.
+
+- A turn ends by itself only when its harness is really gone (its process exited, its connection closed, its session no longer exists, or it reported an error), or when the person stops it. After a quiet spell the provider asks the harness whether it is still there (`desktop/providers/liveness.mjs`), and a live harness is waited for with no failure. A harness whose process ending already ends the turn (Claude Code, Pi, OMP, ACP agents) needs no check.
+- `send(message, timeoutMs)` takes a time limit only from a caller with nobody to stop it, such as the background chat summary. The workspace passes none for a person's turn.
+- Deadlines for a startup or connection handshake, a one-shot probe or a model list stay: the person can't see or stop those. A routine's own max-runtime setting, if one is ever added, is the person's choice and is honored.

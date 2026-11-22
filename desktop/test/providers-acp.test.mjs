@@ -21,7 +21,7 @@ function fakeAgent(play = async (turn) => turn.say("ok"), options = {}) {
   const listeners = new Set();
   let asked = async () => ({});
   let sessions = 0;
-  const state = { signedIn: true, loaded: new Set(), known: new Set(), cancelled: null };
+  const state = { signedIn: true, loaded: new Set(), known: new Set(), cancelled: null, promptTimeouts: [] };
   const opened = () => ({
     models: "models" in options ? options.models : {
       currentModelId: "sonnet",
@@ -40,8 +40,9 @@ function fakeAgent(play = async (turn) => turn.say("ok"), options = {}) {
       log.push([method, params]);
       if (method === "session/cancel") state.cancelled?.();
     },
-    async request(method, params) {
+    async request(method, params, timeoutMs) {
       log.push([method, params]);
+      if (method === "session/prompt") state.promptTimeouts.push(timeoutMs);
       const update = (sessionId, body) => listeners.forEach((fn) => fn("session/update", { sessionId, update: body }));
       switch (method) {
         case "initialize":
@@ -286,6 +287,15 @@ test("what the agent asks permission for goes through the turn's handlers; Botki
   // Nobody to ask between turns, not even for Botkins' own tool.
   assert.deepEqual(await session.permission({ toolCall: { title: "Run ls", kind: "execute" }, options }), picked("no"));
   assert.deepEqual(await session.permission({ toolCall: { title: "botkins-wiki_write", kind: "other" }, options }), picked("no"));
+});
+
+test("a turn has no time limit unless its caller names one: the agent's process ending ends it, and so does Stop", async (t) => {
+  const { provider, state } = setup(t, async (turn) => turn.say("ok"));
+  const session = await provider.openSession(spec());
+  await session.send({ prompt: "Go" });
+  await session.send({ prompt: "Summarize" }, 120000);
+  // 0 is "no deadline" to the channel (see StdioRpc.request); the channel's own 60 seconds is for the small requests.
+  assert.deepEqual(state.promptTimeouts, [0, 120000]);
 });
 
 test("a turn can be stopped or refused, and deleting forgets the session", async (t) => {

@@ -63,7 +63,8 @@ const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max
 const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effort : null);
 /** A conversation lets go of its Pi after this long unused; the next turn starts it again on the same session. */
 const IDLE_MS = 15 * 60 * 1000;
-const TURN_TIMEOUT_MS = 10 * 60 * 1000;
+/** How long Pi lets one call to Botkins' tool server take. A call can wait for the person (a secure prompt), so it is longer than Pi's 60 seconds. */
+const BRIDGE_CALL_TIMEOUT_S = 10 * 60;
 const MAX_LIVE = 8;
 /** Pi's session ids: letters, digits, `.`, `_` and `-`, starting and ending with a letter or digit. */
 const piSessionId = (id) => (/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/.test(id) ? id : uuidFor(id));
@@ -300,7 +301,7 @@ class PiSession extends ProviderSession {
     if (this.bridge) {
       const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
       // Pi defaults to 60 seconds per MCP call. A person has five minutes to answer a secure prompt.
-      if (entry) servers[BRIDGE] = this.provider.runtime === PI_ID ? { ...entry, timeout: TURN_TIMEOUT_MS / 1000 } : entry;
+      if (entry) servers[BRIDGE] = this.provider.runtime === PI_ID ? { ...entry, timeout: BRIDGE_CALL_TIMEOUT_S } : entry;
     }
     return {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
@@ -326,7 +327,12 @@ class PiSession extends ProviderSession {
     if (!spec.temporary && !known) provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
     return this.live;
   }
-  async send(message, timeoutMs = TURN_TIMEOUT_MS) {
+  /**
+   * Sends one message. There is no time limit: the person stops a turn that runs long, and Pi's
+   * process ending ends the turn (PiRpc tells the turn). `timeoutMs` is for a caller with nobody
+   * to stop it, such as a background summary.
+   */
+  async send(message, timeoutMs) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;
@@ -337,7 +343,7 @@ class PiSession extends ProviderSession {
       const { rpc } = live;
       const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map() });
       const settled = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
+        const timer = timeoutMs > 0 && setTimeout(() => reject(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
         const off = rpc.on((event) => {
           if (event.type === "botkins_exit") return reject(event.error);
           this.event(event);

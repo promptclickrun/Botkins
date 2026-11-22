@@ -1,10 +1,9 @@
 // A routine's script: code the owner wrote, run on this computer with no model (desktop/routines.mjs).
 // It runs with the person's shell as a login shell (so their PATH and profile apply), in the bot's
-// own folder, and stops after SCRIPT_TIMEOUT_MS. Its output (standard output and error together) is
-// kept, cut to its last SCRIPT_OUTPUT characters.
+// own folder, and has no time limit: it ends when it exits or when the person stops the run. Its
+// output (standard output and error together) is kept, cut to its last SCRIPT_OUTPUT characters.
 import { spawn } from "node:child_process";
 
-export const SCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
 export const SCRIPT_OUTPUT = 12000;
 /** The longest script a routine keeps. */
 export const SCRIPT_LENGTH = 20000;
@@ -16,14 +15,13 @@ export function shellFor(script, platform = process.platform, env = process.env)
 }
 
 /**
- * Runs a script. Resolves (never rejects) with { exitCode, signal, output, timedOut, stopped, error }.
+ * Runs a script. Resolves (never rejects) with { exitCode, signal, output, stopped, error }.
  * `exitCode` is null when the script was killed or could not start. `stop()` on the returned
  * handle ends it early.
  */
-export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = process.env, platform = process.platform } = {}) {
+export function runScript(script, { cwd, env = process.env, platform = process.platform } = {}) {
   const { file, args } = shellFor(script, platform, env);
   let output = "";
-  let timedOut = false;
   let stopped = false;
   const add = (chunk) => {
     output = (output + chunk).slice(-SCRIPT_OUTPUT);
@@ -32,7 +30,7 @@ export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = pr
     cwd,
     env: { ...env, BOTKINS_ROUTINE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
-    // Its own process group, so a timeout or Stop ends what the script started too.
+    // Its own process group, so Stop ends what the script started too.
     detached: platform !== "win32",
     windowsHide: true,
   });
@@ -46,19 +44,13 @@ export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = pr
   };
   child.stdout.setEncoding("utf8").on("data", add);
   child.stderr.setEncoding("utf8").on("data", add);
-  const timer = setTimeout(() => {
-    timedOut = true;
-    kill();
-  }, timeoutMs);
-  timer.unref?.();
   const done = new Promise((resolve) => {
     let error = "";
     child.on("error", (e) => {
       error = e.message;
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ exitCode: code, signal: signal ?? null, output, timedOut, stopped, ...(error && { error }) });
+      resolve({ exitCode: code, signal: signal ?? null, output, stopped, ...(error && { error }) });
     });
   });
   return {
@@ -75,7 +67,7 @@ export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = pr
  * `{"wakeAgent": false}`. The run then ends quietly, with no model turn and no notification.
  */
 export function sleepsAgent(result) {
-  if (result.exitCode !== 0 || result.stopped || result.timedOut || result.error) return false;
+  if (result.exitCode !== 0 || result.stopped || result.error) return false;
   const last = result.output.trimEnd().split(/\r?\n/).at(-1)?.trim();
   if (!last?.startsWith("{")) return false;
   try {
@@ -90,7 +82,6 @@ export function sleepsAgent(result) {
 export function scriptEnding(result) {
   if (result.error) return "The script could not start: " + result.error;
   if (result.stopped) return "The script was stopped.";
-  if (result.timedOut) return "The script stopped after " + Math.round(SCRIPT_TIMEOUT_MS / 60000) + " minutes.";
   if (result.exitCode === null) return "The script was ended" + (result.signal ? " (" + result.signal + ")." : ".");
   return result.exitCode === 0 ? "The script finished (exit code 0)." : "The script failed (exit code " + result.exitCode + ").";
 }
