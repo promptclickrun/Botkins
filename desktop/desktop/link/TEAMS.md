@@ -131,7 +131,9 @@ Answer =  { status: "pending", requestId, team }                           // fi
 
 ### Owner calls (`link.team.*`, owner devices only; the desktop calls the same functions host-side)
 
-`link.team.get()`, `link.team.saveRole(role)`, `link.team.deleteRole(id)`, `link.team.saveGroup(group)`, `link.team.deleteGroup(id, moveTo)`, `link.team.createInvite({ groupId, days, maxUses })` → `Invite & { link }`, `link.team.revokeInvite(id)`, `link.team.approve(requestId, groupId?)`, `link.team.deny(requestId)`, `link.team.moveMember(memberId, groupId)`, `link.team.removeMember(memberId)`, `link.team.rename(name)`.
+`link.team.get()`, `link.team.saveRole(role)`, `link.team.deleteRole(id)`, `link.team.saveGroup(group)`, `link.team.deleteGroup(id, moveTo)`, `link.team.createInvite({ groupId, days, maxUses })` → `Invite & { link }`, `link.team.revokeInvite(id)`, `link.team.approve(requestId, groupId?)`, `link.team.deny(requestId)`, `link.team.moveMember(memberId, groupId)`, `link.team.removeMember(memberId)`, `link.team.rename(name)`, `link.team.renameMember(memberId, name)`.
+
+`link.team.renameMember` (capability `member-rename-v1`) is owner only. The name is trimmed and has 1 to 60 characters with no control characters, as the team's own name has; anything else is refused ("Give the member a name of up to 60 characters."), and so is a member who left ("That member is no longer on the team."). The member and every device of theirs take the name, as when a member's device sets its person (`link.devices.setPerson`), and the answer is the owner's `team` part. Every session is told at once, so the new name is in `team.people`, in `meta.you` of the member's own devices and in what the app reads from `link.team()`. A message keeps the name it was sent with, and a window shows the member's name as the team has it now. Without the capability a client leaves out Rename.
 
 The `team` part for owner devices: `{ name, roles, groups, members (with devices: name, kind, platform, connected), invites (with link), requests (pending, with name, platform, kind, at, inviteId) }`.
 
@@ -188,7 +190,7 @@ Decided by the owner on 2026-11-20: "the owner should be able to [open a member'
 
 ## Capability
 
-The host lists `teams-v1` in `meta.capabilities`. A client checks it before showing Join or Team. Otherwise it says "Update Botkins on the owner's computer".
+The host lists `teams-v1` in `meta.capabilities`. A client checks it before showing Join or Team. Otherwise it says "Update Botkins on the owner's computer". `member-rename-v1` is for renaming a member: a client checks it before it offers Rename.
 
 ## UX copy (exact)
 

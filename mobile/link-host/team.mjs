@@ -285,6 +285,7 @@ const POLICY = {
   "link.team.moveMember": "owner",
   "link.team.removeMember": "owner",
   "link.team.rename": "owner",
+  "link.team.renameMember": "owner",
   // The people in a chat ("team-people-v1"): its creator or the owner invites; an invited person may leave.
   "link.team.inviteToChat": ["agents", "chat"],
   "link.team.removeFromChat": ["agents", "chat"],

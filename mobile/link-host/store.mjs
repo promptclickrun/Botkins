@@ -300,12 +300,23 @@ export class LinkStore {
     if (!device) return false;
     const who = personName(person);
     if (!who) throw new Error("Give the person a name.");
-    if (device.memberId) {
-      const member = this.data.team?.members?.find((item) => item.id === device.memberId);
-      if (member) member.name = who;
-      for (const other of this.data.devices) if (other.memberId === device.memberId) other.person = who;
-    }
+    if (device.memberId) this.nameMember(device.memberId, who);
     device.person = who;
+    this.save();
+    return true;
+  }
+  /** A member and all of their devices take a name, with no save of its own. */
+  nameMember(memberId, who) {
+    const member = this.data.team?.members?.find((item) => item.id === memberId);
+    if (member) member.name = who;
+    for (const other of this.data.devices) if (other.memberId === memberId) other.person = who;
+    return !!member;
+  }
+  /** The owner names a member: the member and all of their devices take the name. False when there is no such member. */
+  renameMember(memberId, name) {
+    const who = personName(name);
+    if (!who) throw new Error("Give the person a name.");
+    if (!this.nameMember(memberId, who)) return false;
     this.save();
     return true;
   }

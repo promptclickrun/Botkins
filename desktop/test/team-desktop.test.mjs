@@ -409,6 +409,7 @@ test("team IPC handlers call the LinkHost owner API", async () => {
     moveMember: ["m_member", "g_everyone"],
     removeMember: ["m_member"],
     renameTeam: ["Northstar"],
+    renameMember: ["m_member", "Sam Lee"],
     chatPeople: ["chat-1"],
     inviteToChat: ["chat-1", "m_member"],
     removeFromChat: ["chat-1", "m_member"],
@@ -436,6 +437,7 @@ test("team IPC handlers call the LinkHost owner API", async () => {
     ["moveTeamMember", "moveMember"],
     ["removeTeamMember", "removeMember"],
     ["renameTeam", "renameTeam"],
+    ["renameTeamMember", "renameMember"],
     ["chatPeople", "chatPeople"],
     ["inviteToChat", "inviteToChat"],
     ["removeFromChat", "removeFromChat"],
@@ -561,4 +563,15 @@ test("who is looking at a chat's people, and what they may do", async () => {
   assert.equal(chatPeopleView({ team: { ...owner.team, people: undefined } }, ownersChat), null);
   assert.equal(chatPeopleView({ team: { ...owner.team, people: [people[0]] } }, ownersChat), null);
   assert.equal(chatPeopleView({}, ownersChat), null);
+});
+
+test("a message shows its author's current name, so a rename reaches what they wrote before", async () => {
+  const { authorName } = await import("../src/peopleView.ts");
+  const author = { memberId: "m_avery", name: "Avery" };
+  const team = (people) => ({ team: { name: "Northstar", roles: [], groups: [], members: [], invites: [], requests: [], people } });
+  assert.equal(authorName(team([{ id: "owner", name: "Studio" }, { id: "m_avery", name: "Avery Ortiz" }]), author), "Avery Ortiz");
+  // A member who left, a computer with no people list, and no team: the name saved with the message.
+  assert.equal(authorName(team([{ id: "owner", name: "Studio" }]), author), "Avery");
+  assert.equal(authorName(team(undefined), author), "Avery");
+  assert.equal(authorName({}, author), "Avery");
 });

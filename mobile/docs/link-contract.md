@@ -334,4 +334,5 @@ Away from the host's network a client goes through the relay (`relay.botkins.app
 - `link.json` is version 1 and has not changed shape. A device paired before `kind` existed gets its kind from its platform when the file is read. No device has to pair again.
 - A host without `devices-v1` has no `link.devices.*` calls and no `kind` in `phones`. A client then shows only itself.
 - A host without `device-person-v1` ignores `person` and has no `link.devices.setPerson`; a client offers only Rename. A device paired before has no `person` until the owner adds one.
+- A host without `member-rename-v1` has no `link.team.renameMember(memberId, name)` (owner only; the name has the rules of a team's name: trimmed, 60 characters at most). A client leaves Rename out of a member's menu. Its rules are in `TEAMS.md`.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.

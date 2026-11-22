@@ -31,6 +31,7 @@ export function teamHandlers(link) {
     moveTeamMember: (id, groupId) => call("moveMember", id, groupId),
     removeTeamMember: (id) => call("removeMember", id),
     renameTeam: (name) => call("renameTeam", name),
+    renameTeamMember: (id, name) => call("renameMember", id, name),
     // The people in a chat (the link's "team-people-v1"): who started it and who was invited.
     chatPeople: (chatId) => call("chatPeople", String(chatId)),
     inviteToChat: (chatId, personId) => call("inviteToChat", String(chatId), String(personId)),

@@ -266,6 +266,7 @@ for (const name of [
   "moveTeamMember",
   "removeTeamMember",
   "renameTeam",
+  "renameTeamMember",
   "useRemoteHost",
   "forgetRemoteHost",
   "renameRemoteHost",

@@ -253,6 +253,7 @@ export const WORKSPACE = {
   // The team (control-team.mjs): kept by the phone link, reached through the app's own calls.
   team: cmd("team show"),
   renameTeam: cmd("team rename"),
+  renameTeamMember: cmd("team members rename"),
   saveTeamRole: cmd("team roles save"),
   deleteTeamRole: cmd("team roles remove"),
   saveTeamGroup: cmd("team groups save"),
@@ -298,6 +299,7 @@ export const LINK = {
   // The team, as the link names the same calls (control-team.mjs).
   "link.team.get": cmd("team show"),
   "link.team.rename": cmd("team rename"),
+  "link.team.renameMember": cmd("team members rename"),
   "link.team.saveRole": cmd("team roles save"),
   "link.team.deleteRole": cmd("team roles remove"),
   "link.team.saveGroup": cmd("team groups save"),
@@ -550,6 +552,7 @@ export const CHANGES = {
   "team.approve": (args, value) => value?.member?.id ?? value?.id,
   "team.deny": (args, value) => value?.id,
   "team.moveMember": (args, value) => value?.id,
+  "team.renameMember": (args, value) => value?.id,
   "team.removeMember": (args, value) => value?.id,
   "team.inviteToChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
   "team.removeFromChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),

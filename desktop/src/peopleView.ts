@@ -19,5 +19,14 @@ export function chatPeopleView(state: State, chat: Chat) {
   return { people, me, createdBy, mayInvite };
 }
 
+/**
+ * The name above a member's message: the name the team has for them now, so a rename reaches the
+ * messages they wrote before it. The name saved with the message is for a team that does not say.
+ */
+export function authorName(state: State, author: { memberId: string; name: string }) {
+  const people = state.team && "people" in state.team ? state.team.people : undefined;
+  return people?.find((person) => person.id === author.memberId)?.name ?? author.name;
+}
+
 /** Whether whoever is looking may leave the chat: they were invited into it, and did not start it. */
 export const canLeave = (view: { me: string; createdBy: string }, invited: string[]) => view.me !== view.createdBy && invited.includes(view.me);
