@@ -240,7 +240,8 @@ const POLICY = {
   "link.push.test": "owner",
   "link.voice.set": "owner",
   "link.voice.key": "owner",
-  "link.voice.options": ["settings", "view"],
+  // The voices a provider lists, for choosing a bot's own voice ("bot-voice-v1"): a role that manages bots needs it, and it lists only names.
+  "link.voice.options": ["agents", "manage"],
   "link.voice.transcribe": ["agents", "chat"],
   "link.voice.speak": ["agents", "chat"],
   "link.voice.live": ["agents", "chat"],
@@ -791,6 +792,32 @@ export function ownerParts(parts, team, extra = {}) {
   return out;
 }
 
+const SET = "(set)";
+/**
+ * The shared voice settings as a role that manages bots is sent them, to choose a bot's own voice ("bot-voice-v1"):
+ * the shared choices, and what each provider has (a key, sign-in or model is there or not). Never a key, and never an
+ * address, region, deployment or agent id: where one is set it is sent as a mark that it is, which is all a phone asks.
+ */
+export function memberVoice(voice) {
+  const providers = voice?.providers;
+  if (!voice || !providers) return undefined;
+  const { openai, azure, elevenlabs, gemini, custom, local, codex } = providers;
+  return {
+    stt: voice.stt,
+    tts: voice.tts,
+    live: voice.live,
+    providers: {
+      openai: { baseUrl: "", hasKey: openai?.hasKey === true },
+      azure: { kind: azure?.kind === "speech" ? "speech" : "openai", hasKey: azure?.hasKey === true, ...(azure?.endpoint && { endpoint: SET }), ...(azure?.region && { region: SET }), ...(azure?.sttDeployment && { sttDeployment: SET }), ...(azure?.ttsDeployment && { ttsDeployment: SET }) },
+      elevenlabs: { hasKey: elevenlabs?.hasKey === true },
+      gemini: { hasKey: gemini?.hasKey === true },
+      custom: { hasKey: custom?.hasKey === true, ...(custom?.baseUrl && { baseUrl: SET }) },
+      local: { available: local?.available === true, models: Array.isArray(local?.models) ? local.models : [] },
+      codex: { available: codex?.available === true, signedIn: codex?.signedIn === true },
+    },
+  };
+}
+
 /** A member's role, by their id. */
 export const roleOfMember = (team, memberId) => roleFor({ kind: "member", memberId }, team);
 function roleFor(principal, team) {
@@ -979,6 +1006,9 @@ export function filterParts(parts, principal, team, extra = {}) {
   // A bot as a member sees it: without what the owner wrote for it or where it came from, and with
   // the member's own hidden and pinned marks and order. The owner's marks are the owner's.
   const mayManage = can("agents", "manage");
+  // The shared voice is the owner's, but a role that manages bots needs its choices and what is ready to set a bot's own voice.
+  const sharedVoice = mayManage ? memberVoice(parts.voice) : undefined;
+  if (sharedVoice) out.voice = sharedVoice;
   const seen = (bot) => {
     // What the owner wrote for the bot (both of its prompts) is for a role that manages bots; where it came from is the owner's alone.
     const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, instructions, clarificationInstructions, ...rest } = bot;

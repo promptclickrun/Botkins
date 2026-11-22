@@ -80,6 +80,7 @@ async function host(t, name = "Studio") {
   const handlers = {
     createChat: (botId) => ws.createChat(botId),
     renameChat: (id, title) => ((ws.chat(id).title = title), ws.save()),
+    updateBot: (id, data) => ws.updateBot(id, data),
     usage: () => ({ days: 30 }),
     startPhonePairing: () => "never from a client",
   };
@@ -159,6 +160,46 @@ test("a team member's window: its own chats, a chat it is invited into, and leav
   await until("the chat to leave the member's window", () => !chats().includes(owners));
   assert.deepEqual(a.link.chatPeople(owners), { createdBy: "owner", invited: [] });
   assert.ok(a.ws.state.chats.some((chat) => chat.id === owners));
+});
+
+test("a team member's window sets the voice of a bot its role manages, reading and live, and nothing else of the host's voice", async (t) => {
+  const a = await host(t);
+  a.link.voice.setKey("openai", "sk-owner-private-key");
+  const b = client(t, { device: { name: "Avery's laptop", platform: "darwin" } });
+  // Avery's role manages one bot: Pip.
+  const guest = structuredClone(a.link.team().roles.find((role) => role.id === "r_guest"));
+  await a.link.saveRole({ ...guest, perms: { ...guest.perms, agents: ["view", "chat", "manage"] }, bots: ["pip"] });
+  const invite = await a.link.createInvite({ groupId: "g_everyone", days: 7, maxUses: 1 });
+  const { serverKey } = lib.parseJoinUrl(invite.link);
+  const pending = await b.remote.startTeamJoin({ hosts: [a.address], code: invite.code, serverId: a.link.status().serverId, serverKey, name: "Studio" });
+  await a.link.approve(a.link.team().requests[0].id);
+  assert.equal((await b.remote.checkTeamJoin(pending.id)).status, "approved");
+  b.remote.use(b.remote.list()[0].id);
+  await until("the member's view with the voice choices", () => b.remote.state === "online" && b.remote.parts.voice);
+  assert.deepEqual(b.remote.snapshot().bots.map((bot) => bot.id), ["pip"]);
+
+  // The card's own calls: the host's choices (what is ready, never a key), and a provider's voices.
+  const shared = await b.remote.call("voiceSettings", []);
+  assert.deepEqual([shared.ready, shared.providers.openai.hasKey], [true, true]);
+  assert.equal(JSON.stringify(shared).includes("sk-owner-private-key"), false);
+  assert.deepEqual(await b.remote.call("voiceOptions", ["tts", "device"]), { models: [], voices: [] });
+  assert.deepEqual(await b.remote.call("speak", ["Hello", { botId: "pip" }]), { device: true }, "a bot that reads with the shared 'This computer' voice is read by the window");
+
+  // Reading and live voice are saved on the bot, together and apart, and "Same as Settings" clears them.
+  const voiceOf = (id) => a.ws.state.bots.find((bot) => bot.id === id).voice;
+  await b.remote.call("updateBot", ["pip", { voice: { tts: { provider: "openai", voice: "nova", speed: 1.25 }, live: { provider: "gemini", model: "m-1", voice: "puck" } } }]);
+  assert.deepEqual(voiceOf("pip"), { tts: { provider: "openai", voice: "nova", speed: 1.25 }, live: { provider: "gemini", model: "m-1", voice: "puck" } });
+  await b.remote.call("updateBot", ["pip", { voice: { live: { provider: "gemini", model: "m-1", voice: "puck" } } }]);
+  assert.deepEqual(voiceOf("pip"), { live: { provider: "gemini", model: "m-1", voice: "puck" } });
+  await b.remote.call("updateBot", ["pip", { voice: null }]);
+  assert.equal(voiceOf("pip"), undefined);
+
+  // Another bot, the shared voice and the keys stay the owner's.
+  await assert.rejects(b.remote.call("updateBot", ["scout", { voice: { live: { provider: "openai" } } }]), /isn't available to your team role/);
+  assert.equal(voiceOf("scout"), undefined);
+  await assert.rejects(b.remote.call("setVoice", [{ tts: { provider: "device" } }]), /can only be done on .* itself/);
+  await assert.rejects(b.remote.call("setVoiceKey", ["openai", "sk-member-key"]), /can only be done on .* itself/);
+  await assert.rejects(b.remote.client.call("link.voice.key", "openai", "sk-member-key"), /Only the owner/);
 });
 
 test("pairing with a code makes this app a desktop device of the host, and the credential is kept wrapped", async (t) => {
