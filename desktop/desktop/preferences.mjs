@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { backgroundField } from "./startup.mjs";
 import { DEFAULT_HARNESS, HARNESSES } from "./harness/index.mjs";
+import { AUTO_SUMMARIZE_DEFAULT, autoSummarizeField } from "./summaries.mjs";
 
 // The app's themes, each in light and dark, and the fonts a person can read it in
 // (desktop/themes.json, written by scripts/build-themes.mjs; the same as the phone app's). The
@@ -129,6 +130,8 @@ export const defaultSettings = {
   access: { allBots: true },
   // Bots may ask each other for help from a chat (desktop/teamwork.mjs).
   teamwork: true,
+  // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (desktop/summaries.mjs).
+  autoSummarize: AUTO_SUMMARIZE_DEFAULT,
   sidebar: { order: [...SIDEBAR], collapsed: ICONS_ONLY },
   // iMessage and Mail as bot tools, on a Mac only: "off", "read" or "interact" each (desktop/mactools.mjs).
   // Changed only by the app's own window (setMacTool), never by a phone.
@@ -280,6 +283,9 @@ export function changeSettings(settings, patch) {
         if (!value || typeof value !== "object" || typeof value.allBots !== "boolean" || Object.keys(value).some((k) => k !== "allBots"))
           throw new Error("Choose whether all bots can use every project");
         next.access = { allBots: value.allBots };
+        break;
+      case "autoSummarize":
+        next.autoSummarize = autoSummarizeField(value);
         break;
       case "harness":
         if (!HARNESSES.includes(value)) throw new Error("Choose a harness");

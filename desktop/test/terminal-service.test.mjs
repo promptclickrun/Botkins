@@ -208,7 +208,13 @@ test("bots are added, changed and removed by name, and a bot answers in a chat a
   assert.ok(lengths.size > 1, "the reply was seen growing (" + lengths.size + " lengths)");
   assert.equal(view.messages.at(-1).text, "Stand-in reply to: What is the capital of France? — this answer arrives in pieces, a few words at a time, the way a model's does.");
   assert.equal(view.run.status, "Completed");
-  assert.deepEqual((await client.call("chat.list", "Nova II")).map((chat) => [chat.title, chat.messages]), [["What is the capital of France?", 2]]);
+  // Auto-summarize (on, as for anyone) named the chat from its first message: the stand-in model answered that too.
+  let listed;
+  for (const end = Date.now() + 10000; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 50))) {
+    listed = (await client.call("chat.list", "Nova II")).map((chat) => [chat.title, chat.messages]);
+    if (listed[0]?.[0] !== "What is the capital of France?") break;
+  }
+  assert.deepEqual(listed, [["Stand-in reply to: Reply with the title. — this answer arrives in pieces, a…", 2]]);
   assert.equal((await client.call("status")).workspace.chats, 1);
   // A second turn: the run a chat shows is its latest, and the list of runs has the newest first.
   const again = await client.call("chat.send", chatId, "And of Italy?");

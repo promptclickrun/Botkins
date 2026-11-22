@@ -1704,6 +1704,11 @@ export type Preferences = {
   background?: { keepRunning: boolean; runAtStartup: boolean };
   /** On (the default): a bot in a one-bot chat may ask other bots for help (desktop/teamwork.mjs). */
   teamwork?: boolean;
+  /**
+   * Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0
+   * for off (desktop/summaries.mjs). Missing on an older computer.
+   */
+  autoSummarize?: number;
 };
 export type Step = {
   agentId?: string;

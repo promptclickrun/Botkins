@@ -261,6 +261,8 @@ export function seed() {
       background: { keepRunning: true, runAtStartup: false },
       sidebar: { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true },
       teamwork: true,
+      // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
+      autoSummarize: 10,
       harness: "copilot",
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, grok: { enabled: false } },
     },
@@ -279,6 +281,11 @@ const humanize = (name) => {
   return words ? words[0].toUpperCase() + words.slice(1) : name;
 };
 const clip = (value, max) => (value.length <= max ? value : value.slice(0, max - 1).replace(/\s+\S*$/, "") + "…");
+/** The demo's stand-in for the title a model makes (the desktop's desktop/summaries.mjs): the message's first few words. */
+const demoTitle = (text) => {
+  const words = String(text ?? "").replace(/[^\p{L}\p{N}\s'-]/gu, " ").split(/\s+/).filter(Boolean).slice(0, 5).join(" ");
+  return words ? "About " + words.charAt(0).toLowerCase() + words.slice(1) : "This chat";
+};
 const isTemplate = (path) => posix.basename(path) === "_template.md";
 const LINK = /(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]*>|[^)\s]+)\s*\)/g;
 
@@ -1953,6 +1960,12 @@ export class MockBackend {
     if (said) chat.messages.push({ role: "assistant", text: said, runId: run.id, time: finished });
     chat.time = finished;
     chat.unread = true;
+    // Auto-summarize, as the desktop does it: every few completed turns a chat the person didn't name gets a new title.
+    const every = this.state.settings.autoSummarize;
+    if (run.status === "Completed" && every && !chat.titleSet && (chat.titleTurns = (chat.titleTurns ?? 0) + 1) >= every) {
+      chat.titleTurns = 0;
+      chat.title = demoTitle(chat.messages.filter((message) => message.role === "user").at(-1)?.text);
+    }
     this.changed();
     const next = this.state.queued[id]?.shift();
     if (next) {
@@ -1965,6 +1978,7 @@ export class MockBackend {
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};
       if ("harness" in rest && !["copilot", "provider", "pi", "omp"].includes(rest.harness)) throw new Error("Choose a harness");
+      if ("autoSummarize" in rest && !(rest.autoSummarize === 0 || (Number.isInteger(rest.autoSummarize) && rest.autoSummarize >= 5 && rest.autoSummarize <= 30))) throw new Error("Choose off, or every 5 to 30 turns.");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       const settings = this.state.settings;
@@ -2120,7 +2134,7 @@ export class MockBackend {
       Object.assign(this.chat(id), flags);
     },
     renameChat(id, title) {
-      this.chat(id).title = text(title, 120, "title");
+      Object.assign(this.chat(id), { title: text(title, 120, "title"), titleSet: true });
     },
     deleteChat(id) {
       this.chat(id);
@@ -2184,8 +2198,16 @@ export class MockBackend {
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
       addUserMessage(chat, { role: "user", text: prompt, ...tag, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
-      if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
+      const first = chat.title === "New chat";
+      if (first) chat.title = prompt.slice(0, 40);
       chat.time = now();
+      // With auto-summarize on, the first message is named a moment later, while the bot replies, as on the desktop.
+      if (first && !scheduled && this.state.settings.autoSummarize)
+        setTimeout(() => {
+          if (chat.titleSet || !this.state.chats.includes(chat)) return;
+          chat.title = demoTitle(prompt);
+          this.changed();
+        }, 1200).unref?.();
       // Today › New panel sends "/today-panel <what it should show>"; the demo bot makes one at once.
       const asked = /^\/today-panel\s+([\s\S]+)/.exec(prompt);
       if (asked) {

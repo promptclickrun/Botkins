@@ -276,6 +276,29 @@ export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
   );
 }
 
+/** Off, or every 5 to 30 turns (desktop/summaries.mjs). */
+const SUMMARY_TURNS = [0, ...Array.from({ length: 26 }, (_, i) => i + 5)];
+
+/** Settings › Chat › Chat titles: whether a chat is named from its first message, and how often it is renamed after. Hidden for an older computer. */
+export function SummarySettings({ settings, change, fail }: Props) {
+  if (settings.autoSummarize === undefined) return null;
+  return (
+    <Group title="Chat titles" footer="Botkins names a new chat from your first message, then renames it from what it's about every few turns. It uses the Default routines model. A chat you rename keeps your title.">
+      <Row label="Auto-summarize">
+        {(id) => (
+          <select id={id} value={settings.autoSummarize} onChange={(e) => void change({ autoSummarize: Number(e.target.value) }).catch(fail)}>
+            {SUMMARY_TURNS.map((turns) => (
+              <option key={turns} value={turns}>
+                {turns ? "Every " + turns + " turns" : "Off"}
+              </option>
+            ))}
+          </select>
+        )}
+      </Row>
+    </Group>
+  );
+}
+
 /** Settings › Chats & approvals: the global tool approval level and when bots ask clarifying questions. */
 export function BehaviorSettings({ settings, change, fail }: Props) {
   const [instructions, setInstructions] = useState(settings.clarificationInstructions),

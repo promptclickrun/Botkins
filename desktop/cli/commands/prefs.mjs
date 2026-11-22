@@ -40,6 +40,7 @@ const KEYS = [
   ["linkPreviews", "on | off", "Show a preview of a linked page (this computer fetches the page)"],
   ["readAloud", "on | off", "Read replies aloud"],
   ["teamwork", "on | off", "Bots may ask each other for help from a chat"],
+  ["autoSummarize", "off | 5 to 30", "Turns between a chat's summaries into a new title, on the Default routines model"],
   ["approval", "ask | read | assisted | all", "How tool requests are approved (see below)"],
   ["clarify", "missing, choices, changes, or none", "When a bot asks a clarifying question"],
   ["clarificationInstructions", "text (up to 4000 characters)", "Your own words for when a bot asks a clarifying question"],

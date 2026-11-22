@@ -854,6 +854,8 @@ export type Preferences = {
   /** The side menu of the computer's own window: the order of its places, and icons only. */
   sidebar?: { order: string[]; collapsed: boolean; picked?: boolean };
   teamwork?: boolean;
+  /** Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0 for off. Missing on an older computer. */
+  autoSummarize?: number;
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.

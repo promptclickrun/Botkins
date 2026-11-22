@@ -463,3 +463,18 @@ test("the commands are in `botkins help --json`, and the lists of the command li
   assert.deepEqual(Object.keys(MAC_TOOL_NAMES), ["imessage", "mail"]);
   assert.deepEqual(Object.keys(prefsCommands), ["preferences", "usage", "cache", "mac-tools"]);
 });
+
+test("preferences: autoSummarize takes off or 5 to 30 turns", { skip }, async (t) => {
+  const { botkins, workspace } = await service(t);
+  assert.equal((await botkins(["preferences", "show", "autoSummarize"])).out, "10\n", "every 10 turns until the person picks");
+  assert.equal((await botkins(["preferences", "set", "autoSummarize", "20"])).exit, 0);
+  assert.equal(workspace.state.settings.autoSummarize, 20);
+  assert.equal((await botkins(["preferences", "set", "autoSummarize", "off"])).exit, 0);
+  assert.equal(workspace.state.settings.autoSummarize, 0);
+  for (const word of ["4", "31", "often"]) {
+    const refused = await botkins(["preferences", "set", "autoSummarize", word]);
+    assert.notEqual(refused.exit, 0);
+    assert.match(refused.err, /autoSummarize takes off, or a number of turns from 5 to 30/);
+  }
+  assert.equal(workspace.state.settings.autoSummarize, 0);
+});

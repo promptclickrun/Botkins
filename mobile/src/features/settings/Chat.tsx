@@ -1,4 +1,4 @@
-// How chats show a bot's work and replies on this phone, and the two choices kept on the computer.
+// How chats show a bot's work and replies on this phone, and the choices kept on the computer (chat titles, thinking, steps).
 import { MenuView } from "@react-native-menu/menu";
 import { ChevronsUpDown } from "lucide-react-native";
 import { View } from "react-native";
@@ -7,7 +7,7 @@ import { COMPLETION_POSITIONS } from "@/features/chat/completion";
 import { api, attempt } from "@/state/link";
 import { BOT_TAPS } from "@/features/chat/habits";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
-import { Group, Label, Page, Row, useTheme } from "@/ui";
+import { Group, Label, Page, Row, space, T, useTheme } from "@/ui";
 
 const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = [
   { value: "folded", label: "Folded", subtitle: "Every step while it works; one line when it's done" },
@@ -21,8 +21,15 @@ const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string 
   { value: "hide", label: "Hidden", subtitle: "Not in the chat; the activity has it" },
 ];
 
+/** Auto-summarize: off, or every 5 to 30 turns (the computer's desktop/summaries.mjs). */
+const SUMMARY_TURNS = [0, ...Array.from({ length: 26 }, (_, i) => i + 5)].map((turns) => ({
+  value: String(turns),
+  label: turns ? "Every " + turns + " turns" : "Off",
+  subtitle: turns ? undefined : "Chats keep your first message as their title",
+}));
+
 /** A row whose value opens a short list of choices. `stacked` puts a long choice under the title instead of beside it. */
-function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
+function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle?: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
   const { colors } = useTheme();
   const current = options.find((option) => option.value === value) ?? options[0];
   return (
@@ -99,6 +106,28 @@ export default function Chat() {
           <Row title="Read replies aloud" subtitle="In the chat that is open" toggled={prefs.readAloud} onToggle={(readAloud) => setChatPrefs({ readAloud })} />
         </Group>
       </View>
+
+      {settings?.autoSummarize !== undefined && (
+        <View>
+          <Label>Chat titles</Label>
+          <Group>
+            {canManage && online ? (
+              <ChoiceMenu
+                title="Auto-summarize"
+                subtitle="Names a chat from what it's about"
+                value={String(settings.autoSummarize)}
+                options={SUMMARY_TURNS}
+                onChange={(turns) => void attempt(api.setPreferences({ autoSummarize: Number(turns) }))}
+              />
+            ) : (
+              <Row title="Auto-summarize" subtitle={canManage ? "Change it when your computer is back" : "The computer's owner changes it"} value={SUMMARY_TURNS.find((option) => option.value === String(settings.autoSummarize))?.label} />
+            )}
+          </Group>
+          <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, paddingTop: space.sm }}>
+            A new chat is named from your first message, then renamed every few turns. It uses the Default routines model. A chat you rename keeps your title.
+          </T>
+        </View>
+      )}
 
       <View>
         <Label>On your computer too</Label>

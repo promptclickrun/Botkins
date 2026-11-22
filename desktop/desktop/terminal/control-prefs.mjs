@@ -12,6 +12,7 @@
 import { backgroundField } from "../startup.mjs";
 import { appearanceField, clarificationPrompts, defaultSettings, FONT_IDS, sidebarField, SIDEBAR, TEXT_SIZES, THEME_IDS } from "../preferences.mjs";
 import { HARNESSES } from "../harness/index.mjs";
+import { AUTO_SUMMARIZE_MAX, AUTO_SUMMARIZE_MIN } from "../summaries.mjs";
 import { MAC_LEVELS, MAC_TOOLS } from "../mactools.mjs";
 import { usageCsv } from "../usage.mjs";
 import { ControlError } from "./socket.mjs";
@@ -30,7 +31,7 @@ const choice = (values, about) => ({ type: "choice", values, about });
 /**
  * Every preference that `setPreferences` takes, by the name the command line uses (a dot goes one
  * level down). `type` says what a value is: "boolean" (on or off), "choice" (one of `values`),
- * "list" (some of `values`, or none), "color", "clock" (HH:MM) or "text" (up to `max` characters).
+ * "list" (some of `values`, or none), "color", "clock" (HH:MM), "turns" (off, or 5 to 30) or "text" (up to `max` characters).
  * "macTools" is not here: the app changes it only through its own call (`macTools.set`).
  */
 export const PREFERENCES = {
@@ -45,6 +46,7 @@ export const PREFERENCES = {
   linkPreviews: switches("Show a preview of a linked page (this computer fetches the page)"),
   readAloud: switches("Read replies aloud"),
   teamwork: switches("Bots may ask each other for help from a chat"),
+  autoSummarize: { type: "turns", about: "Turns between a chat's summaries into a new title, on the Default routines model: off, or 5 to 30" },
   approval: choice(["ask", "read", "assisted", "all"], "How tool requests are approved: ask for each, read-only tools without asking, the provider decides, or all without asking"),
   clarify: { type: "list", values: Object.keys(clarificationPrompts), about: "When a bot asks a clarifying question: any of " + Object.keys(clarificationPrompts).join(", ") + ", or none" },
   clarificationInstructions: { type: "text", max: 4000, about: "Your own words for when a bot asks a clarifying question" },
@@ -138,6 +140,13 @@ function parsePreference(key, spec, value) {
       const word = typeof value === "string" ? value.trim() : "";
       if (!CLOCK.test(word)) throw refuse("a time of day as HH:MM, such as 22:30");
       return word;
+    }
+    case "turns": {
+      // A number, or its word: "off" (or 0) and 5 to 30. The app checks the range.
+      const word = typeof value === "string" ? value.trim().toLowerCase() : value;
+      const turns = OFF.includes(word) ? 0 : typeof word === "number" ? word : /^\d{1,2}$/.test(word) ? Number(word) : NaN;
+      if (turns !== 0 && !(Number.isInteger(turns) && turns >= AUTO_SUMMARIZE_MIN && turns <= AUTO_SUMMARIZE_MAX)) throw refuse("off, or a number of turns from " + AUTO_SUMMARIZE_MIN + " to " + AUTO_SUMMARIZE_MAX);
+      return turns;
     }
     case "text":
       if (typeof value !== "string" || value.length > spec.max) throw refuse("text of up to " + spec.max + " characters");
