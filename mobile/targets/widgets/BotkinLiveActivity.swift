@@ -1,5 +1,5 @@
-// The Live Activities on the Lock Screen and in the Dynamic Island. A Botkin's card
-// ("activity-bots-v1") is drawn by BotCard.swift. A chat's card (an older computer's) is drawn here:
+// The Live Activities on the Lock Screen and in the Dynamic Island. The card for all Botkins
+// ("activity-all-v1") is drawn by FeedCard.swift, a Botkin's card ("activity-bots-v1") by BotCard.swift. A chat's card (an older computer's) is drawn here:
 // the bot's Botkin, its name, what it is doing in a few words, and how long it has been at it.
 // Tapping opens the chat.
 //
@@ -190,7 +190,14 @@ private func detail(_ state: BotkinActivityAttributes.ContentState) -> String {
 struct BotkinLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: BotkinActivityAttributes.self) { context in
-      if context.attributes.card == "bot" {
+      if context.attributes.card == "all" {
+        // The card for all Botkins (FeedCard.swift).
+        let model = CardModel(context)
+        FeedLock(model: model)
+          .activityBackgroundTint(Color(white: 0.09).opacity(0.82))
+          .activitySystemActionForegroundColor(.white)
+          .widgetURL(model.first.map { Links.chat($0.id, host: model.host) })
+      } else if context.attributes.card == "bot" {
         // A Botkin's card (BotCard.swift).
         let model = CardModel(context)
         BotCardLock(model: model)
@@ -201,7 +208,7 @@ struct BotkinLiveActivity: Widget {
         chatCard(context)
       }
     } dynamicIsland: { context in
-      context.attributes.card == "bot" ? botIsland(context) : chatIsland(context)
+      context.attributes.card == "all" ? feedIsland(context) : context.attributes.card == "bot" ? botIsland(context) : chatIsland(context)
     }
   }
 

@@ -5,9 +5,10 @@
 // that starts an activity from afar, by the type's name, so keep both copies and the name the same
 // (the computer sends it as ACTIVITY_TYPE in link-host/push.mjs).
 //
-// One activity is either a chat's card (`card` is nil; the first version) or a Botkin's card
-// (`card` is "bot", "activity-bots-v1"; docs/live-cards.md). Everything added for a Botkin's card is
-// optional, so a push from an older computer, and an activity an older build started, still decode.
+// One activity is a chat's card (`card` is nil; the first version), a Botkin's card (`card` is "bot",
+// "activity-bots-v1") or the card for all Botkins (`card` is "all", "activity-all-v1";
+// docs/live-cards.md). Everything added since the first version is optional, so a push from an older
+// computer, and an activity an older build started, still decode.
 import ActivityKit
 import Foundation
 
@@ -44,6 +45,12 @@ public struct BotkinActivityAttributes: ActivityAttributes {
       public var provider: String?
       /// approve, risky, question or open: what the card's buttons are.
       public var ask: String?
+      // On the card for all Botkins: the chat's Botkin, and its look when the computer has one saved.
+      public var bot: String?
+      public var head: String?
+      public var palette: String?
+      public var eyes: String?
+      public var colors: [String]?
     }
 
     public init(phase: String, label: String, steps: Int, startedAt: Double, finishedAt: Double? = nil) {
@@ -63,7 +70,7 @@ public struct BotkinActivityAttributes: ActivityAttributes {
   public var palette: String
   public var eyes: String
   public var colors: [String]
-  /// "bot" for a Botkin's card. Missing on a chat's card.
+  /// "bot" for a Botkin's card, "all" for the card for all Botkins. Missing on a chat's card.
   public var card: String?
 
   public init(chatId: String, botId: String, botName: String, head: String, palette: String, eyes: String, colors: [String], card: String? = nil) {
@@ -77,6 +84,6 @@ public struct BotkinActivityAttributes: ActivityAttributes {
     self.card = card
   }
 
-  /// The key the app and the computer know this activity by: the chat's id, or "bot:" and the Botkin's.
-  public var key: String { card == "bot" ? "bot:" + botId : chatId }
+  /// The key the app and the computer know this activity by: the chat's id, "bot:" and the Botkin's, or "all".
+  public var key: String { card == "all" ? "all" : card == "bot" ? "bot:" + botId : chatId }
 }

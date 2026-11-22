@@ -139,15 +139,18 @@ struct CardModel {
   let detail: CardDetail?
   let host: String?
   let models: [String: String]
+  /// The computer's Botkins as the widgets' snapshot has them: names and looks, for the card for all Botkins.
+  let bots: [String: Snapshot.Bot]
   let stale: Bool
 
   /// From what a card would hold, for previews.
-  init(about: BotkinActivityAttributes, state: BotkinActivityAttributes.ContentState, detail: CardDetail?, host: String? = nil, models: [String: String] = [:], stale: Bool = false) {
+  init(about: BotkinActivityAttributes, state: BotkinActivityAttributes.ContentState, detail: CardDetail?, host: String? = nil, models: [String: String] = [:], bots: [String: Snapshot.Bot] = [:], stale: Bool = false) {
     self.about = about
     self.state = state
     self.detail = detail
     self.host = host
     self.models = models
+    self.bots = bots
     self.stale = stale
   }
 
@@ -158,7 +161,9 @@ struct CardModel {
     detail = opened?.detail
     host = opened?.host
     let snapshot = Snapshot.load()
-    models = (opened?.host.flatMap { snapshot?.computers[$0] } ?? snapshot?.current?.computer)?.models ?? [:]
+    let computer = opened?.host.flatMap { snapshot?.computers[$0] } ?? snapshot?.current?.computer
+    models = computer?.models ?? [:]
+    bots = Dictionary((computer?.bots ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     stale = context.isStale
   }
 

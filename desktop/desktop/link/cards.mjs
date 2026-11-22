@@ -1,5 +1,6 @@
-// One Live Activity per Botkin ("activity-bots-v1"; docs/live-cards.md): which of a Botkin's chats
-// its card shows, what Apple may see of them, and what only the phone may see.
+// A Live Activity for a Botkin's chats ("activity-bots-v1"), or one for all Botkins' chats
+// ("activity-all-v1"; docs/live-cards.md): which chats a card shows, what Apple may see of them,
+// and what only the phone may see.
 //
 // Plain functions with no Node imports. The computer uses them for its pushes (push.mjs), and the
 // phone uses the same file for the cards it draws while the app is open (src/state/cards.ts), so the
@@ -11,6 +12,10 @@ export const CARD_LINGER_MS = 30 * 60_000;
 export const CARD_CHATS = 3;
 /** The sealed part is kept under this many bytes, so a push stays under Apple's 4 KB. */
 export const SEALED_MAX = 2400;
+/** The same for the card for all Botkins, whose rows also carry each Botkin's look in the clear. */
+export const ALL_SEALED_MAX = 2000;
+/** The key of the card for all Botkins. A Botkin's card is "bot:" + its id; a chat's card is the chat's id. */
+export const ALL_CARD = "all";
 /** What the sealed part of a card is authenticated as: never the same as an alert's ("botkins-push-v1"). */
 export const CARD_AAD = "botkins-card-v1";
 
@@ -120,9 +125,10 @@ export function endedWord(run) {
 }
 
 /**
- * A Botkin's chats as its card shows them, in order: one with an open request first, then working
- * ones (the newest start first), then ended ones (the newest end first). A chat counts while its
- * turn works and for `linger` after it ends. `visible(chat)` leaves out chats a device may not see.
+ * A Botkin's chats as its card shows them (every Botkin's when `botId` is null), in order: one with
+ * an open request first, then working ones (the newest start first), then ended ones (the newest end
+ * first). A chat counts while its turn works and for `linger` after it ends. `visible(chat)` leaves
+ * out chats a device may not see.
  */
 export function cardRows(state, botId, { now = Date.now(), linger = CARD_LINGER_MS, visible = () => true } = {}) {
   const latest = new Map();
@@ -134,7 +140,7 @@ export function cardRows(state, botId, { now = Date.now(), linger = CARD_LINGER_
   const requests = state.requests ?? [];
   const rows = [];
   for (const chat of state.chats ?? []) {
-    if (!chat || chat.botId !== botId || chat.botIds?.length || chat.temporary || chat.panelId || !visible(chat)) continue;
+    if (!chat || (botId != null && chat.botId !== botId) || chat.botIds?.length || chat.temporary || chat.panelId || !visible(chat)) continue;
     const run = latest.get(chat.id);
     const asked = requests.findIndex((request) => request.chatId === chat.id);
     const request = asked >= 0 ? requests[asked] : undefined;
@@ -183,12 +189,12 @@ function defaultReply(chat, run) {
 }
 
 /** The sealed part, trimmed to fit: thinking goes first, then steps, then the reply, then long words. */
-function fit(detail) {
-  if (bytes(JSON.stringify(detail)) <= SEALED_MAX) return detail;
+function fit(detail, max) {
+  if (bytes(JSON.stringify(detail)) <= max) return detail;
   const next = { c: detail.c.map((row) => ({ ...row })) };
   for (const field of ["th", "s", "r"]) {
     for (const row of next.c) delete row[field];
-    if (bytes(JSON.stringify(next)) <= SEALED_MAX) return next;
+    if (bytes(JSON.stringify(next)) <= max) return next;
   }
   for (const row of next.c) {
     row.t = clip(row.t, 30);
@@ -199,7 +205,8 @@ function fit(detail) {
 }
 
 /**
- * A Botkin's card now, or null when it has no chat to show (then it ends).
+ * A Botkin's card now (the card for all Botkins when `botId` is null), or null when it has no chat
+ * to show (then it ends).
  *
  *   state    what the card shows, as Apple may see it: phases, counts, times and the provider
  *   detail   what only the phone may see, sealed before it is sent (null with previews off)
@@ -208,18 +215,21 @@ function fit(detail) {
  *
  * The model is the chat's, else the Botkin's, else the computer's default (`state.settings.model`).
  * `reply(chat, run)` finds a turn's reply. The computer has the chat's messages; the phone passes
- * its own way.
+ * its own way. On the card for all Botkins each row names its Botkin (`bot`) and carries its look
+ * from `look(botId)` when there is one; the Botkin's name is sealed (`b`).
  */
-export function botCard(state, botId, { previews = true, now = Date.now(), linger = CARD_LINGER_MS, visible, reply = defaultReply } = {}) {
+export function botCard(state, botId, { previews = true, now = Date.now(), linger = CARD_LINGER_MS, visible, reply = defaultReply, look = () => undefined } = {}) {
   const rows = cardRows(state, botId, { now, linger, visible });
   if (!rows.length) return null;
-  const bot = (state.bots ?? []).find((item) => item.id === botId);
+  const all = botId == null;
+  const botOf = (row) => (state.bots ?? []).find((item) => item.id === (all ? row.chat.botId : botId));
   const shown = rows.slice(0, CARD_CHATS);
   const single = shown.length === 1;
   const chats = shown.map((row) => {
     const phase = rowPhase(row, state);
-    const model = row.chat.model ?? bot?.model ?? state.settings?.model;
+    const model = row.chat.model ?? botOf(row)?.model ?? state.settings?.model;
     const ask = askOf(row.request);
+    const face = all ? look(row.chat.botId) : undefined;
     return {
       id: row.chat.id,
       phase,
@@ -228,6 +238,8 @@ export function botCard(state, botId, { previews = true, now = Date.now(), linge
       ...(row.ended !== undefined && { finishedAt: Math.max(secs(row.run.time), secs(row.ended)) }),
       ...(typeof model?.provider === "string" && model.provider && { provider: model.provider }),
       ...(ask && { ask }),
+      ...(all && { bot: row.chat.botId }),
+      ...(face?.head && { head: face.head, palette: face.palette ?? "original", eyes: face.eyes ?? "oval", ...(face.colors?.length === 4 && { colors: face.colors }) }),
     };
   });
   const first = chats[0];
@@ -246,8 +258,9 @@ export function botCard(state, botId, { previews = true, now = Date.now(), linge
   if (previews) {
     detail = fit({
       c: shown.map((row) => {
-        const model = row.chat.model ?? bot?.model ?? state.settings?.model;
+        const model = row.chat.model ?? botOf(row)?.model ?? state.settings?.model;
         const out = { id: row.chat.id, t: clip(firstLine(row.chat.title) || "New chat", 60), l: rowLabel(row, state) };
+        if (all && botOf(row)?.name) out.b = clip(botOf(row).name, 40);
         if (typeof model?.model === "string" && model.model) out.m = clip(model.model, 60);
         if (single && row.run) {
           const steps = (row.run.steps ?? []).slice(-3).map((step) => ({ k: stepKind(step.name), l: clip(firstLine(step.label || step.name), 60) || "Step", d: step.status === "Running" ? 0 : /fail|error/i.test(step.status) ? 2 : 1, ...(step.started && { at: secs(step.started) }) }));
@@ -261,10 +274,15 @@ export function botCard(state, botId, { previews = true, now = Date.now(), linge
             if (said) out.r = clip(said, 140);
           }
         }
+        // The card for all Botkins says how each ended chat ended, in the reply's first line.
+        if (all && !single && row.run && !row.working) {
+          const said = firstLine(reply(row.chat, row.run));
+          if (said) out.r = clip(said, 100);
+        }
         if (row.request) out.q = askDetail(row.request);
         return out;
       }),
-    });
+    }, all ? ALL_SEALED_MAX : SEALED_MAX);
   }
   const relevance = chats.some((chat) => chat.phase === "needs-you") ? 100 : chats.some((chat) => chat.phase === "working" || chat.phase === "thinking") ? 50 : 10;
   return { state: plain, detail, relevance, expires: nextExpiry(rows, linger) };

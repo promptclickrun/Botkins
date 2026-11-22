@@ -16,6 +16,8 @@ struct CardDetail: Decodable {
     let t: String
     /// What it is doing now, in a few words.
     let l: String
+    /// The Botkin's name, on the card for all Botkins.
+    let b: String?
     /// The model's id.
     let m: String?
     /// The last three steps, when the card shows one chat.
