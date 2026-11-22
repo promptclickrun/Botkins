@@ -858,6 +858,8 @@ export type Preferences = {
   teamwork?: boolean;
   /** Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0 for off. Missing on an older computer. */
   autoSummarize?: number;
+  /** Settings › Experimental › Proactive agent. Missing on a computer without "proactive-agent-v1". */
+  proactive?: ProactiveSettings;
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
@@ -1016,6 +1018,9 @@ export type Meta = {
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
+export type ProactiveWatch = "runs" | "tasks" | "requests";
+export type ProactiveSettings = { enabled: boolean; botId: string | null; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
   settings: Preferences;
@@ -1033,6 +1038,8 @@ export type Parts = {
   /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
   spaces?: SpaceSummary[];
   tasks: BotTask[];
+  /** The Proactive agent's log, owner only ("proactive-agent-v1"). */
+  proactive?: { chatId?: string; pings?: number; log: ProactiveLog[] };
   projects: Project[];
   mcp: McpServer[];
   skills: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
@@ -1385,7 +1392,7 @@ export type LiveSession =
 
 /** The desktop's calls a phone may make (link-host/methods.mjs), with their arguments and answers. */
 export type Calls = {
-  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers">> & { appearance?: Partial<Appearance> }): void;
+  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers" | "proactive">> & { appearance?: Partial<Appearance>; proactive?: Partial<ProactiveSettings> }): void;
   appInfo(): { version: string; electron: string; chrome: string; platform: string };
   // ---- The computer's own updates ("app-update-v1"; the owner's devices only). None takes a version or an address.
   appUpdateStatus(): AppUpdate;

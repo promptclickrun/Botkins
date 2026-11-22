@@ -79,6 +79,7 @@ import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
+import { Proactive } from "./proactive.mjs";
 import { Templates } from "./templates.mjs";
 import { readWorkspace } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
@@ -312,6 +313,7 @@ export class Workspace {
       }
     }
     this.tasks = new Tasks(this);
+    this.proactive = new Proactive(this);
     this.save();
   }
 
@@ -349,6 +351,8 @@ export class Workspace {
       spaces: this.spaces.part(),
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
+      // The Proactive agent's log, without the keys of what it already raised.
+      proactive: (({ seen, ...rest }) => rest)(this.state.proactive ?? {}),
       // Resolved provider inputs are private restart data and can contain large attachments.
       runs: this.state.runs.map((run) => {
         if (!run.recovery) return run;
@@ -494,7 +498,9 @@ export class Workspace {
     return false;
   }
   setPreferences(patch) {
+    if (patch?.proactive?.botId) this.bot(patch.proactive.botId);
     this.state.settings = changeSettings(this.state.settings, patch);
+    if (patch && Object.hasOwn(patch, "proactive")) this.proactive.sync();
     this.save();
   }
   /**

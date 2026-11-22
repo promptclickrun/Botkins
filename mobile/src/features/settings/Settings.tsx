@@ -1,5 +1,5 @@
 import { type Href, router } from "expo-router";
-import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, ScreenShare, ShieldCheck, SunMoon, Users, Wrench } from "lucide-react-native";
+import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FlaskConical, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, ScreenShare, ShieldCheck, SunMoon, Users, Wrench } from "lucide-react-native";
 import { Alert, View } from "react-native";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Preferences } from "@/link/types";
@@ -112,6 +112,9 @@ export default function Settings() {
 
       <Group>
         {owner && <Row leading={<IconTile icon={ChartColumn} color={colors.ink2} />} title="Usage" chevron onPress={() => router.push("/settings/usage")} />}
+        {owner && meta?.capabilities.includes("proactive-agent-v1") && (
+          <Row leading={<IconTile icon={FlaskConical} color={colors.ink2} />} title="Experimental" value={settings?.proactive?.enabled ? "Proactive agent on" : undefined} chevron onPress={() => router.push("/settings/experimental" as Href)} />
+        )}
         <Row leading={<IconTile icon={Info} color={colors.ink2} />} title="About" chevron onPress={() => router.push("/settings/about")} />
       </Group>
     </Page>

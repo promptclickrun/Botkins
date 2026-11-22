@@ -81,6 +81,8 @@ export function baseParts(state, info, looks = {}, link = {}) {
   return {
     meta: info,
     settings: state.settings ?? {},
+    // The Proactive agent's log, the owner's alone (desktop/link/team.mjs cuts it for a member).
+    proactive: state.proactive ?? { log: [] },
     bots: (state.bots ?? []).map((bot) => (looks[bot.id] ? { ...bot, look: looks[bot.id] } : bot)),
     sections: state.sections ?? [],
     chats: (state.chats ?? []).map(chatSummary),

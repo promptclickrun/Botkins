@@ -29,7 +29,7 @@ const SUMMARY_TURNS = [0, ...Array.from({ length: 26 }, (_, i) => i + 5)].map((t
 }));
 
 /** A row whose value opens a short list of choices. `stacked` puts a long choice under the title instead of beside it. */
-function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle?: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
+export function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle?: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
   const { colors } = useTheme();
   const current = options.find((option) => option.value === value) ?? options[0];
   return (

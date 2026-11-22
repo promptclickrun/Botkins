@@ -229,6 +229,7 @@ export function notifyField(value) {
 export const SILENT = "[SILENT]";
 export const ROUTINE_SILENT = "routine-silent-v1";
 export const isSilent = (text) => typeof text === "string" && text.trim() === SILENT;
+const MANAGED = "This is the Proactive agent's routine. Change it in Settings › Experimental › Proactive agent.";
 
 const DESTINATION_NOTES = {
   none: "This routine has no output. Do the work, then finish without a reply.",
@@ -397,6 +398,7 @@ export class Routines {
   }
   update(chatId, data, now = Date.now()) {
     const { chat, entry } = this.find(chatId);
+    if (entry.proactive) throw new Error(MANAGED);
     // Whoever changes it, the result may only go to a chat of the routine's creator.
     const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
     const notify = notifyField(data.notify);
@@ -458,8 +460,10 @@ export class Routines {
   }
   /** Deletes a routine and the chat that holds its runs. */
   async remove(chatId) {
-    this.find(chatId);
+    const { entry } = this.find(chatId);
     await this.ws.agents.deleteChat(chatId);
+    // Removing the Proactive agent's routine turns the agent off, or it would come back at the next change.
+    if (entry.proactive && this.ws.state.settings.proactive?.enabled) this.ws.setPreferences({ proactive: { enabled: false } });
   }
   removeSchedule(chatId, id) {
     const { chat } = this.schedule(chatId, id);
@@ -475,6 +479,7 @@ export class Routines {
   /** A copy of a routine. It belongs to whoever copies it: `createdBy` is that team member, or nothing for the owner. */
   duplicate(chatId, botId, now = Date.now(), createdBy) {
     const { chat, entry } = this.find(chatId);
+    if (entry.proactive) throw new Error(MANAGED);
     // A chat chosen on the old bot isn't the new bot's, so a copy for another bot goes to its latest chat.
     // Nor is a chosen chat kept when the copy's owner is not in it.
     const { chatId: picked, ...rest } = entry.deliver ?? {};
@@ -524,6 +529,8 @@ export class Routines {
       // Left out when the routine notifies, which is the usual way.
       ...(entry.notify === false && { notify: false }),
       ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+      // Kept by Botkins for Settings › Experimental › Proactive agent: changed there, not here.
+      ...(entry.proactive && { proactive: true }),
       // The routine's own model; without one it uses the Default routines model.
       ...(chat.model && { model: chat.model }),
     };
@@ -692,6 +699,14 @@ export class Routines {
 
 /** Sends a schedule entry's prompt as a turn in its chat; the run carries `scheduleId`. A script routine runs its script first. */
 export function dispatch(ws, chat, entry, trigger) {
+  if (entry.routine && entry.proactive) {
+    // The Proactive agent's gate decides, with no model, whether this tick wakes the bot (desktop/proactive.mjs).
+    const prompt = ws.proactive?.wake(trigger);
+    if (!prompt) return Promise.resolve(null);
+    const turn = ws.send(chat.id, prompt, { trigger, scheduleId: entry.id, title: entry.name, proactive: true });
+    chat.title = "Routine · " + entry.name;
+    return turn;
+  }
   if (entry.routine && entry.script) return runScriptRoutine(ws, chat, entry, trigger);
   const title = chat.title;
   const turn = ws.send(chat.id, entry.prompt, {

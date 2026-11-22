@@ -366,6 +366,8 @@ export type State = {
   adminMode?: boolean;
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
+  /** The Proactive agent's routine and what it did (desktop/proactive.mjs). */
+  proactive?: { chatId?: string; lastSweepAt?: number; pings?: number; day?: string; log: ProactiveLog[] };
   /** Project workspaces. One with a folder is also a coding project. */
   projects?: Project[];
   /** MCP servers every bot can use (Settings › MCP servers). Secret values never reach the page. */
@@ -411,6 +413,8 @@ export type ChatSchedule = {
   enabled?: boolean;
   /** Set on routines: named scheduled tasks in their own "Routine · <name>" chat (desktop/routines.mjs). */
   routine?: boolean;
+  /** The Proactive agent's routine: Botkins keeps it, and it is changed in Settings › Experimental. */
+  proactive?: boolean;
   /** Where a routine's result goes besides its own chat. Missing means its own chat. */
   deliver?: RoutineDelivery;
   /** false when the routine runs quietly: no notification when a run finishes. Left out when it notifies. */
@@ -536,8 +540,10 @@ declare global {
         value: ModelChoice | null,
       ): Promise<void>;
       setPreferences(
-        patch: Partial<Omit<Preferences, "model" | "appearance">> & {
+        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive">> & {
           appearance?: Partial<Appearance>;
+          /** Only what changes: the computer lays it over what it has (desktop/proactive-settings.mjs). */
+          proactive?: Partial<ProactiveSettings>;
         },
       ): Promise<void>;
       sideQuestion(id: string, question: string): Promise<string>;
@@ -1716,7 +1722,24 @@ export type Preferences = {
    * for off (desktop/summaries.mjs). Missing on an older computer.
    */
   autoSummarize?: number;
+  /** Settings › Experimental › Proactive agent (desktop/proactive.mjs). Missing on an older computer. */
+  proactive?: ProactiveSettings;
 };
+export type ProactiveWatch = "runs" | "tasks" | "requests";
+export type ProactiveSettings = {
+  enabled: boolean;
+  botId: string | null;
+  /** Minutes between checks: 15, 30, 60 or 120. */
+  every: number;
+  /** Hours between looks around the bot's own sources; 0 for never. */
+  sweepHours: number;
+  maxPerDay: number;
+  deliver: "chat" | "feed";
+  watch: ProactiveWatch[];
+  instructions: string;
+};
+/** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
   agentId?: string;
   id: string;
