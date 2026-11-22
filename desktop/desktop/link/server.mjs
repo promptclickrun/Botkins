@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
+import { GADGET_CAPABILITY, Gadgets } from "./gadget.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
@@ -64,7 +65,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1"];
+const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -255,6 +256,7 @@ export class LinkHost extends EventEmitter {
       log: (line) => this.log(line),
       ...(fetch && { fetch }),
     });
+    this.gadgets = new Gadgets(this);
     this.device = new DeviceTools({
       store: this.store,
       push: this.push,
@@ -293,6 +295,14 @@ export class LinkHost extends EventEmitter {
       },
       "link.voice.live": (session, a) => this.liveVoice(a[0], session.principal, session.deviceId),
       "link.voice.endLive": async (_session, a) => this.voice.endLive(a[0]),
+      // Gadgets (gadget.mjs; the contract is gadget/docs/contract.md). An owner device names a gadget by its
+      // key ("link.gadgets.add"); the rest are a gadget's own calls.
+      "link.gadgets.add": async (_session, a) => this.gadgets.add(a[0]),
+      "link.gadget.hello": async (session, a) => this.gadgets.hello(this.gadgets.of(session), a[0]),
+      "link.gadget.set": async (session, a) => this.gadgets.set(this.gadgets.of(session), a[0]),
+      "link.gadget.say": (session, a) => this.gadgets.say(this.gadgets.of(session), a[0]?.text, session.principal),
+      "link.gadget.hear": (session, a) => this.gadgets.hear(this.gadgets.of(session), a[0], session.principal),
+      "link.gadget.speak": (session, a) => this.gadgets.speak(this.gadgets.of(session), a[0]),
       "link.device.sources": async (session, a) => this.device.setSources(session.deviceId, a[0]),
       "link.device.answer": async (session, a) => this.device.answer(session.deviceId, a[0], a[1]),
       "link.device.file": async (session, a) => this.device.file(session.deviceId, a[0]),
@@ -830,11 +840,21 @@ export class LinkHost extends EventEmitter {
       ...(device.person && { person: device.person }),
       platform: device.platform,
       kind: device.kind,
+      // A gadget's board and firmware, as it said them, and the bot it talks with.
+      ...(device.kind === "gadget" && { gadget: (({ board, firmware, botId }) => ({ ...(board && { board }), ...(firmware && { firmware }), ...(botId && { botId }) }))(device.gadget ?? {}) }),
       createdAt: device.createdAt,
       lastSeenAt: device.lastSeenAt,
       connected: live.has(device.id),
       ...(device.id === asking && { current: true }),
     }));
+  }
+  /**
+   * Pairs a gadget by introduction, for the app on this computer (its Gadgets page, `botkins gadgets
+   * add`): `{ publicKey, name?, board?, botId? }`, the key as the gadget gave it over a cable.
+   * Answers `{ deviceId, serverId, serverKey, name, hosts }`, which the app hands to the gadget.
+   */
+  addGadget(input) {
+    return this.gadgets.add(input);
   }
   renameDevice(id, name, asking) {
     if (typeof id !== "string" || !this.store.device(id)) throw new Failure("That device is no longer paired.");
@@ -1467,6 +1487,7 @@ export class LinkHost extends EventEmitter {
     this.uploads.forget(id);
     this.push.forget(id);
     this.device.forget(id);
+    this.gadgets.forget(id);
     this.grants.forget(id);
     for (const [sid, session] of this.sessions) if (session.deviceId === id) this.sessions.delete(sid);
     for (const waiter of [...this.waiters]) if (waiter.session.deviceId === id) waiter.end();
@@ -2100,6 +2121,9 @@ export class LinkHost extends EventEmitter {
   }
   /** The parts one device may see, each with its version: the owner's are the computer's own, a member's are cut to their role. */
   viewParts(session, watching) {
+    // A gadget follows two small parts of its own, made from the owner's (gadget.mjs).
+    const device = session.deviceId === undefined ? null : this.store.device(session.deviceId);
+    if (device?.kind === "gadget" && !device.memberId) return this.gadgets.view(device, this.parts);
     const principal = this.principal(session.deviceId);
     const admin = principal?.kind === "owner" && principal.admin === true;
     // An owner device with Admin mode on is sent everything; the host's own calls too.
@@ -2158,7 +2182,7 @@ export class LinkHost extends EventEmitter {
     const parts = [];
     const versions = {};
     const deliveredReasoning = [];
-    for (const name of this.names(partWatching)) {
+    for (const name of values.names ?? this.names(partWatching)) {
       const part = values.get(quiet && name === "live" ? "quietLive" : name);
       if (!part) continue;
       versions[name] = part.v;
@@ -2170,7 +2194,7 @@ export class LinkHost extends EventEmitter {
       parts.push(JSON.stringify(name) + ":" + (light ? (part.light ??= JSON.stringify(lightPart(JSON.parse(part.json)))) : part.json));
     }
     for (const chat of partWatching) {
-      const shown = values === this.parts || (values.get("chat:" + chat)?.json ?? "null") !== "null";
+      const shown = values === this.parts || values.texts?.has(chat) || (values.get("chat:" + chat)?.json ?? "null") !== "null";
       const followsReasoning = session.reasoningWatch?.includes(chat);
       if (cursors && watching.includes(chat)) {
         const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
@@ -2220,7 +2244,11 @@ export class LinkHost extends EventEmitter {
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
   }
   sync(session, request, gone) {
-    const { epoch, have, watch, wait, appends, steps, text, reasoningWatch } = request;
+    const { epoch, have, watch, wait, appends, text } = request;
+    // A gadget follows its two parts and its reply's text: no steps, and no reasoning.
+    const forGadget = session.deviceId !== undefined && this.store.device(session.deviceId)?.kind === "gadget";
+    const steps = forGadget ? undefined : request.steps;
+    const reasoningWatch = forGadget ? undefined : request.reasoningWatch;
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     session.watching = watching;
     session.noText = text === false;

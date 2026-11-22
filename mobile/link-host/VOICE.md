@@ -110,6 +110,8 @@ The module reads `format` (`wav`, `m4a`, `mp3`, `webm`) to name the file and set
 | `local` | `adapter().local.synthesize(text, { model, voice, speed })` | | WAV |
 | `device` | throws "This device does its own speech." | | |
 
+**Plain samples (`samples: true`).** A gadget plays 16-bit samples and has no MP3 decoder (`gadget.mjs`), so `speak({ samples: true })` asks each provider for a WAV file in place of MP3: OpenAI, a custom server and Azure OpenAI with `response_format: "wav"`, Azure Speech with `X-Microsoft-OutputFormat: riff-24khz-16bit-mono-pcm`, ElevenLabs with `output_format=pcm_24000` (bare samples, which are wrapped in a WAV header here). Gemini and the local models answer with WAV already. **Not checked:** none of these was read in the provider's documentation on the day it was written, and none was called with a real key.
+
 `speak` takes at most 4,000 characters. A voice id is checked before it goes into a path (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$` for ElevenLabs).
 
 ### Models and voices (`options(kind, provider)`)

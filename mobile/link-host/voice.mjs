@@ -774,8 +774,12 @@ export class Voice {
 
   // ── Text to speech ──────────────────────────────────────────────────────────────────────────
 
-  /** Returns { audio: Buffer, format: "mp3" | "wav" }. Callers split long replies by sentence. */
-  async speak({ text: input, voice, speed, override } = {}) {
+  /**
+   * Returns { audio: Buffer, format: "mp3" | "wav" }. Callers split long replies by sentence.
+   * `samples: true` asks each provider for plain samples (a WAV file) where it would send MP3: a
+   * gadget plays samples and has no decoder (gadget.mjs).
+   */
+  async speak({ text: input, voice, speed, override, samples = false } = {}) {
     // `override` is a bot's own reading voice (cleanBotVoice(bot.voice)?.tts): the shared settings fill in what it leaves out.
     const { provider, model, voice: chosenVoice, speed: chosenSpeed } = effectiveTts(this.data.tts, override);
     if (provider === "device") throw new Failure(DEVICE);
@@ -803,19 +807,19 @@ export class Voice {
       const key = provider === "openai" ? this.keyOf("openai") : this.data.keys.custom;
       const base = provider === "openai" ? this.openaiBase() : this.customBase();
       const defaults = provider === "openai" ? DEFAULTS.openai : DEFAULTS.custom;
-      const body = { model: model ?? defaults.tts, input, voice: who ?? defaults.ttsVoice, response_format: "mp3" };
+      const body = { model: model ?? defaults.tts, input, voice: who ?? defaults.ttsVoice, response_format: samples ? "wav" : "mp3" };
       if (rate !== 1) body.speed = rate;
       const audio = await this.bytes(provider, base + "/audio/speech", { method: "POST", headers: { ...(key && { Authorization: "Bearer " + key }), "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
       const format = sniff(audio);
       // Our own account asked for mp3. A server of the person's own may answer in anything else.
       if (!format && provider === "custom") throw new Failure("Your speech server sent audio this app can't play.");
-      return { audio, format: format ?? "mp3" };
+      return { audio, format: format ?? (samples ? "wav" : "mp3") };
     }
     if (provider === "azure") {
       const key = this.keyOf("azure");
       if (this.data.providers.azure.kind === "openai") {
         const { base, deployment, version } = this.azure("openai-tts");
-        const body = { model: model ?? deployment, input, voice: who ?? DEFAULTS.azureOpenaiVoice, response_format: "mp3" };
+        const body = { model: model ?? deployment, input, voice: who ?? DEFAULTS.azureOpenaiVoice, response_format: samples ? "wav" : "mp3" };
         if (rate !== 1) body.speed = rate;
         const audio = await this.bytes("azure", `${base}?api-version=${encodeURIComponent(version)}`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
         return { audio, format: sniff(audio) ?? "mp3" };
@@ -825,7 +829,7 @@ export class Voice {
       const locale = name.split("-").slice(0, 2).join("-");
       const spoken = rate === 1 ? xml(input) : `<prosody rate="${rate}">${xml(input)}</prosody>`;
       const ssml = `<speak version='1.0' xml:lang='${xml(locale)}'><voice xml:lang='${xml(locale)}' name='${xml(name)}'>${spoken}</voice></speak>`;
-      const headers = { "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": "audio-24khz-96kbitrate-mono-mp3", "User-Agent": "Botkins" };
+      const headers = { "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": samples ? "riff-24khz-16bit-mono-pcm" : "audio-24khz-96kbitrate-mono-mp3", "User-Agent": "Botkins" };
       const audio = await this.bytes("azure", tts, { method: "POST", headers, body: ssml }, { secrets: [key] });
       return { audio, format: sniff(audio) ?? "mp3" };
     }
@@ -837,7 +841,10 @@ export class Voice {
       if (!SLUG.test(id)) throw new Failure("That voice isn't valid.");
       const body = { text: input, model_id: model ?? DEFAULTS.elevenTts };
       if (rate !== 1) body.voice_settings = { speed: rate };
-      const audio = await this.bytes("elevenlabs", `${ELEVEN}/v1/text-to-speech/${encodeURIComponent(id)}?output_format=mp3_44100_128`, { method: "POST", headers: { "xi-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
+      const audio = await this.bytes("elevenlabs", `${ELEVEN}/v1/text-to-speech/${encodeURIComponent(id)}?output_format=${samples ? "pcm_24000" : "mp3_44100_128"}`, { method: "POST", headers: { "xi-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
+      // ElevenLabs sends "pcm_24000" as bare samples, with no header.
+      // (Not told apart by its first bytes: loud samples can start like an MP3 frame. Only a real header says otherwise.)
+      if (samples && audio.toString("latin1", 0, 4) !== "RIFF" && audio.toString("latin1", 0, 3) !== "ID3") return { audio: wavFromPcm(audio.subarray(0, audio.length - (audio.length % 2)), 24000), format: "wav" };
       return { audio, format: sniff(audio) ?? "mp3" };
     }
     if (provider === "gemini") {

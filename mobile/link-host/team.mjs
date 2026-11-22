@@ -252,6 +252,13 @@ const POLICY = {
   "link.device.sources": "owner",
   "link.device.answer": "owner",
   "link.device.file": "owner",
+  // Gadgets (gadget.mjs) are the owner's: an owner device names one, and a gadget makes its own calls.
+  "link.gadgets.add": "owner",
+  "link.gadget.hello": "owner",
+  "link.gadget.set": "owner",
+  "link.gadget.say": "owner",
+  "link.gadget.hear": "owner",
+  "link.gadget.speak": "owner",
   "link.devices.list": "owner",
   "link.devices.rename": "owner",
   "link.devices.setPerson": "owner",

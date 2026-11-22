@@ -1,0 +1,24 @@
+# Every ESP32 board. A board adds its own in boards/<name>/sdkconfig.defaults.
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
+CONFIG_APP_PROJECT_VER="0.1.0"
+
+# The core is C++17 with std::thread, std::string and std::function; no exceptions or RTTI.
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# The core's threads (sync, work) are pthreads. app_main also sets this with
+# esp_pthread_set_cfg before gadget.begin(); this is the default for threads made elsewhere.
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=16384
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_FREERTOS_HZ=1000
+
+# Wi-Fi: the port keeps the network in its own NVS namespace, so the driver's own copy
+# is not written (esp_wifi_set_storage(WIFI_STORAGE_RAM) too).
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_LWIP_MAX_SOCKETS=12

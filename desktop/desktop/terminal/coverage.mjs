@@ -297,6 +297,10 @@ export const LINK = {
   "link.devices.rename": cmd("devices rename"),
   "link.devices.setPerson": cmd("devices set-person"),
   "link.devices.remove": cmd("devices remove"),
+  // Gadgets (desktop/link/gadget.mjs). A person names one from a cable; the rest are a gadget's own calls,
+  // which only a paired gadget makes, as a phone makes its own.
+  "link.gadgets.add": cmd("gadgets add"),
+  ...each("link.gadget.hello link.gadget.set link.gadget.say link.gadget.hear link.gadget.speak", no("phone's own")),
   // The team, as the link names the same calls (control-team.mjs).
   "link.team.get": cmd("team show"),
   "link.team.rename": cmd("team rename"),
@@ -351,6 +355,8 @@ export const CHANGES = {
   "devices.rename": 0,
   "devices.setPerson": 0,
   "devices.remove": 0,
+  // A gadget set up over a cable: its name as the computer keeps it. Never the Wi-Fi network or its password.
+  "gadgets.add": (args, value) => value?.name,
   // An answer to a request that waits in a chat: the chat's id, the kind of the request (one of four fixed words) and yes or no. Never the request's text or the answer's, never a value.
   "chat.respond": (args, value) => (value?.chatId && ["permission", "secure", "question", "form"].includes(value.kind) && ["yes", "no"].includes(value.answered) ? value.chatId + " " + value.kind + " " + value.answered : (value?.chatId ?? null)),
   "bots.add": (args) => args?.[0]?.name,

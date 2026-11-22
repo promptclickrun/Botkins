@@ -14,11 +14,19 @@
 //   BOTKINS_DEV_AGENTS=off                act as an older computer, without "agent-templates-v1" (docs/agent-templates.md)
 //   BOTKINS_DEV_BOT_VOICE=off             act as an older computer, without "bot-voice-v1" (a voice of its own for each bot)
 //   BOTKINS_DEV_AUTO_APPROVE=1            approve team join requests after a short wait
+//   BOTKINS_DEV_VOICE=mac                 speech for trying a gadget, with no key: macOS `say` reads replies, and
+//                                         BOTKINS_DEV_STT="<command>" hears (it gets a WAV file's path and prints the
+//                                         words; without it every recording is kept in <dir> and heard as BOTKINS_DEV_HEARD)
+//   BOTKINS_DEV_GADGET=<serial port>      set a gadget up over that USB port at the start (gadget/docs/contract.md);
+//                                         BOTKINS_DEV_WIFI_SSID and BOTKINS_DEV_WIFI_PASSWORD give it a network.
+//                                         In this console: gadget <serial port> [network name] [password]
 // The pairing link is also written to <dir>/pairing-url.txt for scripts and simulators.
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline";
+import { introduce, serialLines } from "./gadget-setup.mjs";
 import { LinkHost, qrText } from "./index.mjs";
 import { MockBackend } from "./mock-backend.mjs";
 import { jpegSize } from "./screen.mjs";
@@ -26,6 +34,38 @@ import { jpegSize } from "./screen.mjs";
 const dir = process.env.BOTKINS_DEV_DIR ?? join(tmpdir(), "botkins-dev-host");
 mkdirSync(dir, { recursive: true });
 const backend = new MockBackend();
+
+// Speech for trying a gadget without a provider's key: this Mac reads replies with `say`, and a
+// command of the person's own hears. It stands where the desktop app's local speech models stand.
+if (process.env.BOTKINS_DEV_VOICE === "mac") {
+  const run = (command, args) => new Promise((resolve, reject) => execFile(command, args, { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => (error ? reject(error) : resolve(stdout))));
+  let files = 0;
+  backend.voice = {
+    local: {
+      models: () => [
+        { id: "dev-stt", name: "Demo hearing", kind: "stt", installed: true },
+        { id: "dev-say", name: "macOS say", kind: "tts", installed: true, voices: [] },
+      ],
+      async transcribe(wav) {
+        // Named by the time too, so a restart doesn't write over what was kept before.
+        const path = join(dir, "heard-" + Date.now() + "-" + ++files + ".wav");
+        writeFileSync(path, wav);
+        const command = (process.env.BOTKINS_DEV_STT ?? "").split(/\s+/).filter(Boolean);
+        if (!command.length) return { text: process.env.BOTKINS_DEV_HEARD ?? "Hello from the gadget" };
+        return { text: String(await run(command[0], [...command.slice(1), path])).trim() };
+      },
+      async synthesize(text) {
+        const path = join(dir, "say-" + ++files + ".wav");
+        try {
+          await run("say", ["-o", path, "--data-format=LEI16@24000", text]);
+          return { audio: readFileSync(path) };
+        } finally {
+          rmSync(path, { force: true });
+        }
+      },
+    },
+  };
+}
 
 // A stand-in screen: one picture, so the phone's screen pages can be tried without showing (or
 // touching) the real one. Clicks and typing are printed, never posted.
@@ -86,6 +126,31 @@ backend.updates.onRestart = async () => {
   console.log("Back after the update.");
 };
 host.setName(process.env.BOTKINS_DEV_NAME ?? "Demo Mac");
+if (process.env.BOTKINS_DEV_VOICE === "mac") host.voice.set({ stt: { provider: "local" }, tts: { provider: "local" } });
+
+/** Sets a gadget up over a USB port: reads its key, names it to this demo computer, and hands it the answer. */
+async function setUpGadget(port, wifi) {
+  let io;
+  try {
+    io = serialLines(port);
+    console.log("Gadget        looking on " + port + "…");
+    let last = "";
+    const done = await introduce({
+      io,
+      wifi,
+      add: (input) => host.addGadget(input),
+      onStatus: (status) => {
+        const line = "Wi-Fi " + status.wifi + ", computer " + status.link;
+        if (line !== last) console.log("Gadget        " + (last = line));
+      },
+    });
+    console.log("Gadget        " + done.board + " (" + done.mac + ", firmware " + done.firmware + ") is set up and online.");
+  } catch (error) {
+    console.log("Gadget        " + error.message);
+  } finally {
+    io?.close();
+  }
+}
 // The real app starts with the screen off. The demo host starts with it fully on, so the phone's screen
 // pages can be tried; with no capture adapter, macOS uses its own screencapture tool.
 // A headless demo keeps the level a phone set (it is saved); any other starts at BOTKINS_DEV_SCREEN.
@@ -103,6 +168,10 @@ if (process.env.BOTKINS_DEV_AWAY === "1" && process.env.BOTKINS_DEV_RELAY) {
   host.hosts = () => all().filter((entry) => entry.startsWith("relay!"));
 }
 await host.setEnabled(true);
+if (process.env.BOTKINS_DEV_GADGET) {
+  const ssid = process.env.BOTKINS_DEV_WIFI_SSID;
+  void setUpGadget(process.env.BOTKINS_DEV_GADGET, ssid ? { ssid, password: process.env.BOTKINS_DEV_WIFI_PASSWORD ?? "" } : undefined);
+}
 // "Launch" starts shared with all members, who may change it, so a member's phone has a shared space to open.
 const launch = host.spacesFor("owner").find((space) => space.name === "Launch" && space.access === "private");
 if (launch) host.shareSpace("owner", launch.id, { access: "team", teamCan: "edit" });
@@ -142,7 +211,11 @@ host.on("joinRequest", (request) => {
 });
 const input = createInterface({ input: process.stdin, output: process.stdout });
 input.on("line", (line) => {
-  const [action, id = latestRequest?.id] = line.trim().split(/\s+/);
+  const [action, id = latestRequest?.id, ...more] = line.trim().split(/\s+/);
+  if (action === "gadget") {
+    if (!id) return console.log("Type: gadget <serial port> [network name] [password]");
+    return void setUpGadget(id, more.length ? { ssid: more[0], password: more.slice(1).join(" ") } : undefined);
+  }
   if (action !== "approve" && action !== "deny") return;
   if (!id) return console.log("There is no team request waiting.");
   const work = action === "approve" ? host.approve(id) : host.deny(id);

@@ -2,7 +2,7 @@
 // one. The same list as Settings › Phone on the computer, with the same things to do: name the
 // person a device belongs to ("device-person-v1"), rename the device, and remove it
 // (docs/link-contract.md). Needs "devices-v1". A row shows the person first, then the model.
-import { Monitor, Smartphone } from "lucide-react-native";
+import { Monitor, Smartphone, Speaker } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import type { PairedDevice } from "@/link/types";
@@ -50,7 +50,7 @@ export function Devices() {
   const changePerson = (device: PairedDevice) =>
     prompt.ask({
       title: device.person ? "Change name" : "Add name",
-      message: "Who this " + (device.kind === "desktop" ? "computer" : "phone") + " belongs to",
+      message: "Who this " + (device.kind === "desktop" ? "computer" : device.kind === "gadget" ? "gadget" : "phone") + " belongs to",
       value: device.person ?? "",
       onSubmit: (next) => {
         if (next !== device.person) void attempt(api["link.devices.setPerson"](device.id, next)).then((list) => list && setDevices(list));
@@ -86,7 +86,7 @@ export function Devices() {
         {devices.map((device) => (
           <Row
             key={device.id}
-            leading={<IconTile icon={device.kind === "desktop" ? Monitor : Smartphone} color={brand.tide} />}
+            leading={<IconTile icon={device.kind === "desktop" ? Monitor : device.kind === "gadget" ? Speaker : Smartphone} color={brand.tide} />}
             title={deviceTitle(device)}
             subtitle={deviceSubtitle(device, statusOf(device))}
             chevron
