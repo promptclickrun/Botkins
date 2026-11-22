@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-canvas-ui-"));
@@ -62,7 +62,7 @@ try {
     executablePath: process.env.BOTKINS_BINARY,
     env,
   });
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.setViewportSize({ width: 1190, height: 830 }).catch(() => {});
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();

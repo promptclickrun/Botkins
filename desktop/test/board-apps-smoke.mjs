@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { probeListeners, probePage } from "./webrtc-probe.mjs";
 import { openBoard } from "./spaces-helper.mjs";
 import { seedApp } from "./starter.mjs";
@@ -24,7 +24,7 @@ const launch = () => _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : 
 
 // First launch writes a fresh workspace; then seed board items, a chat and an app into it.
 let app = await launch();
-await (await skipWelcome(await app.firstWindow())).getByRole("heading", { name: "Home", exact: true }).waitFor();
+await (await home(app)).getByRole("heading", { name: "Home", exact: true }).waitFor();
 await app.close();
 const file = join(dir, "data", "workspace.json");
 const ws = JSON.parse(readFileSync(file, "utf8"));
@@ -54,7 +54,7 @@ writeFileSync(file, JSON.stringify(ws));
 
 app = await launch();
 try {
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 880));

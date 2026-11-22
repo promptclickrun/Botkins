@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-context-"));
@@ -19,7 +19,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 const launch = () => _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
 
 let app = await launch();
-await (await skipWelcome(await app.firstWindow())).getByRole("heading", { name: "Home", exact: true }).waitFor();
+await (await home(app)).getByRole("heading", { name: "Home", exact: true }).waitFor();
 await app.close();
 const file = join(dir, "data", "workspace.json");
 const ws = JSON.parse(readFileSync(file, "utf8"));
@@ -44,7 +44,7 @@ writeFileSync(file, JSON.stringify(ws));
 
 app = await launch();
 try {
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 880));

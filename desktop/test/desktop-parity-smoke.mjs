@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { seedApp, starterBots } from "./starter.mjs";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 
 const data = mkdtempSync(join(tmpdir(), "botkins-parity-ui-"));
 const qa = process.env.BOTKINS_QA_DIR;
@@ -59,7 +59,7 @@ seedChat();
 let app;
 try {
   app = await launch();
-  const page = await skipWelcome(await app.firstWindow());
+  const page = await home(app);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
@@ -100,7 +100,7 @@ try {
   // The saved arrangement survives a renderer restart in this isolated profile.
   await app.close();
   app = await launch();
-  const restarted = await skipWelcome(await app.firstWindow());
+  const restarted = await home(app);
   await expect(restarted.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
   const persisted = await snap(restarted);
   assert.equal(persisted.bots.find((bot) => bot.id === "scout")?.pinned, true);

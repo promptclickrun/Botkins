@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-wiki-ui-"));
@@ -56,10 +56,7 @@ async function launch() {
     if (m.type() === "error" && /Content Security Policy|net::ERR/i.test(m.text())) errors.push(m.text());
   });
   // Signed in as a made-up account, so the app opens on Home whatever this computer's sign-in is.
-  await app.evaluate(({ ipcMain }) => {
-    ipcMain.removeHandler("auth");
-    ipcMain.handle("auth", () => ({ connected: true, login: "octocat", type: "user" }));
-  });
+  await signedInAs(app);
   await page.reload();
   page = await skipWelcome(page);
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();

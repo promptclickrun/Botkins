@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "botkins-market-agents-"));
@@ -41,7 +41,7 @@ const errors = [];
 let page;
 const call = (name, ...args) => page.evaluate(({ name, args }) => window.botkins[name](...args), { name, args });
 try {
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (error) => errors.push(error.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor({ timeout: 30000 });
   assert.equal((await call("plugins.addMarketplace", market)).name, "local-agent-market");
@@ -62,21 +62,25 @@ try {
 
   // Agents: the local templates, with their categories as chips.
   await dialog.getByRole("tab", { name: "Agents", exact: true }).click();
-  const sorter = dialog.locator(".agent-listing", { hasText: "Sorter" });
+  // Only this smoke's own marketplace is looked at: the built-in catalog is read from the network,
+  // and it can have templates with the same names or words.
+  const mine = dialog.locator(".agent-listing", { hasText: "local-agent-market" });
+  const listing = (text) => mine.filter({ hasText: text });
+  const sorter = listing("Sorter");
   await sorter.waitFor({ timeout: 60000 });
   await expect(sorter).toContainText("Sorts your inbox");
   await expect(sorter).toContainText("Productivity · local-agent-market");
   await shot(page, "agents-list");
   await dialog.getByRole("button", { name: /^Writing/ }).click();
-  await expect(dialog.locator(".agent-listing", { hasText: "Quill" })).toBeVisible();
-  await expect(dialog.locator(".agent-listing", { hasText: "Sorter" })).toHaveCount(0);
+  await expect(listing("Quill")).toBeVisible();
+  await expect(listing("Sorter")).toHaveCount(0);
   await dialog.getByRole("button", { name: /^All/ }).click();
   await dialog.getByRole("searchbox", { name: "Search agents" }).fill("inbox");
-  await expect(dialog.locator(".agent-listing")).toHaveCount(1);
+  await expect(mine).toHaveCount(1);
   await dialog.getByRole("searchbox", { name: "Search agents" }).fill("");
 
   // A template's page: its Botkin, role, where it is from, and its instructions as they will be given.
-  await dialog.locator(".agent-listing", { hasText: "Sorter" }).click();
+  await listing("Sorter").click();
   await dialog.getByRole("heading", { name: "Sorter", exact: true }).waitFor();
   await expect(dialog.locator(".agent-detail")).toContainText("Inbox triage");
   await expect(dialog.locator(".agent-detail")).toContainText("Productivity · local-agent-market · v1.0.0 · Botkins");

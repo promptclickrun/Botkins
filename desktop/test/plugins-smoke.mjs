@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { skipWelcome, home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "botkins-plugin-ui-"));
@@ -84,7 +84,7 @@ const clickAsk = (title, button) => page.getByRole("dialog", { name: title, exac
 const RUNS = "This plugin runs commands on this computer";
 
 try {
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (error) => errors.push(error.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor({ timeout: 30000 });
   assert.equal(await page.title(), "Botkins", "desktop renderer keeps the app page name");
@@ -281,11 +281,12 @@ try {
   await expect(heldAsk.getByRole("button", { name: "Turn on", exact: true })).toBeVisible();
   await heldAsk.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Back to plugins", exact: true }).click();
-  // An update is the way back: Update is offered from the mark, and the switch waits for it.
+  // An update is the way back: Update is offered first, from the mark.
   await row("broken").click();
   await expect(dialog.locator(".plugin-held")).toHaveText(CHANGED);
   await expect(dialog.locator(".set-group", { hasText: "Status" }).getByRole("button", { name: "Update", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("switch", { name: "broken enabled", exact: true })).toBeDisabled();
+  // The window does not hold the switch back itself: it warns and asks, and the computer has the last word.
+  await expect(dialog.getByRole("switch", { name: "broken enabled", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Back to plugins", exact: true }).click();
   // A linked folder that could not be copied: the reason, the folder, and Remove alone.
   await row("old-folder").click();

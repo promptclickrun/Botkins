@@ -9,7 +9,7 @@ test("the lists name smokes that exist, each with a reason", () => {
   assert.ok(names.length >= 42 && names.includes("plugins") && names.includes("spaces"));
   for (const one of LEFT_OUT) {
     assert.ok(names.includes(one.name), one.name + " is not a smoke");
-    assert.ok(["ci", "linux", "darwin", "win32"].includes(one.where), one.where);
+    assert.ok(["signed-out", "ci", "linux", "darwin", "win32"].includes(one.where), one.where);
     assert.ok(one.why.length > 10, "say why " + one.name + " is left out");
   }
   for (const [name, why] of Object.entries(BY_CHANCE)) {
@@ -19,14 +19,21 @@ test("the lists name smokes that exist, each with a reason", () => {
 });
 
 test("a smoke is left out only where its entry says", () => {
-  // The rule itself, on entries of this test's own: the real list can be empty.
-  const entries = [{ name: "phone", where: "linux", why: "it needs a tool of macOS" }, { name: "today", where: "ci", why: "it needs a signed-in provider" }];
-  const rule = (name, place) => entries.find((one) => one.name === name && (one.where === "ci" ? place.ci : one.where === place.platform))?.why;
+  // The rule itself, on entries of this test's own.
+  const entries = [{ name: "phone", where: "linux", why: "it needs a tool of macOS" }, { name: "today", where: "ci", why: "it needs something a runner has not" }, { name: "controls", where: "signed-out", why: "it runs real model turns" }];
+  const rule = (name, place) => leftOut(name, place, entries);
   assert.equal(rule("phone", { ci: true, platform: "linux" }), "it needs a tool of macOS");
   assert.equal(rule("phone", { ci: true, platform: "darwin" }), undefined);
-  assert.equal(rule("today", { ci: true, platform: "darwin" }), "it needs a signed-in provider");
+  assert.equal(rule("today", { ci: true, platform: "darwin" }), "it needs something a runner has not");
   assert.equal(rule("today", { ci: false, platform: "darwin" }), undefined);
+  // A smoke that runs real model turns runs only with --live, here and on a runner.
+  assert.equal(rule("controls", { ci: false, platform: "darwin" }), "it runs real model turns");
+  assert.equal(rule("controls", { ci: true, platform: "linux" }), "it runs real model turns");
+  assert.equal(rule("controls", { ci: false, platform: "darwin", live: true }), undefined);
   assert.equal(leftOut("no-such-smoke", { ci: true, platform: "linux" }), undefined);
+  // The two that are in the real list today.
+  assert.ok(leftOut("approvals") && leftOut("controls"));
+  assert.equal(leftOut("approvals", { live: true }), undefined);
 });
 
 test("parts cover every smoke once", () => {

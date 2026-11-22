@@ -283,13 +283,17 @@ try {
   assert.equal((await page.evaluate(() => window.botkins.snapshot())).settings.onboarded, true);
   await app.close();
 
-  // 3. The second launch skips the welcome (real auth again).
+  // 3. The second launch skips the welcome: the workspace is onboarded and a provider is connected.
+  // The sign-in is a stand-in here too, put in before the window is read again, so this step does
+  // not depend on what this computer is signed in to. (A signed-out window shows "Welcome back".)
   await start();
-  await page.getByRole("heading", { name: "Home", exact: true }).waitFor({ timeout: 30000 });
-  await expect(welcome()).toHaveCount(0);
+  await page.waitForFunction(() => !!window.botkins);
   await stubAuth({ connected: true, login: "octocat", type: "user" });
   // Claude stays switched on from the welcome, as the saved setting would keep it.
   await app.evaluate(() => void (globalThis.__welcome.claude = true));
+  await page.reload();
+  await page.getByRole("heading", { name: "Home", exact: true }).waitFor({ timeout: 30000 });
+  await expect(welcome()).toHaveCount(0);
 
   // 4. Settings: the side menu reaches every section, by click and by arrow keys.
   await button("Settings").click();

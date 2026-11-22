@@ -40,3 +40,17 @@ export async function signedInAs(app, login = "octocat") {
   }, login);
   await stubProviders(app, [copilotStatus(true, login)]);
 }
+
+/**
+ * The app's first window on Home, with GitHub Copilot signed in as a made-up account. A smoke that
+ * starts on Home uses this, so it does not depend on what this computer is signed in to: a
+ * signed-out window shows the welcome page in place of Home. The window is read again after the
+ * stand-in is in, because it asks for the providers as it opens.
+ */
+export async function home(app, login = "octocat") {
+  const page = await app.firstWindow();
+  await page.waitForFunction(() => !!window.botkins);
+  await signedInAs(app, login);
+  await page.reload();
+  return skipWelcome(page);
+}

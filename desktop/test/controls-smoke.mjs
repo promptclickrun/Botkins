@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { CopilotClient, RuntimeConnection } from "@microsoft/copilot-sdk";
 import { seedApp } from "./starter.mjs";
 
@@ -30,7 +30,7 @@ let app, page, session;
 const errors = [];
 async function start() {
   app = await launch();
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
 }

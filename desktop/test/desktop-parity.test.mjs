@@ -90,6 +90,10 @@ test("a chat nobody wrote in is archived when it is left; every other chat is ke
   const idle = { streams: {}, queued: {} };
   const chat = (more = {}) => ({ id: "c", botId: "pip", title: "New chat", time: 1, messages: [], ...more });
   assert.equal(leftEmpty(chat(), idle), true);
+  // A chat this window just took out of the archive: what the window knows can still say archived.
+  assert.equal(leftEmpty(chat({ archived: true }), idle), false);
+  assert.equal(leftEmpty(chat({ archived: true }), idle, "", true), true, "leaving it archives it again");
+  assert.equal(leftEmpty(chat({ archived: true }), idle, "typed", true), false, "typed text keeps it");
   assert.equal(leftEmpty(chat({ botIds: ["pip", "ivy"] }), idle), true, "a group nobody wrote in");
   assert.equal(leftEmpty(chat({ projectId: "p1" }), idle), true, "a project's new chat");
   assert.equal(leftEmpty(chat(), { streams: {} }), true, "a computer that sends no queue");

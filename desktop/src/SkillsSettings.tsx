@@ -66,7 +66,7 @@ export default function SkillsSettings({
   const [editing, setEditing] = useState<{ name?: string } | null>(null);
   const [told, setTold] = useState(() => readTold(TOLD));
   /** A plugin folder that "Add from folder…" installed as a plugin just now. */
-  const [installed, setInstalled] = useState<{ id: string; name: string }>();
+  const [installed, setInstalled] = useState<{ id: string; name: string; enabled: boolean }>();
   // Skills that are off because Botkins switched their plugin off: said here, where they are missed, one time.
   const missed = skillsOff(plugins, told, hostId);
   function close(plugin: InstalledPlugin) {
@@ -100,9 +100,9 @@ export default function SkillsSettings({
     try {
       const r = await api.addSkillFolder();
       if (!r) return;
-      // A plugin folder is never linked for its skills: the computer installs it as a plugin, switched off.
+      // A plugin folder is never linked for its skills: the computer installs it as a plugin.
       if (r.kind === "plugin" && r.id) {
-        setInstalled({ id: r.id, name: r.name });
+        setInstalled({ id: r.id, name: r.name, enabled: r.enabled === true });
         await reload();
         return;
       }
@@ -167,7 +167,7 @@ export default function SkillsSettings({
           <ShieldAlert size={16} aria-hidden="true" />
           <div>
             <strong>{decisionText(installed.name)} was installed as a plugin</strong>
-            <p>It is switched off, so its skills are off. Review what it runs, then turn it on.</p>
+            <p>{installed.enabled ? "Its skills are on. Open the plugin to see what it runs." : "It is switched off, so its skills are off. Review what it runs, then turn it on."}</p>
           </div>
           {openPlugin && (
             <button type="button" className="set-button" onClick={() => openPlugin(installed.id)}>
@@ -240,6 +240,7 @@ export default function SkillsSettings({
                     {s.description}
                   </small>
                 )}
+                {s.unavailable && <small className="int-note">{s.unavailable}</small>}
               </div>
               <div className="set-control int-trailing">
                 {s.editable && (

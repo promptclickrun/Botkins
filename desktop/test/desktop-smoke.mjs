@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 const dir = mkdtempSync(join(tmpdir(), "botkins-ui-"));
 const env = { ...process.env, BOTKINS_DATA_DIR: dir };
@@ -19,7 +19,7 @@ const launch = () =>
   });
 let app = await launch();
 try {
-  let page = await skipWelcome(await app.firstWindow());
+  let page = await home(app);
   page.on("pageerror", (e) => console.error(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor({timeout:3000});
   await page.locator(".heroface img.bot-avatar").waitFor();
@@ -66,7 +66,7 @@ try {
     assert.ok(data.chats[0].messages.at(-1).text.includes(nonce));
     await app.close();
     app = await launch();
-    page = await skipWelcome(await app.firstWindow());
+    page = await home(app);
     await page.getByRole("button", { name: "Chats", exact: true }).click();
     await page
       .getByRole("button", { name: new RegExp("Remember the code " + nonce) })

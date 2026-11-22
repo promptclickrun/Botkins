@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-scroll-"));
@@ -25,7 +25,7 @@ const launch = () => _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : 
 const long = { timeout: 120000 };
 
 let app = await launch();
-await (await skipWelcome(await app.firstWindow())).getByRole("heading", { name: "Home", exact: true }).waitFor(long);
+await (await home(app)).getByRole("heading", { name: "Home", exact: true }).waitFor(long);
 await app.close();
 
 // A chat long enough to scroll, in made-up words.
@@ -84,7 +84,7 @@ async function streaming(text) {
 
 app = await launch();
 try {
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1190, 830));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor(long);
@@ -227,7 +227,7 @@ try {
 }
 app = await launch();
 try {
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1190, 830));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor(long);

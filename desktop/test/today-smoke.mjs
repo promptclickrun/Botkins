@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { createSources } from "./fixtures/sources.mjs";
 import { seedApp } from "./starter.mjs";
 
@@ -21,7 +21,7 @@ const launch = () =>
     env,
   });
 let app = await launch(),
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
 const snapshot = () => page.evaluate(() => window.botkins.snapshot());
 const button = (name) => page.getByRole("button", { name, exact: true });
 const nav = (name) =>
@@ -242,7 +242,7 @@ try {
     const updated = (await snapshot()).panels[0];
     await app.close();
     app = await launch();
-    page = await skipWelcome(await app.firstWindow());
+    page = await home(app);
     await nav("Today");
     await page
       .getByRole("heading", { name: "Sample count", exact: true })

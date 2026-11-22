@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { skipWelcome } from "./welcome-helper.mjs";
+import { home } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
 
@@ -74,7 +74,7 @@ writeFileSync(env.BOTKINS_MCP_OAUTH_CLIENTS_FILE, JSON.stringify({ clients: [{
 
 try {
   app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await size(1190, 830);
@@ -214,8 +214,17 @@ try {
   assert.ok(isRef(kept.env.REGION));
   // Changing what the server runs with the key left untouched is refused: a saved key never
   // follows the server to a different program unseen. Typing it again saves.
-  await settings.getByRole("button", { name: "Edit local-tools" }).click();
-  sheet = page.getByRole("dialog", { name: "Edit local-tools" });
+  // The window hears of the saved variable a moment after the save, and the sheet shows what the
+  // window knew when it opened. So the sheet is opened again until it has the second variable.
+  await expect(async () => {
+    await settings.getByRole("button", { name: "Edit local-tools" }).click();
+    sheet = page.getByRole("dialog", { name: "Edit local-tools" });
+    await sheet.getByLabel("Variable 1 name").waitFor();
+    if ((await sheet.getByLabel("Variable 2 name").count()) === 0) {
+      await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+      throw new Error("The window does not show the second variable yet.");
+    }
+  }).toPass({ timeout: 30000 });
   await sheet.getByRole("textbox", { name: /^Arguments/ }).fill("server2.js");
   await shot("mcp-sheet");
   await sheet.getByRole("button", { name: "Save server" }).click();
@@ -533,7 +542,7 @@ try {
   await app.close();
   writeFileSync(join(dir, "app", "data", "vault.json"), "not a vault");
   app = await _electron.launch({ args: process.env.BOTKINS_BINARY ? [] : ["."], executablePath: process.env.BOTKINS_BINARY, env });
-  page = await skipWelcome(await app.firstWindow());
+  page = await home(app);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await size(1190, 830);
