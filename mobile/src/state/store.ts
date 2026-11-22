@@ -1,5 +1,6 @@
 // What the phone knows about the computer right now. The link fills it (src/state/link.ts) and
 // screens read it through the hooks in src/state/hooks.ts.
+import { PendingSends } from "../../link-host/pending-sends";
 import { create } from "zustand";
 import type { LinkRoute, LinkState, Pairing } from "@/link/client";
 import type { ChatDetail, Live, Message, ModelInfo, Parts, ProviderStatus, Run, SkillInfo } from "@/link/types";
@@ -69,6 +70,16 @@ export const onComputerChange = (reset: () => void) => void resets.add(reset);
 export function forgetComputer() {
   for (const reset of resets) reset();
 }
+
+export const pendingSends = new PendingSends<Message & { clientMessageId: string }>();
+onComputerChange(() => pendingSends.clear());
+useApp.subscribe((state, prev) => {
+  if (state.chats === prev.chats && state.parts.live === prev.parts.live) return;
+  for (const id of pendingSends.chatIds()) {
+    const chat = state.chats[id];
+    pendingSends.observe(id, chat?.from ?? 0, chat?.messages ?? [], state.parts.live?.queued[id] ?? []);
+  }
+});
 
 /** Joins a fresh page of a chat onto what is already loaded, keeping earlier pages. */
 export function mergeChat(held: ChatView | undefined, next: ChatDetail): ChatView {

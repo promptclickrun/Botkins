@@ -225,6 +225,7 @@ export type Mention =
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
 export type Message = {
+  clientMessageId?: string;
   /** One utterance in live voice, identified across partials and the final transcript. */
   voiceId?: string;
   voicePartial?: true;
@@ -613,7 +614,7 @@ export type AgentRequest = {
   /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
   fields?: SecureField[];
 };
-export type QueuedMessage = { id: string; text: string };
+export type QueuedMessage = { clientMessageId?: string; id: string; text: string };
 /** What is happening right now, per chat. */
 export type Live = {
   /**
@@ -1401,7 +1402,7 @@ export type Calls = {
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean): void;
-  send(chatId: string, text: string, options?: { voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
+  send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;

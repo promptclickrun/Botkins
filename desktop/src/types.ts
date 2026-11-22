@@ -96,6 +96,7 @@ export type Mention =
 /** What the composer sends for a mention; the main process checks it and fills in the label. */
 export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "file" | "wiki"; path: string };
 export type Message = {
+  clientMessageId?: string;
   role: "assistant" | "user" | "command";
   text: string;
   interim?: boolean;
@@ -391,6 +392,7 @@ export type State = {
   speakers?: Record<string, string>;
 };
 export type QueuedMessage = {
+  clientMessageId?: string;
   id: string;
   text: string;
   attachments?: Attachment[];
@@ -888,7 +890,7 @@ declare global {
       send(
         id: string,
         text: string,
-        options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" },
+        options?: { clientMessageId?: string; attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" },
       ): Promise<void>;
       stop(id: string): Promise<void>;
       /** The account behind one model provider. Without an id, the default provider (GitHub Copilot). */

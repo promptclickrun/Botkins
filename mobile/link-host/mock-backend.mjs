@@ -1185,7 +1185,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["client-message-id-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1698,10 +1698,10 @@ export class MockBackend {
     let ended = null;
     if (kind === "long") {
       // A steer is delivered at once, as the desktop app delivers it to a provider that takes one.
-      turn.steer = (words) => {
+      turn.steer = (words, clientMessageId) => {
         if (!live()) return false;
         commit();
-        chat.messages.push({ role: "user", text: words, steeredRunId: run.id, time: now() });
+        chat.messages.push({ role: "user", text: words, ...(clientMessageId && { clientMessageId }), steeredRunId: run.id, time: now() });
         turn.steers.push(words);
         this.changed();
         return true;
@@ -1783,7 +1783,7 @@ export class MockBackend {
     const next = this.state.queued[id]?.shift();
     if (next) {
       if (!this.state.queued[id].length) delete this.state.queued[id];
-      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author });
+      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author, clientMessageId: next.clientMessageId });
     }
   }
   /** A scripted turn: thinking, a tool step, an approval or question when asked for, then the reply. */
@@ -1954,7 +1954,7 @@ export class MockBackend {
     const next = this.state.queued[id]?.shift();
     if (next) {
       if (!this.state.queued[id].length) delete this.state.queued[id];
-      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author });
+      this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author, clientMessageId: next.clientMessageId });
     }
   }
   handlers = {
@@ -2168,9 +2168,11 @@ export class MockBackend {
     send(id, value, options) {
       const chat = this.chat(id);
       const prompt = text(value, 32000, "message");
+      const clientMessageId = options?.clientMessageId;
+      const tag = typeof clientMessageId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(clientMessageId) ? { clientMessageId } : {};
       if (this.turns.has(id)) {
-        if (options?.delivery === "steer" && this.turns.get(id).steer?.(prompt)) return;
-        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt, ...(options?.author && { author: options.author }), ...(options?.voiceId && { voiceId: options.voiceId }) });
+        if (options?.delivery === "steer" && this.turns.get(id).steer?.(prompt, tag.clientMessageId)) return;
+        (this.state.queued[id] ??= []).push({ id: randomUUID(), text: prompt, ...tag, ...(options?.author && { author: options.author }), ...(options?.voiceId && { voiceId: options.voiceId }) });
         return;
       }
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
@@ -2178,7 +2180,7 @@ export class MockBackend {
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
-      addUserMessage(chat, { role: "user", text: prompt, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
+      addUserMessage(chat, { role: "user", text: prompt, ...tag, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
       if (chat.title === "New chat") chat.title = prompt.slice(0, 40);
       chat.time = now();
       // Today › New panel sends "/today-panel <what it should show>"; the demo bot makes one at once.
@@ -2203,7 +2205,7 @@ export class MockBackend {
     sendNow(chatId, itemId) {
       // "Steer now" on a turn that takes a steer; otherwise the demo stops the turn so the message goes next.
       const item = this.state.queued[chatId]?.find((queued) => queued.id === itemId);
-      if (item && this.turns.get(chatId)?.steer?.(item.text)) return this.handlers.unqueue.call(this, chatId, itemId);
+      if (item && this.turns.get(chatId)?.steer?.(item.text, item.clientMessageId)) return this.handlers.unqueue.call(this, chatId, itemId);
       this.handlers.stop.call(this, chatId);
     },
     retry() {},

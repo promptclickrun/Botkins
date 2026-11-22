@@ -1,6 +1,7 @@
+import { PendingSends } from "../desktop/link/pending-sends";
 import { CompletionScroll } from "./completionScroll";
 import { chatDisplayEvent, readChatDisplay, settleChatDisplay } from "./chatDisplay";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
@@ -42,7 +43,7 @@ import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
 import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
-import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, State } from "./types";
+import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
@@ -62,6 +63,15 @@ const personalChat = (chat: Chat) =>
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
   const [snapshot, setSnapshot] = useState<State>();
+  const [outboxes] = useState(() => new Map<string, PendingSends<Message & { clientMessageId: string }>>());
+  function outbox(host: string) {
+    let box = outboxes.get(host);
+    if (!box) {
+      box = new PendingSends();
+      outboxes.set(host, box);
+    }
+    return box;
+  }
   const [completionByHost] = useState(() => new Map<string, CompletionScroll>());
   const [display, setDisplay] = useState(readChatDisplay);
   const position = useRef(settleChatDisplay(display).completionPosition);
@@ -70,6 +80,11 @@ function App() {
     const scroll = completionByHost.get(hostId) ?? new CompletionScroll();
     completionByHost.set(hostId, scroll);
     scroll.observe(next.chats, next.runs, position.current);
+    const box = outboxes.get(hostId);
+    if (box) for (const id of box.chatIds()) {
+      const chat = next.chats.find(chat => chat.id === id);
+      box.observe(id, chat?.loaded?.from ?? 0, chat?.messages ?? [], next.queued?.[id] ?? []);
+    }
     setSnapshot(next);
   }
   useEffect(() => {
@@ -98,6 +113,8 @@ function App() {
     if (spaceAbout) openSpaceRef.current(spaceAbout.spaceId);
   }, [spaceAbout?.n]);
   const host = state?.remote?.using?.id ?? "local";
+  const box = outbox(host);
+  const pending = useSyncExternalStore(box.subscribe, () => box.rows(chatId));
   const pendingVisit = useRef<{ host: string; id: string } | null>(null);
   const [messageTarget, setMessageTarget] = useState<{ chatId: string; index: number } | null>(null);
   const [modal, setModal] = useState<Modal>("");
@@ -428,7 +445,7 @@ function App() {
     else if (state && teamCan(state, "agents", "chat")) void newChat(b.id).catch(fail);
     else nav("Chats");
   }
-  async function send(key: string, options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }) {
+  async function send(key: string, options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }, onDispatch?: () => void) {
     const prompt = drafts[key]?.trim();
     if (!prompt || prompt === "/" || sending) return;
     setSending(true);
@@ -496,9 +513,27 @@ function App() {
         clear();
         return;
       }
-      await api.send(id, prompt, options);
-      receiveSnapshot(await api.snapshot());
+      const clientMessageId = crypto.randomUUID();
+      const message = { role: "user" as const, clientMessageId, text: prompt, time: Date.now(),
+        quote: options?.quote, attachments: options?.attachments, mentions: draftMentions[key] };
+      const remote = state?.remote?.using;
+      const legacy = remote && !remote.capabilities.includes("client-message-id-v1") ? {
+        from: key === "home" ? 0 : chat?.count ?? chat?.messages.length ?? 0,
+        queued: new Set((state?.queued?.[id] ?? []).map(q => q.id)),
+      } : undefined;
       clear();
+      onDispatch?.();
+      try {
+        await box.send(id, message, () => api.send(id, prompt, legacy ? options : { ...options, clientMessageId }), legacy);
+      } catch (error) {
+        setDrafts(prev => ({ ...prev, [key]: [drafts[key], prev[key]].filter(Boolean).join("\n") }));
+        if (draftMentions[key]?.length) setDraftMentions(prev => ({
+          ...prev, [key]: [...draftMentions[key], ...(prev[key] ?? []).filter(m => !draftMentions[key].some(old => tokenOf(old) === tokenOf(m)))],
+        }));
+        throw error;
+      }
+      // Dispatch can succeed before the host has published the new row.
+      void api.snapshot().then(receiveSnapshot).catch(fail);
       return true;
     } catch (e) {
       fail(e);
@@ -549,7 +584,7 @@ function App() {
         change={(value) => setDrafts((prev) => ({ ...prev, [key]: value }))}
         mentions={draftMentions[key]}
         setMentions={(list) => setDraftMentions((prev) => ({ ...prev, [key]: list }))}
-        send={(options) => send(key, options)}
+        send={(options, onDispatch) => send(key, options, onDispatch)}
         stop={() => void api.stop(key).catch(fail)}
         botName={key !== "home" && (chat?.botIds?.length ?? 0) > 1 ? "The group" : target.name}
         botVoice={target.voice}
@@ -790,6 +825,7 @@ function App() {
             onScreen={onScreen === chat.id}
             state={state}
             chat={chat}
+            pending={pending}
             bot={bot}
             back={() => nav("Chats")}
             botSettings={() => settings("Bot")}
