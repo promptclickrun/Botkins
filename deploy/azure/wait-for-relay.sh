@@ -1,19 +1,16 @@
 #!/bin/sh
-# Starts the Botkins host only when its relay answers over HTTPS.
-#   wait-for-relay.sh <health url> <command> [arguments]
-#
-# A host offers the newest relay protocol (botkins.host.v3) on its first try. It takes a failure
-# of that try to mean an older relay, and then stays on botkins.host.v2 for as long as that
-# connection lives. On a new server the first try would come before Caddy has its certificate,
-# and after a restart it could come before Caddy listens. So every start waits here for the
-# relay. After 10 minutes it starts the host whatever happened, so its log and status can be read.
+# Waits until this server's relay answers over HTTPS, at the name in /etc/botkins-server/server.env.
+# The Botkins service runs it before each start. systemd/botkins.service.d/50-azure.conf says why.
+# After 9 minutes it stops waiting and lets the service start, so its log and status can be read.
+# That is less than the unit's start timeout (11 minutes), so a slow wait never fails the start.
 set -u
-url=$1
-shift
-tries=0
-until node -e 'fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))' "$url" || [ "$tries" -ge 300 ]; do
-  tries=$((tries + 1))
-  sleep 2
+fqdn=$(sed -n 's/^FQDN=//p' /etc/botkins-server/server.env 2>/dev/null | head -n 1)
+[ -n "$fqdn" ] || exit 0
+end=$(($(date +%s) + 540))
+until curl -fsS -o /dev/null --connect-timeout 3 --max-time 5 "https://$fqdn/v1/health"; do
+  if [ "$(date +%s)" -ge "$end" ]; then
+    echo "wait-for-relay: https://$fqdn/v1/health did not answer in 9 minutes. Starting without it." >&2
+    exit 0
+  fi
+  sleep 3
 done
-[ "$tries" -lt 300 ] || echo "wait-for-relay: $url did not answer in 10 minutes. Starting without it." >&2
-exec "$@"

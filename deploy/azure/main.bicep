@@ -1,9 +1,9 @@
-// Botkins on an Azure VM, with its own relay. One deployment: a VM that builds and runs Botkins,
-// Caddy for HTTPS on the VM's Azure DNS name, and the self-hosted relay behind it. The deployment's
-// output is a pairing link to open on a phone.
+// Botkins on an Azure VM, with its own relay. One deployment makes a VM that runs, as systemd
+// services and without Docker: Botkins from its signed release, the self-hosted relay, and Caddy
+// for HTTPS on the VM's Azure DNS name. The deployment's output is a pairing link to open on a phone.
 //
-// By default the VM runs the terminal host: Botkins as one small service with no display. With
-// screenAccess it runs Botkins on a virtual display that a paired phone can see and control.
+// With screenAccess the VM also runs a virtual display with Google Chrome. A paired phone can see
+// and control it, for example to finish a sign-in page that a bot opened.
 //
 // Build azuredeploy.json from this file with: az bicep build -f main.bicep --outfile azuredeploy.json
 
@@ -15,12 +15,11 @@ param location string = resourceGroup().location
 @maxLength(40)
 param vmName string = 'botkins'
 
-@description('Screen access. Off: the terminal host, one small service with no display, which is what most servers need. On: Botkins runs on a virtual display, so a paired phone can see and control the server\'s screen. That needs a bigger VM image and a longer first build.')
+@description('Screen access. On: the server also gets a virtual display with Google Chrome, and a paired phone can see and control it. Off: bots, chats and tools work the same, and there is no screen to see.')
 param screenAccess bool = false
 
-@description('The VM size. Leave empty for the default: 2 vCPUs and 4 GB for the terminal host, 2 vCPUs and 8 GB with Screen access. Screen access builds and runs Electron and needs 8 GB.')
+@description('The VM size. 2 vCPUs and 4 GB is enough, with or without Screen access.')
 @allowed([
-  ''
   'Standard_D2als_v6'
   'Standard_D2ls_v6'
   'Standard_D2als_v7'
@@ -32,7 +31,7 @@ param screenAccess bool = false
   'Standard_D4as_v6'
   'Standard_D4s_v6'
 ])
-param vmSize string = ''
+param vmSize string = 'Standard_D2als_v6'
 
 @description('The name your phone shows for this server.')
 @maxLength(60)
@@ -45,14 +44,18 @@ param certificateEmail string = ''
 @maxLength(50)
 param dnsLabel string = ''
 
-@description('The VM administrator account.')
-param adminUsername string = 'botkins'
+@description('The VM administrator account. Not `botkins`: that is the name of the account the Botkins service runs as.')
+param adminUsername string = 'azureuser'
 
-@description('Your SSH public key (ssh-ed25519 or ssh-rsa). Password sign-in is off.')
-param sshPublicKey string
+@description('Optional. Your SSH public key (ssh-ed25519 or ssh-rsa), if you want SSH. Without one, manage the server with Azure Run Command. Password sign-in is always off.')
+param sshPublicKey string = ''
 
 @description('An IP address or CIDR range allowed to reach SSH. Leave empty to keep SSH closed (use Azure Run Command instead).')
 param sshAllowedFrom string = ''
+
+@description('Leave this as it is. Azure needs a password for a VM without an SSH key. This one is random, nobody is given it, and the setup turns password sign-in off.')
+@secure()
+param generatedPassword string = 'Bk-${newGuid()}'
 
 @description('Optional. A Claude Code token from `claude setup-token`, so Claude works without signing in on the server.')
 @secure()
@@ -74,7 +77,6 @@ param repositoryRef string = 'main'
 @description('Change this to run the setup again on an existing deployment (for example to get a new pairing link).')
 param setupRun string = utcNow()
 
-var size = !empty(vmSize) ? vmSize : screenAccess ? 'Standard_D2as_v6' : 'Standard_D2als_v6'
 var label = empty(dnsLabel) ? toLower('${take(replace(vmName, '_', '-'), 30)}-${uniqueString(resourceGroup().id, vmName)}') : toLower(dnsLabel)
 var fqdn = '${label}.${location}.cloudapp.azure.com'
 var b64 = {
@@ -119,7 +121,8 @@ var webRules = [
     }
   }
 ]
-var sshRule = empty(sshAllowedFrom) ? [] : [
+// SSH opens only for a key, and only from the address given.
+var sshRule = empty(sshAllowedFrom) || empty(sshPublicKey) ? [] : [
   {
     name: 'ssh'
     properties: {
@@ -191,7 +194,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
   properties: {
-    hardwareProfile: { vmSize: size }
+    hardwareProfile: { vmSize: vmSize }
     securityProfile: {
       securityType: 'TrustedLaunch'
       uefiSettings: { secureBootEnabled: true, vTpmEnabled: true }
@@ -199,13 +202,15 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
     osProfile: {
       computerName: take(replace(vmName, '_', '-'), 15)
       adminUsername: adminUsername
+      // Without a key Azure needs a password. Nobody is given it, and install.sh turns password sign-in off.
+      adminPassword: empty(sshPublicKey) ? generatedPassword : null
       linuxConfiguration: {
-        disablePasswordAuthentication: true
-        ssh: {
+        disablePasswordAuthentication: !empty(sshPublicKey)
+        ssh: empty(sshPublicKey) ? null : {
           publicKeys: [
             {
               path: '/home/${adminUsername}/.ssh/authorized_keys'
-              keyData: sshPublicKey
+              keyData: trim(sshPublicKey)
             }
           ]
         }
@@ -232,8 +237,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   }
 }
 
-// Installs Docker, builds Botkins and its relay, waits for HTTPS and the relay, and prints the pairing
-// link. Settings, including the optional tokens, travel only in the encrypted protected settings.
+// Installs Botkins, its relay and Caddy, waits for HTTPS and the relay, and prints the pairing link. Settings, including the optional tokens, travel only in the encrypted protected settings.
 resource setup 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = {
   parent: vm
   name: 'botkins-setup'
@@ -258,7 +262,7 @@ output pairingLink string = trim(split(split(setupOutput, '[stdout]')[1], '[stde
 @description('Your server\'s relay. Phones reach the server through it.')
 output relayUrl string = 'https://${fqdn}'
 
-@description('Run this to get a new pairing link later.')
-output newPairingLink string = 'az vm run-command invoke -g ${resourceGroup().name} -n ${vmName} --command-id RunShellScript --scripts "botkins pair" --query "value[0].message" -o tsv'
+@description('Run this to get a new pairing link later, for example for another phone.')
+output newPairingLink string = 'az vm run-command invoke -g ${resourceGroup().name} -n ${vmName} --command-id RunShellScript --scripts "botkins-server pair" --query "value[0].message" -o tsv'
 
-output sshCommand string = empty(sshAllowedFrom) ? 'SSH is closed. Use: az vm run-command invoke -g ${resourceGroup().name} -n ${vmName} --command-id RunShellScript --scripts "botkins status"' : 'ssh ${adminUsername}@${fqdn}'
+output sshCommand string = empty(sshAllowedFrom) || empty(sshPublicKey) ? 'SSH is closed. Use: az vm run-command invoke -g ${resourceGroup().name} -n ${vmName} --command-id RunShellScript --scripts "botkins-server status"' : 'ssh ${adminUsername}@${fqdn}'

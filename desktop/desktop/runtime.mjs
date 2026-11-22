@@ -128,7 +128,8 @@ export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", 
  *   stays quiet on the local network, unless an environment variable asks for one of those.
  * @param options.pushed   Called when the app's own view of things is out of date (the desktop
  *   app tells its window). Calls may come in bursts: the listener coalesces them.
- * @param options.link     For a host that sets the link up itself: { port?, extraHosts?, announce? }.
+ * @param options.link     For a host that sets the link up itself: { port?, extraHosts?, announce?, relayOwn? }.
+ *   `relayOwn`: the relay in the link's settings is this server's own and phones' only way in (desktop/link/grant.mjs).
  * @param options.copilot  { github? }: () → { token } | undefined, for a host that keeps the
  *   GitHub sign-in of the Copilot runtime itself (the terminal host, for a pasted token).
  * @returns What the program around it uses: `handlers`, `workspace`, `providers`, `link`, `phone`,
@@ -1093,6 +1094,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...(trial && { managerSearchPath: trialToolDirs(env("TOOL_PATH")) }),
     ...(linkPort !== undefined && { port: linkPort }),
     ...(linkOptions.extraHosts?.length && { extraHosts: linkOptions.extraHosts }),
+    ...(linkOptions.relayOwn && { relay: { own: true } }),
     // (Only the relay is refused: the same fetch carries the voice providers' requests.)
     ...(trial && env("PUSH") !== "1" && { fetch: (url, init) => (hostOf(url) === hostOf(DEFAULT_RELAY_URL) ? Promise.reject(new Error("A trial run sends no notifications.")) : fetch(url, init)) }),
     backend: linkBackend,

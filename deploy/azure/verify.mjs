@@ -9,7 +9,7 @@
 //   3. opens a session and makes calls,
 //   4. with --screen, turns the screen on the way the phone app does (a ticket, signed by the
 //      phone's presence key), reads one picture of the server's display, and turns it off again.
-// The pairing code works once, so each run needs a new link (`botkins pair` on the server).
+// The pairing code works once, so each run needs a new link (`botkins-server pair` on the server).
 // It uses the app's own link client, and needs no `npm install`.
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";

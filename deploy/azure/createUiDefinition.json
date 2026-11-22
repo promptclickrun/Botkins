@@ -5,10 +5,10 @@
   "parameters": {
     "config": {
       "basics": {
-        "description": "**Botkins on Azure.** One VM runs Botkins and its own relay. When the deployment finishes, open **Outputs** and use the **pairingLink** on your phone to pair the Botkins app. Phones reach the server only through its own relay, over HTTPS on the VM's Azure DNS name. The server has no screen unless you turn on **Screen access**.",
+        "description": "**Botkins on Azure.** This makes one VM that runs Botkins with its own relay. When the deployment finishes, open **Outputs** and open **pairingLink** on your phone to pair the Botkins app. You need nothing else: no SSH key, and no files to download. This works from a phone.",
         "location": {
           "label": "Region",
-          "toolTip": "Where the VM runs. If a size isn't available here, pick another region or size."
+          "toolTip": "Where the VM runs. If a VM size isn't available here, pick another region."
         }
       }
     },
@@ -18,7 +18,7 @@
         "type": "Microsoft.Common.TextBox",
         "label": "VM name",
         "defaultValue": "botkins",
-        "toolTip": "Also the start of the server's DNS name.",
+        "toolTip": "Also the start of the server's web address.",
         "constraints": {
           "required": true,
           "regex": "^[a-zA-Z][a-zA-Z0-9-]{0,38}[a-zA-Z0-9]$",
@@ -41,13 +41,22 @@
         "type": "Microsoft.Common.CheckBox",
         "label": "Screen access",
         "defaultValue": false,
-        "toolTip": "Runs Botkins on a virtual display, so your phone can see and control the server's screen. This needs a bigger VM image and a longer first build. Leave it off for a server with no screen: you still use your bots, chats and tools from the phone."
+        "toolTip": "Adds a virtual screen with Google Chrome. Your phone can see it and control it, for example to finish a sign-in page that a bot opened. You can change this later with `botkins-server screen on` or `off`."
       },
       {
-        "name": "vmSizeTerminal",
+        "name": "screenInfo",
+        "type": "Microsoft.Common.InfoBox",
+        "visible": "[basics('screenAccess')]",
+        "options": {
+          "icon": "Info",
+          "text": "After you pair, turn the screen on from the phone in **Settings › Screen**. It starts at **Off**. Before the phone allows **View only** or **View and control**, it asks for Face ID or your passcode."
+        }
+      },
+      {
+        "name": "vmSize",
         "type": "Microsoft.Compute.SizeSelector",
         "label": "VM size",
-        "toolTip": "Without Screen access the server is small: 2 vCPUs and 4 GB is plenty.",
+        "toolTip": "2 vCPUs and 4 GB is enough, with or without Screen access.",
         "recommendedSizes": [
           "Standard_D2als_v6",
           "Standard_D2ls_v6",
@@ -73,37 +82,7 @@
           "offer": "ubuntu-24_04-lts",
           "sku": "server"
         },
-        "count": 1,
-        "visible": "[not(basics('screenAccess'))]"
-      },
-      {
-        "name": "vmSizeScreen",
-        "type": "Microsoft.Compute.SizeSelector",
-        "label": "VM size",
-        "toolTip": "Screen access builds and runs the desktop app: 2 vCPUs and 8 GB is the comfortable minimum.",
-        "recommendedSizes": [
-          "Standard_D2as_v6",
-          "Standard_D2s_v6",
-          "Standard_D4as_v6"
-        ],
-        "constraints": {
-          "allowedSizes": [
-            "Standard_D2as_v6",
-            "Standard_D2s_v6",
-            "Standard_D2as_v7",
-            "Standard_D2s_v7",
-            "Standard_D4as_v6",
-            "Standard_D4s_v6"
-          ]
-        },
-        "osPlatform": "Linux",
-        "imageReference": {
-          "publisher": "Canonical",
-          "offer": "ubuntu-24_04-lts",
-          "sku": "server"
-        },
-        "count": 1,
-        "visible": "[basics('screenAccess')]"
+        "count": 1
       }
     ],
     "steps": [
@@ -116,7 +95,7 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "icon": "Info",
-              "text": "Both are optional. Without them, sign in to a provider later. On a server without Screen access, run `botkins host providers login <provider>` on the VM. With Screen access, open the server's Screen in the Botkins app after pairing and finish the sign-in page there. Tokens are passed in the VM extension's encrypted settings and kept only on the VM."
+              "text": "Both are optional. You can also sign in after you pair: in the Botkins app, open **Settings › Models**. The tokens go to the VM in encrypted settings, and Botkins keeps them sealed in its vault."
             }
           },
           {
@@ -126,7 +105,7 @@
               "password": "Claude Code token",
               "confirmPassword": "Confirm token"
             },
-            "toolTip": "Run `claude setup-token` on a computer signed in to your Claude plan, and paste the token.",
+            "toolTip": "On a computer that is signed in to your Claude plan, run `claude setup-token` and paste the token here.",
             "constraints": {
               "required": false
             },
@@ -141,7 +120,7 @@
               "password": "GitHub Copilot token",
               "confirmPassword": "Confirm token"
             },
-            "toolTip": "A GitHub token for an account with Copilot access (for example from `gh auth token`).",
+            "toolTip": "A GitHub token for an account that has Copilot, for example from `gh auth token`.",
             "constraints": {
               "required": false
             },
@@ -160,13 +139,13 @@
             "type": "Microsoft.Common.CheckBox",
             "label": "Send iPhone notifications through relay.botkins.app",
             "defaultValue": true,
-            "toolTip": "Notifications are sealed for your phone, and the Botkins relay only hands them to Apple. Turn this off to send none: then nothing leaves your server for Botkins' infrastructure."
+            "toolTip": "Each notification is sealed for your phone. The Botkins relay only passes it to Apple. Clear this to send no notifications. Then nothing leaves your server for Botkins."
           },
           {
             "name": "certificateEmail",
             "type": "Microsoft.Common.TextBox",
             "label": "Certificate email (optional)",
-            "toolTip": "Receives only certificate notices, and lets the server fall back to ZeroSSL if Let's Encrypt is busy.",
+            "toolTip": "Gets only notices about the HTTPS certificate. It also lets the server use ZeroSSL if Let's Encrypt is busy.",
             "constraints": {
               "required": false,
               "regex": "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
@@ -174,43 +153,47 @@
             }
           },
           {
-            "name": "admin",
-            "type": "Microsoft.Compute.CredentialsCombo",
-            "label": {
-              "authenticationType": "Authentication",
-              "sshPublicKey": "SSH public key"
-            },
-            "toolTip": {
-              "sshPublicKey": "Choose Generate new key pair to have Azure make one and download the private key."
-            },
-            "constraints": {
-              "required": true
-            },
-            "options": {
-              "hideConfirmation": true,
-              "hidePassword": true
-            },
-            "osPlatform": "Linux"
+            "name": "allowSsh",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Allow SSH (optional)",
+            "defaultValue": false,
+            "toolTip": "Most people don't need SSH. The phone app does the daily work, and Azure Run Command runs `botkins-server` commands from the portal or the Azure CLI."
           },
           {
-            "name": "adminUsername",
-            "type": "Microsoft.Compute.UserNameTextBox",
-            "label": "Administrator name",
-            "defaultValue": "botkins",
-            "osPlatform": "Linux",
+            "name": "sshPublicKey",
+            "type": "Microsoft.Common.TextBox",
+            "label": "SSH public key",
+            "visible": "[steps('server').allowSsh]",
+            "toolTip": "Paste a public key, such as the contents of ~/.ssh/id_ed25519.pub. To make one, run `ssh-keygen -t ed25519` on your computer.",
+            "multiLine": true,
             "constraints": {
-              "required": true
+              "required": true,
+              "regex": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+( .*)?\\s*$",
+              "validationMessage": "Paste one public key. It starts with ssh-ed25519, ssh-rsa or ecdsa-sha2-."
             }
           },
           {
             "name": "sshAllowedFrom",
             "type": "Microsoft.Common.TextBox",
-            "label": "Allow SSH from (optional)",
-            "toolTip": "An IP address or CIDR range. Leave empty to keep SSH closed; you can still manage the VM with Azure Run Command.",
+            "label": "Allow SSH from",
+            "visible": "[steps('server').allowSsh]",
+            "toolTip": "The IP address or CIDR range that may connect to SSH, for example your home's public IP. SSH stays closed to everyone else.",
             "constraints": {
-              "required": false,
-              "regex": "^$|^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$",
-              "validationMessage": "An IPv4 address or CIDR range, or leave it empty."
+              "required": true,
+              "regex": "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$",
+              "validationMessage": "An IPv4 address or CIDR range."
+            }
+          },
+          {
+            "name": "adminUsername",
+            "type": "Microsoft.Compute.UserNameTextBox",
+            "label": "SSH user name",
+            "visible": "[steps('server').allowSsh]",
+            "defaultValue": "azureuser",
+            "toolTip": "Any name except botkins, which is the account the Botkins service runs as.",
+            "osPlatform": "Linux",
+            "constraints": {
+              "required": true
             }
           }
         ]
@@ -221,14 +204,14 @@
       "vmName": "[basics('vmName')]",
       "serverName": "[basics('serverName')]",
       "screenAccess": "[basics('screenAccess')]",
-      "vmSize": "[if(basics('screenAccess'), basics('vmSizeScreen'), basics('vmSizeTerminal'))]",
+      "vmSize": "[basics('vmSize')]",
       "claudeCodeToken": "[steps('providers').claudeCodeToken]",
       "githubCopilotToken": "[steps('providers').githubCopilotToken]",
       "pushNotifications": "[steps('server').pushNotifications]",
       "certificateEmail": "[steps('server').certificateEmail]",
-      "adminUsername": "[steps('server').adminUsername]",
-      "sshPublicKey": "[steps('server').admin.sshPublicKey]",
-      "sshAllowedFrom": "[steps('server').sshAllowedFrom]"
+      "adminUsername": "[if(steps('server').allowSsh, steps('server').adminUsername, 'azureuser')]",
+      "sshPublicKey": "[if(steps('server').allowSsh, steps('server').sshPublicKey, '')]",
+      "sshAllowedFrom": "[if(steps('server').allowSsh, steps('server').sshAllowedFrom, '')]"
     }
   }
 }

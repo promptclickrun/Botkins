@@ -1,0 +1,29 @@
+# Screen access: a virtual display (Xvfb) that the Botkins service shows to a paired phone and lets
+# the phone control (desktop/desktop/host/x11screen.mjs). It runs as the `botkins` user. Only a
+# program with the cookie in /var/lib/botkins/display/Xauthority can open it, and it takes no TCP.
+[Unit]
+Description=Botkins virtual display (Screen access)
+Before=botkins.service
+
+[Service]
+Type=simple
+User=botkins
+Group=botkins
+Environment=XAUTHORITY=/var/lib/botkins/display/Xauthority
+# A new cookie for each start. `$$` passes a `$` to the shell instead of to systemd.
+ExecStartPre=/bin/sh -c 'umask 077 && rm -f "$${XAUTHORITY}" && xauth -q -f "$${XAUTHORITY}" add :20 . "$$(mcookie)"'
+ExecStart=/usr/bin/Xvfb :20 -screen 0 1440x900x24 -nolisten tcp -auth /var/lib/botkins/display/Xauthority
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+ProtectSystem=strict
+# /tmp is for the display's lock file and its socket in /tmp/.X11-unix.
+ReadWritePaths=/var/lib/botkins/display /tmp
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

@@ -90,7 +90,7 @@ export async function startService({ paths, version, trial = false, reach = !tri
       // For a container, whose own address no phone can reach: BOTKINS_PAIR_ADDRESS adds the
       // server's address for this start, and BOTKINS_LINK_PORT sets the port, which has to be the
       // one the container publishes (a phone uses the link's own port at every address).
-      link: { port: /^\d{1,5}$/.test(env.BOTKINS_LINK_PORT ?? "") ? Number(env.BOTKINS_LINK_PORT) : config.link.port, extraHosts: [...config.link.addresses, ...(env.BOTKINS_PAIR_ADDRESS ? [env.BOTKINS_PAIR_ADDRESS.replace(/:\d+$/, "")] : [])], announce: trial ? false : config.link.announce },
+      link: { port: /^\d{1,5}$/.test(env.BOTKINS_LINK_PORT ?? "") ? Number(env.BOTKINS_LINK_PORT) : config.link.port, extraHosts: [...config.link.addresses, ...(env.BOTKINS_PAIR_ADDRESS ? [env.BOTKINS_PAIR_ADDRESS.replace(/:\d+$/, "")] : [])], announce: trial ? false : config.link.announce, relayOwn: config.relay.own },
     });
     service.runtime = runtime;
     runtime.subscribe(bump);

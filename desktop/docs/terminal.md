@@ -631,6 +631,7 @@ botkins config edit
 | `link.addresses` | `[]` | More names or addresses, without a port, to offer phones in a pairing code. Needs a restart. |
 | `relay.enabled` | `false` | Away from home, through the relay. |
 | `relay.url` | `https://relay.botkins.app` | The address of the relay. |
+| `relay.own` | `false` | The relay at `relay.url` runs on this server, and phones can reach the server only through it. A phone can then turn on screen access through the relay. Use it only for a server like that. Needs a restart. |
 | `providers.only` | `[]` | Start only these providers. Empty means all. Needs a restart. |
 | `secrets.source` | `auto` | Where the host key comes from: `auto`, `systemd`, `keychain` or `file`. |
 | `secrets.keyFile` | none | The key file for the source `file`. |
@@ -800,7 +801,7 @@ The earlier setup, with an Electron workspace on a virtual display, is still the
 
 ### A screen without Docker
 
-On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View** and **Control**, as they do with the desktop app. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
+On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View only** and **View and control**. A phone sets the level only on the server's own network, unless `relay.own` is on. The [Azure deployment](../../deploy/azure/README.md) sets all of this up. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
 
 For a fresh Debian VM, install the screen tools and a browser, then start Botkins on a private virtual display as the service user:
 
