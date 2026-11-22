@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import type { AppUpdate, AppInfo, Bot, Catalog, MarketAgentTemplate, Preferences, State, NotificationSettings } from "./types";
 import ModelPicker from "./ModelPicker";
-import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings } from "./Preferences";
+import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings, SummarySettings } from "./Preferences";
 import Usage from "./Usage";
 import { OtherComputers } from "./RemoteHosts";
 import AccessSettings from "./AccessSettings";
@@ -341,7 +341,10 @@ export default function Settings({
           {section === "sidebar" && <SidebarSettings settings={state.settings} spaces={hasSpaces(state)} fail={fail} />}
           {section === "chats" && <>
             <ChatDisplaySettings settings={settings} />
-            {(!memberHost || teamCan(state, "settings", "manage")) && <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />}
+            {(!memberHost || teamCan(state, "settings", "manage")) && <>
+              <SummarySettings settings={preferences} change={changePreferences} fail={fail} />
+              <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />
+            </>}
           </>}
           {section === "notifications" && (
             <NotificationPreferences

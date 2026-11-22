@@ -14,7 +14,9 @@ export const starterBots = [
 export function seedBots(dataDir) {
   mkdirSync(dataDir, { recursive: true });
   const file = join(dataDir, "workspace.json");
-  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ bots: starterBots, chats: [], runs: [] }));
+  // Auto-summarize is off here: its own sessions would answer the fakes that other tests write for a chat's
+  // turns (test/summaries.test.mjs turns it on).
+  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ bots: starterBots, chats: [], runs: [], settings: { autoSummarize: 0 } }));
 }
 
 /** For smokes: seeds the data folder the app uses when BOTKINS_DATA_DIR is `userData`. */

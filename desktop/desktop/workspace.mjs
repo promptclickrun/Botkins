@@ -24,6 +24,7 @@ import { profileContext } from "./bot-profile-files.mjs";
 import { Memory } from "./memory.mjs";
 import { Teamwork, helperSessionId } from "./teamwork.mjs";
 import { Mentions } from "./mentions.mjs";
+import { Summaries } from "./summaries.mjs";
 import { Wiki } from "./wiki.mjs";
 import { MacTools, macToolsField } from "./mactools.mjs";
 import { PhoneTools } from "./phonetools.mjs";
@@ -250,6 +251,8 @@ export class Workspace {
     this.memory = new Memory(this);
     this.teamwork = new Teamwork(this);
     this.mentions = new Mentions(this);
+    // Auto-summarize: a chat is named from its first message, then again every few turns (desktop/summaries.mjs).
+    this.summaries = new Summaries(this);
     // The shared wiki of goals, projects and people (desktop/wiki.mjs)
     this.wiki = new Wiki(this);
     // iMessage and Mail for bots, on a Mac (desktop/mactools.mjs). Tests pass stand-ins in options.macTools.
@@ -702,7 +705,8 @@ export class Workspace {
       .join("\n\n");
     delete chat.posted;
     const extra = [posted, where].filter(Boolean).join("\n\n");
-    if (!chat.messages.length && !context.panelId && !isGroup(chat))
+    const first = !chat.messages.length;
+    if (first && !context.panelId && !isGroup(chat))
       chat.title = prompt.slice(0, 80);
     chat.time = Date.now();
 
@@ -730,6 +734,8 @@ export class Workspace {
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
     }, voiceId);
     run.recovery = { extra, ...(message.voiceId && { voicePrompt: prompt }) };
+    // With auto-summarize on, the first message is named while the bot replies (desktop/summaries.mjs).
+    if (first && !context.panelId && context.scheduleId == null) this.summaries.started(chat);
     return this.startTurn(chat, bot, message, run, false);
   }
 
@@ -1183,16 +1189,8 @@ export class Workspace {
     }
     const previous = task?.recovering && run?.recovery?.botId === bot.id ? run.recovery.route : null;
     const choice = previous?.choice ?? this.effectiveModel(chat);
-    const owner = this.providers.for(choice);
-    // A model of a provider the person switched off answers nothing, rather than quietly using it.
-    if (!this.providers.isEnabled(owner))
-      throw new Error(owner.name + " is switched off. Choose another model for this chat, or switch " + owner.name + " on in Settings › Model providers.");
-    // With one harness (Copilot SDK, Pi or OMP), it runs the turn and the model's own plan answers it.
     // A recovered turn goes on where it ran; one saved before program harnesses says only whether Copilot hosted it.
-    const via = previous ? (previous.via ?? (previous.hosted ? "copilot" : null)) : this.harness.via(choice);
-    const runner = via ? this.harness.runner(choice, via) : null;
-    const hosted = runner ? await this.harness.session(choice, via) : null;
-    const provider = runner ?? owner;
+    const { provider, hosted, via } = await this.runnerFor(choice, previous ? (previous.via ?? (previous.hosted ? "copilot" : null)) : undefined);
     if (task && !chat.helper) {
       task.gateway = hosted ? this.harness.gateway.server : null;
       task.route = { choice, hosted: !!hosted, via: hosted ? via : null };
@@ -1294,6 +1292,20 @@ export class Workspace {
       this.save();
     }
     return session;
+  }
+  /**
+   * What runs a turn on a model choice: `provider` opens the session, and `hosted` is set when a
+   * harness (Copilot SDK, Pi or OMP) runs the turn and the model's own plan answers it. `via` is
+   * the harness route (this.harness.via); a recovered turn passes the one it ran on.
+   */
+  async runnerFor(choice, via = this.harness.via(choice)) {
+    const owner = this.providers.for(choice);
+    // A model of a provider the person switched off answers nothing, rather than quietly using it.
+    if (!this.providers.isEnabled(owner))
+      throw new Error(owner.name + " is switched off. Choose another model for this chat, or switch " + owner.name + " on in Settings › Model providers.");
+    const runner = via ? this.harness.runner(choice, via) : null;
+    const hosted = runner ? await this.harness.session(choice, via) : null;
+    return { provider: runner ?? owner, hosted, via };
   }
   /**
    * Opens a chat's session ahead of its next message, so the reply starts at once. Called when
@@ -1864,7 +1876,8 @@ export class Workspace {
           (run.command === "session" && /^\/sessions?\s+rename\b/i.test(prompt))
         ) {
           const named = await session.title();
-          if (named) chat.title = named;
+          // A name the person gave stays: auto-summarize leaves the chat's title alone (desktop/summaries.mjs).
+          if (named) Object.assign(chat, { title: named, titleSet: true });
         }
         const commandText = stripVTControlCharacters(String(text || "")).slice(0, 128000);
         if (routine && !commandText.trim() && !run.cards?.length) {

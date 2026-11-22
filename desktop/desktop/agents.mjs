@@ -259,8 +259,9 @@ export class Agents {
     Object.assign(chat, next);
     this.ws.save();
   }
+  /** A title the person gave. It stays: auto-summarize no longer renames the chat (desktop/summaries.mjs). */
   renameChat(id, title) {
-    this.ws.chat(id).title = textField(title, 120, "chat title");
+    Object.assign(this.ws.chat(id), { title: textField(title, 120, "chat title"), titleSet: true });
     this.ws.save();
   }
   async deleteChat(id) {
