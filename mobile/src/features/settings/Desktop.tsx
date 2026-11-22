@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { Check, Eraser, HardDrive, LogIn, Monitor, MonitorCog, Plus, QrCode, RefreshCw, SquareSlash, Unplug, Users } from "lucide-react-native";
+import { Eraser, HardDrive, LogIn, MonitorCog, MonitorSmartphone, QrCode, RefreshCw, SquareSlash, Unplug } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import { isRelayHost } from "@/link/relay";
@@ -7,7 +7,6 @@ import { useCapability, useOnline, usePart, useSettings } from "@/state/hooks";
 import { api, attempt, unpair, wake } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Badge, brand, Button, Group, IconTile, Label, Mascot, Page, radius, Row, space, T, tint, useTheme } from "@/ui";
-import { addComputer, switchTo } from "@/features/home/computers";
 import { ScreenAccess } from "@/features/remote/ScreenAccess";
 import { AppUpdates } from "./AppUpdates";
 import { megabytes } from "./computer";
@@ -83,36 +82,7 @@ function Storage() {
   );
 }
 
-/** Every computer this phone is paired with. The phone uses one at a time: a tap on another switches to it. */
-function Computers() {
-  const { colors } = useTheme();
-  const computers = useApp((state) => state.pairings);
-  const inUse = useApp((state) => state.pairing?.serverId);
-  return (
-    <View>
-      <Label>Computers</Label>
-      <Group>
-        {computers.map((item) => {
-          const current = item.serverId === inUse;
-          return (
-            <Row
-              key={item.serverId}
-              leading={<IconTile icon={Monitor} color={colors.ink2} />}
-              title={item.name || "Computer"}
-              subtitle={current ? "In use" : undefined}
-              trailing={current ? <Check size={18} color={colors.accentText} strokeWidth={2.6} /> : undefined}
-              onPress={current ? undefined : () => switchTo(item.serverId)}
-            />
-          );
-        })}
-        <Row leading={<IconTile icon={Plus} />} title="Add a computer" tone="accent" chevron onPress={addComputer} />
-        <Row leading={<IconTile icon={Users} />} title="Join a team with a code" tone="accent" chevron onPress={() => router.push("/join")} />
-      </Group>
-    </View>
-  );
-}
-
-/** The computer in use: whether it can be reached, what it runs, the other paired computers, and how to let go of it. */
+/** The computer in use: whether it can be reached, what it runs, a way to the others, and how to let go of it. */
 export default function Desktop() {
   const theme = useTheme();
   const { colors } = theme;
@@ -124,7 +94,8 @@ export default function Desktop() {
   const teamPart = usePart("team");
   const teamName = teamPart && "me" in teamPart ? teamPart.team.name : undefined;
   const name = pairing?.name ?? "Your computer";
-  const others = useApp((state) => state.pairings.length > 1);
+  const count = useApp((state) => state.pairings.length);
+  const others = count > 1;
   const status = LINK_STATUS[link];
   // The relay entry is not an address a person reads: it shows as one row, "Away from home".
   const hosts = pairing?.hosts.filter((host) => !isRelayHost(host)).slice(0, 3) ?? [];
@@ -161,7 +132,10 @@ export default function Desktop() {
         </View>
       )}
 
-      <Computers />
+      {/* The other computers and teams, and adding one, are one page of their own. */}
+      <Group>
+        <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={others ? String(count) : undefined} chevron onPress={() => router.push("/settings/computers")} />
+      </Group>
 
       {(meta || hosts.length > 0 || awayFromHome) && (
         <Group>

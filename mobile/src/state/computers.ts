@@ -89,7 +89,7 @@ export const indexOf = (kept: Kept) => JSON.stringify({ current: kept.current, i
 
 /** The switcher's menu: each paired computer (the one in use is ticked), then a way to pair one more. */
 export function computerActions(list: Pairing[], current: string | null | undefined): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
-  return [...list.map((pairing) => ({ id: "use:" + pairing.serverId, title: pairing.name || "Computer", state: pairing.serverId === current ? ("on" as const) : ("off" as const) })), { id: "add", title: "Add a computer…", image: "plus" }];
+  return [...list.map((pairing) => ({ id: "use:" + pairing.serverId, title: pairing.name || "Computer", state: pairing.serverId === current ? ("on" as const) : ("off" as const) })), { id: "add", title: "Connect a computer…", image: "plus" }];
 }
 /** What a tap in that menu asks for: use a computer, add one, or nothing. */
 export function computerChoice(event: string): { use: string } | "add" | null {
