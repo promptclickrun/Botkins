@@ -15,7 +15,7 @@ import { myPlace, myself } from "./people";
 import { drafts, keepDraft } from "./split";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
-import { ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
+import { Glass, ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
 import { endTalk, startChatVoice, useLiveVoiceReady, useTalk, useTalkReady } from "../voice/api";
 import { boardKindLabel, teammates, toInput } from "./compose";
 import { documentPickerModule, imagePickerModule, NEEDS_UPDATE } from "./native";
@@ -445,8 +445,8 @@ export function Composer({
   const chips = liveMentions.length > 0 || files.length > 0;
   const mainLabel = stop ? "Stop" : endVoice ? "End voice" : voice ? (liveReady ? "Live voice" : "Talk") : uploading ? "Send, waiting for files" : working ? "Send, it waits its turn" : "Send";
   const plus = (
-    <View accessible accessibilityRole="button" accessibilityLabel="Attach" style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.sunken, alignItems: "center", justifyContent: "center" }}>
-      <Plus size={18} color={colors.ink2} strokeWidth={2.4} />
+    <View accessible accessibilityRole="button" accessibilityLabel="Attach" style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" }}>
+      <Plus size={20} color={colors.ink2} strokeWidth={2.3} />
     </View>
   );
 
@@ -461,7 +461,8 @@ export function Composer({
           label={sigil === "/" ? "Commands and skills" : sigil === "@" ? "Mention a bot, project, page or file" : "Mention a project, page, file or pull request"}
         />
       )}
-      <View style={{ backgroundColor: colors.surface, borderRadius: 24, borderWidth: 1, borderColor: colors.line, paddingTop: 4 }}>
+      {/* The message box floats over the chat on glass (T3 Code's look): the chat scrolls under it. */}
+      <Glass style={{ borderRadius: 26, paddingTop: 4 }}>
         {pinned && <PinnedCard item={pinned} onRemove={() => onUnpin?.()} />}
         {!!quote && <QuoteBar text={quote} onRemove={() => onUnquote?.()} />}
         {chips && (
@@ -566,7 +567,7 @@ export function Composer({
             testID="composer-model"
             accessibilityLabel={"Model, " + model.name + (model.effort ? ", " + model.effort : "")}
             accessibilityHint="Changes the model"
-            style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: colors.sunken }}
+            style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" }}
           >
             {model.provider ? <ProviderIcon provider={model.provider} size={17} /> : <Sparkles size={17} color={colors.ink2} strokeWidth={2.2} />}
           </Tap>
@@ -603,7 +604,7 @@ export function Composer({
             )}
           </Tap>
         </View>
-      </View>
+      </Glass>
     </View>
   );
 }

@@ -9,7 +9,8 @@ import { useTheme } from "./theme";
 
 // Asked once: it does not change while the app runs.
 let real: boolean | undefined;
-const hasGlass = () => (real ??= (() => {
+/** The phone draws Apple's Liquid Glass (iOS 26 and later). A chat's bar is see-through only then. */
+export const hasGlass = () => (real ??= (() => {
   try {
     return isLiquidGlassAvailable();
   } catch {

@@ -212,10 +212,10 @@ const KINDS: [RegExp, string][] = [
   [/^(bash|powershell|shell|terminal|run_command|exec|write_bash|write_powershell|read_bash|read_powershell)$/, "command"],
   [/^(view|read|read_file|cat|open_file)$/, "read"],
   [/^(create|write|write_file|create_file)$/, "write"],
-  [/^(edit|str_replace|str_replace_editor|apply_patch|patch|multi_edit|insert)$/, "edit"],
+  [/^(edit|str_replace|str_replace_editor|apply_patch|patch|multi_edit|multiedit|notebookedit|notebook_edit|insert)$/, "edit"],
   [/^(grep|glob|search|search_files|find|rg|ls|list_dir|list_directory)$/, "search-files"],
-  [/^(web_search|search_web|bing_search|google_search)$/, "web"],
-  [/^(web_fetch|fetch|fetch_url|browse|browser_navigate)$/, "web-page"],
+  [/^(web_search|websearch|search_web|bing_search|google_search)$/, "web"],
+  [/^(web_fetch|webfetch|fetch|fetch_url|browse|browser_navigate)$/, "web-page"],
   [/^(ask_user|ask)$/, "ask"],
   [/^(task|subagent|run_subagent|delegate)$/, "helper"],
   [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list)$/, "plan"],
@@ -246,6 +246,9 @@ function toolKind(name: string): string | null {
   if (QUIET.test(n)) return null;
   return KINDS.find(([pattern]) => pattern.test(n))?.[1] ?? "tool";
 }
+
+/** What kind of work a step is, for its icon: a tool of a server is "tool", and a quiet one (report_intent) too. */
+export const stepKind = (step: Pick<Step, "name" | "source">): string => (step.source ? "tool" : (toolKind(step.name || "") ?? "tool"));
 
 /** "Ran 3 commands, read 2 files, searched the web": from tool names only, as the desktop app says it. */
 export function workSummary(steps: Step[]): string {

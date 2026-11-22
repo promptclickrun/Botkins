@@ -6,7 +6,7 @@ import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, File
 import { memo, type ReactNode } from "react";
 import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
-import type { Artifact, Bot, Message, Run } from "@/link/types";
+import type { Artifact, Bot, Message, Run, Step } from "@/link/types";
 import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { useChat } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -22,6 +22,7 @@ import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
+import { FACE_INDENT, mostIcon } from "./WorkRows";
 import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
 
 export type { Item };
@@ -50,24 +51,31 @@ function GroupWorkLine({ chatId, run, mode }: { chatId: string; run: Run; mode: 
   const failed = failedSteps(run);
   if (mode === "hide" || (mode === "failed" && failed === 0)) return null;
   const label = mode === "failed" ? (failed === 1 ? "1 step failed" : failed + " steps failed") : run.summary || workSummary(run.steps ?? []) || (steps === 1 ? "1 step" : steps + " steps");
-  return <WorkLine chatId={chatId} runId={run.id} label={label} failed={mode === "failed"} />;
+  return <WorkLine chatId={chatId} runId={run.id} label={label} steps={run.steps} failed={mode === "failed"} />;
 }
 
-/** Where a turn's work is shown: "Ran 2 commands ›". A tap opens the turn's activity. */
-export function WorkLine({ chatId, runId, label, failed }: { chatId: string; runId: string; label: string; failed?: boolean }) {
+/**
+ * Where a turn's work is shown: "Ran 2 commands ›", a quiet row on the chat with the icon of the
+ * kind most of its steps are (WorkRows.tsx), in the work's column under the face. A tap opens the turn's activity.
+ */
+export function WorkLine({ chatId, runId, label, steps, failed }: { chatId: string; runId: string; label: string; steps?: Step[]; failed?: boolean }) {
   const { colors } = useTheme();
+  const Icon = mostIcon(steps ?? []);
   return (
     <Tap
       onPress={() => router.push({ pathname: "/chat/activity", params: { chatId, runId } })}
       feel="select"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       accessibilityLabel={label + ", show activity"}
-      style={{ ...workWidth, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 2, minHeight: 32 }}
+      style={{ ...workWidth, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, minHeight: 32, paddingLeft: FACE_INDENT }}
     >
-      <T variant="footnote" color={failed ? "danger" : "muted"} numberOfLines={1} style={{ flexShrink: 1 }}>
+      <View style={{ width: 20, alignItems: "center" }}>
+        <Icon size={14} color={failed ? colors.danger : colors.muted} strokeWidth={2.2} />
+      </View>
+      <T variant="subhead" color={failed ? "danger" : "muted"} numberOfLines={1} style={{ flexShrink: 1 }}>
         {label}
       </T>
-      <ChevronRight size={14} color={colors.faint} strokeWidth={2.4} />
+      <ChevronRight size={13} color={colors.faint} strokeWidth={2.4} />
     </Tap>
   );
 }

@@ -9,7 +9,7 @@ export { useShape } from "./useShape";
 export { Button, IconButton } from "./Button";
 export { ColorPicker } from "./ColorPicker";
 export { Field } from "./Field";
-export { Glass } from "./Glass";
+export { Glass, hasGlass } from "./Glass";
 export { haptic } from "./haptics";
 export { HoldMenu } from "./HoldMenu";
 export { type FrameState, HtmlFrame } from "./HtmlFrame";

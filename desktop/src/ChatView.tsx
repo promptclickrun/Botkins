@@ -33,15 +33,17 @@ import {
   HelperDrawer,
   RunLead,
   InterimUpdate,
+  LiveLead,
   Reasoning,
   ReasoningUpdate,
-  StepList,
   RunCards,
   TaskChip,
   TaskDrawer,
   ToolTrail,
   TimelineFold,
+  WorkSteps,
   duration,
+  latestThought,
 } from "./ChatActivity";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
@@ -303,6 +305,21 @@ export default function ChatView({
     gliding.current = false;
     readingBeginning.current = false;
   };
+  // The composer floats over the bottom of the messages. Its height, kept in --compose-room on the
+  // middle column, is the room the messages leave at their end, so the newest rests just above it.
+  const main = useRef<HTMLDivElement>(null);
+  const composeArea = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const column = main.current;
+    const area = composeArea.current;
+    if (!column || !area) return;
+    const measure = () => column.style.setProperty("--compose-room", area.offsetHeight + "px");
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const sizes = new ResizeObserver(measure);
+    sizes.observe(area);
+    return () => sizes.disconnect();
+  }, []);
   // A new chat, or a message the person sent, jumps to the latest.
   useLayoutEffect(toBottom, [completions, chat.id]);
   useLayoutEffect(() => {
@@ -366,7 +383,8 @@ export default function ChatView({
       stick.current = false;
       readingBeginning.current = true;
       setAway(true);
-      const top = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      // The reply rests below the faded top edge, where the first message rests.
+      const top = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top - parseFloat(getComputedStyle(el).paddingTop);
       // Even a one-line reply needs enough space below it to align with the top edge.
       const column = row.closest(".chat-column")!;
       const missing = Math.max(0, Math.ceil(el.clientHeight - (column.getBoundingClientRect().bottom - row.getBoundingClientRect().top)));
@@ -612,13 +630,14 @@ export default function ChatView({
             at: event.at,
             order: event.order,
             key: event.key,
-            body: <ReasoningUpdate text={event.value.text} display={thinkingMode} />,
+            // A live turn shows its newest thought in the lead row instead.
+            body: run.status === "Working" ? null : <ReasoningUpdate text={event.value.text} display={thinkingMode} />,
             fold: <ReasoningUpdate text={event.value.text} display={thinkingMode} />,
             details: <ReasoningUpdate text={event.value.text} display="open" />,
           });
         }
       } else {
-        const body = <section className="timeline-step"><StepList steps={[event.value]} /></section>;
+        const body = <WorkSteps steps={[event.value]} />;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: showStep(event.value) ? body : null, details: body });
       }
     }
@@ -637,7 +656,6 @@ export default function ChatView({
     const failedSteps = ownSteps.filter((step) => step.status === "Failed").length;
     const count = stepsMode === "failed" ? failedSteps : stepsMode === "hidden" ? 0 : ownSteps.length;
     const endingLabel = run.ending === "timed-out" ? "Timed out" : run.ending === "interrupted" ? "Interrupted" : run.ending === "stopped" ? "Stopped" : run.ending === "failed" ? "Needs you" : "";
-    const line = live ? (state.intents[chat.id] || "Working…") : (!reply.length && endingLabel ? endingLabel : `Worked for ${duration(elapsed)}`);
     const countLabel = count ? count + (count === 1 ? " step" : " steps") : undefined;
     const folded = stepsMode !== "every";
     const groupTranscript = group
@@ -646,38 +664,52 @@ export default function ChatView({
           return <Fragment key={event.key}>{visible ? event.body : null}</Fragment>;
         })
       : null;
-    const currentBot = group ? speaker ?? state.bots.find((b) => b.id === run.speakers?.at(-1)) : bot;
+    // The bot speaking now leads a turn under way; a finished turn keeps the face of its own last speaker.
+    const currentBot = group ? (live ? speaker : undefined) ?? state.bots.find((b) => b.id === run.speakers?.at(-1)) : bot;
+    // What the working bot is doing, as the header says it, without the trailing dots: "Coding".
+    const doingNow = activityLabel(group && currentBot ? botActivity(state, currentBot.id) : activity).replace(/…$/, "") || "Working";
+    const who = currentBot?.name ?? bot.name;
+    const line = live
+      ? doingNow === "Needs you" ? who + " needs you" : who + " is " + doingNow[0].toLowerCase() + doingNow.slice(1)
+      : !reply.length && endingLabel ? endingLabel : `Worked for ${duration(elapsed)}`;
+    const thought = thinkingMode !== "hidden" ? latestThought(thinking || run.reasoning?.at(-1)?.text) : "";
+    // Faces in the work log are still (the owner's battery rule): no state loop, no blinking.
+    const stillFace = (size: number) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={false} />;
     const groupFailure = group && run.failures?.length
       ? run.failures.map((failure) => `${state.bots.find((b) => b.id === failure.botId)?.name ?? "A bot"}: ${failure.detail}`).join(" · ")
       : "";
+    const fold = (
+      <TimelineFold
+        line={line}
+        live={live}
+        since={run.time}
+        body={eventBody}
+        detailsBody={detailsBody}
+        avatar={stillFace(20)}
+        count={countLabel}
+        onDetails={() => disclosed()}
+      />
+    );
     return (
       <Fragment key={`timeline-${run.id}`}>
         {timelineMessage(initial.message, initial.index)}
+        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thought || state.intents[chat.id]?.trim()} />}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
+        {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
+        {!group && !live && folded && fold}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
         {live && stream && (
           <article className="assistant live">
             {group && currentBot && (
               <b className="speaker">
-                <BotAvatar bot={currentBot} state={botActivity(state, currentBot.id)} size={22} />
+                <BotAvatar bot={currentBot} state={botActivity(state, currentBot.id)} size={22} animated={false} />
                 <span className="speaker-name">{currentBot.name}</span>
               </b>
             )}
             <RichText text={stream} files={files} />
           </article>
         )}
-        {(live || folded) && (
-          <TimelineFold
-            line={line}
-            live={live}
-            body={eventBody}
-            detailsBody={detailsBody}
-            avatar={live && currentBot ? <BotAvatar bot={currentBot} state={group ? botActivity(state, currentBot.id) : activity} size={22} /> : undefined}
-            intent={live ? state.intents[chat.id] : undefined}
-            count={countLabel}
-            onDetails={() => disclosed()}
-          />
-        )}
+        {(live || group) && (live || folded) && fold}
         <TeamRail run={run} bots={state.bots} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
@@ -689,7 +721,7 @@ export default function ChatView({
 
   return (
     <div className={"conversation" + (paneShown ? " with-side" : "") + (paneShown && narrow ? " with-drawer" : "")}>
-      <div className="chat-main">
+      <div className="chat-main" ref={main}>
         {showPeople && peopleView && (
           <PeopleDialog
             state={state}
@@ -708,11 +740,11 @@ export default function ChatView({
         {group ? (
           <span className="group-avatars" aria-hidden="true">
             {members.map((m) => (
-              <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={28} />
+              <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={28} animated={false} />
             ))}
           </span>
         ) : (
-          <BotAvatar bot={bot} state={face} size={30} />
+          <BotAvatar bot={bot} state={face} size={30} animated={false} />
         )}
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
@@ -851,7 +883,7 @@ export default function ChatView({
             <div className="emptychat group-empty">
               <span className="group-avatars large" aria-hidden="true">
                 {members.map((m) => (
-                  <BotAvatar key={m.id} bot={m} size={80} />
+                  <BotAvatar key={m.id} bot={m} size={80} animated={false} />
                 ))}
               </span>
               <h2>Start the group chat</h2>
@@ -1002,7 +1034,7 @@ export default function ChatView({
                       bot={group ? (run.status === "Working" && speaker ? speaker.name : "The group") : bot.name}
                       avatar={
                         run.status === "Working" && (group ? speaker : bot) ? (
-                          <BotAvatar bot={group ? speaker : bot} state={group ? botActivity(state, speaker!.id) : activity} size={22} />
+                          <BotAvatar bot={group ? speaker : bot} state={group ? botActivity(state, speaker!.id) : activity} size={22} animated={false} />
                         ) : undefined
                       }
                       onToggle={disclosed}
@@ -1034,7 +1066,7 @@ export default function ChatView({
             <article className="assistant live">
               {speaker && (
                 <b className="speaker">
-                  <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} />
+                  <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
                   <span className="speaker-name">{speaker.name}</span>
                 </b>
               )}
@@ -1051,7 +1083,7 @@ export default function ChatView({
             <article className="assistant live">
               {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
                 <b className="speaker">
-                  <BotAvatar bot={bot} state={activity} size={22} />
+                  <BotAvatar bot={bot} state={activity} size={22} animated={false} />
                   <span className="speaker-name">{bot.name}</span>
                 </b>
               )}
@@ -1158,7 +1190,7 @@ export default function ChatView({
           )}
         </div>
       )}
-      <div className="composewrap">
+      <div className="composewrap" ref={composeArea}>
         {reading.error && (
           <div className="voice-strip note error" role="alert">
             <span>Couldn't read that aloud. {reading.error}</span>

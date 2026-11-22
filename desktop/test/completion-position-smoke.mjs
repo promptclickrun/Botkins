@@ -92,7 +92,11 @@ try {
   chat.messages.push({ role: "assistant", text: reply, time: run.finished, runId: run.id });
   await publish();
   const row = view.locator("article.assistant").last();
-  const offset = () => row.evaluate(el => el.getBoundingClientRect().top - el.closest(".messages").getBoundingClientRect().top);
+  // The reply's top, measured from where the first message rests: below the faded top edge.
+  const offset = () => row.evaluate(el => {
+    const scroller = el.closest(".messages");
+    return el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - parseFloat(getComputedStyle(scroller).paddingTop);
+  });
   await expect.poll(async () => Math.abs(await offset())).toBeLessThan(2);
   assert.ok(await distance() > 100, "remaining reply height: " + await distance());
   const top = await offset();

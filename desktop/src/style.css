@@ -311,7 +311,8 @@ header {
   place-items: center;
   padding-right: 8px;
 }
-/* The composer: one soft pill. + at the left, model and send at the right. */
+/* The composer: one soft pill. + at the left, model and send at the right. In a chat it is a
+   glass card floating over the messages (canvas.css). */
 .composer {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -470,13 +471,17 @@ section + section,
   min-height: 0;
   display: flex;
 }
+/* The messages run to the bottom of the column, and the composer area floats over their end.
+   ChatView keeps the composer area's height in --compose-room. */
 .chat-main {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
+/* The header is the page itself: no box and no line. Messages fade out under it instead. */
 .chathead {
   padding: 12px clamp(16px, 3vw, 32px);
   display: flex;
@@ -494,19 +499,32 @@ section + section,
   flex: 0 1 auto;
 }
 .composewrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
   padding: 4px clamp(16px, 4vw, 40px) 18px;
   display: block;
+  /* Only what it holds takes the pointer: between them, the messages scroll and click. */
+  pointer-events: none;
 }
 /* The composer and what sits above it share the reading column. */
 .composewrap > * {
   max-width: 760px;
   margin-left: auto;
   margin-right: auto;
+  pointer-events: auto;
 }
+/* The top 24px fade the messages out under the header, with as much room above the first message.
+   At the end, room for the floating composer, and --reply-scroll-room: what a short finished reply
+   needs below it to be scrolled to the top (ChatView, Settings › Chat › Position). */
 .messages {
   flex: 1;
   overflow: auto;
-  padding: 16px clamp(16px, 4vw, 40px) calc(28px + var(--reply-scroll-room, 0px));
+  padding: 28px clamp(16px, 4vw, 40px) calc(28px + var(--compose-room, 0px) + var(--reply-scroll-room, 0px));
+  -webkit-mask-image: linear-gradient(transparent, #000 24px);
+  mask-image: linear-gradient(transparent, #000 24px);
 }
 /* A comfortable reading column, centered in the middle column. */
 .chat-column {

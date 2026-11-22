@@ -1,5 +1,6 @@
 import { associateHelper, helperId } from "./activity.mjs";
 import { reasoningPreview } from "./link/reasoning-preview.mjs";
+import { toolKind } from "./tool-kind.mjs";
 // Chat canvas helpers: reasoning, usage, context, todos, background helpers,
 // attachments, fork context and the plain-language work summary.
 import { statSync } from "node:fs";
@@ -233,22 +234,7 @@ export function forkSystemMessage(transcript) {
     : "";
 }
 
-// Tool name → how it counts in a summary. Names are Copilot's built-in tools; never arguments.
-const kinds = [
-  [/^(bash|powershell|shell|terminal|run_command|exec|write_bash|write_powershell|read_bash|read_powershell)$/, "command"],
-  [/^(view|read|read_file|cat|open_file)$/, "read"],
-  [/^(create|write|write_file|create_file)$/, "write"],
-  [/^(edit|str_replace|str_replace_editor|apply_patch|patch|multi_edit|insert)$/, "edit"],
-  [/^(grep|glob|search|search_files|find|rg|ls|list_dir|list_directory)$/, "search-files"],
-  [/^(web_search|search_web|bing_search|google_search)$/, "web"],
-  [/^(web_fetch|fetch|fetch_url|browse|browser_navigate)$/, "web-page"],
-  [/^(ask_user|ask)$/, "ask"],
-  [/^(task|subagent|run_subagent|delegate)$/, "helper"],
-  [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list)$/, "plan"],
-  [/^(skill|read_skill|use_skill)$/, "skill"],
-  [/^render_card$/, "card"],
-  [/^today_/, "panel"],
-];
+// How each kind of work counts in a summary. The kinds themselves are tool-kind.mjs.
 const words = {
   command: ["Ran a command", "Ran %d commands"],
   read: ["Read a file", "Read %d files"],
@@ -265,14 +251,7 @@ const words = {
   panel: ["Updated a panel", "Updated panels %d times"],
   tool: ["Used a tool", "Used %d tools"],
 };
-// Bookkeeping that says nothing about the work itself.
-const quiet = /^(report_intent|think|thinking|task_complete|read_agent|list_agents)$/;
-
-export function toolKind(name) {
-  const n = String(name || "").toLowerCase();
-  if (quiet.test(n)) return null;
-  return kinds.find(([re]) => re.test(n))?.[1] ?? "tool";
-}
+export { toolKind };
 
 /** "Ran 3 commands, read 2 files, searched the web": from tool names and kinds only. */
 export function workSummary(steps) {

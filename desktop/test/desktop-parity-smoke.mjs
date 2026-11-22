@@ -143,7 +143,7 @@ try {
   await restarted.getByRole("button", { name: "Chats", exact: true }).click();
   await restarted.getByRole("button", { name: /Folded turn fixture/ }).click();
   await expect(restarted.locator("main").getByText("The fixture is ready.", { exact: true })).toBeVisible();
-  const work = restarted.getByRole("button", { name: /Worked for .*1 step.*Show work/ });
+  const work = restarted.getByRole("button", { name: /Worked for .*1 step/ });
   await expect(work).toBeVisible();
   await work.click();
   await expect(restarted.locator("main").getByText("I checked the fixture files.", { exact: true })).toBeVisible();

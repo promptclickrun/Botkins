@@ -1,12 +1,10 @@
 // Small pieces the chat screens share: step status marks, group avatars, a quiet preview of a
-// message, the bot's typing dots, and how far the bot's work keeps from the screen's edge.
+// message, and how far the bot's work keeps from the screen's edge.
 import { Ban, Check, Circle, Clock3, X } from "lucide-react-native";
-import { createContext, useContext, useLayoutEffect } from "react";
-import { Animated, Easing, useAnimatedValue, View, type ViewStyle } from "react-native";
+import { View, type ViewStyle } from "react-native";
 import type { Bot, Step } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
 import { BotAvatar, space, useTheme } from "@/ui";
-import { useReducedMotion } from "@/ui/BotAvatar";
 
 /**
  * The bot's work (steps, thinking, updates, fold and status lines) keeps away from the trailing
@@ -14,29 +12,6 @@ import { useReducedMotion } from "@/ui/BotAvatar";
  * on a wide screen. Its leading edge stays with the reply's text; the reply itself keeps the full width.
  */
 export const workWidth: ViewStyle = { maxWidth: 600, marginRight: space.huge + space.lg };
-
-/** A visible status gets one native pulse when its activity changes, then holds still. */
-export const StatusMotion = createContext(false);
-
-export function TypingDots({ status }: { status?: string }) {
-  const { colors } = useTheme();
-  const visible = useContext(StatusMotion);
-  const reduced = useReducedMotion();
-  const phase = useAnimatedValue(0);
-  useLayoutEffect(() => {
-    phase.setValue(0);
-    if (!visible || reduced) return;
-    const pulse = Animated.timing(phase, { toValue: 1, duration: 620, easing: Easing.inOut(Easing.quad), useNativeDriver: true, isInteraction: false });
-    pulse.start();
-    return () => pulse.stop();
-  }, [phase, reduced, visible, status]);
-  const opacity = phase.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 1, 0.55] });
-  return (
-    <Animated.View style={{ flexDirection: "row", gap: 4, paddingTop: 2, opacity }}>
-      {[0, 1, 2].map((dot) => <View key={dot} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.muted }} />)}
-    </Animated.View>
-  );
-}
 
 /** Markdown symbols out of a one-line preview: "**Done.** See `x`" → "Done. See x". */
 export function plainPreview(text: string): string {
