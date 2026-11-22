@@ -2,7 +2,7 @@
 // words are the contract's "Words on screen" (docs/spaces.md), final for both apps.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyArrangement, asksOf, changedLine, changedSince, holds, initials, lastLine, linkNote, names, panelProject, panelRows, pickRows, spaceDropPlan, spaceItems, rowLine, shareChoices, since, spaceSections, spaceTitle, whoCanOpen, withMove, withPick, withPin } from "../src/features/spaces/logic";
+import { applyArrangement, asksOf, changedLine, changedSince, hasPanelPin, holds, initials, isApp, lastLine, linkNote, MAX_PANEL_PINS, moreLine, names, panelPinsHere, panelProject, panelRows, pickRows, pinnedLine, spaceDropPlan, spaceItems, rowLine, shareChoices, since, spaceSections, spaceTitle, whoCanOpen, withMove, withPanelPin, withPick, withPin } from "../src/features/spaces/logic";
 import type { SpaceSummary } from "../src/link/types";
 
 const space = (more: Partial<SpaceSummary> = {}): SpaceSummary => ({ id: "s", name: "Launch", by: { id: "owner", name: "Alex Kim" }, mine: true, access: "private", can: "own", count: 5, changed: 0, pinned: false, notify: "daily", here: [], rev: 1, updatedAt: 1, ...more });
@@ -188,4 +188,32 @@ test("dragging a space: the list, where a drop lands, and the list shown at once
   const plan = spaceDropPlan(list, owner, "money", "pinned", 1)!;
   const now = applyArrangement([...list, space({ id: "new" })], plan);
   assert.deepEqual(now.map((one) => one.id + (one.pinned ? "*" : "")), ["today*", "money*", "feed*", "launch", "theirs", "new"]);
+});
+
+test("panels pinned to Home: a pin goes last, comes off, and shows only on its own computer", () => {
+  const a = { spaceId: "s1", panelId: "p1" };
+  const b = { spaceId: "s2", panelId: "p1" };
+  assert.deepEqual(withPanelPin([a], b, true), [a, b]);
+  // Pinned again, it is there once, at the end.
+  assert.deepEqual(withPanelPin([a, b], a, true), [b, a]);
+  assert.deepEqual(withPanelPin([a, b], a, false), [b]);
+  assert.equal(hasPanelPin([a], a), true);
+  assert.equal(hasPanelPin([a], b), false);
+  // The oldest gives way past the most a phone keeps.
+  const many = Array.from({ length: MAX_PANEL_PINS }, (_, n) => ({ spaceId: "s", panelId: "p" + n }));
+  const full = withPanelPin(many, a, true);
+  assert.equal(full.length, MAX_PANEL_PINS);
+  assert.deepEqual([full[0], full.at(-1)], [many[1], a]);
+  // A pin whose space this computer does not have is left out, not dropped.
+  assert.deepEqual(panelPinsHere([a, b], [{ id: "s2" }]), [b]);
+});
+
+test("a pinned space's lines on Home, and what counts as an app", () => {
+  assert.equal(pinnedLine(space({ count: 4, changed: 2 })), "4 panels · 2 changed");
+  assert.equal(pinnedLine(space({ count: 4 })), "4 panels");
+  assert.equal(pinnedLine(space({ builtin: "feed", count: 5, changed: 2 })), "2 new");
+  assert.equal(moreLine(4, 3), "1 more");
+  assert.equal(moreLine(3, 3), undefined);
+  assert.equal(isApp({ blocks: [{ type: "html", html: "<p>x</p>" }] }), true);
+  assert.equal(isApp({ blocks: [{ type: "markdown", text: "x" }] }), false);
 });

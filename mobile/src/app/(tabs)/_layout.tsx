@@ -1,7 +1,11 @@
 import { needsYou } from "@/state/sessionActivity";
 import { NativeTabs } from "expo-router/native-tabs";
-import { isConversation } from "@/state/hooks";
+import type { ReactElement } from "react";
+import { useSpacesOn } from "@/features/spaces/data";
+import { isConversation, useCan } from "@/state/hooks";
+import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
+import type { TabId } from "@/state/tabs";
 import { badgeColors, useTheme } from "@/ui";
 
 export default function TabsLayout() {
@@ -10,37 +14,50 @@ export default function TabsLayout() {
   const badge = badgeColors(theme);
   const unread = useApp((state) => state.parts.chats?.filter((chat) => chat.unread && isConversation(chat)).length ?? 0);
   const waiting = useApp((state) => needsYou(state.parts));
-  const teamRequests = useApp((state) => {
-    const team = state.parts.team;
-    return state.parts.meta?.you?.kind !== "member" && team && "requests" in team ? team.requests.length : 0;
-  });
-  // Each tab scrolls its own vertical view when reselected.
-  return (
-    <NativeTabs tintColor={colors.accent} backgroundColor={colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
-      <NativeTabs.Trigger name="index" disableScrollToTop>
+  // A computer without spaces, or a member who may not see them, has no Spaces tab.
+  const spacesOn = useSpacesOn();
+  const spaces = useCan("today", "view") && spacesOn;
+  const order = usePrefs((prefs) => prefs.tabOrder);
+  // Each tab scrolls its own vertical view when reselected. Settings is a button on Home, not a tab.
+  const tabs: Record<TabId, ReactElement> = {
+    index: (
+      <NativeTabs.Trigger key="index" name="index" disableScrollToTop>
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "house", selected: "house.fill" }} md="home" />
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="chats" disableScrollToTop>
+    ),
+    chats: (
+      <NativeTabs.Trigger key="chats" name="chats" disableScrollToTop>
         <NativeTabs.Trigger.Label>Chats</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "bubble.left.and.bubble.right", selected: "bubble.left.and.bubble.right.fill" }} md="forum" />
         {unread > 0 && <NativeTabs.Trigger.Badge>{String(unread)}</NativeTabs.Trigger.Badge>}
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="work" disableScrollToTop>
+    ),
+    spaces: (
+      <NativeTabs.Trigger key="spaces" name="spaces" hidden={!spaces} disableScrollToTop>
+        <NativeTabs.Trigger.Label>Spaces</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf={{ default: "square.stack.3d.up", selected: "square.stack.3d.up.fill" }} md="layers" />
+      </NativeTabs.Trigger>
+    ),
+    work: (
+      <NativeTabs.Trigger key="work" name="work" disableScrollToTop>
         <NativeTabs.Trigger.Label>Work</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "bolt", selected: "bolt.fill" }} md="bolt" />
         {waiting > 0 && <NativeTabs.Trigger.Badge>{String(waiting)}</NativeTabs.Trigger.Badge>}
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="market" disableScrollToTop>
+    ),
+    market: (
+      <NativeTabs.Trigger key="market" name="market" disableScrollToTop>
         {/* Short on purpose: a long label widens its tab and the selected bubble next to it runs into it. */}
         <NativeTabs.Trigger.Label>Market</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "square.grid.2x2", selected: "square.grid.2x2.fill" }} md="apps" />
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="settings" disableScrollToTop>
-        <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} md="settings" />
-        {teamRequests > 0 && <NativeTabs.Trigger.Badge>{String(teamRequests)}</NativeTabs.Trigger.Badge>}
-      </NativeTabs.Trigger>
+    ),
+  };
+  // The person's own order (Settings › Appearance › Tabs). The bar is built again when it changes.
+  return (
+    <NativeTabs key={order.join()} tintColor={colors.accent} backgroundColor={colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
+      {order.map((id) => tabs[id])}
     </NativeTabs>
   );
 }

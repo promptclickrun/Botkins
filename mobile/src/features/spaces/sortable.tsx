@@ -1,6 +1,7 @@
-// Putting spaces in order by hand, in All spaces (rows, top to bottom) and on Home's row of pinned
-// spaces (chips, side by side): hold one, then move, and it lifts and follows the finger; the others
-// make room, and the page (or the row) scrolls near an edge. Hold still and whatever a hold did
+// Putting a list in order by hand: the spaces of the Spaces tab and the tabs of Settings ›
+// Appearance › Tabs (rows, top to bottom). Hold one, then move, and it lifts and follows the finger;
+// the others make room, and the page scrolls near an edge. A list can also run side by side
+// (`across`, chips), which nothing uses now that Home has no row of spaces. Hold still and whatever a hold did
 // before still happens. The hold-then-move rule, its numbers and the slot math are Home's
 // (src/features/home/BotBoard.tsx has why; DRAG, pickSlot, shiftOf and restingTop are in drag.ts).
 import { createContext, type ReactNode, use, useEffect, useLayoutEffect, useRef, useState } from "react";

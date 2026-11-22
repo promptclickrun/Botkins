@@ -1,10 +1,10 @@
-// A panel, opened: its app gets the whole width and works by touch. The bar has the panel's menu;
-// below it sit the notes people wrote, and the field that asks its bot to change it. Over that
+// A panel, opened: its app gets the whole width and works by touch. The bar pins it to Home and
+// has its menu; below it sit the notes people wrote, and the field that asks its bot to change it. Over that
 // field float the things its bot said are worth asking next, as chips: a tap opens the field with
 // the chip's words in it, and sends nothing.
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { Ellipsis, Trash2 } from "lucide-react-native";
+import { Ellipsis, Pin, PinOff, Trash2 } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,7 +15,7 @@ import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago, upcoming } from "@/state/time";
 import { Blocks, BotAvatar, Button, EmptyState, Field, Glass, Group, IconButton, Label, Loading, Page, radius, slopFor, space as gap, T, Tap, useTheme } from "@/ui";
-import { markItemSeen, panelState, useSpace, useSpaceContent } from "./data";
+import { markItemSeen, panelState, setPanelPinned, usePanelPinned, useSpace, useSpaceContent } from "./data";
 import { asksOf, lastLine } from "./logic";
 
 const SIZES: { value: PanelView["size"]; label: string }[] = [
@@ -141,6 +141,17 @@ function AskChips({ asks, onPick }: { asks: string[]; onPick: (index: number) =>
   );
 }
 
+/** The bar: the panel's pin to Home, then its menu. */
+function BarButtons({ panel, space, first, last }: { panel: PanelView; space: SpaceSummary; first: boolean; last: boolean }) {
+  const pinned = usePanelPinned(space.id, panel.id);
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: gap.xs }}>
+      <IconButton icon={pinned ? PinOff : Pin} label={pinned ? "Take off Home" : "Pin to Home"} onPress={() => setPanelPinned({ spaceId: space.id, panelId: panel.id }, !pinned)} />
+      <PanelMenu panel={panel} space={space} first={first} last={last} />
+    </View>
+  );
+}
+
 export default function PanelPage() {
   const { spaceId, id } = useLocalSearchParams<{ spaceId: string; id: string }>();
   const insets = useSafeAreaInsets();
@@ -170,7 +181,7 @@ export default function PanelPage() {
   return (
     <View style={{ flex: 1 }}>
       <Page contentStyle={{ paddingBottom: asks.length ? 170 : 120 }} keyboard>
-        <Stack.Screen options={{ headerRight: () => <PanelMenu panel={panel} space={space} first={index === 0} last={index === panels.length - 1} /> }} />
+        <Stack.Screen options={{ headerRight: () => <BarButtons panel={panel} space={space} first={index === 0} last={index === panels.length - 1} /> }} />
         <View style={{ flexDirection: "row", alignItems: "center", gap: gap.md }}>
           <BotAvatar bot={bot} size={40} badge={false} />
           <View style={{ flex: 1, minWidth: 0, gap: 1 }}>

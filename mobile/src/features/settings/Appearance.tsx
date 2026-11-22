@@ -2,7 +2,7 @@
 // Every choice applies at once.
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
-import { ChevronsUpDown, Monitor, Moon, SunMoon, Sun, Vibrate } from "lucide-react-native";
+import { ChevronsUpDown, Monitor, Moon, PanelBottom, SunMoon, Sun, Vibrate } from "lucide-react-native";
 import { Platform, StyleSheet, View } from "react-native";
 import { useMember, useSettings } from "@/state/hooks";
 import { type Prefs, setPrefs, usePrefs } from "@/state/prefs";
@@ -254,6 +254,7 @@ export default function Appearance() {
 
       <Group>
         <Row leading={<IconTile icon={Vibrate} color={brand.rose} />} title="Haptics" toggled={haptics} onToggle={(next) => setPrefs({ haptics: next })} />
+        <Row leading={<IconTile icon={PanelBottom} color={brand.rose} />} title="Tabs" subtitle="Their order in the bar" chevron onPress={() => router.push("/settings/tabs" as Href)} />
       </Group>
 
       {paired && !member && (
