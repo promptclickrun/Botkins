@@ -103,7 +103,7 @@ export async function main(argv, io = {}) {
     }
     const found = find(words);
     if (!found) throw usage("There is no command `botkins " + words[0] + "`.");
-    pluginsCommand = found.path[0] === "plugins";
+    pluginsCommand = ["plugins", "pi"].includes(found.path[0]);
     if (!found.command.run) {
       // A group: with --help, or with nothing after it, what it holds; with a word it doesn't know, a mistake.
       if (own.includes("--help") || own.includes("-h") || words.length === found.path.length) {
@@ -143,7 +143,7 @@ export async function main(argv, io = {}) {
       stderr,
       version: version(),
       color: paint(stdout, env),
-      client: io.client ?? controlClient(paths.socket),
+      client: io.client ?? controlClient(paths.socket, path[0] === "pi" && path[1] === "install" ? { timeout: 150_000 } : undefined),
       /** Prints the value as JSON with --json; otherwise what `text` makes of it (a string, or nothing). */
       print(value, text) {
         if (context.json) stdout.write(JSON.stringify(value === undefined ? null : value) + "\n");

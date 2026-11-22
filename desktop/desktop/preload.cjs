@@ -55,6 +55,11 @@ for (const name of [
   "plugins.uninstall",
   "plugins.refresh",
   // Agent templates in the marketplaces ("agent-templates-v1"), and Marketplace › Apps (Composio)
+  "piPackages.browse",
+  "piPackages.preview",
+  "piPackages.list",
+  "piPackages.install",
+  "piPackages.setEnabled",
   "agents.browse",
   "agents.template",
   "composio.catalog",

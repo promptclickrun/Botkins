@@ -1213,6 +1213,8 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
+    this.capabilities.push("pi-packages-v1");
+    this.piPackages = new Map();
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
     this.plugins = { marketplaces: DEMO_MARKETPLACES.map((market) => ({ ...market, updatedAt: now() - 20 * MIN })), catalog: structuredClone(DEMO_PLUGINS), installed: [] };
@@ -3075,7 +3077,29 @@ export class MockBackend {
       this.state.mcpServers = this.state.mcpServers.filter((server) => !servers.has(server.id));
       this.plugins.installed = this.plugins.installed.filter((item) => item !== record);
     },
-    // Agent templates ("agent-templates-v1", docs/agent-templates.md). Nothing here reaches the network.
+    // A Pi catalog and isolated package state for this demo host.
+    "piPackages.browse"({ query = "", page = 1 } = {}) {
+      const item = { name: "@botkins/demo-garden", description: "Garden skills for Pi", types: ["skill"] };
+      return { packages: page === 1 && (item.name + " " + item.description).toLowerCase().includes(query.toLowerCase()) ? [item] : [] };
+    },
+    "piPackages.preview"(name) {
+      if (name !== "@botkins/demo-garden") throw new Error("This package is not in the demo catalog.");
+      return { name, version: "1.0.0" };
+    },
+    "piPackages.list"() { return [...this.piPackages.values()]; },
+    "piPackages.install"(name, version) {
+      if (name !== "@botkins/demo-garden" || version !== "1.0.0") throw new Error("Review the demo package version first.");
+      if (this.piPackages.get(name)?.enabled === false) throw new Error("Turn it on under Installed in Pi.");
+      if (!this.piPackages.has(name)) this.piPackages.set(name, { name, version, enabled: true });
+      return this.piPackages.get(name);
+    },
+    "piPackages.setEnabled"(name, version, enabled) {
+      const pkg = this.piPackages.get(name);
+      if (pkg?.version !== version) throw new Error("That version isn't installed.");
+      this.piPackages.set(name, { name, version, enabled });
+      return this.piPackages.get(name);
+    },
+    // Agent templates ("agent-templates-v1", docs/agent-templates.md).
     "agents.browse"({ query, category, marketplace } = {}) {
       const words = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
       // The categories count what the other filters leave, so the chips can show their counts.

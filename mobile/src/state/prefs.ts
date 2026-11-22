@@ -28,7 +28,7 @@ export type Prefs = {
   /** The model providers folded shut in the model picker. */
   foldedProviders: string[];
   /** What the Marketplace tab showed last: apps (Composio) or plugins. */
-  marketView: "apps" | "agents" | "plugins";
+  marketView: "apps" | "agents" | "plugins" | "pi";
   /** Notices shown one time and closed (a plugin the computer switched off): one key for each computer, plugin and place. */
   toldNotices: string[];
 };
@@ -63,7 +63,7 @@ function read(saved: Record<string, unknown>): Prefs {
     controlSize: CONTROL_SIZES.includes(saved.controlSize as Prefs["controlSize"]) ? (saved.controlSize as Prefs["controlSize"]) : defaults.controlSize,
     haptics: typeof saved.haptics === "boolean" ? saved.haptics : defaults.haptics,
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
-    marketView: saved.marketView === "plugins" || saved.marketView === "agents" ? saved.marketView : "apps",
+    marketView: saved.marketView === "pi" || saved.marketView === "plugins" || saved.marketView === "agents" ? saved.marketView : "apps",
     toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,
     foldedProviders: Array.isArray(saved.foldedProviders) ? saved.foldedProviders.filter((id): id is string => typeof id === "string" && id.length <= 100).slice(0, 100) : defaults.foldedProviders,
   };
