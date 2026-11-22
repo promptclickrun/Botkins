@@ -1,7 +1,7 @@
 // Custom views (html blocks): the document the phone's web view loads and what a page may say back
 // (src/ui/frame.ts), and the link's call that hands the phone a view's page (link-host/server.mjs).
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -190,4 +190,11 @@ test("a panel's page reads and changes its saved state only through the app, wit
   assert.equal(pace.allow("f1", 1000 + STATE_PACE_MS), true);
   // What the app tells a page when someone else changed the state.
   assert.ok(frameScript({ type: "state", state: { ticked: { a: true }, text: "</script>" } }).includes("\\u003c/script"));
+});
+
+test("the web view's iOS-only list prop goes in as a list, which Android's native side requires", () => {
+  // react-native-webview wraps a string for iOS but passes it raw to Android, whose setter casts it to an array: a string stopped the app when a view mounted.
+  const source = readFileSync(new URL("../src/ui/HtmlFrame.tsx", import.meta.url), "utf8");
+  assert.match(source, /dataDetectorTypes=\{\["none"\]\}/);
+  assert.doesNotMatch(source, /dataDetectorTypes="/);
 });
