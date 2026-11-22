@@ -11,30 +11,23 @@ import type { SpaceSummary } from "@/link/types";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
-import { BotAvatar, EmptyState, Glass, IconButton, Loading, Page, space as gap, T, Tap, useOnShow, useTheme } from "@/ui";
+import { BotAvatar, EmptyState, Glass, IconButton, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useOnShow, useTextPrompt, useTheme } from "@/ui";
 import { lookingAt, openNewPanel, openShare, setPinned, useSpaces, useSpacesOn } from "./data";
 import { holds, NOTIFY, spaceTitle, whoCanOpen } from "./logic";
 import { SpaceView } from "./SpaceView";
 
 const openAsk = (spaceId: string) => router.push(("/space/ask?spaceId=" + encodeURIComponent(spaceId)) as unknown as Href);
 
-function rename(space: SpaceSummary) {
-  Alert.prompt(
-    "Rename space",
-    undefined,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Rename",
-        onPress: (value?: string) => {
-          const name = value?.trim().slice(0, 40);
-          if (name && name !== space.name) void attempt(api["spaces.rename"](space.id, name));
-        },
-      },
-    ],
-    "plain-text",
-    space.name,
-  );
+function rename(space: SpaceSummary, ask: (options: TextPromptOptions) => void) {
+  ask({
+    title: "Rename space",
+    value: space.name,
+    confirm: "Rename",
+    onSubmit: (value) => {
+      const name = value.slice(0, 40);
+      if (name !== space.name) void attempt(api["spaces.rename"](space.id, name));
+    },
+  });
 }
 
 function remove(space: SpaceSummary) {
@@ -54,6 +47,7 @@ function remove(space: SpaceSummary) {
 /** Pin, Share and the menu, for the bar. Also used over a space shown from the list. */
 function BarButtons({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary[] }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const canCreate = useCan("today", "create");
   const own = space.can === "own";
   const mayAdd = canCreate && (own || space.can === "edit");
@@ -72,7 +66,7 @@ function BarButtons({ space, spaces }: { space: SpaceSummary; spaces: SpaceSumma
         onPressAction={({ nativeEvent }) => {
           const action = nativeEvent.event;
           if (action === "panel") openNewPanel(space.id);
-          else if (action === "rename") rename(space);
+          else if (action === "rename") rename(space, prompt.ask);
           else if (action === "delete") remove(space);
           else if (action.startsWith("notify:")) void attempt(api["link.spaces.notify"](space.id, action.slice(7) as SpaceSummary["notify"]));
         }}
@@ -81,6 +75,7 @@ function BarButtons({ space, spaces }: { space: SpaceSummary; spaces: SpaceSumma
           <Ellipsis size={20} color={colors.ink} strokeWidth={2.2} />
         </View>
       </MenuView>
+      {prompt.node}
     </View>
   );
 }

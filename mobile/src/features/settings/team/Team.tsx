@@ -32,25 +32,17 @@ export default function Team() {
   const online = useOnline();
   const spacesOn = useCapability("spaces-v1");
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   if (part && !team) return <Page title="Team"><EmptyState title="Only the owner can manage the team" /></Page>;
   if (!team) return <Page title="Team"><Loading label="Loading team" /></Page>;
   // Told by a computer that has Admin mode; an older one says nothing, and shows everything as before.
   const admin = you?.kind === "owner" ? you.admin : undefined;
 
-  const rename = () =>
-    Alert.prompt(
-      "Rename team",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Save", onPress: (value?: string) => value?.trim() && void attempt(api["link.team.rename"](value.trim()), "Team renamed") },
-      ],
-      "plain-text",
-      team.name,
-    );
+  const rename = () => prompt.ask({ title: "Rename team", value: team.name, onSubmit: (name) => void attempt(api["link.team.rename"](name), "Team renamed") });
 
   return (
     <Page title="Team">
+      {prompt.node}
       <Group>
         <Row leading={<IconTile icon={Users} />} title={team.name} subtitle="Team name" trailing={<Pencil size={17} color={colors.faint} />} disabled={!online} onPress={rename} />
         {/* Admin mode is this phone's own way of looking: off, it lists what you are part of; it never changes what you may do. */}
@@ -251,11 +243,8 @@ function Members({ members, groups, online }: { members: Member[]; groups: TeamG
 
 function Groups({ groups, roles, online }: { groups: TeamGroup[]; roles: Role[]; online: boolean }) {
   const saveGroup = (group: TeamGroup, patch: Partial<TeamGroup>) => void attempt(api["link.team.saveGroup"]({ ...group, ...patch }));
-  const rename = (group: TeamGroup) =>
-    Alert.prompt("Rename group", undefined, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Save", onPress: (name?: string) => name?.trim() && saveGroup(group, { name: name.trim() }) },
-    ], "plain-text", group.name);
+  const prompt = useTextPrompt();
+  const rename = (group: TeamGroup) => prompt.ask({ title: "Rename group", value: group.name, onSubmit: (name) => saveGroup(group, { name }) });
   const chooseRole = (group: TeamGroup) =>
     Alert.alert("Role for " + group.name, undefined, [
       ...roles.map((role) => ({ text: (role.id === group.roleId ? "✓ " : "") + role.name, onPress: () => saveGroup(group, { roleId: role.id }) })),
@@ -269,18 +258,18 @@ function Groups({ groups, roles, online }: { groups: TeamGroup[]; roles: Role[];
       { text: "Cancel", style: "cancel" },
     ]);
   };
-  const create = () => {
-    Alert.prompt("New group", undefined, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Next", onPress: (name?: string) => {
-        if (!name?.trim() || !roles[0]) return;
+  const create = () =>
+    prompt.ask({
+      title: "New group",
+      confirm: "Next",
+      onSubmit: (name) => {
+        if (!roles[0]) return;
         Alert.alert("Choose a role", undefined, [
-          ...roles.map((role) => ({ text: role.name, onPress: () => void attempt(api["link.team.saveGroup"]({ id: "g_" + Math.random().toString(36).slice(2, 12), name: name.trim(), roleId: role.id }), "Group created") })),
+          ...roles.map((role) => ({ text: role.name, onPress: () => void attempt(api["link.team.saveGroup"]({ id: "g_" + Math.random().toString(36).slice(2, 12), name, roleId: role.id }), "Group created") })),
           { text: "Cancel", style: "cancel" },
         ]);
-      } },
-    ], "plain-text");
-  };
+      },
+    });
   const actions = (group: TeamGroup) =>
     Alert.alert(group.name, roleName(roles, group.roleId), [
       { text: "Rename", onPress: () => rename(group) },
@@ -295,6 +284,7 @@ function Groups({ groups, roles, online }: { groups: TeamGroup[]; roles: Role[];
         {groups.map((group) => <Row key={group.id} leading={<IconTile icon={Users} />} title={group.name} value={roleName(roles, group.roleId)} chevron disabled={!online} onPress={() => actions(group)} />)}
         <Row leading={<IconTile icon={Plus} />} title="New group" tone="accent" disabled={!online} onPress={create} />
       </Group>
+      {prompt.node}
     </View>
   );
 }
