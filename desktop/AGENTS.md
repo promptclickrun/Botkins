@@ -13,7 +13,7 @@ A standing rule from the owner (2026-11-20): the terminal host's command line an
 
 ## A turn is never failed for being quiet
 
-A standing rule from the owner: "We shouldn't be enforcing time outs if it's controllable." The person can stop any turn (Stop in the chat and on the phone, Stop on Work and Routines), so a turn, a routine or a task has no time limit.
+A standing rule from the owner: "We shouldn't be enforcing time outs if it's controllable." The person can stop any turn (Stop in the chat and on the phone, Stop on Work and Routines), so a turn, a routine or a task has no idle or wall-clock limit. The one exception, by the owner's choice: a routine's script (`desktop/routine-script.mjs`) still stops after 10 minutes.
 
 - A turn ends by itself only when its harness is really gone (its process exited, its connection closed, its session no longer exists, or it reported an error), or when the person stops it. After a quiet spell the provider asks the harness whether it is still there (`desktop/providers/liveness.mjs`), and a live harness is waited for with no failure. A harness whose process ending already ends the turn (Claude Code, Pi, OMP, ACP agents) needs no check.
 - `send(message, timeoutMs)` takes a time limit only from a caller with nobody to stop it, such as the background chat summary. The workspace passes none for a person's turn.

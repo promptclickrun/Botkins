@@ -8,7 +8,6 @@ import { Workspace } from "./starter.mjs";
 import { authorize } from "../desktop/link/team.mjs";
 import { shellFor } from "../desktop/routine-script.mjs";
 import { decide } from "../desktop/notify.mjs";
-import { pass } from "./quiet-turns.mjs";
 
 const T0 = Date.UTC(2026, 10, 17, 12);
 const DAILY = { kind: "daily", time: "09:00" };
@@ -145,20 +144,6 @@ test("Stop ends a running script, and a restart ends one that Botkins closed dur
   const interrupted = reopened.state.runs.find((run) => run.chatId === id);
   assert.equal(interrupted.status, "Interrupted");
   assert.equal(interrupted.detail, "Botkins closed while the script ran.");
-  await ws.stop(id);
-  await done;
-  assert.equal(ws.state.runs[0].status, "Stopped");
-});
-
-test("a script has no time limit: hours of running do not end it, and Stop does", { skip: !unix }, async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { ws } = setup(t);
-  const id = ws.panels.routines.create({ botId: "pip", name: "Long", script: "sleep 30", cadence: DAILY }, T0);
-  const done = ws.panels.routines.run(id);
-  // Three hours on the faked clock: the old limit was ten minutes.
-  await pass(t, 3 * 60 * 60 * 1000);
-  assert.ok(ws.active.has(id), "the script is still running");
-  assert.equal(ws.state.runs[0].status, "Working");
   await ws.stop(id);
   await done;
   assert.equal(ws.state.runs[0].status, "Stopped");

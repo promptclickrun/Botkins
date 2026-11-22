@@ -801,7 +801,7 @@ function runScriptRoutine(ws, chat, entry, trigger) {
     // A run that Botkins quit during keeps `scriptRunning`, and is ended when it opens again (Workspace's constructor).
     if (ws.closing) return;
     delete run.scriptRunning;
-    run.script = { exitCode: result.exitCode };
+    run.script = { exitCode: result.exitCode, ...(result.timedOut && { timedOut: true }) };
     if (!task.stopped && sleepsAgent(result)) {
       Object.assign(run, { noOutput: true, silent: true });
       step.label = "Nothing new: the script let the run end here.";
