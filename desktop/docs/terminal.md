@@ -791,6 +791,10 @@ To keep the host key out of the data volume, give it as a Compose secret. The co
 
 The earlier setup, with an Electron workspace on a virtual display, is still there for a phone that must see and control a screen. Start it with `docker compose --profile display up -d host workspace`. The command names the two services, because a `docker compose up` without them also starts the terminal host. See [the display setup](../desktop/README.md). The two setups keep separate data. Run only one of them.
 
+### A screen without Docker
+
+On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View** and **Control**, as they do with the desktop app. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
+
 ## Scripts and JSON
 
 Each command accepts `--json`. It then prints one JSON document, which is the value from the service. A command that follows a stream (`logs -f`, a sign-in) prints one JSON line for each item.
@@ -902,7 +906,7 @@ This does not protect against a person who is root on the computer while it runs
 
 The terminal host has no window and no screen. These features report "… is not available on this host." A phone and the terminal get that sentence, and nothing else fails.
 
-- Viewing and controlling the screen from a phone.
+- Viewing and controlling the screen from a phone, unless the service has an X11 display. See [A screen without Docker](#a-screen-without-docker).
 - Unlocking a password manager, choosing one of its items, linking a saved credential to a field of it, and using a saved credential by reference. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone." These need a person at the app, because the terminal host's socket cannot know that a person is there.
 - The window of the app: side panes drawn in the app, HTML apps in their own window, the website viewer, and typing a saved credential into a page. A phone still draws side panes itself.
 - File and folder dialogs, opening a file or a link on the computer, and the clipboard. A phone uses the calls that need no dialog.

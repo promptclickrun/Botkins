@@ -13,10 +13,11 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkHost, unavailable } from "./index.mjs";
+import { x11Screen } from "./x11screen.mjs";
 
 /** What stays desktop-only, by the name `botkins doctor` and the docs give it. */
 export const DESKTOP_ONLY = [
-  "Viewing and controlling the screen",
+  "Viewing and controlling the screen, unless the service is given an X11 display (DISPLAY)",
   "The app's window: side panes, html apps in their own window, the website viewer and typing a saved credential into a page",
   "File and folder dialogs, opening a file or a link on the computer, and the clipboard",
   "Desktop notifications (a paired phone is still notified)",
@@ -33,8 +34,9 @@ export const DESKTOP_ONLY = [
  * @param options.updates   () → the update service, or undefined when this copy can't update itself.
  * @param options.fetch     The network. Tests pass their own.
  * @param options.log       (line) → where a note for the person who runs the service goes.
+ * @param options.env       The environment. On Linux, DISPLAY (and XAUTHORITY) give a phone the X11 screen (desktop/host/x11screen.mjs).
  */
-export function headlessHost({ version, packaged = false, keys = async () => null, updates = () => undefined, fetch = (url, init) => globalThis.fetch(url, init), log = () => {} } = {}) {
+export function headlessHost({ version, packaged = false, keys = async () => null, updates = () => undefined, fetch = (url, init) => globalThis.fetch(url, init), log = () => {}, env = process.env, platform = process.platform } = {}) {
   const refuse = (what) => () => {
     throw unavailable(what);
   };
@@ -42,6 +44,7 @@ export function headlessHost({ version, packaged = false, keys = async () => nul
     throw unavailable(what);
   };
   const resumed = new Set();
+  const x11 = platform === "linux" && /^[\w.-]*:\d+(\.\d+)?$/.test(env.DISPLAY ?? "") ? x11Screen({ display: env.DISPLAY, xauthority: env.XAUTHORITY || undefined }) : null;
   return checkHost({
     kind: "terminal",
     version: String(version ?? "0.0.0"),
@@ -49,13 +52,13 @@ export function headlessHost({ version, packaged = false, keys = async () => nul
     headless: true,
     // The shape "About" on a phone reads; it shows the Electron and Chromium rows only when they say something.
     info: () => ({ version: String(version ?? "0.0.0"), electron: "", chrome: "", node: process.versions.node, platform: process.platform, host: "terminal" }),
-    displayStatus: () => ({ available: false, note: "This host has no display." }),
+    displayStatus: () => (x11 ? { available: true, kind: "x11" } : { available: false, note: "This host has no display." }),
     keys,
     updates,
     fetch,
     notifications: null,
     images: null,
-    screen: {
+    screen: x11 ?? {
       displays: refuseLater("Viewing the screen"),
       capture: refuseLater("Viewing the screen"),
       permissions: async () => ({ screenRecording: false, accessibility: false }),

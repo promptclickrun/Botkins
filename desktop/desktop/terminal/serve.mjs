@@ -80,6 +80,7 @@ export async function startService({ paths, version, trial = false, reach = !tri
       },
       updates: () => updates?.(service),
       log: (line) => log.info(line),
+      env,
     });
     runtime = await createRuntime({
       host,
