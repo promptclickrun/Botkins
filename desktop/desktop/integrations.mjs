@@ -635,17 +635,24 @@ export class Integrations {
     const off = new Set(bot?.mcpOff ?? []);
     return Object.fromEntries(this.servers.filter((s) => s.enabled && !off.has(s.id)).map((s) => [s.name, serverConfig(s, this.open)]));
   }
-  /** Connects to one server in a short session and reports whether it works and which tools it offers. */
+  /**
+   * Connects to one server once and reports whether it works and which tools it offers. Botkins
+   * connects itself, with the client MCP Apps use (desktop/mcp-apps.mjs), not through a bot's
+   * harness: some harnesses don't connect until a turn, so the answer would depend on the bot.
+   * `status` is "connected", "needs-auth" (the server refused without a sign-in) or "failed".
+   */
   async testServer(id) {
     const server = this.server(id);
-    const found = await this.ws.probe({ mcpServers: { [server.name]: serverConfig(server, this.open) } });
-    const status = found.servers.find((s) => s.name === server.name)?.status ?? "not started";
-    // The runtime names a server's tools "<server>-<tool>"; the person sees the tool's own name.
-    const prefix = server.name + "-";
-    const tools = found.choices
-      .filter((c) => c.kind === "Tool" && c.source === server.name)
-      .map((c) => (c.name.startsWith(prefix) ? c.name.slice(prefix.length) : c.name));
-    return { status, tools };
+    const upstream = this.ws.mcpApps.connect(server);
+    try {
+      const tools = await upstream.tools();
+      return { status: "connected", tools: tools.map((tool) => tool.name) };
+    } catch (error) {
+      return { status: error?.status === 401 ? "needs-auth" : "failed", tools: [] };
+    } finally {
+      // The answer doesn't wait for a program the test started to stop.
+      void upstream.close();
+    }
   }
 
   // Skills

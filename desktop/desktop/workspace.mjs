@@ -1159,7 +1159,7 @@ export class Workspace {
    * Opens the provider session for a chat (or a member's or teammate's view of one). `run` and
    * `task` are the turn in progress; without a run the session only answers questions about itself.
    */
-  async openSession(chat, bot, run, task, overrides) {
+  async openSession(chat, bot, run, task) {
     // A bot without access to the chat's project gets no session there (desktop/access.mjs).
     this.access.assertChat(chat, [bot]);
     // A coding chat works in its project's folder; other chats in the bot's own folder.
@@ -1275,7 +1275,6 @@ export class Workspace {
       pluginRevision: this.plugins.generation,
       history: () => chat.messages ?? [],
       handlers: handlers || null,
-      ...overrides,
     });
     if (!chat.temporary && (!chat.established || chat.sessionProvider !== provider.id)) {
       chat.established = true;
@@ -1283,32 +1282,6 @@ export class Workspace {
       this.save();
     }
     return session;
-  }
-  /**
-   * Opens a short session for the first bot with the given spec overrides and returns what it
-   * offers. Used to test an MCP server from Settings.
-   */
-  async probe(overrides) {
-    const bot = this.state.bots[0];
-    if (!bot) throw new Error("Create a bot first.");
-    const target = { id: randomUUID(), botId: bot.id, messages: [], established: false, temporary: true };
-    const session = await this.openSession(target, bot, null, { stopped: false }, overrides);
-    try {
-      // Servers connect in the background: look again for up to 15 seconds while one is still starting.
-      let found = await session.inventory();
-      for (let tries = 0; tries < 20 && found.servers.some((s) => s.status === "pending"); tries++) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        found = await session.inventory();
-      }
-      return found;
-    } finally {
-      // The answer doesn't wait for the test session to be torn down.
-      const provider = this.harness.runner(this.effectiveModel(target));
-      session
-        .close({ discard: true })
-        .then(() => provider.deleteSession(session.id))
-        .catch(() => {});
-    }
   }
   /**
    * Opens a chat's session ahead of its next message, so the reply starts at once. Called when

@@ -58,7 +58,13 @@ async function service(t) {
 const SECRET = "sk-VALUE-that-must-not-show";
 
 test("a tool that starts a program is shown first and needs a yes; its values go in by a file and never come out", { skip }, async (t) => {
-  const { botkins, put, client, everything } = await service(t);
+  const { botkins, put, client, everything, running } = await service(t);
+  // A test connects to the tool itself: a stand-in for the program, which can't be reached.
+  const started = [];
+  running.runtime.workspace.mcpApps.connect = (server) => ({
+    tools: async () => (started.push([server.command, ...server.args].join(" ")), Promise.reject(new Error("not reachable"))),
+    close: async () => {},
+  });
   // The program's own arguments come after "--", so that one may start with a dash.
   const add = (...more) => ["tools", "add", "files", "--command", "npx", "--env", "API_KEY", ...more, "--", "-y", "@example/files server"];
   // With no terminal there is nobody to ask: the command shows what would run, fails, and names the flag.
@@ -111,17 +117,19 @@ test("a tool that starts a program is shown first and needs a yes; its values go
   assert.match((await botkins(["tools", "disable", "docs"])).out, /docs is off\./);
   assert.equal((await botkins(["tools", "enable", "docs"])).exit, 2);
   assert.match((await botkins(["tools", "enable", "docs", "--yes"])).out, /docs is on\./);
-  // A test starts it, and says so. With no bot yet there is no session to try it in.
+  // A test starts it, and says so. A tool that doesn't answer fails the command.
   const tried = await botkins(["tools", "test", "docs"]);
   assert.match(tried.err, /Starting: npx -y @example\/other/);
-  assert.match(tried.err, /Create a bot first\./);
+  assert.match(tried.out, /docs: failed/);
   assert.equal(tried.exit, 1);
+  assert.deepEqual(started, ["npx -y @example/other"]);
   // One that is off is shown and asked for, as when it is switched on: a test starts it too.
   await botkins(["tools", "disable", "docs"]);
   const offTest = await botkins(["tools", "test", "docs"]);
   assert.equal(offTest.exit, 2);
   assert.match(offTest.err, /This starts a program on this computer[\s\S]*docs: npx -y @example\/other[\s\S]*This needs a yes/);
-  assert.match((await botkins(["tools", "test", "docs", "--yes"])).err, /Create a bot first\./);
+  assert.match((await botkins(["tools", "test", "docs", "--yes"])).out, /docs: failed/);
+  assert.equal(started.length, 2, "with the yes it is started");
   await botkins(["tools", "enable", "docs", "--yes"]);
   // Removing asks too. The socket's own call refuses with no mark, and the tool is still there; with the mark it goes.
   assert.equal((await botkins(["tools", "remove", "docs"])).exit, 2);
