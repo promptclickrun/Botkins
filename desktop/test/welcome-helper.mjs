@@ -6,6 +6,17 @@ export async function skipWelcome(page) {
   return page;
 }
 
+/**
+ * A first launch opens on the choice of how Botkins is used here (src/SetupChoice.tsx). Chooses
+ * Set up on this computer, which goes on to the provider welcome.
+ */
+export async function setUpHere(page) {
+  await page.getByRole("list", { name: "Ways to use Botkins" }).waitFor({ timeout: 30000 });
+  await page.getByRole("button", { name: /^Set up on this computer/ }).click();
+  await page.getByRole("heading", { name: "Connect a model provider" }).or(page.getByRole("heading", { name: "Your model providers" })).first().waitFor({ timeout: 30000 });
+  return page;
+}
+
 /** GitHub Copilot's status as providers() reports it, signed in as a made-up account or signed out. */
 export const copilotStatus = (connected, login = "octocat") => ({
   id: "copilot",

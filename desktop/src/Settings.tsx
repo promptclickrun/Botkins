@@ -9,6 +9,7 @@ import {
   KeyRound,
   LockKeyhole,
   MessageSquareMore,
+  MonitorSmartphone,
   PanelLeft,
   Palette,
   Server,
@@ -26,7 +27,7 @@ import type { AppUpdate, AppInfo, Bot, Catalog, MarketAgentTemplate, Preferences
 import ModelPicker from "./ModelPicker";
 import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings, SummarySettings } from "./Preferences";
 import Usage from "./Usage";
-import { OtherComputers } from "./RemoteHosts";
+import { ComputersAndTeams } from "./RemoteHosts";
 import AccessSettings from "./AccessSettings";
 import { BotAvatar } from "./Avatar";
 import { Group, Row, SwitchRow, ValueRow, errorText } from "./SettingsRows";
@@ -61,6 +62,7 @@ export type SectionId =
   | "teamwork"
   | "team"
   | "access"
+  | "computers"
   | "phone"
   | "voice"
   | "usage"
@@ -82,6 +84,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "teamwork", label: "Teamwork", icon: UsersRound },
   { id: "team", label: "Team", icon: Users },
   { id: "access", label: "Access", icon: KeyRound },
+  { id: "computers", label: "Computers and teams", icon: MonitorSmartphone },
   { id: "phone", label: "Phone", icon: Smartphone },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "usage", label: "Usage", icon: ChartColumn },
@@ -121,6 +124,9 @@ export function sectionFor(tab: string): { section: SectionId; view?: BotView; t
     providers: { section: "account" },
     "model providers": { section: "account" },
     "phone access": { section: "phone" },
+    computers: { section: "computers" },
+    "other computers": { section: "computers" },
+    "join a team": { section: "computers" },
     speech: { section: "voice" },
     "live voice": { section: "voice" },
   };
@@ -491,8 +497,7 @@ export default function Settings({
           )}
           {section === "team" && <TeamSettings state={state} initialView={teamView} />}
           {section === "access" && <AccessSettings state={state} />}
-          {/* Phones and computers paired to this one, then the computers this app uses. While another
-              computer is in use its own devices are managed there. */}
+          {/* Phones and computers paired to this one. While another computer is in use its own devices are managed there. */}
           {section === "phone" &&
             (state.remote?.using ? (
               <p className="set-status" role="status">
@@ -501,7 +506,7 @@ export default function Settings({
             ) : (
               <PhoneSettings state={state} />
             ))}
-          {section === "phone" && <OtherComputers state={state} initialJoin={initialJoin} />}
+          {section === "computers" && <ComputersAndTeams state={state} initialJoin={initialJoin} />}
           {section === "voice" && <VoiceSettings state={state} />}
           {section === "usage" && <Usage runCount={runCount} />}
           {section === "storage" && (

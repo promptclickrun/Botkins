@@ -392,7 +392,7 @@ else
           void remote.call("link.push.presence", [!!win && !win.isDestroyed() && win.isFocused(), viewingChat ?? undefined]).catch(() => {});
         }
       },
-      // Other computers' Botkins this app uses (Settings › Phone & devices, and the switcher). A phone can't make these calls.
+      // Other computers' Botkins this app uses (Settings › Computers and teams, the first launch and the switcher). A phone can't make these calls.
       remoteHosts: () => ({ using: remote.inUse(), hosts: remote.list() }),
       pairRemoteHost: (input) => remote.pair({ link: input?.link, address: input?.address, code: input?.code }),
       useRemoteHost: (id) => {

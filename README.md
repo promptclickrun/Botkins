@@ -89,7 +89,7 @@ Pair the phone app, and your team goes with you.
 - **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. It works from a phone, with no SSH key. Turn on **Screen access** to also get a virtual screen with Chrome that you can see and control from your phone. See [Botkins on Azure](deploy/azure/README.md).
 
   [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
-- **Other computers.** Pair one Botkins with another, and switch between them from the side menu.
+- **Computers and teams.** Pair one Botkins with another, or join a team with an invite code, from the first launch or Settings → Computers and teams, and switch between them from the side menu.
 
 ## Privacy and security
 
