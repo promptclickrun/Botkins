@@ -198,13 +198,14 @@ test("default desktop delivery and Send now steer the same turn without aborting
   session.aborted = () => aborts++;
   const { ws } = workspaceWith(session, t);
   const id = ws.createChat("pip");
-  const first = ws.submit(id, "Long job");
+  const first = ws.submit(id, "Long job", { clientMessageId: "local-1" });
   await tick();
-  ws.submit(id, "Use green", { delivery: "steer" });
+  ws.submit(id, "Use green", { delivery: "steer", clientMessageId: "local-2" });
   await tick();
   assert.equal(calls[1]?.mode, "immediate");
-  ws.submit(id, "Make it small", { delivery: "queue" });
+  ws.submit(id, "Make it small", { delivery: "queue", clientMessageId: "local-3" });
   const [queued] = ws.snapshot().queued[id];
+  assert.equal(queued.clientMessageId, "local-3");
   await ws.sendNow(id, queued.id);
   assert.deepEqual(calls.map(o => o.prompt), ["Long job", "Use green", "Make it small"]);
   assert.equal(ws.state.runs.length, 1);
@@ -215,6 +216,7 @@ test("default desktop delivery and Send now steer the same turn without aborting
   await first;
   assert.equal(ws.state.runs[0].status, "Completed");
   assert.deepEqual(ws.chat(id).messages.map(m => m.text), ["Long job", "Use green", "Make it small", "Small and green"]);
+  assert.deepEqual(ws.chat(id).messages.filter(m => m.role === "user").map(m => m.clientMessageId), ["local-1", "local-2", "local-3"]);
   assert.equal(ws.snapshot().queued[id], undefined);
 });
 

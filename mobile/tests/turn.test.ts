@@ -313,9 +313,9 @@ for (const timeline of [true, false]) {
     const d = await demo(timeline);
     try {
       const { chatId, detail, running, live } = await openChat(d);
-      await d.client.call("send", chatId, "long turn");
+      await d.client.call("send", chatId, "long turn", { clientMessageId: "long-turn-send" });
       await d.until(() => (running()?.steps?.length ?? 0) >= 2 && !!live().steerable?.[chatId], "the long turn to be steerable");
-      await d.client.call("send", chatId, "Skip the docs", { delivery: "steer" });
+      await d.client.call("send", chatId, "Skip the docs", { delivery: "steer", clientMessageId: "follow-up-send" });
       await d.until(() => detail().messages.some((m) => m.steeredRunId === running()?.id), "the steer in the chat");
       const messages = detail().messages;
       const steerAt = messages.findIndex((m) => m.steeredRunId);
@@ -332,6 +332,8 @@ for (const timeline of [true, false]) {
       const reply = detail().messages.at(-1)!;
       assert.equal(reply.role, "assistant");
       assert.equal(!!reply.time, timeline, "an older computer sends the reply without a time");
+      assert.equal(detail().messages.find(m => m.text === "long turn")?.clientMessageId, "long-turn-send");
+      assert.equal(detail().messages.find(m => m.text === "Skip the docs")?.clientMessageId, "follow-up-send");
       const view = mergeChat(undefined, detail());
       const items = chatTimeline({ messages: view.messages, from: view.from, runs: view.runs, running: running(), live: {}, timeline, group: false, prefs: SHOW });
       const kinds = shape(items);

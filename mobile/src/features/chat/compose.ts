@@ -97,10 +97,12 @@ export const waitingCopies = (text: string, queued: { text: string }[] | undefin
  */
 export function arrived(
   text: string,
-  before: { length: number; waiting: number },
-  view: { from: number; messages: { role: string; text: string }[] } | undefined,
-  queued: { text: string }[] | undefined,
+  before: { length: number; waiting: number; clientMessageId?: string },
+  view: { from: number; messages: { role: string; text: string; clientMessageId?: string }[] } | undefined,
+  queued: { text: string; clientMessageId?: string }[] | undefined,
 ): boolean {
+  if (before.clientMessageId) return !!view?.messages.some(m => m.role === "user" && m.clientMessageId === before.clientMessageId)
+    || !!queued?.some(q => q.clientMessageId === before.clientMessageId);
   if (!text) return false;
   if (waitingCopies(text, queued) > before.waiting) return true;
   if (!view) return false;

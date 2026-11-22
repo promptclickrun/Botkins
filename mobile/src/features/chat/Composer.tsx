@@ -179,7 +179,7 @@ export function Composer({
   value: string;
   onChange: (text: string) => void;
   /** Resolves to false when the message didn't go, so the chips come back. */
-  onSend: (options: SendOptions) => Promise<boolean>;
+  onSend: (options: SendOptions, mentions: DraftMention[]) => Promise<boolean>;
   onStop: () => void;
   working: boolean;
   placeholder: string;
@@ -435,10 +435,10 @@ export function Composer({
     const ok = await onSend({
       ...(sentMentions.length ? { mentions: sentMentions.map(toInput) } : {}),
       ...(ready.length ? { attachments: ready.map((file) => ({ name: file.name, path: file.path! })) } : {}),
-    });
+    }, sentMentions);
     if (!ok) {
-      setMentions(sentMentions);
-      setFiles(sentFiles);
+      setMentions(current => [...sentMentions, ...current.filter(m => !sentMentions.some(old => mentionKey(old) === mentionKey(m)))]);
+      setFiles(current => [...sentFiles, ...current.filter(f => !sentFiles.some(old => old.key === f.key))]);
     }
   };
 

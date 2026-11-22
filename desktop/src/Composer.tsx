@@ -17,7 +17,7 @@ import { useComposerVoice } from "./ComposerVoice";
 import ProviderIcon, { hasProviderMark } from "./ProviderIcon";
 
 /** A reply's quoted text, set by a message's Reply action in ChatView. */
-export const QuoteContext = createContext<{ quote: string; setQuote: (q: string) => void } | null>(null);
+export const QuoteContext = createContext<{ quote: string; setQuote: (q: string | ((current: string) => string)) => void } | null>(null);
 
 const NO_MENTIONS: DraftMention[] = [];
 
@@ -30,7 +30,7 @@ type Props = {
   busy: boolean;
   sending: boolean;
   change: (value: string) => void;
-  send: (options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }) => Promise<boolean | void> | void;
+  send: (options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }, onDispatch?: () => void) => Promise<boolean | void> | void;
   stop: () => void;
   above?: boolean;
   model?: string;
@@ -171,18 +171,23 @@ export default function Composer({
     return found.length + skipped > 0;
   }
   async function submit(queue = false) {
+    let dispatched = false;
     const sent = await send({
       delivery: queue ? "queue" : "steer",
       ...(files.length && { attachments: files }),
       ...(quote && { quote }),
       ...(mentions.length && { mentions: mentions.map(toInput) }),
-    });
-    if (sent) {
+    }, () => {
+      dispatched = true;
       setFiles([]);
       setMentions([]);
       setPicked([]);
       setAttachError("");
       reply?.setQuote("");
+    });
+    if (dispatched && !sent) {
+      setFiles(current => [...files, ...current.filter(f => !files.some(old => old.path === f.path))]);
+      if (quote) reply?.setQuote(current => current || quote);
     }
   }
   useEffect(() => {
