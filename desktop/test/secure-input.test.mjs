@@ -201,3 +201,39 @@ test("a private interactive chat discovers site-matched vault labels and screen 
   ws.peopleOf = () => undefined; // The split workspace has lost contact with the host that knows the invites.
   assert.ok(!tools().some(tool => tool.name === "browser_form"));
 });
+
+// Issue #179: a page_fill request stays open until the person submits, and the handles it returns work in that turn.
+test("a page_fill request waits for the submission, then the returned handles fill the page in that turn only", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-page-fill-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const page = { operation: "page_fill", title: "Sign in", url: "https://example.org/login",
+    fields: [{ key: "email", label: "Email", kind: "text" }, { key: "password", label: "Password", kind: "password" }] };
+  const content = { email: "someone@example.org", password: "page-fill-canary" };
+  const filled = [];
+  const formBrowser = { bind: async () => "doc-1", fill: async (_plan, values) => { filled.push({ ...values }); } };
+  const ws = new Workspace(dir, fakeClient().client, () => {}, { formBrowser,
+    secureUse: (plan, values, { signal }) => performSecureUse(plan, values, { signal, fillPage: () => formBrowser.fill(plan, values, signal) }) });
+  const chat = ws.chat(ws.createChat("pip"));
+  const task = {}, run = { id: "r" };
+  ws.active.set(chat.id, task);
+  const [ask, use] = ws.secureInputs.tools(ws.bot("pip"), chat, run, task);
+
+  let settled = false;
+  const answer = ask.handler(page).finally(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false, "the request must stay open until the person submits");
+  const [request] = ws.interactions.snapshot();
+  assert.equal(request.kind, "secure");
+  ws.interactions.respond(request.id, { action: "accept", content });
+  const result = JSON.parse(await answer);
+  assert.deepEqual(Object.keys(result.handles), ["email", "password"]);
+
+  // The next turn is a new task, and it cannot spend this turn's values.
+  const nextTask = {};
+  ws.active.set(chat.id, nextTask);
+  await assert.rejects(ws.secureInputs.tools(ws.bot("pip"), chat, run, nextTask)[1].handler(result), /unavailable/);
+  ws.active.set(chat.id, task);
+
+  assert.deepEqual(JSON.parse(await use.handler(result)), { applied: true });
+  assert.deepEqual(filled, [content]);
+});
