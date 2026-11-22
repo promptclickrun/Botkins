@@ -1,7 +1,7 @@
 // The frames screens are built in: a page (pushed, or the root of a tab) and a sheet.
-import { router } from "expo-router";
+import { router, useScrollToTop } from "expo-router";
 import { CloudOff, RefreshCw, X } from "lucide-react-native";
-import type { ReactNode } from "react";
+import { type ComponentRef, type ReactNode, useRef } from "react";
 import { ActivityIndicator, Platform, RefreshControl, ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -91,6 +91,8 @@ export type PageProps = {
 export function Page({ title, caption, actions, children, tab, scroll = true, onRefresh, refreshing = false, keyboard, contentStyle, quietLink, footer, onScroll }: PageProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  useScrollToTop(scrollRef);
   // A tab's root lays itself out beside the side rail (a pushed page gets that room from its stack).
   const shape = useShape();
   const head = (title || actions) && (
@@ -135,6 +137,7 @@ export function Page({ title, caption, actions, children, tab, scroll = true, on
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       <Scroller
+        ref={tab ? (view) => { scrollRef.current = view; } : undefined}
         style={{ flex: 1 }}
         contentContainerStyle={[padding, contentStyle]}
         contentInsetAdjustmentBehavior={tab ? "never" : "automatic"}

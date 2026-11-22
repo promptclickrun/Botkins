@@ -1,4 +1,4 @@
-import { router, useIsFocused } from "expo-router";
+import { router, useIsFocused, useScrollToTop } from "expo-router";
 import { Archive, FolderPlus, Search, SquarePen, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
@@ -70,6 +70,7 @@ function Skeleton() {
  */
 /** `inner`: the list is the first of two panes, so its right side meets the chat, not the rail. */
 function ChatsFrame({ children, scroll, scrollEnabled, actions, inner }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode; inner?: boolean }) {
+  useScrollToTop(scroll.ref);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.

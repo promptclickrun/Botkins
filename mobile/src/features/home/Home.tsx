@@ -2,7 +2,7 @@
 // flat list: the primary bot, each section, then the rest. A pinned bot shows only up top, never in
 // the list too. Filters show pinned or hidden bots. Under "All" a bot can be dragged to another place
 // or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
-import { type Href, router } from "expo-router";
+import { type Href, router, useScrollToTop } from "expo-router";
 import { ChevronDown, ChevronUp, Plus, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ScrollView, useWindowDimensions, View } from "react-native";
@@ -122,6 +122,7 @@ function FirstBot() {
  * top or bottom edge scrolls the page (Page has no handle on its scroll view). Keep it like Page's.
  */
 function HomeFrame({ children, scroll, scrollEnabled, onScrolled }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; onScrolled: () => void }) {
+  useScrollToTop(scroll.ref);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
