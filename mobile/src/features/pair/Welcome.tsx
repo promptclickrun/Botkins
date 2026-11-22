@@ -1,6 +1,5 @@
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { StatusBar } from "expo-status-bar";
 import { Keyboard, QrCode, Users } from "lucide-react-native";
 import { useState } from "react";
 import { useWindowDimensions, View } from "react-native";
@@ -19,7 +18,6 @@ export default function Welcome() {
   const art = Math.min(width, 560);
   return (
     <View style={{ flex: 1, backgroundColor: brand.peach }}>
-      <StatusBar style="dark" />
       {panel > 0 && (
         <Animated.View entering={FadeIn.duration(500)} style={{ position: "absolute", bottom: panel - OVERLAP, left: (width - art) / 2 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
           <Image source={require("../../../assets/images/welcome.jpg")} style={{ width: art, height: art * 1.5 }} contentFit="cover" />

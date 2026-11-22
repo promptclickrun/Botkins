@@ -17,6 +17,8 @@ const config: ExpoConfig = {
     buildNumber: process.env.BOTKINS_BUILD ?? "1",
     supportsTablet: true,
     infoPlist: {
+      // The native stack sets the icon color for the visible screen, including on iOS 27.
+      UIViewControllerBasedStatusBarAppearance: true,
       // The desktop link is plain HTTP on the local network (or a tailnet); every message on it
       // is encrypted by the app itself (src/link).
       NSAppTransportSecurity: { NSAllowsLocalNetworking: true },
