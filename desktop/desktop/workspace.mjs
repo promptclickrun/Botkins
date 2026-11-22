@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 
 import { Panels, textField } from "./panels.mjs";
+import { isSilent } from "./routines.mjs";
 import { Providers } from "./providers/index.mjs";
 import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
@@ -1820,7 +1821,11 @@ export class Workspace {
         );
         if (task.stopped || this.closing) return;
         const empty = typeof text !== "string" || !text.trim();
-        if (empty && !run.cards?.length && routine) {
+        if (routine && isSilent(text || task.stream)) {
+          run.noOutput = true;
+          run.silent = true;
+          noOutput = true;
+        } else if (empty && !run.cards?.length && routine) {
           run.noOutput = true;
           noOutput = true;
         }
@@ -1898,7 +1903,8 @@ export class Workspace {
         const recovered = await this.recoverStalled(session, chat, run);
         if (recovered != null) {
           task.stream = "";
-          if (!noOutput) finishReply(chat, run, task, recovered);
+          if (routine && isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
+          else if (!noOutput) finishReply(chat, run, task, recovered);
           run.status = "Completed";
           run.detail = "";
           return;
