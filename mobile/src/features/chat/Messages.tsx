@@ -19,7 +19,7 @@ import type { MessagePart } from "@/features/artifacts/logic";
 import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
-import { claim, useRevealed } from "./reveal";
+import { claimAt, useRevealed } from "./reveal";
 import { answerText, type Ending, type Item, workSummary } from "./turn";
 import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
 
@@ -328,7 +328,7 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
   // A reply that landed whole while this chat was open is shown word by word (reveal.ts).
-  const shown = useRevealed(message.text ?? "", () => (message.role === "assistant" ? claim(chatId, item.index) : null));
+  const shown = useRevealed(message.text ?? "", () => (message.role === "assistant" ? claimAt(chatId, item.index, message.text ?? "") : null));
   if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
   if (message.role === "command") return <CommandBlock message={message} />;
   // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).

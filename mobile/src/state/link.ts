@@ -12,7 +12,7 @@ import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import { relayFetch } from "@/link/relay";
 import type { Calls, ChatDetail } from "@/link/types";
-import { textStreamingOn, useChatPrefs } from "./chatPrefs";
+import { textMode, useChatPrefs } from "./chatPrefs";
 import { loadPrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
 import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
@@ -43,7 +43,7 @@ function follow(pairing: Pairing) {
     fetch: fetcher,
     streamAppends: true,
     lightSteps: true,
-    textStreaming: (route) => textStreamingOn(useChatPrefs.getState().textStreaming, route),
+    textStreaming: (route) => textMode(useChatPrefs.getState().textStreaming, route),
     onParts: applyParts,
     onState: (link) => {
       useApp.setState({ link });

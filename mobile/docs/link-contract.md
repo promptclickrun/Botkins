@@ -93,6 +93,8 @@ A waiting sync with only text changes flushes at most once per 200 ms per sessio
 
 A host with `text-streaming-off-v1` also accepts `text: false` in the `link.sync` argument, to save relay messages. The session gets the boolean `live` form (with or without `appends`) and no text bodies: a held cursor gets `null` once. Text growing alone does not answer a waiting sync. The reply arrives whole in `chat:<chatId>` when it ends. Without the field, or from an older host, the sync is as above.
 
+A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the relay that still wants a reply as it is written. Text comes on the `appends` path as above, but each `add` ends at the last complete line or sentence after the cursor, and text-only news waits 2 s since the last answer instead of 200 ms. Other news is not delayed and carries the text that is ready. Text with no complete end goes, cut at a word, once it has waited 6 s or runs past 1200 units. The phone's cursor moves only by what was sent. The reply arrives whole in `chat:<chatId>` when it ends. From an older host, send `text: false` instead.
+
 ### What a client may call
 
 `link-host/methods.mjs` (`REMOTE_METHODS`) lists the app's calls. A call that opens a window, a file dialog or the browser on the host is not in it. The link's own calls start with `link.`; `Calls` in `types.ts` types all of them. Check `meta.capabilities` before using a feature, and say "Update the app on your computer" when its name is missing.

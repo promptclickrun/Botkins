@@ -8,7 +8,9 @@ import type { BoardItem, Bot, ModelInfo, RunSummary } from "../src/link/types";
 import { boardMessage, boardQuote, findTrigger, joinDictation, mentionKey, teammates, tokenOf, toInput, withBoardQuote, arrived, waitingCopies } from "../src/features/chat/compose";
 import { chatRuns, contextParts, contextPercent, contextTone, tokens, usageSummary } from "../src/features/chat/contextMath";
 import { contextFact, effortRows, modelFacts } from "../src/features/models/facts";
-import { arm, claim, disarm, revealedText, revealMs, settle } from "../src/features/chat/reveal";
+import { arm, claim, claimAt, disarm, notePainted, revealedText, revealMs, settle } from "../src/features/chat/reveal";
+import { PAINT_MS, paintedLength } from "../src/features/chat/paint";
+import { completeUpTo } from "../link-host/parts.mjs";
 
 test("a reply that lands whole is revealed in whole words, faster when it is short", () => {
   assert.equal(revealMs(10), 300);
@@ -37,6 +39,50 @@ test("only a reply after the turn began while the chat was open is revealed, onc
   assert.equal(claim("c", 5, 1200), 1200, "just after the turn ended");
   assert.equal(claim("c", 6, 10_000), null, "long after");
   disarm("c");
+});
+
+test("text in chunks is cut after a complete sentence or line", () => {
+  const cut = (text: string, from = 0) => text.slice(0, completeUpTo(text, from, text.length));
+  assert.equal(cut("One sentence. And half"), "One sentence. ");
+  assert.equal(cut("Use tools, e.g. a hammer"), "");
+  assert.equal(cut("He said \"done.\" Then"), "He said \"done.\" ");
+  assert.equal(cut("Steps:\n12. Mix it"), "Steps:\n");
+  assert.equal(cut("First para.\n\nSecond"), "First para.\n\n");
+  assert.equal(cut("```\nx = 1. y = 2\nz"), "```\nx = 1. y = 2\n");
+  assert.equal(cut("```js\nlet a = 1. b"), "```js\n");
+  assert.equal(cut("no end in sight"), "");
+  assert.equal(completeUpTo("Done. more words", 8, 16), 8, "nothing complete after the cursor");
+});
+
+test("a chunk is painted in whole words, all of it in PAINT_MS", () => {
+  const text = "one two three four five six seven eight";
+  let last = 0;
+  for (let at = 0; at < PAINT_MS; at += 30) {
+    const n = paintedLength(text, 0, at);
+    assert.ok(n >= last, "only grows");
+    assert.ok(n === 0 || n === text.length || /\s/.test(text[n]), "ends at a word");
+    last = n;
+  }
+  assert.equal(paintedLength(text, 0, PAINT_MS), text.length);
+  assert.equal(paintedLength(text, 8, 0), 8, "from what was painted");
+  assert.ok(paintedLength(text, 8, PAINT_MS / 2) > 8);
+});
+
+test("a reply painted in chunks is revealed from where the painting was", () => {
+  assert.equal(revealedText("Hello there world", 0, 6), "Hello ");
+  assert.equal(revealedText("Hello there world", revealMs(11), 6), "Hello there world");
+  arm("p", 2, true);
+  notePainted("p", "Hello ");
+  assert.deepEqual(claimAt("p", 2, "Hello there", 100), { at: 100, from: 6 });
+  disarm("p");
+  arm("p", 2, true);
+  notePainted("p", "Other ");
+  assert.equal(claimAt("p", 2, "Hello there", 100), null, "doesn't go on from it: whole");
+  disarm("p");
+  arm("p", 2);
+  notePainted("p", "Hello ");
+  assert.deepEqual(claimAt("p", 2, "Hello there", 100), { at: 100, from: 0 }, "landing whole: from the start");
+  disarm("p");
 });
 
 test("a trigger is the sigil word that ends at the caret", () => {

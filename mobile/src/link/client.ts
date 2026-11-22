@@ -380,12 +380,17 @@ export type LinkOptions = {
   /** Each time a sync came back: the phone is in step with the computer now. */
   onSync?(): void;
   /**
-   * Whether a reply's text comes as it is written, on this route (default yes). No sends `text: false`
-   * ("text-streaming-off-v1"): the indicators stay and the reply comes whole when it ends. Read on each sync;
-   * call `textStreamingChanged` when the answer may have changed.
+   * How a reply's text comes on this route (default "live", as it is written; true is "live" too). "whole" or
+   * false sends `text: false` ("text-streaming-off-v1"): the indicators stay and the reply comes whole when it
+   * ends. "chunks" sends `text: "chunks"` ("text-chunks-v1"): the text comes in complete sentences every
+   * couple of seconds, or whole from a computer without that. Read on each sync; call `textStreamingChanged`
+   * when the answer may have changed.
    */
-  textStreaming?(route: LinkRoute): boolean;
+  textStreaming?(route: LinkRoute): boolean | TextMode;
 };
+
+/** How a reply's text is followed: as it is written, in complete sentences now and then, or whole when it ends. */
+export type TextMode = "live" | "chunks" | "whole";
 
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
 /** How long a direct address that answered and then failed is left out, when there is a relay to use. */
@@ -401,8 +406,11 @@ export class LinkClient {
   private texts = new Map<string, HeldText>();
   private supportsAppends: boolean | undefined;
   private receivedFullLive = false;
-  /** What the last sync said about text streaming. */
-  private sentText = true;
+  /** What the last sync asked for, as the option said it and as it was sent. */
+  private sentMode: TextMode = "live";
+  private sentText: TextMode = "live";
+  /** Whether the computer sends text in chunks ("text-chunks-v1"), once it has said. */
+  private supportsChunks: boolean | undefined;
   private have: Record<string, number> = {};
   private watching: string[] = [];
   private running = false;
@@ -519,10 +527,11 @@ export class LinkClient {
   }
   /** The choice behind `textStreaming` changed: a waiting sync that asked otherwise asks again. */
   textStreamingChanged() {
-    if (this.session && this.textFor(this.session) !== this.sentText) this.poll?.abort();
+    if (this.session && this.textFor(this.session) !== this.sentMode) this.poll?.abort();
   }
-  private textFor(session: Session) {
-    return this.options.textStreaming?.(routeOf(session)!) ?? true;
+  private textFor(session: Session): TextMode {
+    const mode = this.options.textStreaming?.(routeOf(session)!) ?? "live";
+    return mode === true ? "live" : mode === false ? "whole" : mode;
   }
 
   /** Sets the session and reports how it connects. */
@@ -659,6 +668,7 @@ export class LinkClient {
         // The computer's app restarted: nothing we hold is known to be current.
         this.epoch = reply.epoch;
         this.supportsAppends = undefined;
+        this.supportsChunks = undefined;
         this.have = {};
       }
       const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, base };
@@ -794,18 +804,20 @@ export class LinkClient {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
         const quick = this.suspect;
         this.suspect = false;
-        const text = this.textFor(await this.openSession());
+        const mode = this.textFor(await this.openSession());
+        const text: TextMode = mode === "chunks" && this.supportsChunks === false ? "whole" : mode;
         // Text back on: the computer sends each held body again from its start.
-        if (text && !this.sentText) {
+        if (text !== "whole" && this.sentText === "whole") {
           this.texts.clear();
           delete this.have.live;
         }
+        this.sentMode = mode;
         this.sentText = text;
         const watching = this.watching;
         const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
           watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
         const appends = requestText ? { appends: this.cursors() } : {};
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(!text && { text: false }), ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
+        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
         if (this.lifetime !== lifetime) break;
         failures = 0;
         this.setState("online");
@@ -816,6 +828,8 @@ export class LinkClient {
         }
         if (this.options.streamAppends && watching !== this.watching) continue;
         if (news.v) {
+          const meta = news.parts.meta as { capabilities?: string[] } | undefined;
+          if (meta) this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
           if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
           this.have = news.v;
           this.options.onParts(news.parts);

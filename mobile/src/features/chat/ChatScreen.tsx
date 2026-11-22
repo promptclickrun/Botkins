@@ -8,8 +8,8 @@ import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-nati
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Preferences, Project, QueuedMessage, Run } from "@/link/types";
-import { textStreamingOn, useChatPrefs } from "@/state/chatPrefs";
-import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
+import { useChatPrefs } from "@/state/chatPrefs";
+import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useTextMode, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, showToast, useApp } from "@/state/store";
@@ -358,17 +358,17 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
   }, []);
   const still = useReducedMotion();
   // Without text streaming a reply lands whole: one that comes while this chat is open is shown word by word (reveal.ts).
-  const textStreaming = useChatPrefs((prefs) => prefs.textStreaming);
-  const route = useApp((state) => state.route);
-  const textOff = useCapability("text-streaming-off-v1");
-  const reveals = textOff && !still && !textStreamingOn(textStreaming, route);
+  // In chunks it goes on from where the turn's painting was (paint.ts).
+  const mode = useTextMode();
+  const reveals = !still && mode !== "live";
+  const chunks = mode === "chunks";
   const turnLive = streaming || !!underWay(runPart);
   const chatEnd = view.from + view.messages.length;
   useEffect(() => {
     if (!reveals) disarm(chatId);
-    else if (turnLive) arm(chatId, chatEnd);
+    else if (turnLive) arm(chatId, chatEnd, chunks);
     else settle(chatId);
-  }, [reveals, turnLive, chatId, chatEnd]);
+  }, [reveals, turnLive, chatId, chatEnd, chunks]);
   useEffect(() => () => disarm(chatId), [chatId]);
   useEffect(() => {
     const step = completions.check(chatId, {
