@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool } from "./providers/provider.mjs";
 import { validateSelection } from "./preferences.mjs";
-import { runScript, scriptEnding, SCRIPT_LENGTH } from "./routine-script.mjs";
+import { runScript, scriptEnding, sleepsAgent, SCRIPT_LENGTH } from "./routine-script.mjs";
 import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
@@ -787,7 +787,10 @@ function runScriptRoutine(ws, chat, entry, trigger) {
     if (ws.closing) return;
     delete run.scriptRunning;
     run.script = { exitCode: result.exitCode, ...(result.timedOut && { timedOut: true }) };
-    if (followUp && !task.stopped) {
+    if (!task.stopped && sleepsAgent(result)) {
+      Object.assign(run, { noOutput: true, silent: true });
+      step.label = "Nothing new: the script let the run end here.";
+    } else if (followUp && !task.stopped) {
       const where = routines.destinationNote(chat, entry.id);
       run.recovery = { extra: [scriptNote(result), where].filter(Boolean).join("\n\n") };
       return ws.startTurn(chat, bot, message, run, false);
