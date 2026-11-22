@@ -1,0 +1,116 @@
+#!/bin/bash
+# Manages the server that the Azure one-click deployment set up: Botkins, its relay, Caddy and,
+# with Screen access, the virtual display. Run it as root, for example with Azure Run Command.
+#   botkins-server pair            open a new pairing code and print its link
+#   botkins-server link            print the open pairing link, if there is one
+#   botkins-server status          show the services and the status of Botkins
+#   botkins-server logs [service]  follow a log: botkins (the default), relay, caddy or display
+#   botkins-server screen on|off   turn Screen access on or off. Paired phones stay paired.
+#   botkins-server update [ref]    update this server's setup, the relay and Botkins
+#
+# Everything else is Botkins' own command, `botkins` (desktop/docs/terminal.md). For example:
+#   botkins providers login copilot    botkins bots list    botkins devices list
+set -euo pipefail
+HOME_DIR=/opt/botkins-server
+SRC=$HOME_DIR/src
+ENV=/etc/botkins-server/server.env
+# Where the open pairing link is kept: in memory only, and readable by root alone.
+OPEN=/run/botkins-server/pairing
+
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+case "${1:-}" in help | --help | -h | "") usage; [ -n "${1:-}" ]; exit ;; esac
+[ "$(id -u)" -eq 0 ] && [ -r "$ENV" ] || { echo "botkins-server: run this as root (sudo botkins-server ${1:-status})." >&2; exit 77; }
+
+# One setting from the deployment's file. Values are not quoted there, so the file is not sourced.
+setting() { sed -n "s/^$1=//p" "$ENV" | head -n 1; }
+FQDN=$(setting FQDN)
+
+ready() { botkins status --json >/dev/null 2>&1; }
+connected() {
+  botkins relay status --json 2>/dev/null |
+    python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("connected") else 1)' 2>/dev/null
+}
+# Opens a code and prints its web link. Phones reach this server only through its relay, so the
+# link offers only the relay, and leaves out the VM's private addresses, which no phone can reach.
+pair() {
+  install -d -m 0700 "$(dirname "$OPEN")"
+  botkins pair --ttl 60 --no-wait --json | (umask 077; python3 -c '
+import json, sys
+from urllib.parse import parse_qsl, urlencode, urlsplit
+fqdn, keep = sys.argv[1], sys.argv[2]
+pairing = json.load(sys.stdin)
+query = parse_qsl(urlsplit(pairing["url"]).query, keep_blank_values=True)
+relays = [entry for name, value in query if name == "h" for entry in value.split(",") if entry.startswith("relay!")]
+if not relays: sys.exit("The pairing code has no relay address.")
+link = "https://" + fqdn + "/pair#" + urlencode([(name, ",".join(relays) if name == "h" else value) for name, value in query])
+with open(keep, "w") as file: json.dump({"link": link, "expiresAt": pairing["expiresAt"]}, file)
+print(link)' "$FQDN" "$OPEN")
+}
+# The link that `pair` printed last, while its code is still open and has not expired.
+link() {
+  [ -f "$OPEN" ] || return 1
+  botkins status --json 2>/dev/null | python3 -c '
+import json, sys
+from datetime import datetime, timezone
+status = json.load(sys.stdin)
+with open(sys.argv[1]) as file: kept = json.load(file)
+open_now = status.get("link", {}).get("pairing") and status.get("relay", {}).get("connected")
+if not open_now or datetime.fromisoformat(kept["expiresAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc): sys.exit(1)
+print(kept["link"])' "$OPEN" 2>/dev/null
+}
+# Runs the setup again from the sources in $SRC, with the settings this server already has. It
+# replaces this file, so this file stops here: exec.
+setup() { exec bash "$SRC/deploy/azure/install.sh" --no-pair "$@"; }
+
+case "$1" in
+  pair)
+    # Waits (up to --wait seconds, 20 by default) for Botkins to start and reach its relay.
+    wait=20
+    [ "${2:-}" = "--wait" ] && wait="${3:-600}"
+    end=$((SECONDS + wait))
+    until ready; do
+      [ $SECONDS -lt $end ] || { echo "Botkins isn't running. Check: botkins-server logs" >&2; exit 1; }
+      sleep 2
+    done
+    until connected; do
+      [ $SECONDS -lt $end ] || { echo "Botkins hasn't reached its relay yet. Check: botkins-server logs relay, and botkins-server logs caddy" >&2; exit 1; }
+      sleep 2
+    done
+    pair
+    ;;
+  link) link || { echo "No pairing link is open. Run: botkins-server pair" >&2; exit 1; } ;;
+  status)
+    systemctl --no-pager --lines=0 status botkins.service botkins-relay.service caddy.service || true
+    if [ "$(setting MODE)" = screen ]; then systemctl --no-pager --lines=0 status botkins-display.service || true; fi
+    echo
+    botkins status
+    ;;
+  logs)
+    case "${2:-botkins}" in
+      botkins) unit=botkins ;;
+      relay) unit=botkins-relay ;;
+      caddy) unit=caddy ;;
+      display) unit=botkins-display ;;
+      *) echo "botkins-server logs: botkins, relay, caddy or display." >&2; exit 64 ;;
+    esac
+    journalctl -u "$unit.service" -n 200 -f
+    ;;
+  screen)
+    case "${2:-}" in
+      on) setup --screen on ;;
+      off) setup --screen off ;;
+      *) echo "botkins-server screen: on or off. Now: $([ "$(setting MODE)" = screen ] && echo on || echo off)." >&2; exit 64 ;;
+    esac
+    ;;
+  update)
+    ref=${2:-$(setting REF)}
+    git -C "$SRC" fetch -q --depth 1 origin "$ref"
+    git -C "$SRC" checkout -q --force FETCH_HEAD
+    # The rest runs from the new sources.
+    setup --update --ref "$ref"
+    ;;
+  *)
+    echo "botkins-server: \`$1\` isn't one of its commands. For Botkins itself, run: botkins $*" >&2
+    exit 64
+    ;;
+esac

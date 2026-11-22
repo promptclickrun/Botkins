@@ -43,6 +43,7 @@ export const SETTINGS = {
   "link.addresses": { check: list(address, 8), default: [], restart: true, about: "More names or addresses to offer phones in a pairing code, such as a public name or a tailnet address. Phones use the link's port at each." },
   "relay.enabled": { check: flag, default: false, about: "Away from home: keep one outgoing connection to the Botkins relay, so a phone on another network reaches this host." },
   "relay.url": { check: relayUrl, default: DEFAULT_RELAY_URL, about: "The relay's address." },
+  "relay.own": { check: flag, default: false, restart: true, about: "The relay at relay.url runs on this server and is the only way phones reach it, so a phone may turn on screen access through it. Only for a server like that." },
   "providers.only": { check: list(providerId, 20), default: [], restart: true, about: "Start only these model providers. Empty: all of them." },
   "secrets.source": { check: oneOf(SOURCES), default: "auto", restart: true, about: "Where the host key that wraps secrets at rest comes from: auto, systemd, keychain or file." },
   "secrets.keyFile": { check: (value) => (value === null ? null : text(1024)(value)), default: null, restart: true, about: "The key file for the source \"file\". Empty: host.key in the data folder." },
