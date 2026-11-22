@@ -525,6 +525,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return host.shell.openExternal(parsed.href);
     },
     updateBot: (id, data) => workspace.updateBot(id, data),
+    // A bot's Proactive agent, for the person who calls: the window and the command line are the owner's (desktop/device-call.mjs names a member).
+    setBotProactive: (id, patch, person = "owner") => workspace.proactive.setBot(id, patch, person),
     // Skills and MCP servers for every bot (desktop/integrations.mjs)
     saveMcpServer: (data) => workspace.integrations.saveServer(data),
     setMcpServerEnabled: (id, enabled) => workspace.integrations.setServerEnabled(id, enabled),

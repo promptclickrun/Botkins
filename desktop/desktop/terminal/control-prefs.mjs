@@ -14,7 +14,7 @@ import { appearanceField, clarificationPrompts, defaultSettings, FONT_IDS, sideb
 import { HARNESSES } from "../harness/index.mjs";
 import { AUTO_SUMMARIZE_MAX, AUTO_SUMMARIZE_MIN } from "../summaries.mjs";
 import { MAC_LEVELS, MAC_TOOLS } from "../mactools.mjs";
-import { defaultProactive, EVERY, MAX_PER_DAY, PROACTIVE_DELIVER, SWEEP_HOURS, WATCHES } from "../proactive-settings.mjs";
+import { defaultProactive } from "../proactive-settings.mjs";
 import { usageCsv } from "../usage.mjs";
 import { ControlError } from "./socket.mjs";
 
@@ -64,14 +64,7 @@ export const PREFERENCES = {
   "background.runAtStartup": switches("The desktop app starts with the computer (for the app's window; this host starts with `botkins service install`)"),
   "sidebar.order": { type: "list", values: SIDEBAR, about: "The order of the places in the side menu: " + SIDEBAR.join(", ") },
   "sidebar.collapsed": switches("The side menu shows icons only"),
-  "proactive.enabled": switches("Experimental: the Proactive agent tells you what you should hear of, without being asked"),
-  "proactive.botId": { type: "bot", about: "The bot that is the Proactive agent: a name or id, or none" },
-  "proactive.every": { type: "number", values: EVERY, about: "Minutes between its checks for changes (a check with nothing new uses no model)" },
-  "proactive.sweepHours": { type: "number", values: SWEEP_HOURS, about: "Hours between its looks around its own sources, or 0 for never (each look uses the model)" },
-  "proactive.maxPerDay": { type: "number", values: MAX_PER_DAY, about: "The most alerts it gives in a day" },
-  "proactive.deliver": choice(PROACTIVE_DELIVER, "Where its alerts go: its chat with you, or your Feed"),
-  "proactive.watch": { type: "list", values: WATCHES, about: "What Botkins watches for it: failed routine and task runs, tasks waiting on you, unanswered requests" },
-  "proactive.instructions": { type: "text", max: 2000, about: "Your own rules for what is worth telling you" },
+  "proactive.enabled": switches("Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"),
 };
 /** What each choice of the preference `harness` is, in a sentence. */
 export const HARNESS_ABOUT = {
@@ -93,7 +86,7 @@ export const WIDENS = {
   teamwork: (now, next) => (next === true && now !== true ? "Turning teamwork on lets a bot bring other bots into a chat to work for it: bots get more room." : null),
   // It makes a login item on this computer (desktop/runtime.mjs, setPreferences): a program that starts at each login.
   // An unattended bot that wakes on its own, reads the person's sources and spends their model.
-  "proactive.enabled": (now, next) => (next === true && now !== true ? "Turning on the Proactive agent lets its bot wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model." : null),
+  "proactive.enabled": (now, next) => (next === true && now !== true ? "Turning on the Proactive agent for this computer lets every bot that has its own Proactive agent switched on wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model." : null),
   "background.runAtStartup": (now, next) => (next === true && now !== true ? "Turning on run at startup makes Botkins start when the person logs in to this computer: it adds a login item to this computer." : null),
 };
 
@@ -118,7 +111,7 @@ function preference(key) {
   return PREFERENCES[key];
 }
 /** A value as the app takes it, or a refusal that says what the key takes. */
-function parsePreference(key, spec, value, bots) {
+function parsePreference(key, spec, value) {
   const refuse = (what) => bad(key + " takes " + what + ".");
   switch (spec.type) {
     case "boolean": {
@@ -169,13 +162,6 @@ function parsePreference(key, spec, value, bots) {
       if (!spec.values.includes(n)) throw refuse("one of " + spec.values.join(", "));
       return n;
     }
-    case "bot": {
-      const word = typeof value === "string" ? value.trim().toLowerCase() : "";
-      if (["none", "off", ""].includes(word)) return null;
-      const found = (bots ?? []).filter((b) => b.id.toLowerCase() === word || b.name.toLowerCase() === word);
-      if (found.length !== 1) throw refuse("a bot's name or id (`botkins bots list`), or none");
-      return found[0].id;
-    }
     default:
       throw refuse("a different value");
   }
@@ -222,7 +208,7 @@ export function prefsApi({ workspace, handlers }) {
      */
     async "preferences.set"([key, value, options]) {
       const spec = preference(key);
-      const parsed = parsePreference(key, spec, value, workspace.state.bots);
+      const parsed = parsePreference(key, spec, value);
       const gives = Object.hasOwn(WIDENS, key) ? WIDENS[key](lookup(settings(), key), parsed) : null;
       if (gives && options?.agreed !== true) throw bad(gives + " Show that to the person, and give `{ \"agreed\": true }` after the value (on the command line, `--yes`).", "NEEDS_YES");
       await handlers.setPreferences(patchOf(key, parsed));

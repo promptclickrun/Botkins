@@ -159,7 +159,7 @@ export const defaultSettings = {
   // Model providers the person switched on or off: { [id]: { enabled } }. A provider that isn't
   // named here is on or off as it comes (desktop/providers). Changed with Workspace.setProviderEnabled.
   providers: {},
-  // Settings › Experimental › Proactive agent (desktop/proactive.mjs). Off until the person turns it on.
+  // The Proactive agent: the computer's switch, and each proactive bot's own settings (desktop/proactive.mjs). Off until the owner turns it on.
   proactive: defaultProactive,
   clarify: ["missing"],
   clarificationInstructions: "",

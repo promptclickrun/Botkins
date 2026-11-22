@@ -105,3 +105,11 @@ export function memberSeesBot(memberId, team, botId) {
   const bots = team?.roles?.find((item) => item.id === group?.roleId)?.bots;
   return bots === "all" || (Array.isArray(bots) && bots.includes(botId));
 }
+
+/** Whether a member's role lets them manage bots and see this one. Someone who is no longer a member may not. */
+export function memberManagesBot(memberId, team, botId) {
+  const member = team?.members?.find((item) => item.id === memberId);
+  const group = team?.groups?.find((item) => item.id === member?.groupId);
+  const perms = team?.roles?.find((item) => item.id === group?.roleId)?.perms;
+  return Array.isArray(perms?.agents) && perms.agents.includes("manage") && memberSeesBot(memberId, team, botId);
+}

@@ -43,6 +43,7 @@ export const WORKSPACE = {
   reorderBots: cmd("bots order"),
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
+  setBotProactive: cmd("bots proactive"),
   ...each("botMemory setBotMemory", cmd("bots memory")),
   ...each("addSection", cmd("bots sections add")),
   renameSection: cmd("bots sections rename"),
@@ -401,6 +402,8 @@ export const CHANGES = {
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
+  // The bot's name only: not its rules, and not who the agent works for.
+  "bots.proactive.set": (args, value) => value?.name ?? args?.[0],
   "bots.memory.set": (args, value) => value?.name ?? args?.[0],
   "bots.sections.add": (args, value) => value?.name ?? args?.[0],
   "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
@@ -562,7 +565,7 @@ export const CHANGES = {
 export const READS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
-  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
+  bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],

@@ -351,8 +351,8 @@ export class Workspace {
       spaces: this.spaces.part(),
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
-      // The Proactive agent's log, without the keys of what it already raised.
-      proactive: (({ seen, ...rest }) => rest)(this.state.proactive ?? {}),
+      // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
+      proactive: this.proactive.views(),
       // Resolved provider inputs are private restart data and can contain large attachments.
       runs: this.state.runs.map((run) => {
         if (!run.recovery) return run;
@@ -498,7 +498,6 @@ export class Workspace {
     return false;
   }
   setPreferences(patch) {
-    if (patch?.proactive?.botId) this.bot(patch.proactive.botId);
     this.state.settings = changeSettings(this.state.settings, patch);
     if (patch && Object.hasOwn(patch, "proactive")) this.proactive.sync();
     this.save();
