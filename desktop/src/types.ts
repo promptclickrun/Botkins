@@ -1633,6 +1633,10 @@ export type Appearance = {
   colorTheme: string;
   /** The person picked the theme themselves. */
   themePicked?: boolean;
+  /** A theme dark mode wears instead of `colorTheme`, or null for one theme in both. */
+  darkColorTheme: string | null;
+  /** Stronger lines and quiet text, 0 (as the theme draws them) to 100. */
+  contrast: number;
   /** One of the fonts (src/themes.ts): the system's face until the person picks one. "botkins" is the design kit's pairing. */
   font: string;
   /** The person picked the font themselves. */

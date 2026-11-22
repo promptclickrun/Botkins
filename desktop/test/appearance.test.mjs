@@ -9,7 +9,7 @@ import { DEFAULT_FONT, DEFAULT_THEME, FONT_IDS, THEME_IDS, appearanceField, canv
 
 const catalog = JSON.parse(readFileSync(new URL("../desktop/themes.json", import.meta.url), "utf8"));
 const theme = (id) => catalog.themes.find((t) => t.id === id);
-const usual = { theme: "system", colorTheme: "ink", themePicked: false, textSize: "default", font: "system", fontPicked: false, bubble: "theme", avatarAnimations: true, lightBackground: "cream", darkBackground: "charcoal" };
+const usual = { theme: "system", colorTheme: "ink", themePicked: false, darkColorTheme: null, contrast: 0, textSize: "default", font: "system", fontPicked: false, bubble: "theme", avatarAnimations: true, lightBackground: "cream", darkBackground: "charcoal" };
 
 test("the themes are Botkins, the six named after the kit's palettes, Paper and Ink; Ink is what a new person sees", () => {
   assert.deepEqual(THEME_IDS, ["botkins", "honey", "fern", "tidepool", "bluebell", "fig", "paper", "ink"]);
@@ -105,6 +105,27 @@ test("avatar animations start on for desktop and older settings, and accept an e
   const settings = changeSettings(structuredClone(defaultSettings), { appearance: { avatarAnimations: false } });
   assert.equal(settings.appearance.avatarAnimations, false);
   assert.throws(() => changeSettings(settings, { appearance: { avatarAnimations: "no" } }), /Invalid appearance/);
+});
+
+test("dark mode can wear a theme of its own, and contrast is a number from 0 to 100", () => {
+  let settings = structuredClone(defaultSettings);
+  settings = changeSettings(settings, { appearance: { colorTheme: "fern", darkColorTheme: "bluebell" } });
+  assert.deepEqual([settings.appearance.colorTheme, settings.appearance.darkColorTheme], ["fern", "bluebell"]);
+  // The window's color before the page draws is the theme that mode wears.
+  assert.equal(canvasColor(settings.appearance, false), theme("fern").light.canvas);
+  assert.equal(canvasColor(settings.appearance, true), theme("bluebell").dark.canvas);
+  // Picking a light theme keeps the dark one, and null goes back to one theme for both.
+  settings = changeSettings(settings, { appearance: { colorTheme: "fig" } });
+  assert.equal(settings.appearance.darkColorTheme, "bluebell");
+  settings = changeSettings(settings, { appearance: { darkColorTheme: null } });
+  assert.equal(settings.appearance.darkColorTheme, null);
+  assert.equal(canvasColor(settings.appearance, true), theme("fig").dark.canvas);
+  settings = changeSettings(settings, { appearance: { contrast: 40 } });
+  assert.equal(settings.appearance.contrast, 40);
+  assert.throws(() => changeSettings(settings, { appearance: { darkColorTheme: "neon" } }), /Invalid appearance/);
+  for (const contrast of [-1, 101, 12.5, "40"]) assert.throws(() => changeSettings(settings, { appearance: { contrast } }), /Invalid appearance/);
+  // Saved values that don't fit read as the usual ones.
+  assert.deepEqual([appearanceField({ darkColorTheme: "nope", contrast: 500 }).darkColorTheme, appearanceField({ contrast: 500 }).contrast], [null, 0]);
 });
 
 test("an appearance saved by an earlier version keeps a look the person chose, and moves to Ink when they had not chosen", () => {

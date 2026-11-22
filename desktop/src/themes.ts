@@ -49,6 +49,26 @@ export function fontFamilyOf(id: string | undefined): string | null {
   return shown === KIT_FONT ? null : (familyHere(FONTS.find((f) => f.id === shown)) ?? null);
 }
 
+/** The theme light or dark mode wears: dark mode's own theme when the person chose one. */
+export const themeFor = (appearance: Pick<Appearance, "colorTheme" | "darkColorTheme">, mode: Mode) => themeOf((mode === "dark" && appearance.darkColorTheme) || appearance.colorTheme);
+
+/** `a` moved toward `b` by `amount` (0 to 1), as #RRGGBB. */
+function mix(a: string, b: string, amount: number) {
+  const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+  return "#" + [0, 1, 2].map((i) => Math.round(channel(a, i) + (channel(b, i) - channel(a, i)) * amount).toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * A theme's colors at a contrast from 0 to 100: lines and quiet text move toward the ink, so
+ * borders read more clearly and muted text gets darker (lighter in dark mode). 0 is the theme as drawn.
+ */
+export function withContrast(colors: ThemeColors, contrast: number): ThemeColors {
+  const amount = Math.max(0, Math.min(100, contrast)) / 100;
+  if (!amount) return colors;
+  const toward = (color: string, most: number) => mix(color, colors.ink, most * amount);
+  return { ...colors, line: toward(colors.line, 0.3), lineStrong: toward(colors.lineStrong, 0.35), muted: toward(colors.muted, 0.45), faint: toward(colors.faint, 0.45) };
+}
+
 /** Colors that are not custom properties of their own: `shadow` is a color here, and `--shadow` is a whole shadow in the styles. */
 const RENAMED: Record<string, string> = { shadow: "--shadow-color" };
 const cssName = (key: string) => RENAMED[key] ?? "--" + key.replace(/[A-Z0-9]+/g, (upper) => "-" + upper.toLowerCase());
