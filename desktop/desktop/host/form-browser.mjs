@@ -13,6 +13,16 @@ const closed = () => new Error("Open the sign-in page in this chat’s screen br
 const unavailable = () => new Error("Chromium did not answer. Check that the Botkins service can open its X11 display and run sandboxed Chromium.");
 const systemDirs = ["/usr/bin", "/usr/local/bin", "/opt/google/chrome", "/snap/bin"];
 
+export function screenBrowserExecutable(dirs = systemDirs) {
+  // Ubuntu runners also install a standalone Chromium snapshot. Prefer the Chrome
+  // package with the system sandbox integration when both are present.
+  for (const name of ["google-chrome", "chromium", "chromium-browser"]) {
+    const executable = findTool(name, dirs, "linux");
+    if (executable) return executable;
+  }
+  return null;
+}
+
 // The pipe carries NUL-terminated UTF-8 JSON. Never log commands, replies or Chromium output.
 function connection(child) {
   const input = child.stdio[3], output = child.stdio[4];
@@ -64,7 +74,7 @@ export class ScreenBrowser {
   }
 
   async launch(chatId) {
-    const executable = this.executable ?? ["chromium", "chromium-browser", "google-chrome"].map(name => findTool(name, systemDirs)).find(Boolean);
+    const executable = this.executable ?? screenBrowserExecutable();
     if (!executable) throw new Error("Install Chromium or Google Chrome in the Linux screen setup, then open the page again.");
     const profile = mkdtempSync(join(tmpdir(), "botkins-form-"));
     const env = toolEnv(systemDirs);

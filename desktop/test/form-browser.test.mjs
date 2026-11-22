@@ -2,18 +2,31 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:https";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { screenBrowserExecutable } from "../desktop/host/form-browser.mjs";
 import { headlessHost } from "../desktop/host/headless.mjs";
 import { createRuntime } from "../desktop/runtime.mjs";
 import { LinkClient, pair, parsePairingUrl } from "../desktop/remote/link-client.mjs";
 import { seedBots } from "./starter.mjs";
 
-const binary = ["/usr/bin/chromium", "/usr/bin/google-chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find(existsSync);
+test("Linux screen hosts prefer packaged Chrome when a Chromium snapshot is also installed", t => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-browser-path-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.equal(screenBrowserExecutable([dir]), null);
+  for (const name of ["chromium-browser", "chromium", "google-chrome"]) {
+    const executable = join(dir, name);
+    writeFileSync(executable, "", { mode: 0o755 });
+    assert.equal(screenBrowserExecutable([dir]), executable);
+  }
+});
+
+const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const binary = process.platform === "linux" ? screenBrowserExecutable() : existsSync(macChrome) && macChrome;
 
 for (const split of [false, true]) {
   const topology = split ? "separate vault and workspace processes" : "a terminal host";
