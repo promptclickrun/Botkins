@@ -27,21 +27,32 @@ own. A request makes its sound through the card; a finished turn still gets its 
   the widgets' snapshot.
 - **Starting.** Only the phone starts it, while the app is in front and a chat is at work or needs
   the person. It is never started by a push: the computer could not change it until the app said
-  its address, and often the app never did. The computer keeps it up to date from then on.
-- **Ending.** Once every chat on it has ended, the computer (or the phone, while the app is in
-  front) ends it with its final state, which stays for four minutes. A card with nothing left on it
-  is ended at once. The computer also looks at its cards when it starts, so a card left from before
-  a restart is ended without waiting for a change. When the app comes to the front it ends any card
-  that is not its card for all Botkins, and takes away cards iOS ended by itself but left on the Lock
-  Screen (`dismissEnded`).
+  its address, and often the app never did.
+- **Who draws it.** The phone, only while the app is in front (it knows a turn's steps only for the
+  chat on screen). The computer holds back then, and sends the whole card again the moment the app
+  leaves (`link.push.presence` false), so the card shows each chat's current step from then on.
+- **One chat.** With one chat on it, the card shows that chat's last two steps and the latest
+  sentence of thinking under its row (from the sealed `s` and `th`).
+- **Ending.** Once every chat on it has ended, the computer sends that as an update and keeps the
+  card for a minute (`OVER_HOLD_MS`; a new turn in that minute takes it over), then ends it with its
+  final state, which stays on the Lock Screen four more minutes. A card with nothing left on it is
+  ended at once. The computer also looks at its cards when it starts, so a card left from before a
+  restart is ended a minute later without waiting for a change. When the app comes to the front it
+  ends a finished card it didn't draw, any card that is not its card for all Botkins, and cards iOS
+  ended by itself but left on the Lock Screen (`dismissEnded`, only in front: a card that just ended
+  keeps its final state).
 - **A request.** While the phone has the card, the request's notification is not sent. The card's
   first update that shows the request carries `aps.alert` (`"Botkins"`, `"A bot needs you"`) and
   `sound`, which lights the screen and plays the sound. A request the card doesn't show is a
   notification, as before. Without the card (Live Activities off, or none running) every request is
   a notification.
-- **A finished turn** ends the card quietly and gets its notification, as before.
+- **A finished turn.** When its end leaves every chat on the card ended, the card's update that says
+  so carries `aps.alert` (`"Botkins"`, `"All done"` or `"A chat stopped"`) and `sound`: the Dynamic
+  Island opens and the sound plays. The turn's notification still comes, without `sound`. A turn
+  that ends while others still work gets its notification as before, with its sound.
+- **The card's address** reaching the computer brings the whole card, never a chat's catch-up.
 
-These rules (the end, and the start at a restart) apply to a Botkin's card too.
+The hold before the end, and the look at a restart, apply to a Botkin's card too (it never chimes).
 
 ## 1. A phone asks for cards per Botkin
 
