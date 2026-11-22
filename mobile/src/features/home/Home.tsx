@@ -3,7 +3,7 @@
 // the list too. Filters show pinned or hidden bots. Under "All" a bot can be dragged to another place
 // or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
 import { type Href, router, useScrollToTop } from "expo-router";
-import { ChevronDown, ChevronUp, Plus, Sunrise } from "lucide-react-native";
+import { ChevronDown, ChevronUp, Plus, Settings, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ScrollView, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { openBotChat } from "@/features/chat/open";
 import { useSpacesOn } from "@/features/spaces/data";
-import { HomeSpaces } from "@/features/spaces/HomeSpaces";
+import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
@@ -19,7 +19,7 @@ import { activityLabel, isConversation, useBotActivity, useBots, useCan, useIsPr
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
+import { badgeColors, BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
 import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
@@ -113,6 +113,28 @@ function FirstBot() {
         style={{ paddingBottom: space.sm }}
       />
       <Button title="Create a new bot instead" variant="ghost" onPress={() => router.push("/bot/new")} style={{ alignSelf: "center" }} />
+    </View>
+  );
+}
+
+/** Settings, which is no tab: a button at the end of Home's top row. It carries the count of people asking to join the team. */
+function SettingsButton() {
+  const theme = useTheme();
+  const badge = badgeColors(theme);
+  const asking = useApp((state) => {
+    const team = state.parts.team;
+    return state.parts.meta?.you?.kind !== "member" && team && "requests" in team ? team.requests.length : 0;
+  });
+  return (
+    <View>
+      <IconButton icon={Settings} label={asking > 0 ? "Settings, " + asking + (asking === 1 ? " request" : " requests") : "Settings"} variant="soft" size={44} onPress={() => router.push("/settings")} />
+      {asking > 0 && (
+        <View pointerEvents="none" style={{ position: "absolute", top: -3, right: -3, minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: badge.background }}>
+          <T variant="caption" color={badge.text} maxFontSizeMultiplier={1}>
+            {String(asking)}
+          </T>
+        </View>
+      )}
     </View>
   );
 }
@@ -296,7 +318,10 @@ export default function Home() {
             )}
           </Tap>
         </HoldMenu>
-        {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
+          <SettingsButton />
+        </View>
       </View>
 
       {waiting.length > 0 && (
@@ -348,8 +373,8 @@ export default function Home() {
               manageable={canArrange}
             />
           )}
-          {/* A computer with spaces shows the pinned ones here, where Today sat; one without keeps Today. */}
-          {canSeeToday && spacesOn && <HomeSpaces onDragging={setDragging} />}
+          {/* A computer with spaces shows what the person pinned here, where Today sat; one without keeps Today. */}
+          {canSeeToday && spacesOn && <HomePins />}
           {/* Today is always under the bots, even with nothing open: it has its own empty states. */}
           {canSeeToday && !spacesOn && (
             <View style={{ gap: space.lg }}>

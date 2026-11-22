@@ -1,23 +1,26 @@
-// All spaces: every space this person can open, with who can open each. Pinned first (they are the
-// row on Home), then the others, and for an owner with Admin mode on what members made. Hold a
-// space, then move, to put it in order, pin it (drop it under Pinned) or unpin it (under More); a
-// still hold opens its menu, which has the same moves, as VoiceOver's actions do.
-import { Lightbulb, LayoutGrid, type LucideIcon, Plus, Rss, Sun, Target } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, useEffect, useRef, useState } from "react";
+// The Spaces tab: every space this person can open, with who can open each. Those on Home first
+// (the pinned ones), then the others, and for an owner with Admin mode on what members made; last,
+// the single panels pinned to Home. Hold a space, then move, to put it in order, pin it to Home
+// (drop it under On Home) or take it off (under More); a still hold opens its menu, which has the
+// same moves, as VoiceOver's actions do.
+import { useScrollToTop } from "expo-router";
+import { Plus } from "lucide-react-native";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Alert, StyleSheet, useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import type { SpaceSummary } from "@/link/types";
-import { useCan } from "@/state/hooks";
+import { useBots, useCan } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { type PanelPin, usePrefs } from "@/state/prefs";
+import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
-import { Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, useTheme } from "@/ui";
-import { openShare, openSpace, setPinned, useArranging, useSpaces, useSpacesOn } from "./data";
-import { rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
+import { BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, useShape, useTheme } from "@/ui";
+import { openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
+import { spaceIcon } from "./icons";
+import { panelPinsHere, rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
 import { SortArea, SortCell, SortHandle, useSorter } from "./sortable";
-
-const ICONS: Record<NonNullable<SpaceSummary["builtin"]>, LucideIcon> = { today: Sun, feed: Rss, ideas: Lightbulb, goals: Target };
 
 function newSpace() {
   Alert.prompt(
@@ -43,8 +46,9 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
   const up = withMove(spaces, space.id, -1);
   const down = withMove(spaces, space.id, 1);
   const title = spaceTitle(space);
+  const pinWord = space.pinned ? "Take off Home" : "Pin to Home";
   const actions = [
-    { name: "pin", label: space.pinned ? "Unpin" : "Pin" },
+    { name: "pin", label: pinWord },
     ...(up ? [{ name: "up", label: "Move up" }] : []),
     ...(down ? [{ name: "down", label: "Move down" }] : []),
   ];
@@ -58,7 +62,7 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
     <HoldMenu
       title={title}
       actions={[
-        { id: "pin", title: space.pinned ? "Unpin" : "Pin", image: space.pinned ? "pin.slash" : "pin" },
+        { id: "pin", title: pinWord, image: space.pinned ? "pin.slash" : "pin" },
         { id: "up", title: "Move up", image: "arrow.up", attributes: { disabled: !up } },
         { id: "down", title: "Move down", image: "arrow.down", attributes: { disabled: !down } },
         ...(space.can === "own" ? [{ id: "share", title: "Share", image: "square.and.arrow.up" }] : []),
@@ -76,7 +80,7 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
         onAccessibilityAction={(event) => run(event.nativeEvent.actionName)}
       >
         <View style={{ minHeight: control.row + 8, paddingHorizontal: gap.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: gap.md }}>
-          <IconTile icon={space.builtin ? ICONS[space.builtin] : LayoutGrid} color={colors.ink2} />
+          <IconTile icon={spaceIcon(space)} color={colors.ink2} />
           <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
             <T variant="callout" weight="500" numberOfLines={1}>
               {title}
@@ -92,38 +96,38 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
   );
 }
 
-const ZONE_TITLES: Record<SpaceZone, string> = { pinned: "Pinned", more: "More" };
+const ZONE_TITLES: Record<SpaceZone, string> = { pinned: "On Home", more: "More" };
 const INSET = gap.lg + 40 + gap.md;
 
 /**
- * Page's frame for a pushed page, with a scroll view the list can scroll itself: a dragged space
+ * Page's frame for a tab's root, with a scroll view the list can scroll itself: a dragged space
  * near the top or bottom edge scrolls the page (Page has no handle on its scroll view). Keep it
- * like Page's, and like the Chats screen's own frame.
+ * like Page's, and like Home's own frame.
  */
 function SpacesFrame({ children, scroll, scrollEnabled, actions }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode }) {
+  useScrollToTop(scroll.ref);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
+  const shape = useShape();
   const { height } = useWindowDimensions();
-  const frame = useRef<ComponentRef<typeof View>>(null);
   const view = useSharedValue(0);
   const content = useSharedValue(0);
   const { edges, offset, max } = scroll;
+  useEffect(() => {
+    edges.value = { top: insets.top, bottom: height - shape.tabRoom - insets.bottom };
+  }, [edges, insets.top, insets.bottom, height, shape.tabRoom]);
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
       offset.value = event.contentOffset.y;
     },
   });
   return (
-    <View
-      ref={frame}
-      style={{ flex: 1, backgroundColor: colors.canvas }}
-      // The page starts under the bar: where that is on the screen is where a finger can reach from.
-      onLayout={() => frame.current?.measureInWindow((_x, y) => (edges.value = { top: y, bottom: height - insets.bottom }))}
-    >
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       <Animated.ScrollView
         ref={scroll.ref}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: gap.xl, paddingTop: gap.sm, paddingBottom: insets.bottom + gap.xxl, gap: gap.xl }}
+        contentContainerStyle={{ paddingLeft: gap.xl + shape.left, paddingRight: gap.xl + shape.right, paddingTop: insets.top + gap.md, paddingBottom: shape.tabRoom + insets.bottom + gap.xxl, gap: gap.xl }}
         contentInsetAdjustmentBehavior="never"
         showsVerticalScrollIndicator={false}
         scrollEnabled={scrollEnabled}
@@ -149,6 +153,63 @@ function SpacesFrame({ children, scroll, scrollEnabled, actions }: { children: R
         <LinkBanner />
         {children}
       </Animated.ScrollView>
+    </View>
+  );
+}
+
+/** One panel pinned to Home: its title, its space and what it says. A tap opens it; a hold takes it off Home. */
+function PinnedPanelRow({ pin, space }: { pin: PanelPin; space: SpaceSummary }) {
+  const { control } = useTheme();
+  const { content } = useSpaceContent(pin.spaceId);
+  const bots = useBots();
+  const panel = content?.panels.find((one) => one.id === pin.panelId);
+  if (!panel) return null;
+  const line = ["Panel in " + spaceTitle(space), panelHeadline(panel).value].filter(Boolean).join(" · ");
+  const unpin = () => setPanelPinned(pin, false);
+  return (
+    <HoldMenu title={panel.title} actions={[{ id: "unpin", title: "Take off Home", image: "pin.slash" }]} onPressAction={unpin}>
+      <Tap
+        onPress={() => openPanel(pin.spaceId, pin.panelId)}
+        feel="select"
+        sink={1}
+        hitSlop={0}
+        accessibilityLabel={panel.title + ", " + line}
+        accessibilityHint="Long press for more"
+        accessibilityActions={[{ name: "unpin", label: "Take off Home" }]}
+        onAccessibilityAction={unpin}
+      >
+        <View style={{ minHeight: control.row + 8, paddingHorizontal: gap.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: gap.md }}>
+          <View style={{ width: 40, alignItems: "center" }}>
+            <BotAvatar bot={bots.find((bot) => bot.id === panel.botId)} size={36} badge={false} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+            <T variant="callout" weight="500" numberOfLines={1}>
+              {panel.title}
+            </T>
+            <T variant="footnote" color="muted" numberOfLines={1}>
+              {line}
+            </T>
+          </View>
+        </View>
+      </Tap>
+    </HoldMenu>
+  );
+}
+
+/** The panels pinned to Home, under the spaces. */
+function PinnedPanels({ spaces }: { spaces: SpaceSummary[] }) {
+  const saved = usePrefs((prefs) => prefs.homePanels);
+  const pins = useMemo(() => panelPinsHere(saved, spaces), [saved, spaces]);
+  if (!pins.length) return null;
+  return (
+    <View style={{ marginHorizontal: -gap.lg }}>
+      <View style={{ paddingHorizontal: gap.lg, paddingBottom: gap.xs }}>
+        <Label>Panels on Home</Label>
+      </View>
+      {pins.map((pin) => {
+        const space = spaces.find((one) => one.id === pin.spaceId);
+        return space ? <PinnedPanelRow key={pin.spaceId + ":" + pin.panelId} pin={pin} space={space} /> : null;
+      })}
     </View>
   );
 }
@@ -204,13 +265,14 @@ export default function Spaces() {
   useEffect(() => () => setDragging(false), []);
   if (!on)
     return (
-      <Page title="Spaces">
+      <Page tab title="Spaces">
         <EmptyState title="Update the app on your computer" />
       </Page>
     );
   return (
     <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={canCreate ? <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={newSpace} /> : undefined}>
       {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? newSpace : undefined} /> : <SpaceList spaces={spaces} scroll={scroll} onDragging={setDragging} />}
+      {synced && <PinnedPanels spaces={spaces} />}
     </SpacesFrame>
   );
 }

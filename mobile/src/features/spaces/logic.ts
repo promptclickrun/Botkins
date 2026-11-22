@@ -2,6 +2,7 @@
 // plain functions. The words are the contract's "Words on screen", final for both apps. No React
 // Native imports, so tests/spaces-phone.test.ts runs it.
 import type { PanelStart, PanelView, Person, SpaceAccess, SpaceNotify, SpaceShareInput, SpaceSummary } from "@/link/types";
+import type { PanelPin } from "@/state/prefs";
 
 const first = (name: string) => name.trim().split(/\s+/)[0] || name;
 
@@ -309,3 +310,28 @@ export function panelRows<P extends Pick<PanelView, "size">>(panels: P[]): P[][]
   if (pair.length) rows.push(pair);
   return rows;
 }
+
+// ── Panels as cards, and pins on Home ────────────────────────────────────────
+
+/** Whether a panel runs an app (a custom view), which keeps what people do in it. */
+export const isApp = (panel: Pick<PanelView, "blocks">) => panel.blocks.some((block) => block.type === "html");
+
+/** The most panels a phone keeps pinned to Home. */
+export const MAX_PANEL_PINS = 24;
+
+export const hasPanelPin = (pins: PanelPin[], pin: PanelPin) => pins.some((one) => one.spaceId === pin.spaceId && one.panelId === pin.panelId);
+
+/** The pins with this panel at the end (`on`) or taken out. Past the most a phone keeps, the oldest gives way. */
+export function withPanelPin(pins: PanelPin[], pin: PanelPin, on: boolean): PanelPin[] {
+  const rest = pins.filter((one) => !(one.spaceId === pin.spaceId && one.panelId === pin.panelId));
+  return on ? [...rest, pin].slice(-MAX_PANEL_PINS) : rest;
+}
+
+/** The pins this computer can show: those in a space the person can open here. A pin of another computer stays kept and is left out. */
+export const panelPinsHere = (pins: PanelPin[], spaces: Pick<SpaceSummary, "id">[]) => pins.filter((pin) => spaces.some((space) => space.id === pin.spaceId));
+
+/** A pinned space's line on Home: "4 panels · 2 changed". The Feed's own count already says what is new. */
+export const pinnedLine = (space: Pick<SpaceSummary, "builtin" | "count" | "changed">) => holds(space) + (space.changed > 0 && space.builtin !== "feed" ? " · " + space.changed + " changed" : "");
+
+/** What a pinned space leaves unsaid under its first lines on Home: "1 more", "4 more". Nothing when all are shown. */
+export const moreLine = (total: number, shown: number) => (total > shown ? total - shown + " more" : undefined);

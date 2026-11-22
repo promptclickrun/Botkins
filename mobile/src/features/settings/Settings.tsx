@@ -40,7 +40,7 @@ export default function Settings() {
   const count = (value: number | undefined, word: string) => (value === undefined ? undefined : value + " " + word);
 
   return (
-    <Page tab title="Settings">
+    <Page title="Settings">
       <Group>
         <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={() => router.push("/settings/desktop")} />
         {owner && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle="See and control your computer" chevron onPress={() => router.push("/remote")} />}

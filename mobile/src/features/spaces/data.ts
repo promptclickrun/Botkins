@@ -8,9 +8,10 @@ import type { PanelView, SpaceContent, SpaceSummary } from "@/link/types";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { DRAG } from "@/features/home/drag";
-import { onComputerChange, useApp } from "@/state/store";
+import { onComputerChange, showToast, useApp } from "@/state/store";
 import type { FrameState } from "@/ui";
-import { applyArrangement, type Arrangement, spaceRoute, withPin } from "./logic";
+import { type PanelPin, setPrefs, usePrefs } from "@/state/prefs";
+import { applyArrangement, type Arrangement, hasPanelPin, spaceRoute, withPanelPin, withPin } from "./logic";
 
 const NONE: SpaceSummary[] = [];
 
@@ -150,4 +151,19 @@ export function panelState(panel: Pick<PanelView, "id" | "state" | "stateRev">, 
     rev: panel.stateRev ?? 0,
     ...(acts && { set: (patch: Record<string, unknown>, label?: string) => attempt(api["spaces.patchState"](panel.id, patch, label).then(() => true)).then((saved) => saved === true) }),
   };
+}
+
+/** Whether a space's panels show open on its page. Every other space shows them as cards. Kept on this phone. */
+export const useSpaceOpen = (id: string) => usePrefs((prefs) => prefs.openSpaces.includes(id));
+export function setSpaceOpen(id: string, open: boolean) {
+  const rest = usePrefs.getState().openSpaces.filter((one) => one !== id);
+  setPrefs({ openSpaces: open ? [...rest, id].slice(-200) : rest });
+}
+
+/** Whether a panel is pinned to Home, and the way to pin it or take it off. Kept on this phone. */
+export const usePanelPinned = (spaceId: string, panelId: string) => usePrefs((prefs) => hasPanelPin(prefs.homePanels, { spaceId, panelId }));
+/** `quiet`: nothing is said (a panel that is gone takes its pin with it). */
+export function setPanelPinned(pin: PanelPin, on: boolean, quiet = false) {
+  setPrefs({ homePanels: withPanelPin(usePrefs.getState().homePanels, pin, on) });
+  if (!quiet) showToast(on ? "Pinned to Home" : "Taken off Home", "success");
 }

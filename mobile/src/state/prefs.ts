@@ -3,6 +3,7 @@ import { keep, readKept } from "@/state/keep";
 import { create } from "zustand";
 import { DEFAULT_FONT, FONT_IDS, type FontId } from "@/ui/fonts";
 import { DEFAULT_THEME, THEMES } from "@/ui/themes";
+import { type TabId, tabOrder, USUAL_TABS } from "./tabs";
 
 const KEY = "botkins.prefs.v1";
 
@@ -31,8 +32,15 @@ export type Prefs = {
   marketView: "apps" | "agents" | "plugins" | "pi";
   /** Notices shown one time and closed (a plugin the computer switched off): one key for each computer, plugin and place. */
   toldNotices: string[];
+  /** The order of the tabs in the bar (Settings › Appearance › Tabs). */
+  tabOrder: TabId[];
+  /** The spaces whose panels show open on the space's page. Every other space shows them as cards. */
+  openSpaces: string[];
+  /** The panels pinned to Home, in the order they were pinned. A panel of another computer is kept and not shown. */
+  homePanels: PanelPin[];
 };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [], marketView: "apps", toldNotices: [] };
+export type PanelPin = { spaceId: string; panelId: string };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [], marketView: "apps", toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [] };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -40,6 +48,8 @@ const MODES: Prefs["mode"][] = ["system", "light", "dark"];
 const OLD_DEFAULT = "botkins";
 const OLD_DEFAULT_FONT = "botkins";
 const CONTROL_SIZES: Prefs["controlSize"][] = ["compact", "regular", "large"];
+const isId = (id: unknown): id is string => typeof id === "string" && id.length > 0 && id.length <= 100;
+const ids = (saved: unknown) => (Array.isArray(saved) ? saved.filter(isId).slice(0, 200) : []);
 const isTheme = (id: unknown): id is string => typeof id === "string" && THEMES.some((theme) => theme.id === id);
 
 /** Saved choices, checked one by one; anything unknown falls back to its default. Reads the old `appearance` too. */
@@ -65,6 +75,9 @@ function read(saved: Record<string, unknown>): Prefs {
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
     marketView: saved.marketView === "pi" || saved.marketView === "plugins" || saved.marketView === "agents" ? saved.marketView : "apps",
     toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,
+    tabOrder: tabOrder(saved.tabOrder),
+    openSpaces: ids(saved.openSpaces),
+    homePanels: Array.isArray(saved.homePanels) ? saved.homePanels.filter((pin): pin is PanelPin => !!pin && isId((pin as PanelPin).spaceId) && isId((pin as PanelPin).panelId)).map(({ spaceId, panelId }) => ({ spaceId, panelId })).slice(0, 24) : defaults.homePanels,
     foldedProviders: Array.isArray(saved.foldedProviders) ? saved.foldedProviders.filter((id): id is string => typeof id === "string" && id.length <= 100).slice(0, 100) : defaults.foldedProviders,
   };
 }

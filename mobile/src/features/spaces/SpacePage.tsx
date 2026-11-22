@@ -1,4 +1,4 @@
-// A space: its name, who can open it, its panels and cards. The bar pins it, shares it (its maker
+// A space: its name, who can open it, its panels and cards. The bar pins it to Home, shares it (its maker
 // only) and has its menu; the glass bar at the foot asks a bot about the whole page, and the plus
 // adds a panel.
 import { MenuView } from "@react-native-menu/menu";
@@ -59,7 +59,7 @@ function BarButtons({ space, spaces }: { space: SpaceSummary; spaces: SpaceSumma
   const mayAdd = canCreate && (own || space.can === "edit");
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: gap.xs }}>
-      <IconButton icon={space.pinned ? PinOff : Pin} label={space.pinned ? "Unpin" : "Pin"} onPress={() => setPinned(spaces, space.id, !space.pinned)} />
+      <IconButton icon={space.pinned ? PinOff : Pin} label={space.pinned ? "Take off Home" : "Pin to Home"} onPress={() => setPinned(spaces, space.id, !space.pinned)} />
       {own && <IconButton icon={Share} label="Share" onPress={() => openShare(space.id)} />}
       <MenuView
         title={spaceTitle(space)}
@@ -144,7 +144,7 @@ export default function SpacePage() {
     <View style={{ flex: 1 }}>
       <Page title={spaceTitle(space)} caption={[whoCanOpen(space), project].filter(Boolean).join(" · ")} contentStyle={{ paddingBottom: 120 }}>
         <Stack.Screen options={{ headerRight: () => <BarButtons space={space} spaces={spaces} /> }} />
-        <SpaceView space={space} visit />
+        <SpaceView space={space} />
       </Page>
       <AskBar space={space} />
     </View>

@@ -1,18 +1,23 @@
-// What is in a space: its panels (small ones two up, an app right in its card) and its cards (Feed,
-// Ideas, Goals). Shown on the space's own page and, for a pinned space, in place on Home.
+// What is in a space, on its page: its panels and its cards (Feed, Ideas, Goals). The panels show
+// as cards (PanelTile: a title and the one thing each says, nothing running) until the person sets
+// the space to Open; then small ones sit two up and an app runs right in its card.
 import { Maximize2 } from "lucide-react-native";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo } from "react";
 import { StyleSheet, View } from "react-native";
 import { ItemCard } from "@/features/today/Today";
 import type { Bot, PanelView, SpaceSummary } from "@/link/types";
 import { myself } from "@/features/chat/people";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { ago } from "@/state/time";
-import { Badge, Blocks, BotAvatar, Dot, EmptyState, lift, Loading, Mascot, radius, space, T, Tap, TwoUp, useShape, useTheme } from "@/ui";
-import { markItemSeen, markSeen, openNewPanel, openPanel, panelState, useSeenMarks, useSpaceContent } from "./data";
-import { changedLine, changedSince, lastLine, panelRows } from "./logic";
+import { Badge, Blocks, BotAvatar, Dot, EmptyState, lift, Loading, Mascot, radius, Segmented, space, T, Tap, TwoUp, useShape, useTheme } from "@/ui";
+import { markItemSeen, markSeen, openNewPanel, openPanel, panelState, setSpaceOpen, useSeenMarks, useSpaceContent, useSpaceOpen } from "./data";
+import { changedLine, changedSince, isApp, lastLine, panelRows } from "./logic";
+import { PanelTile } from "./PanelTile";
 
-const isApp = (panel: Pick<PanelView, "blocks">) => panel.blocks.some((block) => block.type === "html");
+const VIEWS: { value: "cards" | "open"; label: string }[] = [
+  { value: "cards", label: "Cards" },
+  { value: "open", label: "Open" },
+];
 
 function Card({ children }: { children: ReactNode }) {
   const theme = useTheme();
@@ -69,29 +74,25 @@ export function PanelCard({ panel, bot, changed, half, space: summary }: { panel
 }
 
 /**
- * A space's content. `visit`: the person is on the space itself, so it counts as seen (its dots
- * clear the next time). On Home it is shown in place, and counts as seen only once the person
- * `picked` its chip; its line and dots follow what was marked from the next `look` (Home came back
- * into view). A panel opened on its own loses its dot at once, wherever it is shown.
+ * A space's content, on its own page: being here counts as seen (its dots clear the next time). A
+ * panel opened on its own loses its dot at once.
  */
-export function SpaceView({ space: summary, visit, picked, look = 0 }: { space: SpaceSummary; visit?: boolean; picked?: boolean; look?: number }) {
+export function SpaceView({ space: summary }: { space: SpaceSummary }) {
   const { content, error, loading, retry } = useSpaceContent(summary.id);
   const allBots = useBots();
   const canCreate = useCan("today", "create");
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
+  const open = useSpaceOpen(summary.id);
   const rev = content?.rev;
   useEffect(() => {
     // Seen once its content is on screen; again when it changes while the person is here.
-    if ((visit || picked) && rev !== undefined) markSeen(summary.id);
-  }, [visit, picked, rev, summary.id]);
+    if (rev !== undefined) markSeen(summary.id);
+  }, [rev, summary.id]);
 
   const panels = useMemo(() => (content?.panels ?? []).filter((panel) => !panel.hidden), [content]);
   const cards = useMemo(() => (content?.cards ?? []).filter((card) => card.status === "open").sort((a, b) => Number(a.read) - Number(b.read) || b.createdAt - a.createdAt), [content]);
-  // What this phone marked since the read: the space as of this look, and each panel opened on its own.
-  const marked = useSeenMarks((marks) => marks.spaces[summary.id] ?? 0);
-  const [held, setHeld] = useState({ look, marked });
-  if (held.look !== look) setHeld({ look, marked });
-  const seenAt = Math.max(content?.seenAt ?? 0, visit ? 0 : held.marked);
+  // What the read says was seen, and each panel opened on its own since.
+  const seenAt = content?.seenAt ?? 0;
   const items = useSeenMarks((marks) => marks.items);
   const opened = useMemo(() => ({ ...content?.seenItems, ...items }), [content?.seenItems, items]);
   const me = myself(usePart("meta"));
@@ -112,8 +113,23 @@ export function SpaceView({ space: summary, visit, picked, look = 0 }: { space: 
           {line}
         </T>
       )}
-      {/* With room, two panels to a row whatever their size (an even split at the Duo's fold); small ones share a row otherwise. */}
-      <TwoUp>
+      {panels.length > 0 && <Segmented options={VIEWS} value={open ? "open" : "cards"} onChange={(view) => setSpaceOpen(summary.id, view === "open")} />}
+      {/* As cards: a small panel shares its row, any other has its own. With room, two rows side by side. */}
+      {!open && (
+        <TwoUp>
+          {panelRows(panels).map((row) => (
+            <View key={row.map((panel) => panel.id).join("+")} style={{ flexDirection: "row", gap: space.md }}>
+              {row.map((panel) => (
+                <PanelTile key={panel.id} panel={panel} spaceId={summary.id} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} wide={row.length === 1 && panel.size !== "small"} />
+              ))}
+              {/* A small panel alone in its row keeps a card's width. */}
+              {row.length === 1 && row[0].size === "small" && <View style={{ flex: 1 }} />}
+            </View>
+          ))}
+        </TwoUp>
+      )}
+      {/* Open, with room: two panels to a row whatever their size (an even split at the Duo's fold); small ones share a row otherwise. */}
+      {open && <TwoUp>
         {wide
           ? panels.map((panel) => <PanelCard key={panel.id} panel={panel} bot={bots.get(panel.botId)} changed={changed.has(panel.id)} half={false} space={summary} />)
           : panelRows(panels).map((row) => (
@@ -123,7 +139,7 @@ export function SpaceView({ space: summary, visit, picked, look = 0 }: { space: 
                 ))}
               </View>
             ))}
-      </TwoUp>
+      </TwoUp>}
       <TwoUp>
         {cards.map((card) => (
           // A computer that keeps single marks (`seenItems`) is told each card the person saw.

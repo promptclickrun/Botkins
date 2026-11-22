@@ -121,7 +121,6 @@ export default function RootLayout() {
               <Stack.Screen name="today" />
               <Stack.Screen name="today/new" options={half} />
               <Stack.Screen name="today/routine" options={tall} />
-              <Stack.Screen name="spaces" />
               <Stack.Screen name="space/[id]" />
               <Stack.Screen name="space/panel" />
               <Stack.Screen name="space/share" options={tall} />
@@ -149,7 +148,9 @@ export default function RootLayout() {
               <Stack.Screen name="market/plugin-install" options={tall} />
               <Stack.Screen name="market/plugin-update" options={tall} />
               <Stack.Screen name="market/add-marketplace" options={half} />
+              <Stack.Screen name="settings/index" />
               <Stack.Screen name="settings/desktop" />
+              <Stack.Screen name="settings/tabs" />
               <Stack.Screen name="settings/appearance" />
               <Stack.Screen name="settings/approvals" />
               <Stack.Screen name="settings/harness" />

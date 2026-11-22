@@ -363,14 +363,15 @@ A person's "Notify me" for a space is Off, Once a day or Every change.
 
 **These words are final for both apps.** Tell the Mobile thread only the ones you cannot use.
 
-- The place: **Spaces**. The built-ins: **Today**, **Feed**, **Ideas**, **Goals**; another person's: **Maya's Today**. The list of all: **All spaces** (desktop side menu), **All** (the phone's row), sections **Pinned**, **More** and, for the owner, **From members**.
+- The place: **Spaces**. The built-ins: **Today**, **Feed**, **Ideas**, **Goals**; another person's: **Maya's Today**. The list of all: **All spaces** (desktop side menu) with sections **Pinned**, **More** and, for the owner, **From members**. On the phone it is the **Spaces** tab, with sections **On Home**, **More**, **From members** and **Panels on Home**.
+- The phone's Home: heading **Pinned**; with nothing pinned, "Nothing pinned. Pin a space or a panel from Spaces."; under a pinned space's first three lines, "1 more". A space's panels on the phone: **Cards**, **Open**.
 - Who can open it, as a tag and a subtitle: **Only you**, the picked people's first names (**Maya and Dev**; **Maya, Dev and 2 more**), **All members**, **Anyone with the link**. A space someone else made that is private: **Only Maya**.
 - Share: button **Share**. Sheet title **Share <name>** (phone), **Who can open <name>** (desktop). Section **Who can open it**. Choices **Only you** (line: "Private" for the owner; "The owner can open it too" for a member), **Members you pick** (line: the names, or "2 picked"), **All members** (line: "5 people on <computer>"), **Anyone with the link** (line: "They can look, not change"; on the desktop "View only"). Section **Members**, each **Can edit** or **Can view**. **Copy link**, **New link**, **Notify me** with **Off**, **Once a day**, **Every change**. Close with **Done**.
 - Panels: **Add panel** (button), **New panel** (sheet), **What should it show?**, **Bot**, **Start from** with **Checklist**, **Tracker**, **Chart**, **Table**, **Notes**, **App**; rows **Space**, **Project**, **Refresh**; action **Create**. Sizes **Small**, **Wide**, **Tall**. The badge on an app panel: **App**.
 - Asking: **Ask about this space** (phone), **Ask about this space, or describe a new panel** (desktop), **Ask <bot> to change it** (an opened panel). The chips under an opened panel are the bot's own words, as they come.
 - New panel's **Project** row (owner only): the project's name, or **None**.
 - What changed: "2 panels changed since yesterday". The time is "this morning" (seen before noon today), "earlier today", "yesterday", the weekday within a week, else the date.
-- Menus: **Pin**, **Unpin**, **Rename**, **Delete space**; "Delete Launch and its 5 panels?" with **Delete**. Creating: **New space…**, **New panel…**.
+- Menus: **Pin**, **Unpin** (desktop); **Pin to Home**, **Take off Home** (phone, for a space and for a panel; it then says "Pinned to Home" or "Taken off Home"); **Rename**, **Delete space**; "Delete Launch and its 5 panels?" with **Delete**. Creating: **New space…**, **New panel…**.
 - Projects: the section **Spaces and panels**, the button **Attach**, the menu heading **Attach a space**.
 - Team settings: the scope **Today** is shown as **Spaces**; the switch **Members may share by link**.
 - Without the capability: "Update the app on your computer" (phone), "Update Botkins on the owner's computer" (a member's app).
