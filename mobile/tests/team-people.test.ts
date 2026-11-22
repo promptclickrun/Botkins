@@ -10,7 +10,7 @@ import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { authorize, chatPeople, filterParts, inChat, OWNER, personOf, sharedBotFlags, TEAM_METHODS, viewOf, withBotFlags, withChatFlags } from "../link-host/team.mjs";
 import { checkJoin, type FetchLike, LinkClient, pair, startJoin } from "../src/link/client";
-import { myPlace, myself, peopleRows, sharedLine, starterOf } from "../src/features/chat/people";
+import { myPlace, myself, peopleRows, sharedLine, speakerLabel, starterOf } from "../src/features/chat/people";
 import type { Bot, ChatSummary } from "../src/link/types";
 
 const real = fetch as unknown as FetchLike;
@@ -231,6 +231,26 @@ test("the phone's sheet lists a chat's people, and offers each person what they 
   assert.equal(sharedLine(people, { invited: ["gone"] }), "");
 });
 
+test("a message names its writer only in a chat several people write in, and never for a routine", () => {
+  const people = [{ id: "owner", name: "Studio" }, { id: "m_a", name: "Ana" }];
+  const shared = { invited: ["m_a"] };
+  const mine = { role: "user" as const };
+  const ana = { role: "user" as const, author: { memberId: "m_a", name: "Ana" } };
+  // The owner's phone sees Ana's messages named; its own are not.
+  assert.equal(speakerLabel(ana, undefined, shared, people, "owner"), "Ana");
+  assert.equal(speakerLabel(mine, undefined, shared, people, "owner"), "");
+  // Ana's phone sees the owner's messages (no author) under the owner's name.
+  assert.equal(speakerLabel(mine, undefined, shared, people, "m_a"), "Studio");
+  assert.equal(speakerLabel(mine, undefined, shared, undefined, "m_a"), "Owner");
+  // A chat of one looks as it did; so do a bot's reply and a message nobody typed.
+  assert.equal(speakerLabel(ana, undefined, {}, people, "owner"), "");
+  assert.equal(speakerLabel({ role: "assistant" }, undefined, shared, people, "m_a"), "");
+  assert.equal(speakerLabel(mine, { scheduleId: 3 }, shared, people, "m_a"), "");
+  assert.equal(speakerLabel(mine, { panelId: "p" }, shared, people, "m_a"), "");
+  // A name the computer left out falls back to the team's list.
+  assert.equal(speakerLabel({ role: "user", author: { memberId: "m_a" } } as never, undefined, shared, people, "owner"), "Ana");
+});
+
 /** A computer with an owner's phone and two members' phones. */
 async function team() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "botkins-people-")));
@@ -344,6 +364,58 @@ test("an owner and two members: an invite shares one chat, and each person's vie
     await ana.call("deleteChat", chatId);
     assert.equal(link.store.data.team.chats[chatId], undefined);
     assert.equal(link.store.data.team.views[anaId].chats[chatId], undefined);
+  } finally {
+    await stop();
+  }
+});
+
+test("the owner renames a member, and the new name shows in the team, to the member and on their devices", async () => {
+  const { link, owner, ana, ben, stop } = await team();
+  try {
+    // Older computers do not name it, so the phone hides "Rename".
+    assert.ok(link.meta().capabilities.includes("member-rename-v1"));
+    assert.equal(TEAM_METHODS["link.team.renameMember"], "owner");
+    const anaId = ana.parts.meta.you.memberId as string;
+    const benId = ben.parts.meta.you.memberId as string;
+    await ben.until(() => ben.parts.team?.people?.some((person: { name: string }) => person.name === "Ana"), "Ben sees Ana");
+
+    // The answer is the owner's team part, with the name cleaned.
+    const after = await owner.call<{ members: { id: string; name: string; devices: { id: string; person?: string }[] }[]; people: { id: string; name: string }[] }>("link.team.renameMember", anaId, "  Ana Ortiz ");
+    assert.equal(after.members.find((member) => member.id === anaId)?.name, "Ana Ortiz");
+    assert.equal(after.members.find((member) => member.id === benId)?.name, "Ben", "nobody else is renamed");
+    assert.equal(after.people.find((person) => person.id === anaId)?.name, "Ana Ortiz");
+    assert.equal(after.members.find((member) => member.id === anaId)?.devices[0].person, "Ana Ortiz");
+    // Kept by the host: the member's devices carry it, and a session's principal (author labels) uses it.
+    const device = link.store.data.devices.find((item: any) => item.memberId === anaId);
+    assert.equal(device.person, "Ana Ortiz");
+    assert.equal(link.principal(device.id).name, "Ana Ortiz");
+    // Everyone's phone is told: the member's own, and the other member's list of people.
+    await ana.until(() => ana.parts.meta?.you?.name === "Ana Ortiz", "Ana's phone has her new name");
+    await ben.until(() => ben.parts.team?.people?.some((person: { name: string }) => person.name === "Ana Ortiz"), "Ben sees the new name");
+    assert.ok(!ben.parts.team.people.some((person: { name: string }) => person.name === "Ana"));
+    // The app on the computer reads the same name.
+    assert.equal(link.teamForApp().members.find((member: any) => member.id === anaId).name, "Ana Ortiz");
+  } finally {
+    await stop();
+  }
+});
+
+test("only the owner renames a member, and the name must be a name", async () => {
+  const { owner, ana, ben, stop } = await team();
+  try {
+    const anaId = ana.parts.meta.you.memberId as string;
+    const benId = ben.parts.meta.you.memberId as string;
+    // A member's device is refused, for another member and for themselves.
+    await assert.rejects(ana.call("link.team.renameMember", benId, "Benny"), /owner/i);
+    await assert.rejects(ana.call("link.team.renameMember", anaId, "Anya"), /owner/i);
+    // Empty, blank, too long (over 60) and control characters are refused.
+    for (const name of ["", "   ", "x".repeat(61), "Ana\u0007", "Ana\nOrtiz", 42, null]) await assert.rejects(owner.call("link.team.renameMember", anaId, name), /name of up to 60 characters/, JSON.stringify(name));
+    await owner.call("link.team.renameMember", anaId, "x".repeat(60));
+    // A member who is not on the team.
+    await assert.rejects(owner.call("link.team.renameMember", "m_nobody", "Zed"), /no longer on the team/);
+    // Nothing changed with the refusals.
+    await ben.until(() => ben.parts.team?.people?.some((person: { name: string }) => person.name === "x".repeat(60)), "only the valid rename went through");
+    assert.ok(ben.parts.team.people.some((person: { id: string; name: string }) => person.id === benId && person.name === "Ben"));
   } finally {
     await stop();
   }

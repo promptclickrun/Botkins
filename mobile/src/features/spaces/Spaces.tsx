@@ -6,7 +6,7 @@
 import { useScrollToTop } from "expo-router";
 import { Plus } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Alert, StyleSheet, useWindowDimensions, View } from "react-native";
+import { StyleSheet, useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BoardScroll } from "@/features/home/BotBoard";
@@ -16,29 +16,18 @@ import { api, attempt } from "@/state/link";
 import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
-import { BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, useShape, useTheme } from "@/ui";
+import { BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useShape, useTextPrompt, useTheme } from "@/ui";
 import { openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
 import { spaceIcon } from "./icons";
 import { panelPinsHere, rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
 import { SortArea, SortCell, SortHandle, useSorter } from "./sortable";
 
-function newSpace() {
-  Alert.prompt(
-    "New space",
-    undefined,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Create",
-        onPress: (value?: string) => {
-          const name = value?.trim().slice(0, 40);
-          if (name) void attempt(api["spaces.create"]({ name })).then((id) => id && openSpace(id));
-        },
-      },
-    ],
-    "plain-text",
-    "",
-  );
+function newSpace(ask: (options: TextPromptOptions) => void) {
+  ask({
+    title: "New space",
+    confirm: "Create",
+    onSubmit: (value) => void attempt(api["spaces.create"]({ name: value.slice(0, 40) })).then((id) => id && openSpace(id)),
+  });
 }
 
 function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary[] }) {
@@ -259,6 +248,7 @@ export default function Spaces() {
   const synced = useApp((state) => state.synced);
   const spaces = useSpaces();
   const canCreate = useCan("today", "create");
+  const prompt = useTextPrompt();
   const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
   const [dragging, setDragging] = useState(false);
   // A page left in the middle of a drag must not keep its scrolling off.
@@ -269,9 +259,11 @@ export default function Spaces() {
         <EmptyState title="Update the app on your computer" />
       </Page>
     );
+  const ask = () => newSpace(prompt.ask);
   return (
-    <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={canCreate ? <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={newSpace} /> : undefined}>
-      {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? newSpace : undefined} /> : <SpaceList spaces={spaces} scroll={scroll} onDragging={setDragging} />}
+    <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={canCreate ? <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={ask} /> : undefined}>
+      {prompt.node}
+      {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? ask : undefined} /> : <SpaceList spaces={spaces} scroll={scroll} onDragging={setDragging} />}
       {synced && <PinnedPanels spaces={spaces} />}
     </SpacesFrame>
   );

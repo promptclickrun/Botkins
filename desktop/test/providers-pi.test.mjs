@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { EXTRA_USAGE, PiProvider, errorText } from "../desktop/providers/pi/index.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
+import { pass, until, watching } from "./quiet-turns.mjs";
 
 const skip = process.platform === "win32" && "The stand-in is a shell script.";
 const FIXTURE = fileURLToPath(new URL("./fixtures/fake-pi.mjs", import.meta.url));
@@ -139,6 +140,29 @@ test("Pi keeps the Botkins tool call open for the full secure prompt", async () 
   assert.equal(servers.files.timeout, undefined);
 });
 
+test("a Pi turn that is quiet for hours is not given up on, and a caller's own limit still applies", { skip }, async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { provider } = setup();
+  // Pi waits for the person's answer: the turn is quiet, and Pi is alive.
+  let answer;
+  const session = await provider.openSession(spec({ handlers: { permission: () => new Promise((resolve) => (answer = resolve)) } }));
+  const sending = watching(session.send({ prompt: "run bash:ls" }));
+  await until(() => answer, "Pi is waiting for the person");
+  await pass(t, 3 * 60 * 60 * 1000);
+  assert.equal(sending.seen.state, "pending", "three hours of silence did not end the turn");
+  answer({ allow: true });
+  await sending.done;
+  assert.equal(sending.seen.state, "done");
+  // A caller with nobody to stop it (a background summary) can still name a limit.
+  answer = undefined;
+  const limited = watching(session.send({ prompt: "run bash:ls again" }, 60000));
+  await until(() => answer, "Pi is waiting again");
+  await pass(t, 60000);
+  await limited.done;
+  assert.match(limited.seen.value.message, /Pi took too long to answer/);
+  await provider.stop();
+});
+
 test("a model error with no reply fails the turn with the plan's words", { skip }, async () => {
   const { provider } = setup();
   const session = await provider.openSession(spec());
@@ -215,7 +239,7 @@ test("the registry keeps a harness out of the model providers but finds it by id
 });
 
 test("a package change refreshes the next Pi turn and its slash commands", { skip }, async (t) => {
-  const { provider } = setup();
+  const { provider, seen } = setup();
   t.after(() => provider.stop());
   let enabled = false;
   t.mock.method(provider.packages, "activePaths", () => enabled ? ["/fixture/pi-package"] : []);
@@ -227,6 +251,9 @@ test("a package change refreshes the next Pi turn and its slash commands", { ski
   assert.ok(choices.some((c) => c.command === "skill:garden" && c.kind === "Skill"));
   assert.ok(before.rpc.closed);
   assert.equal(session.live.ref, before.ref);
+  const [first, restarted] = seen().filter((entry) => entry.started).map((entry) => entry.started.args);
+  assert.ok(!first.includes("/fixture/pi-package"));
+  assert.equal(restarted[restarted.indexOf("/fixture/pi-package") - 1], "-e", "an active package is an extension path to Pi");
   const resolved = await session.resolvePrompt("/show-garden", {}, {}, {});
   assert.equal(resolved.kind, "agent-prompt");
   // A handled extension command has no model turn and no agent_settled event.

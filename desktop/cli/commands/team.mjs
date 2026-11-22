@@ -363,6 +363,17 @@ export const teamCommands = {
               context.print(await call(context, "team.moveMember", look.member.id, look.to.id, look.widens ? { agreed: true } : undefined), (done) => safe(done.name) + " is in the group " + safe(done.group ?? "") + " now.");
             },
           },
+          rename: {
+            summary: "Give a member another name",
+            usage: "botkins team members rename <member> <name>",
+            arguments: [{ name: "member", required: true }, { name: "name", required: true, many: true }],
+            details: "The name is up to 60 characters. It is the member's name everywhere: in the team, in chats and on their devices. It asks nothing, because it changes what the member may do in no way. The words after the member make the name, so `rename Sam Sam Lee` and `rename Sam \"Sam Lee\"` do the same.",
+            async run(context) {
+              if (context.args.length < 2) throw usage("Name the member, then the new name.");
+              const [who, ...name] = context.args;
+              context.print(await call(context, "team.renameMember", who, name.join(" ")), (done) => safe(done.previous ?? who) + " is called " + safe(done.name) + " now.");
+            },
+          },
           remove: {
             summary: "Take a member out of the team",
             usage: "botkins team members remove <member> [--yes]",

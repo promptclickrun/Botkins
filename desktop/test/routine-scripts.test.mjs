@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { authorize } from "../desktop/link/team.mjs";
 import { shellFor } from "../desktop/routine-script.mjs";
+import { decide } from "../desktop/notify.mjs";
 
 const T0 = Date.UTC(2026, 10, 17, 12);
 const DAILY = { kind: "daily", time: "09:00" };
@@ -46,6 +47,29 @@ test("a script routine runs its script with no model and its output is the run's
   const reply = ws.chat(id).messages.findLast((message) => message.role === "assistant" && message.runId === run.id);
   assert.match(reply.text, /^hello\nwarning$/);
   assert.equal(ws.panels.routines.view(ws.chat(id), ws.panels.routines.find(id).entry).script, "echo hello\necho warning >&2");
+});
+
+test("a script whose last line is {\"wakeAgent\": false} ends the run quietly with no model turn", { skip: !unix }, async (t) => {
+  const { ws, seen } = setup(t);
+  const target = ws.createChat("pip");
+  const id = ws.panels.routines.create({ botId: "pip", name: "Inbox watch", script: "echo checked 0 new\necho '{\"wakeAgent\": false}'", followUp: true, prompt: "Tell me what is new.", cadence: DAILY, deliver: { to: "chat", chatId: target } }, T0);
+  await ws.panels.routines.run(id);
+  const run = ws.state.runs[0];
+  assert.equal(run.status, "Completed");
+  assert.equal(run.silent, true);
+  assert.equal(seen.prompts.length, 0, "no model turn");
+  assert.equal(ws.chat(id).messages.filter((m) => m.role === "assistant").length, 0);
+  assert.equal(ws.chat(target).messages.length, 0);
+  assert.equal(decide({ type: "turn", bot: ws.bot("pip"), chat: ws.chat(id), run }, { settings: ws.state.settings, focused: false }), null);
+
+  const failing = ws.panels.routines.create({ botId: "pip", name: "Broken watch", script: "echo '{\"wakeAgent\": false}'; exit 2", cadence: DAILY }, T0);
+  await ws.panels.routines.run(failing);
+  assert.equal(ws.state.runs[0].status, "Needs you", "a failed script is never quiet");
+  assert.equal(ws.state.runs[0].silent, undefined);
+
+  const waking = ws.panels.routines.create({ botId: "pip", name: "Busy watch", script: "echo '{\"wakeAgent\": true}'", followUp: true, prompt: "Tell me.", cadence: DAILY }, T0);
+  await ws.panels.routines.run(waking);
+  assert.equal(seen.prompts.length, 1, "any other last line wakes the bot");
 });
 
 test("a failing script ends its run as failed and says how", { skip: !unix }, async (t) => {

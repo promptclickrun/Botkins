@@ -50,6 +50,9 @@ export const ACTIVITY_TYPE = "BotkinActivityAttributes";
 const TOKEN = /^[0-9a-f]{64,200}$/;
 const PRESENT_MS = 45_000; // a phone that said it is in front, and was heard from this recently, is looking at the app
 const ACTIVITY_GAP_MS = 2_500; // the least time between two updates of one Live Activity
+// Apple holds a priority 5 push back to save power, most of all on a locked phone, and allows only
+// so many at priority 10. A card's steps go at 10 this often, so the Lock Screen is never far behind.
+const ACTIVITY_LOUD_GAP_MS = 15_000;
 const ACTIVITY_STALE_S = 15 * 60;
 // A finished turn's card stays on the phone, marked done, this long, unless a new turn in the chat
 // takes it over first. Then it is ended. (The phone has the same time: LINGER_MS in src/state/activity.ts.)
@@ -308,6 +311,9 @@ export class Push {
     const before = this.working ?? new Map();
     const requests = state.requests ?? [];
     const sends = [];
+    // The chats whose turn ended at this look, for the card for all Botkins: it makes its sound for
+    // these. A turn the person stopped themselves ends quietly.
+    const ended = new Set();
 
     if (!first && targets.length) {
       const chats = new Map((state.chats ?? []).map((chat) => [chat.id, chat]));
@@ -317,14 +323,17 @@ export class Push {
         const working = run.status === "Working";
         const was = before.get(run.id);
         if (working && was === undefined) this.onStart(sends, targets, state, run, chats, bots);
-        else if (!working && was !== false) this.onFinish(sends, targets, state, run, chats, bots);
+        else if (!working && was !== false) {
+          this.onFinish(sends, targets, state, run, chats, bots);
+          if (run.status !== "Stopped" && run.notify !== false) ended.add(run.chatId);
+        }
         // Turns still under way: their Live Activities follow along.
         else if (working) this.onProgress(sends, targets, state, run);
       }
     }
     // The cards for all Botkins and for each Botkin, also at the first look: a card left from before
     // this computer started is brought up to date, or ended when nothing is left on it.
-    if (targets.length) this.cards(sends, targets, state);
+    if (targets.length) this.cards(sends, targets, state, ended);
     this.working = known;
     this.asked = new Set(requests.map((request) => request.id));
     if (sends.length) void this.send(sends);
@@ -575,7 +584,9 @@ export class Push {
   activity(record, token, event, state, { urgent = false, dismissIn, staleIn, relevance, alert } = {}) {
     // Apple applies a card's pushes by their timestamp and drops one that isn't newer than the last.
     // Two pushes in the same second (the last "writing" and the "done") would lose the second one.
-    const seconds = Math.max(Math.floor(this.now() / 1000), (this.stamps.get(token) ?? 0) + 1);
+    // What the phone draws itself counts too, at the phone's own time: the second is rounded up, so
+    // a push is never older than what the phone drew a moment before it left the app.
+    const seconds = Math.max(Math.ceil(this.now() / 1000), (this.stamps.get(token) ?? 0) + 1);
     this.stamps.delete(token);
     if (event !== "end") this.stamps.set(token, seconds);
     // The newest tokens are kept; a phone shows a few cards at most.
@@ -584,7 +595,8 @@ export class Push {
       token,
       env: record.env,
       type: "liveactivity",
-      priority: urgent ? 10 : 5,
+      // Apple holds a priority 5 push back: an alert in one would come late.
+      priority: urgent || alert ? 10 : 5,
       expiration: staleIn || event === "end" ? 3600 : 120,
       payload: {
         aps: {
@@ -638,14 +650,20 @@ export class Push {
   /**
    * Brings the cards up to date on the phones that have one for all Botkins or one per Botkin. A
    * change that matters (a chat needs the person, a chat ended, a new turn on a card) goes at once;
-   * steps and thinking at most every ACTIVITY_GAP_MS, and not while the phone is in front (it draws
-   * its own cards then). A card whose chats have all ended says so for `overHold`, then is ended,
-   * and its final state stays a few minutes; one with no chat left to show is ended at once. On the card for all Botkins, the first update
-   * that shows a new request, or that every chat has ended, carries an alert (the island opens, the
-   * sound plays); the request's notification is then not sent, and a finished turn's comes without
-   * a sound. Held notifications the card doesn't answer for are sent as they are.
+   * steps and thinking at most every ACTIVITY_GAP_MS (at priority 10 every ACTIVITY_LOUD_GAP_MS,
+   * else at 5), and not while the phone is in front (it draws its own cards then). A card whose
+   * chats have all ended says so for `overHold`, then is ended, and its final state stays a few
+   * minutes; one with no chat left to show is ended at once. On the card for all Botkins, the first
+   * update that shows a new request, or that every chat has ended, carries an alert (the island
+   * opens, the sound plays); the request's notification is then not sent, and a finished turn's
+   * comes without a sound. Held notifications the card doesn't answer for are sent as they are.
+   *
+   * The sound for the end is the card's own. It doesn't wait on the turn's notification, which is
+   * left out when the person is reading the chat on the computer: `ended` names the chats whose
+   * turn ended at this look, and the card stays quiet only when none of them is on it (a card found
+   * over), when finished replies are switched off, or when the app is in front on that phone.
    */
-  cards(sends, targets, state) {
+  cards(sends, targets, state, ended = new Set()) {
     const now = this.now();
     let next = null;
     const later = (at) => (next = next == null ? at : Math.min(next, at));
@@ -698,16 +716,17 @@ export class Push {
           // Over since this look, or since before this computer knew the card (it just started, or
           // the card's address came after a short turn): it shows so for a while first.
           if (last?.overAt == null) {
-            // Every chat on it has just ended. On the card for all Botkins, a finished turn's
-            // notification lets the card make the sound.
+            // Every chat on it has just ended: the card for all Botkins says so with its alert, and
+            // a finished turn's notification then comes without a second sound.
+            const rings = cardKey === ALL_CARD && card.state.chats.some((chat) => ended.has(chat.id)) && this.wants(device, "replies") && !this.present(device.id);
             const finished = cardKey === ALL_CARD ? card.state.chats.filter((chat) => chimes?.get(chat.id)?.kind === "finish") : [];
             for (const chat of finished) {
               const { alert } = chimes.get(chat.id);
-              delete alert.payload.aps.sound;
+              if (rings) delete alert.payload.aps.sound;
               sends.push(alert);
               chimes.delete(chat.id);
             }
-            const alert = finished.length ? { title: "Botkins", body: card.state.chats.some((chat) => chat.phase === "failed") ? "A chat stopped" : "All done" } : undefined;
+            const alert = rings ? { title: "Botkins", body: card.state.chats.some((chat) => chat.phase === "failed") ? "A chat stopped" : "All done" } : undefined;
             const shown = content();
             this.sent.set(key, { at: now, text, state: shown, marks: "", over: true, overAt: now });
             sends.push(this.activity(record, token, "update", shown, { urgent: true, relevance: card.relevance, alert, staleIn: Math.ceil(this.overHold / 1000) + 600 }));
@@ -744,9 +763,11 @@ export class Push {
         const asking = cardKey === ALL_CARD ? card.state.chats.filter((chat) => chat.phase === "needs-you" && chimes?.get(chat.id)?.kind === "request") : [];
         for (const chat of asking) chimes.delete(chat.id);
         const alert = asking.length ? { title: "Botkins", body: asking.length > 1 ? asking.length + " bots need you" : "A bot needs you" } : undefined;
+        // A step goes at priority 10 when the last push at 10 was a while ago, else at 5.
+        const loud = urgent || !!alert || now - (last?.loudAt ?? 0) >= ACTIVITY_LOUD_GAP_MS;
         const shown = content();
-        this.sent.set(key, { at: now, text, state: shown, marks, over: false });
-        sends.push(this.activity(record, token, "update", shown, { urgent, relevance: card.relevance, alert }));
+        this.sent.set(key, { at: now, loudAt: loud ? now : last?.loudAt, text, state: shown, marks, over: false });
+        sends.push(this.activity(record, token, "update", shown, { urgent: loud, relevance: card.relevance, alert }));
       }
       // A notification the card didn't make its sound for (a request it has no room for, a turn
       // that ended while others still work) is sent as it is.

@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool } from "./providers/provider.mjs";
 import { validateSelection } from "./preferences.mjs";
-import { runScript, scriptEnding, SCRIPT_LENGTH } from "./routine-script.mjs";
+import { runScript, scriptEnding, sleepsAgent, SCRIPT_LENGTH } from "./routine-script.mjs";
 import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
@@ -221,6 +221,16 @@ export function notifyField(value) {
 }
 
 /** What a bot is told about where its reply goes. */
+/**
+ * A routine's reply of exactly this word says the run found nothing worth saying: the run completes
+ * with no message, no delivery and no notification. A failed run still notifies. Bots are not told
+ * of it by default, so a reminder never goes quiet; a routine's instructions opt in by asking for it.
+ */
+export const SILENT = "[SILENT]";
+export const ROUTINE_SILENT = "routine-silent-v1";
+export const isSilent = (text) => typeof text === "string" && text.trim() === SILENT;
+const MANAGED = "This is a Proactive agent's routine. Change it on the bot's profile, under Proactive.";
+
 const DESTINATION_NOTES = {
   none: "This routine has no output. Do the work, then finish without a reply.",
   chat: "Your reply will be sent to the person as a message in your chat with them.",
@@ -388,6 +398,7 @@ export class Routines {
   }
   update(chatId, data, now = Date.now()) {
     const { chat, entry } = this.find(chatId);
+    if (entry.proactive) throw new Error(MANAGED);
     // Whoever changes it, the result may only go to a chat of the routine's creator.
     const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
     const notify = notifyField(data.notify);
@@ -449,8 +460,10 @@ export class Routines {
   }
   /** Deletes a routine and the chat that holds its runs. */
   async remove(chatId) {
-    this.find(chatId);
+    const { chat, entry } = this.find(chatId);
     await this.ws.agents.deleteChat(chatId);
+    // Removing a bot's Proactive agent routine turns that bot's agent off, or it would come back at the next change.
+    if (entry.proactive) this.ws.proactive.routineRemoved(chat.botId);
   }
   removeSchedule(chatId, id) {
     const { chat } = this.schedule(chatId, id);
@@ -466,6 +479,7 @@ export class Routines {
   /** A copy of a routine. It belongs to whoever copies it: `createdBy` is that team member, or nothing for the owner. */
   duplicate(chatId, botId, now = Date.now(), createdBy) {
     const { chat, entry } = this.find(chatId);
+    if (entry.proactive) throw new Error(MANAGED);
     // A chat chosen on the old bot isn't the new bot's, so a copy for another bot goes to its latest chat.
     // Nor is a chosen chat kept when the copy's owner is not in it.
     const { chatId: picked, ...rest } = entry.deliver ?? {};
@@ -515,6 +529,8 @@ export class Routines {
       // Left out when the routine notifies, which is the usual way.
       ...(entry.notify === false && { notify: false }),
       ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+      // Kept by Botkins for the bot's Proactive agent: changed on the bot's profile, not here.
+      ...(entry.proactive && { proactive: true }),
       // The routine's own model; without one it uses the Default routines model.
       ...(chat.model && { model: chat.model }),
     };
@@ -683,6 +699,14 @@ export class Routines {
 
 /** Sends a schedule entry's prompt as a turn in its chat; the run carries `scheduleId`. A script routine runs its script first. */
 export function dispatch(ws, chat, entry, trigger) {
+  if (entry.routine && entry.proactive) {
+    // The bot's Proactive agent gate decides, with no model, whether this tick wakes the bot (desktop/proactive.mjs).
+    const prompt = ws.proactive?.wake(chat.botId, trigger);
+    if (!prompt) return Promise.resolve(null);
+    const turn = ws.send(chat.id, prompt, { trigger, scheduleId: entry.id, title: entry.name, proactive: true });
+    chat.title = "Routine · " + entry.name;
+    return turn;
+  }
   if (entry.routine && entry.script) return runScriptRoutine(ws, chat, entry, trigger);
   const title = chat.title;
   const turn = ws.send(chat.id, entry.prompt, {
@@ -778,7 +802,10 @@ function runScriptRoutine(ws, chat, entry, trigger) {
     if (ws.closing) return;
     delete run.scriptRunning;
     run.script = { exitCode: result.exitCode, ...(result.timedOut && { timedOut: true }) };
-    if (followUp && !task.stopped) {
+    if (!task.stopped && sleepsAgent(result)) {
+      Object.assign(run, { noOutput: true, silent: true });
+      step.label = "Nothing new: the script let the run end here.";
+    } else if (followUp && !task.stopped) {
       const where = routines.destinationNote(chat, entry.id);
       run.recovery = { extra: [scriptNote(result), where].filter(Boolean).join("\n\n") };
       return ws.startTurn(chat, bot, message, run, false);

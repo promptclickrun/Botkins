@@ -1,7 +1,7 @@
 import { type Href, router, useLocalSearchParams } from "expo-router";
 import { Bot as BotIcon, FileUp, Palette, Shuffle } from "lucide-react-native";
 import { type ReactNode, useEffect, useState } from "react";
-import { Alert, ScrollView, View } from "react-native";
+import { ScrollView, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { type BotkinLook, cleanLook, lookOf, needsLooksV2, randomLook } from "@/data/botLook";
 import { STARTERS } from "@/data/templates";
@@ -11,7 +11,7 @@ import { pickTextFile, shareFrom } from "@/state/files";
 import { useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
-import { BotAvatar, Button, Chip, EmptyState, Field, HoldMenu, Label, Sheet, space, T } from "@/ui";
+import { BotAvatar, Button, Chip, EmptyState, Field, HoldMenu, Label, Sheet, space, T, type TextPromptOptions, useTextPrompt } from "@/ui";
 import { LookEditor, useLooksV2 } from "./LookEditor";
 import { LookStage } from "./LookStage";
 import { addable } from "./agents";
@@ -54,23 +54,16 @@ function StartRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function renameTemplate(template: BotTemplate) {
-  Alert.prompt(
-    "Rename template",
-    undefined,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Rename",
-        onPress: (value?: string) => {
-          const name = value?.trim().slice(0, LIMITS.name);
-          if (name && name !== template.name) void attempt(api.renameTemplate(template.id, name));
-        },
-      },
-    ],
-    "plain-text",
-    template.name,
-  );
+function renameTemplate(template: BotTemplate, ask: (options: TextPromptOptions) => void) {
+  ask({
+    title: "Rename template",
+    value: template.name,
+    confirm: "Rename",
+    onSubmit: (value) => {
+      const name = value.slice(0, LIMITS.name);
+      if (name !== template.name) void attempt(api.renameTemplate(template.id, name));
+    },
+  });
 }
 
 /** Makes a bot: a look, a name, a role, a line about it and what it should do. */
@@ -83,6 +76,7 @@ function NewBotEditor() {
   const canManage = useCan("agents", "manage");
   const saved = usePart("templates");
   const advanced = useLooksV2();
+  const prompt = useTextPrompt();
   const [look, setLook] = useState<BotkinLook>(() => randomLook());
   const [customizing, setCustomizing] = useState(false);
   const [name, setName] = useState("");
@@ -171,6 +165,7 @@ function NewBotEditor() {
   const agent = start?.agent;
   return (
     <Sheet title="New bot" action="Create" onAction={() => void create()} actionDisabled={!ready} actionLoading={busy}>
+      {prompt.node}
       <LookStage look={look} size={120}>
         <View style={{ flexDirection: "row", gap: space.sm }}>
           <Button title="Shuffle" icon={Shuffle} variant="secondary" size="sm" onPress={() => setLook(randomLook({ advanced }))} />
@@ -204,7 +199,7 @@ function NewBotEditor() {
                   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
                 ]}
                 onPressAction={({ nativeEvent }) => {
-                  if (nativeEvent.event === "rename") renameTemplate(template);
+                  if (nativeEvent.event === "rename") renameTemplate(template, prompt.ask);
                   else if (nativeEvent.event === "export") void shareFrom(api.exportTemplateText({ templateId: template.id }), "Template exported. Anyone with Botkins can import it.");
                   else if (nativeEvent.event === "delete") {
                     if (start?.key === item.key) setStart(undefined);

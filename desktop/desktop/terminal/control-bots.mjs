@@ -12,6 +12,7 @@
 // come out and go in as they are (the command line shows them before a change that brings in
 // words from elsewhere). No call here answers a secret: none of these things holds one.
 import { parseTemplateFile } from "../../desktop/templates.mjs";
+import { defaultBotProactive } from "../proactive-settings.mjs";
 import { ControlError } from "./socket.mjs";
 
 const text = (value, max, what) => {
@@ -48,6 +49,17 @@ export function botsApi({ workspace, handlers, bot }) {
   const templates = () => workspace.templates.all;
   const template = (ref, exact) => pick(templates(), ref, "template", "botkins templates list", undefined, exact);
   const time = (value) => (value ? new Date(value).toISOString() : null);
+
+  /** A bot's Proactive agent as the command line shows it: its settings (the usual ones when it has none) and what it did. */
+  const proactiveView = (entry) => ({
+    id: entry.id,
+    name: entry.name,
+    computerOn: workspace.proactive.master,
+    running: workspace.proactive.active(entry.id),
+    person: "owner",
+    ...defaultBotProactive,
+    ...workspace.proactive.view(entry.id),
+  });
 
   /** What a bot has of its place in the list: where it stands, and its flags. */
   const placeView = (entry) => {
@@ -155,6 +167,23 @@ export function botsApi({ workspace, handlers, bot }) {
       if (!Object.keys(next).length) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
       await handlers.setBotFlags(found.id, next);
       return placeView(bot(found.id));
+    },
+
+    // ── A bot's Proactive agent (experimental) ──
+    /** A bot's Proactive agent: its settings, and whether it runs now (the computer's switch is `preferences`' `proactive.enabled`). */
+    "bots.proactive": ([ref]) => proactiveView(bot(ref)),
+    /**
+     * Changes a bot's Proactive agent: { enabled?, every?, sweepHours?, maxPerDay?, deliver?, watch?, instructions? }, or null to
+     * forget its settings and routine. Turning it on needs `{ agreed: true }` as the third argument: the caller showed the person
+     * that the bot then wakes with nobody watching, reads what its tools reach and messages them, and got a yes.
+     */
+    async "bots.proactive.set"([ref, patch, options]) {
+      const found = bot(ref);
+      if (patch !== null && (!patch || typeof patch !== "object" || Array.isArray(patch))) throw new ControlError("Give what to change, or null to forget the settings.", "BAD_ARGUMENT");
+      if (patch?.enabled === true && workspace.proactive.config(found.id)?.enabled !== true && options?.agreed !== true)
+        throw new ControlError("Turning on a bot's Proactive agent lets it wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model. Show that to the person, and give `{ \"agreed\": true }` after the settings (on the command line, `--yes`).", "NEEDS_YES");
+      await handlers.setBotProactive(found.id, patch);
+      return proactiveView(bot(found.id));
     },
 
     // ── A bot's memory ──

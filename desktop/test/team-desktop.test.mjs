@@ -33,13 +33,15 @@ test("member identity prefixes model input without changing the displayed messag
   const fake = fakeClient();
   const ws = new Workspace(tempDir(t), fake.client, () => {}, { team: () => team });
   const chatId = ws.createChat("pip");
+  // The member's own chat: they are its one person.
+  ws.chat(chatId).createdBy = "m_avery";
   await ws.send(chatId, "Help with this", {
     author: { memberId: "m_avery", name: "Avery" },
   });
 
   assert.equal(
     fake.log.sent[0][1],
-    "[From Avery, a member of Northstar's team, not the owner]\nHelp with this",
+    "[Botkins: you are talking with Avery (person id m_avery).]\n[From Avery, a member of Northstar's team, not the owner]\nHelp with this",
   );
   assert.equal(ws.chat(chatId).messages[0].text, "Help with this");
   const ownerChat = ws.createChat("pip");
@@ -125,7 +127,8 @@ test("an invited member's turn in the owner's chat is opened without the owner's
   const second = [...fake.log.configs.values()].at(-1);
   assert.deepEqual(second.mcp.servers, {}, "the session is opened again for the member's turn, without it");
   assert.deepEqual(second.skills.directories, []);
-  assert.equal(fake.log.sent.at(-1)[1], "[From Avery, a member of Northstar's team, not the owner]\nA member continues it");
+  // The owner's chat now has two people, so the text starts with its speaker.
+  assert.match(fake.log.sent.at(-1)[1], /^\[Botkins: this chat has several people: .*the latest is from Avery\.\]\n\[Avery\] A member continues it$/);
 });
 
 test("a chat's people are its creator and whom the link says were invited", (t) => {
@@ -409,6 +412,7 @@ test("team IPC handlers call the LinkHost owner API", async () => {
     moveMember: ["m_member", "g_everyone"],
     removeMember: ["m_member"],
     renameTeam: ["Northstar"],
+    renameMember: ["m_member", "Sam Lee"],
     chatPeople: ["chat-1"],
     inviteToChat: ["chat-1", "m_member"],
     removeFromChat: ["chat-1", "m_member"],
@@ -436,6 +440,7 @@ test("team IPC handlers call the LinkHost owner API", async () => {
     ["moveTeamMember", "moveMember"],
     ["removeTeamMember", "removeMember"],
     ["renameTeam", "renameTeam"],
+    ["renameTeamMember", "renameMember"],
     ["chatPeople", "chatPeople"],
     ["inviteToChat", "inviteToChat"],
     ["removeFromChat", "removeFromChat"],
@@ -561,4 +566,15 @@ test("who is looking at a chat's people, and what they may do", async () => {
   assert.equal(chatPeopleView({ team: { ...owner.team, people: undefined } }, ownersChat), null);
   assert.equal(chatPeopleView({ team: { ...owner.team, people: [people[0]] } }, ownersChat), null);
   assert.equal(chatPeopleView({}, ownersChat), null);
+});
+
+test("a message shows its author's current name, so a rename reaches what they wrote before", async () => {
+  const { authorName } = await import("../src/peopleView.ts");
+  const author = { memberId: "m_avery", name: "Avery" };
+  const team = (people) => ({ team: { name: "Northstar", roles: [], groups: [], members: [], invites: [], requests: [], people } });
+  assert.equal(authorName(team([{ id: "owner", name: "Studio" }, { id: "m_avery", name: "Avery Ortiz" }]), author), "Avery Ortiz");
+  // A member who left, a computer with no people list, and no team: the name saved with the message.
+  assert.equal(authorName(team([{ id: "owner", name: "Studio" }]), author), "Avery");
+  assert.equal(authorName(team(undefined), author), "Avery");
+  assert.equal(authorName({}, author), "Avery");
 });

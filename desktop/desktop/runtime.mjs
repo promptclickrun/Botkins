@@ -51,7 +51,8 @@ import { DEFAULT_RELAY_URL } from "./link/relay.mjs";
 import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { LOOKS_CAPABILITY } from "./looks.mjs";
-import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS } from "./routines.mjs";
+import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
+import { PROACTIVE } from "./proactive.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
 import { LoginLookups } from "./headless/login-lookups.mjs";
@@ -109,7 +110,7 @@ export const APP_UPDATE = "app-update-v1";
 export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
-export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1"];
+export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1"];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -247,7 +248,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
     // Pi-compatible harnesses for the ChatGPT and Claude plans, not model providers.
     pi,
-    new OmpProvider({ dataDir: join(dataDir, "omp"), bridge }),
+    new OmpProvider({ dataDir: join(dataDir, "omp"), bridge, packages: pi.packages }),
   ];
   // BOTKINS_PROVIDERS=copilot,claude keeps only those (in that list's order here), for tests
   // that must not depend on which tools this computer happens to have.
@@ -524,6 +525,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return host.shell.openExternal(parsed.href);
     },
     updateBot: (id, data) => workspace.updateBot(id, data),
+    // A bot's Proactive agent, for the person who calls: the window and the command line are the owner's (desktop/device-call.mjs names a member).
+    setBotProactive: (id, patch, person = "owner") => workspace.proactive.setBot(id, patch, person),
     // Skills and MCP servers for every bot (desktop/integrations.mjs)
     saveMcpServer: (data) => workspace.integrations.saveServer(data),
     setMcpServerEnabled: (id, enabled) => workspace.integrations.setServerEnabled(id, enabled),

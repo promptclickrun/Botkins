@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
+import { setUpHere } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-signin-"));
 // Only GitHub Copilot: the other providers' own sign-ins are not part of this hand-off.
@@ -30,6 +31,7 @@ try {
   const button = (name) => page.getByRole("button", { name, exact: true });
   await page.getByRole("heading", { name: /^Welcome/ }).waitFor();
   await page.waitForFunction(() => !!window.botkins);
+  await setUpHere(page);
   const auth = await page.evaluate(() => window.botkins.auth());
   if (auth.connected) {
     // A token Botkins can't hide (for example one stored by an earlier Botkins sign-in).

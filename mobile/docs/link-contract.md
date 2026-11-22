@@ -7,7 +7,7 @@ A host serves many clients at once. Each client has its own credential. Pairing 
 ## Words
 
 - **Host**: the computer whose Botkins app holds the bots, chats and settings. It runs `LinkHost`.
-- **Client**: a paired device. Its `kind` is `"phone"` or `"desktop"`.
+- **Client**: a paired device. Its `kind` is `"phone"`, `"desktop"` or `"gadget"` (a small device that talks with a bot; see "Gadgets").
 - **Pairing**: the one step that makes a device a client. It is a full-trust step: a client can do what the person can do in the app on the host.
 
 ## Use the client library, do not write a second one
@@ -69,7 +69,7 @@ client.watch([chatId]);                                       // at most 4 chats
 
 - Transport: plain HTTP under `/botkins/v1/` (`hello`, `pair`, `session`, `rpc`). The link encrypts every message itself, so there is no certificate. A session mixes a one-time key exchange into the device's key; every message is ChaCha20-Poly1305 under a numbered nonce that is accepted once.
 - A device may hold 6 sessions at once (so a client may run more than one window). The host keeps 48 sessions in all, and a device's own oldest goes first.
-- **State arrives by itself.** The client follows named parts (`meta`, `settings`, `bots`, `chats`, `live`, `runs`, `panels`, `board`, `tasks`, `projects`, `mcp`, `skills`, `phones`, `asks`, `voice`, `credentials`, `host`, …). After any change on the host, every connected client is sent the parts that changed. Do not update state by hand after a call.
+- **State arrives by itself.** The client follows named parts (`meta`, `settings`, `bots`, `chats`, `live`, `runs`, `panels`, `board`, `tasks`, `projects`, `mcp`, `skills`, `phones`, `asks`, `voice`, `credentials`, `host`, `proactive` (the Proactive agent: the computer's switch and each proactive bot's settings and log, "proactive-agent-v2"; see below), …). After any change on the host, every connected client is sent the parts that changed. Do not update state by hand after a call.
 - **Every client is served alike.** A streaming reply (`live.streams[chatId]`, `run:<id>`), the task board (`tasks`) and Today (`board`, `panels`) reach every connected client, not only the one that acted.
 - **Calls from two clients at the same moment** are handled one after another by the host's app. Each call is one change; no call spans two requests. A client must not assume it is the only one acting: read the parts after a call, do not keep its own copy as the truth.
 - `LinkClient` reconnects by itself. Call `client.wake()` when the app comes to the front or the network changes.
@@ -126,7 +126,8 @@ type PairedDevice = {
   name: string;          // the device ("iPhone 17 Pro")
   person?: string;       // who it belongs to ("Jordan"; device-person-v1). Absent until someone gives one
   platform: string;
-  kind: "phone" | "desktop";
+  kind: "phone" | "desktop" | "gadget";
+  gadget?: { board?: string; firmware?: string; botId?: string }; // a gadget's board and firmware, as it said them, and its bot (gadgets-v1)
   createdAt: number;     // when it was paired (ms)
   lastSeenAt: number;    // when it last made a call (ms; written at most once a minute)
   connected: boolean;    // heard from in the last 90 seconds
@@ -196,6 +197,7 @@ A **person** is the owner (id `"owner"`) or a member (their member id). The owne
 - `ChatSummary.invited?: string[]` goes to the owner and to the chat's people. The `team` part has `people: { id, name }[]`: the whole team for the owner and for a member who can start a chat (and so invite); for anyone else only the owner and the people of the chats they are in.
 - `link.team.inviteToChat(chatId, personId)` and `link.team.removeFromChat(chatId, personId)` answer the invited list afterwards. The chat's starter or the owner invites and removes; someone invited may take themselves out. A chat holds up to 20 people.
 - Someone invited sees the chat and may read it, send, stop, answer its questions, fork it and set their own flags on it. An invite never widens a role: a person whose role can't use the chat's bot can't be invited ("That person's role can't use this chat's bot. Change their role in Team settings first."), and loses the chat if their role later loses the bot. They may not rename, compact or delete it, change its model, project or schedule, or invite. Their messages carry their name, and a turn they start runs under the narrower of the starter's limits and their own (decided by the host's app).
+- Whom the bot is told it is talking to is the host app's own (`team-turn.mjs`); no call or field is added. Every turn starts with one line that names the person it is for by their Botkins name and person id, never by an email or the computer's account; the owner nobody named is left out. In a chat of more than one person each person's message also starts with their name (`[Sam] ...`), and the line lists the chat's people. A routine's, task's or panel refresh's turn is labelled as started on its own, never as the owner's. A teammate asked through `ask_teammate` is told whose request it is. Phones show the name over someone else's message from `author` (and, for the owner's, from `people`) in a chat of more than one person.
 - Removing a member drops their invitations and their view. Deleting a chat through the link drops its people and everyone's marks on it. Taking a person out of a chat ends that chat's card on their phones.
 - For the app on the host: `link.chatPeople(chatId)` → `{ createdBy, invited }` (never throws), `link.inChat(chatId, personId)`, `link.notifiesOwner(chatId)`, `link.inviteToChat`, `link.removeFromChat`, `link.removeChatPeople(chatId)`.
 
@@ -317,6 +319,16 @@ type AppUpdate = {
 - **When `canInstall` is false**, `message` says what to do instead (pull a new image, `git pull`); a client shows it as it comes.
 - **A notification.** When a computer learns of a newer release it calls `link.push.updateAvailable(version)` (`link-host/push.mjs`). Each owner device whose notifications are on and whose `updates` choice is on (the default) gets one sealed alert for that version, titled with the computer's name: "Botkins 0.16.5 is available." A member device never gets it. A device counts as told only once the relay took its alert, so one that missed it is told at a later check. The alert's kind is `"update"`, and its unsealed line is "An update is available"; a tap opens the computer's page.
 
+## A bot's Proactive agent (`proactive-agent-v2`)
+
+Experimental. A bot that is proactive watches, with no model, for what its person should hear of (a failed routine or task run, a task waiting in Review or Blocked, an unanswered approval or question), wakes only when something is new or a look around is due, and says it once. Each such bot has its own settings, its own managed routine (`proactive: true` on its schedule entry, "Proactive agent" in the routines) and its own gate state (what it raised, today's alerts, its log). Any number of bots may be proactive at once.
+
+- **The computer's switch** is a preference: `setPreferences({ proactive: { enabled } })`, the owner's alone (a member's `setPreferences` takes display fields only). Off pauses every bot's agent without forgetting its settings. It takes no other field: an older client that sends `botId` is refused, so the capability is `-v2`.
+- **A bot's own settings** are set with `setBotProactive(botId, patch)`: `patch` is `{ enabled?, every?, sweepHours?, maxPerDay?, deliver?, watch?, instructions? }` and changes only what it names, or `null` to forget the bot's settings and routine. It answers the bot's entry (below). It needs `agents.manage` on a bot the role sees. A member's call also needs the agent to be theirs: the person who first sets an agent up is the one it works for (`person`), and another member's call is refused ("This bot's Proactive agent is set up for someone else."). The owner may change any, and forgets one to take it over.
+- **The `proactive` part** is `{ enabled, bots: { [botId]: { enabled, person, every, sweepHours, maxPerDay, deliver, watch, instructions, chatId?, pings?, day?, lastSweepAt?, log } } }`. `chatId` is the routine's chat (Check now is `runRoutine(chatId)`); `log` holds the last wakes, newest first (`{ at, reason, signals, outcome, runId, said? }`). A bot that was never set up has no entry: read it as off, with the usual settings. Decode tolerantly, the entry may gain fields.
+- **A member is sent** the switch, the whole entry of each bot their role manages whose agent is theirs (without `person`, and with `mine: true`), and for a bot whose agent is another person's only `{ enabled, taken: true }`. Never the owner's or another member's settings, rules or log.
+- **Whose agent it is.** A member's agent hears only of runs and questions in chats that member is part of, for bots their role sees. It never hears of the owner's tasks or of approvals and secure inputs (only the owner answers those), and it never looks around the computer's own tools and accounts (`sweepHours` stays 0, `tasks` is not watched). Its routine and chat are the member's (`createdBy`), and its alerts are a message in that member's chat with the bot (`deliver: "chat"`) or a card in that member's own Feed (`deliver: "feed"`, with `today` view). It pauses while the member's role stops managing the bot. The owner's agent hears of the owner's own chats and of what only the owner can answer.
+
 ## What differs for a desktop client
 
 - **Notifications.** A desktop client does not register for push (`link.push.register` is for phones). It should call `link.push.presence(active, chatId?)` when its window comes to the front, goes away, or shows another chat. While a desktop client is in front, the host treats it like its own window: a reply in the chat on that screen sends no notification to a phone.
@@ -324,6 +336,15 @@ type AppUpdate = {
 - **The screen.** `link.screen.*` shows the host's screen. A desktop client may use it under the same rule as a phone (the host's person allows view or control).
 - **Secrets.** As for a phone: a client saves a credential or links a field, then sends `{ $credential: id }`. No call returns a secret.
 - **Which host is in use.** Show `meta.name` (the host's name) wherever the client shows data from a host, and let the person switch between "This Mac" and each paired host. Keep one `Pairing` and one `LinkClient` for each host.
+
+## Gadgets (`gadgets-v1`)
+
+A gadget is a small device with a microphone, a speaker and maybe a screen that talks with a bot. It is a client of kind `"gadget"`, and the owner's, like the owner's phone. Its whole contract, with the link's bytes for firmware that has no client library, is `gadget/docs/contract.md`. What a client of the other two kinds needs to know:
+
+- **A gadget is paired by introduction, with no code.** An owner device that read a gadget's public key (over a cable, or Bluetooth) calls `link.gadgets.add({ publicKey, name?, board?, botId? })` and hands the answer, `{ deviceId, serverId, serverKey, name, hosts }`, to the gadget. It is the owner's call only. The app on the host does the same with `link.addGadget(…)`.
+- **It is in the device list** with `kind: "gadget"`, `platform: "esp32"` and `gadget: { board?, firmware?, botId? }`. Rename and remove work as for any device. Show it as a gadget, not as a phone.
+- **Its chats are the owner's own chats.** A phone lists them, opens them and answers in them like any other.
+- **A gadget follows two parts, `meta` and `gadget`,** in place of the app's parts, and makes its own calls (`link.gadget.*`). Those are refused for a phone or a desktop ("Only a gadget can do that.").
 
 ## The relay
 
@@ -334,4 +355,5 @@ Away from the host's network a client goes through the relay (`relay.botkins.app
 - `link.json` is version 1 and has not changed shape. A device paired before `kind` existed gets its kind from its platform when the file is read. No device has to pair again.
 - A host without `devices-v1` has no `link.devices.*` calls and no `kind` in `phones`. A client then shows only itself.
 - A host without `device-person-v1` ignores `person` and has no `link.devices.setPerson`; a client offers only Rename. A device paired before has no `person` until the owner adds one.
+- A host without `member-rename-v1` has no `link.team.renameMember(memberId, name)` (owner only; the name has the rules of a team's name: trimmed, 60 characters at most). A client leaves Rename out of a member's menu. Its rules are in `TEAMS.md`.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.

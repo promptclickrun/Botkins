@@ -6,7 +6,7 @@ Botkins is the phone app for the Botkins app on your computer. Pair your phone w
 
 ## What you can do
 
-- **Pair in seconds.** Turn on phone access in the Botkins app on your computer (Settings › Phone), then scan the code with your phone. Or choose "Enter a code instead": the phone finds your computer on the network by itself and you type only the code. Typing an address and port is there as a last resort. A paired phone can do what you can do in the app on your computer, so pair only your own phone. You can remove it there at any time.
+- **Pair in seconds.** Turn on phone access in the Botkins app on your computer (Settings › Phone), then choose "Connect to my computer" on your phone and scan the code. Or choose "Enter a code instead" under the camera: the phone finds your computer on the network by itself and you type only the code. Typing an address and port is there as a last resort. A paired phone can do what you can do in the app on your computer, so pair only your own phone. You can remove it there at any time. No Botkins yet? "Set up a new Botkins" links to the download for a Mac, Windows or Linux computer, and to "Deploy to Azure" for a server of your own. Settings › Computers and teams lists every computer and team the phone knows, with "Connect a computer", "Join a team" and "Set up a new Botkins".
 - **Chat with your bots.** Replies stream in as they are written. You see what a bot is doing, approve what it asks for, answer its questions, stop it, and queue the next message. A command that looks risky needs a press and hold to allow. Tables in a reply fit your screen.
 - **Mention and attach.** Type `/` for commands and skills. Type `#` for projects, wiki pages, files and artifacts, then the pull requests of the chat's project (your computer reads them with the GitHub CLI). Type `@` for bots (a group chat's members, or the teammates a bot may ask) and the same records. Attach photos, camera pictures and files; the phone sends them to your computer. Use Discuss on a card in Today to start a chat about it.
 - **See the context window.** A ring in a chat's header shows how full the model's context is. Tap it to see what fills it and to compact the chat.
@@ -48,7 +48,7 @@ npm test                # 243 tests: the link, your computer's end of it, the re
 
 Three scripts rebuild pictures from the design kit and need macOS: `node scripts/build-botkins.mjs` (the Botkins), `node scripts/check-botkins-layers.mjs` (checks the layers used for custom colors; it also needs Python with Pillow and numpy) and `node scripts/build-widget-assets.mjs` (the Live Activity's pictures).
 
-In the simulator, choose **Enter a code instead**, then **Type an address instead**, and type `127.0.0.1:47620` and the code that `npm run dev-host` printed. (The demo computer does not announce itself on the network; the desktop app does.)
+In the simulator, choose **Connect to my computer**, then **Enter a code instead**, then **Type an address instead**, and type `127.0.0.1:47620` and the code that `npm run dev-host` printed. (The demo computer does not announce itself on the network; the desktop app does.)
 
 `AGENTS.md` describes the code layout, how screens read and change the computer's state, and the design rules.
 

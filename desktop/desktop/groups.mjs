@@ -62,14 +62,14 @@ export function groupInstructions(bot, members) {
   );
 }
 
-/** What a member reads before replying: everything said since its last turn, labeled by speaker. */
-export function catchUp(chat, bot, bots) {
+/** What a member reads before replying: everything said since its last turn, labeled by speaker. `speakerOf` names a person's message in a chat of several people (workspace.speakerNamer). */
+export function catchUp(chat, bot, bots, speakerOf = () => "") {
   const seen = chat.members?.[bot.id]?.seen ?? 0;
   const lines = [];
   for (const m of chat.messages.slice(seen)) {
     if (m.role === "assistant" && m.botId === bot.id) continue;
     if (m.role === "command" || !m.text) continue;
-    const who = m.role === "user" ? "Person" : (bots.find((b) => b.id === m.botId)?.name ?? "A bot");
+    const who = m.role === "user" ? speakerOf(m) || "Person" : (bots.find((b) => b.id === m.botId)?.name ?? "A bot");
     const quote = m.quote ? "(replying to: " + m.quote.trim().slice(0, 400) + ")\n" : "";
     // Records the person mentioned travel with their message (desktop/mentions.mjs).
     lines.push(who + ": " + quote + m.text + (m.role === "user" && m.context ? m.context : ""));

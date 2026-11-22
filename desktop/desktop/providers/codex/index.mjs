@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
 import { StdioRpc, cliEnv, findBinary, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
+import { watchQuiet } from "../liveness.mjs";
 import { SessionStore, mcpText, missingConversation, serversWithTokens, transcriptContext } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
@@ -253,7 +254,7 @@ class CodexSession extends ProviderSession {
     const finished = Promise.withResolvers();
     finished.promise.catch(() => {});
     const turn = this.turn = { id: eventId, text: [], ...finished };
-    let timer;
+    let watching;
     try {
       const { thread } = await rpc.request("thread/read", { threadId, includeTurns: true });
       const saved = thread?.turns?.find((t) => t.id === eventId);
@@ -269,15 +270,15 @@ class CodexSession extends ProviderSession {
       }
       if (this.stopRequested) await this.interrupt();
       else onReady?.(this.steerInput(rpc, threadId, turn));
-      timer = setTimeout(() => finished.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), 600000);
+      watching = this.watch(turn);
       await finished.promise;
       if (turn.recoveryInterrupted) return null;
       return turn.text.map((item) => item.text).filter(Boolean).join("\n\n");
     } catch (error) {
-      if (timer) await this.interrupt();
+      if (watching) await this.interrupt();
       throw error;
     } finally {
-      clearTimeout(timer);
+      watching?.stop();
       this.turn = null;
     }
   }
@@ -290,11 +291,17 @@ class CodexSession extends ProviderSession {
     };
   }
 
-  async send(message, timeoutMs = 600000, onReady) {
+  /**
+   * Sends one message. There is no time limit: the person stops a turn that runs long, and the
+   * turn ends by itself when Codex's CLI stops or its thread is gone (see watch). `timeoutMs` is
+   * for a caller with nobody to stop it, such as a background summary.
+   */
+  async send(message, timeoutMs, onReady) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;
     let timer;
+    let watching;
     try {
       const threadId = await this.thread();
       const rpc = await this.provider.rpc();
@@ -305,8 +312,11 @@ class CodexSession extends ProviderSession {
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       // The turn can be failed from elsewhere (the CLI stopping) before anything waits on it.
       finished.catch(() => {});
-      timer = setTimeout(() => turn.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
-      timer.unref?.();
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => turn.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
+        timer.unref?.();
+      }
+      watching = this.watch(turn);
       try {
         const started = await rpc.request("turn/start", {
           threadId,
@@ -339,6 +349,7 @@ class CodexSession extends ProviderSession {
       }
     } finally {
       clearTimeout(timer);
+      watching?.stop();
       this.turn = null;
       this.sending = false;
     }
@@ -346,6 +357,7 @@ class CodexSession extends ProviderSession {
   /** One app-server notification for this session's thread. */
   notified(method, params) {
     const turn = this.turn;
+    turn?.quiet?.touch();
     switch (method) {
       case "item/started": {
         const item = params.item;
@@ -560,6 +572,28 @@ class CodexSession extends ProviderSession {
     throw Object.assign(new Error("Unsupported request: " + method), { code: -32601 });
   }
 
+  /**
+   * Watches `turn` while Codex is quiet: after each quiet spell Codex is asked whether the thread
+   * is still running it. A CLI that stopped ends the turn at once (CodexProvider.connect), so this
+   * is for a thread that is gone or has gone idle without telling us.
+   */
+  watch(turn) {
+    return (turn.quiet = watchQuiet({ probe: () => this.alive(turn), onDead: (error) => turn.reject(error) }));
+  }
+  /** Rejects only when Codex no longer runs `turn`; a check that fails or gets no answer is no news. */
+  async alive(turn) {
+    const rpc = this.provider.rpcNow;
+    if (!rpc) throw Object.assign(new Error("The Codex CLI stopped."), { code: "BOTKINS_PROVIDER_EXIT" });
+    if (!turn.id || !this.threadId) return;
+    let thread;
+    try {
+      ({ thread } = await rpc.request("thread/read", { threadId: this.threadId, includeTurns: false }, 15000));
+    } catch (error) {
+      if (missingConversation(error)) throw Object.assign(new Error("Codex no longer has this conversation."), { code: "BOTKINS_SESSION_LOST" });
+      return;
+    }
+    if (thread?.status?.type === "idle" || thread?.status?.type === "notLoaded") throw Object.assign(new Error("Codex stopped working on this reply without finishing it."), { code: "BOTKINS_SESSION_LOST" });
+  }
   /** Asks Codex to stop this session's turn, when one is running. Never starts the CLI. */
   interrupt() {
     const turn = this.turn;

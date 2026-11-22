@@ -19,12 +19,13 @@ import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
 import { VoiceDock } from "../voice/VoiceDock";
 import { completions } from "./completion";
+import { useChatScreenState } from "./useChatScreenState";
 import { createChatViewport, HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
@@ -91,17 +92,8 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   const teamSize = usePart("team")?.people?.length ?? 0;
   const place = myPlace(chat, myself(usePart("meta")));
   const mine = place === "manages";
-  const rename = () =>
-    Alert.prompt(
-      "Rename chat",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Save", onPress: (value?: string) => void (value?.trim() && attempt(api.renameChat(chat.id, value.trim()))) },
-      ],
-      "plain-text",
-      chat.title,
-    );
+  const prompt = useTextPrompt();
+  const rename = () => prompt.ask({ title: "Rename chat", value: chat.title, onSubmit: (title) => void attempt(api.renameChat(chat.id, title)) });
   const actions = [
     ...(bot && !chat.botIds ? [{ id: "new", title: "New chat with " + bot.name, image: "square.and.pencil" }] : []),
     ...(canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
@@ -111,10 +103,12 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     ...(project?.folder ? [{ id: "changes", title: "Changes", image: "plus.forwardslash.minus" }] : []),
     ...(panes > 0 ? [{ id: "pane", title: "Side pane", image: "sidebar.right" }] : []),
     { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
-    ...(Platform.OS === "ios" && mine ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
+    ...(mine ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
     ...(mine ? [{ id: "compact", title: "Compact", image: "arrow.down.right.and.arrow.up.left" }, { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
   ];
   return (
+    <>
+    {prompt.node}
     <MenuView
       actions={actions}
       onPressAction={({ nativeEvent }) => {
@@ -140,6 +134,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
         <Ellipsis size={22} color={colors.ink} strokeWidth={2.2} />
       </View>
     </MenuView>
+    </>
   );
 }
 
@@ -525,7 +520,6 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const keyboardHeight = useKeyboardState((state) => state.height);
   const requestRoom = Math.max(200, Math.min(screenHeight * 0.6, screenHeight - (keyboardUp ? keyboardHeight : insets.bottom) - insets.top - 168));
   const chat = useChat(chatId);
-  const chatsLoaded = useApp((state) => !!state.parts.chats);
   const view = useWatchedChat(chatId);
   const pending = useSyncExternalStore(pendingSends.subscribe, () => pendingSends.rows(chatId));
   const bot = useBot(chat?.botId);
@@ -576,6 +570,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     if (board) router.setParams({ board: undefined });
   };
   const [leaving, setLeaving] = useState(false);
+  // Only while the chat isn't in the list: it is loading until the computer says it's gone, and blank on a page being left.
+  const missing = useChatScreenState(chatId, leaving || !focused);
   // A message being replied to (Reply in its menu): it goes with the next message as a quote.
   const [quote, setQuote] = useState(() => drafts.get(chatId)?.quote ?? "");
   useEffect(() => {
@@ -809,7 +805,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   if (!chat)
     return (
       <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
-        {chatsLoaded && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : <Loading />}
+        {missing === "gone" && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : missing === "loading" || paneId ? <Loading /> : null}
       </View>
     );
 

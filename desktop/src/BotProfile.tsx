@@ -24,7 +24,9 @@ import { openProviderSettings } from "./providers";
 import { ChatRow, deleteBot, useAsk, type PageActions } from "./Pages";
 import { BotRoutines } from "./Routines";
 import BotAccess from "./BotAccess";
+import BotProactive, { hasProactive } from "./BotProactive";
 import BotVoiceCard from "./BotVoiceCard";
+import { teamCan } from "./teamAccess";
 import { openBotViewNext } from "./Settings";
 import "./integrations.css";
 import type { Bot, BotLook, State } from "./types";
@@ -357,7 +359,10 @@ export default function BotProfile({
               Manage capabilities
             </button>
           </section>
-          <BotVoiceCard bot={bot} />
+          {/* A bot's voice is for a role that manages bots: the host sends it the shared choices, never a key. */}
+          {teamCan(state, "agents", "manage") && <BotVoiceCard bot={bot} />}
+          {/* A Proactive agent is set by a role that manages bots; the computer says whose it is, and a member's is theirs. */}
+          {teamCan(state, "agents", "manage") && hasProactive(state) && <BotProactive state={state} bot={bot} />}
           <MemoryCard state={state} bot={bot} actions={actions} />
           <section className="profile-card">
             <h2>Today</h2>

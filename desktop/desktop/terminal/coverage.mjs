@@ -43,6 +43,7 @@ export const WORKSPACE = {
   reorderBots: cmd("bots order"),
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
+  setBotProactive: cmd("bots proactive"),
   ...each("botMemory setBotMemory", cmd("bots memory")),
   ...each("addSection", cmd("bots sections add")),
   renameSection: cmd("bots sections rename"),
@@ -253,6 +254,7 @@ export const WORKSPACE = {
   // The team (control-team.mjs): kept by the phone link, reached through the app's own calls.
   team: cmd("team show"),
   renameTeam: cmd("team rename"),
+  renameTeamMember: cmd("team members rename"),
   saveTeamRole: cmd("team roles save"),
   deleteTeamRole: cmd("team roles remove"),
   saveTeamGroup: cmd("team groups save"),
@@ -295,9 +297,14 @@ export const LINK = {
   "link.devices.rename": cmd("devices rename"),
   "link.devices.setPerson": cmd("devices set-person"),
   "link.devices.remove": cmd("devices remove"),
+  // Gadgets (desktop/link/gadget.mjs). A person names one from a cable; the rest are a gadget's own calls,
+  // which only a paired gadget makes, as a phone makes its own.
+  "link.gadgets.add": cmd("gadgets add"),
+  ...each("link.gadget.hello link.gadget.set link.gadget.say link.gadget.hear link.gadget.speak", no("phone's own")),
   // The team, as the link names the same calls (control-team.mjs).
   "link.team.get": cmd("team show"),
   "link.team.rename": cmd("team rename"),
+  "link.team.renameMember": cmd("team members rename"),
   "link.team.saveRole": cmd("team roles save"),
   "link.team.deleteRole": cmd("team roles remove"),
   "link.team.saveGroup": cmd("team groups save"),
@@ -348,6 +355,8 @@ export const CHANGES = {
   "devices.rename": 0,
   "devices.setPerson": 0,
   "devices.remove": 0,
+  // A gadget set up over a cable: its name as the computer keeps it. Never the Wi-Fi network or its password.
+  "gadgets.add": (args, value) => value?.name,
   // An answer to a request that waits in a chat: the chat's id, the kind of the request (one of four fixed words) and yes or no. Never the request's text or the answer's, never a value.
   "chat.respond": (args, value) => (value?.chatId && ["permission", "secure", "question", "form"].includes(value.kind) && ["yes", "no"].includes(value.answered) ? value.chatId + " " + value.kind + " " + value.answered : (value?.chatId ?? null)),
   "bots.add": (args) => args?.[0]?.name,
@@ -401,6 +410,8 @@ export const CHANGES = {
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
+  // The bot's name only: not its rules, and not who the agent works for.
+  "bots.proactive.set": (args, value) => value?.name ?? args?.[0],
   "bots.memory.set": (args, value) => value?.name ?? args?.[0],
   "bots.sections.add": (args, value) => value?.name ?? args?.[0],
   "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
@@ -550,6 +561,7 @@ export const CHANGES = {
   "team.approve": (args, value) => value?.member?.id ?? value?.id,
   "team.deny": (args, value) => value?.id,
   "team.moveMember": (args, value) => value?.id,
+  "team.renameMember": (args, value) => value?.id,
   "team.removeMember": (args, value) => value?.id,
   "team.inviteToChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
   "team.removeFromChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
@@ -562,7 +574,7 @@ export const CHANGES = {
 export const READS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
-  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
+  bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
@@ -603,6 +615,8 @@ const FIXED_WORDS = {
   teamwork: onOff,
   // A login item on this computer: the person sees afterwards that a bot made Botkins start at login.
   "background.runAtStartup": onOff,
+  // An unattended bot that reads the person's sources: the log says when it was turned on.
+  "proactive.enabled": onOff,
 };
 const fixedWord = (key, value) => {
   const word = typeof key === "string" && Object.hasOwn(FIXED_WORDS, key) ? FIXED_WORDS[key](value) : null;

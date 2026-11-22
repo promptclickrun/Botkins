@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { signedInAs } from "./welcome-helper.mjs";
+import { setUpHere, signedInAs } from "./welcome-helper.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "botkins-first-run-"));
 const shots = process.env.FIRSTRUN_SHOTS;
@@ -47,6 +47,7 @@ try {
   mkdirSync(join(root, "home", "agents"), { recursive: true });
   await start("with-agents", "home");
   await heading("Welcome to Botkins").waitFor();
+  await setUpHere(page);
   assert.deepEqual((await snapshot()).bots, [], "a new workspace has no bots");
   // An agent's model carries over when the account has it. Signed out, there is no model list to match.
   const models = await page.evaluate(() => window.botkins.models().catch(() => []));
@@ -164,6 +165,7 @@ try {
   mkdirSync(join(root, "empty-home"), { recursive: true });
   await start("no-agents", "empty-home");
   await heading("Welcome to Botkins").waitFor();
+  await setUpHere(page);
   await button("Get started").click();
   await heading("Create your first bot").waitFor();
   await expect(heading("Home")).toHaveCount(0);

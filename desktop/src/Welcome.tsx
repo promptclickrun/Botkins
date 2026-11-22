@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ProviderStatus } from "./types";
 import ProviderIcon from "./ProviderIcon";
@@ -107,7 +107,8 @@ export function useProviderSignIn() {
 }
 
 /**
- * The full-window welcome: shown on first launch, and whenever no model provider is connected.
+ * The full-window welcome: shown on first launch once the person chose Set up on this computer
+ * (src/SetupChoice.tsx), and whenever no model provider is connected.
  * ChatGPT, Claude and GitHub Copilot are always the three main choices, in that order and as
  * equals: the same row, the same button, none chosen ahead or marked as recommended, whether or
  * not the provider was switched on before. Every other provider is under More providers. Once
@@ -117,9 +118,12 @@ export default function Welcome({
   onboarded,
   finish,
   later,
+  back,
 }: {
   /** The person has used Botkins before; the welcome is back because nothing is connected. */
   onboarded: boolean;
+  /** Back to the first launch's choice of where the bots run (src/SetupChoice.tsx). */
+  back?: () => void;
   /** Get started: marks the welcome done. */
   finish: () => Promise<void> | void;
   /** Not now: an onboarded person can open their workspace with nothing connected. */
@@ -285,7 +289,14 @@ export default function Welcome({
   return (
     <WelcomeFrame label="welcome-title">
       <div className="welcome-card" ref={card}>
-        <WelcomeLogo />
+        {back ? (
+          <button type="button" className="welcome-later welcome-back" onClick={back}>
+            <ArrowLeft size={14} aria-hidden="true" />
+            Back
+          </button>
+        ) : (
+          <WelcomeLogo />
+        )}
         <h1 id="welcome-title" ref={title} tabIndex={-1}>
           {onboarded ? "Welcome back" : "Welcome to Botkins"}
         </h1>

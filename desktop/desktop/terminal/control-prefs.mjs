@@ -14,6 +14,7 @@ import { appearanceField, clarificationPrompts, defaultSettings, FONT_IDS, sideb
 import { HARNESSES } from "../harness/index.mjs";
 import { AUTO_SUMMARIZE_MAX, AUTO_SUMMARIZE_MIN } from "../summaries.mjs";
 import { MAC_LEVELS, MAC_TOOLS } from "../mactools.mjs";
+import { defaultProactive } from "../proactive-settings.mjs";
 import { usageCsv } from "../usage.mjs";
 import { ControlError } from "./socket.mjs";
 
@@ -63,6 +64,7 @@ export const PREFERENCES = {
   "background.runAtStartup": switches("The desktop app starts with the computer (for the app's window; this host starts with `botkins service install`)"),
   "sidebar.order": { type: "list", values: SIDEBAR, about: "The order of the places in the side menu: " + SIDEBAR.join(", ") },
   "sidebar.collapsed": switches("The side menu shows icons only"),
+  "proactive.enabled": switches("Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"),
 };
 /** What each choice of the preference `harness` is, in a sentence. */
 export const HARNESS_ABOUT = {
@@ -83,6 +85,8 @@ export const WIDENS = {
   "access.allBots": (now, next) => (next === true && now !== true ? "Turning on access for all bots lets every bot use every project: the grant that each bot has no longer limits it, so bots get more room." : null),
   teamwork: (now, next) => (next === true && now !== true ? "Turning teamwork on lets a bot bring other bots into a chat to work for it: bots get more room." : null),
   // It makes a login item on this computer (desktop/runtime.mjs, setPreferences): a program that starts at each login.
+  // An unattended bot that wakes on its own, reads the person's sources and spends their model.
+  "proactive.enabled": (now, next) => (next === true && now !== true ? "Turning on the Proactive agent for this computer lets every bot that has its own Proactive agent switched on wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model." : null),
   "background.runAtStartup": (now, next) => (next === true && now !== true ? "Turning on run at startup makes Botkins start when the person logs in to this computer: it adds a login item to this computer." : null),
 };
 
@@ -97,6 +101,7 @@ function wholeSettings(settings = {}) {
     access: { ...defaultSettings.access, ...settings.access },
     background: backgroundField(settings.background),
     sidebar: sidebarField(settings.sidebar),
+    proactive: { ...defaultProactive, ...settings.proactive },
   };
 }
 const lookup = (settings, key) => key.split(".").reduce((value, part) => value?.[part], settings);
@@ -152,6 +157,11 @@ function parsePreference(key, spec, value) {
     case "text":
       if (typeof value !== "string" || value.length > spec.max) throw refuse("text of up to " + spec.max + " characters");
       return value;
+    case "number": {
+      const n = typeof value === "number" ? value : typeof value === "string" && /^\d{1,4}$/.test(value.trim()) ? Number(value.trim()) : NaN;
+      if (!spec.values.includes(n)) throw refuse("one of " + spec.values.join(", "));
+      return n;
+    }
     default:
       throw refuse("a different value");
   }

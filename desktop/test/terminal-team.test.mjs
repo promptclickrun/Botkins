@@ -255,3 +255,42 @@ test("an invite's code is printed once and is in no list, no log and no file; mo
   assert.equal(left.exit, 2);
   assert.match(left.err, /This needs a yes\. Run it again with --yes\./);
 });
+
+test("team members rename: a member is renamed by name or id, and the name is the member's everywhere, with no yes needed", { skip }, async (t) => {
+  const { botkins, client, changes, asks, link } = await service(t);
+  const invite = (await botkins(["team", "invite", "--uses", "5", "--json"])).json();
+  const joined =(await client.call("team.approve", asks(invite.id, "Sam's phone", "Sam"), { agreed: true })).member;
+  const other = (await client.call("team.approve", asks(invite.id, "Kim's laptop", "Kim"), { agreed: true })).member;
+
+  // A rename changes nothing about access, so it asks nothing. The member is found by name, as the other member commands do.
+  const done = await botkins(["team", "members", "rename", "sam", "Samantha", "Lee"]);
+  assert.equal(done.exit, 0, done.err);
+  assert.equal(done.out, "Sam is called Samantha Lee now.\n");
+  const listed = (await botkins(["team", "members", "list", "--json"])).json();
+  assert.deepEqual(listed.map((entry) => entry.name).sort(), ["Kim", "Samantha Lee"]);
+  // The link's own records agree: the people list and the member's device (`devices set-person` shows the same name).
+  assert.equal(link.team().people.find((person) => person.id === joined.id).name, "Samantha Lee");
+  assert.equal(link.store.data.devices.find((device) => device.memberId === joined.id).person, "Samantha Lee");
+  // A name with spaces is one word when quoted, and the id works too; --json answers the member.
+  const quoted = await botkins(["team", "members", "rename", joined.id, "Sam L", "--json"]);
+  assert.equal(quoted.exit, 0, quoted.err);
+  assert.deepEqual([quoted.json().id, quoted.json().name], [joined.id, "Sam L"]);
+  assert.match((await botkins(["team", "members", "rename", "Samantha", "Sam"])).err, /There is no member called Samantha\./);
+
+  // Nothing to rename, no name, an empty name and a name that is too long are refused.
+  assert.equal((await botkins(["team", "members", "rename"])).exit, 2);
+  assert.equal((await botkins(["team", "members", "rename", "Kim"])).exit, 2);
+  const blank = await botkins(["team", "members", "rename", "Kim", "   "]);
+  assert.equal(blank.exit, 1);
+  assert.match(blank.err, /Give the member a name of up to 60 characters\./);
+  const long = await botkins(["team", "members", "rename", "Kim", "x".repeat(61)]);
+  assert.equal(long.exit, 1);
+  assert.match(long.err, /Give the member a name of up to 60 characters\./);
+  await assert.rejects(client.call("team.renameMember", "Kim", ""), { code: "BAD_ARGUMENT" });
+  await assert.rejects(client.call("team.renameMember", "Nobody", "Zed"), { code: "NOT_FOUND" });
+  assert.equal((await client.call("team.members")).find((entry) => entry.id === other.id).name, "Kim", "a refusal changes nothing");
+
+  // The log has the member's id, never the name.
+  const lines = (await changes()).filter((line) => line.startsWith("team.renameMember"));
+  assert.deepEqual(lines, ["team.renameMember " + joined.id, "team.renameMember " + joined.id]);
+});

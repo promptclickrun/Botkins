@@ -23,7 +23,7 @@ import type { Bot, ChatSummary, Section } from "@/link/types";
 import { activityLabel, useBotActivity, useBots, useCan, useIsPrimaryBot, usePart, useCanArrange, useMember } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
-import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
 import { arrangeBots } from "./arrange";
 import { type BoardItem, boardItems, DRAG, pickSlot, restingTop, sectionIdOf, shiftOf, stepSlot, type Zone, zoneOfSection } from "./drag";
 
@@ -41,7 +41,9 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
   const canArrange = useCanArrange();
   const member = useMember();
   const canDelete = useCan("agents", "delete");
+  const prompt = useTextPrompt();
   return (
+    <>
     <HoldMenu
       actions={[
         ...(canChat ? [{ id: "new", title: "New chat", image: "square.and.pencil" }] : []),
@@ -55,7 +57,7 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
       ]}
       onPressAction={({ nativeEvent }) => {
         const event = nativeEvent.event;
-        if (runSectionChoice(bot, event)) return;
+        if (runSectionChoice(bot, event, prompt.ask)) return;
         if (event === "new") void newBotChat(bot.id);
         else if (event === "page") router.push({ pathname: "/bot/[id]", params: { id: bot.id } });
         else if (event === "pin") void attempt(api.setBotFlags(bot.id, { pinned: !bot.pinned }));
@@ -71,6 +73,8 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
     >
       {children}
     </HoldMenu>
+    {prompt.node}
+    </>
   );
 }
 
@@ -127,6 +131,7 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
 function SectionHead({ section, count, open, onToggle, note }: { section: Section; count: number; open: boolean; onToggle: () => void; note?: string }) {
   const { colors } = useTheme();
   const canManage = useCan("agents", "manage");
+  const prompt = useTextPrompt();
   const Fold = open ? ChevronDown : ChevronRight;
   return (
     <View>
@@ -147,13 +152,14 @@ function SectionHead({ section, count, open, onToggle, note }: { section: Sectio
           <Fold size={14} color={colors.faint} strokeWidth={2.4} />
         </Tap>
         {canManage && (
-          <MenuView title={section.name} actions={SECTION_ACTIONS} onPressAction={({ nativeEvent }) => runSectionAction(section, nativeEvent.event)}>
+          <MenuView title={section.name} actions={SECTION_ACTIONS} onPressAction={({ nativeEvent }) => runSectionAction(section, nativeEvent.event, prompt.ask)}>
             <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
               <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
             </View>
           </MenuView>
         )}
       </View>
+      {prompt.node}
       {!!note && (
         <T variant="footnote" color="faint" style={{ paddingHorizontal: space.xs, paddingBottom: space.sm }}>
           {note}

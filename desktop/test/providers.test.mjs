@@ -8,12 +8,13 @@ import { Workspace } from "./starter.mjs";
 import { Providers, ModelProvider, ProviderSession, defineTool } from "../desktop/providers/index.mjs";
 import { CopilotProvider, sessionOptions, spoken } from "../desktop/providers/copilot/index.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
+import { pass, settle, watching } from "./quiet-turns.mjs";
 
 /** A workspace on the Copilot adapter with warm sessions on, over a fake SDK client. */
 function warm(t, reply, options = {}) {
   const dir = tempDir(t);
   const fake = fakeClient(reply, options.extra);
-  const copilot = new CopilotProvider({ connect: fake.client, keepWarmMs: options.keepWarmMs ?? 60000, maxWarm: options.maxWarm ?? 6, stallTimeoutMs: options.stallTimeoutMs });
+  const copilot = new CopilotProvider({ connect: fake.client, keepWarmMs: options.keepWarmMs ?? 60000, maxWarm: options.maxWarm ?? 6, quietCheckMs: options.quietCheckMs });
   t.after(() => copilot.stop());
   const ws = new Workspace(join(dir, "data"), new Providers([copilot, ...(options.more ?? [])]), () => {});
   return { ws, dir, copilot, ...fake };
@@ -255,7 +256,6 @@ test("a warm session closes by itself after the keep-warm time", async (t) => {
 test("Copilot activity keeps a turn alive beyond the old wall-clock deadline", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const { ws, copilot } = warm(t, undefined, {
-    stallTimeoutMs: 600000,
     extra: {
       send: async (_id, _options, session) => {
         session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
@@ -275,9 +275,8 @@ test("Copilot activity keeps a turn alive beyond the old wall-clock deadline", a
   });
   const id = ws.createChat("pip");
   const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
-  const reply = session.send({ prompt: "Long" }, 600000);
-  // Advance the fake clock 800 seconds: the old wall-clock deadline has passed, but each
-  // 100-second activity event resets the inactivity detector.
+  const reply = session.send({ prompt: "Long" });
+  // Advance the fake clock 800 seconds: the old wall-clock deadline has passed, and the turn goes on.
   await Promise.resolve();
   t.mock.timers.tick(800000);
   await assert.doesNotReject(reply);
@@ -285,88 +284,132 @@ test("Copilot activity keeps a turn alive beyond the old wall-clock deadline", a
   await copilot.stop();
 });
 
-test("a silent Copilot session still reports an inactivity stall", async (t) => {
-  const { ws, copilot } = warm(t, undefined, {
-    stallTimeoutMs: 20,
-    extra: { send: async () => "request" },
-  });
+/** A session that admits the message and then says nothing until the test says more. */
+const quiet = {
+  send: async (_id, _options, session) => {
+    session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
+    return "request";
+  },
+};
+/** A quiet session whose connection is closed once its message has been sent (the model lookup before that works). */
+function dying() {
+  const sent = new WeakSet();
+  return {
+    send: (id, options, session) => (sent.add(session), quiet.send(id, options, session)),
+    current: async (_id, session) => (sent.has(session) ? Promise.reject(new Error("Connection is closed.")) : { modelId: "auto" }),
+  };
+}
+const finish = (session) => {
+  session.emit({ type: "assistant.message", id: "reply", data: { originatingMessageId: "request", content: "Finished" } });
+  session.emit({ type: "session.idle", data: { mode: "interactive" } });
+};
+
+test("a Copilot turn that is quiet for hours while its session is alive does not fail, and completes when the events arrive", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let asked = 0;
+  const { ws, copilot } = warm(t, undefined, { extra: { ...quiet, current: async () => (asked++, { modelId: "auto" }) } });
   const id = ws.createChat("pip");
   const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
-  await assert.rejects(session.send({ prompt: "Silent" }, 20), (error) => error.code === "BOTKINS_SESSION_STALL");
+  const { seen, done } = watching(session.send({ prompt: "Long" }));
+  await settle();
+  // Three hours with nothing from the session: the old limit was ten minutes.
+  await pass(t, 3 * 60 * 60 * 1000);
+  assert.equal(seen.state, "pending", "a quiet session that answers the check is not failed");
+  assert.ok(asked >= 10, "the session was asked whether it is still there");
+  finish(session.sdk);
+  await done;
+  assert.deepEqual(seen.value, { text: "Finished" });
   await session.close();
   await copilot.stop();
 });
 
-test("a caller's inactivity timeout overrides the provider default", async (t) => {
-  const { ws, copilot } = warm(t, undefined, {
-    stallTimeoutMs: 1000,
-    extra: { send: async () => new Promise(() => {}) },
-  });
+test("a check that gets no answer, or an odd one, is no news: the turn keeps waiting", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const answers = [() => new Promise(() => {}), () => Promise.reject(new Error("Internal error")), () => ({ modelId: "auto" })];
+  let asked = 0;
+  const { ws, copilot } = warm(t, undefined, { extra: { ...quiet, current: async () => answers[Math.min(asked++, 2)]() } });
   const id = ws.createChat("pip");
   const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
-  const send = session.send({ prompt: "Use the caller timeout" }, 20);
-  send.catch(() => {});
-  await assert.rejects(
-    Promise.race([
-      send,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("caller timeout was ignored")), 200)),
-    ]),
-    (error) => error.code === "BOTKINS_SESSION_STALL",
-  );
+  const { seen, done } = watching(session.send({ prompt: "Long" }));
+  await settle();
+  await pass(t, 20 * 60 * 1000);
+  assert.ok(asked >= 3);
+  assert.equal(seen.state, "pending");
+  finish(session.sdk);
+  await done;
+  assert.equal(seen.state, "done");
   await session.close();
   await copilot.stop();
 });
 
-test("admission activity resets the stall without retaining every delta", async (t) => {
+test("a Copilot turn whose session dies during the silence fails with a clear error", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let dead = false;
   const { ws, copilot } = warm(t, undefined, {
-    stallTimeoutMs: 20,
+    extra: { ...quiet, current: async () => (dead ? Promise.reject(new Error("Connection is closed.")) : { modelId: "auto" }) },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const reply = session.send({ prompt: "Long" });
+  const failed = assert.rejects(reply, (error) => error.code === "BOTKINS_SESSION_LOST" && /Copilot stopped before it finished this reply \(Connection is closed\.\)/.test(error.message));
+  await settle();
+  await pass(t, 30 * 60 * 1000);
+  dead = true;
+  await pass(t, 5 * 60 * 1000);
+  await failed;
+  assert.equal(session.sdk.listeners(), 0, "the turn's listener is removed");
+  await session.close();
+  await copilot.stop();
+});
+
+test("a Copilot turn that never gets its message admitted fails once the session is gone, and not before", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let dead = false;
+  const { ws, copilot } = warm(t, undefined, {
+    extra: { send: async () => new Promise(() => {}), current: async () => (dead ? Promise.reject(new Error("Session not found: gone")) : { modelId: "auto" }) },
+  });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const admission = session.send({ prompt: "Never admitted" });
+  const failed = assert.rejects(admission, (error) => error.code === "BOTKINS_SESSION_LOST");
+  await settle();
+  await pass(t, 60 * 60 * 1000);
+  dead = true;
+  await pass(t, 5 * 60 * 1000);
+  await failed;
+  assert.equal(session.sdk.listeners(), 0);
+  await session.close();
+  await copilot.stop();
+});
+
+test("Stop ends a Copilot turn at once, even one whose message was never admitted", async (t) => {
+  const { ws, copilot } = warm(t, undefined, { extra: { send: async () => new Promise(() => {}), current: async () => ({ modelId: "auto" }) } });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  const reply = session.send({ prompt: "Hangs" });
+  await tick(5);
+  await session.abort();
+  await assert.rejects(reply, /aborted/);
+  assert.equal(session.sdk.listeners(), 0);
+  await session.close();
+  await copilot.stop();
+});
+
+test("a caller that names a time limit gets it: Copilot gives up on a background turn after that long", async (t) => {
+  const { ws, copilot } = warm(t, undefined, { extra: { send: async () => new Promise(() => {}), current: async () => ({ modelId: "auto" }) } });
+  const id = ws.createChat("pip");
+  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
+  await assert.rejects(session.send({ prompt: "Summarize" }, 20), (error) => error.code === "BOTKINS_TURN_TIMEOUT");
+  assert.equal(session.sdk.listeners(), 0);
+  await session.close();
+  await copilot.stop();
+});
+
+test("a Copilot turn whose session died still recovers the reply it journaled before Needs you", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { ws, copilot } = warm(t, undefined, {
     extra: {
-      send: async (_id, _options, session) => {
-        for (let i = 0; i < 10000; i++) session.emit({ type: "assistant.message_delta", data: { deltaContent: "x" } });
-        session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
-        return new Promise(() => {});
-      },
-    },
-  });
-  const id = ws.createChat("pip");
-  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
-  const send = session.send({ prompt: "Admission activity" }, 20);
-  send.catch(() => {});
-  await assert.rejects(send, (error) => error.code === "BOTKINS_SESSION_STALL");
-  assert.equal(session.sdk.listeners(), 0, "the bounded admission buffer still cleans up its listener");
-  await session.close();
-  await copilot.stop();
-});
-
-test("a Copilot turn whose admission stalls rejects and removes its event listener", async (t) => {
-  const { ws, copilot } = warm(t, undefined, {
-    stallTimeoutMs: 20,
-    extra: { send: async () => new Promise(() => {}) },
-  });
-  const id = ws.createChat("pip");
-  const session = await ws.openSession(ws.chat(id), ws.bot("pip"), null, null);
-  const admission = session.send({ prompt: "Never admitted" }, 20);
-  admission.catch(() => {});
-  await assert.rejects(
-    Promise.race([
-      admission,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("admission did not stall out")), 100)),
-    ]),
-    (error) => error.code === "BOTKINS_SESSION_STALL",
-  );
-  assert.equal(session.sdk.listeners(), 0, "stall cleanup removes the listener even when send() never resolves");
-  await session.close();
-  await copilot.stop();
-});
-
-test("a stalled Copilot turn recovers a final journaled reply before Needs you", async (t) => {
-  const { ws, copilot } = warm(t, undefined, {
-    stallTimeoutMs: 20,
-    extra: {
-      send: async (_id, _options, session) => {
-        session.emit({ type: "user.message", id: "user-event", data: { messageId: "request" } });
-        return "request";
-      },
+      ...dying(),
       events: async () => [
         { type: "user.message", id: "user-event", data: { messageId: "request" } },
         { type: "assistant.message", data: { originatingMessageId: "request", content: "Recovered from journal" } },
@@ -375,19 +418,29 @@ test("a stalled Copilot turn recovers a final journaled reply before Needs you",
     },
   });
   const id = ws.createChat("pip");
-  const sendTurn = ws.sendTurn.bind(ws);
-  ws.sendTurn = (session, ...args) => {
-    const send = session.send;
-    session.send = (input) => send.call(session, input, 20);
-    try {
-      return sendTurn(session, ...args);
-    } finally {
-      session.send = send;
-    }
-  };
-  await ws.send(id, "Long request");
+  const turn = ws.send(id, "Long request");
+  await settle();
+  await pass(t, 5 * 60 * 1000);
+  await turn;
   assert.equal(ws.state.runs[0].status, "Completed");
   assert.equal(ws.chat(id).messages.at(-1).text, "Recovered from journal");
+  await copilot.stop();
+});
+
+test("a Copilot turn whose session died and journaled nothing ends as Needs you, not Timed out", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { ws, copilot, log } = warm(t, undefined, { extra: dying() });
+  const id = ws.createChat("pip");
+  let done = false;
+  const turn = ws.send(id, "Long request").then(() => (done = true));
+  // A lost connection is tried once more on a fresh session (retryConnection), which is lost too.
+  for (let i = 0; i < 30 && !done; i++) await pass(t, 60000);
+  await turn;
+  assert.equal(log.sent.length, 2);
+  const run = ws.state.runs[0];
+  assert.equal(run.status, "Needs you");
+  assert.equal(run.ending, "failed");
+  assert.match(run.detail, /Copilot stopped before it finished this reply/);
   await copilot.stop();
 });
 

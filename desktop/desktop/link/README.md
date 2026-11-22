@@ -20,6 +20,8 @@ These modules let a paired phone running Botkins use a desktop app over the loca
 | `relay.mjs` | `RelayHost`: the active and standby v3 sockets (with v2 fallback) that let a phone away from the network reach the computer. `RelayLink` remains for legacy callers. Also signs what is sent to the relay's push route. |
 | `push.mjs` | `Push`: notifications and Live Activities for phones that asked. See "Push notifications". |
 | `device.mjs` | `DeviceTools`: tools that run on a paired phone, and the list of them. See "Tools that run on a phone". |
+| `gadget.mjs` | Gadgets: small devices that talk with a bot. Pairing by introduction, the two small parts a gadget follows, and speech in and out as plain samples. The contract is `gadget/docs/contract.md`. See "Gadgets". |
+| `gadget-setup.mjs` | Setting a gadget up over its USB port: the introducer's half, for the app's own page and `botkins gadgets add`. |
 | `voice.mjs` | `Voice`: speech to text, text to speech and live voice sessions, through providers the person chose. `VOICE.md` has the contract and every provider. See "Voice". |
 | `tools.mjs` | Runs the computer's command-line tools without a shell, with a time limit and a small environment. |
 | `net.mjs` | Which addresses to offer a phone, and which callers count as nearby. |
@@ -76,7 +78,7 @@ A paired phone can do what the person can do in the app, so pairing is a full-tr
 
 ## Teams
 
-Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
+Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember`, `renameMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
 
 `MEMBER_PREFERENCE_FIELDS` is deliberately limited to `appearance`, `foldTools`, `showThinking`, `linkPreviews` and `readAloud`; no approval, access, teamwork, link, provider or voice setting is member-writable.
 
@@ -176,6 +178,16 @@ The key is derived each time from the phone's pairing key, so the computer store
 **Limits at the link.** A `link.voice.transcribe` call carries at most 5 MiB of audio, and `link.voice.speak` at most 4,000 characters. `voice.mjs` itself limits recordings to 25 MB, answers to 40 MB, requests to 60 seconds, and lists and tokens to 15 seconds (`VOICE.md`, "Errors and limits").
 
 **Not tested for real.** No call to any provider has been made with a real key. Every route was read in documentation and run against a fake provider. `VOICE.md` lists where to try first.
+
+## Gadgets
+
+A gadget (an ESP32 board with a microphone and a speaker) is a paired device of kind `"gadget"`. `gadget/docs/contract.md` is its whole contract; this is what an app does with it.
+
+- **Add one.** `link.addGadget({ publicKey, name?, board?, botId? })` pairs a gadget by its key, with no code, and answers the introduction the gadget needs. `introduce()` in `gadget-setup.mjs` does the whole of setup over a USB port: it reads the gadget's key, calls `add`, hands the gadget the answer and the Wi-Fi network, and waits until the gadget is online. `serialLines(path)` opens a serial port for it on macOS and Linux; an app with a serial API of its own passes its own `io`.
+- **It is the owner's device.** Nothing is cut from what a bot may do in a gadget's chat, and the gadget answers a bot's requests itself. So adding a gadget is a full-trust step, like pairing a phone: say so where one is added. A team member can't add one.
+- **What it is sent.** Two small parts, `meta` and `gadget` (`gadgetPart`), and the reply's text for its own chat. The app's own parts never go to a gadget.
+- **Speech.** `link.gadget.hear` takes a recording in pieces and `link.gadget.speak` reads a reply as 16-bit samples at the gadget's rate. Both use the providers of Settings › Voice, so a gadget needs a provider there that is not "This device". `Voice.speak({ samples: true })` asks each provider for plain samples in place of MP3 (`VOICE.md`).
+- **In the device list** a gadget has `gadget: { board, firmware, botId }`. `link.status().devices` has the whole record. `removeDevice` works as for a phone.
 
 ## Limits
 

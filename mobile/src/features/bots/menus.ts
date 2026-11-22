@@ -4,6 +4,10 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { Alert } from "react-native";
 import type { Bot, Section } from "@/link/types";
 import { api, attempt } from "@/state/link";
+import type { TextPromptOptions } from "@/ui";
+
+/** `useTextPrompt().ask` from the screen that shows the menu (it renders the dialog Android needs). */
+type Ask = (options: TextPromptOptions) => void;
 
 /** The computer takes a section name up to this long. */
 const SECTION_MAX = 40;
@@ -26,27 +30,19 @@ export function moveToSection(bot: Bot, sections: Section[] | undefined): MenuAc
 }
 
 /** Carries out one of `moveToSection`'s choices. Answers false for any other menu choice. */
-export function runSectionChoice(bot: Bot, event: string): boolean {
+export function runSectionChoice(bot: Bot, event: string, ask: Ask): boolean {
   if (!event.startsWith("section:")) return false;
   const choice = event.slice("section:".length);
   if (choice === "new")
-    Alert.prompt(
-      "New section",
-      bot.name + " moves into it.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Create section",
-          onPress: (value?: string) => {
-            const name = nameOf(value);
-            if (!name) return;
-            void attempt(api.addSection(name).then((id) => api.setBotFlags(bot.id, { sectionId: id })));
-          },
-        },
-      ],
-      "plain-text",
-      "",
-    );
+    ask({
+      title: "New section",
+      message: bot.name + " moves into it.",
+      confirm: "Create section",
+      onSubmit: (value) => {
+        const name = nameOf(value);
+        if (name) void attempt(api.addSection(name).then((id) => api.setBotFlags(bot.id, { sectionId: id })));
+      },
+    });
   else void attempt(api.setBotFlags(bot.id, { sectionId: choice === "none" ? null : choice }));
   return true;
 }
@@ -64,24 +60,17 @@ export const SECTION_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Delete section…", image: "trash", attributes: { destructive: true } },
 ];
 
-export function runSectionAction(section: Section, event: string) {
+export function runSectionAction(section: Section, event: string, ask: Ask) {
   if (event === "rename")
-    Alert.prompt(
-      "Rename section",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Rename",
-          onPress: (value?: string) => {
-            const name = nameOf(value);
-            if (name && name !== section.name) void attempt(api.renameSection(section.id, name));
-          },
-        },
-      ],
-      "plain-text",
-      section.name,
-    );
+    ask({
+      title: "Rename section",
+      value: section.name,
+      confirm: "Rename",
+      onSubmit: (value) => {
+        const name = nameOf(value);
+        if (name && name !== section.name) void attempt(api.renameSection(section.id, name));
+      },
+    });
   else if (event === "delete")
     Alert.alert("Delete “" + section.name + "”?", "Its bots stay. They move out of the section.", [
       { text: "Cancel", style: "cancel" },

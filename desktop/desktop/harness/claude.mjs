@@ -240,17 +240,21 @@ function runEnvironment(env) {
   return environment;
 }
 
-/** Reads a run's output a line at a time: the next thing Claude Code says, or null when it is done. */
+/**
+ * Reads a run's output a line at a time: the next thing Claude Code says, or null when it is done
+ * (its output closed because it exited). Without a `limit` it waits for as long as it takes: the
+ * runtime hanging up (the person's Stop) ends the run, and so does the process exiting.
+ */
 function reader(child) {
   const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
   let timer;
   return {
-    /** Silence past `limit` throws a 504. */
+    /** With a `limit`, silence past it throws a 504. */
     async next(limit) {
-      const waited = new Promise((_, reject) => (timer = setTimeout(() => reject(new PlanError(504, "api_error", "Claude Code stopped answering.")), limit)));
+      const waited = limit > 0 ? new Promise((_, reject) => (timer = setTimeout(() => reject(new PlanError(504, "api_error", "Claude Code stopped answering.")), limit))) : null;
       try {
         for (;;) {
-          const { value, done } = await Promise.race([lines.next(), waited]);
+          const { value, done } = await (waited ? Promise.race([lines.next(), waited]) : lines.next());
           if (done) return null;
           try {
             return JSON.parse(value);
@@ -462,7 +466,6 @@ function failure(code, detail) {
  * @param options.bridge   The local tool server (desktop/providers/toolbridge.mjs), to list the tools.
  * @param options.emit     (event) => void: each stream event of the reply, tool names as the runtime knows them.
  * @param options.signal   Aborts the run (the runtime hung up).
- * @param options.idleMs   How long Claude Code may say nothing before the run is given up.
  * @param options.ended    () => void: the reply is whole, so the caller can finish its answer. What
  *                         follows (below) never holds the answer back.
  * @param options.report   (modelUsage) => void: what Claude Code said about the models it used, at
@@ -473,7 +476,7 @@ function failure(code, detail) {
  *                         is started for the request.
  * Throws PlanError. A failure after the reply began is thrown too; the caller decides how to tell the runtime.
  */
-export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, idleMs = 240_000, launch = spawn, ended, report, reportMs = 4000, pool, handoverMs = HANDOVER_MS }) {
+export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, launch = spawn, ended, report, reportMs = 4000, pool, handoverMs = HANDOVER_MS }) {
   if (!file) throw new PlanError(503, "api_error", "Claude Code isn't installed. Install it from https://code.claude.com/docs/en/setup, then sign in under Settings › Model providers.");
   if (typeof body?.model !== "string" || !body.model) throw new PlanError(400, "invalid_request_error", "No model was named.");
   const names = toolNames(body.tools);
@@ -545,8 +548,9 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, i
       if (signal?.aborted) stop();
       read = reader(child);
     }
-    // The next thing Claude Code says, or null when it is done. Silence past the limit ends the run.
-    const next = (limit = idleMs) => read.next(limit);
+    // The next thing Claude Code says, or null when it is done. A run has no silence limit: Claude
+    // Code may think or run a tool for as long as it takes, and the person's Stop (the signal) or its exit ends the run.
+    const next = (limit) => read.next(limit);
     const said = (ended) => new PlanError(500, "api_error", "Claude Code stopped " + ended + "." + (stderr().trim() ? " " + stderr().trim().split("\n").at(-1).slice(0, 300) : ""));
 
     for (const [index, frame] of turns.entries()) {

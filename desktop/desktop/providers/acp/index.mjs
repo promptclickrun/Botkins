@@ -149,7 +149,12 @@ class AcpSession extends ProviderSession {
       );
   }
 
-  async send(message, timeoutMs = 600000) {
+  /**
+   * Sends one message. There is no time limit: the person stops a turn that runs long, and the
+   * agent's process ending ends the turn (the request fails). `timeoutMs` is for a caller with
+   * nobody to stop it, such as a background summary; 0 is no limit.
+   */
+  async send(message, timeoutMs = 0) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;

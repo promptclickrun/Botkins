@@ -13,6 +13,8 @@ import { SessionStore, missingConversation, serversWithTokens, transcriptContext
 import { buildInventory, resolvePrompt } from "../desktop/providers/commands.mjs";
 import { enabledSkills, skillChoices, skillSupport } from "../desktop/providers/skills.mjs";
 import { tempDir, tick } from "./fake-copilot.mjs";
+import { watchQuiet } from "../desktop/providers/liveness.mjs";
+import { pass, settle } from "./quiet-turns.mjs";
 
 const rpc = (url, headers, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
@@ -112,6 +114,12 @@ test("the channel to a command-line backend carries requests both ways and survi
   });
   assert.deepEqual(await plain.request("ask", { text: "again?" }), { answered: null, refused: "Not now" });
   await assert.rejects(plain.request("never-answered", {}, 50), /didn't answer in time/);
+  // 0 is no deadline at all: a turn is one such request, and the person is the one who ends it.
+  const unlimited = plain.request("never-answered", {}, 0);
+  let answered = false;
+  unlimited.then(() => (answered = true), () => (answered = true));
+  await tick(120);
+  assert.equal(answered, false);
   // A request in flight fails when the child stops, and later ones fail at once.
   const inFlight = plain.request("never-answered", {}, 5000);
   plain.notify("quit");
@@ -130,6 +138,52 @@ test("the channel to a command-line backend carries requests both ways and survi
   assert.equal(versionOf("codex-cli 0.169.0"), "0.169.0");
   assert.equal(versionOf("2.1.325 (Claude Code)"), "2.1.325");
   assert.equal(versionOf("nothing"), "");
+});
+
+test("a quiet turn's harness is asked after each quiet spell: alive or unsure goes on waiting, gone ends the turn once", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const gone = [];
+  let asked = 0;
+  let answer = () => undefined;
+  const watch = watchQuiet({ every: 60000, probeMs: 10000, probe: async () => (asked++, answer()), onDead: (error) => gone.push(error.message) });
+  await pass(t, 10 * 60000);
+  assert.equal(asked, 10, "asked once per quiet spell, with no limit");
+  // A sign of life starts the quiet spell again.
+  t.mock.timers.tick(50000);
+  watch.touch();
+  await pass(t, 50000);
+  assert.equal(asked, 10);
+  await pass(t, 10000);
+  assert.equal(asked, 11);
+  // No answer in time is no news; so is an answer that is late.
+  answer = () => new Promise(() => {});
+  const before = asked;
+  await pass(t, 5 * 60000);
+  assert.deepEqual(gone, []);
+  assert.ok(asked >= before + 3, "an unanswered check does not stop the next one");
+  // Gone: the turn ends once, and nothing is asked again.
+  answer = () => Promise.reject(new Error("Connection is closed."));
+  await pass(t, 2 * 60000);
+  const total = asked;
+  await pass(t, 10 * 60000);
+  assert.deepEqual(gone, ["Connection is closed."]);
+  assert.equal(asked, total);
+  watch.stop();
+});
+
+test("a quiet turn's check that finds the harness gone is not believed when the harness spoke meanwhile, and stop() ends the watching", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const gone = [];
+  let release;
+  const watch = watchQuiet({ every: 60000, probe: () => new Promise((_, reject) => (release = () => reject(new Error("closed")))), onDead: (error) => gone.push(error.message) });
+  await pass(t, 60000);
+  watch.touch();
+  release();
+  await settle();
+  assert.deepEqual(gone, [], "it spoke while the question was out");
+  watch.stop();
+  await pass(t, 10 * 60000);
+  assert.deepEqual(gone, []);
 });
 
 test("session records remember which backend conversation belongs to a Botkins session", async (t) => {

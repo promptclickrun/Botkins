@@ -4,11 +4,13 @@ import {
   Bot as BotIcon,
   Boxes,
   ChartColumn,
+  FlaskConical,
   HardDrive,
   Info,
   KeyRound,
   LockKeyhole,
   MessageSquareMore,
+  MonitorSmartphone,
   PanelLeft,
   Palette,
   Server,
@@ -26,7 +28,7 @@ import type { AppUpdate, AppInfo, Bot, Catalog, MarketAgentTemplate, Preferences
 import ModelPicker from "./ModelPicker";
 import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings, SummarySettings } from "./Preferences";
 import Usage from "./Usage";
-import { OtherComputers } from "./RemoteHosts";
+import { ComputersAndTeams } from "./RemoteHosts";
 import AccessSettings from "./AccessSettings";
 import { BotAvatar } from "./Avatar";
 import { Group, Row, SwitchRow, ValueRow, errorText } from "./SettingsRows";
@@ -42,6 +44,7 @@ import BotIntegrations from "./BotIntegrations";
 import BotMemory from "./BotMemory";
 import PluginsSettings from "./PluginsSettings";
 import TeamSettings, { type TeamView } from "./TeamSettings";
+import ExperimentalSettings from "./ExperimentalSettings";
 import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
 
@@ -61,11 +64,13 @@ export type SectionId =
   | "teamwork"
   | "team"
   | "access"
+  | "computers"
   | "phone"
   | "voice"
   | "usage"
   | "storage"
   | "account"
+  | "experimental"
   | "about";
 type BotView = "profile" | "model" | "capabilities" | "memory";
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
@@ -82,12 +87,14 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "teamwork", label: "Teamwork", icon: UsersRound },
   { id: "team", label: "Team", icon: Users },
   { id: "access", label: "Access", icon: KeyRound },
+  { id: "computers", label: "Computers and teams", icon: MonitorSmartphone },
   { id: "phone", label: "Phone", icon: Smartphone },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "usage", label: "Usage", icon: ChartColumn },
   { id: "storage", label: "Storage", icon: HardDrive },
   // The id stays "account" so /login and older callers still land here.
   { id: "account", label: "Model providers", icon: Boxes },
+  { id: "experimental", label: "Experimental", icon: FlaskConical },
   { id: "about", label: "About", icon: Info },
 ];
 
@@ -121,6 +128,9 @@ export function sectionFor(tab: string): { section: SectionId; view?: BotView; t
     providers: { section: "account" },
     "model providers": { section: "account" },
     "phone access": { section: "phone" },
+    computers: { section: "computers" },
+    "other computers": { section: "computers" },
+    "join a team": { section: "computers" },
     speech: { section: "voice" },
     "live voice": { section: "voice" },
   };
@@ -180,8 +190,11 @@ export default function Settings({
   const routineModels = !state.remote?.using || !!state.remote.using.capabilities?.includes("routine-models-v1");
   const sections = SECTIONS.filter((item) => {
     if (item.id === "team" && state.remote?.using) return false;
+    // A computer reached over the link may be older than this window: it says so in its capabilities.
+    if (item.id === "experimental" && state.remote?.using && !state.remote.using.capabilities?.includes("proactive-agent-v2")) return false;
     if (!memberHost) return true;
-    if (item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
+    if (item.id === "experimental" ||
+      item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
     if (item.id === "bots") return teamCan(state, "agents");
     if (item.id === "skills") return teamCan(state, "skills");
     if (item.id === "marketplace") return teamCan(state, "plugins");
@@ -198,7 +211,8 @@ export default function Settings({
       ...p,
       ...patch,
       appearance: { ...p.appearance, ...patch.appearance },
-    }));
+      ...(p.proactive && patch.proactive && { proactive: { ...p.proactive, ...patch.proactive } }),
+    }) as Preferences);
     try {
       await api.setPreferences(patch);
     } catch (e) {
@@ -491,8 +505,7 @@ export default function Settings({
           )}
           {section === "team" && <TeamSettings state={state} initialView={teamView} />}
           {section === "access" && <AccessSettings state={state} />}
-          {/* Phones and computers paired to this one, then the computers this app uses. While another
-              computer is in use its own devices are managed there. */}
+          {/* Phones and computers paired to this one. While another computer is in use its own devices are managed there. */}
           {section === "phone" &&
             (state.remote?.using ? (
               <p className="set-status" role="status">
@@ -501,7 +514,7 @@ export default function Settings({
             ) : (
               <PhoneSettings state={state} />
             ))}
-          {section === "phone" && <OtherComputers state={state} initialJoin={initialJoin} />}
+          {section === "computers" && <ComputersAndTeams state={state} initialJoin={initialJoin} />}
           {section === "voice" && <VoiceSettings state={state} />}
           {section === "usage" && <Usage runCount={runCount} />}
           {section === "storage" && (
@@ -541,6 +554,7 @@ export default function Settings({
               general={() => setSection("general")}
             />
           )}
+          {section === "experimental" && <ExperimentalSettings state={state} bots={bots} settings={preferences} change={changePreferences} />}
           {section === "about" && <About />}
           {error && (
             <p className="set-status error-text" role="alert">

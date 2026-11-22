@@ -34,7 +34,7 @@ import { WORK_TABS, WorkBack, type WorkNav, type WorkTab } from "./WorkBar";
 import RoutinesPage from "./Routines";
 import TasksPage from "./Tasks";
 import Usage from "./Usage";
-import { HostBanner, HostSwitcher } from "./RemoteHosts";
+import { HostBanner, HostSwitcher, HostUnreachable } from "./RemoteHosts";
 import BotForm from "./BotForm";
 import BotProfile from "./BotProfile";
 import NewChat from "./NewChat";
@@ -44,6 +44,7 @@ import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
 import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
+import SetupChoice, { SetupConnect, SetupTeam, type SetupPath } from "./SetupChoice";
 import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { applyAppearance, startAppearance } from "./appearance";
@@ -54,6 +55,8 @@ import "./style.css";
 // The remembered colors go on before anything is drawn.
 startAppearance();
 const api = window.botkins;
+/** Where the first-run choice is kept for the window's session (src/SetupChoice.tsx). */
+const SETUP_KEY = "botkins.setupPath";
 // Work is three pages with tabs between them (Routines, Projects, Tasks); Activity and Usage open from its top.
 // With Spaces ("spaces-v1"), a space's page and All spaces take the Today page's place (src/SpacePage.tsx).
 type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage" | "Space" | "AllSpaces";
@@ -148,6 +151,24 @@ function App() {
   const [error, setError] = useState("");
   /** An onboarded person chose Not now on the signed-out welcome; lasts until the app restarts. */
   const [later, setLater] = useState(false);
+  /**
+   * On a first launch, how the person chose to use Botkins here (src/SetupChoice.tsx); "" until they
+   * choose. Kept for the window's session, so a reload stays on the step it was on.
+   */
+  const [setupPath, setSetupPathNow] = useState<SetupPath | "">(() => {
+    try {
+      const saved = sessionStorage.getItem(SETUP_KEY);
+      return saved === "here" || saved === "computer" || saved === "team" ? saved : "";
+    } catch {
+      return "";
+    }
+  });
+  const setSetupPath = (path: SetupPath | "") => {
+    setSetupPathNow(path);
+    try {
+      sessionStorage.setItem(SETUP_KEY, path);
+    } catch {}
+  };
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
   /** The tab Work shows when it is opened from the side menu: the one last looked at. */
@@ -398,7 +419,9 @@ function App() {
     const openJoin = (url: string) => {
       void api.takeTeamJoin().catch(() => {});
       setTeamJoinUrl(url);
-      settingsRef.current("Phone");
+      // On a first launch the link opens the Join a team step; otherwise Settings › Computers and teams.
+      setSetupPath("team");
+      settingsRef.current("Computers");
     };
     const off = api.onTeamJoin(openJoin);
     api.takeTeamJoin().then((url) => url && openJoin(url)).catch(() => {});
@@ -606,7 +629,14 @@ function App() {
   const enabledProviders = providers?.filter((p) => p.enabled) ?? [];
   const connectedProviders = enabledProviders.filter(isConnected);
   const settled = !!providers && !(enabledProviders.length > 0 && enabledProviders.every((p) => p.starting));
-  const welcome = !!state && (!onboarded || (settled && !connectedProviders.length && !later));
+  // A first launch opens on the choice of where the bots run (src/SetupChoice.tsx), unless the window
+  // already uses another computer or a team: their bots are already there.
+  const firstRun = !!state && !onboarded && !state.remote?.using && !memberTeam(state);
+  const welcome = !!state && (firstRun || (onboarded && settled && !connectedProviders.length && !later));
+  // The computer in use has sent nothing yet (it can't be reached, a different computer answered, or
+  // it no longer knows this one): the window says so in place of its pages, and offers the way back.
+  const using = state?.remote?.using;
+  const hostDown = !!state && !!using && using.state !== "online" && !state.bots.length && !state.chats.length;
   useEffect(() => {
     if (welcome) setModal("");
   }, [welcome]);
@@ -628,16 +658,21 @@ function App() {
     }
   }, [spaces, page, spaceId, !!openedSpace]);
   if (!state) return <main>{error || "Opening Botkins…"}</main>;
+  if (firstRun && setupPath === "") return <SetupChoice choose={setSetupPath} />;
+  if (firstRun && setupPath === "computer") return <SetupConnect back={() => setSetupPath("")} />;
+  if (firstRun && setupPath === "team") return <SetupTeam back={() => setSetupPath("")} initialJoin={teamJoinUrl || undefined} />;
   if (welcome)
     return (
       <Welcome
         onboarded={onboarded}
         finish={() => api.setPreferences({ onboarded: true })}
         later={onboarded ? () => setLater(true) : undefined}
+        back={firstRun ? () => setSetupPath("") : undefined}
       />
     );
-  // A workspace with no bots opens on the first-run step: the person's existing agents, or Create a bot.
-  if (!state.bots.length && !state.remote?.using?.member && !memberTeam(state))
+  // A workspace of this computer's with no bots opens on the first-run step: the person's existing
+  // agents, or Create a bot. Never while another computer is in use: a bot made there would go to it.
+  if (!state.bots.length && !state.remote?.using && !memberTeam(state))
     return <FirstBot saved={state.templates} created={async () => receiveSnapshot(await api.snapshot())} />;
   const stream = state.streams[chatId];
   const elsewhere = state.requests.find((r) => r.chatId !== chatId);
@@ -758,7 +793,7 @@ function App() {
           <>
             <div className="sidebarlabel">
               <span className="nav-label">Bots</span>
-              {teamCan(state, "agents", "create") && (
+              {teamCan(state, "agents", "create") && !hostDown && (
                 <button aria-label="Create bot" title={collapsed ? "Create bot" : undefined} onClick={() => setModal("bot")}>
                   <Plus size={15} />
                 </button>
@@ -781,7 +816,7 @@ function App() {
           )}
           {!collapsed && toggle}
         </div>
-        <HostSwitcher state={state} collapsed={collapsed} connect={() => settings("Phone")} />
+        <HostSwitcher state={state} collapsed={collapsed} connect={() => settings("Computers")} />
         <button
           className={"account models-status" + (connectedProviders.length ? " on" : "")}
           aria-label={"Models · " + modelsState}
@@ -803,7 +838,7 @@ function App() {
         </button>
       </aside>
       <main>
-        <HostBanner state={state} pairAgain={() => settings("Phone")} />
+        {!hostDown && <HostBanner state={state} pairAgain={() => settings("Computers")} />}
         {elsewhere && (
           <button
             className="request-banner"
@@ -822,7 +857,9 @@ function App() {
             </button>
           </div>
         )}
-        {chat && bot ? (
+        {hostDown ? (
+          <HostUnreachable state={state} pairAgain={() => settings("Computers")} />
+        ) : chat && bot ? (
           <ChatView
             completions={completionByHost.get(host)!}
             onScreen={onScreen === chat.id}
@@ -932,7 +969,9 @@ function App() {
             )}
             {page === "Home" && state.bots.length === 0 && (
               <div className="empty">
-                No agents are visible to this role. Ask the team owner if you need access.
+                {memberHost
+                  ? "No agents are visible to this role. Ask the team owner if you need access."
+                  : (state.remote?.using?.name ?? "This computer") + " has no bots yet. Create one with the + beside Bots."}
               </div>
             )}
             {page === "Projects" && (

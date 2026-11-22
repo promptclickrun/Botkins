@@ -152,6 +152,52 @@ export function wavFromPcm(pcm, sampleRate = 24000) {
   return Buffer.concat([header, pcm]);
 }
 
+/** A recording shorter than this (ms) is a tap, not speech. */
+const MIN_CLIP_MS = 250;
+/** A recording whose loudest 20 ms stay under this level (RMS, 0 to 1 of full scale; about -40 dBFS) has no speech in it. */
+const SPEECH_RMS = 0.01;
+
+/**
+ * Whether a 16-bit PCM WAV recording can hold speech: false when it is shorter than a tap or never gets
+ * louder than a quiet room. Speech models answer silence with an invented word ("Qué"), so such a clip
+ * is not sent to one. A recording this can't read (another format or encoding) is true: the provider judges it.
+ */
+export function wavHasSpeech(wav) {
+  if (wav.length < 44 || wav.toString("latin1", 0, 4) !== "RIFF" || wav.toString("latin1", 8, 12) !== "WAVE") return true;
+  let rate = 0;
+  let channels = 0;
+  for (let at = 12; at + 8 <= wav.length; ) {
+    const id = wav.toString("latin1", at, at + 4);
+    const size = wav.readUInt32LE(at + 4);
+    const body = at + 8;
+    if (id === "fmt ") {
+      if (size < 16 || body + 16 > wav.length) return true;
+      channels = wav.readUInt16LE(body + 2);
+      rate = wav.readUInt32LE(body + 4);
+      if (wav.readUInt16LE(body) !== 1 || wav.readUInt16LE(body + 14) !== 16 || !channels || !rate) return true;
+    } else if (id === "data") {
+      if (!rate) return true;
+      // A file still being written, or streamed, says 0 or too much: the data is what is there.
+      const end = size && body + size <= wav.length ? body + size : wav.length;
+      const samples = Math.floor((end - body) / 2);
+      if ((samples / channels / rate) * 1000 < MIN_CLIP_MS) return false;
+      const window = Math.max(1, Math.round(rate * 0.02)) * channels;
+      for (let from = 0; from < samples; from += window) {
+        const to = Math.min(samples, from + window);
+        let sum = 0;
+        for (let i = from; i < to; i++) {
+          const value = wav.readInt16LE(body + i * 2) / 32768;
+          sum += value * value;
+        }
+        if (Math.sqrt(sum / (to - from)) >= SPEECH_RMS) return true;
+      }
+      return false;
+    }
+    at = body + size + (size & 1);
+  }
+  return true;
+}
+
 const xml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 /** A language as the OpenAI routes want it: "en-US" is "en" (the page only keeps regional codes for Chinese). */
 const iso = (language) => (/^zh-/i.test(language) ? language.toLowerCase() : language.split("-")[0].toLowerCase());
@@ -660,7 +706,7 @@ export class Voice {
 
   // ── Speech to text ──────────────────────────────────────────────────────────────────────────
 
-  /** audio: Buffer; format: wav, m4a, mp3 or webm. Returns { text }. */
+  /** audio: Buffer; format: wav, m4a, mp3 or webm. Returns { text }; a WAV with no speech in it is { text: "" } without asking the provider. */
   async transcribe({ audio, format, language } = {}) {
     const { provider, model, language: chosenLanguage } = this.data.stt;
     if (provider === "device") throw new Failure(DEVICE);
@@ -670,6 +716,7 @@ export class Voice {
     if (language != null && (typeof language !== "string" || !LANGUAGE.test(language))) throw new Failure("That language isn't valid.");
     const lang = language || chosenLanguage;
     const buffer = Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength);
+    if (format === "wav" && !wavHasSpeech(buffer)) return { text: "" };
     const file = () => new Blob([buffer], { type: FORMATS[format] });
     let result;
     if (provider === "local") {
@@ -727,8 +774,12 @@ export class Voice {
 
   // ── Text to speech ──────────────────────────────────────────────────────────────────────────
 
-  /** Returns { audio: Buffer, format: "mp3" | "wav" }. Callers split long replies by sentence. */
-  async speak({ text: input, voice, speed, override } = {}) {
+  /**
+   * Returns { audio: Buffer, format: "mp3" | "wav" }. Callers split long replies by sentence.
+   * `samples: true` asks each provider for plain samples (a WAV file) where it would send MP3: a
+   * gadget plays samples and has no decoder (gadget.mjs).
+   */
+  async speak({ text: input, voice, speed, override, samples = false } = {}) {
     // `override` is a bot's own reading voice (cleanBotVoice(bot.voice)?.tts): the shared settings fill in what it leaves out.
     const { provider, model, voice: chosenVoice, speed: chosenSpeed } = effectiveTts(this.data.tts, override);
     if (provider === "device") throw new Failure(DEVICE);
@@ -756,19 +807,19 @@ export class Voice {
       const key = provider === "openai" ? this.keyOf("openai") : this.data.keys.custom;
       const base = provider === "openai" ? this.openaiBase() : this.customBase();
       const defaults = provider === "openai" ? DEFAULTS.openai : DEFAULTS.custom;
-      const body = { model: model ?? defaults.tts, input, voice: who ?? defaults.ttsVoice, response_format: "mp3" };
+      const body = { model: model ?? defaults.tts, input, voice: who ?? defaults.ttsVoice, response_format: samples ? "wav" : "mp3" };
       if (rate !== 1) body.speed = rate;
       const audio = await this.bytes(provider, base + "/audio/speech", { method: "POST", headers: { ...(key && { Authorization: "Bearer " + key }), "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
       const format = sniff(audio);
       // Our own account asked for mp3. A server of the person's own may answer in anything else.
       if (!format && provider === "custom") throw new Failure("Your speech server sent audio this app can't play.");
-      return { audio, format: format ?? "mp3" };
+      return { audio, format: format ?? (samples ? "wav" : "mp3") };
     }
     if (provider === "azure") {
       const key = this.keyOf("azure");
       if (this.data.providers.azure.kind === "openai") {
         const { base, deployment, version } = this.azure("openai-tts");
-        const body = { model: model ?? deployment, input, voice: who ?? DEFAULTS.azureOpenaiVoice, response_format: "mp3" };
+        const body = { model: model ?? deployment, input, voice: who ?? DEFAULTS.azureOpenaiVoice, response_format: samples ? "wav" : "mp3" };
         if (rate !== 1) body.speed = rate;
         const audio = await this.bytes("azure", `${base}?api-version=${encodeURIComponent(version)}`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
         return { audio, format: sniff(audio) ?? "mp3" };
@@ -778,7 +829,7 @@ export class Voice {
       const locale = name.split("-").slice(0, 2).join("-");
       const spoken = rate === 1 ? xml(input) : `<prosody rate="${rate}">${xml(input)}</prosody>`;
       const ssml = `<speak version='1.0' xml:lang='${xml(locale)}'><voice xml:lang='${xml(locale)}' name='${xml(name)}'>${spoken}</voice></speak>`;
-      const headers = { "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": "audio-24khz-96kbitrate-mono-mp3", "User-Agent": "Botkins" };
+      const headers = { "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": samples ? "riff-24khz-16bit-mono-pcm" : "audio-24khz-96kbitrate-mono-mp3", "User-Agent": "Botkins" };
       const audio = await this.bytes("azure", tts, { method: "POST", headers, body: ssml }, { secrets: [key] });
       return { audio, format: sniff(audio) ?? "mp3" };
     }
@@ -790,7 +841,10 @@ export class Voice {
       if (!SLUG.test(id)) throw new Failure("That voice isn't valid.");
       const body = { text: input, model_id: model ?? DEFAULTS.elevenTts };
       if (rate !== 1) body.voice_settings = { speed: rate };
-      const audio = await this.bytes("elevenlabs", `${ELEVEN}/v1/text-to-speech/${encodeURIComponent(id)}?output_format=mp3_44100_128`, { method: "POST", headers: { "xi-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
+      const audio = await this.bytes("elevenlabs", `${ELEVEN}/v1/text-to-speech/${encodeURIComponent(id)}?output_format=${samples ? "pcm_24000" : "mp3_44100_128"}`, { method: "POST", headers: { "xi-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
+      // ElevenLabs sends "pcm_24000" as bare samples, with no header.
+      // (Not told apart by its first bytes: loud samples can start like an MP3 frame. Only a real header says otherwise.)
+      if (samples && audio.toString("latin1", 0, 4) !== "RIFF" && audio.toString("latin1", 0, 3) !== "ID3") return { audio: wavFromPcm(audio.subarray(0, audio.length - (audio.length % 2)), 24000), format: "wav" };
       return { audio, format: sniff(audio) ?? "mp3" };
     }
     if (provider === "gemini") {
@@ -1004,10 +1058,13 @@ export class Voice {
 
   /**
    * The OpenAI realtime session. Over WebRTC the audio formats are negotiated, so they are left out.
-   * What the person says is transcribed too, so the caller can show both sides of the talk.
+   * What the person says is transcribed too, so the caller can show both sides of the talk, in the language chosen for speech to text when there is one.
    */
   openaiSession({ model, voice, instructions, tools }, socket) {
-    const session = { type: "realtime", model, ...(instructions && { instructions }), output_modalities: ["audio"], audio: { input: { turn_detection: { type: "semantic_vad" }, transcription: { model: DEFAULTS.openai.stt } }, output: { voice } } };
+    // The chosen language is a hint, so a silent turn can't be heard as another language.
+    const { language } = this.data.stt;
+    const transcription = { model: DEFAULTS.openai.stt, ...(language && { language: language.split("-")[0].toLowerCase() }) };
+    const session = { type: "realtime", model, ...(instructions && { instructions }), output_modalities: ["audio"], audio: { input: { turn_detection: { type: "semantic_vad" }, transcription }, output: { voice } } };
     if (socket) {
       session.audio.input.format = { type: "audio/pcm", rate: 24000 };
       session.audio.output.format = { type: "audio/pcm", rate: 24000 };

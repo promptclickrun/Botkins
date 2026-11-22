@@ -29,6 +29,31 @@ function setup(t) {
   return { ws: new Workspace(dir, client, () => {}, () => ({ kind: "reject" })), script };
 }
 
+test("a routine that replies [SILENT] completes with no message, delivery or notification", async (t) => {
+  const { ws, script } = setup(t);
+  const target = ws.createChat("pip");
+  script.reply = "  [SILENT]\n";
+  const routine = ws.panels.routines.create({ botId: "pip", name: "Watcher", prompt: "Check for news.", cadence: DAILY, deliver: { to: "chat", chatId: target } }, T0);
+  await ws.panels.routines.run(routine);
+  const run = ws.state.runs[0];
+  assert.equal(run.status, "Completed");
+  assert.equal(run.silent, true);
+  assert.equal(ws.chat(routine).messages.filter((m) => m.role === "assistant").length, 0);
+  assert.equal(ws.chat(target).messages.length, 0);
+  assert.equal(decide({ type: "turn", bot: ws.bot("pip"), chat: ws.chat(routine), run }, { settings: ws.state.settings, focused: false }), null);
+
+  script.reply = "[SILENT] but here is news";
+  await ws.panels.routines.run(routine);
+  assert.equal(ws.state.runs[0].silent, undefined, "only the bare word is silent");
+  assert.equal(ws.chat(target).messages.length, 1);
+
+  script.reply = "[SILENT]";
+  const chat = ws.createChat("pip");
+  await ws.send(chat, "Say it.");
+  await ws.active.get(chat)?.done;
+  assert.equal(ws.chat(chat).messages.findLast((m) => m.role === "assistant").text, "[SILENT]", "a person's chat shows it as written");
+});
+
 test("a no-output routine completes on idle without publishing or notifying its reply", async (t) => {
   const { ws, script } = setup(t);
   const routine = ws.panels.routines.create({

@@ -858,6 +858,8 @@ export type Preferences = {
   teamwork?: boolean;
   /** Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0 for off. Missing on an older computer. */
   autoSummarize?: number;
+  /** Settings › Experimental › Proactive agent: the computer's switch. Each bot's own is the `proactive` part. Missing on a computer without "proactive-agent-v2". */
+  proactive?: ProactiveSettings;
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
@@ -986,6 +988,7 @@ export type UsageReport = {
  * "team-people-v1" (the people in a chat: `ChatSummary.invited`, `link.team.inviteToChat` and
  * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
  * view of bots and chats, kept by the computer for them).
+ * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
@@ -1016,6 +1019,30 @@ export type Meta = {
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
+export type ProactiveWatch = "runs" | "tasks" | "requests";
+/** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
+export type ProactiveSettings = { enabled: boolean };
+/** What a bot's Proactive agent is set to. */
+export type ProactiveBotSettings = { enabled: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/**
+ * One bot's agent as this phone is sent it. The owner is sent `person` ("owner", or the member it works for). A member is sent
+ * `mine` for their own agents and, for another person's, only `{ enabled, taken }`: every other field may be missing, and a
+ * computer may add more.
+ */
+export type ProactiveBot = Partial<ProactiveBotSettings> & {
+  enabled: boolean;
+  person?: string;
+  mine?: boolean;
+  taken?: boolean;
+  /** The agent's routine's chat (Check now is `runRoutine` on it). */
+  chatId?: string;
+  lastSweepAt?: number;
+  pings?: number;
+  day?: string;
+  log?: ProactiveLog[];
+};
+export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
   settings: Preferences;
@@ -1033,6 +1060,8 @@ export type Parts = {
   /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
   spaces?: SpaceSummary[];
   tasks: BotTask[];
+  /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
+  proactive?: ProactivePart;
   projects: Project[];
   mcp: McpServer[];
   skills: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
@@ -1297,11 +1326,43 @@ export type PushTarget = { token: string; env: "production" | "sandbox"; start?:
  * `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"), given when
  * it paired or set by the owner ("device-person-v1"). A device paired before has none.
  */
-export type PairedDevice = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean; current?: boolean };
+export type PairedDevice = {
+  id: string;
+  name: string;
+  person?: string;
+  platform: string;
+  kind: "phone" | "desktop" | "gadget";
+  /** A gadget's board and firmware, as it said them, and the bot it talks with ("gadgets-v1"). */
+  gadget?: { board?: string; firmware?: string; botId?: string };
+  createdAt: number;
+  lastSeenAt: number;
+  connected: boolean;
+  current?: boolean;
+};
+/**
+ * What a gadget is handed once a trusted device named it by its key ("gadgets-v1",
+ * "link.gadgets.add"): who the computer is and where to find it. With its own secret key that is
+ * a gadget's whole `Pairing`.
+ */
+export type GadgetIntroduction = { deviceId: string; serverId: string; serverKey: string; name: string; hosts: string[] };
+/** The part a gadget follows in place of the app's parts (gadget/docs/contract.md). */
+export type GadgetPart = {
+  name: string;
+  bot: { id: string; name: string; look?: BotkinLook } | null;
+  bots: { id: string; name: string }[];
+  chat: { id: string; title: string } | null;
+  phase: "idle" | "working" | "writing" | "request";
+  doing?: string;
+  request?: { id: string; kind: AgentRequest["kind"]; title: string; preview?: string; choices?: string[]; remember?: true; freeform?: true };
+  queued?: number;
+  /** The newest reply, as plain words. `parts` is how many pieces "link.gadget.speak" reads it in. */
+  reply?: { id: string; text: string; parts: number };
+  voice: { hear: boolean; speak: boolean; live?: LiveProvider };
+};
 export type PhoneRecord = {
   name: string;
   /** What the device is. Missing on an older computer, where every paired device is a phone. */
-  kind?: "phone" | "desktop";
+  kind?: "phone" | "desktop" | "gadget";
   platform?: string;
   /** The computer keeps this phone's presence key: it paired directly, with a build that has one ("screen-grant-v1"). */
   presence?: true;
@@ -1385,7 +1446,7 @@ export type LiveSession =
 
 /** The desktop's calls a phone may make (link-host/methods.mjs), with their arguments and answers. */
 export type Calls = {
-  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers">> & { appearance?: Partial<Appearance> }): void;
+  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers" | "proactive">> & { appearance?: Partial<Appearance>; proactive?: Partial<ProactiveSettings> }): void;
   appInfo(): { version: string; electron: string; chrome: string; platform: string };
   // ---- The computer's own updates ("app-update-v1"; the owner's devices only). None takes a version or an address.
   appUpdateStatus(): AppUpdate;
@@ -1403,6 +1464,11 @@ export type Calls = {
   duplicateBot(id: string): string;
   setBotAccess(botId: string, grant: BotAccessGrant): void;
   setBotIntegrations(botId: string, off: { skillsOff?: string[]; mcpOff?: string[] }): void;
+  /**
+   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2".
+   * A role that manages the bot may; the agent works for the person who set it up, and is theirs alone to change (the owner may change any).
+   */
+  setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): void;
   botMemory(botId: string): string;
   setBotMemory(botId: string, text: string): void;
   saveTemplate(botId: string, name?: string): string;
@@ -1668,6 +1734,8 @@ export type Calls = {
   /** Sends a file to the computer for the next message. `data` is base64, at most about 3 MB a call; a larger file goes in parts with the same `id`. */
   /** The devices paired with the computer. Needs "devices-v1". */
   "link.devices.list"(): PairedDevice[];
+  /** Pairs a gadget by introduction ("gadgets-v1"): its public key (X25519, base64url) as it gave it over a cable or Bluetooth. */
+  "link.gadgets.add"(input: { publicKey: string; name?: string; board?: string; botId?: string }): GadgetIntroduction;
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
   /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */
@@ -1687,6 +1755,7 @@ export type Calls = {
   "link.team.moveMember"(memberId: string, groupId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.removeMember"(memberId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.rename"(name: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.renameMember"(memberId: string, name: string): Extract<TeamPart, { roles: Role[] }>;
   /** A custom view (an html block) as its bot wrote it, and its data. Needs "frames-v1". */
   "link.frame.page"(frame: string): { html: string; data: unknown };
   /** The chat a custom view's answer goes to, for a view in a Today panel. */

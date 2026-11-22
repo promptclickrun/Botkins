@@ -79,7 +79,7 @@ export default function MarketPi({ state, refreshed }: { state: State; refreshed
             (current ? "" : "Pi will run pi install npm:" + name + "@" + version + ". ") +
             "This package can run code on " +
             shownText(host?.name || "this computer") +
-            ". It will load on the next turn in every Botkins chat using Pi.",
+            ". It will load on the next turn in every Botkins chat using Pi or OMP.",
           confirm: action,
         }))
       )
@@ -98,7 +98,7 @@ export default function MarketPi({ state, refreshed }: { state: State; refreshed
   if (!supported) return <p className="set-status">Update the app on your computer to manage Pi packages.</p>;
   return (
     <>
-      <Group title="Installed in Pi" footer="Changes apply on the next turn in every Botkins chat using Pi.">
+      <Group title="Installed in Pi" footer="Changes apply on the next turn in every Botkins chat using Pi or OMP.">
         {installed?.map((pkg) => (
           <SwitchRow
             key={pkg.name}
