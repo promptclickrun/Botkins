@@ -97,7 +97,6 @@ process.on("exit", stopAll);
 /** A local Worker. `vars` are passed with --var, so nothing is written into the project. */
 async function startDev(vars) {
   const port = await freePort();
-  const inspector = await freePort();
   const dir = mkdtempSync(path.join(tmpdir(), "botkins-push-"));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("CLOUDFLARE_")));
   Object.assign(env, { WRANGLER_SEND_METRICS: "false", CI: "1", NO_COLOR: "1" });
@@ -109,7 +108,7 @@ async function startDev(vars) {
       "--local",
       "--ip=127.0.0.1",
       `--port=${port}`,
-      `--inspector-port=${inspector}`,
+      "--inspector-port=0",
       `--persist-to=${dir}`,
       "--show-interactive-dev-session=false",
       ...Object.entries(vars).map(([name, value]) => `--var=${name}:${value}`),

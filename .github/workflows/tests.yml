@@ -68,6 +68,9 @@ jobs:
       # Type-checks the window's code and bundles it.
       - run: npm run build
       - run: npm test
+      - name: Fill a secure form on a Linux screen
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node --test test/form-browser.test.mjs
       # What the terminal host does as root beside a folder that is not root's own (its update job
       # and its service install). `npm test` skips these tests, because they need root to give
       # rights up and to plant links another user could not write through.

@@ -62,7 +62,6 @@ const NODE_RELAY = process.env.RELAY_TARGET === "node";
 
 async function startDev() {
   const port = await freePort();
-  const inspector = await freePort();
   stateDir = mkdtempSync(path.join(tmpdir(), "botkins-relay-"));
   // No Cloudflare credentials reach the child, and nothing is sent to anyone.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("CLOUDFLARE_")));
@@ -75,7 +74,7 @@ async function startDev() {
       "--local",
       "--ip=127.0.0.1",
       `--port=${port}`,
-      `--inspector-port=${inspector}`,
+      "--inspector-port=0",
       `--persist-to=${stateDir}`,
       "--show-interactive-dev-session=false",
       // Every socket of a test run comes from one address, so the per-network limits are off here.
