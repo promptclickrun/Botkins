@@ -99,6 +99,8 @@ A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the r
 
 `link-host/methods.mjs` (`REMOTE_METHODS`) lists the app's calls. A call that opens a window, a file dialog or the browser on the host is not in it. The link's own calls start with `link.`; `Calls` in `types.ts` types all of them. Check `meta.capabilities` before using a feature, and say "Update the app on your computer" when its name is missing.
 
+With `client-message-id-v1`, a client may include a locally generated `clientMessageId` in the options for `send`. The host echoes it on the queued item and on the user message when delivered. A client can show the message immediately and replace its local row when either echo arrives. Each press of Send gets its own ID, even for identical text.
+
 ## Devices: list, rename, remove (`devices-v1`)
 
 Any paired client may read the list of paired devices, rename one and remove one, as the person can in the host's own Settings.

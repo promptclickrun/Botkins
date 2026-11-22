@@ -1,18 +1,19 @@
+import { randomUUID } from "expo-crypto";
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Bot, ChatSummary, Preferences, Project, QueuedMessage, Run } from "@/link/types";
+import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useTextMode, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
-import { type ChatView, showToast, useApp } from "@/state/store";
+import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
 import { AvatarMotion, BotAvatar, Chip, EmptyState, IconButton, LinkBanner, Loading, radius, space, T, Tap, useOnShow, useShape, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
@@ -21,7 +22,7 @@ import { completions } from "./completion";
 import { HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
-import { arrived, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
+import { arrived, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
@@ -31,7 +32,7 @@ import { drafts, keepDraft, useChatSplit } from "./split";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
-import { EndedNote, type MessageActions, MessageRow } from "./Messages";
+import { EndedNote, type MessageActions, MessageRow, UserBubble } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
 import { Aside } from "./Aside";
 import { chatTimeline, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
@@ -43,6 +44,7 @@ import { usePane } from "../pane/usePane";
 import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
 
+const EMPTY_CHAT: ChatView = { from: 0, total: 0, messages: [], runs: {} };
 const STARTERS = ["What can you do?", "Plan my day", "Summarize my week"];
 // The rows each open chat drew last, by key: a row that didn't change stays the same object (turn.ts, reuseItems).
 const drawn = new Map<string, Map<string, Item>>();
@@ -250,8 +252,9 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
-function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, at, list, parked, setParked, sendText, draftText, messageActions, openPanel, emptyView }: RowProps & {
+function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, parked, setParked, sendText, draftText, messageActions, openPanel, emptyView }: RowProps & {
   view: ChatView;
+  pending: (Message & { clientMessageId: string })[];
   runPart?: Run | null;
   streaming: boolean;
   at?: string;
@@ -294,6 +297,7 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
   const marks = useTurnMarks(useShallow((all) => Object.fromEntries(
     Object.entries(all).filter(([id]) => id === runPart?.id || Object.hasOwn(view.runs, id)),
   )));
+  const timestamps = useChatPrefs(prefs => prefs.timestamps);
   const stepsPref = useChatPrefs((prefs) => prefs.steps);
   const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
   const textBody = useApp((state) => state.texts[chatId]);
@@ -440,6 +444,12 @@ function ChatTimelineList({ chatId, view, runPart, streaming, group, bot, bots, 
           if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, animated: !still }), 160);
         }}
         onEndReachedThreshold={0.6}
+        ListHeaderComponent={pending.length ? (
+          <View style={{ gap: space.xl, marginTop: data.length ? space.xl : 0 }}>
+            {pending.map(message => <UserBubble key={message.clientMessageId} id={message.clientMessageId}
+              message={message} index={-1} timestamps={timestamps} media={[]} />)}
+          </View>
+        ) : undefined}
         ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
         initialNumToRender={12}
         windowSize={11}
@@ -480,6 +490,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const chat = useChat(chatId);
   const chatsLoaded = useApp((state) => !!state.parts.chats);
   const view = useWatchedChat(chatId);
+  const pending = useSyncExternalStore(pendingSends.subscribe, () => pendingSends.rows(chatId));
   const bot = useBot(chat?.botId);
   const allBots = useBots();
   const bots = useMemo(() => new Map(allBots.map((b) => [b.id, b])), [allBots]);
@@ -519,7 +530,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   }, [chatId, text]);
   const [pinnedId, setPinnedId] = useState(board);
   const pinned = usePart("board")?.find((item) => item.id === pinnedId);
-  const boardMentions = !!usePart("meta")?.capabilities.includes("board-mentions-v1");
+  const meta = usePart("meta");
+  const boardMentions = !!meta?.capabilities.includes("board-mentions-v1");
   const unpin = () => {
     setPinnedId(undefined);
     if (board) router.setParams({ board: undefined });
@@ -599,7 +611,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     return true;
   };
   /** `fromComposer`: what the person wrote, so a pinned card and a quote go with it. A reply's own buttons send plain text. */
-  const send = (value: string, options?: SendOptions, fromComposer = true): Promise<boolean> => {
+  const send = (value: string, options?: SendOptions, fromComposer = true, mentions: DraftMention[] = []): Promise<boolean> => {
     // "/btw" and "/ask" are answered beside the chat, also while the bot works.
     const asked = fromComposer && chatId ? sideQuestionOf(value) : null;
     if (asked) return Promise.resolve(askSide(asked.command, asked.question));
@@ -629,9 +641,16 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     onLeave.current.wrote = true;
     setParked(false);
     list.current?.scrollToOffset({ offset: 0, animated: true });
-    const before = { length: view ? view.from + view.messages.length : 0, waiting: waitingCopies(message, queued) };
+    const clientMessageId = randomUUID();
+    const withIds = meta?.capabilities.includes("client-message-id-v1");
+    const before = { length: view?.total ?? chat?.count ?? 0, waiting: waitingCopies(message, queued), clientMessageId: withIds ? clientMessageId : undefined };
+    const bubble = { role: "user" as const, text: message, clientMessageId, time: Date.now(), attachments: sent?.attachments, quote: quoted,
+      mentions: card && boardMentions ? [{ kind: "board" as const, id: card.id, label: card.title, body: card.body, board: card.kind }, ...mentions].slice(0, MAX_MENTIONS) : mentions };
+    const legacy = withIds ? undefined : { from: before.length, queued: new Set(queued?.map(q => q.id)) };
     // While the chat works, the message steers the turn where the provider takes one, as on the desktop app.
-    return api.send(chatId, message, working ? { ...sent, delivery: "steer" } : sent).then(
+    return pendingSends.send(chatId, bubble, () => api.send(chatId, message, {
+      ...sent, ...(withIds && { clientMessageId }), ...(working && { delivery: "steer" }),
+    }), legacy).then(
       () => true,
       (error: unknown) => {
         // The computer can take a message and its answer still be lost on the way back. Then the
@@ -640,7 +659,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         if (arrived(message, before, now.chats[chatId], now.parts.live?.queued[chatId])) return true;
         if (card) setPinnedId(card.id);
         if (quoted) setQuote((current) => current || quoted);
-        setText((current) => current || typed);
+        setText(current => [typed, current].filter(Boolean).join("\n"));
         // It can also arrive a moment after the failure: the draft is taken out again then (below).
         setUnsure({ text: typed, message, before });
         showToast(error instanceof Error ? error.message : "Couldn't send that.", "error");
@@ -649,7 +668,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     );
   };
   // A draft put back after a send that seemed to fail, while it is still as it was put back.
-  const [unsure, setUnsure] = useState<{ text: string; message: string; before: { length: number; waiting: number } } | null>(null);
+  const [unsure, setUnsure] = useState<{ text: string; message: string; before: { length: number; waiting: number; clientMessageId?: string } } | null>(null);
   const landed = !!unsure && arrived(unsure.message, unsure.before, view, queued);
   useEffect(() => {
     if (!unsure) return;
@@ -739,7 +758,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       </View>
     );
 
-  const empty = !!view && view.messages.length === 0 && !streaming;
+  const empty = !!view && view.messages.length === 0 && !pending.length && !streaming;
   const measured = chat.context && chat.context.limit > 0 ? chat.context : undefined;
   const barEnd = (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -776,13 +795,13 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       <View style={{ paddingHorizontal: space.lg }}>
         <LinkBanner />
       </View>
-      {!view ? (
+      {!view && !pending.length ? (
         <View style={{ flex: 1, justifyContent: "center" }}>
           <Loading />
         </View>
       ) : (
         <ChatTimelineList
-          chatId={chatId} view={view} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
+          chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
           at={at} list={list} parked={parked} setParked={setParked} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
           emptyView={empty && (
             <View style={{ flex: 1 }}>
@@ -820,7 +839,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
               onUnquote={() => setQuote("")}
               value={text}
               onChange={setText}
-              onSend={(options) => send(text, options)}
+              onSend={(options, mentions) => send(text, options, true, mentions)}
               onStop={() => void attempt(api.stop(chatId))}
               working={working}
               placeholder={"Message " + (group ? chat.title || "the group" : (bot?.name ?? "your bot"))}

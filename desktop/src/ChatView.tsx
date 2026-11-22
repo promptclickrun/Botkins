@@ -124,6 +124,7 @@ function Attachments({ list }: { list: Message["attachments"] }) {
 /** One conversation: header, transcript, pending requests and the composer slot. */
 export default function ChatView({
   completions,
+  pending,
   onScreen,
   state,
   chat,
@@ -144,6 +145,7 @@ export default function ChatView({
   openBot,
 }: {
   completions: CompletionScroll;
+  pending: (Message & { clientMessageId: string })[];
   onScreen: boolean;
   state: State;
   chat: Chat;
@@ -201,7 +203,7 @@ export default function ChatView({
   // A bot that lost access to the chat's project can't take new turns here (desktop/access.mjs).
   const blocked = blockedBots(state, chat);
   const mode: ChatMode = chat.mode ?? "default";
-  const started = chat.messages.length > 0 || busy0(state, chat.id);
+  const started = chat.messages.length > 0 || pending.length > 0 || busy0(state, chat.id);
   const busy = stream !== undefined;
   const thinking = state.thinking?.[chat.id];
   const queued = state.queued?.[chat.id] ?? [];
@@ -266,7 +268,7 @@ export default function ChatView({
   // A bot asked for the pane to open on a panel, or to close.
   usePaneAsk(state, chat, (close) => showPane(!close));
   const unseen = !paneShown && panels.some((p) => p.unseen);
-  const sentCount = chat.messages.filter((m) => m.role === "user").length + queued.length;
+  const sentCount = chat.messages.filter((m) => m.role === "user").length + queued.length + pending.length;
 
   // Within this much of the end counts as at the bottom, so the button doesn't flicker there.
   const atBottom = () => {
@@ -304,7 +306,7 @@ export default function ChatView({
   // A new chat, or a message the person sent, jumps to the latest.
   useLayoutEffect(toBottom, [completions, chat.id]);
   useLayoutEffect(() => {
-    if (!readingBeginning.current || busy) toBottom();
+    if (pending.length || !readingBeginning.current || busy) toBottom();
   }, [sentCount]);
   // New output follows only while the person is at the bottom.
   const liveSteps = latest?.status === "Working" ? (latest.steps?.length ?? 0) + (latest.reasoning?.length ?? 0) : 0;
@@ -433,7 +435,7 @@ export default function ChatView({
   }, [drawer, todos.length, agents.length]);
 
   const quote = quotes[chat.id] || "";
-  const setQuote = (q: string) => setQuotes((p) => ({ ...p, [chat.id]: q }));
+  const setQuote = (q: string | ((current: string) => string)) => setQuotes(p => ({ ...p, [chat.id]: typeof q === "string" ? q : q(p[chat.id] ?? "") }));
   const focusComposer = () =>
     requestAnimationFrame(() =>
       document.querySelector<HTMLTextAreaElement>(".composewrap textarea[role=combobox]")?.focus(),
@@ -845,7 +847,7 @@ export default function ChatView({
           onKeyDown={stopGlide}
         >
           <div className="chat-column">
-          {chat.messages.length === 0 && group && (
+          {chat.messages.length === 0 && !pending.length && group && (
             <div className="emptychat group-empty">
               <span className="group-avatars large" aria-hidden="true">
                 {members.map((m) => (
@@ -858,7 +860,7 @@ export default function ChatView({
               </p>
             </div>
           )}
-          {chat.messages.length === 0 && !group && (
+          {chat.messages.length === 0 && !pending.length && !group && (
             <div className="emptychat">
               <BotAvatar bot={bot} state={face} size={136} animated />
               <h2>What can {bot.name} help with?</h2>
@@ -1062,6 +1064,14 @@ export default function ChatView({
               )}
             </article>
           )}
+          {pending.map(m => (
+            <article className={messageClass(m)} key={m.clientMessageId} aria-label="Sending message">
+              {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
+              <RichText text={m.text} files={files} />
+              <Attachments list={m.attachments} />
+              {!!m.mentions?.length && <MentionChips sent list={m.mentions} />}
+            </article>
+          ))}
           {queued.length > 0 && (
             <section className="queued" aria-label="Queued messages">
               {queued.map((q) => (

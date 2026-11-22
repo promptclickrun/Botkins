@@ -291,7 +291,7 @@ test("a stopped turn stays stopped across a crash, and its queued message is del
   const id = first.createChat("pip");
   const old = first.send(id, "Stop this");
   await new Promise((resolve) => setImmediate(resolve));
-  first.submit(id, "Do this next");
+  first.submit(id, "Do this next", { clientMessageId: "queued-before-restart" });
   await first.stop(id);
   const replacement = fakeClient();
   const again = new Workspace(dir, replacement.client, () => {});
@@ -299,6 +299,7 @@ test("a stopped turn stays stopped across a crash, and its queued message is del
   await again.active.get(id).done;
   assert.deepEqual(again.state.runs.map((r) => r.status), ["Completed", "Stopped"]);
   assert.deepEqual(replacement.log.sent.map(([, prompt]) => prompt), ["Do this next"]);
+  assert.equal(again.chat(id).messages.find(m => m.text === "Do this next").clientMessageId, "queued-before-restart");
   assert.equal(again.queues.size, 0);
   first.closing = true;
   pending.resolve({ data: { content: "" } });

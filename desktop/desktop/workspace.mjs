@@ -82,6 +82,9 @@ import { Access } from "./access.mjs";
 import { memberCanSpaces, memberPrompt, narrower, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
 
+// This identifier only correlates a local bubble with its echo. The host still owns every queue and run ID.
+const clientMessageTag = id => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id) ? { clientMessageId: id } : {};
+
 function textFieldOptional(text) {
   if (typeof text !== "string" || text.length > 4000)
     throw new Error("Use up to 4,000 characters for question instructions.");
@@ -382,7 +385,8 @@ export class Workspace {
             list.filter(item => {
               const task = this.active.get(id);
               return item.id !== task?.delivering && !(item.steer && task?.deliverSteer && !item.text.startsWith("/"));
-            }).map(({ id, text, attachments }) => ({
+            }).map(({ id, text, attachments, clientMessageId }) => ({
+              ...clientMessageTag(clientMessageId),
               id,
               text,
               ...(attachments?.length && { attachments }),
@@ -663,7 +667,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, author, also: rawAlso, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -713,6 +717,7 @@ export class Workspace {
     const message = addUserMessage(chat, {
       role: "user",
       text: prompt,
+      ...clientMessageTag(clientMessageId),
       runId: run.id,
       time: chat.time,
       ...(author && { author }),
@@ -775,6 +780,7 @@ export class Workspace {
     const item = {
       id: randomUUID(),
       steer: delivery === "steer",
+      ...clientMessageTag(options.clientMessageId),
       ...(options.notify === false && { notify: false }),
       ...(typeof options.voiceId === "string" && options.voiceId.length <= 256 && { voiceId: options.voiceId }),
       text: textField(text, 32000, "message"),
@@ -822,7 +828,7 @@ export class Workspace {
           const accepted = await task.deliverSteer({ prompt: quotedPrompt(authored, item.quote) + (refs.context || ""), attachments: [...attachments, ...mentioned] });
           if (!accepted) break;
           commitInterim(chat, task.run, task);
-          addUserMessage(chat, { role: "user", text: item.text, steeredRunId: task.run.id, time: Date.now(),
+          addUserMessage(chat, { role: "user", text: item.text, ...clientMessageTag(item.clientMessageId), steeredRunId: task.run.id, time: Date.now(),
             ...(item.author && { author: item.author }),
             ...(item.quote && { quote: item.quote }), ...(attachments.length && { attachments }),
             ...(refs.list.length && { mentions: refs.list, context: refs.context }) }, item.voiceId);
@@ -868,6 +874,7 @@ export class Workspace {
         author: next.author,
         ...(next.notify === false && { notify: false }),
         voiceId: next.voiceId,
+        clientMessageId: next.clientMessageId,
       }).catch((err) => console.error("Queued turn:", err.message));
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
@@ -883,6 +890,7 @@ export class Workspace {
           addUserMessage(chat, {
             role: "user",
             text: next.text,
+            ...clientMessageTag(next.clientMessageId),
             runId: run.id,
             time,
             ...(next.author && { author: next.author }),
