@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { MAX_PROJECT_ARTIFACTS, PROJECT_ARTIFACTS, Projects, parseStatus } from "../desktop/projects.mjs";
 import { CAPABILITIES, linkCapabilities } from "../desktop/runtime.mjs";
+import { PI_PACKAGE_METHODS } from "../desktop/link/methods.mjs";
 import { decide } from "../desktop/providers/copilot/permissions.mjs";
 
 function setup(t) {
@@ -246,11 +247,14 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
   // (Live speech in the history is named only when the link carries recordVoiceLine.)
-  const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS && name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1");
+  const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS && name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1" && name !== "pi-packages-v1");
   assert.deepEqual(linkCapabilities(new Set()), others);
   assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact"])), others);
   // (Spaces are named the same way, only when the link carries their calls: test/spaces-host.test.mjs.)
-  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES.filter((name) => name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1"));
+  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES.filter((name) => name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1" && name !== "pi-packages-v1"));
+  // Pi packages are named only when the link carries all five marketplace calls.
+  assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS.slice(1))).includes("pi-packages-v1"), false);
+  assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS)).includes("pi-packages-v1"), true);
   // ("market-refresh-v1" is named only when the link carries plugins.refresh.)
   assert.ok(linkCapabilities(new Set(["plugins.refresh"])).includes("market-refresh-v1"));
   const files = join(dir, "files");
