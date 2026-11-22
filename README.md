@@ -130,6 +130,7 @@ For your phone, join the [iOS or Android beta](https://botkins.app/downloads). T
 | [Desktop](desktop/README.md) · Electron | In `desktop/`, run `npm ci`, then `npm start`. |
 | [Mobile](mobile/README.md) · Expo and React Native | In `mobile/`, run `npm ci`. Run `npm start` for Metro, or `npm run ios` to build for an iOS simulator. |
 | [Relay](mobile/relay/README.md) · Cloudflare Worker | In `mobile/relay/`, run `npm ci` and `npm test`. |
+| [Gadget](gadget/README.md) · ESP32 firmware and its contract | In `gadget/`, run `sh firmware/build-host.sh`, then `node --test tests/*.test.mjs`. |
 
 Each component has its own package manifest and lockfile. Run `npm test` in the component you change. For changes to the desktop–phone link, run both app suites and read the [link contract](mobile/docs/link-contract.md).
 
