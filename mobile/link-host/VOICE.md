@@ -95,7 +95,7 @@ Rules for `set(patch)`:
 | `local` | `adapter().local.transcribe(wav, { model, language })` | the chosen model, else the first installed STT model | WAV only |
 | `device` | not done here. Throws "This device does its own speech." | | |
 
-The module reads `format` (`wav`, `m4a`, `mp3`, `webm`) only to name the file and set its type. OpenAI's `languages[]` and `language` get the primary subtag (`en-US` becomes `en`, but `zh-CN` stays `zh-cn`). Azure Speech and `custom` get the language as it was given.
+The module reads `format` (`wav`, `m4a`, `mp3`, `webm`) to name the file and set its type. A `wav` it can read (16-bit PCM) is also checked first: one shorter than 250 ms, or whose loudest 20 ms stay under about -40 dBFS (RMS 0.01), is answered `{ text: "" }` without asking the provider, because a speech model given silence invents a short word, often in another language ("Qué"). A recording it can't read (another encoding or format) goes to the provider as it is; the phone checks those itself (`src/features/voice/clip.ts`). OpenAI's `languages[]` and `language` get the primary subtag (`en-US` becomes `en`, but `zh-CN` stays `zh-cn`). Azure Speech and `custom` get the language as it was given.
 
 ### Text to speech
 
@@ -144,6 +144,7 @@ Where a provider has a list route, it is called (15 s limit) and the answer is k
 How the caller connects (from the same documentation):
 
 - **OpenAI socket.** In a browser the subprotocols are `["realtime", "openai-insecure-api-key." + token]`. Tool results go back as `conversation.item.create` with a `function_call_output` item, then `response.create`. (**Not checked:** none of the realtime pages read today show those two events. They are from earlier knowledge of the Realtime API, so check them against the event reference.)
+- **The person's transcript and language.** The `session` asks for the person's words with `transcription: { model: "gpt-transcribe" }`, plus `language` (the primary subtag of the language chosen for speech to text, `en-US` becomes `en`) when one is chosen, so a silent turn can't be heard as another language. (**Not checked:** the realtime pages say `language` is an ISO-639-1 code; none of them says whether `gpt-transcribe` also wants `languages[]` there, as the transcription route does.) The phone does the same when it sets the transcript up itself (Codex).
 - **OpenAI WebRTC.** The caller creates the data channel `oai-events` before it makes its offer.
 - **Gemini.** Audio goes in as `{ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=16000" } } }`. Audio comes out in `serverContent.modelTurn.parts[].inlineData`. A tool call is `toolCall.functionCalls[]` (`id`, `name`, `args`) and the answer is `{ toolResponse: { functionResponses: [{ id, name, response }] } }`.
 - **ElevenLabs.** Audio goes in as `{ user_audio_chunk: <base64> }`. Reply to `ping` with `pong`. A tool call is `client_tool_call` (`tool_name`, `tool_call_id`, `parameters`); the answer is `{ type: "client_tool_result", tool_call_id, result, is_error }`. The server's first message, `conversation_initiation_metadata`, names the real audio formats; this module assumes the agent's default, `pcm_16000` both ways.

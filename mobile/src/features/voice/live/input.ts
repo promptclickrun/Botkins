@@ -18,6 +18,11 @@ export const RELEASE_TAIL_MS = 250;
 /** A press shorter than this is not a turn: nothing is sent for the bot to answer. */
 export const MIN_TURN_MS = 250;
 /**
+ * A push-to-talk turn whose microphone level (0 to 1) never reached this had no speech in it: it is
+ * cleared and not answered, because a speech model given silence invents a word ("Qué").
+ */
+export const SPEECH_LEVEL = 0.05;
+/**
  * Talking over the bot by voice: a piece of the microphone counts when its level (0 to 1) is at
  * least `min` and `ratio` times the echo heard so far, and `frames` such pieces in a row (about
  * 40 ms each) interrupt the bot.
