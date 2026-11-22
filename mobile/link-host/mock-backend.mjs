@@ -848,8 +848,9 @@ function delivery(value) {
 // `revision` is a hash of what it holds, so a phone that reviewed one version can't install another.
 // BOTKINS_DEV_PLUGINS=off leaves the capability out, as an older computer would. "old" keeps
 // "plugins-v1" and leaves "plugin-starts-v1" out: descriptions in the old shape, with no mark.
-// "held" starts with plugins the computer switched off: one whose folder was linked for its skills,
-// one an earlier version did not show whole, and one whose copy is not the reviewed files.
+// "held" starts with plugins the computer has a note about, as the app has after its update: one whose
+// folder was linked for its skills, one an earlier version did not show whole (both stay on, the note
+// first among their warnings), and one whose copy is not the reviewed files.
 const PLUGIN_PAGE = 50;
 const pluginField = (key, label, { secret = false, required = true, ...rest } = {}) => ({ key, label, secret, required, ...rest });
 const contents = ({ skills = [], agents = [], commands = [], mcpServers = [], hooks = [], lspServers, notRun, otherFiles } = {}) => ({
@@ -1025,10 +1026,13 @@ const DEMO_FOLDER_PLUGINS = {
 /** A revision is the hash of what was looked at: 64 hex characters, as the app's. */
 const revisionOf = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const pluginRevision = (entry) => revisionOf({ version: entry.version, contents: entry.contents, config: entry.config });
-/** The app's own sentences (desktop/docs/PLUGINS.md), so a phone meets the words it will meet. */
-const HELD_BACK = {
-  unseen: "Botkins switched this plugin off. An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts, and switch it on again if you agree.",
-  linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer. It is off until you switch it on.",
+/**
+ * The app's own notes (desktop/desktop/plugins.mjs, NOTES), so a phone meets the words it will meet. Botkins switches no
+ * plugin off by itself: a note is the first of a plugin's warnings, and a switch by the person ends it.
+ */
+const PLUGIN_NOTES = {
+  unseen: "An earlier version of Botkins did not show everything that this plugin starts on this computer. Look at what it starts.",
+  linked: "This plugin folder was linked for its skills. Botkins now keeps a copy of it and shows what it starts on this computer.",
 };
 const CHANGED_COPY = "The installed files of this plugin are not the files that were reviewed. Update the plugin: Botkins writes its files again and keeps your settings.";
 const NO_REVISION = "Look at the plugin first. An install or an update names the revision that was looked at.";
@@ -1292,24 +1296,24 @@ export class MockBackend {
   }
   /**
    * What the update to the app left behind (BOTKINS_DEV_PLUGINS=held): a folder that was linked for
-   * its skills is now a plugin that is off; a plugin an earlier version did not show whole is off;
-   * and one plugin's copy is not the reviewed files, so an update is its repair.
+   * its skills is now a plugin, still on; a plugin an earlier version did not show whole is still on;
+   * both with a note. And one plugin's copy is not the reviewed files, so an update is its repair.
    */
   holdPluginsBack() {
     const linked = "/Users/demo/.plugins/code-review";
     this.state.skills = { ...this.state.skills, plugins: this.state.skills.plugins.filter((plugin) => plugin.path !== linked) };
-    this.addPluginFolder(linked).heldBack = "linked";
-    for (const [id, more] of [["git-guard@awesome-copilot", { enabled: false, heldBack: "unseen" }], ["test-runner@awesome-copilot", { changed: true }]]) {
+    this.addPluginFolder(linked).note = "linked";
+    for (const [id, more] of [["git-guard@awesome-copilot", { note: "unseen" }], ["test-runner@awesome-copilot", { changed: true }]]) {
       this.installPlugin(id, { revision: pluginRevision(this.pluginEntry(id)) });
       Object.assign(this.installedPlugin(id), more);
     }
   }
-  /** A folder as an installed plugin, switched off: a copy of what the folder holds now. */
+  /** A folder as an installed plugin, switched on: a copy of what the folder holds now. The phone warns before it is added. */
   addPluginFolder(path) {
     if (this.plugins.installed.some((record) => record.folder === path)) throw new Error("That folder is already added.");
     const name = posix.basename(path);
     const made = DEMO_FOLDER_PLUGINS[path] ?? { contents: { skills: [slug(name) || "skill"] } };
-    const record = { id: name + "@folder", listing: { id: name + "@folder", name, marketplace: "folder", ...(made.description && { description: made.description }) }, contents: contents(made.contents), config: [], values: {}, enabled: false, bots: "all", installedAt: now(), folder: path };
+    const record = { id: name + "@folder", listing: { id: name + "@folder", name, marketplace: "folder", ...(made.description && { description: made.description }) }, contents: contents(made.contents), config: [], values: {}, enabled: true, bots: "all", installedAt: now(), folder: path };
     record.revision = revisionOf(record.contents);
     if (this.plugins.installed.some((item) => item.id === record.id)) throw new Error("A plugin called " + name + " is already installed.");
     this.plugins.installed.push(record);
@@ -1375,8 +1379,9 @@ export class MockBackend {
           : signIn
             ? ["needs-sign-in", "Sign in to " + signIn.name + " on your computer."]
             : ["ready"];
-    // A plugin the app itself switched off says why, with any status but an error's own sentence.
-    const detail = status === "error" ? said : record.heldBack && !record.enabled ? HELD_BACK[record.heldBack] : said;
+    const detail = said;
+    // The app's note comes first among the warnings.
+    const warnings = [...(PLUGIN_NOTES[record.note] ? [PLUGIN_NOTES[record.note]] : []), ...(shown.warnings ?? [])];
     const { skills, ...rest } = record.contents;
     const more = Object.values(rest).some((list) => Array.isArray(list) && list.length > 0);
     return {
@@ -1386,7 +1391,7 @@ export class MockBackend {
       bots: record.bots === "all" ? "all" : [...record.bots],
       contents: { ...shown.contents, mcpServers },
       config,
-      ...(shown.warnings && { warnings: shown.warnings }),
+      ...(warnings.length && { warnings }),
       ...(shown.starts && { starts: shown.starts }),
       status,
       ...(detail && { detail }),
@@ -2706,10 +2711,10 @@ export class MockBackend {
     // "Add from folder…" with a folder chosen in the folder browser. It stays where it is and is read from there.
     addSkillFolderAt(path) {
       chosenFolder(path);
-      // A plugin folder is never linked as a folder of skills: it is installed as a plugin, switched off.
+      // A plugin folder is never linked as a folder of skills: it is installed as a plugin, switched on.
       if (this.pluginStarts && DEMO_FOLDER_PLUGINS[path] && path !== "/Users/demo/team-skills") {
         const record = this.addPluginFolder(path);
-        return { kind: "plugin", name: record.listing.name, id: record.id, enabled: false };
+        return { kind: "plugin", name: record.listing.name, id: record.id, enabled: true };
       }
       const { folders } = this.state.skills;
       if (folders.some((folder) => folder.path === path)) throw new Error("That folder is already added.");
@@ -3000,7 +3005,7 @@ export class MockBackend {
     "plugins.install"(id, options) {
       return this.installPlugin(id, options ?? {});
     },
-    // A folder plugin is added turned off: the person looks at what it runs and turns it on.
+    // A folder plugin is added turned on: the phone warns before it is added.
     "plugins.addFolder"(path) {
       chosenFolder(path);
       return this.pluginView(this.addPluginFolder(path));
@@ -3019,8 +3024,8 @@ export class MockBackend {
       // A copy that is not the reviewed files is not switched on: the way back is an update.
       if (on === true && record.changed) throw new Error(CHANGED_COPY);
       record.enabled = on === true;
-      // The person looked and said yes: the app's reason for holding it back is over.
-      if (record.enabled) delete record.heldBack;
+      // A switch by the person, on or off, is their own choice: the app's note is done with.
+      delete record.note;
     },
     "plugins.update"(id, { revision } = {}) {
       const record = this.installedPlugin(id);

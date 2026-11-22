@@ -214,19 +214,20 @@ export function byLine(listing: PluginListing, marketplaces: PluginMarketplace[]
 }
 
 /**
- * Whether the computer switched a plugin off and says why: the person looks at it, then turns it
- * on (or updates it first, with `repair`). An entry in error that no update repairs (a linked
- * folder that could not be copied) has nothing to review: it can only be removed.
+ * Whether the computer switched a plugin off by itself and says why. Only a computer up to 0.17.2 did:
+ * a newer one switches nothing off, and its reason is the first of the plugin's warnings. An entry in
+ * error is not one of these, whoever switched it off: its `detail` is about the error, and with
+ * `repair` its way back is Update.
  */
-export const needsReview = (plugin: Pick<InstalledPlugin, "enabled" | "detail" | "status" | "repair">) => !plugin.enabled && !!plugin.detail && (plugin.status !== "error" || plugin.repair === "update");
+export const switchedOff = (plugin: Pick<InstalledPlugin, "enabled" | "detail" | "status">) => !plugin.enabled && !!plugin.detail && plugin.status !== "error";
 
 /**
- * An installed plugin's status as one line. A plugin the computer switched off reads
+ * An installed plugin's status as one line. A plugin an older computer switched off reads
  * "Off · Needs review"; one a person switched off stays "Off". `page`: on the plugin's own page the
  * computer's sentence is shown whole under the name, so the line stays short.
  */
-export function statusLine(plugin: Pick<InstalledPlugin, "status" | "detail" | "enabled" | "repair">, { page = false }: { page?: boolean } = {}): string {
-  if (plugin.status !== "error" && needsReview(plugin)) return "Off · Needs review";
+export function statusLine(plugin: Pick<InstalledPlugin, "status" | "detail" | "enabled">, { page = false }: { page?: boolean } = {}): string {
+  if (switchedOff(plugin)) return "Off · Needs review";
   if (plugin.status === "error" && page) return "Something is wrong with this plugin.";
   switch (plugin.status) {
     case "ready":
@@ -299,7 +300,7 @@ export const noticeKey = (computer: string, pluginId: string, where: "plugins" |
 
 /** The notice over the plugins: "Botkins switched off 3 plugins", for those not told about yet. Undefined when there is nothing new to say. */
 export function reviewNotice(plugins: InstalledPlugin[] | undefined, computer: string, told: readonly string[]): { title: string; text: string; keys: string[] } | undefined {
-  const fresh = (plugins ?? []).filter((plugin) => needsReview(plugin) && !told.includes(noticeKey(computer, plugin.id, "plugins")));
+  const fresh = (plugins ?? []).filter((plugin) => switchedOff(plugin) && !told.includes(noticeKey(computer, plugin.id, "plugins")));
   if (!fresh.length) return undefined;
   return {
     title: "Botkins switched off " + count(fresh.length, "plugin", "plugins"),
@@ -311,7 +312,7 @@ export function reviewNotice(plugins: InstalledPlugin[] | undefined, computer: s
 /** The notices in Skills: one for each installed plugin that has skills and is switched off with a reason, not told about yet. */
 export function skillsNotices(plugins: InstalledPlugin[] | undefined, computer: string, told: readonly string[]): { id: string; key: string; title: string; text: string }[] {
   return (plugins ?? [])
-    .filter((plugin) => needsReview(plugin) && plugin.contents.skills.length > 0 && !told.includes(noticeKey(computer, plugin.id, "skills")))
+    .filter((plugin) => switchedOff(plugin) && plugin.contents.skills.length > 0 && !told.includes(noticeKey(computer, plugin.id, "skills")))
     .map((plugin) => ({ id: plugin.id, key: noticeKey(computer, plugin.id, "skills"), title: "Skills from " + shownText(plugin.name) + " are off", text: "They are part of a plugin that is switched off. Review it, then turn it on." }));
 }
 

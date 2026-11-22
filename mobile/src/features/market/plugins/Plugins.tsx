@@ -10,7 +10,7 @@ import { attempt } from "@/state/link";
 import { Button, Chip, EmptyState, Group, Loading, Page, space, T } from "@/ui";
 import { SearchField } from "../parts";
 import { addFolderHref, addMarketplaceHref, loadMarketplaces, markTold, pluginCalls, pluginHref, refreshCatalogs, useCanRefresh, useComputerKey, useInstalledPlugins, usePluginMarketplaces, usePluginsReady, useToldNotices } from "./calls";
-import { byLine, matchInstalled, needsReview, pluginChips, readPages, reviewNotice, statusLine } from "./logic";
+import { byLine, matchInstalled, switchedOff, pluginChips, readPages, reviewNotice, statusLine } from "./logic";
 import { Notice, PluginRow } from "./parts";
 
 /** One search of one marketplace, page by page. */
@@ -124,8 +124,8 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
     ]);
   };
 
-  // A plugin the computer switched off says so in its line, wherever it is listed.
-  const held = useMemo(() => new Map((installed ?? []).filter(needsReview).map((plugin) => [plugin.id, statusLine(plugin)])), [installed]);
+  // A plugin an older computer switched off says so in its line, wherever it is listed.
+  const held = useMemo(() => new Map((installed ?? []).filter(switchedOff).map((plugin) => [plugin.id, statusLine(plugin)])), [installed]);
   const rows = (items: PluginListing[]) => (
     <Group flat>
       {items.map((item) => (
