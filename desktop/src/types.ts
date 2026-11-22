@@ -1640,6 +1640,8 @@ export type Appearance = {
   textSize: "small" | "default" | "large" | "larger";
   /** "theme", or a hex color for the person's own messages. */
   bubble: string;
+  /** Missing on an older computer means the usual desktop default: on. */
+  avatarAnimations?: boolean;
   /** Background presets from before themes; kept as saved and no longer drawn. */
   lightBackground: string;
   darkBackground: string;

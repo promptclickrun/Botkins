@@ -26,6 +26,7 @@ import Settings from "./Settings";
 import ModelPicker, { chatDefault, isRoutineChat, modelLabel } from "./ModelPicker";
 import ProviderIcon from "./ProviderIcon";
 import { isConnected, useModelCatalog, useProviders } from "./providers";
+import { AvatarAnimations } from "./Avatar";
 import ChatView, { type SideAnswer } from "./ChatView";
 import { ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
 import { ActivityPage } from "./Work";
@@ -697,6 +698,7 @@ function App() {
     </button>
   );
   return (
+    <AvatarAnimations enabled={state.settings.appearance.avatarAnimations !== false}>
     <div className={"shell" + (collapsed ? " collapsed" : "")}>
       <aside aria-label="Side menu">
         <div className="brand">
@@ -1050,6 +1052,7 @@ function App() {
         )}
       </dialog>
     </div>
+    </AvatarAnimations>
   );
 }
 createRoot(document.getElementById("root")!).render(<App />);

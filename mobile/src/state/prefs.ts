@@ -3,6 +3,7 @@ import { keep, readKept } from "@/state/keep";
 import { create } from "zustand";
 import { DEFAULT_FONT, FONT_IDS, type FontId } from "@/ui/fonts";
 import { DEFAULT_THEME, THEMES } from "@/ui/themes";
+import { DEFAULT_AVATAR_ANIMATIONS, readAvatarAnimations } from "./avatarPrefs";
 import { type TabId, tabOrder, USUAL_TABS } from "./tabs";
 
 const KEY = "botkins.prefs.v1";
@@ -24,6 +25,8 @@ export type Prefs = {
   /** The height of buttons, fields, chips and rows. */
   controlSize: "compact" | "regular" | "large";
   haptics: boolean;
+  /** Motion for bot avatars on this phone. Missing in older saved choices means off. */
+  avatarAnimations: boolean;
   /** Whether Today is open on Home. */
   todayOpen: boolean;
   /** The model providers folded shut in the model picker. */
@@ -40,7 +43,7 @@ export type Prefs = {
   homePanels: PanelPin[];
 };
 export type PanelPin = { spaceId: string; panelId: string };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, todayOpen: true, foldedProviders: [], marketView: "apps", toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [] };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], marketView: "apps", toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [] };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -72,6 +75,7 @@ function read(saved: Record<string, unknown>): Prefs {
     fontPicked: saved.fontPicked === true || (FONT_IDS.includes(saved.font as FontId) && saved.font !== OLD_DEFAULT_FONT),
     controlSize: CONTROL_SIZES.includes(saved.controlSize as Prefs["controlSize"]) ? (saved.controlSize as Prefs["controlSize"]) : defaults.controlSize,
     haptics: typeof saved.haptics === "boolean" ? saved.haptics : defaults.haptics,
+    avatarAnimations: readAvatarAnimations(saved.avatarAnimations),
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
     marketView: saved.marketView === "pi" || saved.marketView === "plugins" || saved.marketView === "agents" ? saved.marketView : "apps",
     toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,

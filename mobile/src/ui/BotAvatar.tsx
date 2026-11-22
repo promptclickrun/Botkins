@@ -14,8 +14,9 @@ import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, M
 import { lookOf, type ResolvedLook, resolveLook } from "@/data/botLook";
 import type { BotkinLook } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
+import { usePrefs } from "@/state/prefs";
 import { useAvatarMotion } from "./avatarMotion";
-import { avatarBeat, avatarMotion, schedulePasses, scheduleRestPasses } from "./avatarRest";
+import { avatarBeat, avatarCanMove, avatarMotion, schedulePasses, scheduleRestPasses } from "./avatarRest";
 import { useOnShow } from "./useOnShow";
 
 const CLIP_FOR: Record<AvatarState, BotkinState> = {
@@ -76,8 +77,8 @@ export type BotAvatarProps = {
   tile?: boolean;
   /**
    * Left out, an avatar moves only inside an `AvatarMotion` screen (Home's primary bot passes true,
-   * Home's other bots false). The phone's Reduce Motion stills them all, and an avatar whose screen
-   * can't be seen holds still by itself.
+   * Home's other bots false). The phone-wide setting and Reduce Motion still them all, and an avatar
+   * whose screen can't be seen holds still by itself.
    */
   animated?: boolean;
   /** The state's badge at the corner. On by default from 40 points up. */
@@ -107,6 +108,7 @@ function Head({ look, size }: { look: ResolvedLook; size: number }) {
 export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated: asked, badge, style }: BotAvatarProps) {
   const screenMoves = useAvatarMotion();
   const animated = asked ?? screenMoves;
+  const animations = usePrefs((prefs) => prefs.avatarAnimations);
   const spec = given ?? lookOf(bot ?? {});
   const colorKey = spec.colors?.join(",");
   const look = useMemo(() => resolveLook(spec), [spec.head, spec.palette, spec.eyes, colorKey]);
@@ -115,7 +117,8 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const eyes = clip.eyes === "oval" ? look.eyes : clip.eyes;
   const inner = size;
   const unit = inner / 256;
-  const still = useReducedMotion() || !animated;
+  const reducedMotion = useReducedMotion();
+  const still = !avatarCanMove(animations, reducedMotion, animated);
   // Under another page, or in a tab that isn't selected, the head holds the pose it has: nothing
   // jumps while the next screen slides over it, and it starts its clip again when it is seen.
   const seen = useOnShow();

@@ -1094,6 +1094,7 @@ export function HomePage({ state, actions, composer }: { state: State; actions: 
     (r) => r.status === "Needs you" && state.runs.find((x) => x.chatId === r.chatId) === r,
   );
   const primary = state.bots[0];
+  const primaryActivity = botActivity(state, primary.id);
   return (
     <>
       {/* The page's name, for screen readers: what a person sees first is the question below. */}
@@ -1104,7 +1105,7 @@ export function HomePage({ state, actions, composer }: { state: State; actions: 
           {composer}
         </div>
         <div className="heroface">
-          <BotAvatar bot={primary} state={botActivity(state, primary.id)} size={176} animated />
+          <BotAvatar bot={primary} state={primaryActivity} size={176} animated={primaryActivity !== "idle"} />
           <strong>{primary.name}</strong>
           <small>{primary.role}</small>
         </div>

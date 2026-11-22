@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useSyncExternalStore } from "react";
+import { createContext, memo, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { type AvatarState, botkinSvg, botkinUrl, clipDuration, lookKey, lookOf, playsOnce } from "./botkins";
 import type { BotLook } from "./types";
 import "./agents.css";
@@ -10,6 +10,12 @@ const watchMotion = (changed: () => void) => {
   reduce.addEventListener("change", changed);
   return () => reduce.removeEventListener("change", changed);
 };
+const AvatarAnimationSetting = createContext(true);
+
+/** One desktop-wide setting for every Botkin drawn in the window. */
+export function AvatarAnimations({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+  return <AvatarAnimationSetting.Provider value={enabled}>{children}</AvatarAnimationSetting.Provider>;
+}
 
 export type BotAvatarProps = {
   /** A bot (its saved look, or its default character), or a look by itself. */
@@ -19,7 +25,7 @@ export type BotAvatarProps = {
   state?: AvatarState;
   /** Width and height in CSS pixels. */
   size?: number;
-  /** Moving or still. By default an avatar moves when it is large, or when its bot is doing something. */
+  /** Moving or still. By default an avatar moves only when its bot is doing something. */
   animated?: boolean;
   /** The state's badge at the corner. On by default from 40 pixels up. */
   badge?: boolean;
@@ -33,7 +39,8 @@ export type BotAvatarProps = {
  */
 export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated, badge, label }: BotAvatarProps) {
   const look = given ?? lookOf(bot ?? {});
-  const still = useSyncExternalStore(watchMotion, () => reduce.matches) || !(animated ?? (state !== "idle" || size >= 48));
+  const animations = useContext(AvatarAnimationSetting);
+  const still = useSyncExternalStore(watchMotion, () => reduce.matches) || !animations || !(animated ?? state !== "idle");
   const showBadge = badge ?? size >= 40;
   // An outcome or a reaction plays once and holds, so each showing needs a picture of its own:
   // a picture that is already loaded has already played.
