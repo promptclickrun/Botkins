@@ -54,6 +54,16 @@ async function gemini() {
   return it;
 }
 
+/** A quiet room at the microphone: soft noise, about 0.002 of full scale, under the speech level (0.01). */
+function roomNoise(seconds, rate = 16000) {
+  const pcm = Buffer.alloc(Math.floor(seconds * rate) * 2);
+  let seed = 7;
+  for (let i = 0; i < pcm.length / 2; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    pcm.writeInt16LE((seed % 201) - 100, i * 2);
+  }
+  return pcm;
+}
 const kinds = (connection) => connection.messages.map((message) => (message.setup ? "setup" : message.toolResponse ? "toolResponse" : Object.keys(message.realtimeInput ?? {})[0] ?? "?"));
 const audioBytes = (messages) => messages.filter((message) => message.realtimeInput?.audio).reduce((sum, message) => sum + Buffer.from(message.realtimeInput.audio.data, "base64").length, 0);
 /** The voice's sound as Gemini sends it: base64 PCM at 24 kHz, in pieces of `piece` seconds. */
@@ -185,6 +195,44 @@ test("a gadget talks with the bot's live voice: push to talk, ask_bot, the voice
   assert.deepEqual(after2.filter((kind) => kind !== "audio"), ["activityStart", "activityEnd", "activityStart", "activityEnd"]);
   assert.equal(standIn.connections.length, 1, "one session for every press so far");
   await until(() => !sim.view.speaking, "quiet after the cut");
+
+  // ── A press with no speech in it, as a tap or a quiet room gives: nothing goes to Gemini, which would
+  // make up a word for it ("¿Qué?") and answer in that word's language. The gadget is ready again at once.
+  const sentBefore = first.messages.length;
+  const quietWav = join(dir, "quiet.wav");
+  writeFileSync(quietWav, wavFromPcm(roomNoise(1), 16000));
+  const logged = sim.logs.length;
+  sim.send("hear " + quietWav);
+  await until(() => sim.logs.length > logged, "the quiet press in the log");
+  assert.match(sim.logs.at(-1), /^live press: .*no speech, nothing sent$/);
+  await until(() => !sim.view.listening && !sim.view.sending, "ready again after the quiet press");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(first.messages.length, sentBefore, "nothing sent to Gemini for a press with no speech");
+
+  // A tap, however loud (a click of the button, a word cut off): the board gives it up, and nothing of it
+  // reaches Gemini either.
+  const tapWav = join(dir, "tap.wav");
+  writeFileSync(tapWav, wavFromPcm(tone(0.2, 16000), 16000));
+  const tapped = sim.logs.length;
+  sim.send("tap " + tapWav);
+  await until(() => sim.logs.length > tapped, "the tap in the log");
+  await until(() => !sim.view.listening && !sim.view.sending, "ready again after the tap");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(first.messages.length, sentBefore, "nothing sent to Gemini for a tap");
+
+  // A press that is quiet at first and then speaks: the turn starts at the speech, with the second before
+  // it (so a soft first word is whole), and not the quiet before that.
+  standIn.onMessage = (connection, message) => {
+    if (message.realtimeInput?.activityEnd) connection.send({ serverContent: { turnComplete: true } });
+  };
+  const lateWav = join(dir, "late.wav");
+  writeFileSync(lateWav, wavFromPcm(Buffer.concat([roomNoise(1.5), tone(1, 16000)]), 16000));
+  sim.send("hear " + lateWav);
+  await until(() => first.messages.slice(sentBefore).some((message) => message.realtimeInput?.activityEnd), "the late speech's turn sent");
+  const lateTurn = { messages: first.messages.slice(sentBefore) };
+  assert.deepEqual(kinds(lateTurn), ["activityStart", ...Array(20).fill("audio"), "activityEnd"]);
+  assert.equal(audioBytes(lateTurn.messages), 64000, "the second before the speech, then the second of it");
+  assert.match(sim.logs.at(-1), /^live press: .*: speech$/);
 
   // ── Closing: no press and no sound for the idle time (4 s here) closes the session; the computer
   // forgets it, and the next press opens a new one.

@@ -91,6 +91,8 @@ extern "C" void app_main(void) {
   config.socket = [] { return std::unique_ptr<botkins::Socket>(new port::EspSocket()); };
   // The owner's restart (the part's `restart`): the core says it is restarting, then calls this.
   config.restart = [] { esp_restart(); };
+  // The core's own lines (what a live press heard, for instance).
+  config.log = [](const std::string& line) { ESP_LOGI("botkins.core", "%s", line.c_str()); };
   // The threads the core makes as it needs them: the live voice's, made while a session is open beside
   // the relay's socket and the live one, and the console's `listen` hold. Each gets a stack of its own
   // size, not the 16 KB of the core's long-lived threads. Stacks stay in internal RAM: a call on the

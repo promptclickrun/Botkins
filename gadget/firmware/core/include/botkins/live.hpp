@@ -53,6 +53,8 @@ class SampleQueue {
   void append(const int16_t* samples, size_t count) { data_.insert(data_.end(), samples, samples + count); }
   /** Takes up to `count` samples from the front into `out`. */
   void take(size_t count, std::vector<int16_t>& out);
+  /** Lets go of up to `count` samples from the front. */
+  void drop(size_t count);
   /** Everything waiting, taken out. */
   std::vector<int16_t> take_all();
 
@@ -170,11 +172,16 @@ class LiveVoice {
   /** A session is opening or open: the bot's replies are its to speak, not to be read aloud. */
   bool active();
 
-  /** The talk button. The press's sound is kept until the session is open, then sent after the turn starts. */
+  /**
+   * The talk button. The press's sound is kept until the session is open and the microphone has heard
+   * speech; then the person's turn starts on the provider and the sound goes. A press with no speech in
+   * it sends nothing: a speech model given silence or a tap makes up a word ("¿Qué?") and answers it.
+   */
   void press();
   /** Samples at `Board::mic_rate`, while pressed (the gadget calls it with its own audio lock held). */
   void feed(const int16_t* samples, size_t count);
-  void release();
+  /** The button is up. `keep` false (a tap): the press is given up, unless its turn already reached the provider. */
+  void release(bool keep = true);
   /** After `failed`: the press's sound, given back (with the gadget's audio lock held). */
   std::vector<int16_t> surrender();
   /** Stops what the voice says now; the rest of its turn is dropped. */
@@ -242,8 +249,18 @@ class LiveVoice {
   bool shutting_ = false;  // closing: nothing more is taken from the provider
   Clock::time_point active_at_{};  // the last press, sound or tool
 
-  // The person's turn.
+  // The person's turn. `start_pending_`: a press whose turn hasn't started on the provider yet, which it
+  // does once `speech_` (the microphone heard speech in this press).
   bool held_ = false, start_pending_ = false, release_pending_ = false, turn_open_ = false;
+  bool speech_ = false;
+  // How loud the press was, in frames of 20 ms (their RMS, 0 to 1): for the speech test, and for the log.
+  double frame_sum_ = 0;
+  size_t frame_count_ = 0;
+  int loud_run_ = 0, loud_frames_ = 0;
+  double press_peak_ = 0, press_floor_ = 1;
+  Clock::time_point press_at_{};
+  void hear(const int16_t* samples, size_t count);
+  std::string press_summary(Clock::time_point now) const;
   SampleQueue mic_;  // at the microphone's rate, not sent yet
   Resampler mic_rate_;
 

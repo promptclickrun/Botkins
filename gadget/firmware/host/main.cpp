@@ -9,6 +9,7 @@
 //   say <words>             typed words
 //   hear <file.wav>         a press of the talk button with this recording: 16-bit mono WAV at the
 //                           microphone's rate (16 kHz). It goes through live voice when the computer has one.
+//   tap <file.wav>          the same, as a press the board gives up (shorter than its shortest talk)
 //   answer <action> [text]  answers the request on show
 //   new | next | stop       a new chat, the next bot, stop the turn
 //   away | home             away from the computer's network (none of its own addresses answers), or back
@@ -180,6 +181,11 @@ int main(int argc, char** argv) {
     fflush(stdout);
   };
   board.socket = [] { return std::unique_ptr<Socket>(new HostSocket()); };
+  // The core's own lines go to standard error: standard output carries the protocol.
+  board.log = [](const std::string& line) {
+    fprintf(stderr, "core: %s\n", line.c_str());
+    fflush(stderr);
+  };
   if (const char* probe = getenv("BOTKINS_SIM_PROBE_MS")) board.relay_probe_ms = atoi(probe) > 0 ? atoi(probe) : board.relay_probe_ms;
   if (const char* idle = getenv("BOTKINS_SIM_LIVE_IDLE_MS")) board.live_idle_ms = atoi(idle) > 0 ? atoi(idle) : board.live_idle_ms;
 
@@ -217,7 +223,7 @@ int main(int argc, char** argv) {
     else if (verb == "answer") {
       size_t space = rest.find(' ');
       gadget.answer(rest.substr(0, space), space == std::string::npos ? "" : rest.substr(space + 1));
-    } else if (verb == "hear") {
+    } else if (verb == "hear" || verb == "tap") {
       // The file's samples go in as a microphone gives them: a tenth of a second at a time, in real time or faster.
       std::ifstream file(rest, std::ios::binary);
       std::stringstream bytes;
@@ -236,7 +242,8 @@ int main(int argc, char** argv) {
         gadget.feed(samples.data() + at, std::min(step, samples.size() - at));
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
-      gadget.stop_listening();
+      // "tap": a press the board gives up (shorter than its shortest talk), as a quick press and let go is.
+      gadget.stop_listening(verb == "hear");
     }
   }
   gadget.stop();

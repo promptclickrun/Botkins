@@ -783,7 +783,7 @@ void Gadget::stop_listening(bool send) {
     change([](View& view) { view.listening = false; view.sending = true; });
     std::lock_guard<std::mutex> lock(audio_);
     // Unless the session couldn't open meanwhile: then the sound already went the turn path.
-    if (live_take_) live_->release();
+    if (live_take_) live_->release(send);
     return;
   }
   change([send](View& view) { view.listening = false; view.sending = send; });
@@ -810,6 +810,11 @@ void Gadget::live_failed() {
       pending_ = std::move(audio);
       if (!uploading_ && pending_.size() >= (size_t)(board_.mic_rate * kPieceSeconds)) piece = uploading_ = true;
     } else last = true;
+  }
+  if (last && audio.empty()) {
+    // A press with no speech in it: nothing to send down the turn path either.
+    change([](View& view) { view.sending = false; });
+    return;
   }
   if (last) {
     auto shared = std::make_shared<std::vector<int16_t>>(std::move(audio));

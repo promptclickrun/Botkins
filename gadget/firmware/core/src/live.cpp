@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace botkins {
@@ -18,6 +19,16 @@ const int kPieceMs = 100;
 const int kAheadSeconds = 4;
 // The microphone held at most while the session opens.
 const int kMicSeconds = 12;
+// Speech, for the provider's turn to start: frames of this long, and this many in a row at the board's
+// speech level. A click of the button is shorter.
+const int kFrameMs = 20;
+const int kSpeechFrames = 3;
+// A press shorter than this is a tap: its turn never starts on the provider, whatever the microphone heard
+// (the boards give up such a press, and a click of the button can be loud).
+const int kMinTurnMs = 300;
+// Before speech, only this much of the press is kept: what goes just before the first loud frames, so a
+// soft first word ("What is…") is whole.
+const int kPreRollMs = 1000;
 // Played out with no word that the voice's turn is over: the speaker stops after this.
 const int kQuietMs = 1500;
 // A reply is taken after this long with nothing more (another reply may follow, in a group chat).
@@ -221,6 +232,15 @@ void SampleQueue::take(size_t count, std::vector<int16_t>& out) {
   }
 }
 
+void SampleQueue::drop(size_t count) {
+  at_ += std::min(count, size());
+  if (at_ == data_.size()) clear();
+  else if (at_ >= 16384 && at_ * 2 >= data_.size()) {
+    data_.erase(data_.begin(), data_.begin() + at_);
+    at_ = 0;
+  }
+}
+
 std::vector<int16_t> SampleQueue::take_all() {
   if (at_ > 0) data_.erase(data_.begin(), data_.begin() + at_);
   std::vector<int16_t> out;
@@ -279,6 +299,13 @@ void LiveVoice::press() {
     else {
       start_pending_ = true;
       mic_.clear();
+      speech_ = false;
+      frame_sum_ = 0;
+      frame_count_ = 0;
+      loud_run_ = loud_frames_ = 0;
+      press_peak_ = 0;
+      press_floor_ = 1;
+      press_at_ = Clock::now();
     }
     // A press while the voice speaks is how a person interrupts it: the sound stops now, and the rest of its turn is dropped.
     cut = playing_;
@@ -307,21 +334,63 @@ void LiveVoice::feed(const int16_t* samples, size_t count) {
   // A session that is slow to open must not grow this without end on a board with little memory.
   if (mic_.size() + count > (size_t)board_.mic_rate * kMicSeconds) return;
   mic_.append(samples, count);
+  const bool was = speech_;
+  hear(samples, count);
+  // No speech yet: only the last moment is kept, for the first word.
+  const size_t pre = (size_t)board_.mic_rate * kPreRollMs / 1000;
+  if (!speech_ && mic_.size() > pre) mic_.drop(mic_.size() - pre);
   active_at_ = Clock::now();
-  if (state_ == State::Open && mic_.size() >= (size_t)board_.mic_rate * kPieceMs / 1000) wake_.notify_all();
+  if (state_ == State::Open && ((speech_ && !was) || mic_.size() >= (size_t)board_.mic_rate * kPieceMs / 1000)) wake_.notify_all();
 }
 
-void LiveVoice::release() {
-  std::lock_guard<std::mutex> lock(m_);
-  if (!held_) return;
-  held_ = false;
-  release_pending_ = true;
-  active_at_ = Clock::now();
-  wake_.notify_all();
+/** How loud the press is, a frame at a time; three loud frames in a row are speech. With m_ held. */
+void LiveVoice::hear(const int16_t* samples, size_t count) {
+  const size_t frame = std::max<size_t>(1, (size_t)board_.mic_rate * kFrameMs / 1000);
+  for (size_t i = 0; i < count; i++) {
+    const double sample = samples[i] / 32768.0;
+    frame_sum_ += sample * sample;
+    if (++frame_count_ < frame) continue;
+    const double level = std::sqrt(frame_sum_ / frame_count_);
+    frame_sum_ = 0;
+    frame_count_ = 0;
+    press_peak_ = std::max(press_peak_, level);
+    press_floor_ = std::min(press_floor_, level);
+    if (level >= board_.speech_level) {
+      loud_frames_++;
+      if (++loud_run_ >= kSpeechFrames) speech_ = true;
+    } else loud_run_ = 0;
+  }
+}
+
+/** One line for the port's log: how long the press was, how loud, and whether it held speech. With m_ held. */
+std::string LiveVoice::press_summary(Clock::time_point now) const {
+  char line[160];
+  snprintf(line, sizeof line, "live press: %d ms, loudest %.3f, quietest %.3f, %d loud frames (level %.3f): %s",
+           (int)std::chrono::duration_cast<milliseconds>(now - press_at_).count(), press_peak_, press_floor_ > press_peak_ ? 0.0 : press_floor_, loud_frames_,
+           board_.speech_level, speech_ ? "speech" : "no speech, nothing sent");
+  return line;
+}
+
+void LiveVoice::release(bool keep) {
+  std::string line;
+  {
+    std::lock_guard<std::mutex> lock(m_);
+    if (!held_) return;
+    held_ = false;
+    release_pending_ = true;
+    // A tap: given up, unless the provider already has its turn (it can't be taken back there).
+    if (!keep && !turn_open_) speech_ = false;
+    active_at_ = Clock::now();
+    if (board_.log) line = press_summary(active_at_);
+    wake_.notify_all();
+  }
+  if (!line.empty()) board_.log(line);
 }
 
 std::vector<int16_t> LiveVoice::surrender() {
   std::lock_guard<std::mutex> lock(m_);
+  // A press that is over and held no speech gives nothing back: the turn path would send its silence.
+  if (!held_ && !speech_) mic_.clear();
   std::vector<int16_t> out = mic_.take_all();
   held_ = start_pending_ = release_pending_ = want_ = false;
   // Not tried again for a while: the presses until then go straight down the turn path.
@@ -523,11 +592,21 @@ void LiveVoice::serve(std::unique_lock<std::mutex>& lock) {
         continue;
       }
     }
-    // A press: the person's turn starts, which stops the voice on the provider's side too.
-    if (start_pending_) {
+    // A press with speech in it, past a tap's length: the person's turn starts, which stops the voice on
+    // the provider's side too.
+    if (start_pending_ && speech_ && (!held_ || Clock::now() - press_at_ >= milliseconds(kMinTurnMs))) {
       start_pending_ = false;
       turn_open_ = true;
       send(proto_->start_turn());
+      continue;
+    }
+    // A press that ended with no speech, or a tap: nothing of it went to the provider, and nothing does.
+    if (start_pending_ && release_pending_ && !held_) {
+      start_pending_ = release_pending_ = false;
+      mic_.clear();
+      lock.unlock();
+      hooks_.change([](View& view) { view.sending = false; });
+      lock.lock();
       continue;
     }
     // The microphone: whole pieces while the button is held, then the rest and the turn's end.

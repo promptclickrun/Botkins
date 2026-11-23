@@ -61,6 +61,16 @@ struct Board {
   /** A live voice session closes after this long with no press and no sound (botkins/live.hpp). */
   int live_idle_ms = 180000;
   /**
+   * How loud speech is at this board's microphone: the RMS of 20 ms of samples, 0 to 1 of full scale.
+   * Live voice sends a press to its provider only once three frames in a row reach it, so a tap or a
+   * quiet press sends nothing. On the StopWatch a quiet room measured 0.001-0.005, sound elsewhere in
+   * the room up to 0.017, and speech from a speaker across the desk peaked at 0.035. 0.01 keeps the
+   * quiet room out and lets soft speech in: a turn of room sound costs less than speech ignored.
+   */
+  double speech_level = 0.01;
+  /** Lines for the port's own log (what a press heard, for instance). A person never sees them. Null: none. */
+  std::function<void(const std::string&)> log;
+  /**
    * Starts one of the core's threads that come and go: "live", the live voice's, which runs while a
    * session is open, and "hold", which holds the talk button for the console's `listen`. Null: a plain
    * std::thread. A port may give each a stack of its own size, or log how much of it was used. It must

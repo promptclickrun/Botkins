@@ -50,9 +50,21 @@ export const freePort = () =>
 
 /** The gadget as a process: lines in, lines out. `view` is what a board would draw now. `env` adds to its environment. */
 export function gadget(dir, env = {}) {
-  const child = track(spawn(SIM, [dir], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...env } }));
+  const child = track(spawn(SIM, [dir], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } }));
   const lines = [];
-  const sim = { view: {}, views: [], spoken: [], answers: [], lines };
+  // The core's own lines (Board::log, "core: …" on standard error), and the rest of standard error as it comes.
+  const logs = [];
+  const sim = { view: {}, views: [], spoken: [], answers: [], lines, logs };
+  let errors = "";
+  child.stderr.on("data", (chunk) => {
+    errors += chunk;
+    for (let at = errors.indexOf("\n"); at >= 0; at = errors.indexOf("\n")) {
+      const line = errors.slice(0, at);
+      errors = errors.slice(at + 1);
+      if (line.startsWith("core: ")) logs.push(line.slice(6));
+      else process.stderr.write(line + "\n");
+    }
+  });
   let held = "";
   child.stdout.on("data", (chunk) => {
     held += chunk;
