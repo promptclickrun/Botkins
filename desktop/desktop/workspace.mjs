@@ -1087,7 +1087,7 @@ export class Workspace {
       ...records,
       // iMessage and Mail, for what the person switched on (a turn nobody watches only reads).
       ...this.mac.tools(bot, chat, run, task),
-      // The phone's calendar, contacts, health, location, photos and mail, for what the person switched on there.
+      // The phone's calendar, contacts, health, location, photos, music and mail, for what the person switched on there.
       ...this.phone.tools(bot, chat, run, task),
       // A panel refresh only updates its panel; other turns can post to Today's board, show apps and ask teammates.
       ...(run?.panelId

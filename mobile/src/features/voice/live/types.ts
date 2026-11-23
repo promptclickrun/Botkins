@@ -41,6 +41,21 @@ export type DuplexLike = {
   addListener(name: "interrupted", listener: (event: { began: boolean; failed?: boolean }) => void): { remove(): void };
 };
 
+/** The iPhone's custom WebRTC audio device for a WebRTC-only Watch session. */
+export type WatchRtcLike = {
+  readonly sessionId: string;
+  start(): Promise<string>;
+  answer(sdp: string): Promise<void>;
+  send(event: string): void;
+  input(enabled: boolean): void;
+  flush(): void;
+  end(): Promise<void>;
+  onMessage(listener: (message: string) => void): { remove(): void };
+  onState(listener: (state: "open" | "connected" | "failed" | "closed") => void): { remove(): void };
+  onLevel(listener: (level: { mic: number; output: number }) => void): { remove(): void };
+  onInterrupted(listener: (failed: boolean) => void): { remove(): void };
+};
+
 export interface LiveTransport {
   /** How the microphone is used: hands-free, or only while the talk button is held. Set before `start`. */
   setInput(mode: InputMode): void;

@@ -272,6 +272,44 @@ struct FeedLock: View {
   }
 }
 
+@available(iOS 18.0, *)
+struct FeedAdaptive: View {
+  @Environment(\.activityFamily) private var family
+  let model: CardModel
+
+  var body: some View {
+    if family == .small {
+      FeedSmall(model: model)
+    } else {
+      FeedLock(model: model)
+    }
+  }
+}
+
+/// A one-chat summary for CarPlay and the Watch Smart Stack. The detailed FeedLock remains on iPhone.
+struct FeedSmall: View {
+  let model: CardModel
+
+  var body: some View {
+    if let chat = model.first {
+      HStack(spacing: 10) {
+        FeedFace(model: model, chat: chat, size: 38)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(model.botName(chat) ?? "Botkins").font(.system(size: 15, weight: .semibold)).lineLimit(1)
+          Text(model.stale ? "Open Botkins for the latest" : (model.words(chat)?.t ?? model.feedLine(chat))).font(.system(size: 12.5)).foregroundStyle(Tone.muted).lineLimit(1)
+        }
+        Spacer(minLength: 4)
+        FeedStatus(model: model, chat: chat)
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .environment(\.colorScheme, .dark)
+    } else {
+      Text("Open Botkins").font(.system(size: 15, weight: .semibold)).padding(14)
+    }
+  }
+}
+
 // ── The Dynamic Island ──────────────────────────────────────────────────────────────────────
 
 /// The compact island's right side: a word when a chat needs you, a check when all ended, else how many are at work or the time.

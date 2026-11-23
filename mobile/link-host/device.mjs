@@ -1,7 +1,7 @@
 // Tools that run on a paired phone ("device access").
 //
 // A person switches sources on in the phone app (Tools › Device access): Calendar, Contacts,
-// Health, Location, Photos, Mail, each off, read, or read and interact. The phone tells this
+// Health, Location, Photos, Apple Music, Mail, each off, read, or read and interact. The phone tells this
 // computer its choices, and the app offers its bots the matching tools (`tools()`). When a bot calls
 // one (`call()`), the call waits in the "asks" part until the phone it is addressed to answers it
 // with "link.device.answer". A phone that is asleep is woken with a push it doesn't show; when that
@@ -16,7 +16,7 @@ import { readFileSync, statSync } from "node:fs";
 import { basename, extname, isAbsolute } from "node:path";
 import { Failure } from "./tools.mjs";
 
-export const DEVICE_SOURCES = ["calendar", "contacts", "health", "location", "photos", "mail"];
+export const DEVICE_SOURCES = ["calendar", "contacts", "health", "location", "photos", "music", "mail"];
 export const DEVICE_LEVELS = ["off", "read", "interact"];
 const RANK = { off: 0, read: 1, interact: 2 };
 
@@ -157,6 +157,86 @@ export const DEVICE_TOOLS = [
     send: "path",
   },
   {
+    name: "phone_music_now_playing",
+    source: "music",
+    level: "read",
+    description: "Reads the Apple Music item currently playing on the person's phone, including playback state, position, title, artist, album and duration.",
+    parameters: object({}),
+  },
+  {
+    name: "phone_music_search",
+    source: "music",
+    level: "read",
+    description: "Searches Apple Music by title, artist or playlist name. `types` may contain songs, albums, playlists and artists. `source` is catalog or library (default: catalog when the person's subscription can play it, otherwise library). Returns stable Music IDs for play or library tools.",
+    parameters: object({
+      query: string,
+      types: { type: "array", items: { type: "string", enum: ["songs", "albums", "playlists", "artists"] } },
+      source: { type: "string", enum: ["catalog", "library"] },
+      limit: { ...number, description: "Results per kind, from 1 to 25. Default 10." },
+    }, ["query"]),
+  },
+  {
+    name: "phone_music_library",
+    source: "music",
+    level: "read",
+    description: "Lists Apple Music playlists or recently played songs from the person's library.",
+    parameters: object({
+      type: { type: "string", enum: ["playlists", "recent"] },
+      limit: { ...number, description: "From 1 to 50. Default 25." },
+    }),
+  },
+  {
+    name: "phone_music_play",
+    source: "music",
+    level: "interact",
+    description: "Starts a MusicKit song, album, playlist or artist on the person's phone. Give an ID from search/library together with its type and source, or give a query to play the best song match. Optional shuffle changes the queue's shuffle mode.",
+    parameters: object({
+      id: string,
+      type: { type: "string", enum: ["song", "songs", "album", "albums", "playlist", "playlists", "artist", "artists"] },
+      source: { type: "string", enum: ["catalog", "library"] },
+      query: string,
+      shuffle: boolean,
+    }),
+  },
+  {
+    name: "phone_music_control",
+    source: "music",
+    level: "interact",
+    description: "Controls the Apple Music player on the person's phone.",
+    parameters: object({ action: { type: "string", enum: ["pause", "resume", "next", "previous", "stop"] } }, ["action"]),
+  },
+  {
+    name: "phone_music_create_playlist",
+    source: "music",
+    level: "interact",
+    description: "Creates an Apple Music playlist on the person's phone. songIds may contain library or catalog song IDs. Returns the new playlist ID.",
+    parameters: object({
+      name: string,
+      description: string,
+      songIds: { type: "array", items: string, maxItems: 100 },
+    }, ["name"]),
+  },
+  {
+    name: "phone_music_add_playlist",
+    source: "music",
+    level: "interact",
+    description: "Adds up to 100 songs, by library or catalog ID, to an Apple Music playlist already in the person's library.",
+    parameters: object({
+      playlistId: string,
+      songIds: { type: "array", items: string, maxItems: 100 },
+    }, ["playlistId", "songIds"]),
+  },
+  {
+    name: "phone_music_add_library",
+    source: "music",
+    level: "interact",
+    description: "Adds a song, album or playlist from the Apple Music catalog to the person's library. Artists cannot be added.",
+    parameters: object({
+      id: string,
+      type: { type: "string", enum: ["song", "songs", "album", "albums", "playlist", "playlists"] },
+    }, ["id", "type"]),
+  },
+  {
     name: "phone_mail_compose",
     source: "mail",
     level: "interact",
@@ -167,7 +247,7 @@ export const DEVICE_TOOLS = [
   },
 ];
 const BY_NAME = new Map(DEVICE_TOOLS.map((tool) => [tool.name, tool]));
-const SOURCE_NAMES = { calendar: "Calendar", contacts: "Contacts", health: "Health", location: "Location", photos: "Photos", mail: "Mail" };
+const SOURCE_NAMES = { calendar: "Calendar", contacts: "Contacts", health: "Health", location: "Location", photos: "Photos", music: "Apple Music", mail: "Mail" };
 
 /** A picture on this computer, read to be sent to a phone. Throws a sentence a bot can read. */
 function pictureAt(path) {

@@ -38,8 +38,10 @@ public enum ShortcutRequests {
     }
   }
 
-  fileprivate static func take(voice: Bool) -> [[String: String]] {
-    let pending = requests.filter { !$0.value.claimed && ($0.value.fields["action"] == "voice") == voice }
+  fileprivate static func take(foreground: Bool) -> [[String: String]] {
+    let pending = requests.filter {
+      !$0.value.claimed && (["voice", "open"].contains($0.value.fields["action"] ?? "")) == foreground
+    }
     for id in pending.keys { requests[id]?.claimed = true }
     return pending.values.map(\.fields)
   }
@@ -70,7 +72,7 @@ public final class BotkinsShortcutsModule: Module {
     OnDestroy {
       if let observer = self.observer { NotificationCenter.default.removeObserver(observer) }
     }
-    AsyncFunction("take") { (voice: Bool) in await ShortcutRequests.take(voice: voice) }
+    AsyncFunction("take") { (foreground: Bool) in await ShortcutRequests.take(foreground: foreground) }
     AsyncFunction("isPending") { (id: String) in await ShortcutRequests.isPending(id) }
     AsyncFunction("finish") { (id: String, value: String, error: String?) in
       await ShortcutRequests.finish(id, value: value, error: error)

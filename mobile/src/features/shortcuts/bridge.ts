@@ -3,9 +3,11 @@ import { AppState } from "react-native";
 
 type Fields = {
   id: string;
-  action: "catalog" | "send" | "voice";
+  action: "hosts" | "catalog" | "send" | "voice" | "open";
   host?: string;
   bot?: string;
+  botHost?: string;
+  destination?: "latest" | "new";
   modelHost?: string;
   model?: string;
   effort?: string;
@@ -23,6 +25,15 @@ type Native = {
 const native = requireOptionalNativeModule<Native>("BotkinsShortcuts");
 
 async function run(fields: Fields, signal: AbortSignal): Promise<string> {
+  if (fields.action === "hosts") {
+    const { shortcutHosts } = await import("@/state/link");
+    return JSON.stringify(await shortcutHosts());
+  }
+  if (fields.action === "open") {
+    const { startOpenShortcut } = await import("./open");
+    await startOpenShortcut(fields.host, fields.bot, fields.destination ?? "latest", signal, fields.botHost);
+    return "";
+  }
   if (fields.action === "voice") {
     const { startVoiceShortcut } = await import("./voice");
     await startVoiceShortcut(fields.host, fields.bot, signal);
@@ -41,7 +52,7 @@ async function run(fields: Fields, signal: AbortSignal): Promise<string> {
   }
 }
 
-/** Voice is claimed only by a mounted scene. Text and picker queries can run in the background. */
+/** Foreground navigation/voice requests are claimed only by a mounted scene. Other work may run with no window. */
 export function listenForShortcuts(voice: boolean) {
   if (!native) return;
   const bridge = native;

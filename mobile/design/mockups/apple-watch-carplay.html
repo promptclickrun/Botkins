@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Botkins Apple Watch and CarPlay mockups</title>
+  <style>
+    :root { color-scheme: dark; --clay:#e77f40; --ink:#08090b; --line:rgba(255,255,255,.1); }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#0b0d11; color:#edf1f7; font:14px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif; }
+    main { width:min(940px,100%); margin:0 auto; padding:28px 18px 48px; }
+    h1 { font-size:clamp(30px,6vw,46px); line-height:1.02; letter-spacing:-.045em; margin:4px 0 8px; }
+    h2 { font-size:20px; margin:0 0 6px; }
+    p { color:#9ea7b5; line-height:1.5; margin:0; }
+    .eyebrow { color:#79aef7; font-size:10px; font-weight:750; letter-spacing:.16em; text-transform:uppercase; }
+    .section { margin-top:32px; }
+    .stage { margin-top:16px; display:grid; grid-template-columns:minmax(250px,360px) 1fr; gap:24px; align-items:center; }
+    .watch {
+      width:min(340px,100%); aspect-ratio:1/1.16; margin:0 auto; padding:16px; overflow:hidden;
+      border:8px solid #292c32; border-radius:58px; position:relative;
+      background:radial-gradient(circle at 30% 4%,rgba(255,255,255,.1),transparent 34%),linear-gradient(155deg,#15181d,#050608);
+      box-shadow:inset 0 0 0 2px #050608,0 28px 58px rgba(0,0,0,.44);
+    }
+    .crown { position:absolute; right:-11px; top:92px; width:10px; height:45px; background:#484c54; border-radius:5px; }
+    .watch-header { display:flex; gap:9px; align-items:center; }
+    .face { width:48px; height:48px; flex:none; border-radius:44% 44% 48% 48%; position:relative; background:linear-gradient(145deg,#f0aa62,#e77f40); box-shadow:inset -6px -8px 12px rgba(82,34,15,.2); }
+    .face:before,.face:after { content:""; position:absolute; top:17px; width:5px; height:9px; border-radius:9px; background:#3c241b; }
+    .face:before { left:14px; } .face:after { right:14px; }
+    .watch-name { font-size:15px; font-weight:740; }
+    .watch-host { font-size:9px; color:#8e96a2; margin-top:2px; }
+    .online { margin-left:auto; width:6px; height:6px; border-radius:99px; background:#61d7a0; }
+    .chat-title { margin:15px 3px 8px; font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:#77808e; }
+    .messages { display:flex; flex-direction:column; gap:7px; height:210px; overflow:hidden; mask-image:linear-gradient(transparent,#000 8%,#000 94%,transparent); padding-top:13px; }
+    .bubble { max-width:86%; padding:9px 11px; border-radius:14px; font-size:11px; line-height:1.35; color:#dde3eb; background:rgba(255,255,255,.07); }
+    .bubble.you { align-self:flex-end; color:#ffe2cc; background:rgba(231,127,64,.18); }
+    .activity { color:#df8f5d; font-size:10px; margin:8px 4px; }
+    .wave { height:24px; display:flex; justify-content:center; align-items:center; gap:3px; margin-top:1px; }
+    .wave i { display:block; width:3px; border-radius:4px; background:var(--clay); }
+    .wave i:nth-child(1){height:5px}.wave i:nth-child(2){height:14px}.wave i:nth-child(3){height:22px}.wave i:nth-child(4){height:9px}.wave i:nth-child(5){height:18px}.wave i:nth-child(6){height:7px}
+    .controls { display:flex; gap:7px; margin-top:7px; }
+    .control { flex:1; min-height:38px; display:grid; place-items:center; border-radius:13px; background:rgba(255,255,255,.08); font-size:10px; color:#cfd5dd; }
+    .control.main { flex:1.4; color:#170b06; background:var(--clay); font-weight:750; }
+    .notes { display:grid; gap:10px; }
+    .note { padding:15px; background:rgba(255,255,255,.045); border:1px solid var(--line); border-radius:16px; }
+    .note strong { display:block; margin-bottom:4px; color:#f0f3f8; }
+    .note span { color:#9da6b4; line-height:1.45; font-size:12px; }
+    .car {
+      margin-top:16px; border:1px solid var(--line); border-radius:26px; padding:18px;
+      background:linear-gradient(105deg,rgba(36,72,55,.75),rgba(14,18,24,.96) 36%),#0d1117;
+      box-shadow:0 24px 54px rgba(0,0,0,.34);
+    }
+    .car-top { display:flex; gap:14px; color:#89929f; font-size:11px; margin-bottom:14px; }
+    .car-top b { color:#fff; }
+    .car-grid { display:grid; grid-template-columns:1fr 1.5fr 1fr; gap:13px; align-items:end; }
+    .tile { min-height:136px; border-radius:21px; padding:15px; background:rgba(255,255,255,.07); color:#d9dfe7; }
+    .map-line { margin-top:21px; height:54px; border:7px solid rgba(255,255,255,.13); border-radius:22px; transform:rotate(-8deg); }
+    .music { display:grid; gap:10px; margin-top:20px; }
+    .music i { display:block; height:8px; border-radius:10px; background:rgba(255,255,255,.13); }
+    .music i:nth-child(2){width:65%}
+    .live { min-height:136px; padding:16px; border:1px solid var(--line); border-radius:21px; background:linear-gradient(145deg,rgba(52,57,66,.98),rgba(19,22,28,.98)); }
+    .live-head { display:flex; align-items:center; gap:11px; }
+    .live .face { width:43px; height:43px; }
+    .live-name { font-size:15px; font-weight:750; }
+    .live-state { color:#84d7ae; font-size:11px; margin-top:2px; }
+    .live-copy { margin-top:13px; font-size:12px; line-height:1.38; color:#d9dee6; }
+    .live-foot { display:flex; justify-content:space-between; color:#89929f; font-size:9px; margin-top:13px; }
+    .safe { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+    .safe div { border:1px solid var(--line); border-radius:14px; padding:12px; color:#a3acb9; font-size:11px; line-height:1.4; }
+    .safe strong { display:block; color:#eef2f7; margin-bottom:3px; }
+    @media (max-width:680px) {
+      .stage,.car-grid { grid-template-columns:1fr; }
+      .tile { display:none; }
+      .safe { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Approved mockup</div>
+  <h1>Conversation-first Watch.<br>Glance-only CarPlay.</h1>
+  <p>The Watch mirrors the iPhone's paired host and live voice session. CarPlay uses a compact Live Activity: no approvals, text entry, or miniature chat.</p>
+
+  <section class="section">
+    <div class="eyebrow">Apple Watch</div>
+    <h2>The latest chat stays in view during live voice</h2>
+    <div class="stage">
+      <div class="watch">
+        <div class="crown"></div>
+        <div class="watch-header">
+          <div class="face"></div>
+          <div><div class="watch-name">Koda</div><div class="watch-host">Studio Mac</div></div>
+          <div class="online"></div>
+        </div>
+        <div class="chat-title">Secure input retry</div>
+        <div class="messages">
+          <div class="bubble">I found the pairing path. The reconnect branch still needs a timeout.</div>
+          <div class="bubble you">Keep the existing timeout and add a clear fallback.</div>
+          <div class="bubble">I'm adding the fallback now, then I'll check the quiet failure case.</div>
+        </div>
+        <div class="activity">Working on it...</div>
+        <div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="controls"><div class="control">Mute</div><div class="control main">Listening</div><div class="control">End</div></div>
+      </div>
+      <div class="notes">
+        <div class="note"><strong>One primary Botkin</strong><span>The Watch mirrors the same primary avatar, host and latest one-to-one chat.</span></div>
+        <div class="note"><strong>Full voice, not a new protocol</strong><span>Mic and response audio travel to iPhone while the existing live provider, chat tools and history stay in charge.</span></div>
+        <div class="note"><strong>Disconnected means stopped</strong><span>The Watch never connects to the computer directly and never resumes stale audio silently.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">CarPlay · ActivityFamily.small</div>
+    <h2>The same Live Activity, reduced to one glance</h2>
+    <div class="car">
+      <div class="car-top"><b>8:42</b><span>LTE</span><span>Music</span><span>Botkins</span></div>
+      <div class="car-grid">
+        <div class="tile"><strong>Navigation</strong><div class="map-line"></div></div>
+        <div class="live">
+          <div class="live-head">
+            <div class="face"></div>
+            <div><div class="live-name">Koda is working</div><div class="live-state">3 steps · no input needed</div></div>
+          </div>
+          <div class="live-copy">Reviewing the auth retry branch in “Secure input retry”.</div>
+          <div class="live-foot"><span>Studio Mac</span><span>Open Botkins ↗</span></div>
+        </div>
+        <div class="tile"><strong>Now Playing</strong><div class="music"><i></i><i></i><i></i></div></div>
+      </div>
+    </div>
+    <div class="safe">
+      <div><strong>Same state pipeline</strong>The compact card reads the existing ActivityKit content and sealed detail.</div>
+      <div><strong>Safe by construction</strong>No approvals, command previews, text entry or voice capture on the dashboard.</div>
+      <div><strong>One exit</strong>The card opens the exact host and chat on iPhone.</div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

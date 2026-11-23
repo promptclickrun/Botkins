@@ -11,7 +11,7 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   ios: {
     bundleIdentifier: "app.botkins.mobile",
-    // The extensions (widgets and Live Activities, the notification extension and the notification content extension, in targets/) are signed for the same team.
+    // The Watch app and extensions in targets/ are signed for the same team.
     appleTeamId: process.env.TEAM_ID,
     // Each upload to TestFlight needs a higher number: scripts/testflight.sh passes it in.
     buildNumber: process.env.BOTKINS_BUILD ?? "1",
@@ -30,6 +30,9 @@ const config: ExpoConfig = {
       // App Store Connect reads this encryption declaration for each build.
       ITSAppUsesNonExemptEncryption: false,
       NSLocalNetworkUsageDescription: "Botkins finds and connects to your computer on your local network.",
+      NSAppleMusicUsageDescription: "Botkins lets your bots search, play, and change Apple Music only when you turn on Music under Device access.",
+      // A Watch-owned live voice session keeps the iPhone bridge alive while the Watch is in front.
+      UIBackgroundModes: ["audio"],
       // What the app may look for on the network: the desktop app's own announcement.
       NSBonjourServices: ["_botkins._tcp"],
       // A chat's running turn shows on the Lock Screen and in the Dynamic Island.
@@ -142,7 +145,7 @@ const config: ExpoConfig = {
     ["expo-audio", { microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot.", enableBackgroundRecording: false, enableBackgroundPlayback: true }],
     ["expo-speech-recognition", { microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot.", speechRecognitionPermission: "Botkins turns what you say into the text of a message." }],
     ["@config-plugins/react-native-webrtc", { cameraPermission: "Botkins uses the camera to scan the pairing code and to take a photo for a message.", microphonePermission: "Botkins uses the microphone when you dictate a message or talk with a bot." }],
-    // The Live Activities and widgets, the notification extension, and the notification content extension (targets/).
+    // The Watch app, Live Activities/widgets, and notification extensions (targets/).
     "@bacons/apple-targets",
     "./plugins/withShortcuts.js",
     // Android release signing with the Play upload key (plugins/withAndroidRelease.js).

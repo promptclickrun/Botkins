@@ -136,8 +136,9 @@ test("a finished reply reaches the phone sealed: the relay carries no message te
 
 test("a phone that paired again with its old entry still there gets each alert once, sealed for the new pairing", async () => {
   const { link, call, until, done, sent } = await setup();
+  const oldStart = "12".repeat(32);
   try {
-    await call("link.push.register", { token: TOKEN, env: "production", start: START });
+    await call("link.push.register", { token: TOKEN, env: "production", start: oldStart });
     // The same phone pairs again with a new key; its first entry is left behind.
     const again = await pair(fetcher, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "Test phone", platform: "ios" });
     const client = new LinkClient(again, { fetch: fetcher, onParts() {}, onState() {} });
@@ -151,7 +152,7 @@ test("a phone that paired again with its old entry still there gets each alert o
       const alerts = sent.filter((item) => item.type === "alert");
       assert.equal(alerts.length, 1);
       assert.equal(unseal(again, alerts[0].payload.b).c, "chat-blog");
-      assert.equal(sent.filter((item) => item.type === "liveactivity").length, 0, "the old entry starts no Live Activity");
+      assert.equal(sent.filter((item) => item.type === "liveactivity" && item.token === oldStart).length, 0, "the old entry starts no Live Activity");
     } finally {
       client.stop();
     }
@@ -597,12 +598,12 @@ test("bots get the tools a phone allows, at the level it allows", async () => {
     let changes = 0;
     link.on("tools", () => changes++);
     assert.deepEqual(link.deviceTools(), [], "nothing is on until the person switches it on");
-    await call("link.device.sources", { calendar: "read", location: "interact", mail: "read", photos: "interact", nonsense: "interact" });
+    await call("link.device.sources", { calendar: "read", location: "interact", mail: "read", photos: "interact", music: "read", nonsense: "interact" });
     await until(() => !!parts.phones[paired.deviceId].sources.calendar, "the switches");
     // Location has nothing to change and Mail nothing to read.
-    assert.deepEqual(parts.phones[paired.deviceId].sources, { calendar: "read", location: "read", photos: "interact" });
+    assert.deepEqual(parts.phones[paired.deviceId].sources, { calendar: "read", location: "read", photos: "interact", music: "read" });
     const names = link.deviceTools().map((tool: any) => tool.name);
-    assert.ok(names.includes("phone_calendar_events") && names.includes("phone_calendar_list") && names.includes("phone_location") && names.includes("phone_photos_get"));
+    assert.ok(names.includes("phone_calendar_events") && names.includes("phone_calendar_list") && names.includes("phone_location") && names.includes("phone_photos_get") && names.includes("phone_music_search"));
     assert.ok(!names.includes("phone_calendar_create_event"), "read does not include changing");
     assert.ok(!names.includes("phone_mail_compose") && !names.includes("phone_contacts_search"));
     for (const tool of link.deviceTools()) {
@@ -611,8 +612,11 @@ test("bots get the tools a phone allows, at the level it allows", async () => {
       assert.equal(typeof tool.readOnly, "boolean");
     }
     assert.equal(link.deviceTools().find((tool: any) => tool.name === "phone_calendar_events").readOnly, true);
+    assert.equal(link.deviceTools().find((tool: any) => tool.name === "phone_music_play"), undefined);
     await call("link.device.sources", { calendar: "interact" });
     assert.ok(link.deviceTools().some((tool: any) => tool.name === "phone_calendar_create_event" && tool.readOnly === false));
+    await call("link.device.sources", { music: "interact" });
+    assert.ok(link.deviceTools().some((tool: any) => tool.name === "phone_music_play" && tool.readOnly === false));
     assert.ok(changes >= 2, "the app is told when the list changes");
     await assert.rejects(link.callDeviceTool("phone_contacts_search", { query: "a" }), /No phone allows this.*Contacts.*Read/);
     await assert.rejects(link.callDeviceTool("phone_nonsense", {}), /no phone tool named/);

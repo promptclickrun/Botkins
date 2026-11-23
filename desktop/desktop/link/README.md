@@ -147,7 +147,7 @@ The key is derived each time from the phone's pairing key, so the computer store
 
 ## Tools that run on a phone
 
-`device.mjs` lets a bot use a paired phone: its calendar, contacts, Health data, location and photos, and a draft email. The header of `device.mjs` is the contract; `DEVICE_TOOLS` in it is the list of tools, with the source and level each needs and the JSON Schema a bot is shown.
+`device.mjs` lets a bot use a paired phone: its calendar, contacts, Health data, location, photos, Apple Music and a draft email. The header of `device.mjs` is the contract; `DEVICE_TOOLS` in it is the list of tools, with the source and level each needs and the JSON Schema a bot is shown.
 
 **The switches are the consent.** In the phone app the person switches each source (Calendar, Contacts, Health, Location, Photos, Mail) off, to read, or to read and interact, after iOS has been asked for what that needs. The phone tells the computer (`link.device.sources`), which keeps the switches per phone in `link.json` (`sources`). A tool exists only while some paired phone allows its source at the level it needs; Location offers only read, and Mail only interact (`cleanSources` lowers Location to read and drops Mail's read). The phone checks its own switch again before it acts, so a stale list here can't reach past a switch.
 
@@ -263,7 +263,7 @@ Without an adapter, macOS falls back on its own `screencapture` and `sips` (one 
 - Send files (`link.upload`, up to 4 MB a call, 25 MB a file, 200 files and 200 MB per phone) and attach them to a message. Files are kept in `<dir>/uploads/<phone>/`. A file left unfinished for 10 minutes is dropped, finished files are removed after 7 days (checked at start and every 10 minutes), and a phone's files go when the phone is removed. A message may attach only a file its own phone sent, and its `mentions` are cut down to at most 12 of the exact shapes the composer sends (the desktop app itself checks that a mentioned file is inside the chat's own folders).
 - A search for pull requests can't reach other repositories: `repo:`, `org:`, `user:` and `owner:` are removed from the search text. A failed lookup is remembered for 30 seconds, like a good one.
 - Get notifications and Live Activities (`link.push.*`), and choose which of them it wants. See "Push notifications".
-- Let bots use it: switch sources of its calendar, contacts, Health data, location, photos and mail on, and answer what bots ask of it (`link.device.*`). See "Tools that run on a phone".
+- Let bots use it: switch sources of its calendar, contacts, Health data, location, photos, Apple Music and mail on, and answer what bots ask of it (`link.device.*`). See "Tools that run on a phone".
 - Set the speech providers and their keys, dictate and have replies read, and talk live with a bot (`link.voice.*`). See "Voice".
 
 `meta().capabilities` lists `credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `push-v1`, `device-v1` and `voice-v1`, then the names of the app's own `extras` and `backend.capabilities`, so a phone can tell an app that has a feature from an older one. A look's eyes and custom colors, `looks-v2`, is there when the link keeps the looks (the app gave no `setLook`) or the app names it.

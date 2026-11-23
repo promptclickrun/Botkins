@@ -214,6 +214,89 @@ struct BotCardLock: View {
   }
 }
 
+@available(iOS 18.0, *)
+struct BotCardAdaptive: View {
+  @Environment(\.activityFamily) private var family
+  let model: CardModel
+
+  var body: some View {
+    if family == .small {
+      BotCardSmall(model: model)
+    } else {
+      BotCardLock(model: model)
+    }
+  }
+}
+
+/// The ActivityFamily.small presentation used in CarPlay and the Watch Smart Stack. It is glance
+/// only: one chat, one status, and the existing URL to open the full conversation on iPhone.
+struct BotCardSmall: View {
+  let model: CardModel
+
+  var body: some View {
+    let chat = model.first
+    HStack(spacing: 10) {
+      BotkinFace(
+        look: Look(model.about),
+        expression: expression(chat?.phase, own: model.about.eyes),
+        size: 38
+      )
+      VStack(alignment: .leading, spacing: 2) {
+        Text(model.about.botName)
+          .font(.system(size: 15, weight: .semibold))
+          .lineLimit(1)
+        Text(model.stale ? "Open Botkins for the latest" : (chat.flatMap { compactLine($0) } ?? "Open Botkins"))
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(chat?.phase == "needs-you" ? Tone.amber : Color.white.opacity(0.72))
+          .lineLimit(1)
+      }
+      Spacer(minLength: 4)
+      if let chat {
+        SmallCardState(model: model, chat: chat)
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .environment(\.colorScheme, .dark)
+  }
+
+  private func compactLine(_ chat: BotkinActivityAttributes.ContentState.Chat) -> String {
+    let title = model.words(chat)?.t
+    let label = model.label(chat)
+    return [title, chat.phase == "needs-you" ? "Needs you" : label].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+  }
+}
+
+private struct SmallCardState: View {
+  let model: CardModel
+  let chat: BotkinActivityAttributes.ContentState.Chat
+
+  var body: some View {
+    VStack(alignment: .trailing, spacing: 2) {
+      switch chat.phase {
+      case "needs-you":
+        Image(systemName: "questionmark.circle.fill")
+          .foregroundStyle(Tone.amber)
+        Text("Needs you").font(.system(size: 10, weight: .semibold)).foregroundStyle(Tone.amber)
+      case "done":
+        Image(systemName: "checkmark.circle.fill").foregroundStyle(Tone.ok)
+        Text(tookWords(chat.startedAt, chat.finishedAt) ?? "Done")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(Tone.ok)
+      case "failed":
+        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Tone.bad)
+        Text("Stopped").font(.system(size: 10, weight: .semibold)).foregroundStyle(Tone.bad)
+      default:
+        Running(since: chat.startedAt)
+          .font(.system(size: 12, weight: .semibold))
+          .monospacedDigit()
+        Text(model.steps(chat)).font(.system(size: 10)).foregroundStyle(Tone.muted)
+      }
+    }
+    .frame(width: 56)
+  }
+}
+
 /// The header: the Botkin, its name, the model and the chat, and the time.
 struct CardHeader: View {
   let model: CardModel
