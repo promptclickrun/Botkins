@@ -2,7 +2,9 @@
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
+export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
+  fastModes?: Partial<Record<Exclude<FastMode, "off">, string>>;
   id: string;
   name: string;
   provider?: string;
@@ -118,6 +120,7 @@ export type BotkinEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curi
 export type BotkinLook = { head: string; palette: string; eyes?: BotkinEyes; colors?: [string, string, string, string] };
 export type BotAccessGrant = { all: boolean; projects: string[] };
 export type Bot = {
+  fastMode?: FastMode;
   id: string;
   name: string;
   role: string;
@@ -401,6 +404,7 @@ export type RoutineInput = {
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
+  fastMode?: FastMode;
   id: string;
   botId: string;
   /** How many tabs the chat's side pane has ("side-pane-v1"). The tabs come with the chat's detail. */
@@ -429,6 +433,7 @@ export type ChatSummary = {
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
 };
 export type Step = {
+  background?: boolean;
   id: string;
   name: string;
   source?: string;
@@ -447,7 +452,7 @@ export type Step = {
 };
 /** One step's input and output, read when the step is opened (`link.step`). */
 export type StepDetail = { input?: string; output?: string };
-export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
+export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
 /** One reasoning item's wire suffix for a phone following a working turn. */
 export type ReasoningAppend = Omit<Reasoning, "text"> & { from: number; add: string };
@@ -836,6 +841,7 @@ export type Appearance = {
 };
 export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
 export type Preferences = {
+  fastMode?: FastMode;
   model: ModelChoice;
   /** The Default routines model ("routine-models-v1"): routines without their own use it before their bot's. */
   routineModel?: ModelChoice;
@@ -1482,6 +1488,8 @@ export type Calls = {
   createGroupChat(botIds: string[], title?: string): string;
   setChatFlags(id: string, flags: Partial<Pick<ChatSummary, "pinned" | "archived" | "unread">>): void;
   renameChat(id: string, title: string): void;
+  /** Generates and saves a title from the chat's messages ("chat-title-regeneration-v1"). */
+  regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
@@ -1502,7 +1510,7 @@ export type Calls = {
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
   /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */
-  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
+  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null, fastMode?: FastMode | null): void;
   providers(refresh?: boolean): ProviderStatus[];
   /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
