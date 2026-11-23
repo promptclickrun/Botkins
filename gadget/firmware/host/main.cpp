@@ -101,6 +101,10 @@ static std::string view_line(const View& view) {
   if (view.sending) json.set("sending", true);
   if (view.speaking) json.set("speaking", true);
   json.set("hear", view.can_hear).set("speak", view.can_speak);
+  const auto& s = view.settings;
+  json.set("settings", Json::object().set("volume", s.volume).set("mic", s.mic).set("mute", s.mute).set("brightness", s.brightness).set("dimAfter", s.dim_after).set("offAfter", s.off_after));
+  if (!view.look.empty()) json.set("look", view.look).set("faces", view.faces ? view.faces->size() : 0);
+  if (view.steps > 0) json.set("steps", view.steps);
   if (!view.request.id.empty()) json.set("request", Json::object().set("kind", view.request.kind).set("title", view.request.title).set("preview", view.request.preview).set("remember", view.request.remember));
   return "view " + json.dump();
 }
@@ -132,6 +136,11 @@ int main(int argc, char** argv) {
   board.mac = "00:00:00:00:00:00";
   board.screen_width = 240;
   board.screen_height = 240;
+  // A restart asked for from the owner's page: said, so a test can see it, and nothing else on a computer.
+  board.restart = [] {
+    puts("restart");
+    fflush(stdout);
+  };
 
   Gadget gadget(board);
   std::mutex printing;
