@@ -12,12 +12,22 @@
 // trusted (the computer's own app, or a paired owner device) read the gadget's public key over a
 // cable or a few meters of radio, and names it here. The gadget gets back this computer's key and
 // addresses and opens a session like any device. No code is typed on either side.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { POSES } from "./botkin-svg.mjs";
 import { agree } from "./crypto.mjs";
 import { Failure } from "./tools.mjs";
 import { wavFromPcm } from "./voice.mjs";
 
 export const GADGET_CAPABILITY = "gadgets-v1";
+/** Settings, Wi-Fi, restart and the Botkin's faces (gadget/docs/contract.md, "Settings"). */
+export const GADGET_SETTINGS_CAPABILITY = "gadget-settings-v1";
+/** A gadget's settings before its owner changes any. */
+export const GADGET_DEFAULTS = Object.freeze({ volume: 60, mic: "normal", mute: false, brightness: 80, dimAfter: 30, offAfter: 300 });
+const MICS = ["low", "normal", "high"];
+/** A Wi-Fi change waits this long for the gadget to take it; the password is kept nowhere else, and not after. */
+const WIFI_WAIT_MS = 10 * 60_000;
+const MAX_WIFI_CHANGES = 4;
+const MAX_SAVED_NETWORKS = 8;
 /** The newest reply as a gadget is sent it. A screen shows a page or two; the whole of it is still spoken. */
 export const MAX_REPLY = 2000;
 const MAX_BOTS = 24;
@@ -53,6 +63,50 @@ export function cleanIntroduction(input) {
   return { publicKey: key, name: typeof input?.name === "string" ? input.name : "", board: label(input?.board), ...(botId && { botId }) };
 }
 
+/** A Wi-Fi network's name as a gadget or a person gives it: 1 to 32 bytes, no control characters. */
+function networkName(value) {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f]/.test(value)) return "";
+  return value.length >= 1 && Buffer.byteLength(value, "utf8") <= 32 ? value : "";
+}
+
+/** Settings a person (or the gadget) changes, checked. Throws a sentence a person can read. */
+export function cleanSettings(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Failure("Those aren't a gadget's settings.");
+  const whole = (value, low, high, sentence) => {
+    if (!Number.isInteger(value) || value < low || value > high) throw new Failure(sentence);
+    return value;
+  };
+  const out = {};
+  if (patch.volume !== undefined) out.volume = whole(patch.volume, 0, 100, "Volume is from 0 to 100.");
+  if (patch.mic !== undefined) {
+    if (!MICS.includes(patch.mic)) throw new Failure("The microphone is low, normal or high.");
+    out.mic = patch.mic;
+  }
+  if (patch.mute !== undefined) {
+    if (typeof patch.mute !== "boolean") throw new Failure("Mute is on or off.");
+    out.mute = patch.mute;
+  }
+  if (patch.brightness !== undefined) out.brightness = whole(patch.brightness, 5, 100, "Brightness is from 5 to 100.");
+  if (patch.dimAfter !== undefined) out.dimAfter = whole(patch.dimAfter, 0, 3600, "The screen dims after 0 to 3,600 seconds (0 is never).");
+  if (patch.offAfter !== undefined) out.offAfter = whole(patch.offAfter, 0, 86400, "The screen turns off after 0 to 86,400 seconds (0 is never).");
+  return out;
+}
+
+/** A Wi-Fi change a person asks for: `{ add: { ssid, password } }` or `{ forget: ssid }`. Throws a sentence. */
+export function cleanWifiChange(change) {
+  if (change?.add && typeof change.add === "object") {
+    const ssid = networkName(change.add.ssid);
+    if (!ssid) throw new Failure("Give the Wi-Fi network's name (up to 32 letters).");
+    const password = change.add.password ?? "";
+    // WPA2 asks for 8 to 63 characters; an open network has none.
+    if (typeof password !== "string" || (password.length > 0 && (password.length < 8 || password.length > 63))) throw new Failure("A Wi-Fi password has 8 to 63 characters, or none for an open network.");
+    return { add: { ssid, password } };
+  }
+  const forget = networkName(change?.forget);
+  if (forget) return { forget };
+  throw new Failure("Say which network to add or forget.");
+}
+
 /** What a gadget said of itself in "link.gadget.hello", cut to what is kept. */
 export function cleanHello(input) {
   const rate = Number(input?.rate);
@@ -65,7 +119,16 @@ export function cleanHello(input) {
     ...(size(screen?.width) && size(screen?.height) && { screen: { width: screen.width, height: screen.height, ...(screen.round === true && { round: true }) } }),
     ...(input?.mic === false && { mic: false }),
     ...(input?.speaker === false && { speaker: false }),
+    ...(input?.wifi && typeof input.wifi === "object" && { wifi: cleanWifiReport(input.wifi) }),
   };
+}
+
+/** The Wi-Fi a gadget reports: the network in use, the saved ones' names, the signal (dBm). Never a password. */
+function cleanWifiReport(wifi) {
+  const network = networkName(wifi.network);
+  const saved = Array.isArray(wifi.saved) ? [...new Set(wifi.saved.map(networkName).filter(Boolean))].slice(0, MAX_SAVED_NETWORKS) : [];
+  const signal = Number.isInteger(wifi.signal) && wifi.signal < 0 && wifi.signal > -128 ? wifi.signal : undefined;
+  return { ...(network && { network }), saved, ...(signal !== undefined && { signal }) };
 }
 
 /** The id a gadget names a reply by: the chat and the message's place in it. */
@@ -86,7 +149,7 @@ function lastReply(chat) {
  * The part "gadget": everything one gadget shows, in one small object. Pure.
  * `chat` is the gadget's chat with its messages (or undefined), `live` the owner's `live` part.
  */
-export function gadgetPart({ device, bots = [], chat, live = {}, voice = {}, words = (text) => ({ text: speakable(text), parts: splitForSpeech(speakable(text)).length }) }) {
+export function gadgetPart({ device, bots = [], chat, live = {}, voice = {}, words = (text) => ({ text: speakable(text), parts: splitForSpeech(speakable(text)).length }), steps = 0, face, wifi = [], restart }) {
   const mine = device.gadget ?? {};
   const bot = bots.find((item) => item.id === (chat?.botId ?? mine.botId)) ?? bots.find((item) => !item.hidden) ?? bots[0];
   const chatId = chat?.id;
@@ -102,6 +165,7 @@ export function gadgetPart({ device, bots = [], chat, live = {}, voice = {}, wor
     // What the gadget's face shows: "request" comes first, since the turn waits on the person.
     phase: request ? "request" : writing ? "writing" : working ? "working" : "idle",
     ...(working && typeof live.intents?.[chatId] === "string" && live.intents[chatId] && { doing: line(live.intents[chatId], 60) }),
+    ...(working && steps > 0 && { steps }),
     ...(request && {
       request: {
         id: request.id,
@@ -116,6 +180,11 @@ export function gadgetPart({ device, bots = [], chat, live = {}, voice = {}, wor
     ...(chatId && (live.queued?.[chatId]?.length ?? 0) > 0 && { queued: live.queued[chatId].length }),
     ...(reply && !working && { reply: (({ text, parts }) => ({ id: replyId(chatId, reply.index), text: clip(text, MAX_REPLY), parts }))(words(reply.message.text)) }),
     voice: { hear: voice.hear === true, speak: voice.speak === true, ...(voice.live && { live: voice.live }) },
+    settings: { ...GADGET_DEFAULTS, ...mine.settings },
+    ...(face && { face }),
+    // Changes the owner asked for, until the gadget says it took them. A password travels only here, sealed for this gadget.
+    ...(wifi.length > 0 && { wifi: { changes: wifi.map(({ id, add, forget }) => ({ id, ...(add && { add }), ...(forget && { forget }) })) } }),
+    ...(restart && { restart }),
   };
 }
 
@@ -304,6 +373,32 @@ export class Gadgets {
     this.spoken = new Map(); // "reply|part|rate|bot" → { pcm: Promise<Buffer>, at }
     this.saying = new Map(); // device id → the send under way, so two at once don't start two chats
     this.worded = { from: null, text: "", parts: [] }; // the last reply made into words: made once, not at every sync
+    this.wifi = new Map(); // device id → the Wi-Fi changes waiting for the gadget: [{ id, add?, forget?, at }]
+    this.restarts = new Map(); // device id → the id of a restart the owner asked for
+  }
+  /** The renderer of Botkins faces (botkin-svg.mjs), or null on a computer without the design kit. */
+  get faces() {
+    return this.host.botkins;
+  }
+  /** The bot a gadget talks with now, as the "bots" part has it (with its look). */
+  botOf(device) {
+    const bots = JSON.parse(this.host.parts.get("bots")?.json ?? "[]");
+    const id = this.chatOf(device)?.botId ?? device.gadget?.botId;
+    return bots.find((bot) => bot.id === id) ?? bots.find((bot) => !bot.hidden) ?? bots[0];
+  }
+  /** One gadget, by id, for an owner's call. Throws a sentence when there is none. */
+  gadget(id) {
+    const device = typeof id === "string" ? this.host.store.device(id) : null;
+    if (device?.kind !== "gadget") throw new Failure("That gadget is no longer paired.");
+    return device;
+  }
+  /** Waiting Wi-Fi changes for a gadget, without the ones that waited too long. */
+  pendingWifi(deviceId) {
+    const now = Date.now();
+    const left = (this.wifi.get(deviceId) ?? []).filter((change) => now - change.at < WIFI_WAIT_MS);
+    if (left.length) this.wifi.set(deviceId, left);
+    else this.wifi.delete(deviceId);
+    return left;
   }
   /** A reply as plain words and the parts it is read in. The newest one is kept, since every gadget's every sync asks. */
   words(markdown) {
@@ -324,6 +419,8 @@ export class Gadgets {
     this.views.delete(deviceId);
     this.takes.delete(deviceId);
     this.saying.delete(deviceId);
+    this.wifi.delete(deviceId);
+    this.restarts.delete(deviceId);
   }
 
   /**
@@ -377,6 +474,8 @@ export class Gadgets {
     const meta = read("meta") ?? {};
     const chat = this.chatOf(device);
     const settings = read("voice") ?? {};
+    const run = chat ? read("run:" + chat.id) : undefined;
+    const bot = this.faces ? this.botOf(device) : undefined;
     const put = (name, value) => {
       const json = JSON.stringify(value);
       if (view.get(name)?.json !== json) view.set(name, { json, v: ++host.version });
@@ -392,6 +491,10 @@ export class Gadgets {
         // "device" means a phone's own speech: a gadget has none, so it needs a provider on the computer.
         voice: { hear: !!settings.stt && settings.stt.provider !== "device", speak: !!settings.tts && settings.tts.provider !== "device", live: settings.live?.provider ?? undefined },
         words: (text) => (({ text: plain, parts }) => ({ text: plain, parts: parts.length }))(this.words(text)),
+        steps: run?.status === "Working" && Array.isArray(run.steps) ? run.steps.length : 0,
+        ...(bot && { face: { look: this.faces.lookId(bot.look) } }),
+        wifi: this.pendingWifi(device.id),
+        restart: this.restarts.get(device.id),
       }),
     );
     view.names = ["meta", "gadget"];
@@ -410,6 +513,58 @@ export class Gadgets {
     const { botId, chatId, rate } = this.host.store.device(device.id)?.gadget ?? {};
     return { ...(botId && { botId }), ...(chatId && { chatId }), ...(rate && { rate }) };
   }
+  /** The bot's Botkin in one pose, as SVG text, for the gadget to draw: `{ look, pose, svg }`. */
+  face(device, input) {
+    const pose = input?.pose;
+    if (typeof pose !== "string" || !Object.hasOwn(POSES, pose)) throw new Failure("That isn't a pose a Botkin takes.");
+    if (!this.faces) throw new Failure("This computer can't draw Botkins.");
+    const look = this.botOf(device)?.look;
+    return { look: this.faces.lookId(look), pose, svg: this.faces.svg(look, pose) };
+  }
+  /** Changes the settings of a gadget and tells it at its next look. */
+  saveSettings(device, patch) {
+    const clean = cleanSettings(patch);
+    if (!Object.keys(clean).length) return;
+    const now = this.host.store.device(device.id)?.gadget?.settings ?? {};
+    this.host.store.setGadget(device.id, { settings: { ...now, ...clean } });
+  }
+
+  // ── What the owner does with a gadget (a phone's Settings › Devices, the app's own page, `botkins gadgets`) ──
+
+  /** Settings and the bot, from the owner: `{ volume?, mic?, mute?, brightness?, dimAfter?, offAfter?, botId? }`. */
+  configure(id, patch) {
+    const device = this.gadget(id);
+    const { botId, ...rest } = patch && typeof patch === "object" ? patch : {};
+    if (botId !== undefined) {
+      if (typeof botId !== "string" || !(this.host.backend.snapshot().bots ?? []).some((bot) => bot.id === botId)) throw new Failure("This bot no longer exists.");
+    }
+    // Checked whole before anything is kept, so a bad value changes nothing.
+    const clean = cleanSettings(rest);
+    if (Object.keys(clean).length) this.saveSettings(device, clean);
+    if (botId !== undefined && botId !== device.gadget?.botId) this.host.store.setGadget(device.id, { botId, chatId: null });
+    this.host.dirty = true;
+    this.host.changed();
+    this.host.emit("status");
+  }
+  /** A Wi-Fi network to add (with its password) or forget, for the gadget to take at its next look. */
+  queueWifi(id, change) {
+    const device = this.gadget(id);
+    const clean = cleanWifiChange(change);
+    const waiting = this.pendingWifi(device.id).filter((item) => (item.add?.ssid ?? item.forget) !== (clean.add?.ssid ?? clean.forget));
+    if (waiting.length >= MAX_WIFI_CHANGES) throw new Failure("The gadget hasn't taken the last changes yet. Check that it is on.");
+    this.wifi.set(device.id, [...waiting, { id: randomUUID().slice(0, 12), ...clean, at: Date.now() }]);
+    this.host.dirty = true;
+    this.host.changed();
+    return { queued: true };
+  }
+  /** Asks the gadget to restart. It says it is restarting, and its sessions come back by themselves. */
+  restart(id) {
+    const device = this.gadget(id);
+    this.restarts.set(device.id, randomUUID().slice(0, 12));
+    this.host.dirty = true;
+    this.host.changed();
+    return null;
+  }
   /** Another bot, another chat, or a new chat with the next thing said. */
   set(device, input) {
     const state = this.host.backend.snapshot();
@@ -427,6 +582,16 @@ export class Gadgets {
       patch.botId = chat.botId;
     }
     if (input?.newChat === true) patch.chatId = null;
+    // Settings the person changed on the gadget itself.
+    if (input?.settings !== undefined) this.saveSettings(device, input.settings);
+    // Wi-Fi changes and a restart the gadget took.
+    if (Array.isArray(input?.wifiDone)) {
+      const done = new Set(input.wifiDone.filter((item) => typeof item === "string"));
+      const left = this.pendingWifi(device.id).filter((change) => !done.has(change.id));
+      if (left.length) this.wifi.set(device.id, left);
+      else this.wifi.delete(device.id);
+    }
+    if (typeof input?.restarting === "string" && this.restarts.get(device.id) === input.restarting) this.restarts.delete(device.id);
     this.host.store.setGadget(device.id, patch);
     this.host.dirty = true;
     this.host.changed();
