@@ -371,3 +371,11 @@ A new follow or sync replaces the session's follow. On rest, stop or departure f
 - A host without `device-person-v1` ignores `person` and has no `link.devices.setPerson`; a client offers only Rename. A device paired before has no `person` until the owner adds one.
 - A host without `member-rename-v1` has no `link.team.renameMember(memberId, name)` (owner only; the name has the rules of a team's name: trimmed, 60 characters at most). A client leaves Rename out of a member's menu. Its rules are in `TEAMS.md`.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.
+
+## Pull request panel (`pr-panel-v1`)
+
+An owner can open a github.com pull request from any readable repository. The host uses its signed-in GitHub CLI. The project picker continues to use `link.pullRequests({ chatId }, query?)` under `prs-v1`.
+
+- `link.pullRequest({ url })` returns `{ available: true, pull }`. The list item's fields are joined by `body`, `createdAt`, `checks: [{ name, result }]`, overall `summary`, `review` and `files: [{ path, additions, deletions }]`.
+- `link.pullRequestDiff({ url, path })` returns `{ available: true, text }` for the selected changed file. Tool output is limited to 1 MiB and a displayed patch to 128 KiB and 3,000 lines.
+- An unavailable read returns `{ available: false, reason }`. Both reads accept the overview, files and commits URLs and fragments. They time out after 15 seconds and cache answers for 30 seconds. Members cannot call either method.

@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { demoGitHub } from "./mock-prs.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
 import { botVoiceField } from "./voice.mjs";
@@ -1187,6 +1188,7 @@ const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.
 export class MockBackend {
   constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
+    if (process.env.BOTKINS_DEV_PRS === "1") this.runGitHub = demoGitHub;
     this.streamAppends = appends;
     this.timeline = timeline;
     // A computer nobody has set up yet: no bots, and nothing that belongs to one.

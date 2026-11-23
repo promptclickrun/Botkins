@@ -13,7 +13,8 @@ import { ScrollView, StyleSheet, Text, type TextStyle, View } from "react-native
 import { useChatPrefs } from "@/state/chatPrefs";
 import { haptic } from "./haptics";
 import { codePalette, type CodeRun, highlightCode } from "./highlight";
-import { LinkHold, type LinkHoldApi, linkPress, openLink } from "./LinkHold";
+import { pullRequestUrl } from "../../link-host/pr-url.mjs";
+import { LinkHold, type LinkHoldApi, linkPress, MessageLink, openLink as defaultOpenLink } from "./LinkHold";
 import { parseStreamingMarkdown, type MarkdownStreamCache } from "./markdownCache";
 import { CELL_PAD, tableWidths } from "./tables";
 import { Tap } from "./Tap";
@@ -519,10 +520,11 @@ const Footnotes = memo(function Footnotes({ notes, ctx }: { notes: Footnote[]; c
 // ---------------------------------------------------------------------------------------------
 // Inline-only text (a person's own message): links and inline code, nothing else.
 
-const INLINE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]])/g;
+const INLINE = /\[((?:\\.|[^\]\\\n])+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]])/g;
 
-function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; paths?: PathLinks }) {
+function InlineOnly({ text, base, paths, plain }: { text: string; base: TextStyle; paths?: PathLinks; plain?: boolean }) {
   const scale = useTheme().type;
+  const openLink = useContext(MessageLink);
   const hold = useContext(LinkHold);
   // A person's bubble has its own text color; a path in it is underlined in that color.
   const linkColor = String(base.color ?? "");
@@ -531,6 +533,7 @@ function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; path
     let last = 0;
     INLINE.lastIndex = 0;
     for (let match = INLINE.exec(text); match; match = INLINE.exec(text)) {
+      if (plain && !pullRequestUrl(match[2] ?? match[4])) continue;
       if (match.index > last) out.push(withPaths(text.slice(last, match.index), paths, linkColor, "t" + last));
       const k = "u" + match.index;
       const code = match[3];
@@ -548,7 +551,7 @@ function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; path
         const href = match[2] ?? match[4];
         out.push(
           <Text key={k} style={{ textDecorationLine: "underline", fontWeight: "600" }} {...linkPress(hold, href, () => openLink(href))} accessibilityRole="link">
-            {match[1] ?? match[4]}
+            {plain ? match[0] : match[1]?.replace(/\\([[\]\\])/g, "$1") ?? match[4]}
           </Text>,
         );
       }
@@ -556,7 +559,7 @@ function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; path
     }
     if (last < text.length) out.push(withPaths(text.slice(last), paths, linkColor, "t" + last));
     return out;
-  }, [text, base, paths, linkColor, hold, scale]);
+  }, [text, base, paths, linkColor, hold, scale, openLink, plain]);
   return (
     <Text selectable maxFontSizeMultiplier={1.35} style={base}>
       {parts}
@@ -589,6 +592,7 @@ export type MarkdownProps = {
 /** Renders Markdown. Safe to re-render while a reply streams in. */
 export const Markdown = memo(function Markdown({ text, color, size = "body", plain, inline: inlineOnly, highlight, wrapCode, paths, streaming = false }: MarkdownProps) {
   const { colors, type: scale } = useTheme();
+  const openLink = useContext(MessageLink);
   const hold = useContext(LinkHold);
   const prefHighlight = useChatPrefs((prefs) => prefs.highlight);
   const prefWrap = useChatPrefs((prefs) => prefs.wrapCode);
@@ -614,9 +618,9 @@ export const Markdown = memo(function Markdown({ text, color, size = "body", pla
   const ctx = useMemo<Ctx>(() => {
     const notes = new Map<string, number>(noteKey ? noteKey.split("\u0000").map((id, index) => [id, index + 1]) : []);
     return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink, hold, paths };
-  }, [colors, scale, base, doHighlight, wrap, noteKey, hold, paths]);
+  }, [colors, scale, base, doHighlight, wrap, noteKey, hold, paths, openLink]);
 
-  if (inlineOnly) return <InlineOnly text={text} base={base} paths={paths} />;
+  if (inlineOnly || (plain && openLink !== defaultOpenLink)) return <InlineOnly text={text} base={base} paths={paths} plain={!inlineOnly && plain} />;
   if (!parsed)
     return (
       <Text selectable maxFontSizeMultiplier={1.35} style={base}>

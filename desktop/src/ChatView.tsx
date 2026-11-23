@@ -27,6 +27,7 @@ import {
   Square,
 } from "lucide-react";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
+import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
 import { RichText } from "./RichText";
 import type { FilePreview } from "./ChatFileLink";
 import {
@@ -262,6 +263,7 @@ export default function ChatView({
   });
   const narrow = useNarrow();
   const [paneDrawer, setPaneDrawer] = useState(false);
+  const [pull, setPull] = useState<{ url: string; chatId: string }>();
   const [preview, setPreview] = useState<(FilePreview & { chatId: string })>();
   const panels = chat.pane?.panels ?? [];
   // A group chat has no Details, so its pane is there only once a bot opened a panel.
@@ -285,6 +287,7 @@ export default function ChatView({
     if (narrow && !paneShown) requestAnimationFrame(() => document.querySelector<HTMLElement>(".side-pane.drawer :is([role=tab][aria-selected=true], .pane-close)")?.focus());
   };
   const files = { chatId: chat.id, botId: bot.id, hostId: state.remote?.using?.id, remote: !!state.remote?.using, preview: (file: FilePreview) => {
+    setPull(undefined);
     setPreview({ ...file, chatId: chat.id });
     showPane(true);
   } };
@@ -736,7 +739,18 @@ export default function ChatView({
 
   return (
     <div className={"conversation" + (paneShown ? " with-side" : "") + (paneShown && narrow ? " with-drawer" : "")}>
-      <div className="chat-main" ref={main}>
+      <div className="chat-main" ref={main} onClickCapture={(event) => {
+        const host = state.remote?.using;
+        if (host && (host.member || !host.capabilities.includes("pr-panel-v1"))) return;
+        const link = event.target instanceof Element && event.target.closest(".md a[href], button.link-preview, a.pr-reference");
+        const target = link && pullRequestUrl(link.getAttribute("href") ?? link.getAttribute("title"));
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setPreview(undefined);
+        setPull({ url: target.url, chatId: chat.id });
+        showPane(true);
+      }}>
         {showPeople && peopleView && (
           <PeopleDialog
             state={state}
@@ -1227,7 +1241,7 @@ export default function ChatView({
       </div>
       {paneShown && narrow && <div className="pane-scrim" aria-hidden="true" onClick={closePane} />}
       {paneShown && (
-        <SidePane key={chat.id} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
+        <SidePane key={chat.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
       )}
     </div>
   );

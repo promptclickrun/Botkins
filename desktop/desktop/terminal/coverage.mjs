@@ -338,6 +338,7 @@ export const LINK = {
   ...each("link.device.answer link.device.file link.device.sources link.upload link.pullRequests", no("phone's own")),
   ...each("link.push.activity link.push.prefs link.push.presence link.push.register link.push.test link.push.unregister", no("phone's own")),
   ...each("link.screen.frame link.screen.grant.begin link.screen.grant.confirm link.screen.info link.screen.input link.screen.revoke link.screen.stop", no("phone's own")),
+  ...each("link.pullRequest link.pullRequestDiff", no("window's own")),
   ...each("link.frame.chat link.frame.page", no("phone's own")),
   ...each("link.voice.endLive link.voice.key link.voice.live link.voice.options link.voice.set link.voice.speak link.voice.transcribe", no("phone's own")),
 };

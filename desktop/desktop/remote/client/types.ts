@@ -273,6 +273,12 @@ export type Catalog = { choices: Capability[]; servers: { name: string; status: 
 /** A file the phone uploaded to the computer for a message. */
 export type UploadedFile = { id: string; name: string; path: string; size: number };
 /** A pull request of the repository a chat's project works in. */
+export type PullRequestDetail = PullRequest & {
+  body: string; createdAt: string; summary: string; review: string;
+  checks: { name: string; result: string }[];
+  files: { path: string; additions: number; deletions: number }[];
+};
+export type PullAnswer<T> = ({ available: true } & T) | { available: false; reason: string };
 export type PullRequest = { number: number; title: string; url: string; state: "open" | "closed" | "merged"; draft: boolean; author?: string; head?: string; base?: string; updatedAt?: string; repository?: string };
 
 // Credentials. Values stay on the computer: the phone can save one, and can name one in a call
@@ -964,6 +970,7 @@ export type UsageReport = {
 
 /**
  * `capabilities` names what this computer's link can do beyond the basics: "credentials-v1",
+ * "pr-panel-v1" (owner-only pull request details and per-file patches),
  * "screen-v1", "prs-v1", "uploads-v1", "relay-v1" (the computer keeps a relay open, so a phone away
  * from its network can reach it), "push-v1" (notifications and Live Activities), "device-v1" (tools
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
@@ -1771,6 +1778,8 @@ export type Calls = {
   "link.frame.chat"(frame: string): { chatId: string | null };
   "link.upload"(file: { id?: string; name: string; data: string; last?: boolean }): UploadedFile;
   /** Pull requests of the repository behind a chat's project. `available: false` says why there are none to offer. */
+  "link.pullRequest"(input: { url: string }): PullAnswer<{ pull: PullRequestDetail }>;
+  "link.pullRequestDiff"(input: { url: string; path: string }): PullAnswer<{ text: string }>;
   "link.pullRequests"(where: { chatId?: string; projectId?: string }, query?: string): { available: boolean; reason?: string; items: PullRequest[] };
   "link.credentials.save"(input: CredentialInput): string;
   "link.credentials.remove"(id: string): void;

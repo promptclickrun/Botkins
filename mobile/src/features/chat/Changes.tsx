@@ -50,7 +50,7 @@ function FileRow({ file, onPress }: { file: ChangedFile; onPress: () => void }) 
 }
 
 /** A file's changes as text: monospace, colored by line, scrolling sideways for long lines. */
-function DiffView({ text }: { text: string }) {
+export function DiffView({ text }: { text: string }) {
   const { colors, type } = useTheme();
   const tone: Record<DiffLine, string> = { file: colors.muted, add: colors.success, del: colors.danger, hunk: colors.info, plain: colors.ink2 };
   return (
