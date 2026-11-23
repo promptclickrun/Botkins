@@ -151,8 +151,8 @@ export const defaultSettings = {
   // iMessage and Mail as bot tools, on a Mac only: "off", "read" or "interact" each (desktop/mactools.mjs).
   // Changed only by the app's own window (setMacTool), never by a phone.
   macTools: { imessage: "off", mail: "off" },
-  // What runs a turn around the model (desktop/harness): "copilot" is one harness for every plan,
-  // "provider" is each provider's own tool.
+  // What runs a turn around the model (desktop/harness): "pi" (the default), "provider" (each
+  // provider's own tool), "copilot" (one harness for every plan) or "omp".
   harness: DEFAULT_HARNESS,
   // Staying on (desktop/startup.mjs): keep running when the window is closed, and start with the computer.
   background: backgroundField(),
@@ -310,6 +310,8 @@ export function changeSettings(settings, patch) {
       case "harness":
         if (!HARNESSES.includes(value)) throw new Error("Choose a harness");
         next.harness = value;
+        // From now on it is the person's own choice, kept when the default changes (desktop/harness).
+        next.harnessPicked = true;
         break;
       case "background":
         next.background = backgroundField(value, backgroundField(settings.background));

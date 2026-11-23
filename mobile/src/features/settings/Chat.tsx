@@ -58,7 +58,7 @@ export default function Chat() {
           <ChoiceMenu title="Steps" subtitle="A bot's work in a turn" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
           <ChoiceMenu title="Thinking and updates" subtitle="Its reasoning and notes while it works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
           <Row title="Fold finished steps" subtitle="One line with elapsed time and step count" subtitleLines={2} toggled={prefs.foldFinishedSteps} onToggle={(foldFinishedSteps) => setChatPrefs({ foldFinishedSteps })} />
-          <Row title="Text streaming" subtitle="Receive sentence-sized updates while it writes" toggled={prefs.textStreaming} onToggle={(textStreaming) => setChatPrefs({ textStreaming })} />
+          <Row title="Text streaming" subtitle="See the reply a few words at a time as it writes" toggled={prefs.textStreaming} onToggle={(textStreaming) => setChatPrefs({ textStreaming })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />
         </Group>

@@ -3,7 +3,11 @@
 //
 // A prompt containing "bash:<command>" asks Botkins' question (as extension.mjs would) and then
 // "runs" the command when allowed; "fail" ends with a model error; anything else is answered
-// with "echo: <prompt>". The reply streams as two text deltas.
+// with "echo: <prompt>". The reply streams as two text deltas. "early" in a prompt with a bash:
+// command streams the call's toolcall_start/_delta/_end before it runs, as Pi does while the model
+// writes the arguments; "dangle" starts a write call that is never executed. "slow" works a moment
+// before it answers, so a `steer` can arrive: it is delivered before the reply (a user message_end,
+// and " | steer: <text>" in the reply), except with "late", where it stays queued for clear_queue.
 import { appendFileSync, readFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -27,12 +31,23 @@ const ask = (title) =>
     send({ type: "extension_ui_request", id, method: "select", title, options: ["allow", "deny"] });
   });
 let aborted = false;
+const steers = [];
 
 async function turn(text) {
   aborted = false;
   send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "user" } });
+  send({ type: "message_end", message: { role: "user", content: [{ type: "text", text }] } });
+  if (text.includes("slow")) await new Promise((resolve) => setTimeout(resolve, 200));
   const bash = /bash:(\S+)/.exec(text);
+  const toolcall = (assistantMessageEvent) => send({ type: "message_update", assistantMessageEvent });
+  if (text.includes("dangle")) toolcall({ type: "toolcall_start", contentIndex: 0, id: "call-9", toolName: "write" });
+  if (bash && text.includes("early")) {
+    toolcall({ type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "bash" });
+    toolcall({ type: "toolcall_delta", contentIndex: 0, delta: '{"command":' });
+    toolcall({ type: "toolcall_end", contentIndex: 0, toolCall: { type: "toolCall", id: "call-1", name: "bash", arguments: { command: bash[1] } } });
+    send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "toolUse" } });
+  }
   if (bash) {
     const call = { toolCallId: "call-1", toolName: "bash", input: { command: bash[1] } };
     send({ type: "tool_execution_start", toolCallId: call.toolCallId, toolName: "bash", args: call.input });
@@ -45,7 +60,13 @@ async function turn(text) {
     send({ type: "agent_settled", aborted: true });
     return;
   }
-  const reply = text.includes("fail") || text.includes("extra") ? "" : "echo: " + text;
+  let said = text;
+  if (!text.includes("late"))
+    for (const steer of steers.splice(0)) {
+      send({ type: "message_end", message: { role: "user", content: [{ type: "text", text: steer }] } });
+      said += " | steer: " + steer;
+    }
+  const reply = text.includes("fail") || text.includes("extra") ? "" : "echo: " + said;
   // Pi's own words for a refused request: the status, then the provider's error as JSON.
   const error = text.includes("extra")
     ? '402 {"type":"error","error":{"type":"billing_error","message":"API Error: 400 You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}'
@@ -101,6 +122,13 @@ process.stdin.on("data", (chunk) => {
       case "abort":
         aborted = true;
         ok();
+        break;
+      case "steer":
+        steers.push(command.message);
+        ok({ disposition: "queued" });
+        break;
+      case "clear_queue":
+        ok({ steering: steers.splice(0), followUp: [] });
         break;
       case "compact":
         ok({ summary: "short" });

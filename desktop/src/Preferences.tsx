@@ -15,9 +15,9 @@ type Props = {
 };
 
 const HARNESSES: { id: NonNullable<Values["harness"]>; name: string }[] = [
-  { id: "copilot", name: "Copilot SDK" },
-  { id: "provider", name: "Provider default" },
   { id: "pi", name: "Pi" },
+  { id: "provider", name: "Provider default" },
+  { id: "copilot", name: "Copilot SDK" },
   { id: "omp", name: "OMP" },
 ];
 const HARNESS_HELP: Record<NonNullable<Values["harness"]>, string> = {
@@ -29,7 +29,7 @@ const HARNESS_HELP: Record<NonNullable<Values["harness"]>, string> = {
 
 /** Settings › General › Harness: one harness for every plan (the Copilot SDK), or each provider's own. */
 export function HarnessSettings({ settings, change, fail, setup = true, windows = false }: Props & { setup?: boolean; windows?: boolean }) {
-  const harness = settings.harness ?? "copilot";
+  const harness = settings.harness ?? "pi";
   const [programs, setPrograms] = useState<HarnessStatus[]>([]);
   const load = () =>
     (window.botkins.harnesses?.() ?? Promise.resolve([]))

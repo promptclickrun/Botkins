@@ -38,7 +38,19 @@ export function recordActivity(run, { type, data, agentId }, notify) {
   run.steps ??= [];
   let step = run.steps.find((s) => s.id === id);
   if (type === "tool.execution_start") {
-    if (step) return;
+    if (step) {
+      // A start that came before the arguments were written (Pi's toolcall_start) says more later:
+      // the arguments, and which MCP server's tool it is once the harness has asked about it.
+      if (step.status !== "Running") return;
+      const name = data.mcpToolName || data.toolName || step.name;
+      const args = data.arguments && typeof data.arguments === "object" && Object.keys(data.arguments).length ? data.arguments : null;
+      const input = args ? displayValue(args, 12000) : step.input;
+      const source = data.mcpServerName ?? step.source;
+      if (name === step.name && source === step.source && input === step.input) return;
+      Object.assign(step, { name, source, input, label: args ? toolLabel(name, args) : step.label });
+      notify();
+      return;
+    }
     const name = data.mcpToolName || data.toolName || "Tool";
     const owner = data.parentToolCallId ?? (agentId && helperId(run, agentId));
     step = {
@@ -62,7 +74,9 @@ export function recordActivity(run, { type, data, agentId }, notify) {
   else if (type === "tool.execution_partial_result")
     step.output = displayValue(data.partialOutput, 12000);
   else if (type === "tool.execution_complete") {
-    step.status = data.success ? "Done" : "Failed";
+    // `stopped`: the call was written but never ran (a harness ended its message first), so it
+    // neither did anything nor failed.
+    step.status = data.success ? "Done" : data.stopped ? "Stopped" : "Failed";
     step.finished = Date.now();
     const output =
       data.error?.message ??

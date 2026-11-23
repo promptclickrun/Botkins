@@ -1,6 +1,7 @@
 import type { Calls } from "../desktop/remote/client/types";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
+import type { HotMessage } from "./hotState";
 export type SkillUpload = { filename: string; data: string; replace?: string[] };
 export type SkillImportResult = { added: string[]; conflicts: string[] };
 export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
@@ -402,6 +403,8 @@ export type State = {
   queued: Record<string, QueuedMessage[]>;
   /** In a group chat, the member replying right now. */
   speakers?: Record<string, string>;
+  /** The number this whole state was sent under (desktop/window-push.mjs); the small updates name the one they apply to. */
+  seq?: number;
 };
 export type QueuedMessage = {
   clientMessageId?: string;
@@ -569,6 +572,8 @@ declare global {
       clearApprovals(chatId?: string): Promise<void>;
       copyReply(chatId: string): Promise<void>;
       subscribe(fn: (state: State) => void): () => void;
+      /** The small updates sent while a bot streams (src/hotState.ts); the whole states come through subscribe. */
+      subscribeHot(fn: (message: HotMessage) => void): () => void;
       addBot(
         bot: Pick<Bot, "name" | "role" | "instructions"> &
           Partial<Pick<Bot, "look" | "summary">> & {

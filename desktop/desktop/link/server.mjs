@@ -21,7 +21,8 @@ import { GADGET_CAPABILITY, GADGET_DEFAULTS, GADGET_SETTINGS_CAPABILITY, Gadgets
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
-import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_MS, chatPart, chunkDelta, compactWorkingRun, lightPart, quietLive, reasoningDelta, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
+import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_LIVE_MS, CHUNK_MS, chatPart, chunkDelta, compactWorkingRun, lightPart, quietLive, reasoningDelta, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
+import { jsonFragments, sameFragments } from "./json-cache.mjs";
 import { reasoningPreview } from "./reasoning-preview.mjs";
 import { PullRequests } from "./prs.mjs";
 import { Push } from "./push.mjs";
@@ -102,6 +103,16 @@ function validCursors(value, watching) {
 }
 function validReasoningWatch(value) {
   return Array.isArray(value) && value.length <= MAX_WATCH && value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128);
+}
+
+/** Whether two reasoning snapshots (`{ run, items }`, or null) hold the same items and text. */
+function sameReasoning(a, b) {
+  if (a === b) return true;
+  if (!a || !b || a.run !== b.run || a.items.length !== b.items.length) return false;
+  return a.items.every((item, i) => {
+    const other = b.items[i];
+    return item.id === other.id && item.text === other.text && item.started === other.started && item.finished === other.finished && item.botId === other.botId;
+  });
 }
 
 const SYSTEM_ERROR = "That didn't work on your computer.";
@@ -225,8 +236,8 @@ export class LinkHost extends EventEmitter {
     super();
     Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
     this.botkins = botkins === undefined ? botkinRenderer() : botkins;
-    // How often a phone that asked for text in chunks gets it, and how long text may wait for a sentence's end (tests set shorter ones).
-    this.chunkTiming = { every: CHUNK_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
+    // How often a phone that asked for text in chunks gets thinking and sentences (`every`) and the reply's own text (`live`), and how long text may wait for a sentence's end (tests set shorter ones).
+    this.chunkTiming = { every: CHUNK_MS, live: CHUNK_LIVE_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
     this.relayLink = null;
     this.store = new LinkStore(dir, { protect, reveal });
@@ -256,7 +267,7 @@ export class LinkHost extends EventEmitter {
         return device ? this.deviceKey(device) : null;
       },
       relayUrl: () => this.relayUrl(),
-      snapshot: () => this.backend.snapshot(),
+      snapshot: () => this.lastState(),
       attention: () => this.attention(),
       // A chat's alerts go to its people only: who started it, and who was invited.
       people: (chat, person) => inChat(this.store.data.team, chat, person),
@@ -385,7 +396,7 @@ export class LinkHost extends EventEmitter {
     // Spaces ("spaces-v1"): how each is shared and each person's view of the list (spaces.mjs).
     this.spaces = new Spaces({
       records: () => {
-        const spaces = this.backend.snapshot().spaces;
+        const spaces = this.refreshState().spaces;
         return Array.isArray(spaces) ? spaces : null;
       },
       team: () => this.store.data.team,
@@ -401,7 +412,7 @@ export class LinkHost extends EventEmitter {
       team: () => this.store.data.team,
       setTeam: (team) => this.setTeam(team),
       records: () => {
-        const spaces = this.backend.snapshot().spaces;
+        const spaces = this.refreshState().spaces;
         return Array.isArray(spaces) ? spaces : null;
       },
       relay: () => ({ on: !!this.relaySettings(), base: this.relayUrl(), key: this.relaySettings() ? this.store.relayKey() : this.store.data.relay.key }),
@@ -421,11 +432,11 @@ export class LinkHost extends EventEmitter {
       shown: (device) => this.spaces.for(device.memberId ?? OWNER, { partOnly: !device.memberId && device.admin !== true }),
       context: (person) => this.spaces.context(person),
       records: () => {
-        const spaces = this.backend.snapshot().spaces;
+        const spaces = this.refreshState().spaces;
         return Array.isArray(spaces) ? spaces : null;
       },
       titles: () => {
-        const state = this.backend.snapshot();
+        const state = this.refreshState();
         const titles = new Map([...(state.panels ?? []), ...(state.board ?? [])].map((item) => [item.id, item.title]));
         return (id) => titles.get(id);
       },
@@ -448,9 +459,12 @@ export class LinkHost extends EventEmitter {
     this.sessions = new Map();
     this.deviceKeys = new Map();
     this.waiters = new Set();
+    this.shared = null; // the app's state as the last refresh built it (see refreshState, lastState)
+    this.refreshing = false;
     this.parts = new Map(); // name → { json, v }
     this.partViews = new Map(); // principal id → name → { json, v }
     this.partsRev = 0; // goes up when a part changes
+    this.liveRev = 0; // goes up when the full live part changed: growing text changes only that, never its indicators
     this.teamRev = 0; // goes up when the team, or anyone's view, changes
     this.texts = new Map();
     this.reasoningParts = new Map();
@@ -2023,6 +2037,17 @@ export class LinkHost extends EventEmitter {
       capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
     };
   }
+  /**
+   * The app's state while `refresh` rebuilds the parts: the one build it made (a build for the parts, for
+   * the spaces and for each view was two to four a pump). Any other time, a fresh one.
+   */
+  refreshState() {
+    return this.refreshing && this.shared ? this.shared : this.backend.snapshot();
+  }
+  /** The app's state as the last refresh built it, for as long as nothing has changed since; a fresh one after. */
+  lastState() {
+    return !this.dirty && this.shared ? this.shared : this.backend.snapshot();
+  }
   /** The desktop changed: wake the phones that are waiting, at most once per PUMP_MS. */
   changed() {
     this.dirty = true;
@@ -2052,7 +2077,17 @@ export class LinkHost extends EventEmitter {
   /** Rebuilds the parts when something changed, or when a chat is watched for the first time. */
   refresh(watching, reasoningWatch = []) {
     if (!this.dirty && watching.every((id) => this.parts.has("chat:" + id)) && reasoningWatch.every((id) => this.reasoningParts.has(id))) return;
+    this.refreshing = true;
+    try {
+      this.rebuild(watching, reasoningWatch);
+    } finally {
+      this.refreshing = false;
+    }
+  }
+  rebuild(watching, reasoningWatch) {
+    // One build of the app's state for everything this refresh and the views made from it ask.
     const state = this.backend.snapshot();
+    this.shared = state;
     const ownLooks = typeof this.backend.setLook === "function";
     if (!ownLooks) this.store.syncLooks((state.bots ?? []).map((bot) => bot.id));
     // A full live version must be newer than its indicators: an older phone's acknowledged
@@ -2120,9 +2155,8 @@ export class LinkHost extends EventEmitter {
         const current = runPartValue?.status === "Working" && runPartValue.id && Array.isArray(runPartValue.reasoning)
           ? { run: runPartValue.id, items: runPartValue.reasoning.map(({ id: itemId, text, started, finished, botId }) => ({ id: itemId, text, started, ...(finished !== undefined && { finished }), ...(botId && { botId }) })) }
           : null;
-        const json = JSON.stringify(current);
         const previous = this.reasoningParts.get(id);
-        if (!previous || previous.json !== json) this.reasoningParts.set(id, { version: ++this.version, json, snapshot: current });
+        if (!previous || !sameReasoning(previous.snapshot, current)) this.reasoningParts.set(id, { version: ++this.version, snapshot: current });
       }
       if (!Object.hasOwn(next.live.streams, id) && !Object.hasOwn(next.live.thinking, id)) continue;
       const stream = next.live.streams[id] ?? "";
@@ -2153,11 +2187,18 @@ export class LinkHost extends EventEmitter {
     this.texts = texts;
     for (const id of this.reasoningParts.keys()) if (!wantedReasoning.has(id)) this.reasoningParts.delete(id);
     for (const [name, value] of Object.entries(next)) {
-      const json = JSON.stringify(value ?? null);
-      if (this.parts.get(name)?.json !== json) {
-        this.parts.set(name, { json, v: ++this.version });
-        this.partsRev++;
-      }
+      // A chat's page and its run are most of the bytes: the steps and messages that did not change are not
+      // written again, and a part whose fragments are all the same as last time is not joined to be compared.
+      const held = this.parts.get(name);
+      const frags = name.startsWith("chat:") || name.startsWith("run:") ? jsonFragments(value ?? null) : null;
+      if (frags && held?.frags && sameFragments(held.frags, frags)) continue;
+      const json = frags ? frags.join("") : JSON.stringify(value ?? null);
+      if (held?.json !== json) {
+        this.parts.set(name, { json, ...(frags && { frags }), v: ++this.version });
+        // A phone that is sent indicators and text by cursor reads `quietLive`, which a reply's growth leaves as it was.
+        if (name === "live") this.liveRev++;
+        else this.partsRev++;
+      } else if (frags) held.frags = frags;
     }
     // Chats nobody watches any more are dropped.
     for (const name of [...this.parts.keys()]) {
@@ -2173,8 +2214,12 @@ export class LinkHost extends EventEmitter {
     for (const id of watching) names.push("chat:" + id, "run:" + id);
     return names;
   }
-  /** The parts one device may see, each with its version: the owner's are the computer's own, a member's are cut to their role. */
-  viewParts(session, watching) {
+  /**
+   * The parts one device may see, each with its version: the owner's are the computer's own, a member's are cut
+   * to their role. `quiet` says the device is sent indicators, not the full `live` (its text comes by cursor, or not
+   * at all), so a reply growing is no reason to make its view again.
+   */
+  viewParts(session, watching, quiet) {
     // A gadget follows two small parts of its own, made from the owner's (gadget.mjs).
     const device = session.deviceId === undefined ? null : this.store.device(session.deviceId);
     if (device?.kind === "gadget" && !device.memberId) return this.gadgets.view(device, this.parts);
@@ -2188,14 +2233,15 @@ export class LinkHost extends EventEmitter {
     const previous = this.partViews.get(key) ?? new Map();
     // Nothing changed since this view was made for the same chats: it is still right.
     const stamp = this.partsRev + ":" + this.teamRev + ":" + watching.join(",") + ":" + (session.reasoningWatch ?? []).join(",") + ":" + (session.light ? "light" : "full");
-    if (previous.stamp === stamp) return previous;
+    if (previous.stamp === stamp && (quiet || previous.liveRev === this.liveRev)) return previous;
     // The computer's own indicators name every chat, so they stay out: a view's own are made below
     // from its own `live`, after it was cut to its chats.
-    // The owner's cut keeps or drops a chat's page whole, so those (the largest parts) are not read
-    // here: a kept one is sent as it is. A member's cut also changes what is inside one.
-    const whole = (name) => principal.kind === "owner" && (name.startsWith("chat:") || (!hasReasoning && name.startsWith("run:")));
+    // The owner's cut keeps or drops a chat's page and its run whole, so those (the largest parts) are not
+    // read here: a kept one is sent as it is, or cut to a reasoning client's form once for each version
+    // (`compactJson`). A member's cut also changes what is inside one.
+    const whole = (name) => principal.kind === "owner" && (name.startsWith("chat:") || name.startsWith("run:"));
     const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, whole(name) ? true : JSON.parse(part.json)]));
-    const records = this.backend.snapshot().spaces;
+    const records = this.lastState().spaces;
     const team = this.store.data.team;
     const values =
       admin
@@ -2210,29 +2256,41 @@ export class LinkHost extends EventEmitter {
     put("quietLive", JSON.stringify(quietLive(values.live) ?? null));
     for (const name of this.names(watching)) {
       if (!(name in values)) continue;
-      let json = whole(name) && values[name] === true ? this.parts.get(name).json : JSON.stringify(values[name] ?? null);
-      if (hasReasoning && name.startsWith("run:") && values[name] !== true) json = JSON.stringify(compactWorkingRun(values[name], session.light));
+      let json;
+      if (whole(name) && values[name] === true) json = hasReasoning && name.startsWith("run:") ? this.compactJson(this.parts.get(name), session.light) : this.parts.get(name).json;
+      else if (hasReasoning && name.startsWith("run:")) json = JSON.stringify(compactWorkingRun(values[name], session.light));
+      else json = JSON.stringify(values[name] ?? null);
       put(name, json);
     }
     for (const name of previous.keys()) if (!this.parts.has(name)) previous.delete(name);
     previous.stamp = stamp;
+    previous.liveRev = this.liveRev;
     this.partViews.set(key, previous);
     return previous;
+  }
+  /** A run part as a client that follows reasoning is sent it: made once for each version of the part, for every phone. */
+  compactJson(part, light) {
+    const slot = light ? "compactLight" : "compact";
+    return (part[slot] ??= JSON.stringify(compactWorkingRun(JSON.parse(part.json), light)));
   }
   /** Missing parts as JSON, null when caught up, or milliseconds until the next eligible flush. */
   news(known, watching, cursors, session, throttle, interval = 0, advance) {
     const partWatching = [...new Set([...watching, ...(session.reasoningWatch ?? [])])];
-    const values = this.viewParts(session, partWatching);
     // A phone that asked for no text streaming ("text-streaming-off-v1") gets the indicators only, and no text:
     // text growing alone wakes nothing. The reply comes whole in its chat's page.
     const quiet = !!cursors || session.noText;
-    // A phone that asked for chunks ("text-chunks-v1") gets text cut at complete sentences and lines, at most
-    // once per `every` ms: about ten times fewer relay messages. Text with no end in sight goes after `holdMax`.
+    const values = this.viewParts(session, partWatching, quiet);
+    // A phone that asked for chunks ("text-chunks-v1") gets the reply's own text after each whole word, at most
+    // once per `live` ms, and the first words of a reply at once; thinking and the rest of the text waits for
+    // a sentence's end or a line's, at most once per `every` ms. Both are far fewer relay messages than the
+    // 200 ms of a direct phone. Text with no end in sight goes after `holdMax`.
     const chunks = session.textMode === "chunks";
     const now = Date.now();
     const loose = chunks && session.heldSince !== undefined && now - session.heldSince >= this.chunkTiming.holdMax;
     let held = false;
     let textOnly = true;
+    let live = false; // reply text goes out in this answer
+    let first = false; // and it is the first of a reply: the phone holds none of it yet
     const parts = [];
     const versions = {};
     const deliveredReasoning = [];
@@ -2257,9 +2315,13 @@ export class LinkHost extends EventEmitter {
         const text = followsReasoning && raw?.projected ? raw.projected : raw;
         let delta = textDelta(text, cursor);
         if (chunks && delta) {
-          const cut = chunkDelta(text, delta, cursor, loose);
+          const cut = chunkDelta(text, delta, cursor, loose, true);
           delta = cut.delta;
           held ||= cut.held;
+          if (delta?.stream.add) {
+            live = true;
+            first ||= delta.stream.from === 0;
+          }
         }
         if (text?.preview) {
           // Establish the preview source even when the first incomplete reply chunk is held.
@@ -2293,8 +2355,9 @@ export class LinkHost extends EventEmitter {
     else delete session.heldSince;
     // Held text with nothing to send yet: look again when it has waited long enough.
     if (!parts.length) return held && (throttle || advance) ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : null;
-    const remaining = (session.lastNews ?? 0) + (chunks && textOnly ? this.chunkTiming.every : interval || TEXT_PUMP_MS) - now;
-    if (throttle && (textOnly || interval) && remaining > 0) return remaining;
+    // The first words of a reply never wait for the clock: time to first text is what a phone shows most plainly.
+    const remaining = (session.lastNews ?? 0) + (chunks && textOnly ? (live ? this.chunkTiming.live : this.chunkTiming.every) : interval || TEXT_PUMP_MS) - now;
+    if (throttle && (textOnly || interval) && remaining > 0 && !(first && textOnly)) return remaining;
     for (const [chat, sent] of deliveredReasoning) session.reasoningSent.set(chat, sent);
     advance?.(versions, deliveredText);
     if (held) session.heldSince = now;

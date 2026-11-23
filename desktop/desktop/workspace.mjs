@@ -42,7 +42,7 @@ import {
   providersField,
 } from "./preferences.mjs";
 import { backgroundField } from "./startup.mjs";
-import { Harness, harnessField } from "./harness/index.mjs";
+import { DEFAULT_HARNESS, HARNESSES, Harness, harnessField } from "./harness/index.mjs";
 import { friendlyModel } from "./modelnames.mjs";
 import { meterLimit } from "./modeldetails.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
@@ -121,6 +121,12 @@ export function appendStream(task, data) {
   task.stream += text;
 }
 
+/** How long the turn's hot path waits to write the state (Workspace.saveSoon). */
+const SAVE_SOON_MS = 750;
+/** Workspaces with a write waiting, written when the process exits. */
+const unsaved = new Set();
+let exitHooked = false;
+
 export class Workspace {
   /**
    * @param providers  The model providers (desktop/providers). Tests may pass a function that
@@ -159,6 +165,7 @@ export class Workspace {
     this.harness = new Harness({
       providers: this.providers,
       choice: () => this.state?.settings?.harness,
+      picked: () => !!this.state?.settings?.harnessPicked,
       dir,
       bridge: options?.bridge ?? new ToolBridge(),
       version: options?.version,
@@ -190,6 +197,8 @@ export class Workspace {
     this.state.panels ??= [];
     // Pages of html blocks in panels and cards (desktop/frames.mjs)
     this.frames = new Frames(this);
+    // What this workspace's file said, before the defaults fill in (the harness's migration below).
+    const savedHarness = this.state.settings?.harness;
     this.state.settings = {
       ...structuredClone(defaultSettings),
       ...this.state.settings,
@@ -199,8 +208,12 @@ export class Workspace {
     // A new workspace has no default model yet: it becomes the recommended model of the provider
     // the person connects first (firstDefaultModel). A workspace that already exists keeps its own.
     if (isNew) this.state.settings.modelUnset = true;
-    // One harness for every plan, unless the person chose each provider's own.
-    this.state.settings.harness = harnessField(this.state.settings.harness);
+    // The harness: one the person chose stays. One saved without `harnessPicked` was the default of
+    // its time, not a choice: "copilot" was the only default before Pi (2026-11-23), so any other
+    // saved one was chosen. One not chosen follows the default (desktop/harness).
+    if (typeof this.state.settings.harnessPicked !== "boolean")
+      this.state.settings.harnessPicked = HARNESSES.includes(savedHarness) && savedHarness !== "copilot";
+    this.state.settings.harness = this.state.settings.harnessPicked ? harnessField(savedHarness) : DEFAULT_HARNESS;
     // Staying on: a workspace from before the choice has the usual one, and a damaged one too.
     try {
       this.state.settings.background = backgroundField(this.state.settings.background);
@@ -332,7 +345,38 @@ export class Workspace {
     return turns;
   }
 
+  /**
+   * Writes the state soon instead of now, for the turn's hot path: a turn's steps and streamed
+   * text change it many times a second, and each write stringifies the whole state on the main
+   * process (about 18 ms at 3 MB and 260 ms at 50 MB, measured 2026-11-23), which stalled the
+   * harness running in this process and the approvals it waits on. The window hears at once; the
+   * disk gets one write within SAVE_SOON_MS. Any `save()` meanwhile writes it all and takes its
+   * place; the turn's end saves, and so do quitting and the process's exit (`flushSave`).
+   * Use `save()` for anything recovery or safety reads after a crash.
+   */
+  saveSoon() {
+    this.notify();
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => this.save(), SAVE_SOON_MS);
+    this.saveTimer.unref?.();
+    unsaved.add(this);
+    if (!exitHooked) {
+      exitHooked = true;
+      process.once("exit", () => {
+        for (const workspace of unsaved) workspace.flushSave();
+      });
+    }
+  }
+  /** Writes now if a `saveSoon` is waiting. */
+  flushSave() {
+    if (this.saveTimer) this.save();
+  }
   save() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+      unsaved.delete(this);
+    }
     this.artifacts?.batch(() => {
       for (const chat of this.state.chats) this.artifactEvents.messages(chat);
     });
@@ -346,6 +390,8 @@ export class Workspace {
   snapshot() {
     return {
       ...this.state,
+      // The harness that runs turns: the default gives way while its program isn't here and nobody chose.
+      settings: { ...this.state.settings, harness: this.harness.effective() },
       // Each space with what it holds, for the link to make each person's own list from
       // (docs/spaces.md, "What each device is sent"). No app is sent this part as it is.
       spaces: this.spaces.part(),
@@ -1230,6 +1276,10 @@ export class Workspace {
       folder = join(this.dir, "files", bot.id);
       mkdirSync(folder, { recursive: true });
     }
+    // The bot's MCP servers start beside the harness and the plugins below, not after them.
+    const access = this.accessForTurn(chat, task);
+    const routing = access.mcp ? this.mcpApps.prepare(bot) : Promise.resolve(new Map());
+    routing.catch(() => {});
     const previous = task?.recovering && run?.recovery?.botId === bot.id ? run.recovery.route : null;
     const choice = previous?.choice ?? this.effectiveModel(chat);
     // A recovered turn goes on where it ran; one saved before program harnesses says only whether Copilot hosted it.
@@ -1291,13 +1341,12 @@ export class Workspace {
         task.stopped ? { action: "cancel" } : this.interactions.elicit(chat, task, request),
     };
     const copilotPlugins = provider.id === "copilot";
-    const access = this.accessForTurn(chat, task);
     const pluginSpec = access.plugins
       ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
     // Servers with views (and the Composio tool) are run by Botkins for this turn, when they answer;
     // their tools come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs).
-    const routed = access.mcp ? await this.mcpApps.prepare(bot) : new Map();
+    const routed = await routing;
     const ownServers = access.mcp ? this.integrations.serversFor(bot) : {};
     for (const name of routed.keys()) delete ownServers[name];
     const mcpServers = {
@@ -1344,7 +1393,10 @@ export class Workspace {
    * harness (Copilot SDK, Pi or OMP) runs the turn and the model's own plan answers it. `via` is
    * the harness route (this.harness.via); a recovered turn passes the one it ran on.
    */
-  async runnerFor(choice, via = this.harness.via(choice)) {
+  async runnerFor(choice, via) {
+    // Whether the default harness's program is here decides which harness runs, while nobody chose one.
+    await this.harness.checkPrograms();
+    via ??= this.harness.via(choice);
     const owner = this.providers.for(choice);
     // A model of a provider the person switched off answers nothing, rather than quietly using it.
     if (!this.providers.isEnabled(owner))
@@ -1359,18 +1411,55 @@ export class Workspace {
    */
   async prewarm(chatId) {
     const chat = this.state.chats.find((c) => c.id === chatId);
-    if (!chat || !chat.established || isGroup(chat) || this.closing || this.active.has(chatId)) return;
+    if (!chat || isGroup(chat) || this.closing || this.active.has(chatId)) return;
     const bot = this.state.bots.find((b) => b.id === chat.botId);
     if (!bot) return;
+    // A new chat has no session to open yet, but everything around one can start now, while the
+    // person writes: the harness's runtime, the gateway and the bot's MCP servers.
+    await this.warmRoute(chat, bot);
+    if (!chat.established) return;
     await this.locked(chatId, async () => {
       if (this.closing || this.active.has(chatId)) return;
       try {
         const session = await this.openSession(chat, bot, null, { stopped: false });
+        // A harness with a program per conversation (Pi, OMP) starts it now; it stays for the turn.
+        await session.warm?.().catch(() => {});
         await session.close();
       } catch {
         // The real turn reports whatever is wrong.
       }
     });
+  }
+  /**
+   * Starts what a turn of this chat would start before its session: the provider that runs it (a
+   * program, a runtime), the gateway a plan's model goes through, and the bot's MCP servers that
+   * Botkins runs. Each is kept by its owner, so the turn then finds them ready. Never throws.
+   */
+  async warmRoute(chat, bot) {
+    try {
+      if (this.accessForTurn(chat, null).mcp) void this.mcpApps.prepare(bot).catch(() => {});
+      const { provider } = await this.runnerFor(this.effectiveModel(chat));
+      await provider.warm();
+    } catch {
+      // The turn reports whatever is wrong.
+    }
+  }
+  /**
+   * At launch, starts the runtime of the default model's harness in the background, so the first
+   * message of the day doesn't wait for it.
+   */
+  async warmUp() {
+    if (this.closing) return;
+    this.mcpApps.warm();
+    try {
+      // Whether the default harness's program is here: Settings then shows the one that runs.
+      await this.harness.checkPrograms();
+      this.notify();
+      const { provider } = await this.runnerFor(this.state.settings.model);
+      await provider.warm();
+    } catch {
+      // The turn reports whatever is wrong.
+    }
   }
   /**
    * Closes a bot's sessions so their next turn opens with its current memory. An idle session
@@ -1514,7 +1603,7 @@ export class Workspace {
     if (run.recovery) run.recovery.draft = task.stream;
     if (run.recovery && Date.now() >= (task.nextCheckpoint ?? 0)) {
       task.nextCheckpoint = Date.now() + 2000;
-      this.save();
+      this.saveSoon();
     } else this.notify();
   }
 
@@ -1771,7 +1860,7 @@ export class Workspace {
           const step = data?.toolCallId && run.steps?.find((s) => s.id === data.toolCallId);
           if (step) {
             step.botId ??= bot.id;
-            if (type === "tool.execution_start" || type === "tool.execution_complete") this.save();
+            if (type === "tool.execution_start" || type === "tool.execution_complete") this.saveSoon();
           }
         }
       });
@@ -1835,7 +1924,7 @@ export class Workspace {
           this.readSessionTodos(session, chat, run, task);
         } else if (recordCanvas(run, chat, task, this.metered(event, run.model ?? chosen))) this.notify();
         else recordActivity(run, event, () => {
-          if (event.type === "tool.execution_start" || event.type === "tool.execution_complete") this.save();
+          if (event.type === "tool.execution_start" || event.type === "tool.execution_complete") this.saveSoon();
           else this.notify();
         });
       });

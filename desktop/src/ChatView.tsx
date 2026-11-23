@@ -2,6 +2,7 @@ import {
   Fragment,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -29,6 +30,8 @@ import {
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
 import { RichText } from "./RichText";
+import { StreamingText } from "./StreamingText";
+import { useStableFunctions } from "./stable";
 import type { FilePreview } from "./ChatFileLink";
 import {
   HelperChip,
@@ -146,7 +149,7 @@ function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (e
 }
 
 /** One conversation: header, transcript, pending requests and the composer slot. */
-export default function ChatView({
+function ChatViewBody({
   completions,
   pending,
   onScreen,
@@ -286,11 +289,16 @@ export default function ChatView({
     paneAction(chat.id, paneShown ? "closed" : "opened");
     if (narrow && !paneShown) requestAnimationFrame(() => document.querySelector<HTMLElement>(".side-pane.drawer :is([role=tab][aria-selected=true], .pane-close)")?.focus());
   };
-  const files = { chatId: chat.id, botId: bot.id, hostId: state.remote?.using?.id, remote: !!state.remote?.using, preview: (file: FilePreview) => {
+  // One object for as long as the chat and computer are the same: the messages' Markdown is not read again for a new one.
+  const showPaneNow = useRef(showPane);
+  showPaneNow.current = showPane;
+  const hostId = state.remote?.using?.id;
+  const remoteHost = !!state.remote?.using;
+  const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, preview: (file: FilePreview) => {
     setPull(undefined);
     setPreview({ ...file, chatId: chat.id });
-    showPane(true);
-  } };
+    showPaneNow.current(true);
+  } }), [chat.id, bot.id, hostId, remoteHost]);
   const closePane = () => {
     showPane(false);
     paneAction(chat.id, "closed");
@@ -624,6 +632,9 @@ export default function ChatView({
     const initial = related.find(({ message }) => message.role === "user" && message.runId === run.id && !message.steeredRunId && !message.answer);
     const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim);
     const allSteps = run.steps ?? [];
+    // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
+    // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
+    const onIt = run.status === "Working" && !requests.length;
     const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode === "open" || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
@@ -649,7 +660,7 @@ export default function ChatView({
         const marker = <div className="timeline-person">↳ {event.value.answer?.title ? event.value.answer.title + ": " : ""}{event.value.text}</div>;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: timelineMessage(event.value, event.index), fold: marker, details: marker });
       } else {
-        const body = <WorkSteps steps={[event.value]} />;
+        const body = <WorkSteps steps={[event.value]} live={onIt} />;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
     }
@@ -710,7 +721,7 @@ export default function ChatView({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} />}
+        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
@@ -724,7 +735,7 @@ export default function ChatView({
                 <span className="speaker-name">{currentBot.name}</span>
               </b>
             )}
-            <RichText text={stream} files={files} />
+            <StreamingText text={stream} files={files} />
           </article>
         )}
         {(live || group) && (live || folded || hasActivity) && fold}
@@ -1059,7 +1070,7 @@ export default function ChatView({
                 </b>
               )}
               {stream ? (
-                <RichText text={stream} files={files} />
+                <StreamingText text={stream} files={files} />
               ) : (
                 <p className="typing" role="status">
                   {requests.length ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
@@ -1076,7 +1087,7 @@ export default function ChatView({
                 </b>
               )}
               {stream ? (
-                <RichText text={stream} files={files} />
+                <StreamingText text={stream} files={files} />
               ) : (
                 <p className="typing" role="status">
                   {requests.length ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
@@ -1247,4 +1258,9 @@ export default function ChatView({
       )}
     </div>
   );
+}
+
+/** The window's functions from the page above are made anew on every render; the rows below keep what they were given. */
+export default function ChatView(props: Parameters<typeof ChatViewBody>[0]) {
+  return <ChatViewBody {...useStableFunctions(props)} />;
 }

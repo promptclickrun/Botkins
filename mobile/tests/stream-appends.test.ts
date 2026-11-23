@@ -19,7 +19,7 @@ async function until(check: () => boolean) {
   }
 }
 
-async function setup(t: TestContext, appends = true, chunkTiming?: { every: number; holdMax: number }) {
+async function setup(t: TestContext, appends = true, chunkTiming?: { every?: number; live?: number; holdMax?: number }) {
   const saved = process.env.BOTKINS_DEV_APPENDS;
   process.env.BOTKINS_DEV_APPENDS = appends ? "on" : "off";
   let backend;
@@ -517,8 +517,52 @@ test("with text streaming off a phone gets indicators only, is not woken by text
   await until(() => held()?.stream === "next");
 });
 
-test("text in chunks comes at sentence or line ends, no more often than CHUNK_MS, and held text goes after the hold", async (t) => {
-  const { backend, link, phone } = await setup(t, true, { every: 300, holdMax: 900 });
+test("the first words of a reply go at once, and the next chunk waits for the live clock", async (t) => {
+  // A slow clock, so a first chunk that waited for it could not be mistaken for one that did not.
+  const { backend, link, phone } = await setup(t, true, { every: 1500, live: 1500, holdMax: 6000 });
+  const client = await phone(true, applyParts, { textStreaming: () => "chunks" });
+  const chat = backend.state.chats.find((c) => !c.botIds);
+  const id = chat.id;
+  const stream = backend.state.streams;
+  const held = () => useApp.getState().texts[id]?.stream;
+  client.watch([id]);
+  client.start();
+  await until(() => link.waiters.size === 1);
+  // The stream starts: indicators go at once (not text news), which starts the clock.
+  stream[id] = "Hel";
+  backend.changed();
+  await until(() => useApp.getState().parts.live?.streams[id] === true);
+  const session = [...link.sessions.values()][0];
+  await sleep(80);
+  assert.equal(held() ?? "", "", "half a word is not sent");
+  const since = Date.now();
+  assert.ok(since - session.lastNews < 400, "the clock was started by the indicators");
+  stream[id] = "Hello wor";
+  backend.changed();
+  await until(() => held() === "Hello ");
+  assert.ok(Date.now() - since < 400, "the first words waited for the clock");
+  // Not the first words any more: this one waits for the 1.5 s clock.
+  await until(() => link.waiters.size === 1);
+  stream[id] = "Hello world is big and wide ";
+  backend.changed();
+  await sleep(700);
+  assert.equal(held(), "Hello ", "the second chunk came before the live clock");
+  await until(() => held() === "Hello world is big and wide ");
+  assert.ok(Date.now() - since >= 1300, "the second chunk came before the live clock");
+  // A new reply (a new text) is first words again.
+  delete stream[id];
+  chat.messages.push({ role: "assistant", text: "Hello world is big and wide " });
+  backend.changed();
+  await until(() => link.waiters.size === 1);
+  stream[id] = "Again ";
+  backend.changed();
+  const again = Date.now();
+  await until(() => held() === "Again ");
+  assert.ok(Date.now() - again < 400, "the first words of the next reply waited for the clock");
+});
+
+test("reply text in chunks comes every live clock after a whole word, thinking at sentence ends, and no-space text is held", async (t) => {
+  const { backend, link, phone } = await setup(t, true, { every: 700, live: 250, holdMax: 800 });
   const received: { at: number; news: Record<string, any> }[] = [];
   const syncs: Record<string, unknown>[] = [];
   const client = await phone(true, (news) => {
@@ -534,32 +578,57 @@ test("text in chunks comes at sentence or line ends, no more often than CHUNK_MS
   const id = chat.id;
   const stream = backend.state.streams;
   const held = () => useApp.getState().texts[id]?.stream;
-  stream[id] = "One. Tw";
+  stream[id] = "One ";
   backend.changed();
   client.watch([id]);
   client.start();
-  await until(() => held() === "One. ");
+  await until(() => held() === "One ");
   assert.equal(syncs.at(-1)!.text, "chunks");
   assert.ok(useApp.getState().parts.meta!.capabilities.includes("text-chunks-v1"));
-  for (const more of ["o is", " here.", " Three", "\n- a list ite", "m\n", "and then"]) {
-    stream[id] += more;
+  // Typed a few characters at a time, words and sentences, a line, an emoji, and Han text with no spaces.
+  const typed = "Two words here. Three more\n- a list item 😀 here\nand then 你好世界。再见 ";
+  for (let at = 0; at < typed.length; at += 3) {
+    stream[id] += typed.slice(at, at + 3);
     backend.changed();
-    await sleep(40);
+    await sleep(20);
   }
-  await until(() => held() === "One. Two is here. Three\n- a list item\n");
-  const texts = received.filter((r) => r.news["text:" + id]);
-  for (const r of texts) {
-    assert.match(r.news["text:" + id].stream, /(\n|[.!?] )$/, "cut at a sentence or line end");
-  }
-  for (let i = 1; i < texts.length; i++) assert.ok(texts[i].at - texts[i - 1].at >= 280, "two chunks too close");
-  // Nothing more comes, and "and then" has no end: it goes once it was held too long.
-  const before = Date.now();
   await until(() => held() === stream[id]);
-  assert.ok(Date.now() - before >= 400, "the held words waited for the hold");
-  delete stream[id];
-  chat.messages.push({ role: "assistant", text: "One. Two is here. Three\n- a list item\nand then" });
+  const texts = received.filter((r) => r.news["text:" + id]);
+  assert.ok(texts.length >= 3, "the text came in several chunks");
+  for (const r of texts) {
+    // Everything the phone holds ends after a whole word: a space or a line end, or a Han character.
+    assert.match(r.news["text:" + id].stream, /(\s|[\u3400-\u9fff\u3000-\u303f])$/, "ended inside a word: " + JSON.stringify(r.news["text:" + id].stream));
+    assert.doesNotMatch(r.news["text:" + id].stream, /[\ud800-\udbff]$/, "split an emoji");
+  }
+  for (let i = 1; i < texts.length; i++) assert.ok(texts[i].at - texts[i - 1].at >= 230, "two chunks closer than the live clock");
+  // Faster than the slow clock, and not waiting for a sentence's end: that is what makes it feel written.
+  assert.ok(texts.some((r, i) => i > 0 && r.at - texts[i - 1].at < 600), "no chunk came sooner than the slow clock");
+  assert.ok(texts.some((r) => !/([.!?\u3002]\s*|\n)$/.test(r.news["text:" + id].stream)), "every chunk waited for a sentence's end");
+  assert.ok(texts.length <= 1 + Math.ceil((typed.length / 3 * 20 + 400) / 230), "far more chunks than the clock allows");
+  // The last word has no space after it: held, then sent after the hold.
+  const before = Date.now();
+  stream[id] += "tail";
   backend.changed();
-  await until(() => useApp.getState().chats[id]?.messages.at(-1)?.text?.endsWith("and then") === true);
+  await sleep(300);
+  assert.equal(held(), stream[id].slice(0, -4), "a word that may not be finished was sent");
+  await until(() => held() === stream[id]);
+  assert.ok(Date.now() - before >= 600, "the held word waited for the hold");
+  // Thinking is not the reply: it waits for a sentence's end and for the slower clock.
+  const base = Date.now();
+  backend.state.thinking[id] = "Plan one. Plan tw";
+  backend.changed();
+  await until(() => useApp.getState().texts[id]?.thinking === "Plan one. ");
+  backend.state.thinking[id] += "o is next. And more words";
+  backend.changed();
+  await sleep(300);
+  assert.equal(useApp.getState().texts[id]?.thinking, "Plan one. ", "thinking came faster than the slow clock");
+  await until(() => useApp.getState().texts[id]?.thinking === "Plan one. Plan two is next. ");
+  assert.ok(Date.now() - base >= 600, "thinking came before the slow clock");
+  delete stream[id];
+  delete backend.state.thinking[id];
+  chat.messages.push({ role: "assistant", text: "One " + typed + "tail" });
+  backend.changed();
+  await until(() => useApp.getState().chats[id]?.messages.at(-1)?.text?.endsWith("tail") === true);
 });
 
 test("a phone asks for chunks only from a computer that sends them, and whole text otherwise", async (t) => {

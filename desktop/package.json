@@ -2,7 +2,7 @@
   "license": "MIT",
   "name": "botkins-desktop",
   "productName": "Botkins",
-  "version": "0.17.8",
+  "version": "0.17.9",
   "private": true,
   "type": "module",
   "main": "desktop/start.mjs",
@@ -74,6 +74,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.327",
+    "@earendil-works/pi-coding-agent": "1.6.0",
     "@microsoft/copilot-sdk": "2.0.1",
     "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/core": "2.4.0",

@@ -464,6 +464,9 @@ export class CopilotProvider extends ModelProvider {
    * @param options.workingDirectory  Folder for a child-process runtime, when one is used.
    * @param options.keepWarmMs     How long a finished turn's session stays open. 0 closes it at once.
    * @param options.maxWarm        How many sessions may stay open.
+   * @param options.keepOne        The last open session outlives the keep-warm time, so the runtime
+   *                               always has one open and the next new session is ready at once
+   *                               (see "Speed" at the top of this file).
    * @param options.connect        For tests: returns an SDK-shaped client instead of starting the runtime.
    * @param options.quietCheckMs   How long a turn is quiet before the runtime is asked whether the session is still there.
    * @param options.github         () => { token?, useLoggedInUser? } | undefined: how the runtime signs in
@@ -472,9 +475,9 @@ export class CopilotProvider extends ModelProvider {
    *                               runs signed out. Either way it leaves the keychain alone.
    * @param options.platform, options.sdk  For tests of how the runtime is started.
    */
-  constructor({ baseDirectory, userHome, workingDirectory, keepWarmMs = 0, maxWarm = 6, connect, github, platform = process.platform, sdk, quietCheckMs = QUIET_CHECK_MS } = {}) {
+  constructor({ baseDirectory, userHome, workingDirectory, keepWarmMs = 0, maxWarm = 6, keepOne = false, connect, github, platform = process.platform, sdk, quietCheckMs = QUIET_CHECK_MS } = {}) {
     super();
-    Object.assign(this, { baseDirectory, userHome, workingDirectory, keepWarmMs, maxWarm, connect, github, platform, quietCheckMs });
+    Object.assign(this, { baseDirectory, userHome, workingDirectory, keepWarmMs, maxWarm, keepOne, connect, github, platform, quietCheckMs });
     this.sdk = sdk ?? { CopilotClient, RuntimeConnection };
     this.pool = new Map();
     // Disconnects in progress. A session opened while one runs is slow, so opens wait for them.
@@ -538,6 +541,10 @@ export class CopilotProvider extends ModelProvider {
     }
     this.sdkClient = client;
     return client;
+  }
+  /** Starts the runtime ahead of the first turn (Workspace.warmUp and warmRoute). */
+  async warm() {
+    if (!this.stopping) await this.client();
   }
   async stop() {
     this.stopping = true;
@@ -790,11 +797,22 @@ export class CopilotProvider extends ModelProvider {
     entry.busy = false;
     if (discard || entry.stale || this.stopping || this.pool.get(entry.id) !== entry) return this.discard(entry);
     entry.used = Date.now();
-    entry.timer = setTimeout(() => this.discard(entry), this.keepWarmMs);
-    entry.timer.unref?.();
+    this.expireLater(entry);
     // Only the most recently used conversations stay open.
     const idle = [...this.pool.values()].filter((e) => !e.busy).sort((a, b) => a.used - b.used);
     while (this.pool.size > this.maxWarm && idle.length) await this.discard(idle.shift());
+  }
+  /**
+   * Closes a warm session after the keep-warm time. With `keepOne`, the last one open stays: a
+   * session opened beside an open one is ready in well under a second, and one opened after the
+   * last one closed waits seconds (see "Speed" at the top of this file).
+   */
+  expireLater(entry) {
+    entry.timer = setTimeout(() => {
+      if (this.keepOne && !this.stopping && this.pool.get(entry.id) === entry && this.pool.size === 1) return this.expireLater(entry);
+      void this.discard(entry);
+    }, this.keepWarmMs);
+    entry.timer.unref?.();
   }
   async discard(entry) {
     clearTimeout(entry.timer);

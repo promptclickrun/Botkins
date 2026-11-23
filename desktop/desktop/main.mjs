@@ -30,6 +30,7 @@ import { parseJoinUrl } from "./remote/link-client.mjs";
 import { createRuntime, isSplitHost } from "./runtime.mjs";
 import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
+import { createWindowPush } from "./window-push.mjs";
 
 // Use the Botkins path for an existing installation. A development run never changes it.
 if (app.isPackaged && !env("DATA_DIR")) adoptFolder({ appData: app.getPath("appData") });
@@ -54,8 +55,7 @@ let win,
   remote,
   // Phone access (desktop/link): the runtime's LinkHost.
   link,
-  quitting = false,
-  pending = false;
+  quitting = false;
 // "Run at startup" is asked of the system only by the installed app on its own data. A trial run
 // (a test, a development build on a folder of its own) writes its entry inside that folder instead,
 // so it never changes what starts with this computer.
@@ -118,16 +118,22 @@ function frameIdOf(address) {
     return null;
   }
 }
-/** The window hears of a change at most every 35 ms. */
-function push() {
-  if (pending) return;
-  pending = true;
-  setTimeout(() => {
-    pending = false;
-    if (win && !win.isDestroyed())
-      win.webContents.send("changed", appSnapshot());
-  }, 35);
-}
+/**
+ * The window hears of a change at most every 35 ms: the whole state, or while a bot streams only the
+ * live parts of it (desktop/window-push.mjs).
+ */
+const windowPush = createWindowPush({
+  snapshot: () => appSnapshot(),
+  send: (state) => {
+    if (!win || win.isDestroyed()) return false;
+    win.webContents.send("changed", state);
+  },
+  sendHot: (message) => {
+    if (!win || win.isDestroyed()) return false;
+    win.webContents.send("changed-hot", message);
+  },
+});
+const push = () => windowPush.push();
 function openTeamJoin(value) {
   const url = String(value ?? "").trim();
   if (!parseJoinUrl(url)) return false;
@@ -434,7 +440,8 @@ else
         if (!remote.inUse() || typeof chatId !== "string" || !Number.isSafeInteger(index) || index < 0) throw new Error("Choose a message on the paired computer.");
         return remote.call("link.messages", [chatId, index + 11, 32]);
       },
-      snapshot: () => appSnapshot(),
+      // The window's base for the small updates that follow (desktop/window-push.mjs).
+      snapshot: () => windowPush.whole(),
       openApp: (id) => appWindows.show(id, win),
       takePrefill: () => {
         const value = pendingPrefill;

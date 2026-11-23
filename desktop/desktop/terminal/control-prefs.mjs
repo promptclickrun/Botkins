@@ -59,7 +59,7 @@ export const PREFERENCES = {
   "notifications.quietHours.from": { type: "clock", about: "The quiet hours start, as HH:MM" },
   "notifications.quietHours.to": { type: "clock", about: "The quiet hours end, as HH:MM" },
   "access.allBots": switches("Every bot can use every project"),
-  harness: choice(HARNESSES, "What runs a bot's turn: copilot (one for every plan), provider (each provider's own tool), pi (Pi) or omp (OMP)"),
+  harness: choice(HARNESSES, "What runs a bot's turn: pi (Pi, the default), provider (each provider's own tool), copilot (one for every plan) or omp (OMP)"),
   "background.keepRunning": switches("The desktop app keeps running when its window closes (for the app's window; this host runs as a service)"),
   "background.runAtStartup": switches("The desktop app starts with the computer (for the app's window; this host starts with `botkins service install`)"),
   "sidebar.order": { type: "list", values: SIDEBAR, about: "The order of the places in the side menu: " + SIDEBAR.join(", ") },
@@ -68,9 +68,9 @@ export const PREFERENCES = {
 };
 /** What each choice of the preference `harness` is, in a sentence. */
 export const HARNESS_ABOUT = {
-  copilot: "One harness runs every chat, and each plan answers its own model requests (the usual choice)",
+  copilot: "One harness runs every chat, and each plan answers its own model requests",
   provider: "Each provider's own tool runs its chats",
-  pi: "The Pi program runs the chats of ChatGPT and Claude plan models",
+  pi: "The Pi program runs the chats of ChatGPT and Claude plan models (the default)",
   omp: "The OMP program runs the chats of ChatGPT and Claude plan models with Pi-compatible tools and OMP improvements",
 };
 /** The levels of "approval", from the one that asks the most to the one that asks nothing: a later one is looser. */

@@ -237,6 +237,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // and sessions are rarely closed (see desktop/providers/copilot/index.mjs).
     keepWarmMs: 30 * 60 * 1000,
     maxWarm: 8,
+    keepOne: true,
   });
   // ChatGPT (through Codex), Claude (through Claude Code), OpenCode and the ACP agents run the tool
   // the person installed, with the sign-in that tool keeps. Each stores which conversation is whose in its
@@ -1255,9 +1256,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       timer = setInterval(tick, 5000);
       host.power.onResume(tick);
       tick();
+      // The default harness's runtime starts now, in the background, instead of with the first message.
+      checking.push(setTimeout(() => void workspace.warmUp(), 1500));
       if (host.packaged && !trial && updates) {
         const check = () => updates.check().catch(() => {});
-        checking = [setTimeout(check, 12000), setInterval(check, 6 * 60 * 60 * 1000)];
+        checking.push(setTimeout(check, 12000), setInterval(check, 6 * 60 * 60 * 1000));
         for (const timer of checking) timer.unref();
       }
     },
@@ -1276,7 +1279,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);
       voiceDesk.close();
-      return Promise.allSettled([formBrowser?.stop(), signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]);
+      workspace.flushSave();
+      return Promise.allSettled([formBrowser?.stop(), signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]).then((results) => {
+        // Turns that ended while everything stopped wrote with `save`; anything still waiting goes now.
+        workspace.flushSave();
+        return results;
+      });
     },
   };
 }

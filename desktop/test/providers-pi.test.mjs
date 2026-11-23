@@ -7,9 +7,11 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EXTRA_USAGE, PiProvider, errorText } from "../desktop/providers/pi/index.mjs";
+import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher } from "../desktop/providers/pi/index.mjs";
+import { execFileSync } from "node:child_process";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
+import { recordActivity } from "../desktop/activity.mjs";
 import { pass, until, watching } from "./quiet-turns.mjs";
 
 const skip = process.platform === "win32" && "The stand-in is a shell script.";
@@ -203,6 +205,49 @@ test("the next turn reuses the running Pi, and a new model goes to it with set_m
   await provider.stop();
 });
 
+test("warming a chat starts its Pi ahead of the message, and the message uses that process", { skip }, async () => {
+  const { provider, seen } = setup();
+  // What Workspace.prewarm does when a chat opens: a session with no turn, warmed, then closed.
+  const ahead = await provider.openSession(spec({ established: true, hasReplies: true, handlers: null }));
+  await ahead.warm();
+  await ahead.close();
+  const pid = provider.live.get("chat-1").rpc.child.pid;
+  assert.equal(seen().filter((entry) => entry.started).length, 1, "Pi started when the chat opened");
+  const turn = await provider.openSession(spec({ established: true, hasReplies: true }));
+  await turn.send({ prompt: "hi" });
+  assert.equal(provider.live.get("chat-1").rpc.child.pid, pid, "the same process");
+  assert.equal(seen().filter((entry) => entry.started).length, 1, "nothing started again for the message");
+  await provider.stop();
+});
+
+test("a message written during a turn steers it: Pi takes it before its next step", { skip }, async () => {
+  const { provider, seen } = setup();
+  const session = await provider.openSession(spec());
+  let deliver;
+  const reply = session.send({ prompt: "slow work" }, undefined, (steer) => (deliver = steer));
+  while (!deliver) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(await deliver({ prompt: "use tabs", attachments: [{ path: "/tmp/a.txt" }] }), true, "the harness took it");
+  const { text } = await reply;
+  assert.match(text, /\| steer: use tabs\n\nAttached:\n- \/tmp\/a\.txt/, "delivered inside the same turn");
+  assert.ok(seen().some((entry) => entry.command?.type === "steer"));
+  assert.equal(seen().filter((entry) => entry.command?.type === "prompt").length, 1, "no second prompt");
+  assert.equal(await deliver({ prompt: "too late" }), false, "a finished turn takes no steer");
+  await provider.stop();
+});
+
+test("a steer Pi took but never delivered before the run ended goes as one more prompt in the turn", { skip }, async () => {
+  const { provider, seen } = setup();
+  const session = await provider.openSession(spec());
+  let deliver;
+  const reply = session.send({ prompt: "slow late" }, undefined, (steer) => (deliver = steer));
+  while (!deliver) await new Promise((resolve) => setTimeout(resolve, 5));
+  await deliver({ prompt: "use tabs" });
+  const { text } = await reply;
+  assert.match(text, /echo: use tabs/, "nothing the person wrote is dropped");
+  assert.ok(seen().some((entry) => entry.command?.type === "clear_queue"));
+  await provider.stop();
+});
+
 test("a conversation Pi never held goes on from Botkins' transcript", { skip }, async () => {
   const { provider, seen } = setup();
   const history = [{ role: "user", text: "what is 2+2" }, { role: "assistant", text: "4" }, { role: "user", text: "and again?" }];
@@ -264,4 +309,95 @@ test("a package change refreshes the next Pi turn and its slash commands", { ski
   await session.send({ prompt: "after" });
   assert.ok(withPackage.rpc.closed);
   assert.equal(session.live.ref, before.ref);
+});
+
+test("a character split across two reads of Pi's output comes back whole, on stdout and stderr", { skip }, async () => {
+  const text = "emoji \u{1F600} and CJK \u6F22\u5B57";
+  const bytes = Buffer.from(JSON.stringify({ type: "note", text }) + "\n");
+  // Cut inside the emoji and inside the first CJK character.
+  const cuts = [bytes.indexOf(0xf0) + 2, bytes.indexOf(0xe6) + 1];
+  const script = `
+    const bytes = Buffer.from(${JSON.stringify(bytes.toString("base64"))}, "base64");
+    const cuts = ${JSON.stringify(cuts)};
+    const parts = [bytes.subarray(0, cuts[0]), bytes.subarray(cuts[0], cuts[1]), bytes.subarray(cuts[1])];
+    (async () => {
+      for (const part of parts) {
+        process.stdout.write(part);
+        process.stderr.write(part);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      process.exit(0);
+    })();`;
+  const rpc = new PiRpc(process.execPath, ["-e", script]);
+  const heard = [];
+  rpc.on((message) => heard.push(message));
+  const reason = await rpc.exited;
+  assert.deepEqual(heard.find((m) => m.type === "note"), { type: "note", text });
+  assert.equal(heard.length, 2, "the exit notice is the only other event");
+  assert.ok(rpc.stderr.includes(text), rpc.stderr);
+  assert.ok(!reason.message.includes("\uFFFD") && !rpc.stderr.includes("\uFFFD"));
+});
+
+test("a tool call shows as a running step from toolcall_start and stays one step through execution", { skip }, async () => {
+  const { provider } = setup();
+  const session = await provider.openSession(spec());
+  const events = [];
+  session.on((event) => events.push(event));
+  const run = {};
+  const notified = [];
+  session.on((event) => recordActivity(run, event, () => notified.push(run.steps.map((s) => s.status + ":" + s.label))));
+  await session.send({ prompt: "early bash:ls" });
+  const tools = events.filter((e) => e.type.startsWith("tool."));
+  assert.deepEqual(
+    tools.map((e) => [e.type, e.data.toolCallId, e.data.toolName, e.data.arguments]),
+    [
+      ["tool.execution_start", "call-1", "bash", {}],
+      ["tool.execution_start", "call-1", "bash", { command: "ls" }],
+      ["tool.execution_complete", "call-1", undefined, undefined],
+    ],
+    "the execution's own start repeats nothing: its arguments are the ones already sent",
+  );
+  assert.equal(run.steps.length, 1);
+  assert.deepEqual([run.steps[0].status, run.steps[0].label, run.steps[0].name], ["Done", "ls", "bash"]);
+  assert.deepEqual(notified[0], ["Running:bash"]);
+  assert.ok(notified.some((n) => n[0] === "Running:ls"));
+  await provider.stop();
+});
+
+test("a call that is written but never executed ends as Stopped, not Running", { skip }, async () => {
+  const { provider } = setup();
+  const session = await provider.openSession(spec());
+  const events = [];
+  session.on((event) => events.push(event));
+  const run = {};
+  session.on((event) => recordActivity(run, event, () => {}));
+  await session.send({ prompt: "dangle" });
+  const tools = events.filter((e) => e.type.startsWith("tool."));
+  assert.deepEqual(tools.map((e) => [e.type, e.data.toolCallId, e.data.success, e.data.error?.message]), [
+    ["tool.execution_start", "call-9", undefined, undefined],
+    ["tool.execution_complete", "call-9", false, "Stopped"],
+  ]);
+  assert.deepEqual([run.steps.length, run.steps[0].status, run.steps[0].output], [1, "Stopped", "Stopped"], "stopped, not counted as a failure");
+  await provider.stop();
+});
+
+test("the Pi that ships with Botkins is found first, and is the version the adapter is built for", async () => {
+  const cli = bundledPi();
+  assert.ok(cli && existsSync(cli), "the dependency's command line script");
+  const provider = new PiProvider({ dataDir: join(root, "bundled") });
+  assert.equal(await provider.locate(), cli);
+  const { version } = JSON.parse(readFileSync(join(cli, "..", "..", "..", "package.json"), "utf8"));
+  const status = await provider.status();
+  assert.deepEqual([status.installed, status.version], [true, version]);
+});
+
+test("a bundled script runs on this program's Node, without ELECTRON_RUN_AS_NODE reaching what it starts", () => {
+  const script = join(root, "show.mjs");
+  writeFileSync(script, "console.log(JSON.stringify({ flag: process.env.ELECTRON_RUN_AS_NODE ?? null, argv: process.argv.slice(1) }))");
+  const start = launcher(script, ["--mode", "rpc"]);
+  assert.equal(start.file, process.execPath);
+  const out = JSON.parse(execFileSync(start.file, start.args, { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, encoding: "utf8" }));
+  assert.equal(out.flag, null, "a bot's shell commands don't inherit it");
+  assert.deepEqual(out.argv, [script, "--mode", "rpc"], "Pi sees its own command line");
+  assert.deepEqual(launcher("/usr/local/bin/pi", ["x"]), { file: "/usr/local/bin/pi", args: ["x"], env: {} }, "an installed program runs as it is");
 });
