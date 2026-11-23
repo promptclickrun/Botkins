@@ -1,6 +1,8 @@
 // The side pane a bot opened beside a chat, as a sheet over the chat: one tab for each panel. A
 // panel is a custom view, a table, a website or the computer's screen ("side-pane-v1"; the
 // contract is the desktop app's docs/SIDE_PANE.md).
+import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
+import { PullRequestSheet } from "./PullRequestSheet";
 import { MenuView } from "@react-native-menu/menu";
 import { router, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
@@ -8,7 +10,7 @@ import { Ellipsis, Globe } from "lucide-react-native";
 import { useEffect } from "react";
 import { ScrollView, View } from "react-native";
 import type { PanePanel } from "@/link/types";
-import { useBots, useWatchedChat } from "@/state/hooks";
+import { useBots, usePart, useWatchedChat } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Blocks, Button, Chip, Dot, EmptyState, HtmlFrame, Sheet, space, T, useTheme } from "@/ui";
 import { handToChat } from "./inbox";
@@ -62,6 +64,15 @@ function Body({ panel, chatId }: { panel: PanePanel; chatId: string }) {
 }
 
 export default function PaneSheet() {
+  const { pull } = useLocalSearchParams<{ pull?: string }>();
+  const meta = usePart("meta");
+  const target = pullRequestUrl(pull);
+  if (target && meta?.capabilities.includes("pr-panel-v1") && meta.you?.kind !== "member")
+    return <PullRequestSheet key={target.url} url={target.url} />;
+  return <BotPaneSheet />;
+}
+
+function BotPaneSheet() {
   const { chatId, panel: wanted } = useLocalSearchParams<{ chatId: string; panel?: string }>();
   const { colors } = useTheme();
   const pane = useWatchedChat(chatId)?.pane;

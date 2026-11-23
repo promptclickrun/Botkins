@@ -119,6 +119,7 @@ export const REMOTE_METHODS = new Set([
   ...PLUGIN_METHODS,
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
+  "skills.upload", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install",
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")

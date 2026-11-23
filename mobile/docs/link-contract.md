@@ -372,6 +372,26 @@ A new follow or sync replaces the session's follow. On rest, stop or departure f
 - A host without `member-rename-v1` has no `link.team.renameMember(memberId, name)` (owner only; the name has the rules of a team's name: trimmed, 60 characters at most). A client leaves Rename out of a member's menu. Its rules are in `TEAMS.md`.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.
 
+## Pull request panel (`pr-panel-v1`)
+
+An owner can open a github.com pull request from any readable repository. The host uses its signed-in GitHub CLI. The project picker continues to use `link.pullRequests({ chatId }, query?)` under `prs-v1`.
+
+- `link.pullRequest({ url })` returns `{ available: true, pull }`. The list item's fields are joined by `body`, `createdAt`, `checks: [{ name, result }]`, overall `summary`, `review` and `files: [{ path, additions, deletions }]`.
+- `link.pullRequestDiff({ url, path })` returns `{ available: true, text }` for the selected changed file. Tool output is limited to 1 MiB and a displayed patch to 128 KiB and 3,000 lines.
+- An unavailable read returns `{ available: false, reason }`. Both reads accept the overview, files and commits URLs and fragments. They time out after 15 seconds and cache answers for 30 seconds. Members cannot call either method.
+
+## Skill uploads and the skills.sh catalog
+
+With `skill-upload-v1`, `skills.upload({filename, data, replace?})` accepts one Markdown or zip file. `data` is standard base64. The computer accepts up to 3 MiB before encoding, 12 MiB unpacked, 512 archive entries and 24 skills. It checks paths and file types, imports the folders and enables the skills. The result is `{added: string[], conflicts: string[]}`. A conflict leaves the batch untouched. Ask the person, then repeat with only the approved names in `replace`.
+
+With `skills-catalog-v1`, the computer makes these calls available:
+
+- `skillsCatalog.search(query)` takes 2–200 characters and returns up to 40 rows sorted by installs. Each row has `id, source, skillId, name, installs, available` and an optional installed skill name in `installed`. The computer caches successful searches for two minutes.
+- `skillsCatalog.preview(id)` reads a GitHub skill and returns `{name, description, text, token, installed?}`. Domain sources open at `https://skills.sh/<id>`.
+- `skillsCatalog.install(token, replace?)` imports the files pinned by the preview and returns the upload result. The preview token expires after ten minutes.
+
+Search and preview need the team's Skills read permission. Upload and install need create permission, and confirming replacement also needs manage permission. Phones use the link for every file and catalog operation.
+
 ## Project folders, modes and GitHub
 
 These calls are owner-only. A computer advertising `project-folders-v1` sends `project.folders`, an ordered list of up to 12 absolute paths. The first is also `project.folder` for older clients. An empty list omits the legacy field. A chat can carry a non-default `folder`. If it disappears, the computer uses the first folder that the project designates as default.

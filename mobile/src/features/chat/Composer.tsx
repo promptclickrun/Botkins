@@ -5,7 +5,7 @@
 import { MenuView } from "@react-native-menu/menu";
 import { router } from "expo-router";
 import { ArrowUp, AudioLines, BookOpen, CircleAlert, FileText, FolderKanban, ImageIcon, Lightbulb, Newspaper, Plus, Quote, Sparkles, Square, Target, X } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import { type ComponentRef, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, Text, TextInput, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import type { BoardItem, Bot, MentionInput } from "@/link/types";
@@ -15,7 +15,9 @@ import { myPlace, myself } from "./people";
 import { drafts, keepDraft } from "./split";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
-import { Glass, ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
+import { draftPulls } from "@/link/pr-reference";
+import { MessageLink } from "@/ui/LinkHold";
+import { Chip, Glass, ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
 import { endTalk, startChatVoice, useLiveVoiceReady, useTalk, useTalkReady } from "../voice/api";
 import { boardKindLabel, teammates, toInput } from "./compose";
 import { documentPickerModule, imagePickerModule, NEEDS_UPDATE } from "./native";
@@ -194,7 +196,7 @@ export function Composer({
   const here = useChat(chatId);
   const mine = !here || myPlace(here, myself(meta)) === "manages";
   const canUpload = !!capabilities?.includes("uploads-v1");
-  const canListPulls = !!capabilities?.includes("prs-v1");
+  const canListPulls = !!here?.projectId && meta?.you?.kind !== "member" && !!capabilities?.includes("prs-v1");
   // One voice button. Live voice takes it when it is on (Settings › Voice); otherwise it talks by
   // turns: the phone listens, sends what was said, and reads the reply aloud. Neither is for a group chat.
   const liveReady = useLiveVoiceReady(botId);
@@ -241,7 +243,7 @@ export function Composer({
     const pullsShown = canListPulls && !(pulls.value && !pulls.value.available);
     options = [...recordOptions(query, records.data, colors.muted), ...(pullsShown ? pullOptions(pulls.value?.items ?? [], colors) : [])];
     loading = records.loading || (pullsShown && pulls.loading && !pulls.value);
-    note = records.error || (pullsShown ? pulls.error : "") || undefined;
+    note = records.error || (canListPulls && pulls.value?.reason) || undefined;
   }
   const listOpen = !!trigger;
 
@@ -442,7 +444,9 @@ export function Composer({
     }
   };
 
-  const chips = liveMentions.length > 0 || files.length > 0;
+  const references = draftPulls(value);
+  const openMessageLink = useContext(MessageLink);
+  const chips = liveMentions.length > 0 || files.length > 0 || references.length > 0;
   const mainLabel = stop ? "Stop" : endVoice ? "End voice" : voice ? (liveReady ? "Live voice" : "Talk") : uploading ? "Send, waiting for files" : working ? "Send, it waits its turn" : "Send";
   const plus = (
     <View accessible accessibilityRole="button" accessibilityLabel="Attach" style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" }}>
@@ -487,6 +491,7 @@ export function Composer({
                 }
               />
             ))}
+            {references.map(({ url, label }) => <Chip key={url} label={label} onPress={() => openMessageLink(url)} />)}
             {liveMentions.map((mention) => (
               <Pill key={mentionKey(mention)} label={mention.label} icon={mentionIcon(mention.kind, colors.muted)} removeLabel={"Remove " + mention.label} onRemove={() => removeMention(mention)} />
             ))}

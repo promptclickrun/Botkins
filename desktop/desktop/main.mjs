@@ -380,6 +380,9 @@ else
     });
     const handlers = {
       ...runtime.handlers,
+      "link.pullRequests": (where, query) => runtime.link.prs.lookup(where, query),
+      "link.pullRequest": (input) => runtime.link.prs.panel(input),
+      "link.pullRequestDiff": (input) => runtime.link.prs.panel(input, true),
       // The calls only this window makes: about the window itself, and about the other computers
       // it can show. None is in REMOTE_METHODS (desktop/link/methods.mjs), so a phone makes none.
       takeTeamJoin: () => {

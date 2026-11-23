@@ -6,15 +6,19 @@ import { changedFolders, repositoryName } from "./project-folders.mjs";
 import { addUserMessage, recordVoiceLine } from "./voice-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { posix } from "node:path";
+import { basename, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { demoGitHub } from "./mock-prs.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
+import { uploadSkill } from "./skill-import.mjs";
+import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 
 const now = () => Date.now();
 /** The demo computer's owner, as a person. */
 const OWNER_NAME = "Alex";
+const DESIGN_SKILL = "---\nname: design-review\ndescription: Review a design.\n---\nCheck readability and contrast.";
 const BUILTIN_SPACES = [["today", "Today"], ["feed", "Feed"], ["ideas", "Ideas"], ["goals", "Goals"]];
 const CARD_SPACE = { feed: "feed", idea: "ideas", goal: "goals" };
 const SPACE_LIMIT = { spaces: 60, panels: 40, notes: 50 };
@@ -1188,6 +1192,7 @@ const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.
 export class MockBackend {
   constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
+    if (process.env.BOTKINS_DEV_PRS === "1") this.runGitHub = demoGitHub;
     this.streamAppends = appends;
     this.timeline = timeline;
     // A computer nobody has set up yet: no bots, and nothing that belongs to one.
@@ -1227,7 +1232,10 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1");
+    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1");
+    this.catalogToken = "";
+    this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
+
     this.piPackages = new Map();
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
@@ -3205,6 +3213,42 @@ export class MockBackend {
       const servers = new Set(Object.values(record.serverIds ?? {}));
       this.state.mcpServers = this.state.mcpServers.filter((server) => !servers.has(server.id));
       this.plugins.installed = this.plugins.installed.filter((item) => item !== record);
+    },
+    // The demo uses the same upload reader and keeps the resulting skills in memory.
+    "skills.upload"(file) {
+      return uploadSkill({
+        importSkillFolders: (folders, replace) => {
+          const skills = folders.map(folder => parseSkill(readFileSync(join(folder, "SKILL.md"), "utf8"), basename(folder)));
+          const conflicts = skills.filter(s => this.skillList.some(old => old.name === s.name) && !replace.includes(s.name)).map(s => s.name);
+          if (conflicts.length) return {added: [], conflicts};
+          const added = skills.map(s => s.name);
+          if (new Set(added.map(slug)).size !== added.length) throw new Error("Duplicate skill name.");
+          this.skillList = this.skillList.filter(old => !added.includes(old.name));
+          for (const skill of skills) {
+            this.skillList.unshift({...skill, path: "/skills/" + slug(skill.name), origin: "botkins", enabled: true, editable: true});
+            this.handlers.setSkillEnabled.call(this, skill.name, true);
+          }
+          if (added.includes(this.demoSkill.name)) this.demoInstalled = false;
+          return {added, conflicts: []};
+        },
+      }, file);
+    },
+    "skillsCatalog.search"(query) {
+      if (typeof query !== "string" || query.trim().length < 2) throw new Error("Enter at least two characters.");
+      const installed = this.demoInstalled && this.skillList.some(s => s.name === this.demoSkill.name);
+      return this.demoSkill.name.includes(query.trim().toLowerCase()) ? [{...this.demoSkill, installed: installed ? this.demoSkill.name : undefined}] : [];
+    },
+    "skillsCatalog.preview"(id) {
+      if (id !== this.demoSkill.id) throw new Error("Unknown demo skill.");
+      this.catalogToken = randomUUID();
+      return {name: this.demoSkill.name, description: "Review a design.", text: DESIGN_SKILL, token: this.catalogToken};
+    },
+    async "skillsCatalog.install"(token, replace) {
+      if (!token || token !== this.catalogToken) throw new Error("Open the preview again.");
+      const data = Buffer.from(DESIGN_SKILL).toString("base64");
+      const result = await this.handlers["skills.upload"].call(this, {filename: "design-review.md", data, replace});
+      if (result.added.length) this.demoInstalled = true;
+      return result;
     },
     // A Pi catalog and isolated package state for this demo host.
     "piPackages.browse"({ query = "", page = 1 } = {}) {

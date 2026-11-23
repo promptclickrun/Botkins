@@ -81,3 +81,20 @@ export async function pickTextFile(types: string | string[] = ["application/json
     }
   }
 }
+
+/** Pick one skill and send the cached copy as bytes; parsing belongs to the host. */
+export async function pickSkillUpload() {
+  const picker = documentPicker();
+  if (!picker) throw new Error(NEEDS_UPDATE);
+  const result = await picker.getDocumentAsync({ type: "*/*", multiple: false, copyToCacheDirectory: true });
+  if (result.canceled) return null;
+  const asset = result.assets[0];
+  const file = new File(asset.uri);
+  try {
+    if (!/\.(zip|md)$/i.test(asset.name)) throw new Error("Choose a .md or .zip file.");
+    if (file.size > 3 * 1024 * 1024) throw new Error("Choose a file of up to 3 MiB.");
+    return { filename: asset.name, data: await file.base64() };
+  } finally {
+    file.delete();
+  }
+}

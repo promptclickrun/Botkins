@@ -69,7 +69,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -319,6 +319,8 @@ export class LinkHost extends EventEmitter {
       "link.frame.page": async (_session, a) => this.framePage(a[0]),
       "link.frame.chat": async (_session, a) => this.frameChat(a[0]),
       "link.upload": (session, a) => this.uploads.put(session.deviceId, a[0]),
+      "link.pullRequest": (_session, a) => this.prs.panel(a[0]),
+      "link.pullRequestDiff": (_session, a) => this.prs.panel(a[0], true),
       "link.pullRequests": (_session, a) => this.prs.lookup(a[0], a[1]),
       "link.credentials.save": (_session, a) => this.credentials.save(a[0]),
       "link.credentials.remove": async (_session, a) => this.credentials.remove(a[0]),

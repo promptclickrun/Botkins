@@ -1,5 +1,11 @@
+import type { Calls } from "../desktop/remote/client/types";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type Bot = {
   fastMode?: FastMode;
   id: string;
@@ -574,6 +580,9 @@ declare global {
       importableAgents(): Promise<ImportableAgent[]>;
       /** Makes a bot of each agent, in the order given. Returns the new bots' ids. */
       importAgents(keys: string[]): Promise<string[]>;
+      "link.pullRequests"(where: { chatId: string }, query?: string): Promise<ReturnType<Calls["link.pullRequests"]>>;
+      "link.pullRequest"(input: { url: string }): Promise<ReturnType<Calls["link.pullRequest"]>>;
+      "link.pullRequestDiff"(input: { url: string; path: string }): Promise<ReturnType<Calls["link.pullRequestDiff"]>>;
       openLink(url: string): Promise<void>;
       "artifacts.list": (input: { botId: string; chatId?: string; kind?: "files" | "media"; folder?: string; cursor?: string }) => Promise<{ items: Artifact[]; nextCursor: string | null }>;
       "artifacts.read": (idOrPath: string, options?: { offset?: number; length?: number }) => Promise<{ artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null }>;
@@ -791,6 +800,11 @@ declare global {
       /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
       "plugins.refresh"?(): Promise<PluginMarketplace[]>;
       // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
+      pickSkillUpload(): Promise<SkillUpload | null>;
+      "skills.upload"(file: SkillUpload): Promise<SkillImportResult>;
+      "skillsCatalog.search"(query: string): Promise<CatalogSkill[]>;
+      "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
+      "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
       "piPackages.preview"(name: string): Promise<PiPackageVersion>;
       "piPackages.list"(): Promise<InstalledPiPackage[]>;

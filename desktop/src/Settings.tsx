@@ -180,9 +180,11 @@ export default function Settings({
   });
   const [id, setId] = useState(initialBot || bots[0]?.id || ""),
     [section, setSection] = useState<SectionId>(start.section),
+    [skillToOpen, setSkillToOpen] = useState<string>(),
     // The installed plugin that Skills asked to show: Marketplace opens on its page.
     [pluginToOpen, setPluginToOpen] = useState<string>(),
     [view, setView] = useState<BotView>(start.view ?? "model");
+  useEffect(() => { if (section === "skills") setSkillToOpen(undefined); }, [section]);
   const teamView = start.teamView ?? "requests";
   const member = memberTeam(state);
   const memberHost = !!member || state.remote?.using?.member === true;
@@ -197,7 +199,7 @@ export default function Settings({
       item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
     if (item.id === "bots") return teamCan(state, "agents");
     if (item.id === "skills") return teamCan(state, "skills");
-    if (item.id === "marketplace") return teamCan(state, "plugins");
+    if (item.id === "marketplace") return teamCan(state, "plugins") || teamCan(state, "skills", "read");
     if (item.id === "mcp") return teamCan(state, "mcp");
     if (item.id === "notifications") return teamCan(state, "settings", "manage");
     return true;
@@ -483,7 +485,8 @@ export default function Settings({
             </>
           )}
           {section === "skills" && (
-            <SkillsSettings
+            <SkillsSettings key={state.remote?.using?.id ?? "local"}
+              initialSkill={skillToOpen}
               stamp={JSON.stringify(state.skills ?? null)}
               plugins={state.plugins}
               hostId={state.remote?.using?.id}
@@ -493,7 +496,7 @@ export default function Settings({
               }}
             />
           )}
-          {section === "marketplace" && <PluginsSettings key={pluginToOpen ?? ""} state={state} bots={bots} open={pluginToOpen} createBot={createBot} />}
+          {section === "marketplace" && <PluginsSettings openSkill={name => { setSkillToOpen(name); setSection("skills"); }} key={pluginToOpen ?? ""} state={state} bots={bots} open={pluginToOpen} createBot={createBot} />}
           {section === "mcp" && <McpSettings state={state} credentials={() => setSection("credentials")} />}
           {section === "credentials" && <CredentialsSettings state={state} mcp={() => setSection("mcp")} />}
           {section === "teamwork" && (

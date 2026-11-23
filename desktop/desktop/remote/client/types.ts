@@ -1,6 +1,11 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
@@ -273,6 +278,12 @@ export type Catalog = { choices: Capability[]; servers: { name: string; status: 
 /** A file the phone uploaded to the computer for a message. */
 export type UploadedFile = { id: string; name: string; path: string; size: number };
 /** A pull request of the repository a chat's project works in. */
+export type PullRequestDetail = PullRequest & {
+  body: string; createdAt: string; summary: string; review: string;
+  checks: { name: string; result: string }[];
+  files: { path: string; additions: number; deletions: number }[];
+};
+export type PullAnswer<T> = ({ available: true } & T) | { available: false; reason: string };
 export type PullRequest = { number: number; title: string; url: string; state: "open" | "closed" | "merged"; draft: boolean; author?: string; head?: string; base?: string; updatedAt?: string; repository?: string };
 
 // Credentials. Values stay on the computer: the phone can save one, and can name one in a call
@@ -967,6 +978,7 @@ export type UsageReport = {
 
 /**
  * `capabilities` names what this computer's link can do beyond the basics: "credentials-v1",
+ * "pr-panel-v1" (owner-only pull request details and per-file patches),
  * "screen-v1", "prs-v1", "uploads-v1", "relay-v1" (the computer keeps a relay open, so a phone away
  * from its network can reach it), "push-v1" (notifications and Live Activities), "device-v1" (tools
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
@@ -1012,6 +1024,7 @@ export type UsageReport = {
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
+ * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  */
@@ -1677,6 +1690,10 @@ export type Calls = {
   "plugins.refresh"(): PluginMarketplace[];
   // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
   /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "skills.upload"(file: SkillUpload): SkillImportResult;
+  "skillsCatalog.search"(query: string): CatalogSkill[];
+  "skillsCatalog.preview"(id: string): CatalogPreview;
+  "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];
@@ -1780,6 +1797,8 @@ export type Calls = {
   "link.frame.chat"(frame: string): { chatId: string | null };
   "link.upload"(file: { id?: string; name: string; data: string; last?: boolean }): UploadedFile;
   /** Pull requests of the repository behind a chat's project. `available: false` says why there are none to offer. */
+  "link.pullRequest"(input: { url: string }): PullAnswer<{ pull: PullRequestDetail }>;
+  "link.pullRequestDiff"(input: { url: string; path: string }): PullAnswer<{ text: string }>;
   "link.pullRequests"(where: { chatId?: string; projectId?: string }, query?: string): { available: boolean; reason?: string; items: PullRequest[] };
   "link.credentials.save"(input: CredentialInput): string;
   "link.credentials.remove"(id: string): void;

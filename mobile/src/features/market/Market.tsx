@@ -10,6 +10,7 @@ import { showToast } from "@/state/store";
 import { AppLogo, Button, EmptyState, Group, IconTile, Label, Mascot, Page, radius, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { AppRow, AppTile, RowSkeleton, SearchField, TileSkeleton } from "./parts";
 import { AgentsPage } from "./agents/Agents";
+import { CatalogPage } from "./CatalogPage";
 import { PiPage } from "./PiPackages";
 import { PluginsPage } from "./plugins/Plugins";
 
@@ -170,22 +171,25 @@ function SignedInLine({ email }: { email?: string }) {
   );
 }
 
-type MarketView = "apps" | "agents" | "plugins" | "pi";
+type MarketView = "apps" | "agents" | "plugins" | "pi" | "skills";
 const VIEWS: { value: MarketView; label: string }[] = [
   { value: "apps", label: "Apps" },
   { value: "agents", label: "Agents" },
   { value: "plugins", label: "Plugins" },
+  { value: "skills", label: "Skills" },
   { value: "pi", label: "Pi" },
 ];
 
 /** Marketplace remembers the last catalog viewed on this phone. */
 export default function Market() {
+  const canSkills = useCan("skills", "read");
   const canAgents = useCan("agents", "create");
   const canPlugins = useCan("plugins", "view");
   const savedView = usePrefs((prefs) => prefs.marketView);
-  const views = VIEWS.filter((item) => (item.value === "agents" ? canAgents : (item.value === "plugins" || item.value === "pi") ? canPlugins : true));
+  const views = VIEWS.filter((item) => (item.value === "skills" ? canSkills : item.value === "agents" ? canAgents : (item.value === "plugins" || item.value === "pi") ? canPlugins : true));
   const view = views.some((item) => item.value === savedView) ? savedView : "apps";
   const switcher = views.length > 1 ? <Segmented options={views} value={view} onChange={(marketView) => setPrefs({ marketView })} /> : undefined;
+  if (view === "skills") return <CatalogPage switcher={switcher} />;
   if (view === "pi") return <PiPage switcher={switcher} />;
   if (view === "plugins") return <PluginsPage switcher={switcher} />;
   if (view === "agents") return <AgentsPage switcher={switcher} />;
