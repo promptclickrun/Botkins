@@ -1,16 +1,16 @@
 # Botkins gadgets
 
-A gadget is a small device with a microphone, a speaker and maybe a screen that talks with one of your bots. Hold a button, say something, hear the answer. It runs on an ESP32 board and uses the same sealed link as the phone app, so it needs no account, no cloud and no certificate.
+A gadget is a small device with a microphone, a speaker and maybe a screen that talks with one of your bots. Hold a button, say something, hear the answer: with the bot's live voice when your computer has one (Gemini, for now), else read aloud by turns. It runs on an ESP32 board and uses the same sealed link as the phone app, so it needs no account, no cloud and no certificate.
 
 This folder is the SDK: the contract, the firmware's portable core, and a build of the gadget that runs on a computer.
 
 | Path | What it holds |
 | --- | --- |
 | [`docs/contract.md`](docs/contract.md) | What a gadget builds against: pairing by introduction, what it is sent, its calls, the link's bytes, and setup over USB. Start here. |
-| `firmware/core/` | The gadget in portable C++17, with no board in it: the link (X25519, HKDF-SHA256, ChaCha20-Poly1305), keeping in step with the computer, recording, reading replies aloud, the setup lines on the USB port, and the screen (`include/botkins/draw.hpp`: the home screen and the quick-controls panel, drawn into any RGB565 frame). |
+| `firmware/core/` | The gadget in portable C++17, with no board in it: the link (X25519, HKDF-SHA256, ChaCha20-Poly1305), keeping in step with the computer, recording, reading replies aloud, live voice (`include/botkins/live.hpp`), the setup lines on the USB port, and the screen (`include/botkins/draw.hpp`: the home screen and the quick-controls panel, drawn into any RGB565 frame). |
 | `firmware/host/` | A gadget on a computer: the same core with a folder for its flash and WAV files for its microphone and speaker; and `botkins-gadget-screens`, which draws every screen to PNG files. |
 | `firmware/esp32/` | The ESP-IDF project for real boards. |
-| `tests/` | The compiled gadget against the computer's real link (`mobile/link-host`) with the demo backend, directly and through the real relay (`mobile/relay/node`). |
+| `tests/` | The compiled gadget against the computer's real link (`mobile/link-host`) with the demo backend, directly, through the real relay (`mobile/relay/node`), and with live voice against a stand-in for Gemini Live. |
 
 The computer's side is `mobile/link-host/gadget.mjs` and `gadget-setup.mjs` (copied into the desktop app as `desktop/desktop/link/`), with its own tests in `mobile/tests/gadget.test.ts`.
 
@@ -37,7 +37,7 @@ Then run it by hand against the demo computer (`cd ../mobile && npm run dev-host
 
 ## Write a port for a board
 
-A port fills in four small interfaces (`firmware/core/include/botkins/hal.hpp`): `Transport` (the core's own `SocketTransport` works on lwIP), `Storage`, `Network` and `Speaker`. A fifth, `Socket` (a WebSocket client, made by `Board::socket`), lets the gadget reach its computer through the computer's relay when none of its own addresses answers: away from home, or a computer that is reachable only that way, such as a server in the cloud. Then it makes one `Gadget`, tells it what the person does, and draws `view()` when `on_change` fires:
+A port fills in four small interfaces (`firmware/core/include/botkins/hal.hpp`): `Transport` (the core's own `SocketTransport` works on lwIP), `Storage`, `Network` and `Speaker`. A fifth, `Socket` (a WebSocket client, made by `Board::socket`), lets the gadget reach its computer through the computer's relay when none of its own addresses answers (away from home, or a computer that is reachable only that way, such as a server in the cloud), and talk with the bot's live voice: the core opens the live provider's socket with it. Then it makes one `Gadget`, tells it what the person does, and draws `view()` when `on_change` fires:
 
 ```cpp
 botkins::Gadget gadget(board);
@@ -52,8 +52,8 @@ gadget.begin();
 ## What is not built yet
 
 - Setup over Bluetooth from the phone app, and a Gadgets page in the desktop app's window. Setup today is the USB cable with `botkins gadgets add` or the demo computer.
-- The relay on a board. The core speaks the relay ("Through the relay" in the contract) and the computer build tries it against the real relay over `ws://` (`tests/relay.test.mjs`), but the ESP32 port has no `Socket` yet: there it will be ESP-IDF's `esp_websocket_client` over `wss://`, checked with the certificate bundle (`esp_crt_bundle_attach`). Until then a board reaches its computer on its own network or a tailnet.
-- Live voice on a gadget. The contract says how it will work; the core reads replies aloud by turns.
+- The relay and live voice on a board. The core speaks the relay ("Through the relay" in the contract) and Gemini Live ("Live voice"), and the computer build tries them over `ws://` (`tests/relay.test.mjs` against the real relay, `tests/live.test.mjs` against a stand-in for Gemini), but the ESP32 port has no `Socket` yet: there it will be ESP-IDF's `esp_websocket_client` over `wss://`, checked with the certificate bundle (`esp_crt_bundle_attach`), for the relay and for `generativelanguage.googleapis.com`. Until then a board reaches its computer on its own network or a tailnet, and talks by turns.
+- Live voice with OpenAI and ElevenLabs (`openai-ws`, `elevenlabs-ws`): the core has room for each as a `LiveProtocol` (`firmware/core/src/live.cpp`); until then those computers' gadgets talk by turns. Live voice has not been tried against the real Gemini.
 - Device tools (a bot switching a gadget's light), and firmware updates over the air.
 - The StopWatch board still draws its own screen; it moves to the core's (`draw.hpp`) next.
 
