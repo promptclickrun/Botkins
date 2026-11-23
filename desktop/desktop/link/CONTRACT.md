@@ -97,11 +97,11 @@ A working run's reasoning travels in a separate `reasoning:<chatId>` part for ea
 
 When the live thinking preview exactly matches the latest 4,000 characters of that reasoning, `text:<chatId>` carries `preview: {run, botId?}` with an empty thinking body. The phone rebuilds the preview from the indicated run and speaker and acknowledges the empty wire body. A provider-specific preview still travels as text. Sliding a reasoning preview leaves the reply cursor intact.
 
-A waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
+A direct waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
 
 A host with `text-streaming-off-v1` also accepts `text: false` in the `link.sync` argument, to save relay messages. The session gets the boolean `live` form (with or without `appends`) and no text bodies: a held cursor gets `null` once. Text growing alone does not answer a waiting sync. The reply arrives whole in `chat:<chatId>` when it ends. Without the field, or from an older host, the sync is as above.
 
-A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the relay that still wants a reply as it is written. Text comes on the `appends` path as above, but each `add` ends at the last complete line or sentence after the cursor, and text-only news waits 2 s since the last answer instead of 200 ms. Other news is not delayed and carries the text that is ready. Text with no complete end goes, cut at a word, once it has waited 6 s or runs past 1200 units. The phone's cursor moves only by what was sent. The reply arrives whole in `chat:<chatId>` when it ends. From an older host, send `text: false` instead.
+A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the relay that still wants a reply as it is written. Text comes on the `appends` path as above, but each `add` ends at the last complete line or sentence after the cursor, and text-only news waits 2 s since the last answer instead of 200 ms. Other news carries the text that is ready on the normal cadence for its route. Text with no complete end goes, cut at a word, once it has waited 6 s or runs past 1200 units. The phone's cursor moves only by what was sent. The reply arrives whole in `chat:<chatId>` when it ends. From an older host, send `text: false` instead.
 
 ### What a client may call
 
@@ -355,6 +355,18 @@ A gadget is a small device with a microphone, a speaker and maybe a screen that 
 ## The relay
 
 Away from the host's network a client goes through the relay (`relay.botkins.app`). The host lists it as one more address, `relay!<room>@<host>`, and `relayFetch` carries the same sealed requests over a socket. The relay sees sizes and timing, never contents. A room takes 16 client sockets at once (8 from one address). The relay is off until the person turns it on on the host.
+
+### Following through the relay (`sync-push-v1`)
+
+A client that receives this capability in `meta` and can receive intermediate relay frames calls `link.follow` on its relay route. Its argument is the `link.sync` argument without `wait`, including the versions, watches, append cursors, reasoning watches, text mode and step detail. Direct clients and clients without both capabilities poll. A host with this feature paces relay poll news at 250 ms per session. Chunked text retains its sentence and hold timers.
+
+The phone sends the ordinary sealed RPC request. Each intermediate frame from the computer is `[conn 8][0x07][request ID u32][counter u64][sealed news]`. The relay strips the connection prefix. The request stays pending until the usual `0x02` final answer. All integers are big-endian. The decrypted part is a sync result with `epoch`, `v` and `parts`.
+
+The computer seals each part with the session's computer-to-phone key. Its nonce is the four bytes `01 00 00 00` followed by the clear counter's eight bytes. The counter starts at one and increases across all follows under that key. Both endpoints limit it to the positive safe-integer range. RPC answer nonces start with four zero bytes. The UTF-8 associated data is `push:<session id>:<RPC sequence in decimal>:first` for the first frame and ends in `:more` for later frames. The client authenticates this label using the sequence of its own follow RPC. The first counter must exceed every previously accepted counter for that session. Later counters must be consecutive. A missing first frame, replay, gap or authentication failure starts a fresh follow from the client's actual versions and cursors.
+
+The first available news goes immediately. Subsequent frames coalesce changes at 100 ms intervals. After a send the host advances the follow's versions and cursors. A backed-up socket holds the changes at the host. At 25 seconds of silence the host sends an empty sync result. At four minutes it finishes the call and the client renews it. After 40 seconds without a part or final answer the client uses its ordinary sync timeout recovery.
+
+A new follow or sync replaces the session's follow. On rest, stop or departure for a direct connection the client sends a best-effort `link.unfollow` with no arguments. Waking first proves the path with a short-deadline `link.sync` and `wait: 0`. Closing either socket, reseating, ending the session or stopping the host releases the follow. The host deduplicates replayed requests and caches only final answers.
 
 ## Upgrades
 

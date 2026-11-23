@@ -1,14 +1,13 @@
 // The phone's end of the Botkins link (the desktop's end is link-host/server.mjs).
 // It pairs with a computer, opens encrypted sessions, makes calls, and follows the computer's
-// state by asking for the parts that changed. Nothing here depends on React Native, so the same
+// state by polling or receiving sealed relay updates. Nothing here depends on React Native, so the same
 // code runs in the tests.
-import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
+import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, pushNonce, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
 import type { PairTarget } from "./pairing";
 import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type { ReasoningDelta, ReasoningView } from "./types";
-import { reasoningPreview } from "../../link-host/reasoning-preview.mjs";
 
 const PREFIX = "/botkins/v1/";
 export const PROTOCOL = 1;
@@ -49,7 +48,7 @@ export class LinkError extends Error {
 }
 
 type FetchResponse = { ok: boolean; status: number; json(): Promise<unknown>; arrayBuffer(): Promise<ArrayBuffer> };
-export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; signal?: AbortSignal }) => Promise<FetchResponse>;
+export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; signal?: AbortSignal; onPart?(part: Uint8Array): void }) => Promise<FetchResponse>;
 
 /** What a computer says about itself. Over the relay it says only the first four (no name, app or version). */
 /** `pairing` says whether a code is open. Through the relay the computer leaves it out, so a stranger can't watch for one. */
@@ -60,7 +59,7 @@ type Hello = { botkins: number; serverId: string; publicKey: string; pairing?: b
  * never waits on the transport to say so. A request that iOS dropped while the app was suspended may
  * never settle, and that must not hold the link.
  */
-async function timed<T>(ms: number, outer: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+async function timed<T>(ms: number, outer: AbortSignal | undefined, run: (signal: AbortSignal, renew: () => void) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stop: (() => void) | undefined;
@@ -76,7 +75,11 @@ async function timed<T>(ms: number, outer: AbortSignal | undefined, run: (signal
     if (outer?.aborted) stop();
   });
   try {
-    return await Promise.race([run(controller.signal), gaveUp]);
+    const renew = () => {
+      clearTimeout(timer);
+      if (stop && !controller.signal.aborted) timer = setTimeout(stop, ms);
+    };
+    return await Promise.race([run(controller.signal, renew), gaveUp]);
   } finally {
     clearTimeout(timer);
     if (stop) outer?.removeEventListener("abort", stop);
@@ -344,10 +347,15 @@ const deviceKeyOf = (pairing: Pairing) => hkdf(agree(unb64u(pairing.secretKey), 
  */
 export const pushKeyOf = (pairing: Pairing) => hkdf(deviceKeyOf(pairing), utf8(pairing.deviceId), "botkins/push/v1");
 
-type Session = { id: string; toHost: Uint8Array; toPhone: Uint8Array; seq: number; base: string };
+type Session = { id: string; toHost: Uint8Array; toPhone: Uint8Array; seq: number; pushCounter: number; base: string };
 const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRelayHost(session.base.replace(/^http:\/\//, "")) ? "relay" : "direct") : null);
 type SyncNews = { epoch: string; v: Record<string, number> | null; parts: Record<string, unknown> };
 class Retry extends Error {}
+
+// Same preview as the host. The portable client is bundled independently of the host modules.
+function reasoningPreview(items: ReasoningView["items"], botId?: string) {
+  return items.filter(item => item.text && (!botId || item.botId === botId)).map(item => item.text).join("\n\n").slice(-4000);
+}
 
 type PreviewSource = { run: string; botId?: string };
 type HeldText = { id: string; stream: string; thinking: string; preview?: PreviewSource };
@@ -414,6 +422,8 @@ export class LinkClient {
   /** What the last sync asked for, as the option said it and as it was sent. */
   private sentMode: TextMode = "live";
   private sentText: TextMode = "live";
+  private supportsPush = false;
+  private pushSession: Session | null = null;
   /** Whether the computer sends text in chunks ("text-chunks-v1"), once it has said. */
   private supportsChunks: boolean | undefined;
   private have: Record<string, number> = {};
@@ -457,7 +467,15 @@ export class LinkClient {
     this.scheduleProbe();
     void this.follow(this.lifetime);
   }
+  private endPush() {
+    const session = this.pushSession;
+    if (!session) return;
+    this.pushSession = null;
+    void this.request("link.unfollow", [], 4000, undefined, session).catch(() => {});
+  }
+
   stop() {
+    this.endPush();
     this.running = false;
     this.lifetime = null;
     this.opening = null;
@@ -496,6 +514,7 @@ export class LinkClient {
    */
   rest() {
     if (!this.lifetime || this.resting) return;
+    this.endPush();
     this.resting = true;
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
@@ -549,6 +568,7 @@ export class LinkClient {
 
   /** Sets the session and reports how it connects. */
   private useSession(session: Session | null) {
+    if (this.pushSession && this.pushSession !== session) this.endPush();
     this.session = session;
     this.setRoute(routeOf(session));
   }
@@ -682,27 +702,47 @@ export class LinkClient {
         this.epoch = reply.epoch;
         this.supportsAppends = undefined;
         this.supportsReasoning = undefined;
+        this.supportsPush = false;
         this.supportsChunks = undefined;
         this.have = {};
         this.reasonings.clear();
       }
-      const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, base };
+      const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, pushCounter: 0, base };
       if (this.lifetime === lifetime) this.useSession(session);
       return session;
     }
   }
 
-  private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal): Promise<T> {
-    const session = await this.openSession();
+  private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal, active?: Session, onNews?: (news: SyncNews) => void): Promise<T> {
+    const session = active ?? await this.openSession();
     if (signal?.aborted) throw new Error("The request was cancelled");
     const seq = ++session.seq;
     const sealed = seal(session.toHost, seqNonce(seq), utf8(JSON.stringify({ m: method, a: args })), "rpc:" + session.id);
-    const response = await timed(timeout, signal, (inner) =>
+    let first = true;
+    const response = await timed(timeout, signal, (inner, renew) =>
       this.options.fetch(session.base + PREFIX + "rpc", {
         method: "POST",
         headers: { "content-type": "application/octet-stream", "x-botkins-session": session.id },
         body: concat(seqBytes(seq), sealed),
         signal: inner,
+        ...(onNews && { onPart: (part: Uint8Array) => {
+          if (inner.aborted || this.session !== session) return;
+          if (part.length < 24) throw new Retry();
+          const view = new DataView(part.buffer, part.byteOffset, 8);
+          const counter = view.getUint32(0) * 0x100000000 + view.getUint32(4);
+          if (!Number.isSafeInteger(counter) || counter <= session.pushCounter || (!first && counter !== session.pushCounter + 1)) throw new Retry();
+          const aad = "push:" + session.id + ":" + seq + ":" + (first ? "first" : "more");
+          let news: SyncNews;
+          try {
+            news = JSON.parse(fromUtf8(open(session.toPhone, pushNonce(counter), part.subarray(8), aad)));
+          } catch {
+            throw new Retry();
+          }
+          session.pushCounter = counter;
+          first = false;
+          renew();
+          onNews(news);
+        } }),
       }),
     );
     if (response.status === 401) {
@@ -887,7 +927,9 @@ export class LinkClient {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
         const quick = this.suspect;
         this.suspect = false;
-        const mode = this.textFor(await this.openSession());
+        const session = await this.openSession();
+        if (poll.signal.aborted) continue;
+        const mode = this.textFor(session);
         const text: TextMode = mode === "chunks" && this.supportsChunks === false ? "whole" : mode;
         // Text back on: the computer sends each held body again from its start.
         if (text !== "whole" && this.sentText === "whole") {
@@ -904,26 +946,39 @@ export class LinkClient {
         const requestReasoning = requestText && this.supportsReasoning !== false;
         const reasoningWatch = requestReasoning ? [...new Set([...detailed, ...(text !== "whole" ? watching.slice(0, 4) : [])])].slice(0, 4) : [];
         this.releaseReasoning(reasoningWatch);
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
-        if (this.lifetime !== lifetime) break;
-        failures = 0;
-        this.setState("online");
-        if (this.lifetime !== lifetime) break;
-        if (news.epoch !== this.epoch) {
-          this.epoch = news.epoch;
-          this.have = {};
-        }
-        if (this.options.streamAppends && (watching !== this.watching || detailed !== this.reasoningWatching)) continue;
-        if (news.v) {
-          const meta = news.parts.meta as { capabilities?: string[] } | undefined;
-          if (meta) this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
-          if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
-          if (this.options.streamAppends) this.expandReasoning(news.parts);
-          if (requestReasoning && text !== "whole") this.publishThinkingPreviews(news.parts, watching);
-          this.have = news.v;
-          this.options.onParts(news.parts);
-        }
-        this.options.onSync?.();
+        if (poll.signal.aborted) continue;
+        const push = !quick && routeOf(session) === "relay" && this.supportsPush &&
+          "supportsPush" in this.options.fetch && this.options.fetch.supportsPush === true;
+        const accept = (news: SyncNews) => {
+          if (this.lifetime !== lifetime || poll.signal.aborted) return;
+          failures = 0;
+          this.setState("online");
+          if (this.lifetime !== lifetime || poll.signal.aborted) return;
+          if (news.epoch !== this.epoch) {
+            this.epoch = news.epoch;
+            this.have = {};
+          }
+          if (this.options.streamAppends && (watching !== this.watching || detailed !== this.reasoningWatching)) return;
+          if (news.v) {
+            const meta = news.parts.meta as { capabilities?: string[] } | undefined;
+            if (meta) {
+              this.supportsPush = meta.capabilities?.includes("sync-push-v1") === true;
+              this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
+            }
+            if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
+            if (this.options.streamAppends) this.expandReasoning(news.parts);
+            if (requestReasoning && text !== "whole") this.publishThinkingPreviews(news.parts, watching);
+            this.have = news.v;
+            this.options.onParts(news.parts);
+          }
+          this.options.onSync?.();
+        };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        if (push) this.pushSession = session;
+        const news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
+          quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+        if (push && this.pushSession === session) this.pushSession = null;
+        accept(news);
       } catch (error) {
         if (this.lifetime !== lifetime) break;
         // Cut short on purpose (the watched chats changed), or a session to renew: go again.
