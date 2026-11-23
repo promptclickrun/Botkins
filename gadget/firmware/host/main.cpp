@@ -7,7 +7,8 @@
 // Lines on standard input:
 //   @botkins {...}          the setup protocol, as on a board's USB port
 //   say <words>             typed words
-//   hear <file.wav>         a recording: 16-bit mono WAV at the microphone's rate (16 kHz)
+//   hear <file.wav>         a press of the talk button with this recording: 16-bit mono WAV at the
+//                           microphone's rate (16 kHz). It goes through live voice when the computer has one.
 //   answer <action> [text]  answers the request on show
 //   new | next | stop       a new chat, the next bot, stop the turn
 //   away | home             away from the computer's network (none of its own addresses answers), or back
@@ -15,11 +16,13 @@
 // Each change of what a board would draw is printed as one line: "view {json}". What the speaker
 // plays is written to <folder>/spoken-<n>.wav when the reply has been read.
 //
-// The relay is reached over ws:// (host/websocket.cpp), so only a relay on this computer. In the
-// environment, BOTKINS_SIM_AWAY=1 starts away, and BOTKINS_SIM_PROBE_MS sets how soon a gadget on the
-// relay looks for its computer's own addresses again.
+// The relay and a live provider are reached over ws:// (host/websocket.cpp), so only on this computer.
+// In the environment, BOTKINS_SIM_AWAY=1 starts away, BOTKINS_SIM_PROBE_MS sets how soon a gadget on the
+// relay looks for its computer's own addresses again, BOTKINS_SIM_LIVE_IDLE_MS how soon a live voice
+// session closes, and BOTKINS_SIM_REALTIME=1 makes the speaker take as long to play as a real one.
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -71,21 +74,34 @@ struct HostNetwork : Network {
   std::string address() override { return "127.0.0.1"; }
 };
 
-/** The speaker: what was played is kept, and written as a WAV file when the reply ends. */
+/**
+ * The speaker: what was played is kept, and written as a WAV file when the reply ends. `realtime`: a
+ * write returns once its samples would have played, as a board's does, and a cut stops it at once.
+ */
 struct FileSpeaker : Speaker {
   std::string folder;
   std::mutex mutex;
+  std::condition_variable wake;
   std::vector<int16_t> played;
   int rate = 16000, files = 0;
+  bool realtime = false, cutting = false;
   bool begin(int next) override {
     std::lock_guard<std::mutex> lock(mutex);
     rate = next;
     played.clear();
+    cutting = false;
     return true;
   }
   void write(const int16_t* samples, size_t count) override {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
+    if (cutting) return;
     played.insert(played.end(), samples, samples + count);
+    if (realtime) wake.wait_for(lock, std::chrono::microseconds((long long)count * 1000000 / rate), [this] { return cutting; });
+  }
+  void cut() override {
+    std::lock_guard<std::mutex> lock(mutex);
+    cutting = true;
+    wake.notify_all();
   }
   void end(bool cut) override {
     std::lock_guard<std::mutex> lock(mutex);
@@ -117,6 +133,7 @@ static std::string view_line(const View& view) {
   if (view.listening) json.set("listening", true);
   if (view.sending) json.set("sending", true);
   if (view.speaking) json.set("speaking", true);
+  if (view.live) json.set("live", true);
   json.set("hear", view.can_hear).set("speak", view.can_speak);
   const auto& s = view.settings;
   json.set("settings", Json::object().set("volume", s.volume).set("mic", s.mic).set("mute", s.mute).set("brightness", s.brightness).set("dimAfter", s.dim_after).set("offAfter", s.off_after));
@@ -144,6 +161,8 @@ int main(int argc, char** argv) {
   HostNetwork network;
   FileSpeaker speaker;
   speaker.folder = argv[1];
+  const char* realtime = getenv("BOTKINS_SIM_REALTIME");
+  speaker.realtime = realtime && strcmp(realtime, "1") == 0;
 
   Board board;
   board.transport = &transport;
@@ -162,6 +181,7 @@ int main(int argc, char** argv) {
   };
   board.socket = [] { return std::unique_ptr<Socket>(new HostSocket()); };
   if (const char* probe = getenv("BOTKINS_SIM_PROBE_MS")) board.relay_probe_ms = atoi(probe) > 0 ? atoi(probe) : board.relay_probe_ms;
+  if (const char* idle = getenv("BOTKINS_SIM_LIVE_IDLE_MS")) board.live_idle_ms = atoi(idle) > 0 ? atoi(idle) : board.live_idle_ms;
 
   Gadget gadget(board);
   std::mutex printing;
