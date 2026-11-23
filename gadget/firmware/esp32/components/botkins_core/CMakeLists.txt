@@ -3,7 +3,7 @@
 # two fonts embedded as files.
 set(core "${CMAKE_CURRENT_LIST_DIR}/../../../core")
 idf_component_register(
-  SRCS "${core}/src/crypto.cpp" "${core}/src/json.cpp" "${core}/src/link.cpp" "${core}/src/gadget.cpp" "${core}/src/sockets.cpp"
+  SRCS "${core}/src/crypto.cpp" "${core}/src/json.cpp" "${core}/src/link.cpp" "${core}/src/relay.cpp" "${core}/src/gadget.cpp" "${core}/src/sockets.cpp"
        "${core}/src/draw.cpp" "${core}/src/faces.cpp" "${core}/src/home.cpp"
        "${core}/third_party/monocypher/monocypher.c"
   INCLUDE_DIRS "${core}/include"

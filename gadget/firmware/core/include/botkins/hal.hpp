@@ -1,8 +1,10 @@
 // What a board gives the core. A port (firmware/esp32 for a real board, firmware/host for a
-// computer) fills in these four small interfaces; everything else is the core's.
+// computer) fills in these four small interfaces, and a fifth for the relay if it can;
+// everything else is the core's.
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,6 +21,37 @@ struct HttpResponse {
 struct Transport {
   virtual ~Transport() = default;
   virtual HttpResponse request(const std::string& host, const char* method, const std::string& path, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, int timeout_ms) = 0;
+  /** Whether a `relay!<room>@<relay>` host is carried (the core's RelayTransport). Others skip those entries. */
+  virtual bool relays() const { return false; }
+};
+
+/**
+ * A WebSocket client: one connection, whole binary and text messages. The core uses it for the relay
+ * (botkins/relay.hpp), so a board without one reaches its computer only on its own network. A board's
+ * needs wss:// (TLS, checked against the usual certificate authorities); ws:// is only for a relay on
+ * the same machine (127.0.0.1, localhost).
+ */
+struct Socket {
+  struct Events {
+    /** One whole message, its fragments joined. From the socket's own thread. */
+    std::function<void(const uint8_t* data, size_t size, bool binary)> message;
+    /**
+     * The connection ended without `close()`: the other end closed it (its close code), or it failed
+     * (0). Called at most once, from the socket's own thread, after the last `message`.
+     */
+    std::function<void(int code)> closed;
+  };
+  virtual ~Socket() = default;
+  /**
+   * Connects to `url` offering one subprotocol, which the server must choose. Waits up to `timeout_ms`.
+   * Events come only after it returned true. A message longer than `max_message` closes the
+   * connection (1009).
+   */
+  virtual bool open(const std::string& url, const std::string& protocol, int timeout_ms, size_t max_message, Events events) = 0;
+  /** Sends one message whole. Safe from any thread, also while another sends. False when the connection is gone. */
+  virtual bool send(const uint8_t* data, size_t size, bool binary) = 0;
+  /** Closes the connection, from any thread but the socket's own (not inside an event). No event comes after it returns. */
+  virtual void close() = 0;
 };
 
 /** A few small named values that outlive a restart: the key, the introduction, the Wi-Fi network. */
