@@ -34,5 +34,6 @@ From the Hermes reference, deliberately: `panel_sh8601.hpp`, `crowpanel_st7701_i
 | `espressif/esp_codec_dev` | 1.5.10 (pinned) | Apache-2.0 | ES8311 register work. Releases from 1.5.11 on are under the "Espressif Modified MIT" licence (Espressif chips only), so the pin stays at 1.5.10. |
 | `espressif/esp_lcd_co5300` | 2.2.0 (pinned) | Apache-2.0 (the registry labels it "Custom"; the file is the Apache License 2.0) | The CO5300 panel driver. |
 | `espressif/cmake_utilities` | 0.5.3 (a dependency of `esp_lcd_co5300`) | Apache-2.0 | Build helper. |
+| `espressif/esp_websocket_client` | 1.7.0 (pinned) | Apache-2.0 | The WebSocket under `esp32/main/websocket.cpp` (the relay, live voice). 1.8.0 is labelled "Custom" in the registry (its licence file is still the Apache License 2.0), so the pin stays at 1.7.0, the last release labelled Apache-2.0. |
 
 `esp32/dependencies.lock` records the exact versions and hashes. ESP-IDF itself is Apache-2.0.
