@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,7 +47,12 @@ struct Board {
   int slice_bytes = 16000;
   int screen_width = 0, screen_height = 0;
   bool screen_round = false;
+  /** Restarts the board, when the owner asks for it from the Botkins app. Null: a restart is refused. */
+  std::function<void()> restart;
 };
+
+/** The poses a gadget's Botkin takes. The computer draws each from the bot's own look. */
+inline const char* const kPoses[] = {"ready", "listening", "working", "speaking", "needs", "waiting", "sleepy"};
 
 /** Everything a board draws. Copied out whole, so a port never holds a lock while it draws. */
 struct View {
@@ -76,9 +82,38 @@ struct View {
     std::vector<std::string> choices;
     bool remember = false;
   } request;
+  /** What the gadget's owner set for it. The computer keeps them and the gadget keeps a copy, so it starts with them. */
+  struct Settings {
+    int volume = 60;             // 0 to 100
+    std::string mic = "normal";  // "low", "normal" or "high"
+    bool mute = false;           // the microphone is off: holding talk says so
+    int brightness = 80;         // 5 to 100
+    int dim_after = 30;          // seconds idle before the screen dims; 0: never
+    int off_after = 300;         // seconds idle before it goes dark; 0: never
+  } settings;
+  /** While a turn works: how many steps it has taken. The halo's arc grows with it. */
+  int steps = 0;
+  /**
+   * The bot's Botkin, as SVG text (a 256 by 256 view box, nothing that moves), for each pose of
+   * kPoses that has arrived. `look` names the set: it changes when the bot or its look does.
+   */
+  std::string look;
+  std::shared_ptr<const std::map<std::string, std::string>> faces;
+  /** The Wi-Fi network in use, when there is one. */
+  std::string network;
   /** Goes up with every change. */
   uint32_t revision = 0;
 };
+
+/** The Botkin's pose for what is on show (a board shows "sleepy" itself while the screen is dimmed). */
+inline const char* pose_for(const View& view) {
+  if (view.stage != View::Stage::Online) return view.stage == View::Stage::Setup ? "ready" : "waiting";
+  if (view.listening) return "listening";
+  if (!view.request.id.empty()) return "needs";
+  if (view.speaking) return "speaking";
+  if (view.sending || view.phase == "working" || view.phase == "writing") return "working";
+  return "ready";
+}
 
 class Gadget {
  public:
@@ -106,6 +141,11 @@ class Gadget {
   void new_chat();
   /** The next bot on show, in the computer's order. */
   void next_bot();
+  /**
+   * Changes settings here at once and on the computer: an object with any of "volume", "mic",
+   * "mute", "brightness", "dimAfter", "offAfter" (the part's names). Kept if the computer is away.
+   */
+  void change_settings(const Json& patch);
 
   /**
    * One line from the USB port. Returns the line to print, or "" when the line was not for the

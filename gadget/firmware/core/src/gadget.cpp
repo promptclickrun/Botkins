@@ -697,3 +697,18 @@ std::string Gadget::console(const std::string& line) {
 }
 
 }  // namespace botkins
+
+namespace botkins {
+// The settings the person changed on the gadget: shown at once; the computer is told (gadget.cpp's own sync keeps them in step).
+void Gadget::change_settings(const Json& patch) {
+  change([&patch](View& view) {
+    auto& s = view.settings;
+    if (patch["volume"].type() == Json::Type::Number) s.volume = (int)patch["volume"].num();
+    if (patch["mic"].is_string()) s.mic = patch["mic"].str();
+    if (patch["mute"].type() == Json::Type::Bool) s.mute = patch["mute"].truthy();
+    if (patch["brightness"].type() == Json::Type::Number) s.brightness = (int)patch["brightness"].num();
+    if (patch["dimAfter"].type() == Json::Type::Number) s.dim_after = (int)patch["dimAfter"].num();
+    if (patch["offAfter"].type() == Json::Type::Number) s.off_after = (int)patch["offAfter"].num();
+  });
+}
+}  // namespace botkins
