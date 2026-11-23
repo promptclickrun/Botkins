@@ -69,6 +69,8 @@ const projectText = (p) =>
   [
     safe(p.name) + "   " + p.id,
     p.folder ? "Folder: " + JSON.stringify(safe(p.folder)) + (p.folderMissing ? " (missing)" : "") : "No folder.",
+    ...(p.folders ?? []).slice(1).map((path) => "Folder: " + JSON.stringify(safe(path))),
+    p.mode ? "Mode: " + p.mode : null,
     p.description ? "Description: " + safeLines(p.description) : null,
     p.color ? "Color: " + p.color : null,
     "To-dos: " + todoCount(p.todos) + ". Chats: " + p.chats + ". Attached artifacts: " + p.artifacts + ".",
@@ -166,8 +168,8 @@ export const projectsCommands = {
       },
       edit: {
         summary: "Change a project's name, description, color or folder",
-        usage: "botkins projects edit <project> [--name <text>] [--description <text>] [--description-file <path>] [--color <color>] [--no-color] [--folder <path>] [--no-folder]",
-        options: { ...projectOptions, "no-color": { type: "boolean", about: "Take the color away" }, folder: { type: "string", value: "path", about: "The project's folder (a full path that can be chosen: `botkins folders`)" }, "no-folder": { type: "boolean", about: "Take the folder away. The files stay where they are" } },
+        usage: "botkins projects edit <project> [--name <text>] [--description <text>] [--description-file <path>] [--color <color>] [--no-color] [--folder <path>] [--no-folder] [--mode <mode>]",
+        options: { ...projectOptions, mode: { type: "string", value: "mode", about: "Default, plan or yolo" }, "no-color": { type: "boolean", about: "Take the color away" }, folder: { type: "string", value: "path", about: "The project's folder (a full path that can be chosen: `botkins folders`)" }, "no-folder": { type: "boolean", about: "Take the folder away. The files stay where they are" } },
         details: "Only what you name changes. A folder cannot change while a chat of the project works. Chats that began keep their history; without a folder they lose the coding modes.",
         async run(context) {
           const ref = one(context, "Name the project (its name or id).");
@@ -175,7 +177,7 @@ export const projectsCommands = {
           if (o.color !== undefined && o["no-color"]) throw usage("Give --color or --no-color, not both.");
           if (o.folder !== undefined && o["no-folder"]) throw usage("Give --folder or --no-folder, not both.");
           const description = await longText(context, "description", "description");
-          const patch = { ...(o.name !== undefined && { name: o.name }), ...(description !== undefined && { description }), ...(o.color !== undefined && { color: o.color }), ...(o["no-color"] && { color: null }), ...(o.folder !== undefined && { folder: o.folder }), ...(o["no-folder"] && { folder: null }) };
+          const patch = { ...(o.mode && { mode: o.mode }), ...(o.name !== undefined && { name: o.name }), ...(description !== undefined && { description }), ...(o.color !== undefined && { color: o.color }), ...(o["no-color"] && { color: null }), ...(o.folder !== undefined && { folder: o.folder }), ...(o["no-folder"] && { folder: null }) };
           if (!Object.keys(patch).length) throw usage("Give what to change: --name, --description, --color, --folder, or --no-color or --no-folder.");
           context.print(await context.client.call("projects.edit", ref, patch), (p) => "Changed the project " + safe(p.name) + ".");
         },
@@ -191,6 +193,23 @@ export const projectsCommands = {
           show(context, "This removes the project " + safe(found.name) + " from Botkins, with its " + count(found.todos.open + found.todos.done, "to-do") + " and its list of attached artifacts." + (found.chats ? " Its " + count(found.chats, "chat") + " stay, with no project." : "") + (found.folder ? " The folder " + JSON.stringify(safe(found.folder)) + " and its files are not touched." : ""));
           if (!(await confirm(context, "Remove the project?"))) return EXIT.failed;
           context.print(await context.client.call("projects.remove", found.id), (gone) => "Removed the project " + safe(gone.name) + ".");
+        },
+      },
+      folder: {
+        summary: "Add or remove a folder, or make it the default",
+        usage: "botkins projects folder <project> <add|remove|default> <path>",
+        async run(context) {
+          if (context.args.length !== 3) throw usage("Give a project, action and folder.");
+          context.print(await context.client.call("projects.folder", ...context.args), projectText);
+        },
+      },
+      clone: {
+        summary: "Add a folder from GitHub, creating a project if needed",
+        usage: "botkins projects clone <owner/repo> [--parent <path>] [--project <project>]",
+        options: { parent: { type: "string", value: "path", about: "Parent folder on the host" }, project: { type: "string", value: "project", about: "Existing project" } },
+        async run(context) {
+          const repo = one(context, "Give a GitHub repository.");
+          context.print(await context.client.call("projects.clone", repo, context.options.parent, context.options.project), projectText);
         },
       },
       folders: {
@@ -231,20 +250,22 @@ export const projectsCommands = {
       },
       changes: {
         summary: "Show what changed in the project's folder (git), and which files a commit would take",
-        usage: "botkins projects changes <project>",
+        usage: "botkins projects changes <project> [--folder <path>]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" } },
         details: "This runs git in the project's folder, read-only, with the repository's own hooks, filters and programs switched off. A file is in a commit when it is in the project's folder, or already staged.",
         async run(context) {
-          context.print(await context.client.call("projects.changes", one(context, "Name the project (its name or id).")), changesText);
+          context.print(await context.client.call("projects.changes", one(context, "Name the project (its name or id)."), context.options.folder), changesText);
         },
       },
       diff: {
         summary: "Show the changes of one file of the project's folder",
-        usage: "botkins projects diff <project> <file>",
+        usage: "botkins projects diff <project> <file> [--folder <path>]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" } },
         arguments: [{ name: "project", required: true }, { name: "file", required: true }],
         details: "The file is its path in the repository, as `botkins projects changes` shows it. The text is cut at 400,000 characters. At a terminal it is made safe to show; in a pipe and with --json it is as git wrote it.",
         async run(context) {
           if (context.args.length !== 2) throw usage("Name the project, then the file (its path in the repository).");
-          const found = await context.client.call("projects.diff", context.args[0], context.args[1]);
+          const found = await context.client.call("projects.diff", context.args[0], context.args[1], context.options.folder);
           context.print(found, (done) => {
             const text = (context.stdout.isTTY ? safeLines(done.text) : done.text).replace(/\n$/, "");
             return (text || "No changes in " + safe(done.file) + ".") + (done.truncated ? "\n(The diff is longer. This is its beginning.)" : "");
@@ -253,38 +274,38 @@ export const projectsCommands = {
       },
       commit: {
         summary: "Commit the changes of the project's folder (git)",
-        usage: "botkins projects commit <project> [--message <text>] [--file <path>] [--yes]",
-        options: { message: { type: "string", short: "m", value: "text", about: "The commit message (\"-\" reads standard input)" }, file: { type: "string", value: "path", about: "The commit message from a file (\"-\" reads standard input)" }, ...YES },
+        usage: "botkins projects commit <project> [--folder <path>] [--message <text>] [--file <path>] [--yes]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" }, message: { type: "string", short: "m", value: "text", about: "The commit message (\"-\" reads standard input)" }, file: { type: "string", value: "path", about: "The commit message from a file (\"-\" reads standard input)" }, ...YES },
         details: "This stages every change in the project's folder (git add -A) and makes a commit. Git hooks do not run. The command shows the files that go into the commit first and asks; with no terminal it needs --yes. Without --message and --file, a terminal asks for the message. The commit is made as the user that runs Botkins, with that user's git name and email.",
         async run(context) {
           const ref = one(context, "Name the project (its name or id).");
           const message = await commitMessage(context);
-          const changes = await context.client.call("projects.changes", ref);
+          const changes = await context.client.call("projects.changes", ref, context.options.folder);
           if (!changes.repo) throw new CliError("The folder of " + safe(changes.project.name) + " is not a git repository, so there is nothing to commit.");
           const files = changes.files.filter((file) => file.commit);
           if (!files.length) throw new CliError("There is nothing to commit in " + safe(changes.project.name) + ".");
           show(context, ["This makes a git commit in the folder of " + safe(changes.project.name) + ", " + JSON.stringify(safe(changes.folder)) + ", on the branch " + safe(changes.branch) + ".", "Git hooks do not run. The files that go into it (" + files.length + "):", ...files.map((file) => "  " + file.kind.padEnd(9) + " " + safe(file.path) + (file.staged ? "  (staged)" : "")), "Message: " + safe(message.split("\n")[0]) + (message.includes("\n") ? " …" : "")].join("\n"));
           if (!(await confirm(context, "Commit these files?"))) return EXIT.failed;
-          const done = await context.client.call("projects.commit", changes.project.id, message, files.map((file) => file.path));
+          const done = await context.client.call("projects.commit", changes.project.id, message, files.map((file) => file.path), changes.folder);
           context.print(done, (result) => "Committed " + result.commit + " in " + safe(result.name) + ": " + count(result.files, "file") + ".");
         },
       },
       chat: {
         summary: "Open a chat in a project for one bot, or for a group of bots",
-        usage: "botkins projects chat <project> --bot <bot>… [--mode <mode>] [--yes]",
-        options: { bot: { type: "string", multiple: true, value: "bot", about: "A bot to chat with (name or id). Give it 2 to 6 times for a group chat" }, mode: { type: "string", value: "mode", about: "default (the default), plan or yolo. Yolo asks first" }, ...YES },
+        usage: "botkins projects chat <project> --bot <bot>… [--folder <path>] [--mode <mode>] [--yes]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" }, bot: { type: "string", multiple: true, value: "bot", about: "A bot to chat with (name or id). Give it 2 to 6 times for a group chat" }, mode: { type: "string", value: "mode", about: "default (the default), plan or yolo. Yolo asks first" }, ...YES },
         details: "This opens the chat and sends nothing: no turn of a model starts. A turn starts when a message is sent: `botkins chat <bot> --chat <id> -m <message>`. The bot's tools then work in the project's folder, and each tool asks for an approval as it does in any chat. A group chat takes text only, so a project with a folder cannot have one. --mode yolo changes that: each request of the bot in the chat gets a yes with no question, but for one that leaves the sandbox. The command shows the project, its folder and the bot first, and asks; with no terminal it needs --yes. The block is printed on standard error with --yes and with --json too. The modes default and plan ask nothing.",
         async run(context) {
           const ref = one(context, "Name the project (its name or id).");
           if (!context.options.bot?.length) throw usage("Name a bot with --bot <bot>.");
-          const options = { bots: context.options.bot, ...(context.options.mode !== undefined && { mode: context.options.mode }) };
-          if (context.options.mode === "yolo") {
+          const options = { bots: context.options.bot, ...(context.options.folder && { folder: context.options.folder }), ...(context.options.mode !== undefined && { mode: context.options.mode }) };
+          if ((context.options.mode ?? (await context.client.call("projects.get", ref)).mode) === "yolo") {
             // What the mode gives is shown first, with --yes and with --json too: the caller's own record has it.
             const found = await context.client.call("projects.get", ref);
             const bots = [];
             for (const name of context.options.bot) bots.push(await context.client.call("bots.get", name));
             const names = [...new Map(bots.map((entry) => [entry.id, entry])).values()].map((entry) => safe(entry.name));
-            show(context, ["This opens a chat in the mode yolo.", "Project: " + safe(found.name) + (found.folder ? ", folder " + JSON.stringify(safe(found.folder)) : ", with no folder (a project with no folder opens its chats in the mode default)") + ".", (names.length === 1 ? "Bot: " : "Bots: ") + names.join(", ") + ".", "Each request of the bot in this chat gets a yes with no question, but for one that leaves the sandbox."].join("\n"));
+            show(context, ["This opens a chat in the mode yolo.", "Project: " + safe(found.name) + (found.folder ? ", folder " + JSON.stringify(safe(options.folder ?? found.folder)) : ", with no folder (a project with no folder opens its chats in the mode default)") + ".", (names.length === 1 ? "Bot: " : "Bots: ") + names.join(", ") + ".", "Each request of the bot in this chat gets a yes with no question, but for one that leaves the sandbox."].join("\n"));
             if (!(await confirm(context, "Open the chat in the mode yolo?"))) return EXIT.failed;
             options.agreed = true;
           }

@@ -168,6 +168,10 @@ export const WORKSPACE = {
   ...each("createProject addProjectFolder", cmd("projects add")),
   addProject: no("window"), // a folder dialog; `projects add <folder>` takes the path itself
   renameProject: cmd("projects rename"),
+  editProjectFolder: cmd("projects folder"),
+  chatProjectFolder: cmd("chats show"),
+  setChatFolder: cmd("chats project"),
+  cloneProjectRepository: cmd("projects clone"),
   updateProject: cmd("projects edit"),
   removeProject: cmd("projects remove"),
   addProjectArtifact: cmd("projects add-artifact"),
@@ -465,6 +469,8 @@ export const CHANGES = {
   // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
   "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
   "projects.rename": (args, value) => value?.name ?? args?.[0],
+  "projects.folder": (args, value) => value?.id ?? args?.[0],
+  "projects.clone": (_args, value) => value?.id,
   "projects.edit": (args, value) => value?.name ?? args?.[0],
   "projects.remove": (args, value) => value?.name ?? args?.[0],
   "projects.addArtifact": (args, value) => value?.project?.name ?? args?.[0],

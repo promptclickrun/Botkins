@@ -16,6 +16,7 @@
 // `allowed(path)` is the same rule for a path that is being chosen: the calls that take a folder
 // from a paired device accept only a folder this browser could have shown.
 import { readdir, realpath, stat } from "node:fs/promises";
+import { repositoryName } from "./link/project-folders.mjs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 
@@ -130,6 +131,15 @@ export class Folders {
  */
 export async function deviceArgs(folders, name, args) {
   if (name === "plugins.addFolder" || (name === "plugins.addMarketplace" && typeof args[0] === "string" && isAbsolute(args[0]))) return [(await folders.allowed(args[0])).path];
+  if (name === "editProjectFolder" && args[1] === "add") return [args[0], "add", (await folders.allowed(args[2])).path];
+  if (name === "cloneProjectRepository") {
+    const repo = repositoryName(args[0]);
+    const leaf = repo.split("/")[1];
+    const parent = await folders.allowed(args[1] || folders.home);
+    if (hidden(leaf) || (folders.platform === "darwin" && parent.root.name === "Home" && parent.path === parent.root.path && leaf.toLowerCase() === "library"))
+      throw new Error("Choose a destination the computer's folder browser can show.");
+    return [repo, parent.path, ...args.slice(2)];
+  }
   if (name === "updateProject" && args[1] && typeof args[1] === "object" && args[1].folder) return [args[0], { ...args[1], folder: (await folders.allowed(args[1].folder)).path }, ...args.slice(2)];
   if (name === "createProject" && args[0] && typeof args[0] === "object" && args[0].folder) return [{ ...args[0], folder: (await folders.allowed(args[0].folder)).path }, ...args.slice(1)];
   return args;

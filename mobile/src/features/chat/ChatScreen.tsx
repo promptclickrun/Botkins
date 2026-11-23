@@ -93,6 +93,8 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   const project = projects?.find((p) => p.id === chat.projectId);
   // The people in a chat ("team-people-v1"). Someone invited takes part; renaming, compacting,
   // deleting and the chat's model, project and people are its starter's (and the owner's).
+  const multiple = useCapability("project-folders-v1");
+  const savesMode = useCapability("project-mode-v1");
   const canShare = useCapability("team-people-v1");
   const teamSize = usePart("team")?.people?.length ?? 0;
   const place = myPlace(chat, myself(usePart("meta")));
@@ -105,7 +107,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     ...(canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
     ...(canManage && mine ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
     // Before the first message the chat can still change its project and mode.
-    ...(started || !mine ? [] : projectActions({ chat, projects, settings, bots })),
+    ...(started || !mine ? [] : projectActions({ chat, projects, settings, bots }, multiple)),
     ...(project?.folder ? [{ id: "changes", title: "Changes", image: "plus.forwardslash.minus" }] : []),
     ...(panes > 0 ? [{ id: "pane", title: "Side pane", image: "sidebar.right" }] : []),
     { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
@@ -120,10 +122,10 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
       actions={actions}
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
-        if (runProjectChoice(chat, action)) return;
+        if (runProjectChoice(chat, action, savesMode)) return;
         if (action === "pane") return void onPane?.();
         if (action === "people") return void router.push({ pathname: "/chat/people", params: { id: chat.id } });
-        if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id)) as Href);
+        if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id) + "&chatId=" + encodeURIComponent(chat.id)) as Href);
         else if (action === "new" && bot)
           void attempt(api.createChat(bot.id)).then((id) => id && (onOpen ? onOpen(id) : router.replace({ pathname: "/chat/[id]", params: { id } })));
         else if (action === "model") router.push({ pathname: "/chat/model", params: { scope: "chat", id: chat.id } });
@@ -1013,7 +1015,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       <View style={{ width: Math.max(0, book.x - shape.left) }}>{column}</View>
       <View style={{ width: book.width }} />
       <View style={{ flex: 1, paddingTop: insets.top }}>
-        <ChangesView id={project.id} inline />
+        <ChangesView id={project.id} chatId={chat.id} inline />
       </View>
     </View>
   );

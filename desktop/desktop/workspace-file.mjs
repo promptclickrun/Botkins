@@ -10,6 +10,7 @@ const workspaceFields = new Set([
 ]);
 const projectFields = new Set([
   "id", "name", "description", "folder", "color", "todos", "artifacts", "lastUsed", "createdAt",
+  "folders", "mode",
   "path", // migrateProject reads the folder from this field in early files.
 ]);
 

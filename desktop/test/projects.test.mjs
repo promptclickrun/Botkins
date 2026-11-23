@@ -76,7 +76,8 @@ test("a non-repository folder reports no changes; chats bind to projects before 
   assert.equal(ws.chat(chat).mode, "plan");
   ws.chat(chat).established = true;
   const other = projects.add(repo);
-  assert.throws(() => projects.setChatProject(chat, other), /Start a new chat/);
+  projects.setChatProject(chat, other);
+  assert.equal(ws.chat(chat).restartSession, true);
   projects.setChatProject(chat, pid, "yolo");
   assert.equal(ws.chat(chat).mode, "yolo");
   assert.throws(() => projects.setChatProject(chat, pid, "turbo"), /default, plan or yolo/);
@@ -178,7 +179,7 @@ test("folder projects saved before workspaces migrate: path becomes folder, no t
   writeFileSync(join(dir, "data", "workspace.json"), JSON.stringify(legacy));
   const ws = new Workspace(join(dir, "data"), async () => ({}), () => {});
   const p = ws.projects.get("p1");
-  assert.deepEqual(p, { id: "p1", name: "code", folder, description: "", todos: [], lastUsed: 5, createdAt: 5 });
+  assert.deepEqual(p, { id: "p1", name: "code", folder, folders: [folder], description: "", todos: [], lastUsed: 5, createdAt: 5 });
   assert.equal(ws.projects.folderFor(ws.chat("c1")), folder, "the chat still runs in its folder");
   assert.equal(ws.chat("c1").mode, "yolo", "and keeps its mode");
   const saved = JSON.parse(readFileSync(join(dir, "data", "workspace.json"), "utf8")).projects[0];
@@ -206,12 +207,13 @@ test("workspace projects: no folder, folder choose and remove, and modes only in
   assert.equal(ws.chat(chat).mode, "default", "removing the folder turns the coding modes off");
   assert.throws(() => ws.projects.update(id, { folder: "/no/such/folder" }), /Choose a folder/);
   assert.throws(() => ws.projects.update(id, { owner: "x" }), /Unknown project field/);
-  // An established chat may move between projects without folders, but not into a folder.
+  // An established chat can move into a folder on its next turn.
   ws.chat(chat).established = true;
   const other = ws.projects.create({ name: "Other" });
   ws.projects.setChatProject(chat, other);
   assert.equal(ws.chat(chat).projectId, other);
-  assert.throws(() => ws.projects.setChatProject(chat, ws.projects.add(repo)), /Start a new chat/);
+  ws.projects.setChatProject(chat, ws.projects.add(repo));
+  assert.equal(ws.chat(chat).restartSession, true);
 });
 
 test("project to-dos: add, check off, rename, reorder and delete", (t) => {
@@ -246,7 +248,7 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.equal(PROJECT_ARTIFACTS, "project-artifacts-v1");
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
-  const gated = new Set(["spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "chat-title-regeneration-v1"]);
+  const gated = new Set(["project-folders-v1", "project-mode-v1", "project-clone-v1", "spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "chat-title-regeneration-v1"]);
   const withArtifacts = CAPABILITIES.filter((name) => !gated.has(name));
   const withoutArtifacts = withArtifacts.filter((name) => name !== PROJECT_ARTIFACTS);
   assert.deepEqual(linkCapabilities(new Set()), withoutArtifacts);
@@ -335,4 +337,66 @@ test("a project holds up to 200 artifacts", (t) => {
   assert.equal(projects.addArtifact(id, ids[0])[0], ids[0], "one that is already attached still moves to the front");
   projects.removeArtifact(id, ids[1]);
   assert.equal(projects.addArtifact(id, ids[200]).length, 200);
+});
+
+test("folder order, fallback, project defaults and a moved session's transcript", async (t) => {
+  const { ws, projects, repo, dir } = setup(t);
+  const second = join(dir, "mobile");
+  mkdirSync(second);
+  const p = projects.add(repo);
+  const other = projects.create({ name: "Other", folder: second });
+  projects.editFolder(p, "add", second);
+  projects.editFolder(p, "add", second);
+  assert.deepEqual(projects.get(p).folders, [repo, second]);
+  projects.update(p, { mode: "plan" });
+  const restored = new Workspace(ws.dir, async () => ({}), () => {});
+  assert.deepEqual(restored.projects.get(p).folders, [repo, second]);
+  assert.equal(restored.projects.get(p).mode, "plan");
+  const id = projects.startChat(["pip"], p);
+  const chat = ws.chat(id);
+  assert.equal(chat.mode, "plan");
+  assert.equal(ws.chat(projects.startChat(["pip"], p, "default")).mode, "default");
+  projects.setChatProject(id, null);
+  chat.established = true;
+  chat.messages = [{ role: "user", text: "Keep my notes" }, { role: "assistant", text: "Notes saved" }];
+  const provider = ws.sessionProvider(chat);
+  const specs = [], deleted = [];
+  provider.deleteSession = async (key) => deleted.push(key);
+  provider.openSession = async (spec) => { specs.push(spec); return {}; };
+  ws.runnerFor = async () => ({ provider });
+  const nextTurn = async (folder) => {
+    const count = deleted.length;
+    assert.ok(chat.restartSession);
+    chat.messages.push({ role: "user", text: "Continue" });
+    await ws.openSession(chat, ws.bot("pip"), { id: "turn" }, { stopped: false });
+    assert.deepEqual(deleted.slice(count), [id]);
+    assert.equal(specs.at(-1).established, false);
+    assert.equal(specs.at(-1).folder, folder);
+    assert.match(specs.at(-1).instructions, /Keep my notes/);
+    assert.match(specs.at(-1).instructions, /Notes saved/);
+    assert.ok(!chat.restartSession);
+  };
+  projects.setChatProject(id, p);
+  assert.equal(chat.mode, "plan");
+  await nextTurn(repo);
+  projects.setChatProject(id, p, "default", second);
+  assert.equal(projects.folderFor(chat), second);
+  assert.match(projects.context(chat, ws.bot("pip")), /Other project folder: repo/);
+  await nextTurn(second);
+  projects.editFolder(p, "default", second);
+  assert.equal(projects.get(p).folder, second);
+  assert.equal(chat.folder, undefined);
+  projects.editFolder(p, "remove", second);
+  assert.equal(projects.folderFor(chat), repo);
+  await nextTurn(repo);
+  projects.setChatProject(id, other);
+  await nextTurn(second);
+  projects.setChatProject(id, null);
+  await nextTurn(join(ws.dir, "files", "pip"));
+  projects.editFolder(p, "add", second);
+  projects.setChatProject(id, p, undefined, second);
+  rmSync(second, { recursive: true });
+  assert.equal(projects.folderFor(chat), repo);
+  projects.update(p, { mode: "default" });
+  assert.equal(projects.get(p).mode, undefined);
 });

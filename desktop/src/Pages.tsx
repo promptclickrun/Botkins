@@ -994,7 +994,7 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
       icon: chat.archived ? ArchiveRestore : Archive,
       run: () => run(actions, api().setChatFlags(chat.id, { archived: !chat.archived })),
     },
-    // A chat in a project can leave it. One that already worked in the project's folder says why it can't.
+    // A chat in a project can leave it. Its next turn carries the transcript.
     ...(chat.projectId
       ? [{ label: "Remove from project", icon: FolderMinus, run: () => run(actions, api().setChatProject(chat.id, null, "default")) }]
       : []),
@@ -1078,7 +1078,7 @@ export function ChatRow({
         </span>
         {project && (
           <small className="row-folder">
-            {project.folder ? <FolderGit2 size={12} /> : <FolderKanban size={12} />} {project.name}
+            {project.folder ? <FolderGit2 size={12} /> : <FolderKanban size={12} />} {project.name}{project.folder && " · " + (chat.folder ?? project.folder)}
           </small>
         )}
       </span>

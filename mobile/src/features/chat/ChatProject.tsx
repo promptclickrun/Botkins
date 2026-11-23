@@ -6,6 +6,7 @@ import { ChevronDown, FolderGit2, FolderKanban, X } from "lucide-react-native";
 import { ActivityIndicator, ScrollView, StyleSheet, View } from "react-native";
 import { MODE_LABELS, projectBlock, sortedProjects } from "@/features/bots/projectAccess";
 import type { Bot, ChatMode, ChatSummary, Preferences, Project } from "@/link/types";
+import { useCapability } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Markdown, radius, space, T, Tap, useTheme } from "@/ui";
 
@@ -14,7 +15,7 @@ const MODES: ChatMode[] = ["default", "plan", "yolo"];
 type ProjectContext = { chat: ChatSummary; projects: Project[] | undefined; settings: Preferences | undefined; bots: Map<string, Bot> };
 
 /** "Project" (No project, then each project, greyed out with the reason when the chat's bots can't use it) and, for a project with a folder, "Mode". */
-export function projectActions({ chat, projects, settings, bots }: ProjectContext): MenuAction[] {
+export function projectActions({ chat, projects, settings, bots }: ProjectContext, multiple = false): MenuAction[] {
   const list = sortedProjects(projects);
   if (!list.length) return [];
   const members = (chat.botIds?.length ? chat.botIds : [chat.botId]).flatMap((id) => bots.get(id) ?? []);
@@ -44,20 +45,30 @@ export function projectActions({ chat, projects, settings, bots }: ProjectContex
       image: "slider.horizontal.3",
       subactions: MODES.map((value) => ({ id: "mode:" + value, title: MODE_LABELS[value].label, subtitle: MODE_LABELS[value].hint, state: value === mode ? "on" : "off" })),
     });
+  if (multiple && chosen?.folders && chosen.folders.length > 1) out.push({
+    id: "folder", title: "Folder", image: "folder", subactions: chosen.folders.map((path) => ({
+      id: "folder:" + path, title: path, state: path === (chat.folder ?? chosen.folder) ? "on" : "off",
+    })),
+  });
   return out;
 }
 
 /** Carries out a choice from `projectActions`. Answers false for any other menu choice. */
-export function runProjectChoice(chat: ChatSummary, event: string): boolean {
+export function runProjectChoice(chat: ChatSummary, event: string, savesMode = false): boolean {
   const mode = chat.mode ?? "default";
   if (event.startsWith("project:")) {
     const id = event.slice("project:".length) || null;
-    if (id !== (chat.projectId ?? null)) void attempt(api.setChatProject(chat.id, id, mode));
+    if (id !== (chat.projectId ?? null)) void attempt(api.setChatProject(chat.id, id, savesMode ? undefined : mode));
+    return true;
+  }
+  if (event.startsWith("folder:")) {
+    void attempt(api.setChatFolder(chat.id, event.slice(7)));
     return true;
   }
   if (event.startsWith("mode:")) {
     const next = event.slice("mode:".length) as ChatMode;
-    if (next !== mode) void attempt(api.setChatProject(chat.id, chat.projectId ?? null, next));
+    if (chat.projectId && savesMode) void attempt(api.updateProject(chat.projectId, { mode: next }).then(() => api.setChatProject(chat.id, chat.projectId ?? null, next)));
+    else if (next !== mode) void attempt(api.setChatProject(chat.id, chat.projectId ?? null, next));
     return true;
   }
   return false;
@@ -66,13 +77,15 @@ export function runProjectChoice(chat: ChatSummary, event: string): boolean {
 /** On a chat with no messages yet: its project and mode, as one quiet pill that opens the choices. */
 export function ProjectPill(context: ProjectContext) {
   const { colors } = useTheme();
-  const actions = projectActions(context);
+  const multiple = useCapability("project-folders-v1");
+  const savesMode = useCapability("project-mode-v1");
+  const actions = projectActions(context, multiple);
   if (!actions.length) return null;
   const project = context.projects?.find((p) => p.id === context.chat.projectId);
   const Icon = project?.folder ? FolderGit2 : FolderKanban;
-  const label = project ? project.name + (project.folder && actions.length > 1 ? " · " + MODE_LABELS[context.chat.mode ?? "default"].label : "") : "Work in a project…";
+  const label = project ? project.name + (multiple && project.folder ? " · " + (context.chat.folder ?? project.folder) : "") + (project.folder && actions.length > 1 ? " · " + MODE_LABELS[context.chat.mode ?? "default"].label : "") : "Work in a project…";
   return (
-    <MenuView actions={actions} onPressAction={({ nativeEvent }) => runProjectChoice(context.chat, nativeEvent.event)}>
+    <MenuView actions={actions} onPressAction={({ nativeEvent }) => runProjectChoice(context.chat, nativeEvent.event, savesMode)}>
       <View
         accessible
         accessibilityRole="button"

@@ -65,7 +65,8 @@ article b.speaker .avatar {
   color: var(--muted);
   background: var(--sunken);
 }
-.project-label > span {
+.project-label > span,
+.project-label > small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

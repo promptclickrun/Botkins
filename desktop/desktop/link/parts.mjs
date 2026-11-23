@@ -26,6 +26,7 @@ function chatSummary(chat) {
     ...(chat.archived && { archived: true }),
     ...(chat.unread && { unread: true }),
     ...(chat.projectId && { projectId: chat.projectId }),
+    ...(chat.folder && { folder: chat.folder }),
     ...(chat.mode && { mode: chat.mode }),
     ...(chat.panelId && { panelId: chat.panelId }),
     // How many tabs the chat's side pane has; the tabs themselves come with the chat's detail.

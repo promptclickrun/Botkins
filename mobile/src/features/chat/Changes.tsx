@@ -1,3 +1,4 @@
+import { FolderChoice } from "../projects/ProjectFolders";
 // A project's changes (the desktop's Project Changes, src/ProjectChanges.tsx): the branch, the
 // changed files with what was added and removed, one file's changes as text, and Commit all.
 import { useLocalSearchParams } from "expo-router";
@@ -5,7 +6,7 @@ import { ArrowLeft, GitBranch, GitCommitHorizontal, RefreshCw } from "lucide-rea
 import { type ReactNode, useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ChangedFile, ProjectChanges } from "@/link/types";
-import { usePart } from "@/state/hooks";
+import { useCapability, usePart } from "@/state/hooks";
 import { api } from "@/state/link";
 import { Button, EmptyState, Field, Group, IconButton, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
 import { changedPath, type DiffLine, diffLineKind, fileCount, kindLetter } from "./side";
@@ -70,8 +71,8 @@ export function DiffView({ text }: { text: string }) {
 }
 
 export default function Changes() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  return <ChangesView id={id} />;
+  const { id, chatId } = useLocalSearchParams<{ id: string; chatId?: string }>();
+  return <ChangesView id={id} chatId={chatId} />;
 }
 
 /** The second page of a chat on a phone half folded like a book: the same view, without the sheet. */
@@ -93,7 +94,25 @@ function PageFrame({ title, onAction, actionDisabled, children }: { title: strin
 }
 
 /** A project's uncommitted changes. `inline` draws it as a page beside the chat instead of a sheet. */
-export function ChangesView({ id, inline }: { id?: string; inline?: boolean }) {
+type ChangesProps = { id?: string; inline?: boolean; chatId?: string };
+export function ChangesView(props: ChangesProps) {
+  const project = usePart("projects")?.find((p) => p.id === props.id);
+  const multiple = useCapability("project-folders-v1");
+  const [picked, pick] = useState<string>();
+  const [working, setWorking] = useState<string | null>();
+  const chatId = props.chatId && multiple ? props.chatId : undefined;
+  useEffect(() => {
+    if (!chatId) return;
+    let live = true;
+    api.chatProjectFolder(chatId).then((path) => { if (live) setWorking(path); }, () => { if (live) setWorking(null); });
+    return () => { live = false; };
+  }, [chatId, project?.folders?.join("\n")]);
+  if (chatId && working === undefined) return null;
+  const selected = picked ?? working;
+  const folder = selected && project?.folders?.includes(selected) ? selected : project?.folder;
+  return <ChangesBody {...props} key={folder} folder={folder} choice={<FolderChoice project={project} value={folder} change={pick} />} />;
+}
+function ChangesBody({ id, inline, folder, choice }: ChangesProps & { folder?: string; choice: ReactNode }) {
   const Frame = inline ? PageFrame : Sheet;
   const project = usePart("projects")?.find((p) => p.id === id);
   const [changes, setChanges] = useState<ProjectChanges>();
@@ -110,7 +129,7 @@ export function ChangesView({ id, inline }: { id?: string; inline?: boolean }) {
     setBusy(true);
     setError("");
     try {
-      setChanges(await api.projectChanges(id));
+      setChanges(await api.projectChanges(id, folder));
     } catch (e) {
       setError(messageOf(e));
     } finally {
@@ -125,7 +144,7 @@ export function ChangesView({ id, inline }: { id?: string; inline?: boolean }) {
     if (!file || !id) return;
     setDiff(undefined);
     let live = true;
-    api.projectDiff(id, file).then(
+    api.projectDiff(id, file, folder).then(
       (result) => live && setDiff(result),
       (e: unknown) => live && setError(messageOf(e)),
     );
@@ -139,7 +158,7 @@ export function ChangesView({ id, inline }: { id?: string; inline?: boolean }) {
     setBusy(true);
     setError("");
     try {
-      const sha = await api.projectCommit(id, message.trim());
+      const sha = await api.projectCommit(id, message.trim(), folder);
       setNote("Committed " + sha + " on " + changes.branch + ".");
       setMessage("");
       setCommitting(false);
@@ -160,6 +179,7 @@ export function ChangesView({ id, inline }: { id?: string; inline?: boolean }) {
 
   return (
     <Frame title={file ? file.split("/").pop() || file : "Changes"} action={file ? undefined : "Refresh"} onAction={file ? undefined : () => void load()} actionDisabled={busy} actionLoading={busy && !!changes}>
+      {choice}
       {!!error && (
         <T variant="subhead" color="danger" accessibilityRole="alert">
           {error}

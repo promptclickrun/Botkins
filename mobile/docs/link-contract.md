@@ -391,3 +391,20 @@ With `skills-catalog-v1`, the computer makes these calls available:
 - `skillsCatalog.install(token, replace?)` imports the files pinned by the preview and returns the upload result. The preview token expires after ten minutes.
 
 Search and preview need the team's Skills read permission. Upload and install need create permission, and confirming replacement also needs manage permission. Phones use the link for every file and catalog operation.
+
+## Project folders, modes and GitHub
+
+These calls are owner-only. A computer advertising `project-folders-v1` sends `project.folders`, an ordered list of up to 12 absolute paths. The first is also `project.folder` for older clients. An empty list omits the legacy field. A chat can carry a non-default `folder`. If it disappears, the computer uses the first folder that the project designates as default.
+
+| Call | Answer |
+| --- | --- |
+| `editProjectFolder(id, "add" / "remove" / "default", path)` | Updated ordered paths |
+| `chatProjectFolder(chatId)` | Effective working folder, or null |
+| `setChatFolder(chatId, pathOrNull)` | Void. Null selects the default |
+| `startProjectChat(botIds, id, mode?, folder?)` | New chat ID |
+| `setChatProject(chatId, idOrNull, mode?, folder?)` | Void |
+| `projectChanges(id, folder?)`, `projectDiff(id, file, folder?)`, `projectCommit(id, message, folder?)` | Existing changes, diff and commit answers for the chosen folder |
+
+With `project-mode-v1`, `updateProject(id, { mode })` saves Plan or YOLO and clears the preference for Default. Starting or assigning a chat inherits the preference when the caller omits the mode. Changing a started chat's project or working folder carries its transcript into a fresh provider session. A reply in progress must finish first. Group chats use folderless projects.
+
+With `project-clone-v1`, `cloneProjectRepository(repository, parent?, projectId?, { name?, description? }?)` returns the project ID after the computer has cloned the repository. Omitting the project ID creates a project. The destination is the repository name under the supplied parent or the host user's home directory. It must be new or empty. The computer uses its signed-in GitHub CLI for private repositories and falls back to HTTPS Git for public ones. The link validates a supplied parent through its folder browser.

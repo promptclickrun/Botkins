@@ -30,6 +30,7 @@ export default function FolderPicker() {
   const pluginsOk = usePluginsReady() || use !== "plugin";
   const { colors } = useTheme();
   const can = useCapability("folders-v1") && pluginsOk;
+  const multiple = useCapability("project-folders-v1");
   const online = useOnline();
   // `at` is the folder asked for (none: the home folder). `good` is the last one the computer listed.
   const [at, setAt] = useState<string>();
@@ -90,7 +91,7 @@ export default function FolderPicker() {
         done = true;
       }
     } else if (params.id) {
-      done = (await attempt(api.updateProject(params.id, { folder: list.path }).then(() => true), "Folder chosen")) === true;
+      done = (await attempt((multiple ? api.editProjectFolder(params.id, "add", list.path) : api.updateProject(params.id, { folder: list.path })).then(() => true), "Folder chosen")) === true;
     }
     setBusy(false);
     if (done) router.back();

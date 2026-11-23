@@ -99,6 +99,7 @@ export const REMOTE_METHODS = new Set([
   "cancelMcpSignIn", "signOutMcpServer", "importMcpServers",
   "credentials", "removeCredential",
   // Projects
+  "editProjectFolder", "setChatFolder", "chatProjectFolder", "cloneProjectRepository",
   "createProject", "updateProject", "renameProject", "removeProject", "projectChanges", "projectDiff", "projectCommit",
   "addTodo", "updateTodo", "deleteTodo", "moveTodo",
   // What a project keeps of the artifacts ("project-artifacts-v1"): a list of ids on the project.

@@ -303,6 +303,22 @@ try {
   await expect(page.getByRole("region", { name: "Cutover status" })).toContainText("412 / 1,200");
   await shot("project-panels");
   console.log("A project panel shows on Today with its project tag and on the project's Panels.");
+  const second = join(dir, "marketplace");
+  mkdirSync(second);
+  const sections = page.getByRole("navigation", { name: "Project sections" });
+  await sections.getByRole("button", { name: /Overview/ }).click();
+  await app.evaluate(({ dialog }, paths) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [paths.shift()] });
+  }, [dir, second]);
+  await button("Add folder…").click();
+  await expect.poll(async () => (await snap()).projects.find((p) => p.id === project.id).folder).toBe(dir);
+  await button("Add folder…").click();
+  await expect.poll(async () => (await snap()).projects.find((p) => p.id === project.id).folders).toEqual([dir, second]);
+  await sections.getByRole("button", { name: /Chats/ }).click();
+  await page.getByRole("combobox", { name: "Folder", exact: true }).selectOption(second);
+  await button("Start chat with Scout").click();
+  await expect(page.locator(".project-label")).toContainText(second);
+  assert.equal((await snap()).chats[0].folder, second);
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log("Projects smoke passed. No renderer exceptions." + (shots ? " Screenshots in " + shots : ""));
 } finally {

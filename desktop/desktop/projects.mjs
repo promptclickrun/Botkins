@@ -11,6 +11,8 @@ import { isGroup } from "./groups.mjs";
 import { defineTool } from "./providers/provider.mjs";
 import { assertProject, canUseProject } from "./access.mjs";
 
+import { changedFolders, folderFor, MAX_PROJECT_FOLDERS } from "./link/project-folders.mjs";
+
 const run = promisify(execFile);
 export const MODES = ["default", "plan", "yolo"];
 /** A project keeps a list of artifacts a person attached to it (`addProjectArtifact`, `removeProjectArtifact`, `projectArtifacts`). */
@@ -89,6 +91,12 @@ export function parseStatus(text) {
 }
 
 const MAX_TODOS = 500;
+function restart(chat) {
+  if (chat.established || chat.messages?.length) chat.restartSession = true;
+  for (const session of [...Object.values(chat.members ?? {}), ...Object.values(chat.helpers ?? {})])
+    if (session.established) session.restartSession = true;
+}
+
 export const PROJECT_COLORS = ["coral", "amber", "green", "teal", "blue", "violet", "pink", "gray"];
 
 function todoText(value) {
@@ -116,6 +124,10 @@ export function migrateProject(p) {
   if (!Array.isArray(p.todos)) p.todos = [];
   p.lastUsed ??= Date.now();
   p.createdAt ??= p.lastUsed;
+  const paths = Array.isArray(p.folders) ? p.folders : [p.folder];
+  p.folders = [...new Set(paths.filter((f) => typeof f === "string" && isAbsolute(f)).map((f) => resolve(f)))].slice(0, MAX_PROJECT_FOLDERS);
+  if (p.mode !== "plan" && p.mode !== "yolo") delete p.mode;
+  p.folder = p.folders[0];
   if (!p.folder) delete p.folder;
   if (Array.isArray(p.artifacts)) p.artifacts = [...new Set(p.artifacts.filter((id) => typeof id === "string"))].slice(0, MAX_PROJECT_ARTIFACTS);
   if (!p.artifacts?.length) delete p.artifacts;
@@ -142,11 +154,13 @@ export class Projects {
     return project;
   }
   /** A project's folder, which must still exist. For Project Changes and Reveal. */
-  folderOf(id) {
+  folderOf(id, folder) {
     const project = this.get(id);
     if (!project.folder) throw new Error("“" + project.name + "” has no folder. Choose one in its Overview.");
-    if (!existsSync(project.folder)) throw new Error("This project's folder is missing: " + project.folder);
-    return project.folder;
+    folder ??= project.folder;
+    if (!project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+    if (!statSync(folder, { throwIfNoEntry: false })?.isDirectory()) throw new Error("This project's folder is missing: " + folder);
+    return folder;
   }
   /** Creates a project. Returns its id. */
   create(data = {}) {
@@ -157,6 +171,7 @@ export class Projects {
       name: textField(data.name ?? (folder ? basename(folder) : ""), 60, "project name"),
       description: descriptionField(data.description),
       ...(PROJECT_COLORS.includes(data.color) && { color: data.color }),
+      folders: folder ? [folder] : [],
       ...(folder && { folder }),
       todos: [],
       lastUsed: now,
@@ -174,7 +189,30 @@ export class Projects {
     if (existing) return existing.id;
     return this.create({ name: name ?? basename(folder), folder });
   }
-  /** Changes name, description, color or folder. A null folder removes it. */
+  editFolder(id, action, path) {
+    const p = this.get(id);
+    if (action === "add") path = folderField(path);
+    if (!path) throw new Error("Choose a folder for the project.");
+    const folders = changedFolders(p.folders, action, path);
+    this.applyFolders(p, folders);
+    this.ws.save();
+    return p.folders;
+  }
+  applyFolders(p, folders) {
+    const chats = this.chats(p.id);
+    if (chats.some((c) => this.ws.active.has(c.id))) throw new Error("Wait for this project's chats to finish before changing its folder.");
+    if (folders.length && chats.some(isGroup)) throw new Error("Group chats take text only. Move them before adding a folder.");
+    for (const c of chats) {
+      const before = c.folder ?? p.folder;
+      if (!folders.includes(c.folder) || c.folder === folders[0]) delete c.folder;
+      if (before !== (c.folder ?? folders[0])) restart(c);
+      if (!folders.length) c.mode = "default";
+    }
+    p.folders = folders;
+    if (folders.length) p.folder = folders[0];
+    else delete p.folder;
+  }
+  /** A legacy folder edit replaces (or removes) the first folder and preserves its siblings. */
   update(id, patch = {}) {
     const p = this.get(id);
     const next = {};
@@ -184,17 +222,16 @@ export class Projects {
       else if (key === "color") {
         if (value != null && !PROJECT_COLORS.includes(value)) throw new Error("Unknown project color");
         next.color = value ?? undefined;
+      } else if (key === "mode") {
+        if (!MODES.includes(value)) throw new Error("Use default, plan or yolo.");
+        next.mode = value === "default" ? undefined : value;
       } else if (key === "folder") next.folder = folderField(value);
       else throw new Error("Unknown project field");
     }
-    if ("folder" in next && next.folder !== p.folder) {
-      const chats = this.chats(id);
-      if (chats.some((c) => this.ws.active.has(c.id))) throw new Error("Wait for this project's chats to finish before changing its folder.");
-      // Chats that already started keep their history; without a folder they lose the coding modes.
-      if (!next.folder)
-        for (const c of chats) {
-          c.mode = "default";
-        }
+    if ("folder" in next) {
+      const rest = p.folders.slice(1).filter((f) => f !== next.folder);
+      this.applyFolders(p, next.folder ? [next.folder, ...rest] : rest);
+      delete next.folder;
     }
     Object.assign(p, next);
     for (const key of Object.keys(next)) if (next[key] === undefined) delete p[key];
@@ -205,9 +242,12 @@ export class Projects {
   }
   remove(id) {
     this.get(id);
+    if (this.chats(id).some((c) => this.ws.active.has(c.id))) throw new Error("Wait for this project's chats to finish.");
     this.ws.state.projects = this.all.filter((p) => p.id !== id);
     for (const chat of this.ws.state.chats)
       if (chat.projectId === id) {
+        restart(chat);
+        delete chat.folder;
         delete chat.projectId;
         chat.mode = "default";
       }
@@ -288,10 +328,12 @@ export class Projects {
     return (isGroup(chat) ? chat.botIds : [chat.botId]).map((id) => this.ws.bot(id));
   }
   /** Points a chat at a project (or none) and sets how freely its bot may act there. */
-  setChatProject(chatId, projectId, mode = "default") {
+  setChatProject(chatId, projectId, mode, folder) {
     const chat = this.ws.chat(chatId);
     if (this.ws.active.has(chatId)) throw new Error("Wait for the reply to finish before changing the project.");
+    mode ??= (projectId && this.get(projectId).mode) || "default";
     if (!MODES.includes(mode)) throw new Error("Use default, plan or yolo.");
+    const previousId = chat.projectId;
     const before = this.folderFor(chat);
     if (projectId) {
       const project = this.get(projectId);
@@ -299,32 +341,31 @@ export class Projects {
         throw new Error("Group chats take text only and can't work in a project folder. Choose a project without a folder.");
       // Every bot that answers here needs access to the project.
       for (const bot of this.botsOf(chat)) assertProject(this.ws.state, bot, project);
-      // Changing only the mode of a chat whose folder has gone missing is allowed, so YOLO can be turned off.
-      if (project.folder && projectId !== chat.projectId && !existsSync(project.folder))
-        throw new Error("This project's folder is missing: " + project.folder);
-      const after = project.folder && existsSync(project.folder) ? project.folder : null;
-      if (chat.established && projectId !== chat.projectId && (before || after) && before !== after)
-        throw new Error("This conversation already started in another folder. Start a new chat for this project.");
+      if (folder === undefined && projectId === chat.projectId) folder = chat.folder;
+      if (folder && !project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      if (project.folder && projectId !== previousId && !folderFor(project, { folder })) throw new Error("This project's folder is missing: " + (folder || project.folder));
+      if (folder && folder !== project.folder) chat.folder = folder;
+      else delete chat.folder;
       project.lastUsed = Date.now();
       chat.projectId = projectId;
       // Modes only apply in a folder.
       chat.mode = project.folder ? mode : "default";
     } else {
-      if (chat.projectId && chat.established && before)
-        throw new Error("This conversation already started in its project. Start a new chat instead.");
+      delete chat.folder;
       delete chat.projectId;
       chat.mode = mode;
     }
+    if (previousId !== chat.projectId || before !== this.folderFor(chat)) restart(chat);
     this.ws.save();
   }
   /** New chat in a project: one bot, or 2 to 6 for a group. Every bot needs access. Returns the chat id. */
-  startChat(botIds, projectId, mode = "default") {
+  startChat(botIds, projectId, mode, folder) {
     if (!Array.isArray(botIds) || !botIds.length) throw new Error("Choose a bot.");
     const project = this.get(projectId);
     for (const id of botIds) assertProject(this.ws.state, this.ws.bot(id), project);
     const chatId = botIds.length > 1 ? this.ws.createGroupChat(botIds) : this.ws.createChat(botIds[0]);
     try {
-      this.setChatProject(chatId, projectId, mode);
+      this.setChatProject(chatId, projectId, mode, folder);
     } catch (error) {
       this.ws.state.chats = this.ws.state.chats.filter((c) => c.id !== chatId);
       this.ws.save();
@@ -336,7 +377,7 @@ export class Projects {
   folderFor(chat) {
     if (isGroup(chat) || chat.group) return null;
     const project = chat.projectId && this.all.find((p) => p.id === chat.projectId);
-    return project?.folder && existsSync(project.folder) ? project.folder : null;
+    return folderFor(project, chat);
   }
 
   // To-do list
@@ -387,20 +428,23 @@ export class Projects {
   context(chat, bot) {
     const p = this.projectOf(chat);
     if (!p || !canUseProject(this.ws.state, bot, p)) return "";
+    const working = this.folderFor(chat);
     return (
       "\n\nThis chat belongs to the project “" + p.name + "”." +
       (p.description ? "\nProject description: " + p.description : "") +
       // No counts here: this text opens the session, and the to-do list changes during it.
       "\nThe project keeps a to-do list. Use todo_list, todo_add and todo_update to read and keep it, and project_info for its details." +
-      (p.folder ? "\nIts folder is " + p.folder + "." : "")
+      (working ? "\nIts folder is " + working + "." : "") +
+      p.folders.filter((f) => f !== working).map((f) => "\nOther project folder: " + basename(f) + " (" + f + ")").join("")
     );
   }
-  info(p) {
+  info(p, chat) {
     return {
       id: p.id,
       name: p.name,
       description: p.description || "",
-      folder: p.folder ?? null,
+      folder: chat ? this.folderFor(chat) : p.folder ?? null,
+      ...(p.folders.length > 1 && { folders: p.folders }),
       todos: { open: p.todos.filter((t) => !t.done).length, done: p.todos.filter((t) => t.done).length },
     };
   }
@@ -428,7 +472,7 @@ export class Projects {
     const view = (t) => ({ id: t.id, text: t.text, done: t.done });
     let added = 0;
     return [
-      tool("project_info", "Read this chat's project: name, description, folder and to-do counts.", {}, [], (p) => this.info(p)),
+      tool("project_info", "Read this chat's project: name, description, folder and to-do counts.", {}, [], (p) => this.info(p, chat)),
       tool(
         "todo_list",
         "List this project's to-do items in order. Done items are included unless open_only is true.",
@@ -449,8 +493,8 @@ export class Projects {
       ),
     ];
   }
-  async changes(id) {
-    const path = this.folderOf(id);
+  async changes(id, folder) {
+    const path = this.folderOf(id, folder);
     const root = (await git(path, ["rev-parse", "--show-toplevel"], { allowFail: true }))?.trim();
     if (!root) return { repo: false, files: [] };
     const status = parseStatus(await git(root, ["status", "--porcelain=v1", "-b", "-z", "--untracked-files=all"]));
@@ -491,8 +535,8 @@ export class Projects {
       removed: files.reduce((n, f) => n + f.removed, 0),
     };
   }
-  async diff(id, file) {
-    const path = this.folderOf(id);
+  async diff(id, file, folder) {
+    const path = this.folderOf(id, folder);
     const root = (await git(path, ["rev-parse", "--show-toplevel"]))?.trim();
     if (typeof file !== "string" || !file || isAbsolute(file) || file.split(/[\\/]/).includes(".."))
       throw new Error("Invalid file");
@@ -508,8 +552,8 @@ export class Projects {
     return text.length > MAX_DIFF ? { text: text.slice(0, MAX_DIFF), truncated: true } : { text, truncated: false };
   }
   /** Stages everything and commits it. The person confirms this in the app. */
-  async commit(id, message) {
-    const path = this.folderOf(id);
+  async commit(id, message, folder) {
+    const path = this.folderOf(id, folder);
     const text = textField(message, 2000, "commit message");
     // Only the project's folder is staged. Hooks don't run (see SAFE).
     await git(path, ["add", "-A", "--", "."]);
