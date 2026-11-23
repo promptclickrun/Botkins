@@ -91,6 +91,8 @@ bool send_all(int fd, const char* data, size_t size, Clock::time_point deadline)
 }
 }  // namespace
 
+int connect_to(const std::string& host, int timeout_ms) { return open_socket(host, Clock::now() + std::chrono::milliseconds(timeout_ms)); }
+
 HttpResponse SocketTransport::request(const std::string& host, const char* method, const std::string& path, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, int timeout_ms) {
   HttpResponse response;
   const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);

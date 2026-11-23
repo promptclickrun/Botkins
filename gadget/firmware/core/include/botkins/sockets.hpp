@@ -12,4 +12,7 @@ struct SocketTransport : Transport {
   HttpResponse request(const std::string& host, const char* method, const std::string& path, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, int timeout_ms) override;
 };
 
+/** A TCP connection to "address:port" ("[v6]:port"; 47610 without a port), non-blocking, or -1. */
+int connect_to(const std::string& host, int timeout_ms);
+
 }  // namespace botkins
