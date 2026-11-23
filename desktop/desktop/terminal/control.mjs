@@ -137,6 +137,17 @@ export function controlApi(service) {
     if (!found) throw new ControlError("No paired device is called " + wanted + ". See `botkins devices list`.", "NOT_FOUND");
     return found;
   };
+  /** A paired device that is a gadget, by name or id. */
+  const gadget = (ref) => {
+    const found = device(ref);
+    if (found.kind !== "gadget") throw new ControlError(found.name + " isn't a gadget. See `botkins devices list`.", "NOT_FOUND");
+    if (typeof link.configureGadget !== "function") throw new ControlError("This version of Botkins has no gadget settings yet.", "UNSUPPORTED");
+    return found;
+  };
+  const gadgetView = (id) => {
+    const listed = link.devices().find((entry) => entry.id === id);
+    return { id, name: listed?.name, connected: listed?.connected === true, ...listed?.gadget };
+  };
   const deviceView = (entry) => ({
     id: entry.id,
     name: entry.name,
@@ -307,6 +318,34 @@ export function controlApi(service) {
      * Sets a gadget up over a USB port of this computer (gadget/docs/contract.md): reads its key,
      * pairs it by introduction and hands it the Wi-Fi network. The password goes to the gadget and nowhere else.
      */
+    /** A paired gadget, by name or id, with its settings and Wi-Fi as the device list shows them. */
+    "gadgets.get": ([ref]) => gadgetView(gadget(ref).id),
+    /** Volume, microphone, mute, brightness, the screen's timers, and the bot (desktop/link/gadget.mjs checks each). */
+    "gadgets.set": ([ref, patch = {}]) => {
+      const found = gadget(ref);
+      const { bot: botRef, ...settings } = patch && typeof patch === "object" ? patch : {};
+      try {
+        link.configureGadget(found.id, { ...settings, ...(botRef !== undefined && { botId: bot(botRef).id }) });
+      } catch (error) {
+        throw new ControlError(error.message, "BAD_ARGUMENT");
+      }
+      return gadgetView(found.id);
+    },
+    /** A Wi-Fi network for a gadget: `{ add: { ssid, password } }` or `{ forget: ssid }`. The password is in no log line. */
+    "gadgets.wifi": ([ref, change]) => {
+      const found = gadget(ref);
+      try {
+        link.gadgetWifi(found.id, change);
+      } catch (error) {
+        throw new ControlError(error.message, "BAD_ARGUMENT");
+      }
+      return { ...gadgetView(found.id), queued: true };
+    },
+    "gadgets.restart": ([ref]) => {
+      const found = gadget(ref);
+      link.restartGadget(found.id);
+      return gadgetView(found.id);
+    },
     async "gadgets.add"([{ port, name, bot: botRef, wifi } = {}] = []) {
       if (!link.status().enabled) throw new ControlError("Phone access is off, so a gadget couldn't reach this computer. " + (service.inApp ? "Turn it on in the app's Settings, under Phone." : "Turn it on with `botkins config set link.enabled true`."), "LINK_OFF");
       if (typeof link.addGadget !== "function") throw new ControlError("This version of Botkins has no gadgets yet.", "UNSUPPORTED");
