@@ -433,6 +433,7 @@ export type ChatSummary = {
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
 };
 export type Step = {
+  background?: boolean;
   id: string;
   name: string;
   source?: string;
@@ -451,7 +452,7 @@ export type Step = {
 };
 /** One step's input and output, read when the step is opened (`link.step`). */
 export type StepDetail = { input?: string; output?: string };
-export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
+export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
 /** One reasoning item's wire suffix for a phone following a working turn. */
 export type ReasoningAppend = Omit<Reasoning, "text"> & { from: number; add: string };

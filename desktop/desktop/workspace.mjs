@@ -1674,6 +1674,16 @@ export class Workspace {
       if (this.queues.has(chat.id)) setImmediate(() => this.drain(chat.id));
     }
   }
+  async readSessionTodos(session, chat, run, task) {
+    const read = (task.todoRead ?? 0) + 1;
+    task.todoRead = read;
+    const result = await session.todos().catch(() => null);
+    if (!result || read !== task.todoRead) return;
+    run.todos = mapTodos(result);
+    // A late read still belongs in its turn's activity, but the latest turn owns the rail.
+    if (this.state.runs.find((item) => item.chatId === chat.id)?.id === run.id) chat.todos = run.todos;
+    this.notify();
+  }
   /** One member's reply inside a group turn. Returns its text. */
   async memberTurn(chat, bot, members, run, task) {
     chat.members ??= {};
@@ -1717,7 +1727,6 @@ export class Workspace {
       session = await this.openSession(view, bot, run, task);
       task.session = session;
       if (task.stopped) return "";
-      let todoRead = 0;
       unsubscribe = session.on((event) => {
         const { type, data, agentId } = event;
         if (!event.agentId && !event.data?.parentToolCallId) {
@@ -1740,15 +1749,7 @@ export class Workspace {
           task.intent = data.intent;
           this.notify();
         } else if (type === "session.todos_changed") {
-          const read = ++todoRead;
-          session
-            .todos()
-            .then((result) => {
-              if (!result || read !== todoRead) return;
-              run.todos = mapTodos(result);
-              this.notify();
-            })
-            .catch(() => {});
+          this.readSessionTodos(session, chat, run, task);
         } else if (recordCanvas(run, null, task, event)) {
           // Tag this member's reasoning, and show only its own while it thinks.
           if (type.startsWith("assistant.reasoning")) {
@@ -1801,7 +1802,6 @@ export class Workspace {
       const chosen = task.route.choice;
       if (task.route.hosted) run.model = { model: chosen.model, provider: this.providers.for(chosen).id, ...(current?.reasoningEffort && { reasoningEffort: current.reasoningEffort }), harness: task.route.via ?? "copilot" };
       else if (current) run.model = { ...current, ...(chat.sessionProvider && { provider: chat.sessionProvider }) };
-      let todoRead = 0;
       unsubscribe = session.on((event) => {
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") commitInterim(chat, run, task);
@@ -1824,16 +1824,7 @@ export class Workspace {
           if (run.recovery?.input && event.data?.delivery !== "steering") run.recovery.eventId = event.id;
           this.save();
         } else if (event.type === "session.todos_changed") {
-          const read = ++todoRead;
-          session
-            .todos()
-            .then((result) => {
-              if (!result || read !== todoRead) return;
-              run.todos = mapTodos(result);
-              chat.todos = run.todos;
-              this.notify();
-            })
-            .catch(() => {});
+          this.readSessionTodos(session, chat, run, task);
         } else if (recordCanvas(run, chat, task, this.metered(event, run.model ?? chosen))) this.notify();
         else recordActivity(run, event, () => {
           if (event.type === "tool.execution_start" || event.type === "tool.execution_complete") this.save();

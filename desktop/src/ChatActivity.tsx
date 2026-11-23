@@ -21,6 +21,8 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { todoLabel } from "../desktop/link/session-todos";
+import { activitySteps } from "../desktop/link/activity-steps.mjs";
 import { toolKind } from "../desktop/tool-kind.mjs";
 import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
@@ -324,6 +326,7 @@ export function TimelineFold({
   avatar,
   count,
   onDetails,
+  todoRail,
 }: {
   line: string;
   live?: boolean;
@@ -336,11 +339,16 @@ export function TimelineFold({
   avatar?: ReactNode;
   count?: string;
   onDetails?: () => void;
+  todoRail?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const toggle = () => {
-    if (live) return onDetails?.();
+    if (live) {
+      onDetails?.();
+      setDetailsOpen((value) => !value);
+      return;
+    }
     setOpen((value) => !value);
   };
   const showDetails = () => {
@@ -349,22 +357,25 @@ export function TimelineFold({
   };
   return (
     <section className={"timeline-fold" + (live ? " live" : "")} aria-label={live ? "Turn status" : "Turn activity"}>
-      <button className="timeline-fold-line" aria-expanded={live ? undefined : open} onClick={toggle}>
-        {!live && avatar}
-        <span>
-          {line}
-          {live && since !== undefined && <> · <Elapsed since={since} /></>}
-          {count && " · " + count}
-        </span>
-        {!live && <ChevronRight size={14} className="fold-chevron" aria-hidden="true" />}
-      </button>
+      <div className="turn-rails">
+        <button className="timeline-fold-line" aria-expanded={live ? detailsOpen : open} onClick={toggle}>
+          {!live && avatar}
+          <span>
+            {line}
+            {live && since !== undefined && <> · <Elapsed since={since} /></>}
+            {count && " · " + count}
+          </span>
+          {!live && <ChevronRight size={14} className="fold-chevron" aria-hidden="true" />}
+        </button>
+        {todoRail}
+      </div>
       {open && !live && (
         <div className="timeline-fold-body">
           {body}
           <button className="timeline-details" onClick={showDetails}>Details</button>
         </div>
       )}
-      {detailsOpen && !live && (
+      {detailsOpen && (
         <div className="timeline-activity" role="dialog" aria-label="Work activity">
           <div className="timeline-activity-head">
             <strong>Work activity</strong>
@@ -412,11 +423,12 @@ export function ToolTrail({
   const count = visibleSteps.length || (choice === "hidden" ? 0 : run.usedTools?.length || 0);
   // Keep a stable status row even before the first tool arrives. This is the anchor that becomes
   // the finished work line when the turn ends.
-  if (!live && !count && !run.summary) return null;
+  if (!live && !count && !run.summary && !run.agents?.length && !run.todos?.length) return null;
   const toggle = () => {
     onToggle?.();
     setExpanded(!expanded);
   };
+  const contents = expanded && <ActivitySections run={run} steps={visibleSteps} />;
   const plural = count === 1 ? " step" : " steps";
   if (live)
     return (
@@ -427,7 +439,7 @@ export function ToolTrail({
           <span className="work-intent">{intent?.trim() || "Working…"}</span>
           {count > 0 && <span className="work-count">{count + plural}</span>}
         </button>
-        {expanded && <StepList steps={visibleSteps} />}
+        {contents}
       </section>
     );
   const last = Math.max(run.time, ...steps.map((s) => s.finished ?? s.started));
@@ -442,17 +454,15 @@ export function ToolTrail({
         </span>
         {count > 0 && <span className="work-count">{count + plural}</span>}
       </button>
-      {expanded && <RunLead agents={run.agents} todos={run.todos} />}
-      {expanded &&
-        (steps.length ? (
-          <StepList steps={visibleSteps} />
-        ) : (
+      {contents}
+      {expanded && !steps.length && !!run.usedTools?.length && (
+        <section className="activity-tools" aria-label="Tool calls">
+          <h4>Tool calls</h4>
           <ol>
-            {run.usedTools?.map((name) => (
-              <li key={name}>{name} · Done</li>
-            ))}
+            {[...run.usedTools].reverse().map((name) => <li key={name}>{name} · Done</li>)}
           </ol>
-        ))}
+        </section>
+      )}
     </section>
   );
 }
@@ -460,12 +470,13 @@ export function ToolTrail({
 function TodoGlyph({ status }: { status: Todo["status"] }) {
   if (status === "done") return <Check size={14} aria-label="Done" />;
   if (status === "in_progress") return <LoaderCircle size={14} className="spin" aria-label="In progress" />;
+  if (status === "failed") return <CircleAlert size={14} aria-label="Failed" />;
   if (status === "blocked" || status === "cancelled")
     return <Ban size={14} aria-label={status === "blocked" ? "Blocked" : "Cancelled"} />;
   return <Circle size={14} aria-label="Pending" />;
 }
 
-/** "Tasks 3/5" above the composer, opening the chat's task list. */
+/** The session’s tracked todos, including the closed count. */
 export function TaskChip({
   todos,
   open,
@@ -475,12 +486,11 @@ export function TaskChip({
   open: boolean;
   toggle: () => void;
 }) {
-  const done = todos.filter((t) => t.status === "done").length;
   const active = todos.some((t) => t.status === "in_progress");
   return (
     <button className="canvas-chip" aria-expanded={open} aria-controls="task-drawer" onClick={toggle}>
       {active ? <LoaderCircle size={14} className="spin" /> : <ListChecks size={14} />}
-      Tasks {done}/{todos.length}
+      {todoLabel(todos)}
     </button>
   );
 }
@@ -493,6 +503,7 @@ function TodoItems({ todos }: { todos: Todo[] }) {
           <TodoGlyph status={t.status} />
           <span>{t.title}</span>
           {t.status === "blocked" && <em>Blocked</em>}
+          {t.status === "failed" && <em>Failed</em>}
         </li>
       ))}
     </ol>
@@ -526,7 +537,7 @@ export function HelperChip({
   );
 }
 
-function HelperItems({ agents }: { agents: Subagent[] }) {
+function HelperItems({ agents, byAgent }: { agents: Subagent[]; byAgent?: Map<string, Step[]> }) {
   const now = useNow(agents.some((a) => a.status === "Running"));
   return (
     <ol>
@@ -541,10 +552,16 @@ function HelperItems({ agents }: { agents: Subagent[] }) {
           ) : (
             <CircleAlert size={14} />
           )}
-          <span>
+          <div className="helper-info">
             <strong>{a.name}</strong>
             {(a.detail || a.description) && <small>{a.detail || a.description}</small>}
-          </span>
+            {!!byAgent?.get(a.id)?.length && (
+              <details>
+                <summary>Tool calls</summary>
+                <WorkSteps steps={byAgent.get(a.id)!} />
+              </details>
+            )}
+          </div>
           <em>
             {a.status === "Running" ? "Running" : a.status} · {duration((a.finished ?? now) - a.started)}
           </em>
@@ -562,25 +579,28 @@ export function HelperDrawer({ agents }: { agents: Subagent[] }) {
   );
 }
 
-/**
- * What a turn's work list starts with: its helpers, then its to-do list, and after them the steps
- * and everything else (the owner's order, 2026-11-20; the phone's Activity sheet has the same).
- * Nothing when the turn had neither.
- */
-export function RunLead({ agents, todos }: { agents?: Subagent[]; todos?: Todo[] }) {
-  if (!agents?.length && !todos?.length) return null;
+/** Tasks, helpers and background commands lead the activity feed. */
+export function ActivitySections({ run, steps }: { run: Run; steps?: Step[] }) {
+  const { tools, background, byAgent } = activitySteps(steps, run.agents);
   return (
     <>
-      {!!agents?.length && (
-        <section className="run-lead" aria-label="Helpers">
-          <h4>Helpers</h4>
-          <HelperItems agents={agents} />
+      {!!run.todos?.length && (
+        <section className="run-lead" aria-label="Tasks">
+          <h4>Tasks</h4>
+          <TodoItems todos={run.todos} />
         </section>
       )}
-      {!!todos?.length && (
-        <section className="run-lead" aria-label="To do">
-          <h4>To do</h4>
-          <TodoItems todos={todos} />
+      {(!!run.agents?.length || background.length > 0) && (
+        <section className="run-lead" aria-label="Subagents">
+          <h4>Subagents</h4>
+          {!!run.agents?.length && <HelperItems agents={run.agents} byAgent={byAgent} />}
+          <WorkSteps steps={background} />
+        </section>
+      )}
+      {!!tools.length && (
+        <section className="activity-tools" aria-label="Tool calls">
+          <h4>Tool calls</h4>
+          <WorkSteps steps={tools} />
         </section>
       )}
     </>

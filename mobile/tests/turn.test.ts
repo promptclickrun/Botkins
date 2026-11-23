@@ -11,6 +11,7 @@ import { MockBackend } from "../link-host/mock-backend.mjs";
 import { type FetchLike, LinkClient, pair, type Pairing } from "../src/link/client";
 import { parsePairingUrl } from "../src/link/pairing";
 import type { ChatDetail, Live, Message, PanePanel, Run, Step, Subagent } from "../src/link/types";
+import { sessionTodos, todoLabel } from "../link-host/session-todos";
 import { helperDetail, latestTurn, railLabel } from "../src/features/chat/helpers";
 import { answerText, chatTimeline, createTimelineRunSelector, endingOf, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, markKeys, noteMarks, type RunMarks, stepLabel, TIMELINE_V1, type TimelineInput, underWay, workSummary } from "../src/features/chat/turn";
 import { mergeChat } from "../src/state/store";
@@ -192,6 +193,20 @@ test("work lines and step labels use the desktop app's words", () => {
   assert.equal(workSummary([{ ...step("a", 1), name: "x", source: "github" }]), "Used a tool");
   assert.equal(stepLabel({ ...step("q", 1), name: "ask_user", label: "ask_user", input: JSON.stringify({ question: "Which one?", choices: ["A"] }, null, 2) }), "Asked you: Which one?");
   assert.equal(stepLabel(step("a", 1)), "Ran a");
+});
+
+test("the session Todo rail keeps open work and retires a closed list only at the next turn", () => {
+  const closed = ["done", "cancelled", "failed"].map((status) => ({ status }));
+  assert.equal(todoLabel(closed), "Todos 3/3");
+  assert.equal(sessionTodos(closed, undefined), closed);
+  assert.equal(sessionTodos(undefined, closed), undefined);
+  for (const status of ["pending", "in_progress", "blocked"]) {
+    const open = [...closed, { status }];
+    assert.equal(sessionTodos(undefined, open), open);
+    assert.deepEqual(sessionTodos([], open), []);
+    assert.equal(sessionTodos(open, closed), open);
+  }
+  assert.equal(sessionTodos(undefined, undefined), undefined);
 });
 
 test("the helpers of a turn: the rail's words, and what each was asked, did and came back with", () => {

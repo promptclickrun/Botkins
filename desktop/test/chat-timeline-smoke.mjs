@@ -37,8 +37,10 @@ workspace.runs.unshift({
   status: "Completed",
   detail: "",
   reasoning: [{ id: randomUUID(), text: "Read the workspace before writing.", started: now + 5 }],
-  steps: [{ id: randomUUID(), name: "read_file", label: "Read file", status: "Done", started: now + 15, finished: now + 25 }],
-  // The turn's to-do list and its helper, written here in the order the window must not keep.
+  steps: [{ id: randomUUID(), name: "read_file", label: "Read file", status: "Done", started: now + 15, finished: now + 25 },
+    { id: "bg", name: "Bash", label: "Build in background", input: JSON.stringify({ run_in_background: true }), status: "Done", started: now + 16 },
+    { id: "latest", name: "view", label: "Inspect result", status: "Done", started: now + 21 }],
+  // The activity feed groups these records independently of their storage order.
   todos: [{ id: "t1", title: "Check both files", status: "done" }, { id: "t2", title: "Write the summary", status: "pending" }],
   agents: [{ id: "h1", name: "File reader", description: "Reads the second file", status: "Done", started: now + 12, finished: now + 22 }],
 });
@@ -68,18 +70,62 @@ try {
   await page.getByRole("region", { name: "Turn activity" }).getByRole("button", { name: "Details", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Work activity" })).toContainText("I checked the first file.");
   await expect(page.getByRole("dialog", { name: "Work activity" })).toContainText("Read the workspace before writing.");
-  // The owner's order (2026-11-20): the helpers, then the to-do list, then the steps and everything else.
-  // In the opened work list, in its details, and in the chips over the message box.
   const inOrder = (text, words) => words.map((word) => text.indexOf(word)).every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1]));
-  const ORDER = ["Helpers", "File reader", "To do", "Check both files", "Write the summary", "Read file"];
-  const listText = await page.locator(".timeline-fold-body").innerText();
-  assert.ok(inOrder(listText, ORDER), "the work list starts with the helpers, then the to-do list: " + listText);
-  const detailsText = await page.getByRole("dialog", { name: "Work activity" }).innerText();
-  assert.ok(inOrder(detailsText, [...ORDER.slice(0, 5), "I checked the first file."]), "the details start with the helpers, then the to-do list: " + detailsText);
-  const chips = await page.locator(".canvas-chips .canvas-chip").allInnerTexts();
-  assert.equal(chips.length, 2, "one chip for the helpers and one for the to-do list");
-  assert.match(chips[0], /In the background/, "the helpers' chip comes first");
-  assert.match(chips[1], /Tasks 1\/2/, "the to-do list's chip comes after it");
+  const orderInFeed = ["Tasks", "Check both files", "Subagents", "File reader", "Build in background", "Tool calls", "Inspect result", "Read file"];
+  for (const feed of [page.locator(".timeline-fold-body"), page.getByRole("dialog", { name: "Work activity" })]) {
+    const text = await feed.innerText();
+    assert.ok(inOrder(text, orderInFeed), "activity sections and newest tools first: " + text);
+  }
+  const taskRail = page.getByRole("button", { name: /^Todos / });
+  await expect(taskRail).toHaveCount(1);
+  await expect(taskRail).toHaveText("Todos 1/2");
+  await taskRail.click();
+  await expect(page.locator("#task-drawer")).toContainText("Write the summary");
+  await taskRail.click();
+  const activeRun = current.runs.find((run) => run.id === runId);
+  activeRun.status = "Working";
+  const publish = () => app.evaluate(({ BrowserWindow }, snapshot) => BrowserWindow.getAllWindows()[0].webContents.send("changed", snapshot), current);
+  await page.getByRole("button", { name: "Close work activity" }).click();
+  await publish();
+  await page.locator(".timeline-fold.live .timeline-fold-line").click();
+  const liveTools = page.getByRole("dialog", { name: "Work activity" }).getByRole("region", { name: "Tool calls" });
+  await expect(liveTools.locator("summary").first()).toContainText("Inspect result");
+  activeRun.steps.push({ id: "live", name: "bash", label: "Check result", status: "Running", started: now + 31 });
+  await publish();
+  await expect(liveTools.locator("summary").first()).toContainText("Check result");
+  const workingRail = page.locator(".timeline-fold.live .timeline-fold-line");
+  const left = await workingRail.boundingBox();
+  const right = await taskRail.boundingBox();
+  assert.ok(right.x >= left.x + left.width - 1 && right.y < left.y + left.height, "Todos is to the right of Working");
+  const activeChat = current.chats.find((chat) => chat.id === chatId);
+  activeRun.status = "Completed";
+  activeChat.todos = activeRun.todos;
+  const nextTurn = () => {
+    const id = randomUUID();
+    const run = { id, chatId, time: Date.now(), status: "Working", title: "Next turn" };
+    current.runs.unshift(run);
+    activeChat.messages.push({ role: "user", text: run.title, runId: id, time: run.time });
+    return run;
+  };
+  const next = nextTurn();
+  await publish();
+  await expect(workingRail.locator("..").getByRole("button", { name: "Todos 1/2" })).toBeVisible();
+  next.todos = activeChat.todos = [
+    { id: "t1", title: "Done task", status: "done" },
+    { id: "t2", title: "Cancelled task", status: "cancelled" },
+    { id: "t3", title: "Failed task", status: "failed" },
+  ];
+  next.status = "Completed";
+  await publish();
+  await expect(taskRail).toBeVisible();
+  const fresh = nextTurn();
+  await publish();
+  await expect(taskRail).toHaveCount(0);
+  fresh.todos = [{ id: "t4", title: "Fresh task", status: "pending" }];
+  await publish();
+  await expect(taskRail).toHaveText("Todos 0/1");
+  await taskRail.click();
+  await expect(page.locator("#task-drawer")).toContainText("Fresh task");
   // A group turn has one run but several speakers. Each final reply must stay in the message
   // order around the shared activity, and the run's current speaker owns the live/status avatar.
   const groupChatId = randomUUID();

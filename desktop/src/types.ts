@@ -257,7 +257,7 @@ export type Reasoning = {
 export type Todo = {
   id: string;
   title: string;
-  status: "pending" | "in_progress" | "done" | "blocked" | "cancelled";
+  status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed";
   dependsOn?: string[];
 };
 export type Subagent = {
@@ -1770,6 +1770,7 @@ export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBo
 /** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
+  background?: boolean;
   agentId?: string;
   id: string;
   name: string;

@@ -131,10 +131,12 @@ try {
     await expect(trail).toContainText("Worked for");
     await expect(trail).toContainText(run.summary);
     if (run.reasoning?.length) await expect(page.locator(".reasoning").first()).toContainText("Thought for");
-    if (run.todos?.length || (await chatOf(id)).todos?.length) {
-      await page.locator(".canvas-chip", { hasText: "Tasks" }).click();
-      await expect(page.getByRole("region", { name: "Tasks" })).toBeVisible();
-    }
+    const rail = page.getByRole("button", { name: /^Todos / });
+    const carried = (await chatOf(id)).todos?.some((todo) => ["pending", "in_progress", "blocked"].includes(todo.status));
+    if (queuedRun.todos ? queuedRun.todos.length > 0 : carried) {
+      await rail.click();
+      await expect(page.locator("#task-drawer")).toBeVisible();
+    } else await expect(rail).toHaveCount(0);
     if (ctx) await expect(page.locator(".context-meter")).toContainText("% of context");
     const scrollable = await page
       .locator(".messages")
