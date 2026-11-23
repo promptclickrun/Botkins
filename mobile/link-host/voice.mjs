@@ -199,6 +199,16 @@ export function wavHasSpeech(wav) {
 }
 
 const xml = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+/** The line that keeps a live voice in the person's chosen speech language ("en-US"), or "" with none chosen. */
+function speakingIn(language) {
+  if (!language) return "";
+  let name = language;
+  try {
+    name = new Intl.DisplayNames(["en"], { type: "language" }).of(language) || language;
+  } catch {}
+  return `The person speaks ${name} (${language}). Always answer in ${name}, unless they clearly speak to you in another language. Never take noise, silence or a short, unclear sound for words in another language: when you can't make out what they said, ask them in ${name} to say it again.`;
+}
+
 /** A language as the OpenAI routes want it: "en-US" is "en" (the page only keeps regional codes for Chinese). */
 const iso = (language) => (/^zh-/i.test(language) ? language.toLowerCase() : language.split("-")[0].toLowerCase());
 
@@ -1115,6 +1125,9 @@ export class Voice {
   }
   async liveGemini({ model, voice, instructions, tools }) {
     const key = this.keyOf("gemini");
+    // Gemini tells the language by ear, and a faint or cut-off sound can pass for another language to it
+    // ("¿Qué?"), which it then answers in. Its native audio models take a language from the instructions.
+    const told = [instructions, speakingIn(this.data.stt.language)].filter(Boolean).join("\n\n");
     // A new session has to start within 2 minutes; the token's own life is the default 30 minutes and one use.
     const opens = new Date(this.now() + 2 * 60_000).toISOString();
     const ends = new Date(this.now() + 30 * 60_000).toISOString();
@@ -1124,7 +1137,7 @@ export class Voice {
     const setup = {
       model: "models/" + model,
       generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
-      ...(instructions && { systemInstruction: { parts: [{ text: instructions }] } }),
+      ...(told && { systemInstruction: { parts: [{ text: told }] } }),
       ...(tools.length && { tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, ...(t.description && { description: t.description }), ...(this.trimSchema(t.parameters) && { parameters: this.trimSchema(t.parameters) }) })) }] }),
       inputAudioTranscription: {},
       outputAudioTranscription: {},
