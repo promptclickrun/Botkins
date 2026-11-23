@@ -623,7 +623,10 @@ const freePort = () =>
   });
 
 test("a running service sets a key provider up from the command line's calls, switches it on, and shows no key", async (t) => {
-  const dir = folder();
+  // A short folder straight in the system's temp folder: on macOS that is already long, and a Unix
+  // socket's path has a limit of about a hundred characters (as test/terminal-coverage.test.mjs does).
+  const dir = mkdtempSync(join(tmpdir(), "bk-keyed-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const paths = terminalPaths({ root: join(dir, "r"), env: {} });
   mkdirSync(paths.root, { recursive: true });
   writeFileSync(paths.config, JSON.stringify({ providers: { only: ["openrouter", "foundry", "openai-api"] }, link: { port: await freePort(), announce: false } }));
