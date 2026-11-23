@@ -27,7 +27,7 @@ What it can not see:
 - Invite contents. A card is encrypted with a key derived from the invite code.
 - Any secret of the computer.
 
-The room holds bounded, opaque requests until they are answered or expire, so it can forward them again after a transport interruption. It drops pending requests when the phone leaves. Its invite directory stores only sealed cards it cannot read, together with an expiry and owner public key, in a Durable Object keyed by the hash of the invite code. The card is deleted at expiry. Logs hold counts, socket kinds, close codes and the relay's own fixed close reasons, and nothing else: no lookup, key, signature, room name, `from` tag, card or message content. Invocation logs are off in `wrangler.jsonc` because they record request URLs, which hold room names and invite lookups.
+The room keeps opaque requests and recent answer IDs in instance memory. It can replay requests across a short transport gap while that memory survives. Hibernation or eviction discards the queue, and the phone retries unanswered requests. The room drops a phone’s entries when it leaves. Durable room records contain the v3 seat group and, during recovery, its deadline and phone routing IDs. Its invite directory stores only sealed cards it cannot read, together with an expiry and owner public key, in a Durable Object keyed by the hash of the invite code. The card is deleted at expiry. Logs hold counts, socket kinds, close codes and the relay's own fixed close reasons, and nothing else: no lookup, key, signature, room name, `from` tag, card or message content. Invocation logs are off in `wrangler.jsonc` because they record request URLs, which hold room names and invite lookups.
 
 ## Wire format
 
@@ -38,10 +38,11 @@ Phones continue to use the original frames. The legacy host protocol is also cov
 - Phone: `wss://<relay>/v1/room/<room>`, subprotocol `["botkins.phone.v1"]`.
 - A v2 computer uses one socket. A v3 computer can attach a second authenticated socket to the same seat. When a third socket from the same proven group arrives, the room evicts the least-recently-heard old socket with the same-group repair close (4001), makes the new socket active, demotes the survivor to standby and replays pending requests immediately. This is not a takeover: it sends no host-closed notice and does not clear the pending cache. A different computer taking the seat still closes the previous computer’s sockets with 4000.
 - Up to 48 phone sockets, and up to 8 from one network address. A new phone socket is never turned away: when its address already has 8, that address's oldest socket is closed with 4008, then when the room has 48, the room's oldest is closed with 4008.
-- Text `ping` gets `pong` on both kinds of socket. v3 liveness is hibernation-friendly: the room uses the Durable Object auto-response timestamp and recent binary host traffic, checked by an alarm rather than an interval. v0.16.1 hosts ping every 25 seconds and receive a conservative 40-second silence deadline; binary traffic refreshes that activity deadline, and hosts that prove a heartbeat of 12 seconds or less use a 15-second deadline. An older socket attachment without a baseline is initialized on the first wake.
+- Text `ping` gets `pong` on both kinds of socket. v3 liveness is hibernation-friendly: the room uses the Durable Object auto-response timestamp and recent binary host traffic, checked when a phone joins or sends a request. A bounded set of opening probes samples the heartbeat. After those probes, only a room with an open phone schedules liveness checks. v0.16.1 hosts ping every 25 seconds and receive a conservative 40-second silence deadline. Binary traffic refreshes the activity deadline. Closely observed pongs at most 12 seconds apart prove the fast heartbeat and shorten the deadline to 15 seconds. A silence timeout starts the 15-second recovery window at the missed deadline. An older socket attachment without a baseline is initialized on the first wake.
 - Phone to computer: `[conn 8][from 8] + the phone's message`. Computer to phone: `[conn 8] + the answer`, sent to that phone with the 8 bytes removed. An answer for a phone that is gone is dropped.
-- The v3 room keeps up to 48 outstanding requests and 16 MiB of request bodies across all phones. It holds them in arrival order, including requests sent while both sockets were down. A request that exceeds either limit gets the usual offline answer. An unanswered request expires after five minutes.
-- The v3 host receives `[conn 8][from 8][0x06][request id u32]` after the room accepts an answer. It can then release the cached answer body. This acknowledgement stays between the room and the host.
+- The v3 room keeps up to 48 outstanding requests and 16 MiB of request bodies across all phones. It holds them in arrival order, including requests sent while both sockets were down. A request that exceeds either limit gets the usual offline answer. The room checks the five-minute request lifetime on activity. A hostless room with held requests can stay resident until its 15-second reconnect window ends.
+- A pushed part from the host is `[conn 8][0x07][request id u32][sealed part]`. The room strips the connection prefix and forwards the part. The request stays pending until the normal `0x02` answer, which the host sends within four minutes. Only the final answer gets an acknowledgement.
+- The v3 host receives `[conn 8][from 8][0x06][request id u32]` after the room accepts an answer. It can then release the cached answer body. If room memory was lost, the open phone still receives the answer and the host receives the acknowledgement. The room suppresses duplicate answers while it remembers their IDs. If the phone has left and its routing prefix is gone, the host still receives the acknowledgement with eight zero bytes for `from`. The host releases its cache by connection and request ID. This acknowledgement stays between the room and the host.
 - No computer connected and no v3 reconnect window: the phone gets `[0x03][id]` for each request.
 - A phone socket closes (for any reason, also a 4008): the computer gets `[conn][from][0x04]`.
 - A v2 computer disconnects, or a v3 computer exhausts its reconnect window: every phone in the room gets `[0x05]`, so it stops waiting for answers that will not come.
@@ -84,7 +85,7 @@ npm test           # unit tests, then real `wrangler dev` runs on free ports (th
 npm run typecheck  # wrangler types, then tsc
 ```
 
-`npm test` takes about 40 seconds (the relay and push test files run side by side). One test waits 15 seconds to let the object hibernate. Three tests wait about 10 seconds each, see "Known behavior".
+The relay and push test files run side by side. The relay suite waits through real hibernation, liveness and recovery deadlines. Three tests wait about 10 seconds each, see "Known behavior".
 
 Under `wrangler dev` a local client can set `CF-Connecting-IP` itself, and the Worker uses it. The tests use that to act as many addresses. On Cloudflare the header is set by Cloudflare and can not be set by a client.
 
@@ -99,7 +100,7 @@ npm run start:node   # PORT (8080), HOST, DATA_DIR, CLIENT_IP_HEADER, PUSH_UPSTR
 npm run test:node    # the relay tests above against it (RELAY_TARGET=node), and test/node.test.mjs
 ```
 
-- It speaks `botkins.host.v3` and `botkins.host.v2` as the Worker does: the active and standby host sockets, the bounded request cache and its replay, the `0x06` acknowledgements, the silent-seat rules and the 4001 repair close. The checks and limits are the Worker's own code (`src/pure.ts`, `src/shared.ts`). The whole of `test/relay.test.mjs` passes against it. Only the two assertions that count Durable Object wakes are skipped, because Node has nothing to hibernate.
+- It speaks `botkins.host.v3` and `botkins.host.v2` as the Worker does: the active and standby host sockets, the bounded request cache and its replay, the `0x06` acknowledgements, the silent-seat rules and the 4001 repair close. The checks and limits are the Worker's own code (`src/pure.ts`, `src/shared.ts`). The whole of `test/relay.test.mjs` passes against it. Assertions that count Durable Object wakes are skipped, because Node has nothing to hibernate.
 - Rooms and held requests are in memory. A restart drops the sockets, and computers and phones connect again on their own. Invite cards are kept in `DATA_DIR/invites.json`, and the sealed copies of shared spaces in `DATA_DIR/spaces` with `DATA_DIR/spaces.json`.
 - It serves the shared-space routes as the Worker does. The Botkin pictures come from `BOTKINS_DIR` (the phone app's `assets/botkins` by default; the Docker image has a copy).
 - It runs behind a TLS proxy. `CLIENT_IP_HEADER` names the header in which that proxy gives the client's address. Without it the relay uses the address of the socket.
@@ -119,6 +120,7 @@ The Durable Object classes are SQLite-backed (`new_sqlite_classes`), the only ki
 ## Limits
 
 - A phone's message: 6 MiB + 64 KiB. The computer's message: 8 MiB. (The platform's own limit is 32 MiB.) Anything bigger must be split.
+- The room holds up to 48 pending requests totaling at most 16 MiB across all phones, plus the last 128 accepted or expired request IDs for up to five minutes.
 - 1 computer and 48 phones per room, at most 8 phones from one network address.
 - One Durable Object handles about 1,000 requests a second, a soft limit.
 - Free plan: 100,000 Worker requests and 100,000 Durable Object requests a day, 13,000 GB-s of duration a day, 10 ms of CPU per request. Checking a signature and forwarding a message take little CPU.
@@ -137,7 +139,7 @@ A network is an IPv4 address or an IPv6 /64. Over the limit the answer is 429, b
 
 Local tests pass `--var=RATE_LIMITS:off`, because every socket of a test run comes from one address. (`test/push.test.mjs` also runs one Worker with the limits on: locally the `PUSHES` and `REQUESTS` bindings do trip, 429 after 240 items and after 120 calls. They are still approximate on Cloudflare.) A phone and a computer that meet a 429 wait and try again by themselves (the phone backs off to 15 seconds, the computer to 60).
 
-Messages on an open socket are not metered. A zone-level rate limiting rule for this hostname can be added on top if the Worker's own limits ever prove too loose.
+These rate-limit bindings apply to HTTP requests and socket upgrades. A zone-level rate limiting rule for this hostname can be added on top if the Worker's own limits ever prove too loose.
 
 ## Push notifications
 
@@ -246,10 +248,13 @@ Not verified on this machine: a real call to Apple. Apple's servers need HTTP/2 
 
 ## Pricing notes
 
-- Idle rooms cost nothing. The object uses the WebSocket Hibernation API, so it is not billed for duration while no message is being handled, and the sockets stay open.
+- Hibernated sockets stay open without duration charges. A room with held requests during host recovery can incur duration for the remaining reconnect window (at most 15 seconds at 128 MB). Ordinary request and answer traffic schedules no timer and incurs zero storage reads or writes.
+- Seat and recovery changes write or delete durable records. Host admission also checks for and removes old pending storage. Each alarm firing counts as a request and setting an alarm counts as a row written. The room schedules the next opening probe, liveness deadline with phones present, or recovery expiry. After the opening probes, a connected host with no phones generates no liveness alarms.
 - Incoming WebSocket messages are billed 20 to 1: 100 messages from phones and computers count as 5 requests. Messages the relay sends are free. Opening a socket counts as one request. Protocol pings are free, and the `ping` text is answered by the runtime without waking the object.
 - Workers Logs is on. It writes one line per open, close and wake. The Free plan allows 200,000 log lines a day.
 
 ## Known behavior
 
 When the relay closes a socket from another socket's event (the old computer socket it replaces, or a phone it replaces with 4008), workerd sends the Close frame at once but keeps the TCP connection open until the client closes it. Clients get the close code right away. Node's WebSocket only reports the close after its own 10 second timeout, so the tests that check 4000 and 4008 wait that long.
+
+In a local `wrangler dev` check, a replaced computer deliberately stopped reading its socket before the relay closed it. After 14 seconds of silence the next phone request woke the room with all three sockets still attached (old computer, new computer and phone).

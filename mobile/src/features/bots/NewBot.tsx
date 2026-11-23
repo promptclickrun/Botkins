@@ -1,25 +1,24 @@
 import { type Href, router, useLocalSearchParams } from "expo-router";
-import { Bot as BotIcon, FileUp, Palette, Shuffle } from "lucide-react-native";
+import { Bot as BotIcon, FileUp, LayoutTemplate, Palette, Shuffle } from "lucide-react-native";
 import { type ReactNode, useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { type BotkinLook, cleanLook, lookOf, needsLooksV2, randomLook } from "@/data/botLook";
-import { STARTERS } from "@/data/templates";
+import { MarketTemplates } from "./MarketTemplates";
 import { fromLine } from "@/features/market/agents/logic";
 import type { BotInput, BotTemplate, ImportableAgent, MarketAgentTemplate } from "@/link/types";
 import { pickTextFile, shareFrom } from "@/state/files";
 import { useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
-import { BotAvatar, Button, Chip, EmptyState, Field, HoldMenu, Label, Sheet, space, T, type TextPromptOptions, useTextPrompt } from "@/ui";
+import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, Label, Row, Sheet, space, T, type TextPromptOptions, useTextPrompt } from "@/ui";
 import { LookEditor, useLooksV2 } from "./LookEditor";
 import { LookStage } from "./LookStage";
 import { addable } from "./agents";
 import { counter, LIMITS } from "./limits";
 
-type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; face: string; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent };
+type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent };
 
-const starterStart = (starter: (typeof STARTERS)[number]): Start => ({ key: "starter:" + starter.name, name: starter.name, role: starter.role, instructions: starter.instructions, look: starter.look, face: starter.face, avatar: starter.avatar });
 const savedStart = (template: BotTemplate): Start => ({
   key: "saved:" + template.id,
   name: template.name,
@@ -27,7 +26,6 @@ const savedStart = (template: BotTemplate): Start => ({
   instructions: template.instructions,
   summary: template.summary || undefined,
   look: lookOf(template),
-  face: "idle",
   avatar: template.avatar,
 });
 /** A template from Marketplace › Agents (docs/agent-templates.md). */
@@ -38,9 +36,8 @@ const marketStart = (template: MarketAgentTemplate): Start => ({
   instructions: template.instructions,
   summary: template.summary || undefined,
   look: template.look ? cleanLook(lookOf({ id: template.id, look: template.look })) : undefined,
-  face: "idle",
 });
-const agentStart = (agent: ImportableAgent): Start => ({ key: "agent:" + agent.key, name: agent.name, role: agent.role, instructions: agent.instructions, summary: agent.summary || undefined, face: "idle", agent });
+const agentStart = (agent: ImportableAgent): Start => ({ key: "agent:" + agent.key, name: agent.name, role: agent.role, instructions: agent.instructions, summary: agent.summary || undefined, agent });
 
 /** A row of chips under a small heading. */
 function StartRow({ label, children }: { label: string; children: ReactNode }) {
@@ -75,6 +72,7 @@ export default function NewBot() {
 function NewBotEditor() {
   const canManage = useCan("agents", "manage");
   const saved = usePart("templates");
+  const [picker, setPicker] = useState<"templates" | "import">();
   const advanced = useLooksV2();
   const prompt = useTextPrompt();
   const [look, setLook] = useState<BotkinLook>(() => randomLook());
@@ -85,7 +83,7 @@ function NewBotEditor() {
   const [instructions, setInstructions] = useState("");
   const [start, setStart] = useState<Start | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  // Agents the person already has in a provider's own tool. The row is simply missing when the lookup fails.
+  // A failed provider lookup still leaves file import available.
   const [agents, setAgents] = useState<ImportableAgent[]>([]);
   useEffect(() => {
     api.importableAgents().then(setAgents, () => {});
@@ -117,6 +115,7 @@ function NewBotEditor() {
     setInstructions(next.instructions);
     if (next.look) setLook(next.look);
     setStart(next);
+    setPicker(undefined);
   };
 
   // "Import…": a template file someone shared. The computer makes the template; when it arrives it is chosen, as on the computer.
@@ -150,7 +149,7 @@ function NewBotEditor() {
       if (fields.instructions !== agent.instructions.trim()) patch.instructions = fields.instructions;
       if (id && canManage && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
     } else {
-      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: start?.face ?? "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }) };
+      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }) };
       id = await attempt(api.addBot(bot));
     }
     if (id) {
@@ -162,32 +161,20 @@ function NewBotEditor() {
     setBusy(false);
   };
 
-  const agent = start?.agent;
-  return (
-    <Sheet title="New bot" action="Create" onAction={() => void create()} actionDisabled={!ready} actionLoading={busy}>
+  if (picker === "templates") return (
+    <Sheet title="Start from template" onClose={() => setPicker(undefined)}>
       {prompt.node}
-      <LookStage look={look} size={120}>
-        <View style={{ flexDirection: "row", gap: space.sm }}>
-          <Button title="Shuffle" icon={Shuffle} variant="secondary" size="sm" onPress={() => setLook(randomLook({ advanced }))} />
-          <Button title={customizing ? "Done" : "Customize"} icon={Palette} variant="secondary" size="sm" onPress={() => setCustomizing(!customizing)} accessibilityLabel={customizing ? "Hide look options" : "Customize look"} />
-        </View>
-      </LookStage>
-
-      {customizing && (
-        <Animated.View entering={FadeIn.duration(200)}>
-          <LookEditor value={look} onChange={setLook} advanced={advanced} />
-        </Animated.View>
-      )}
-
-      <StartRow label="Start from">
-        {STARTERS.map(starterStart).map((item) => (
-          <Chip key={item.key} label={item.name} selected={start?.key === item.key} onPress={() => pick(item)} leading={item.look ? <BotAvatar look={item.look} size={22} /> : undefined} />
-        ))}
-      </StartRow>
-
-      {(!!saved?.length || canFiles) && (
-        <StartRow label="Your templates">
-          {(saved ?? []).map((template) => {
+      <View>
+        <Label>Marketplace</Label>
+        <MarketTemplates pick={(template) => {
+          setMarket(template);
+          pick(marketStart(template));
+        }} />
+      </View>
+      <View>
+        <Label>Your templates</Label>
+        {saved?.length ? <Group>
+          {saved.map((template) => {
             const item = savedStart(template);
             return (
               <HoldMenu
@@ -207,14 +194,17 @@ function NewBotEditor() {
                   }
                 }}
               >
-                <Chip label={item.name} selected={start?.key === item.key} onPress={() => pick(item)} leading={item.look ? <BotAvatar look={item.look} size={22} /> : undefined} />
+                <Row title={item.name} subtitle={[item.role, item.summary].filter(Boolean).join("\n")} subtitleLines={3} onPress={() => pick(item)} leading={<BotAvatar look={item.look} size={40} />} />
               </HoldMenu>
             );
           })}
-          {canFiles && <Chip label="Import…" icon={FileUp} onPress={() => void importOne()} />}
-        </StartRow>
-      )}
-
+        </Group> : <T variant="footnote" color="muted">No saved templates yet.</T>}
+      </View>
+    </Sheet>
+  );
+  if (picker === "import") return (
+    <Sheet title="Import" onClose={() => setPicker(undefined)}>
+      {canFiles && <Button title="Import from file…" icon={FileUp} variant="secondary" onPress={() => void importOne()} />}
       {providers.map((provider) => (
         <StartRow key={provider} label={"Your " + provider + " agents"}>
           {agents
@@ -226,6 +216,31 @@ function NewBotEditor() {
           {addable(agents.filter((item) => item.providerName === provider)).length > 1 && <Chip label="Add several…" onPress={() => router.replace("/bot/agents" as Href)} />}
         </StartRow>
       ))}
+      {!canFiles && !providers.length && <EmptyState title="No agents found" />}
+    </Sheet>
+  );
+
+  const agent = start?.agent;
+  return (
+    <Sheet title="New bot" action="Create" onAction={() => void create()} actionDisabled={!ready} actionLoading={busy}>
+      {prompt.node}
+      <LookStage look={look} size={120}>
+        <View style={{ flexDirection: "row", gap: space.sm }}>
+          <Button title="Shuffle" icon={Shuffle} variant="secondary" size="sm" onPress={() => setLook(randomLook({ advanced }))} />
+          <Button title={customizing ? "Done" : "Customize"} icon={Palette} variant="secondary" size="sm" onPress={() => setCustomizing(!customizing)} accessibilityLabel={customizing ? "Hide look options" : "Customize look"} />
+        </View>
+      </LookStage>
+
+      {customizing && (
+        <Animated.View entering={FadeIn.duration(200)}>
+          <LookEditor value={look} onChange={setLook} advanced={advanced} />
+        </Animated.View>
+      )}
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+        <Button title="Start from template" icon={LayoutTemplate} variant="secondary" size="sm" onPress={() => setPicker("templates")} />
+        <Button title="Import" icon={FileUp} variant="secondary" size="sm" onPress={() => setPicker("import")} />
+      </View>
 
       {!!marketNote && (
         <T variant="footnote" color="muted">

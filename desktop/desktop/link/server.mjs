@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
-import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, seqNonce, unb64u, unbox } from "./crypto.mjs";
+import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, pushNonce, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
 import { GADGET_CAPABILITY, Gadgets } from "./gadget.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
@@ -59,13 +59,17 @@ const MAX_PER_ADDRESS = 24; // connections one address may hold open
 const WINDOW = 4096;
 const MAX_WAIT = 30_000;
 const PUMP_MS = 60;
+const RELAY_POLL_MS = 250;
+const FOLLOW_PUMP_MS = 100;
+const FOLLOW_QUIET_MS = 25_000;
+const FOLLOW_LIFE_MS = 4 * 60_000;
 const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following phone.
 const MAX_WATCH = 4;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -315,6 +319,8 @@ export class LinkHost extends EventEmitter {
       "link.frame.page": async (_session, a) => this.framePage(a[0]),
       "link.frame.chat": async (_session, a) => this.frameChat(a[0]),
       "link.upload": (session, a) => this.uploads.put(session.deviceId, a[0]),
+      "link.pullRequest": (_session, a) => this.prs.panel(a[0]),
+      "link.pullRequestDiff": (_session, a) => this.prs.panel(a[0], true),
       "link.pullRequests": (_session, a) => this.prs.lookup(a[0], a[1]),
       "link.credentials.save": (_session, a) => this.credentials.save(a[0]),
       "link.credentials.remove": async (_session, a) => this.credentials.remove(a[0]),
@@ -1551,7 +1557,7 @@ export class LinkHost extends EventEmitter {
    * Over the relay a hello says less, attempts are limited per relay `from`, and the checks that only
    * make sense for a socket (the caller's network, an Origin header) don't apply: they are HTTP's own.
    */
-  async serve({ route, session: sessionId = "", body = Buffer.alloc(0), from = "", via = "http", gone = new Promise(() => {}) }) {
+  async serve({ route, push, session: sessionId = "", body = Buffer.alloc(0), from = "", via = "http", gone = new Promise(() => {}) }) {
     const json = (status, value) => ({ status, body: Buffer.from(JSON.stringify(value), "utf8"), json: true });
     try {
       if (route === "hello") return json(200, this.hello(via));
@@ -1561,7 +1567,7 @@ export class LinkHost extends EventEmitter {
         // The phone may have been removed while its call was on the way.
         const session = this.knownSession(sessionId);
         if (body.length > limit) throw new Refused(413, "too_large");
-        return { status: 200, body: await this.rpc(session, body, gone, via), json: false };
+        return { status: 200, body: await this.rpc(session, body, gone, via, push), json: false };
       }
       // Each way in has its own failure counts: the relay can never use up HTTP's allowance, or the other way round.
       const failures = this.failures[via === "relay" ? "relay" : "http"];
@@ -1715,7 +1721,7 @@ export class LinkHost extends EventEmitter {
   }
   prune() {
     const now = Date.now();
-    for (const [id, session] of this.sessions) if (now - session.used > SESSION_IDLE) this.sessions.delete(id);
+    for (const session of this.sessions.values()) if (now - session.used > SESSION_IDLE) this.dropSession(session);
     // A phone keeps a few sessions; its oldest go first, so it can't push other phones out.
     const mine = new Map();
     for (const session of this.sessions.values()) mine.set(session.deviceId, [...(mine.get(session.deviceId) ?? []), session]);
@@ -1737,7 +1743,7 @@ export class LinkHost extends EventEmitter {
     this.grants.dropSession(session.id);
     for (const waiter of [...this.waiters]) if (waiter.session === session) waiter.end();
   }
-  async rpc(session, body, gone, via = "http") {
+  async rpc(session, body, gone, via = "http", push) {
     if (body.length < 24) throw new Refused(400, "short");
     const seq = Number(body.readBigUInt64BE(0));
     // Each number is taken once, so a recorded message can't be played again.
@@ -1757,7 +1763,7 @@ export class LinkHost extends EventEmitter {
 
     let text;
     try {
-      const result = await this.dispatch(session, message, gone, via);
+      const result = await this.dispatch(session, message, gone, via, push, seq);
       text = result instanceof Json ? '{"r":' + result.text + "}" : JSON.stringify({ r: result ?? null });
     } catch (error) {
       text = JSON.stringify({ e: { message: plain(error).slice(0, 600) } });
@@ -1768,7 +1774,7 @@ export class LinkHost extends EventEmitter {
   // ── Calls ───────────────────────────────────────────────────────────────────────────────────
 
   /** `via` is how the call arrived: "http" straight to this computer, or "relay". */
-  async dispatch(session, message, gone, via = "http") {
+  async dispatch(session, message, gone, via = "http", push, seq) {
     const method = String(message?.m ?? "");
     const args = Array.isArray(message?.a) ? message.a : [];
     // Only the host's own calls come without a device. A device whose member record is gone gets
@@ -1777,7 +1783,9 @@ export class LinkHost extends EventEmitter {
     if (!principal) throw new Failure("This device is no longer on the team.");
     session.principal = principal;
     const state = this.backend.snapshot();
-    const refusal = authorize(principal, this.store.data.team, method, args, {
+    const isFollow = method === "link.follow";
+    const cancel = method === "link.unfollow";
+    const refusal = authorize(principal, this.store.data.team, isFollow || cancel ? "link.sync" : method, args, {
       bot: (id) => (state.bots ?? []).find((bot) => bot.id === id),
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
       request: (id) => (state.requests ?? []).find((request) => request.id === id),
@@ -1832,13 +1840,26 @@ export class LinkHost extends EventEmitter {
         }
       }
     }
-    if (method === "link.sync") {
+    if (method === "link.sync" || isFollow || cancel) {
+      if (isFollow && (via !== "relay" || !push)) throw new Failure("A follow needs a relay socket.");
+      // A delayed request must never reclaim a follow that a newer RPC already replaced.
+      // Ordinary concurrent polls keep their existing two-waiter behavior.
+      const superseded = () => seq < (isFollow || cancel ? session.syncSeq : session.lastFollowSeq);
+      if (superseded()) return { epoch: this.epoch, v: null, parts: {} };
+      if (isFollow || cancel) session.lastFollowSeq = seq;
+      if (seq) session.syncSeq = Math.max(seq, session.syncSeq ?? 0);
+      session.follow?.end();
+      if (isFollow) for (const waiter of this.waiters) if (waiter.session === session) waiter.end();
+      if (cancel) return null;
       // A person's four built-in spaces exist before their device is first sent its parts.
       if (this.spaces.on) {
         this.spaces.moveOnce();
         await this.spaces.ensure(personOf(principal));
       }
-      return this.sync(session, args[0] ?? {}, gone);
+      if (superseded() || (seq && !this.sessions.has(session.id))) {
+        return { epoch: this.epoch, v: null, parts: {} };
+      }
+      return this.sync(session, args[0] ?? {}, gone, via, isFollow ? push : undefined);
     }
     if (method === "link.messages") {
       const limit = Math.max(1, Math.min(Number(args[2]) || CHAT_PAGE, 200));
@@ -2165,8 +2186,8 @@ export class LinkHost extends EventEmitter {
     this.partViews.set(key, previous);
     return previous;
   }
-  /** Missing parts as JSON, null when caught up, or milliseconds until a text-only flush. */
-  news(known, watching, cursors, session, throttle) {
+  /** Missing parts as JSON, null when caught up, or milliseconds until the next eligible flush. */
+  news(known, watching, cursors, session, throttle, interval = 0, advance) {
     const partWatching = [...new Set([...watching, ...(session.reasoningWatch ?? [])])];
     const values = this.viewParts(session, partWatching);
     // A phone that asked for no text streaming ("text-streaming-off-v1") gets the indicators only, and no text:
@@ -2182,6 +2203,7 @@ export class LinkHost extends EventEmitter {
     const parts = [];
     const versions = {};
     const deliveredReasoning = [];
+    const deliveredText = [];
     for (const name of values.names ?? this.names(partWatching)) {
       const part = values.get(quiet && name === "live" ? "quietLive" : name);
       if (!part) continue;
@@ -2211,7 +2233,10 @@ export class LinkHost extends EventEmitter {
           if (!delta && cursor?.id !== text.id) delta = { id: text.id, stream: { from: 0, add: "" }, thinking: { from: 0, add: "" } };
           if (delta) delta.preview = text.preview;
         }
-        if (delta !== undefined) parts.push(JSON.stringify("text:" + chat) + ":" + JSON.stringify(delta));
+        if (delta !== undefined) {
+          parts.push(JSON.stringify("text:" + chat) + ":" + JSON.stringify(delta));
+          if (advance) deliveredText.push([chat, delta]);
+        }
       }
       if (!followsReasoning) continue;
       const key = "reasoning:" + chat;
@@ -2234,16 +2259,66 @@ export class LinkHost extends EventEmitter {
     if (held) session.heldSince ??= now;
     else delete session.heldSince;
     // Held text with nothing to send yet: look again when it has waited long enough.
-    if (!parts.length) return held && throttle ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : null;
-    const remaining = (session.lastNews ?? 0) + (chunks ? this.chunkTiming.every : TEXT_PUMP_MS) - now;
-    if (throttle && textOnly && remaining > 0) return remaining;
+    if (!parts.length) return held && (throttle || advance) ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : null;
+    const remaining = (session.lastNews ?? 0) + (chunks && textOnly ? this.chunkTiming.every : interval || TEXT_PUMP_MS) - now;
+    if (throttle && (textOnly || interval) && remaining > 0) return remaining;
     for (const [chat, sent] of deliveredReasoning) session.reasoningSent.set(chat, sent);
+    advance?.(versions, deliveredText);
     if (held) session.heldSince = now;
     session.lastNews = Date.now();
     session.watchUntil = session.lastNews + MAX_WAIT;
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
   }
-  sync(session, request, gone) {
+  follow(session, push, read) {
+    const quiet = { epoch: this.epoch, v: null, parts: {} };
+    if (push.closed.aborted) return quiet;
+    const seq = session.syncSeq;
+    const started = Date.now();
+    let last = null;
+    return new Promise((resolve, reject) => {
+      const end = () => {
+        clearTimeout(timer);
+        push.closed.removeEventListener("abort", end);
+        this.waiters.delete(waiter);
+        if (session.follow === waiter) delete session.follow;
+        resolve(quiet);
+      };
+      const pump = () => {
+        try {
+          if (!push.ready()) return FOLLOW_PUMP_MS;
+          const now = Date.now();
+          if (last !== null && now < last + FOLLOW_PUMP_MS) return last + FOLLOW_PUMP_MS - now;
+          const news = read(last !== null);
+          const heartbeat = (last ?? started) + FOLLOW_QUIET_MS;
+          if (!(news instanceof Json) && now < heartbeat) {
+            return Math.min(heartbeat - now, typeof news === "number" ? news : Infinity);
+          }
+          const counter = (session.pushCounter ?? 0) + 1;
+          if (!Number.isSafeInteger(counter)) throw new Error("Follow counter exhausted");
+          session.pushCounter = counter;
+          const nonce = pushNonce(counter);
+          const aad = "push:" + session.id + ":" + seq + ":" + (last === null ? "first" : "more");
+          const sealed = seal(session.toPhone, nonce, Buffer.from(news instanceof Json ? news.text : JSON.stringify(quiet)), aad);
+          push.send(Buffer.concat([nonce.subarray(4), sealed]));
+          session.used = last = Date.now();
+          this.push.heard(session.deviceId);
+          return FOLLOW_PUMP_MS;
+        } catch (error) {
+          reject(error);
+          end();
+        }
+      };
+      const waiter = { session, watching: session.watching, reasoningWatch: session.reasoningWatch, news: pump, end };
+      const timer = setTimeout(end, FOLLOW_LIFE_MS);
+      timer.unref?.();
+      this.waiters.add(waiter);
+      session.follow = waiter;
+      push.closed.addEventListener("abort", end, { once: true });
+      const delay = pump();
+      if (delay) this.schedulePump(delay);
+    });
+  }
+  sync(session, request, gone, via = "http", push) {
     const { epoch, have, watch, wait, appends, text } = request;
     // A gadget follows its two parts and its reply's text: no steps, and no reasoning.
     const forGadget = session.deviceId !== undefined && this.store.device(session.deviceId)?.kind === "gadget";
@@ -2265,13 +2340,30 @@ export class LinkHost extends EventEmitter {
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
     session.light = steps === "light";
     session.watchUntil = Date.now() + MAX_WAIT;
-    const known = epoch === this.epoch && have && typeof have === "object" ? have : {};
+    let known = epoch === this.epoch && have && typeof have === "object" ? have : {};
     this.refresh(watching, session.reasoningWatch);
-    const cursors = acceptsAppends ? (epoch === this.epoch ? appends : {}) : null;
-    const news = () => this.news(known, watching, cursors, session, Number(wait) > 0);
+    const cursors = acceptsAppends ? Object.assign(Object.create(null), epoch === this.epoch ? appends : {}) : null;
+    if (push) {
+      const advance = (versions, deltas) => {
+        known = versions;
+        for (const [chat, delta] of deltas) {
+          if (!delta) delete cursors[chat];
+          else cursors[chat] = {
+            id: delta.id, stream: delta.stream.from + delta.stream.add.length, thinking: delta.thinking.from + delta.thinking.add.length,
+          };
+        }
+      };
+      return this.follow(session, push, (throttle) => this.news(known, watching, cursors, session, throttle, FOLLOW_PUMP_MS, advance));
+    }
+    const interval = via === "relay" ? RELAY_POLL_MS : 0;
+    const news = () => this.news(known, watching, cursors, session, Number(wait) > 0 || interval > 0, interval);
     const now = news();
     const quiet = () => ({ epoch: this.epoch, v: null, parts: {} });
-    if (now instanceof Json || !(Number(wait) > 0)) return now ?? quiet();
+    if (now instanceof Json) return now;
+    // A wake asks only for news already present. If a relay tick is due shortly, include it
+    // before the background client marks this sync fresh and goes back to sleep.
+    const quick = !(Number(wait) > 0);
+    if (quick && !(typeof now === "number" && now <= interval)) return quiet();
     // A phone has a couple of waits open at most; a newer one ends the oldest.
     const mine = [...this.waiters].filter((w) => w.session === session);
     for (const old of mine.slice(0, Math.max(0, mine.length - (MAX_WAITERS - 1)))) old.end();
@@ -2287,7 +2379,10 @@ export class LinkHost extends EventEmitter {
           resolve(news ?? quiet());
         },
       };
-      const timer = setTimeout(() => waiter.end(), Math.min(Number(wait), MAX_WAIT));
+      const timer = setTimeout(() => {
+        const pending = quick ? news() : null;
+        waiter.end(pending instanceof Json ? pending : undefined);
+      }, quick ? now : Math.min(Number(wait), MAX_WAIT));
       timer.unref?.();
       this.waiters.add(waiter);
       if (typeof now === "number") this.schedulePump(now);

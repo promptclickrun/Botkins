@@ -99,6 +99,7 @@ export const REMOTE_METHODS = new Set([
   "cancelMcpSignIn", "signOutMcpServer", "importMcpServers",
   "credentials", "removeCredential",
   // Projects
+  "editProjectFolder", "setChatFolder", "chatProjectFolder", "cloneProjectRepository",
   "createProject", "updateProject", "renameProject", "removeProject", "projectChanges", "projectDiff", "projectCommit",
   "addTodo", "updateTodo", "deleteTodo", "moveTodo",
   // What a project keeps of the artifacts ("project-artifacts-v1"): a list of ids on the project.
@@ -118,6 +119,7 @@ export const REMOTE_METHODS = new Set([
   ...PLUGIN_METHODS,
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
+  "skills.upload", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install",
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")

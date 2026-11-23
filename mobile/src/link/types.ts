@@ -1,6 +1,11 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
@@ -273,6 +278,12 @@ export type Catalog = { choices: Capability[]; servers: { name: string; status: 
 /** A file the phone uploaded to the computer for a message. */
 export type UploadedFile = { id: string; name: string; path: string; size: number };
 /** A pull request of the repository a chat's project works in. */
+export type PullRequestDetail = PullRequest & {
+  body: string; createdAt: string; summary: string; review: string;
+  checks: { name: string; result: string }[];
+  files: { path: string; additions: number; deletions: number }[];
+};
+export type PullAnswer<T> = ({ available: true } & T) | { available: false; reason: string };
 export type PullRequest = { number: number; title: string; url: string; state: "open" | "closed" | "merged"; draft: boolean; author?: string; head?: string; base?: string; updatedAt?: string; repository?: string };
 
 // Credentials. Values stay on the computer: the phone can save one, and can name one in a call
@@ -423,6 +434,7 @@ export type ChatSummary = {
   /** The section the person put it in on their Chats screen ("chat-sections-v1"). Their own: nobody else sees it. */
   sectionId?: string;
   projectId?: string;
+  folder?: string;
   mode?: ChatMode;
   panelId?: string;
   model?: ModelChoice;
@@ -433,6 +445,7 @@ export type ChatSummary = {
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
 };
 export type Step = {
+  background?: boolean;
   id: string;
   name: string;
   source?: string;
@@ -451,7 +464,7 @@ export type Step = {
 };
 /** One step's input and output, read when the step is opened (`link.step`). */
 export type StepDetail = { input?: string; output?: string };
-export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
+export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
 /** One reasoning item's wire suffix for a phone following a working turn. */
 export type ReasoningAppend = Omit<Reasoning, "text"> & { from: number; add: string };
@@ -764,6 +777,8 @@ export type TaskInput = { id?: string; title: string; body?: string; botId?: str
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 export type Project = {
+  folders?: string[];
+  mode?: ChatMode;
   id: string;
   name: string;
   description?: string;
@@ -963,6 +978,7 @@ export type UsageReport = {
 
 /**
  * `capabilities` names what this computer's link can do beyond the basics: "credentials-v1",
+ * "pr-panel-v1" (owner-only pull request details and per-file patches),
  * "screen-v1", "prs-v1", "uploads-v1", "relay-v1" (the computer keeps a relay open, so a phone away
  * from its network can reach it), "push-v1" (notifications and Live Activities), "device-v1" (tools
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
@@ -994,7 +1010,10 @@ export type UsageReport = {
  * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
  * view of bots and chats, kept by the computer for them).
  * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
+ * "project-folders-v1" (ordered folders and chat folder choice), "project-mode-v1" (saved project mode),
+ * "project-clone-v1" (clone from GitHub on the computer),
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
+ * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
@@ -1005,6 +1024,7 @@ export type UsageReport = {
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
+ * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  */
@@ -1491,7 +1511,7 @@ export type Calls = {
   deleteChat(id: string): void;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
-  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
+  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
@@ -1566,8 +1586,12 @@ export type Calls = {
   cancelMcpSignIn(id: string): boolean;
   signOutMcpServer(id: string): void;
   createProject(input: { name?: string; description?: string; color?: ProjectColor | null }): string;
+  editProjectFolder(id: string, action: "add" | "remove" | "default", path: string): string[];
+  chatProjectFolder(id: string): string | null;
+  setChatFolder(id: string, path: string | null): void;
+  cloneProjectRepository(repository: string, parent?: string, id?: string, data?: { name?: string; description?: string }): string;
   /** `folder: null` unlinks the project's folder (the folder itself is left alone). */
-  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null }): void;
+  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null; mode?: ChatMode }): void;
   /** The folders inside `path`, or inside the home folder. Needs "folders-v1". */
   listFolders(path?: string): FolderList;
   /** A project for a folder chosen in the folder browser (or the one it already has); answers its id. Needs "folders-v1". */
@@ -1596,8 +1620,8 @@ export type Calls = {
   renameSection(id: string, name: string): void;
   deleteSection(id: string): void;
   renameTemplate(id: string, name: string): void;
-  /** Changes the project and mode of a chat that has no messages yet. */
-  setChatProject(chatId: string, projectId: string | null, mode?: "default" | "plan" | "yolo"): void;
+  /** Changes a chat's project or mode. Moving a started chat carries its transcript into the next session. */
+  setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): void;
   linkPreview(url: string): LinkPreview | null;
   /** Pauses, resumes or deletes a schedule a bot made in a chat. */
   changeSchedule(chatId: string, id: number, action: "pause" | "resume" | "delete"): void;
@@ -1615,9 +1639,9 @@ export type Calls = {
   addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean };
   renameProject(id: string, name: string): void;
   /** What changed in a project's folder, one file's changes as text, and committing all of it. */
-  projectChanges(id: string): ProjectChanges;
-  projectDiff(id: string, file: string): { text: string; truncated: boolean };
-  projectCommit(id: string, message: string): string;
+  projectChanges(id: string, folder?: string): ProjectChanges;
+  projectDiff(id: string, file: string, folder?: string): { text: string; truncated: boolean };
+  projectCommit(id: string, message: string, folder?: string): string;
   moveTodo(projectId: string, todoId: string, delta: -1 | 1): void;
   /** Makes the wiki page for a project that has none yet; answers the page's path. */
   createWikiPageFor(record: { kind: "project"; id: string }): string;
@@ -1666,6 +1690,10 @@ export type Calls = {
   "plugins.refresh"(): PluginMarketplace[];
   // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
   /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "skills.upload"(file: SkillUpload): SkillImportResult;
+  "skillsCatalog.search"(query: string): CatalogSkill[];
+  "skillsCatalog.preview"(id: string): CatalogPreview;
+  "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];
@@ -1769,6 +1797,8 @@ export type Calls = {
   "link.frame.chat"(frame: string): { chatId: string | null };
   "link.upload"(file: { id?: string; name: string; data: string; last?: boolean }): UploadedFile;
   /** Pull requests of the repository behind a chat's project. `available: false` says why there are none to offer. */
+  "link.pullRequest"(input: { url: string }): PullAnswer<{ pull: PullRequestDetail }>;
+  "link.pullRequestDiff"(input: { url: string; path: string }): PullAnswer<{ text: string }>;
   "link.pullRequests"(where: { chatId?: string; projectId?: string }, query?: string): { available: boolean; reason?: string; items: PullRequest[] };
   "link.credentials.save"(input: CredentialInput): string;
   "link.credentials.remove"(id: string): void;

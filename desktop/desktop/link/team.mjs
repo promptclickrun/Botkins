@@ -143,6 +143,10 @@ const POLICY = {
   "link.chats.setSection": ["agents", "view"],
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
+  "skills.upload": ["skills", "create"],
+  "skillsCatalog.search": ["skills", "read"],
+  "skillsCatalog.preview": ["skills", "read"],
+  "skillsCatalog.install": ["skills", "create"],
   saveSkill: ["skills", "create"],
   removeSkill: ["skills", "delete"],
   setSkillEnabled: ["skills", "manage"],
@@ -159,6 +163,10 @@ const POLICY = {
   removeCredential: "owner",
   createProject: "owner",
   updateProject: "owner",
+  editProjectFolder: "owner",
+  setChatFolder: "owner",
+  chatProjectFolder: "owner",
+  cloneProjectRepository: "owner",
   renameProject: "owner",
   removeProject: "owner",
   projectChanges: "owner",
@@ -268,6 +276,8 @@ const POLICY = {
   "link.frame.chat": ["today", "view"],
   "link.upload": ["agents", "chat"],
   "link.pullRequests": "owner",
+  "link.pullRequest": "owner",
+  "link.pullRequestDiff": "owner",
   "link.credentials.save": "owner",
   "link.credentials.remove": "owner",
   "link.credentials.check": "owner",
@@ -904,6 +914,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
+  if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";
   if (method === "setPreferences") {
     const patch = args[0];
     if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some((field) => !MEMBER_PREFERENCE_FIELDS.includes(field))) return "Your team role can change display preferences only.";
@@ -1059,7 +1070,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   // A chat's flags are the member's own. Unread is theirs too: since they last marked it read; a
   // chat they never marked follows the workspace when they started it, and is new to them otherwise.
   out.chats = shared.map((chat) => {
-    const { pinned: _pinned, archived: _archived, unread, ...rest } = chat;
+    const { pinned: _pinned, archived: _archived, folder: _folder, unread, ...rest } = chat;
     const own = view.chats[chat.id];
     const mine = chat.createdBy === me;
     const fresh = own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0);

@@ -235,6 +235,15 @@ article > .interim-update {
   margin: 0 0 14px;
   color: var(--muted);
 }
+.turn-rails {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.turn-rails .canvas-chip {
+  flex: none;
+  white-space: nowrap;
+}
 .timeline-fold-line {
   display: flex;
   align-items: center;
@@ -317,6 +326,7 @@ article > .interim-update {
 .run-lead {
   margin: 0 0 8px;
 }
+.activity-tools h4,
 .run-lead h4 {
   margin: 0 0 2px;
   color: var(--muted);
@@ -818,13 +828,13 @@ article:focus-within .msg-actions {
   overscroll-behavior: contain;
 }
 .canvas-drawer ol,
-.run-lead ol {
+.run-lead > ol:not(.work-steps) {
   list-style: none;
   margin: 0;
   padding: 4px 14px;
 }
 .canvas-drawer li,
-.run-lead li {
+.run-lead > ol:not(.work-steps) > li {
   display: flex;
   align-items: flex-start;
   gap: 9px;
@@ -838,7 +848,8 @@ article:focus-within .msg-actions {
   color: var(--muted);
 }
 .canvas-drawer li > span,
-.run-lead li > span {
+.run-lead li > span,
+.helper-info {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;

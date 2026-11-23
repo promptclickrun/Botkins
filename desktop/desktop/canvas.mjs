@@ -141,6 +141,7 @@ const statusMap = {
   active: "in_progress",
   running: "in_progress",
   blocked: "blocked",
+  failed: "failed",
   cancelled: "cancelled",
   canceled: "cancelled",
   skipped: "cancelled",

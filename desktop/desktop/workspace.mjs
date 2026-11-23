@@ -1238,15 +1238,17 @@ export class Workspace {
       task.gateway = hosted ? this.harness.gateway.server : null;
       task.route = { choice, hosted: !!hosted, via: hosted ? via : null };
     }
-    // A conversation whose model moved to another provider starts a session there. Its transcript
-    // goes along in the instructions, the way a forked chat's does.
-    if (chat.established && this.sessionProvider(chat) !== provider) {
-      await this.sessionProvider(chat)
-        .deleteSession(chat.sessionId ?? chat.id)
-        .catch(() => {});
+    // A changed provider, project or working folder starts a fresh session with the transcript.
+    const moved = chat.restartSession || (chat.established && chat.sessionFolder !== undefined && chat.sessionFolder !== folder);
+    if (moved || (chat.established && this.sessionProvider(chat) !== provider)) {
+      if (chat.established) {
+        await this.sessionProvider(chat).deleteSession(chat.sessionId ?? chat.id).catch(() => {});
+      }
       chat.established = false;
-      if (!chat.sessionId)
+      if (moved || !chat.sessionId)
         chat.forkContext = forkTranscript((chat.messages ?? []).slice(0, run ? -1 : undefined), bot.name);
+      if (chat.sessionId) chat.restartSession = false;
+      else delete chat.restartSession;
     }
     const handlers = run && {
       permission: (request) => this.interactions.permission(chat, task, request),
@@ -1329,9 +1331,10 @@ export class Workspace {
       history: () => chat.messages ?? [],
       handlers: handlers || null,
     });
-    if (!chat.temporary && (!chat.established || chat.sessionProvider !== provider.id)) {
+    if (!chat.temporary && (!chat.established || chat.sessionProvider !== provider.id || chat.sessionFolder !== (projectFolder || undefined))) {
       chat.established = true;
       chat.sessionProvider = provider.id;
+      if (projectFolder || chat.sessionFolder) chat.sessionFolder = projectFolder || undefined;
       this.save();
     }
     return session;
@@ -1395,7 +1398,7 @@ export class Workspace {
    */
   menuTarget(bot, chat) {
     // A chat's own model or project changes what its menu shows, so those get their own.
-    const key = bot.id + (chat?.projectId ? "\n" + chat.projectId : "") + (chat?.model ? "\n" + JSON.stringify(chat.model) : "") + (chat?.fastMode ? "\nspeed=" + chat.fastMode : "");
+    const key = bot.id + (chat?.folder ?? "") + (chat?.projectId ? "\n" + chat.projectId : "") + (chat?.model ? "\n" + JSON.stringify(chat.model) : "") + (chat?.fastMode ? "\nspeed=" + chat.fastMode : "");
     let target = this.menus.get(key);
     if (!target) {
       target = {
@@ -1405,6 +1408,7 @@ export class Workspace {
         established: false,
         menu: true,
         ...(chat?.projectId && { projectId: chat.projectId }),
+        ...(chat?.folder && { folder: chat.folder }),
         ...(chat?.model && { model: chat.model }),
         ...(chat?.fastMode && { fastMode: chat.fastMode }),
       };
@@ -1674,6 +1678,16 @@ export class Workspace {
       if (this.queues.has(chat.id)) setImmediate(() => this.drain(chat.id));
     }
   }
+  async readSessionTodos(session, chat, run, task) {
+    const read = (task.todoRead ?? 0) + 1;
+    task.todoRead = read;
+    const result = await session.todos().catch(() => null);
+    if (!result || read !== task.todoRead) return;
+    run.todos = mapTodos(result);
+    // A late read still belongs in its turn's activity, but the latest turn owns the rail.
+    if (this.state.runs.find((item) => item.chatId === chat.id)?.id === run.id) chat.todos = run.todos;
+    this.notify();
+  }
   /** One member's reply inside a group turn. Returns its text. */
   async memberTurn(chat, bot, members, run, task) {
     chat.members ??= {};
@@ -1686,12 +1700,16 @@ export class Workspace {
       botId: bot.id,
       title: chat.title,
       approval: chat.approval,
-      messages: chat.messages.filter((m) => m.botId === bot.id),
+      messages: member.restartSession ? chat.messages : chat.messages.filter((m) => m.botId === bot.id),
       fastMode: chat.fastMode,
       groupInstructions: groupInstructions(bot, members),
       // The group's project gives each member its context and to-do tools, never a folder.
       projectId: chat.projectId,
       group: true,
+      get restartSession() { return member.restartSession; },
+      set restartSession(value) { member.restartSession = value; },
+      get sessionFolder() { return member.sessionFolder; },
+      set sessionFolder(value) { member.sessionFolder = value; },
       get established() {
         return member.established;
       },
@@ -1717,7 +1735,6 @@ export class Workspace {
       session = await this.openSession(view, bot, run, task);
       task.session = session;
       if (task.stopped) return "";
-      let todoRead = 0;
       unsubscribe = session.on((event) => {
         const { type, data, agentId } = event;
         if (!event.agentId && !event.data?.parentToolCallId) {
@@ -1740,15 +1757,7 @@ export class Workspace {
           task.intent = data.intent;
           this.notify();
         } else if (type === "session.todos_changed") {
-          const read = ++todoRead;
-          session
-            .todos()
-            .then((result) => {
-              if (!result || read !== todoRead) return;
-              run.todos = mapTodos(result);
-              this.notify();
-            })
-            .catch(() => {});
+          this.readSessionTodos(session, chat, run, task);
         } else if (recordCanvas(run, null, task, event)) {
           // Tag this member's reasoning, and show only its own while it thinks.
           if (type.startsWith("assistant.reasoning")) {
@@ -1801,7 +1810,6 @@ export class Workspace {
       const chosen = task.route.choice;
       if (task.route.hosted) run.model = { model: chosen.model, provider: this.providers.for(chosen).id, ...(current?.reasoningEffort && { reasoningEffort: current.reasoningEffort }), harness: task.route.via ?? "copilot" };
       else if (current) run.model = { ...current, ...(chat.sessionProvider && { provider: chat.sessionProvider }) };
-      let todoRead = 0;
       unsubscribe = session.on((event) => {
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") commitInterim(chat, run, task);
@@ -1824,16 +1832,7 @@ export class Workspace {
           if (run.recovery?.input && event.data?.delivery !== "steering") run.recovery.eventId = event.id;
           this.save();
         } else if (event.type === "session.todos_changed") {
-          const read = ++todoRead;
-          session
-            .todos()
-            .then((result) => {
-              if (!result || read !== todoRead) return;
-              run.todos = mapTodos(result);
-              chat.todos = run.todos;
-              this.notify();
-            })
-            .catch(() => {});
+          this.readSessionTodos(session, chat, run, task);
         } else if (recordCanvas(run, chat, task, this.metered(event, run.model ?? chosen))) this.notify();
         else recordActivity(run, event, () => {
           if (event.type === "tool.execution_start" || event.type === "tool.execution_complete") this.save();

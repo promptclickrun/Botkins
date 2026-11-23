@@ -311,3 +311,60 @@ test("the v2 fallback does not consume the v3 acknowledgement window", async () 
   }
   assert.equal(calls, 75); assert.equal(active.sent.at(-1).readUInt16BE(13), 200); link.stop();
 });
+
+test("follow parts use the active seat, respect backpressure and never enter the replay cache", async () => {
+  let calls = 0;
+  let stream;
+  const { link, clock } = newLink({ serve: async ({ push }) => {
+    calls++;
+    stream = push;
+    await new Promise(resolve => push.closed.addEventListener("abort", resolve, { once: true }));
+    return { status: 200, body: Buffer.from("end") };
+  } });
+  link.start();
+  const active = Socket.all[0];
+  active.open();
+  await clock.advance(0);
+  const standby = Socket.all[1];
+  standby.open();
+  const request = frame("01".repeat(8), 42);
+  active.feed(request);
+  await Promise.resolve();
+  active.bufferedAmount = 1024 * 1024;
+  assert.equal(stream.ready(), false);
+  active.bufferedAmount = 0;
+  assert.equal(stream.ready(), true);
+  stream.send(Buffer.from("part"));
+  assert.equal(active.sent[0][8], 7);
+  assert.equal(answerId(active.sent[0]), 42);
+  assert.equal(link.cacheBytes, 0);
+  active.feed(request);
+  assert.equal(stream.closed.aborted, false);
+  standby.feed(request);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1);
+  assert.equal(stream.closed.aborted, true);
+  assert.equal(standby.sent[0][8], 2);
+  assert.equal(link.cacheBytes, 3);
+  link.stop();
+});
+
+test("a new active seat sends unacknowledged answers again without a replay", async () => {
+  const { link, clock } = newLink();
+  link.start();
+  const active = Socket.all[0];
+  active.open();
+  await clock.advance(0);
+  const standby = Socket.all[1];
+  standby.open();
+  active.feed(frame("01".repeat(8), 7));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(answerId(active.sent.at(-1)), 7);
+  // The answer may have been lost with the socket, and the room may have forgotten the request.
+  active.close(1006);
+  const again = standby.sent.find(bytes => bytes[8] === 2);
+  assert.equal(answerId(again), 7);
+  standby.feed(ackFrame("01".repeat(8), 7));
+  assert.equal(link.cacheBytes, 0);
+  link.stop();
+});

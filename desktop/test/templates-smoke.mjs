@@ -1,6 +1,7 @@
 // Smoke for bot templates: save a bot as a template, export it as a file, import a file someone shared,
 // create a bot from it, and delete a template. Native file dialogs are stubbed to temporary paths.
 // Set TEMPLATES_SHOTS to a folder to save light and dark screenshots.
+import { stubTemplate } from "./template-fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,12 +65,14 @@ try {
   writeFileSync(shared, JSON.stringify({ ...file, name: "Fact Finder", role: "Checks claims", summary: "Finds the source", instructions: "Check every claim against a primary source." }));
   await page.getByRole("navigation").getByRole("button", { name: "Home", exact: true }).click();
   await page.getByRole("button", { name: "Add bot", exact: true }).click();
-  await dialog.getByRole("button", { name: "Start from a template", exact: true }).click();
+  await stubTemplate(app);
+  await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
   await dialog.getByRole("group", { name: "Your templates" }).getByRole("button", { name: "Scout", exact: true }).waitFor();
   await shoot("create-bot-template-menu");
-  await dialog.getByRole("button", { name: "Import…", exact: true }).click();
+  await dialog.getByRole("button", { name: "Import", exact: true }).click();
+  await dialog.getByRole("button", { name: "Import from file…", exact: true }).click();
   // Importing picks the template and closes the menu; reopen it to see the choice.
-  await dialog.getByRole("button", { name: "Template: Fact Finder", exact: true }).click();
+  await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
   await expect(dialog.getByRole("group", { name: "Your templates" }).getByRole("button", { name: "Fact Finder", exact: true })).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Escape");
   await expect(dialog.getByRole("group", { name: "Your templates" })).toHaveCount(0);
@@ -84,17 +87,17 @@ try {
   const imported = (await snapshot()).templates.find((t) => t.name === "Fact Finder");
   assert.deepEqual([imported.source, imported.from], ["imported", "From a friend.json"]);
 
-  // A built-in template still fills the form, and a saved template can be deleted.
+  // A marketplace template fills the form, and a saved template can be deleted.
   await page.getByRole("button", { name: "Add bot", exact: true }).click();
-  await dialog.getByRole("button", { name: "Start from a template", exact: true }).click();
-  await dialog.getByRole("button", { name: "Writer", exact: true }).click();
-  await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("Writing partner");
-  await dialog.getByRole("button", { name: "Template: Writer", exact: true }).click();
+  await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
+  await dialog.getByRole("button", { name: /Archive Guide/ }).click();
+  await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("Research assistant");
+  await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
   await dialog.getByRole("button", { name: "Options for template Scout", exact: true }).click();
   await dialog.getByRole("menuitem", { name: "Delete" }).click();
   await expect.poll(async () => (await snapshot()).templates.some((t) => t.name === "Scout")).toBe(false);
   assert.deepEqual(errors, []);
-  console.log("Templates: save from a bot, export a file, import a shared file with a review note, create a bot from it, built-ins and delete passed.");
+  console.log("Templates: save from a bot, export a file, import a shared file with a review note, create a bot from it, marketplace templates and delete passed.");
 } finally {
   await app.close();
   rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

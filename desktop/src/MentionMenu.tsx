@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, FileText, FolderKanban, Newspaper, Users, X } from "lucide-react";
+import type { Calls, PullRequest } from "../desktop/remote/client/types";
+import { pullReference } from "../desktop/remote/client/pr-reference";
+import { GitPullRequest, BookOpen, FileText, FolderKanban, Newspaper, Users, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import type { Bot, Mention, MentionInput, Mentionables } from "./types";
 import "./mentions.css";
@@ -65,9 +67,25 @@ export function findTrigger(draft: string, caret: number) {
   return { sigil: m[1] as "@" | "#", query: m[2], start: caret - m[2].length - 1 };
 }
 
+export function useProjectPulls(chatId: string | undefined, query: string) {
+  const [result, setResult] = useState<{ chatId: string; query: string; value: ReturnType<Calls["link.pullRequests"]> }>();
+  useEffect(() => {
+    if (!chatId) return;
+    let live = true;
+    const timer = setTimeout(async () => {
+      const value = await window.botkins["link.pullRequests"]({ chatId }, query)
+        .catch(() => ({ available: false, reason: "Couldn't load pull requests.", items: [] }));
+      if (live) setResult({ chatId, query, value });
+    }, 200);
+    return () => { live = false; clearTimeout(timer); };
+  }, [chatId, query]);
+  const value = result && result.chatId === chatId && result.query === query ? result.value : undefined;
+  return { value, loading: !!chatId && !value };
+}
+
 export type MentionOption = {
   key: string;
-  group: "Bots" | "Projects" | "Wiki" | "Files";
+  group: "Bots" | "Projects" | "Wiki" | "Files" | "Pull requests";
   name: string;
   hint?: string;
   tag?: string;
@@ -86,6 +104,7 @@ export function mentionOptions(
   query: string,
   data: Mentionables | undefined,
   members: Bot[] | undefined,
+  pulls: PullRequest[] = [],
 ): MentionOption[] {
   const q = query.toLowerCase();
   const hit = (...texts: (string | undefined)[]) => texts.some((t) => t?.toLowerCase().includes(q));
@@ -148,6 +167,11 @@ export function mentionOptions(
       token: "#" + f.name,
       mention: { kind: "file", path: f.path, label: f.name },
     });
+  for (const pull of pulls) out.push({
+    key: "pr:" + pull.number, group: "Pull requests", name: "#" + pull.number + " " + pull.title,
+    hint: [pull.draft && pull.state === "open" ? "draft" : pull.state, pull.author].filter(Boolean).join(" · "),
+    token: pullReference(pull), icon: <GitPullRequest size={15} aria-hidden="true" />,
+  });
   return out;
 }
 

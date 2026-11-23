@@ -1,5 +1,11 @@
+import type { Calls } from "../desktop/remote/client/types";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type Bot = {
   fastMode?: FastMode;
   id: string;
@@ -134,6 +140,7 @@ export type Chat = {
   invited?: string[];
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
+  folder?: string;
   mode?: ChatMode;
   panelId?: string;
   title: string;
@@ -257,7 +264,7 @@ export type Reasoning = {
 export type Todo = {
   id: string;
   title: string;
-  status: "pending" | "in_progress" | "done" | "blocked" | "cancelled";
+  status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed";
   dependsOn?: string[];
 };
 export type Subagent = {
@@ -573,6 +580,9 @@ declare global {
       importableAgents(): Promise<ImportableAgent[]>;
       /** Makes a bot of each agent, in the order given. Returns the new bots' ids. */
       importAgents(keys: string[]): Promise<string[]>;
+      "link.pullRequests"(where: { chatId: string }, query?: string): Promise<ReturnType<Calls["link.pullRequests"]>>;
+      "link.pullRequest"(input: { url: string }): Promise<ReturnType<Calls["link.pullRequest"]>>;
+      "link.pullRequestDiff"(input: { url: string; path: string }): Promise<ReturnType<Calls["link.pullRequestDiff"]>>;
       openLink(url: string): Promise<void>;
       "artifacts.list": (input: { botId: string; chatId?: string; kind?: "files" | "media"; folder?: string; cursor?: string }) => Promise<{ items: Artifact[]; nextCursor: string | null }>;
       "artifacts.read": (idOrPath: string, options?: { offset?: number; length?: number }) => Promise<{ artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null }>;
@@ -658,18 +668,22 @@ declare global {
       addProject(): Promise<string | null>;
       renameProject(id: string, name: string): Promise<void>;
       removeProject(id: string): Promise<void>;
-      setChatProject(chatId: string, projectId: string | null, mode?: ChatMode): Promise<void>;
-      projectChanges(id: string): Promise<ProjectChanges>;
-      projectDiff(id: string, file: string): Promise<{ text: string; truncated: boolean }>;
-      projectCommit(id: string, message: string): Promise<string>;
-      revealProject(id: string): Promise<string>;
+      setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): Promise<void>;
+      projectChanges(id: string, folder?: string): Promise<ProjectChanges>;
+      projectDiff(id: string, file: string, folder?: string): Promise<{ text: string; truncated: boolean }>;
+      projectCommit(id: string, message: string, folder?: string): Promise<string>;
+      revealProject(id: string, folder?: string): Promise<string>;
       // Project workspaces, to-dos and agent access
       createProject(data: ProjectInput): Promise<string>;
-      updateProject(id: string, patch: Partial<Omit<ProjectInput, "folder">> & { folder?: string | null }): Promise<void>;
+      editProjectFolder(id: string, action: "add" | "remove" | "default", path: string): Promise<string[]>;
+      chatProjectFolder(id: string): Promise<string | null>;
+      setChatFolder(id: string, path: string | null): Promise<void>;
+      cloneProjectRepository(repository: string, parent?: string, id?: string, data?: { name?: string; description?: string }): Promise<string>;
+      updateProject(id: string, patch: Partial<Omit<ProjectInput, "folder">> & { folder?: string | null; mode?: ChatMode }): Promise<void>;
       /** Asks for a folder and gives it to the project. Null when cancelled. */
-      chooseProjectFolder(id: string): Promise<string | null>;
+      chooseProjectFolder(id: string, append?: boolean): Promise<string | null>;
       /** A new chat in a project with one bot, or 2 to 6 for a group. Every bot needs access. */
-      startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): Promise<string>;
+      startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): Promise<string>;
       /** Attaches an artifact to a project; one already there moves to the front. Answers the project's list afterwards. */
       addProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
       removeProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
@@ -786,6 +800,11 @@ declare global {
       /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
       "plugins.refresh"?(): Promise<PluginMarketplace[]>;
       // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
+      pickSkillUpload(): Promise<SkillUpload | null>;
+      "skills.upload"(file: SkillUpload): Promise<SkillImportResult>;
+      "skillsCatalog.search"(query: string): Promise<CatalogSkill[]>;
+      "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
+      "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
       "piPackages.preview"(name: string): Promise<PiPackageVersion>;
       "piPackages.list"(): Promise<InstalledPiPackage[]>;
@@ -1685,8 +1704,10 @@ export type Preferences = {
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
   /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */
   botTap?: import("./chatDisplay").ChatDisplay["botTap"];
-  steps?: "folded" | "every" | "failed" | "hidden";
+  steps?: "folded" | "open" | "failed";
   thinking?: "open" | "folded" | "hidden";
+  /** Collapse finished work to one expandable elapsed-time/count line on this computer. */
+  foldFinishedSteps?: boolean;
   foldTools: boolean;
   showThinking: boolean;
   /** Show a card for the first web link in a reply. Private and local hosts are never fetched. */
@@ -1770,6 +1791,7 @@ export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBo
 /** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
+  background?: boolean;
   agentId?: string;
   id: string;
   name: string;
@@ -1848,6 +1870,8 @@ export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: 
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 /** A project workspace. With a folder, its chats are coding chats with modes and Changes. */
 export type Project = {
+  folders?: string[];
+  mode?: ChatMode;
   id: string;
   name: string;
   description?: string;

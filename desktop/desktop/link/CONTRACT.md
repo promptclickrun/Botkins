@@ -97,11 +97,11 @@ A working run's reasoning travels in a separate `reasoning:<chatId>` part for ea
 
 When the live thinking preview exactly matches the latest 4,000 characters of that reasoning, `text:<chatId>` carries `preview: {run, botId?}` with an empty thinking body. The phone rebuilds the preview from the indicated run and speaker and acknowledges the empty wire body. A provider-specific preview still travels as text. Sliding a reasoning preview leaves the reply cursor intact.
 
-A waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
+A direct waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
 
 A host with `text-streaming-off-v1` also accepts `text: false` in the `link.sync` argument, to save relay messages. The session gets the boolean `live` form (with or without `appends`) and no text bodies: a held cursor gets `null` once. Text growing alone does not answer a waiting sync. The reply arrives whole in `chat:<chatId>` when it ends. Without the field, or from an older host, the sync is as above.
 
-A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the relay that still wants a reply as it is written. Text comes on the `appends` path as above, but each `add` ends at the last complete line or sentence after the cursor, and text-only news waits 2 s since the last answer instead of 200 ms. Other news is not delayed and carries the text that is ready. Text with no complete end goes, cut at a word, once it has waited 6 s or runs past 1200 units. The phone's cursor moves only by what was sent. The reply arrives whole in `chat:<chatId>` when it ends. From an older host, send `text: false` instead.
+A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the relay that still wants a reply as it is written. Text comes on the `appends` path as above, but each `add` ends at the last complete line or sentence after the cursor, and text-only news waits 2 s since the last answer instead of 200 ms. Other news carries the text that is ready on the normal cadence for its route. Text with no complete end goes, cut at a word, once it has waited 6 s or runs past 1200 units. The phone's cursor moves only by what was sent. The reply arrives whole in `chat:<chatId>` when it ends. From an older host, send `text: false` instead.
 
 ### What a client may call
 
@@ -356,6 +356,18 @@ A gadget is a small device with a microphone, a speaker and maybe a screen that 
 
 Away from the host's network a client goes through the relay (`relay.botkins.app`). The host lists it as one more address, `relay!<room>@<host>`, and `relayFetch` carries the same sealed requests over a socket. The relay sees sizes and timing, never contents. A room takes 16 client sockets at once (8 from one address). The relay is off until the person turns it on on the host.
 
+### Following through the relay (`sync-push-v1`)
+
+A client that receives this capability in `meta` and can receive intermediate relay frames calls `link.follow` on its relay route. Its argument is the `link.sync` argument without `wait`, including the versions, watches, append cursors, reasoning watches, text mode and step detail. Direct clients and clients without both capabilities poll. A host with this feature paces relay poll news at 250 ms per session. Chunked text retains its sentence and hold timers.
+
+The phone sends the ordinary sealed RPC request. Each intermediate frame from the computer is `[conn 8][0x07][request ID u32][counter u64][sealed news]`. The relay strips the connection prefix. The request stays pending until the usual `0x02` final answer. All integers are big-endian. The decrypted part is a sync result with `epoch`, `v` and `parts`.
+
+The computer seals each part with the session's computer-to-phone key. Its nonce is the four bytes `01 00 00 00` followed by the clear counter's eight bytes. The counter starts at one and increases across all follows under that key. Both endpoints limit it to the positive safe-integer range. RPC answer nonces start with four zero bytes. The UTF-8 associated data is `push:<session id>:<RPC sequence in decimal>:first` for the first frame and ends in `:more` for later frames. The client authenticates this label using the sequence of its own follow RPC. The first counter must exceed every previously accepted counter for that session. Later counters must be consecutive. A missing first frame, replay, gap or authentication failure starts a fresh follow from the client's actual versions and cursors.
+
+The first available news goes immediately. Subsequent frames coalesce changes at 100 ms intervals. After a send the host advances the follow's versions and cursors. A backed-up socket holds the changes at the host. At 25 seconds of silence the host sends an empty sync result. At four minutes it finishes the call and the client renews it. After 40 seconds without a part or final answer the client uses its ordinary sync timeout recovery.
+
+A new follow or sync replaces the session's follow. On rest, stop or departure for a direct connection the client sends a best-effort `link.unfollow` with no arguments. Waking first proves the path with a short-deadline `link.sync` and `wait: 0`. Closing either socket, reseating, ending the session or stopping the host releases the follow. The host deduplicates replayed requests and caches only final answers.
+
 ## Upgrades
 
 - `link.json` is version 1 and has not changed shape. A device paired before `kind` existed gets its kind from its platform when the file is read. No device has to pair again.
@@ -363,3 +375,40 @@ Away from the host's network a client goes through the relay (`relay.botkins.app
 - A host without `device-person-v1` ignores `person` and has no `link.devices.setPerson`; a client offers only Rename. A device paired before has no `person` until the owner adds one.
 - A host without `member-rename-v1` has no `link.team.renameMember(memberId, name)` (owner only; the name has the rules of a team's name: trimmed, 60 characters at most). A client leaves Rename out of a member's menu. Its rules are in `TEAMS.md`.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.
+
+## Pull request panel (`pr-panel-v1`)
+
+An owner can open a github.com pull request from any readable repository. The host uses its signed-in GitHub CLI. The project picker continues to use `link.pullRequests({ chatId }, query?)` under `prs-v1`.
+
+- `link.pullRequest({ url })` returns `{ available: true, pull }`. The list item's fields are joined by `body`, `createdAt`, `checks: [{ name, result }]`, overall `summary`, `review` and `files: [{ path, additions, deletions }]`.
+- `link.pullRequestDiff({ url, path })` returns `{ available: true, text }` for the selected changed file. Tool output is limited to 1 MiB and a displayed patch to 128 KiB and 3,000 lines.
+- An unavailable read returns `{ available: false, reason }`. Both reads accept the overview, files and commits URLs and fragments. They time out after 15 seconds and cache answers for 30 seconds. Members cannot call either method.
+
+## Skill uploads and the skills.sh catalog
+
+With `skill-upload-v1`, `skills.upload({filename, data, replace?})` accepts one Markdown or zip file. `data` is standard base64. The computer accepts up to 3 MiB before encoding, 12 MiB unpacked, 512 archive entries and 24 skills. It checks paths and file types, imports the folders and enables the skills. The result is `{added: string[], conflicts: string[]}`. A conflict leaves the batch untouched. Ask the person, then repeat with only the approved names in `replace`.
+
+With `skills-catalog-v1`, the computer makes these calls available:
+
+- `skillsCatalog.search(query)` takes 2–200 characters and returns up to 40 rows sorted by installs. Each row has `id, source, skillId, name, installs, available` and an optional installed skill name in `installed`. The computer caches successful searches for two minutes.
+- `skillsCatalog.preview(id)` reads a GitHub skill and returns `{name, description, text, token, installed?}`. Domain sources open at `https://skills.sh/<id>`.
+- `skillsCatalog.install(token, replace?)` imports the files pinned by the preview and returns the upload result. The preview token expires after ten minutes.
+
+Search and preview need the team's Skills read permission. Upload and install need create permission, and confirming replacement also needs manage permission. Phones use the link for every file and catalog operation.
+
+## Project folders, modes and GitHub
+
+These calls are owner-only. A computer advertising `project-folders-v1` sends `project.folders`, an ordered list of up to 12 absolute paths. The first is also `project.folder` for older clients. An empty list omits the legacy field. A chat can carry a non-default `folder`. If it disappears, the computer uses the first folder that the project designates as default.
+
+| Call | Answer |
+| --- | --- |
+| `editProjectFolder(id, "add" / "remove" / "default", path)` | Updated ordered paths |
+| `chatProjectFolder(chatId)` | Effective working folder, or null |
+| `setChatFolder(chatId, pathOrNull)` | Void. Null selects the default |
+| `startProjectChat(botIds, id, mode?, folder?)` | New chat ID |
+| `setChatProject(chatId, idOrNull, mode?, folder?)` | Void |
+| `projectChanges(id, folder?)`, `projectDiff(id, file, folder?)`, `projectCommit(id, message, folder?)` | Existing changes, diff and commit answers for the chosen folder |
+
+With `project-mode-v1`, `updateProject(id, { mode })` saves Plan or YOLO and clears the preference for Default. Starting or assigning a chat inherits the preference when the caller omits the mode. Changing a started chat's project or working folder carries its transcript into a fresh provider session. A reply in progress must finish first. Group chats use folderless projects.
+
+With `project-clone-v1`, `cloneProjectRepository(repository, parent?, projectId?, { name?, description? }?)` returns the project ID after the computer has cloned the repository. Omitting the project ID creates a project. The destination is the repository name under the supplied parent or the host user's home directory. It must be new or empty. The computer uses its signed-in GitHub CLI for private repositories and falls back to HTTPS Git for public ones. The link validates a supplied parent through its folder browser.

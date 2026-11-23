@@ -1,3 +1,9 @@
+import { MenuView } from "@react-native-menu/menu";
+import { showToast, useApp } from "@/state/store";
+import { pickSkillUpload } from "@/state/files";
+import { askReplace } from "./replaceSkill";
+import { finishSkillImport } from "./importSkill";
+import { useTheme } from "@/ui";
 import { type Href, router, Stack } from "expo-router";
 import { BookOpen, Folder, FolderPlus, Plus, Puzzle, Sparkles } from "lucide-react-native";
 import { useState } from "react";
@@ -8,7 +14,7 @@ import { api, attempt } from "@/state/link";
 import { markTold, pluginHref, useComputerKey, useInstalledPlugins, useToldNotices } from "@/features/market/plugins/calls";
 import { skillsNotices } from "@/features/market/plugins/logic";
 import { Notice } from "@/features/market/plugins/parts";
-import { brand, Button, EmptyState, Field, Group, IconButton, IconTile, Label, Loading, Page, Row, space, T } from "@/ui";
+import { brand, Button, EmptyState, Field, Group, IconTile, Label, Loading, Page, Row, space, T } from "@/ui";
 import { FILTER_FROM, filterSkills, folderName, isBuiltIn, readableName, skillOrigin, skillsIn } from "./shared";
 
 const open = (name: string) => router.push({ pathname: "/skills/[name]", params: { name } });
@@ -18,6 +24,21 @@ export default function Skills() {
   const online = useOnline();
   const canRead = useCan("skills", "read");
   const canCreate = useCan("skills", "create");
+  const supportsUpload = useCapability("skill-upload-v1");
+  const {colors} = useTheme();
+  async function upload() {
+    const host = useApp.getState().pairing?.serverId;
+    try {
+      const file = await pickSkillUpload();
+      if (!file) return;
+      const added = await finishSkillImport(replace => api["skills.upload"]({...file, replace}), askReplace,
+        () => !!host && useApp.getState().pairing?.serverId === host && useApp.getState().link === "online");
+      if (added) {
+        showToast("Added " + added.length + (added.length === 1 ? " skill." : " skills."), "success");
+        await refresh("skills");
+      }
+    } catch (error) { showToast(error instanceof Error ? error.message : "Upload failed.", "error"); }
+  }
   const canManage = useCan("skills", "manage");
   const member = useMember();
   const canFolders = !member && useCapability("folders-v1");
@@ -87,7 +108,9 @@ export default function Skills() {
 
   return (
     <Page title="Skills" caption="What your bots know how to do" keyboard>
-      <Stack.Screen options={{ headerRight: canCreate ? () => <IconButton icon={Plus} label="New skill" size={44} onPress={() => open("new")} /> : undefined }} />
+      <Stack.Screen options={{ headerRight: canCreate ? () => <MenuView title="Add skill" actions={[{id:"create", title:"Create skill"}, ...(supportsUpload && online ? [{id:"upload", title:"Upload skill"}] : [])]} onPressAction={({nativeEvent}) => nativeEvent.event === "upload" ? void upload() : open("new")}>
+        <View accessible accessibilityRole="button" accessibilityLabel="Add skill" style={{width:44, height:44, alignItems:"center", justifyContent:"center"}}><Plus color={colors.ink} size={22} /></View>
+      </MenuView> : undefined }} />
       {!canRead ? (
         <EmptyState title="Your team role can't view skills" />
       ) : !skills ? (

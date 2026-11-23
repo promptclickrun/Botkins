@@ -590,6 +590,7 @@ function App() {
         key={key}
         botId={target.id}
         chatId={key === "home" ? undefined : key}
+        listPulls={key !== "home" && !!chat?.projectId && !memberHost && (!state?.remote?.using || state.remote.using.capabilities.includes("prs-v1"))}
         sourceKey={JSON.stringify([state!.mcpServers, state!.skills, target.skillsOff, target.mcpOff])}
         draft={drafts[key] || ""}
         placeholder={placeholder}
@@ -673,7 +674,7 @@ function App() {
   // A workspace of this computer's with no bots opens on the first-run step: the person's existing
   // agents, or Create a bot. Never while another computer is in use: a bot made there would go to it.
   if (!state.bots.length && !state.remote?.using && !memberTeam(state))
-    return <FirstBot saved={state.templates} created={async () => receiveSnapshot(await api.snapshot())} />;
+    return <FirstBot remote={state.remote} saved={state.templates} created={async () => receiveSnapshot(await api.snapshot())} />;
   const stream = state.streams[chatId];
   const elsewhere = state.requests.find((r) => r.chatId !== chatId);
   const actions: PageActions = {
@@ -1079,6 +1080,7 @@ function App() {
         {modal === "bot" && (
           <BotForm
             key={botStart?.id ?? "blank"}
+            remote={state.remote}
             start={botStart}
             fail={fail}
             cancel={() => setModal("")}

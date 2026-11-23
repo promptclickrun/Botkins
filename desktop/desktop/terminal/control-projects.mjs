@@ -53,6 +53,8 @@ export function projectsApi({ workspace, handlers, bot }) {
     description: p.description ?? "",
     color: p.color ?? null,
     folder: p.folder ?? null,
+    folders: p.folders,
+    ...(p.mode && { mode: p.mode }),
     ...(p.folder && !existsSync(p.folder) && { folderMissing: true }),
     todos: { open: p.todos.filter((todo) => !todo.done).length, done: p.todos.filter((todo) => todo.done).length },
     artifacts: workspace.projects.attached(p).length,
@@ -87,12 +89,12 @@ export function projectsApi({ workspace, handlers, bot }) {
    * What `git status` says of the project's folder, with which files a commit would take. The commit stages the project's
    * folder (`git add -A -- .`), and `git commit` takes what is staged: so a file of the folder, and a file that is staged already.
    */
-  const changesOf = async (p) => {
+  const changesOf = async (p, folder = p.folder) => {
     needFolder(p);
-    const changes = await handlers.projectChanges(p.id);
-    if (!changes.repo) return { project: named(p), folder: p.folder, repo: false, files: [] };
-    const inside = relative(realpathSync(changes.root), realpathSync(p.folder)).split(sep).join("/");
-    return { project: named(p), folder: p.folder, ...changes, files: changes.files.map((file) => ({ ...file, commit: file.staged || inside === "" || file.path.startsWith(inside + "/") })) };
+    const changes = await handlers.projectChanges(p.id, folder);
+    if (!changes.repo) return { project: named(p), folder, repo: false, files: [] };
+    const inside = relative(realpathSync(changes.root), realpathSync(folder)).split(sep).join("/");
+    return { project: named(p), folder, ...changes, files: changes.files.map((file) => ({ ...file, commit: file.staged || inside === "" || file.path.startsWith(inside + "/") })) };
   };
 
   // ── Tasks ──
@@ -163,12 +165,22 @@ export function projectsApi({ workspace, handlers, bot }) {
       await handlers.renameProject(found.id, name);
       return projectView(project(found.id));
     },
-    /** Changes { name?, description?, color?, folder? }. A null `color` or `folder` takes it away. */
+    async "projects.folder"([ref, action, path]) {
+      const id = project(ref).id;
+      if (action === "add") path = (await handlers.listFolders(path)).path;
+      await handlers.editProjectFolder(id, action, path);
+      return projectView(project(id));
+    },
+    async "projects.clone"([repo, parent, ref]) {
+      const path = parent && (await handlers.listFolders(parent)).path;
+      const id = await handlers.cloneProjectRepository(repo, path, ref && project(ref).id);
+      return projectView(project(id));
+    },
     async "projects.edit"([ref, patch = {}]) {
       const found = project(ref);
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
       const update = {};
-      for (const key of ["name", "description", "color"]) if (patch[key] !== undefined) update[key] = patch[key];
+      for (const key of ["name", "description", "color", "mode"]) if (patch[key] !== undefined) update[key] = patch[key];
       // The folder is chosen by the app's own rule, as a phone chooses one; what comes back is the real path.
       if (patch.folder !== undefined) update.folder = patch.folder === null ? null : (await handlers.listFolders(text(patch.folder, 4000, "a folder's full path"))).path;
       if (!Object.keys(update).length) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
@@ -198,20 +210,20 @@ export function projectsApi({ workspace, handlers, bot }) {
       return { project: named(found), items: (await handlers.projectArtifacts(found.id)).items };
     },
     /** What changed in the project's folder (git), and which files a commit would take: each file has `commit: true` or `false`. */
-    "projects.changes": ([ref]) => changesOf(project(ref)),
-    async "projects.diff"([ref, file]) {
+    "projects.changes": ([ref, folder]) => changesOf(project(ref), folder ?? undefined),
+    async "projects.diff"([ref, file, folder]) {
       const found = project(ref);
       needFolder(found);
-      return { project: named(found), file: text(file, 4096, "a file's path in the repository"), ...(await handlers.projectDiff(found.id, file)) };
+      return { project: named(found), file: text(file, 4096, "a file's path in the repository"), ...(await handlers.projectDiff(found.id, file, folder)) };
     },
     /**
      * Commits the changes of the project's folder with the message. `expected` is the list of paths that the caller was shown
      * (`projects.changes`, the files with `commit: true`): when the changes are others now, nothing is committed.
      */
-    async "projects.commit"([ref, message, expected]) {
+    async "projects.commit"([ref, message, expected, folder]) {
       const found = project(ref);
       const words = text(message, 2000, "a commit message (up to 2000 characters)");
-      const view = await changesOf(found);
+      const view = await changesOf(found, folder ?? undefined);
       if (!view.repo) throw new ControlError("The folder of " + found.name + " is not a git repository, so there is nothing to commit.", "NO_REPOSITORY");
       const files = view.files.filter((file) => file.commit);
       if (!files.length) throw new ControlError("There is nothing to commit in " + found.name + ".", "NOTHING_TO_COMMIT");
@@ -220,7 +232,7 @@ export function projectsApi({ workspace, handlers, bot }) {
         const now = files.map((file) => file.path);
         if (now.length !== expected.length || now.some((path) => !expected.includes(path))) throw new ControlError("The changes are not the files that were shown. Look at them again with `botkins projects changes`.", "CHANGED");
       }
-      const commit = await handlers.projectCommit(found.id, words);
+      const commit = await handlers.projectCommit(found.id, words, view.folder);
       return { project: named(found), name: found.name, commit, files: files.length };
     },
     /**
@@ -236,10 +248,10 @@ export function projectsApi({ workspace, handlers, bot }) {
       const refs = Array.isArray(options?.bots) ? options.bots : [];
       if (!refs.length) throw new ControlError("Give at least one bot.", "BAD_ARGUMENT");
       const bots = [...new Map(refs.map((entry) => bot(entry)).map((entry) => [entry.id, entry])).values()];
-      const mode = oneOf(["default", "plan", "yolo"], options.mode ?? "default", "A mode");
+      const mode = oneOf(["default", "plan", "yolo"], options.mode ?? found.mode ?? "default", "A mode");
       if (mode === "yolo" && options.agreed !== true) throw new ControlError("A chat in the mode yolo needs a yes: each request of the bot in it gets a yes with no question. Show that to the person, and give `agreed: true` (on the command line, `--yes`).", "NEEDS_YES");
-      const chatId = await handlers.startProjectChat(bots.map((entry) => entry.id), found.id, mode);
-      return { chatId, project: named(found), bots: bots.map((entry) => ({ id: entry.id, name: entry.name })), mode: workspace.chat(chatId).mode, ...(found.folder && { folder: found.folder }) };
+      const chatId = await handlers.startProjectChat(bots.map((entry) => entry.id), found.id, mode, options.folder);
+      return { chatId, project: named(found), bots: bots.map((entry) => ({ id: entry.id, name: entry.name })), mode: workspace.chat(chatId).mode, ...(found.folder && { folder: workspace.chat(chatId).folder ?? found.folder }) };
     },
 
     // ── To-dos (each is a project's own) ──

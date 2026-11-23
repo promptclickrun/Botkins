@@ -4,7 +4,7 @@ import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "ex
 import { HeaderHeightContext } from "expo-router/react-navigation";
 import { LinearGradient } from "expo-linear-gradient";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
-import { api, attempt, loadEarlier } from "@/state/link";
+import { api, attempt, loadEarlier, watchReasoning } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
@@ -37,17 +37,21 @@ import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
 import { drafts, keepDraft, useChatSplit } from "./split";
+import { sessionTodos, todoLabel } from "../../../link-host/session-todos";
+import { TodoList } from "./TodoList";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
-import { EndedNote, type MessageActions, MessageRow, UserBubble } from "./Messages";
+import { EndedNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
 import { Aside } from "./Aside";
 import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
 import { endSelecting, selectionEnds } from "./selecting";
+import { MessageLink, openLink } from "@/ui/LinkHold";
+import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
 import { usePane } from "../pane/usePane";
 import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
@@ -89,6 +93,8 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   const project = projects?.find((p) => p.id === chat.projectId);
   // The people in a chat ("team-people-v1"). Someone invited takes part; renaming, compacting,
   // deleting and the chat's model, project and people are its starter's (and the owner's).
+  const multiple = useCapability("project-folders-v1");
+  const savesMode = useCapability("project-mode-v1");
   const canShare = useCapability("team-people-v1");
   const teamSize = usePart("team")?.people?.length ?? 0;
   const place = myPlace(chat, myself(usePart("meta")));
@@ -101,7 +107,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     ...(canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
     ...(canManage && mine ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
     // Before the first message the chat can still change its project and mode.
-    ...(started || !mine ? [] : projectActions({ chat, projects, settings, bots })),
+    ...(started || !mine ? [] : projectActions({ chat, projects, settings, bots }, multiple)),
     ...(project?.folder ? [{ id: "changes", title: "Changes", image: "plus.forwardslash.minus" }] : []),
     ...(panes > 0 ? [{ id: "pane", title: "Side pane", image: "sidebar.right" }] : []),
     { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
@@ -116,10 +122,10 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
       actions={actions}
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
-        if (runProjectChoice(chat, action)) return;
+        if (runProjectChoice(chat, action, savesMode)) return;
         if (action === "pane") return void onPane?.();
         if (action === "people") return void router.push({ pathname: "/chat/people", params: { id: chat.id } });
-        if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id)) as Href);
+        if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id) + "&chatId=" + encodeURIComponent(chat.id)) as Href);
         else if (action === "new" && bot)
           void attempt(api.createChat(bot.id)).then((id) => id && (onOpen ? onOpen(id) : router.replace({ pathname: "/chat/[id]", params: { id } })));
         else if (action === "model") router.push({ pathname: "/chat/model", params: { scope: "chat", id: chat.id } });
@@ -216,6 +222,9 @@ function Hello({ chat, bot, bots, projects, settings, onPick }: { chat: ChatSumm
 
 /** How long the list must stay unchanged after a reply finishes before it is shown from its beginning. */
 const SETTLE_MS = 350;
+type ChatPosition = "latest" | "completion" | "history";
+const HOLD_POSITION = { minIndexForVisible: 0 };
+const FOLLOW_LATEST = { minIndexForVisible: 0, autoscrollToTopThreshold: 80 };
 const VIEWABILITY = { viewAreaCoveragePercentThreshold: 0 };
 
 type RowProps = {
@@ -238,21 +247,24 @@ function ActiveLiveLeaf({ chatId, bot, group, bots, item }: { chatId: string; bo
   return <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={{ ...item, ...resolved }} />;
 }
 
-const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active }: RowProps & {
+const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef }: RowProps & {
   item: Item;
   holdFold: FoldHold;
   viewport: ReturnType<typeof createChatViewport>;
   active: boolean;
+  replyRef?: RefObject<ComponentRef<typeof View> | null>;
 }) {
   const inView = useStore(viewport.rows, (rows) => active && rows.has(item.key));
   const row = item.kind === "message" ? (
-    <MessageRow item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
+    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
   ) : item.kind === "work" ? (
     <WorkPart chatId={chatId} bot={bot} item={item} />
   ) : item.kind === "text" ? (
     <TurnText item={item} />
   ) : item.kind === "screen" ? (
     <ScreenCard chatId={chatId} panel={item.panel} inView={inView} onOpen={() => openPanel(item.panel.id)} />
+  ) : item.kind === "activity" ? (
+    <WorkLine chatId={chatId} runId={item.runId} label="Turn activity" />
   ) : item.kind === "ended" ? (
     <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
   ) : item.kind === "fold" ? (
@@ -268,25 +280,22 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
-function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, parked, setParked, sendText, draftText, messageActions, openPanel, emptyView, room}: RowProps & {
+function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, emptyView, room}: RowProps & {
   view: ChatView;
   pending: (Message & { clientMessageId: string })[];
   runPart?: Run | null;
   streaming: boolean;
   at?: string;
   list: RefObject<FlatList<Item> | null>;
-  /**
-   * After a finished reply was shown from its beginning ("Position after response completes"), the
-   * list stops following new content to the bottom until the person goes back to it.
-   */
-  parked: boolean;
-  setParked: (parked: boolean) => void;
+  position: ChatPosition;
+  setPosition: (position: ChatPosition) => void;
+  followLatest: (animated?: boolean) => void;
   emptyView?: ReactNode;
   /**
    * What floats over the list's ends: the see-through bar and banners at the top, the message box at
-   * the bottom. The rows scroll under them. `button`: where Scroll to latest floats, clear of the status capsule too.
+   * the bottom. `bottom` includes the capsule when it is visible.
    */
-  room: { top: number; bottom: number; button: number };
+  room: { top: number; dock: number; bottom: number };
 }) {
   const { colors } = useTheme();
   // The newest message is out of view: the button that goes back to it shows.
@@ -303,6 +312,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   });
   // Where the list is scrolled to, and where it sits in the window: a fold that opens or closes keeps its line in place (holdFold).
   const scrolled = useRef(0);
+  const latestReply = useRef<ComponentRef<typeof View>>(null);
   const listBox = useRef<ComponentRef<typeof View>>(null);
   const frame = useRef({ top: 0, height: 0 });
   const measureList = () => listBox.current?.measureInWindow((_x, top, _w, height) => (frame.current = { top, height }));
@@ -329,9 +339,10 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const timestamps = useChatPrefs(prefs => prefs.timestamps);
   const stepsPref = useChatPrefs((prefs) => prefs.steps);
   const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
+  const foldFinishedSteps = useChatPrefs((prefs) => prefs.foldFinishedSteps);
   const streamOpen = useApp((state) => streaming && typeof state.texts[chatId]?.stream === "string");
   const ownership = useMemo(() => indexMessageOwnership(view.messages), [view.messages]);
-  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref }), [stepsPref, thinkingPref]);
+  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref, foldFinishedSteps }), [stepsPref, thinkingPref, foldFinishedSteps]);
   // A new step, steer, or page seals the current text into history using the latest snapshot.
   // Body-only changes reach the active row directly and leave this list untouched.
   const structural = useMemo(() => {
@@ -346,7 +357,8 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
       live: { stream: streamOpen ? body?.stream : undefined, thinking: body?.thinking },
       marks, timeline, group, prefs, ownership,
       screens: panesOn ? view.pane?.panels?.filter((panel) => panel.kind === "screen") : undefined,
-      livePlaceholder: streamOpen,
+      // Whole-reply mode can receive reasoning before it receives any reply text.
+      livePlaceholder: streamOpen || (!!underWay(runPart) && prefs.thinking === "show"),
     });
   }, [chatId, view, runPart, markPositions, timeline, group, panesOn, prefs, ownership, streamOpen]);
   const liveItem = useMemo(() => structural.find((item) => item.kind === "live"), [structural]);
@@ -362,6 +374,8 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const target = at !== undefined && /^\d{1,7}$/.test(at) ? Number(at) : undefined;
   const loads = useRef(0);
   const scrollTries = useRef(0);
+  const retry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(retry.current), []);
   const from = view.from;
   const loadingEarlier = !!view.loadingEarlier;
   useEffect(() => {
@@ -380,13 +394,15 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
     }
     const timer = setTimeout(() => {
       scrollTries.current = 0;
+      clearTimeout(retry.current);
+      setPosition("history");
       viewPosition.current = 0.5;
       viewOffset.current = 0;
       list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
       router.setParams({ at: undefined });
     }, 300);
     return () => clearTimeout(timer);
-  }, [target, from, loadingEarlier, data, chatId, list]);
+  }, [target, from, loadingEarlier, data, chatId, list, setPosition]);
 
   // "Show beginning of completed response": once a reply this phone saw under way has finished and
   // is drawn, the list scrolls once so the reply's top is at the top of the view (completion.ts has
@@ -399,6 +415,14 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
     return () => subscription.remove();
   }, []);
   const still = useReducedMotion();
+  const turnLive = streaming || !!underWay(runPart);
+  const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);
+  const needsReasoning = onShow && inFront && turnLive && thinkingPref === "show" && !streamsReplies;
+  useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
+  useLayoutEffect(() => {
+    if (position === "latest") clearTimeout(retry.current);
+    if (turnLive && position === "completion") followLatest();
+  }, [turnLive, position, followLatest]);
   useEffect(() => {
     const step = completions.check(chatId, {
       mode: completionPosition,
@@ -408,26 +432,49 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
       runs: view.runs,
       visible: onShow && inFront,
       // Read while the reply streams (completion.ts keeps it with the run): a reply that lands all at once moves the list too.
-      following: !awayNow,
-      drawn: !data.some((item) => item.kind === "live"),
+      following: position !== "history",
+      drawn: !turnLive && !data.some((item) => item.kind === "live"),
     });
     if (step.kind !== "jump") return;
-    const timer = setTimeout(() => {
+    if (position === "history" || pending.length) {
       completions.done(chatId, step.runId);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
       const index = data.findIndex((item) => item.kind === "message" && item.index === step.index);
       if (index < 0) return;
-      setParked(true);
-      scrollTries.current = 0;
-      viewPosition.current = 1;
-      // Inverted: a negative offset moves the reply's top down, clear of what floats at the top.
-      viewOffset.current = -edges.current.top;
-      list.current?.scrollToIndex({ index, viewPosition: 1, viewOffset: viewOffset.current, animated: !still });
+      const land = (replyTop?: number) => {
+        if (cancelled) return;
+        completions.done(chatId, step.runId);
+        clearTimeout(retry.current);
+        // At the latest position, a short reply and the activity beneath it can fit together.
+        // Scrolling to that reply alone would put its activity under the composer.
+        if (replyTop !== undefined && frame.current.height > 0 &&
+            replyTop - scrolled.current >= frame.current.top + edges.current.top) {
+          followLatest();
+          return;
+        }
+        setPosition("completion");
+        scrollTries.current = 0;
+        viewPosition.current = 1;
+        viewOffset.current = -edges.current.top;
+        list.current?.scrollToIndex({ index, viewPosition: 1, viewOffset: viewOffset.current, animated: !still });
+      };
+      if (step.index === view.from + view.messages.length - 1 && latestReply.current) {
+        latestReply.current.measureInWindow((_x, top, _width, height) => land(height > 0 ? top : undefined));
+      } else land();
     }, SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [view, runPart, data, completionPosition, onShow, inFront, awayNow, chatId, still, list, setParked]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [view, runPart, data, completionPosition, onShow, inFront, position, turnLive, pending.length, chatId, still, list, setPosition, followLatest]);
 
-  // A turn under way: the status capsule floats over the message box.
-  const turnLive = streaming || !!underWay(runPart);
+  // A trailing live fold already reserves the capsule's place. All other tails, including
+  // optimistic messages and steps that arrive before the stream, need that room in the inset.
+  const hasStatusRow = !pending.length && data[0]?.kind === "fold" && data[0].live;
+  const listBottom = hasStatusRow ? room.dock : room.bottom;
+  const finishDrag = (offset: number) => {
+    if (position === "history" && offset <= HIDE_AT) followLatest();
+  };
   if (emptyView) return emptyView;
   return (
     <View ref={listBox} collapsable={false} onLayout={measureList} style={{ flex: 1 }} {...selectionEnds}>
@@ -449,18 +496,26 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
             }
           }}
           scrollEventThrottle={64}
-          // Back at the newest content by their own hand: the list follows it again.
-          onScrollEndDrag={(event) => event.nativeEvent.contentOffset.y < HIDE_AT && setParked(false)}
+          onScrollBeginDrag={() => {
+            clearTimeout(retry.current);
+            setPosition("history");
+          }}
+          onScrollEndDrag={({ nativeEvent }) => {
+            if (nativeEvent.targetContentOffset) finishDrag(nativeEvent.targetContentOffset.y);
+            else if (!nativeEvent.velocity?.y) finishDrag(nativeEvent.contentOffset.y);
+          }}
+          onMomentumScrollEnd={({ nativeEvent }) => finishDrag(nativeEvent.contentOffset.y)}
           data={data}
           keyExtractor={(item) => item.key}
           renderItem={({ item }) => (
             <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
               draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport}
+              replyRef={item.kind === "message" && item.latest && item.message.role === "assistant" ? latestReply : undefined}
               active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
           )}
           style={{ flex: 1 }}
           // Inverted: the content's top is the screen's bottom, under the message box.
-          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: space.lg + room.bottom, paddingBottom: space.lg + room.top }}
+          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: space.lg + listBottom, paddingBottom: space.lg + room.top }}
           ItemSeparatorComponent={Gap}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
@@ -468,20 +523,19 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           // adding the bar's height again would land at the wrong end of the inverted list.
           contentInsetAdjustmentBehavior="never"
           showsVerticalScrollIndicator={false}
-          maintainVisibleContentPosition={parked ? { minIndexForVisible: 0 } : { minIndexForVisible: 0, autoscrollToTopThreshold: 80 }}
+          maintainVisibleContentPosition={position === "latest" ? FOLLOW_LATEST : HOLD_POSITION}
           onEndReached={() => view.from > 0 && void loadEarlier(chatId)}
           // A message not drawn yet: go near it by the rows' average height, then to it.
           onScrollToIndexFailed={(info) => {
             list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
-            if (scrollTries.current++ < 4) setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, viewOffset: viewOffset.current, animated: !still }), 160);
+            clearTimeout(retry.current);
+            if (scrollTries.current++ < 4) retry.current = setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: viewPosition.current, viewOffset: viewOffset.current, animated: !still }), 160);
           }}
           onEndReachedThreshold={0.6}
           ListHeaderComponent={pending.length ? (
             <View style={{ gap: space.xl, marginTop: data.length ? space.xl : 0 }}>
               {pending.map(message => <UserBubble key={message.clientMessageId} id={message.clientMessageId}
                 message={message} index={-1} timestamps={timestamps} media={[]} />)}
-              {/* A message sent while the turn runs sits under its status line's room: it keeps clear of the capsule over the message box. */}
-              {turnLive && <View style={{ height: CAPSULE }} />}
             </View>
           ) : undefined}
           ListFooterComponent={view.loadingEarlier ? <ActivityIndicator color={colors.muted} style={{ paddingVertical: space.lg }} /> : undefined}
@@ -490,11 +544,10 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
         />
       </EdgeFree>
       <ScrollToLatest
-        bottom={room.button}
+        bottom={room.bottom + space.sm}
         shown={awayNow}
         onPress={() => {
-          setParked(false);
-          list.current?.scrollToOffset({ offset: 0, animated: true });
+          followLatest(!still);
           away.current = false;
           setAway(false);
         }}
@@ -586,9 +639,13 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const projects = usePart("projects");
   const input = useRef<ComponentRef<typeof TextInput>>(null);
   const list = useRef<FlatList<Item>>(null);
-  // After a finished reply was shown from its beginning ("Position after response completes"), the
-  // list stops following new content to the bottom until the person goes back to it.
-  const [parked, setParked] = useState(false);
+  // An automatic completion jump lasts one turn. An intentional scroll into history lasts until
+  // the person returns to the latest content or sends a message.
+  const [position, setPosition] = useState<ChatPosition>("latest");
+  const followLatest = useCallback((animated = false) => {
+    setPosition("latest");
+    list.current?.scrollToOffset({ offset: 0, animated });
+  }, []);
   // Opening a chat wakes its bot up and marks it read.
   useEffect(() => {
     if (chatId) api.warmChat(chatId).catch(() => {});
@@ -629,7 +686,15 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   };
 
   // The helpers of the chat's newest turn, above the composer.
-  const newest = view ? latestTurn(runPart, view.messages, view.runs) : undefined;
+  const newest = runPart ?? (view && latestTurn(undefined, view.messages, view.runs));
+
+  const todos = sessionTodos(newest?.todos, view?.todos);
+  const [todoDrawerChat, setTodoDrawerChat] = useState<string>();
+  const hasTodos = !!todos?.length;
+  const todoOpen = hasTodos && todoDrawerChat === chatId;
+  useEffect(() => {
+    if (!hasTodos || todoDrawerChat !== chatId) setTodoDrawerChat(undefined);
+  }, [chatId, hasTodos, todoDrawerChat]);
 
   const askSide = (command: string, question: string) => {
     if (!question) {
@@ -677,8 +742,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     }
     setText("");
     onLeave.current.wrote = true;
-    setParked(false);
-    list.current?.scrollToOffset({ offset: 0, animated: true });
+    followLatest();
     const clientMessageId = randomUUID();
     const withIds = meta?.capabilities.includes("client-message-id-v1");
     const before = { length: view?.total ?? chat?.count ?? 0, waiting: waitingCopies(message, queued), clientMessageId: withIds ? clientMessageId : undefined };
@@ -729,6 +793,12 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const draftText = useCallback((value: string) => setText((current) => (current.trim() ? current.replace(/\s+$/, "") + "\n" + value : value)), []);
   // The side pane a bot opened beside this chat: its sheet opens when a bot asks, and text a view in it hands over lands in the message box.
   const pane = usePane(chatId, draftText);
+  const showPulls = meta?.you?.kind !== "member" && meta?.capabilities.includes("pr-panel-v1");
+  const openMessageLink = useCallback((url: string) => {
+    const target = showPulls && pullRequestUrl(url);
+    if (target) router.push({ pathname: "/chat/pane", params: { chatId, pull: target.url } });
+    else openLink(url);
+  }, [chatId, showPulls]);
   // Reply and Fork from here, in each message's menu. A group chat can't be forked.
   const messageActions = useMemo<MessageActions>(
     () => ({
@@ -813,7 +883,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       </View>
     );
 
-  const empty = !!view && view.messages.length === 0 && !pending.length && !streaming;
+  const empty = !!view && view.messages.length === 0 && !pending.length && !working;
   const measured = chat.context && chat.context.limit > 0 ? chat.context : undefined;
   const barEnd = (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -846,8 +916,10 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // second page, and the chat keeps to the first, clear of the fold.
   const project = projects?.find((item) => item.id === chat.projectId);
   const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
-  const room = { top: topBar + banners, bottom: dock, button: dock + (working ? CAPSULE + space.sm : 0) + space.sm };
+  const idleTodoRoom = canChat && hasTodos && !working ? CAPSULE + space.sm : 0;
+  const room = { top: topBar + banners, dock: dock + idleTodoRoom, bottom: dock + idleTodoRoom + (working ? CAPSULE + space.sm : 0) };
   const column = (
+    <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       {!paneId && header}
       {/* The chat fills this; the bar, the banners and the message box float over it. */}
@@ -859,7 +931,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         ) : (
           <ChatTimelineList
             chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
-            at={at} list={list} parked={parked} setParked={setParked} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
+            at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
             room={room}
             emptyView={empty && (
               <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
@@ -877,13 +949,19 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
           </View>
         </View>
         <Fade edge="bottom" cover={dock} />
-        {canChat && working && (
-          <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: dock + space.sm }}>
-            <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />
+        {canChat && (working || hasTodos) && (
+          <View pointerEvents="box-none" style={{ position: "absolute", left: space.sm, right: space.sm, bottom: dock + space.sm, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm }}>
+            {working && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
+            {hasTodos && <Chip label={todoLabel(todos)} selected={todoOpen} onPress={() => setTodoDrawerChat(todoOpen ? undefined : chatId)} />}
           </View>
         )}
         {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
         <View onLayout={(event) => setDock(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
+          {canChat && todoOpen && (
+            <ScrollView style={{ maxHeight: Math.min(240, requestRoom / 2), marginHorizontal: space.md }} keyboardShouldPersistTaps="handled">
+              <TodoList todos={todos} />
+            </ScrollView>
+          )}
           {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
           {canChat && requests.length > 0 && (
             <View style={{ paddingHorizontal: space.md }}>
@@ -929,6 +1007,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       </View>
       <Animated.View style={spacer} />
     </View>
+    </MessageLink.Provider>
   );
   if (!book || !project) return column;
   return (
@@ -936,7 +1015,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       <View style={{ width: Math.max(0, book.x - shape.left) }}>{column}</View>
       <View style={{ width: book.width }} />
       <View style={{ flex: 1, paddingTop: insets.top }}>
-        <ChangesView id={project.id} inline />
+        <ChangesView id={project.id} chatId={chat.id} inline />
       </View>
     </View>
   );

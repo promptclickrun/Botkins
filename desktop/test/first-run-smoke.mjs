@@ -3,6 +3,7 @@
 // Also covers the agents section of the Create a bot sheet and a second launch.
 // Uses isolated data folders and a made-up Copilot home; the real ~/.copilot is never read.
 // Set FIRSTRUN_SHOTS to a folder to save light and dark screenshots.
+import { stubTemplate } from "./template-fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -102,7 +103,7 @@ try {
   // Create a new bot instead: the form, which can still start from an agent. Back keeps the choices.
   await button("Create a new bot instead").click();
   await heading("Create your first bot").waitFor();
-  await page.getByRole("button", { name: "Start from a template" }).click();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
   const group = page.getByRole("group", { name: "Your GitHub Copilot agents" });
   await expect(group.getByRole("button", { name: "Huge", exact: true })).toBeDisabled();
   await group.getByRole("button", { name: "Reviewer", exact: true }).click();
@@ -110,7 +111,6 @@ try {
   await expect(page.getByLabel("Role", { exact: true })).toHaveValue("Reviews a change for bugs and missed cases");
   await expect(page.getByRole("textbox", { name: "Instructions", exact: true })).toHaveValue("Review the diff. Report findings by severity.");
   await page.getByRole("note").getByText("Copied from your GitHub Copilot agent reviewer", { exact: false }).waitFor();
-  await page.getByRole("button", { name: "Agent: Reviewer" }).waitFor();
   await shoot("form-from-agent");
   await button("Back to your agents").click();
   await heading("Bring in your agents").waitFor();
@@ -135,7 +135,7 @@ try {
   // Create a bot later: agents that are bots already say so, and can still be used as a start.
   await button("Add bot").click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("button", { name: "Start from a template", exact: true }).click();
+  await dialog.getByRole("button", { name: "Import", exact: true }).click();
   const menu = dialog.getByRole("group", { name: "Your GitHub Copilot agents" });
   await menu.getByText("Already a bot · Backend development specialist").waitFor();
   await shoot("create-bot-agents");
@@ -170,8 +170,9 @@ try {
   await heading("Create your first bot").waitFor();
   await expect(heading("Home")).toHaveCount(0);
   await expect(button("Back to your agents")).toHaveCount(0);
-  await page.getByRole("button", { name: "Start from a template" }).click();
-  await page.getByRole("group", { name: "Built-in templates" }).waitFor();
+  await stubTemplate(app);
+  await page.getByRole("button", { name: "Start from template" }).click();
+  await page.getByRole("group", { name: "Marketplace templates" }).waitFor();
   await expect(page.getByRole("group", { name: /agents$/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await shoot("create-first-bot");

@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { AppState, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, Run } from "@/link/types";
-import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, useChatActivity } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { BotAvatar, Glass, T, Tap, useTheme } from "@/ui";
@@ -46,17 +45,16 @@ export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: strin
   const { colors } = useTheme();
   const state = useChatActivity(chatId);
   const speakerId = useApp((s) => s.parts.live?.speakers[chatId]);
-  const mode = useChatPrefs((prefs) => prefs.steps);
   const now = useNow(useIsFocused() && !!run);
   const face = (group && speakerId ? bots.get(speakerId) : undefined) ?? bot;
   const doing = (activityLabel(state) || "Working").replace(/…$/, "");
-  const own = (run?.steps ?? []).filter((step) => !step.agentId);
-  const count = stepCount(mode, own.length, own.filter((step) => step.status === "Failed").length);
+  const own = run?.steps ?? [];
+  const count = stepCount(own.length);
   const facts = [run ? clock(now - run.time) : "", count].filter(Boolean).join(" · ");
   const name = face?.name && !group ? face.name + " is " + doing.toLowerCase() : doing;
   return (
     // It goes at once when the turn ends: the fold line takes its place under the reply.
-    <Animated.View entering={FadeIn.duration(180)} pointerEvents="box-none" style={{ alignItems: "center" }}>
+    <Animated.View entering={FadeIn.duration(180)} pointerEvents="box-none" style={{ flexShrink: 1, minWidth: 0 }}>
       <Tap
         onPress={run ? () => router.push({ pathname: "/chat/activity", params: { chatId, runId: run.id } }) : undefined}
         disabled={!run}
@@ -68,13 +66,13 @@ export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: strin
         <View pointerEvents="none">
           <Glass style={{ height: CAPSULE, borderRadius: CAPSULE / 2, flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 8, paddingRight: 16 }}>
             <BotAvatar bot={face} size={28} state={state === "idle" ? "thinking" : state} animated={false} />
-            <T variant="footnote" weight="600" numberOfLines={1}>
+            <T variant="footnote" weight="600" numberOfLines={1} style={{ flexShrink: 1 }}>
               {doing}
             </T>
             {!!facts && (
               <>
                 <View style={{ width: 1, height: 16, backgroundColor: colors.line }} />
-                <T variant="footnote" color="muted" numberOfLines={1} style={{ fontVariant: ["tabular-nums"] }}>
+                <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}>
                   {facts}
                 </T>
               </>

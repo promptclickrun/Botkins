@@ -2,6 +2,8 @@
 // The server versions these snapshots. An opted-in phone gets boolean stream indicators in live
 // and only the missing reply and thinking text for its watched chats.
 
+import { isBackgroundStep } from "./activity-steps.mjs";
+
 const PREVIEW = 160;
 const STEP_TEXT = 4000;
 export const CHAT_PAGE = 60;
@@ -24,6 +26,7 @@ function chatSummary(chat) {
     ...(chat.archived && { archived: true }),
     ...(chat.unread && { unread: true }),
     ...(chat.projectId && { projectId: chat.projectId }),
+    ...(chat.folder && { folder: chat.folder }),
     ...(chat.mode && { mode: chat.mode }),
     ...(chat.panelId && { panelId: chat.panelId }),
     // How many tabs the chat's side pane has; the tabs themselves come with the chat's detail.
@@ -57,7 +60,7 @@ function runSummary(run) {
 
 /** A run as a chat shows it. Long tool text is cut: a phone shows the start of it. */
 function runDetail(run) {
-  const step = (s) => ({ ...s, ...(s.input && { input: clip(s.input, STEP_TEXT) }), ...(s.output && { output: clip(s.output, STEP_TEXT) }) });
+  const step = (s) => ({ ...s, ...(s.input?.length > STEP_TEXT && isBackgroundStep(s) && { background: true }), ...(s.input && { input: clip(s.input, STEP_TEXT) }), ...(s.output && { output: clip(s.output, STEP_TEXT) }) });
   return {
     ...run,
     ...(run.steps && { steps: run.steps.map(step) }),
@@ -263,7 +266,7 @@ export function lightRun(run) {
     const long = (text) => typeof text === "string" && text.length > LIGHT_STEP_TEXT;
     if ((!long(step.input) && !long(step.output)) || KEEPS_TEXT.test(step.name ?? "") || helpers.has(step.id)) return step;
     const { input, output, ...rest } = step;
-    return { ...rest, ...(!long(input) && input !== undefined && { input }), ...(!long(output) && output !== undefined && { output }), more: true };
+    return { ...rest, ...(long(input) && isBackgroundStep(step) && { background: true }), ...(!long(input) && input !== undefined && { input }), ...(!long(output) && output !== undefined && { output }), more: true };
   };
   return {
     ...run,
@@ -303,13 +306,15 @@ export function chatPart(state, chatId, runs = runsByChat(state, [chatId]).get(c
   const from = Math.max(0, end - limit);
   const messages = all.slice(from, end).map(({ context: _context, ...message }) => message);
   const ids = new Set(messages.map((m) => m.runId).filter(Boolean));
+  // Older group chats kept the task list on the run alone.
+  const todos = chat.todos ?? (chat.botIds?.length > 1 ? runs.find((run) => run.todos)?.todos : undefined);
   return {
     id: chatId,
     from,
     total: all.length,
     messages,
     runs: runs.filter((run) => ids.has(run.id) && run.status !== "Working").map(runDetail),
-    ...(chat.todos && { todos: chat.todos }),
+    ...(todos && { todos }),
     // The side pane a bot opened beside this chat: its tabs, the one in front, and the latest ask.
     ...(chat.pane && typeof chat.pane === "object" && { pane: chat.pane }),
   };

@@ -32,7 +32,7 @@ export type Prefs = {
   /** The model providers folded shut in the model picker. */
   foldedProviders: string[];
   /** What the Marketplace tab showed last: apps (Composio) or plugins. */
-  marketView: "apps" | "agents" | "plugins" | "pi";
+  marketView: "apps" | "agents" | "plugins" | "pi" | "skills";
   /** Notices shown one time and closed (a plugin the computer switched off): one key for each computer, plugin and place. */
   toldNotices: string[];
   /** The order of the tabs in the bar (Settings › Appearance › Tabs). */
@@ -77,7 +77,7 @@ function read(saved: Record<string, unknown>): Prefs {
     haptics: typeof saved.haptics === "boolean" ? saved.haptics : defaults.haptics,
     avatarAnimations: readAvatarAnimations(saved.avatarAnimations),
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
-    marketView: saved.marketView === "pi" || saved.marketView === "plugins" || saved.marketView === "agents" ? saved.marketView : "apps",
+    marketView: saved.marketView === "skills" || saved.marketView === "pi" || saved.marketView === "plugins" || saved.marketView === "agents" ? saved.marketView : "apps",
     toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,
     tabOrder: tabOrder(saved.tabOrder),
     openSpaces: ids(saved.openSpaces),

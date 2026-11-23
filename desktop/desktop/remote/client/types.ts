@@ -1,8 +1,15 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
+export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
+  fastModes?: Partial<Record<Exclude<FastMode, "off">, string>>;
   id: string;
   name: string;
   provider?: string;
@@ -37,6 +44,18 @@ export type ModelInfo = {
   /** The provider's own price or speed class. */
   tier?: string;
 };
+/** A harness that is a program of its own (Pi or OMP), as harnesses() reports it. */
+export type HarnessStatus = {
+  id: string;
+  name: string;
+  description: string;
+  harness: true;
+  installed: boolean;
+  version?: string;
+  message?: string;
+  error?: string;
+  install?: { url: string; command?: string };
+};
 export type ProviderStatus = {
   id: string;
   name: string;
@@ -54,6 +73,36 @@ export type ProviderStatus = {
   install?: { url: string; command?: string };
   starting?: boolean;
   error?: string;
+  /**
+   * How a phone can sign this provider in through the computer ("provider-signin-v1"): `guided`,
+   * the provider's own sign-in run on the computer, its page and code shown on the phone
+   * (providerSignInStart); `token`, a token or key pasted on the phone (providerUseToken). Missing
+   * on a computer without the capability.
+   */
+  signInWays?: { guided: boolean; token: boolean };
+};
+/**
+ * What a sign-in or an install run on the computer says, in order ("provider-signin-v1"): a page
+ * to open with a code to type there, a page to open, a line the tool printed, or the tool waiting
+ * for a line from the person (`text` may be empty when the tool asked in its own output).
+ */
+export type ProviderSignInEvent =
+  | { n: number; type: "code"; url: string; code: string }
+  | { n: number; type: "open"; url: string }
+  | { n: number; type: "output"; text: string }
+  | { n: number; type: "prompt"; text: string };
+/** A sign-in or an install as it stands: the events after the ones already read, and how it ended. */
+export type ProviderSignInView = {
+  events: ProviderSignInEvent[];
+  /** The number of the newest event: read on from here. */
+  next: number;
+  done: boolean;
+  /** Why it didn't finish, in a sentence. */
+  error?: string;
+  /** How it finished: signed in (and as whom), or installed. */
+  result?: { connected?: boolean; installed?: boolean; account?: string | null; plan?: string | null; version?: string | null };
+  /** The tool waits for a line from the person (providerSignInInput). */
+  wantsInput: boolean;
 };
 export type ProviderService = {
   id: string;
@@ -76,6 +125,7 @@ export type BotkinEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curi
 export type BotkinLook = { head: string; palette: string; eyes?: BotkinEyes; colors?: [string, string, string, string] };
 export type BotAccessGrant = { all: boolean; projects: string[] };
 export type Bot = {
+  fastMode?: FastMode;
   id: string;
   name: string;
   role: string;
@@ -89,6 +139,8 @@ export type Bot = {
   avatar?: BotAvatarSpec;
   /** The Botkin chosen for this bot on a phone. Without one, the bot shows its default character. */
   look?: BotkinLook;
+  /** A voice of this bot's own ("bot-voice-v1"). A field it leaves out is the same as Settings › Voice. */
+  voice?: BotVoice;
   summary?: string;
   pinned?: boolean;
   hidden?: boolean;
@@ -144,7 +196,7 @@ export type Role = {
   bots: "all" | string[];
 };
 export type Group = { id: string; name: string; roleId: string };
-export type MemberDevice = { id: string; name: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
+export type MemberDevice = { id: string; name: string; person?: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
 export type Member = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices?: MemberDevice[] };
 export type Invite = {
   id: string;
@@ -158,10 +210,14 @@ export type Invite = {
   published?: boolean;
   link?: string;
 };
-export type JoinRequest = { id: string; name: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
+export type JoinRequest = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
+/** Someone a chat can be shared with ("team-people-v1"): the owner (id "owner", named after the computer) or a member. */
+export type Person = { id: string; name: string };
 export type TeamPart =
-  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[] }
+  | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[]; people?: Person[]; /** "Members may share by link" ("spaces-v1"). */ linkSharing?: boolean }
   | {
+      people?: Person[];
+      linkSharing?: boolean;
       me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] } };
       team: { name: string };
     };
@@ -177,6 +233,11 @@ export type Mention =
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
 export type Message = {
+  clientMessageId?: string;
+  /** One utterance in live voice, identified across partials and the final transcript. */
+  voiceId?: string;
+  voicePartial?: true;
+  voiceCaption?: string;
   role: "assistant" | "user" | "command";
   text: string;
   mentions?: Mention[];
@@ -217,6 +278,12 @@ export type Catalog = { choices: Capability[]; servers: { name: string; status: 
 /** A file the phone uploaded to the computer for a message. */
 export type UploadedFile = { id: string; name: string; path: string; size: number };
 /** A pull request of the repository a chat's project works in. */
+export type PullRequestDetail = PullRequest & {
+  body: string; createdAt: string; summary: string; review: string;
+  checks: { name: string; result: string }[];
+  files: { path: string; additions: number; deletions: number }[];
+};
+export type PullAnswer<T> = ({ available: true } & T) | { available: false; reason: string };
 export type PullRequest = { number: number; title: string; url: string; state: "open" | "closed" | "merged"; draft: boolean; author?: string; head?: string; base?: string; updatedAt?: string; repository?: string };
 
 // Credentials. Values stay on the computer: the phone can save one, and can name one in a call
@@ -316,6 +383,10 @@ export type ChatSchedule = {
   notify?: boolean;
   createdAt?: number;
   finishedAt?: number;
+  /** A script routine's script: it runs on the computer with no model ("routine-scripts-v1"). */
+  script?: string;
+  /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
+  followUp?: boolean;
 };
 /**
  * Where a routine's result lands when a run finishes. "routine" (and nothing) keeps it in the
@@ -326,10 +397,25 @@ export type ChatSchedule = {
  */
 export type RoutineDelivery = { to: "none" | "routine" | "chat" | "feed" | "idea" | "goal"; chatId?: string; /** For "goal": which kind of goal. */ category?: string };
 /** `notify: false` keeps a routine quiet: no notification when a run finishes, on the computer or a phone. */
-export type RoutineInput = { botId: string; name: string; prompt: string; cadence: Cadence; timezone?: string; deliver?: RoutineDelivery; notify?: boolean };
+export type RoutineInput = {
+  botId: string;
+  name: string;
+  /** The instructions; on a script routine, its follow-up action's (needed only when `followUp` is on). */
+  prompt: string;
+  cadence: Cadence;
+  timezone?: string;
+  deliver?: RoutineDelivery;
+  notify?: boolean;
+  /** A script that runs on the computer with no model ("routine-scripts-v1"; the owner's only). null on an edit takes it away. */
+  script?: string | null;
+  followUp?: boolean;
+  /** The routine's own model, kept on its chat ("routine-models-v1"). null on an edit goes back to the Default routines model. */
+  model?: ModelChoice | null;
+};
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
+  fastMode?: FastMode;
   id: string;
   botId: string;
   /** How many tabs the chat's side pane has ("side-pane-v1"). The tabs come with the chat's detail. */
@@ -338,12 +424,17 @@ export type ChatSummary = {
   botIds?: string[];
   /** The member who created it. Missing on an owner chat. */
   createdBy?: string;
+  /** The people invited to it ("team-people-v1"): "owner" or a member's id. The owner and the chat's people get it. */
+  invited?: string[];
   title: string;
   time: number;
   pinned?: boolean;
   archived?: boolean;
   unread?: boolean;
+  /** The section the person put it in on their Chats screen ("chat-sections-v1"). Their own: nobody else sees it. */
+  sectionId?: string;
   projectId?: string;
+  folder?: string;
   mode?: ChatMode;
   panelId?: string;
   model?: ModelChoice;
@@ -354,6 +445,7 @@ export type ChatSummary = {
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
 };
 export type Step = {
+  background?: boolean;
   id: string;
   name: string;
   source?: string;
@@ -367,9 +459,19 @@ export type Step = {
   botId?: string;
   /** The helper (`Subagent.id`) that ran this step ("turn-timeline-v1"). Missing: the turn's own step, or a computer that doesn't say. */
   agentId?: string;
+  /** The step has a longer input or output than it carries here ("step-details-v1"): `link.step` reads them. */
+  more?: boolean;
 };
-export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
+/** One step's input and output, read when the step is opened (`link.step`). */
+export type StepDetail = { input?: string; output?: string };
+export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
+/** One reasoning item's wire suffix for a phone following a working turn. */
+export type ReasoningAppend = Omit<Reasoning, "text"> & { from: number; add: string };
+/** Snapshot-diff reasoning updates ("reasoning-appends-v1"). */
+export type ReasoningDelta = { run: string; reset?: true; remove?: string[]; order?: string[]; items: ReasoningAppend[] };
+/** The expanded reasoning state held by the phone for one running chat. */
+export type ReasoningView = { run: string; items: Reasoning[] };
 /**
  * A helper a turn started ("In the background"). `id` is the id of the step that started it. With
  * "turn-timeline-v1": `prompt` is what it was asked, `intent` what it says it is doing now, and
@@ -401,6 +503,30 @@ export type PanelBlock =
   | { type: "line"; label: string; labels: string[]; series: { name: string; values: number[] }[] }
   | { type: "html"; frame: string; height: number };
 export type Card = { id: string; title: string; blocks: PanelBlock[]; replies: string[] };
+/**
+ * A bot asked the person to connect a Composio app (the computer's desktop/connects.mjs). The card
+ * holds only the app and where it stands; the page to sign in on goes to the owner who presses Connect.
+ * needed: not connected yet. waiting: a sign-in page is open. sign_in: the computer isn't signed in to
+ * Composio. unavailable: the chat's bot can no longer use Composio.
+ */
+export type ConnectStatus = "needed" | "waiting" | "connected" | "failed" | "expired" | "sign_in" | "unavailable";
+export type ConnectCard = { id: string; toolkit: string; name: string; logo?: string; status: ConnectStatus; note?: string; updatedAt: number; resumed?: boolean };
+export type ConnectCardState = { card: string; app: string; status: ConnectStatus; note?: string };
+/** The card of a tool with an MCP App view (the computer's desktop/mcp-apps.mjs): what anyone in the chat may see. */
+export type McpAppCard = { id: string; server: string; tool: string; title: string; summary: string; at: number };
+/** A tool's result as MCP gives it: `content` is what the model read; the view also gets the rest. */
+export type McpToolResult = { content: Record<string, unknown>[]; structuredContent?: Record<string, unknown>; _meta?: Record<string, unknown>; isError?: boolean };
+/** What a view is shown with: the tool, its input and its result as they were, the origins it may reach, and its page. */
+export type McpAppView = {
+  id: string;
+  server: string;
+  tool: { name: string; title?: string; description?: string; inputSchema: Record<string, unknown>; _meta?: Record<string, unknown> };
+  input: Record<string, unknown>;
+  result: McpToolResult;
+  csp: { resourceDomains: string[]; connectDomains: string[] };
+  prefersBorder?: boolean;
+  html?: string;
+};
 export type RunSummary = {
   id: string;
   chatId: string;
@@ -422,6 +548,10 @@ export type Run = RunSummary & {
   steps?: Step[];
   cards?: Card[];
   apps?: { id: string; title: string; description: string; sendsAnswers: boolean }[];
+  /** Composio apps the bot asked the person to connect in this turn. */
+  connects?: ConnectCard[];
+  /** Tools with an MCP App view that ran in this turn. */
+  mcpApps?: McpAppCard[];
   options?: { label: string; prompt: string; description?: string }[];
   reasoning?: Reasoning[];
   todos?: Todo[];
@@ -508,7 +638,7 @@ export type AgentRequest = {
   /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
   fields?: SecureField[];
 };
-export type QueuedMessage = { id: string; text: string };
+export type QueuedMessage = { clientMessageId?: string; id: string; text: string };
 /** What is happening right now, per chat. */
 export type Live = {
   /**
@@ -542,7 +672,74 @@ export type Panel = {
   projectId?: string;
   /** The chat that holds the panel's refreshes (its "refresh history"), once it has refreshed. */
   refreshChatId?: string;
+  /** The space it is in ("spaces-v1"). */
+  spaceId?: string;
+  /** The member who asked for it. Missing: the owner. */
+  createdBy?: string;
+  /** An app panel's saved state (`botkins.state`), and how many times it changed. */
+  state?: Record<string, unknown>;
+  stateRev?: number;
+  /** Short notes people wrote on it. */
+  notes?: PanelNote[];
+  /** The last change a person made: "Maya ticked Press kit". `label` is the page's own words. */
+  last?: { by: string; name: string; label?: string; at: number };
+  /** Up to 3 things worth asking its bot next, in the bot's own words: plain text, at most 60 characters each. Never made up by an app. */
+  asks?: string[];
 };
+export type PanelNote = { id: string; by: string; name: string; text: string; at: number };
+/**
+ * A panel as a device is sent it ("spaces-v1"). A member gets it without its project, without its
+ * chats unless they are in them, and without its routine's prompt unless they may change the space.
+ */
+export type PanelView = Omit<Panel, "chatId" | "routine"> & {
+  chatId?: string;
+  routine: (Omit<NonNullable<Panel["routine"]>, "prompt"> & { prompt?: string; setBy?: string; promptBy?: string }) | null;
+};
+/** Who can open a space: only its maker, members the maker picked, all members, or anyone with the link. */
+export type SpaceAccess = "private" | "members" | "team" | "link";
+/** What a person may do with a space. A member's role narrows what each allows (`team.me.role`). */
+export type SpaceCan = "own" | "edit" | "view";
+export type SpaceNotify = "off" | "daily" | "all";
+/** A space as one person is sent it in the `spaces` part ("spaces-v1"; docs/spaces.md): the spaces they can open, pinned first. */
+export type SpaceSummary = {
+  id: string;
+  name: string;
+  /** One of the four every person has. Another person's is shown with its maker: "Maya's Today". */
+  builtin?: "today" | "feed" | "ideas" | "goals";
+  /** Who made it. */
+  by: Person;
+  mine: boolean;
+  access: SpaceAccess;
+  can: SpaceCan;
+  /** With access "members": the people picked. */
+  people?: (Person & { can: "view" | "edit" })[];
+  /** With access "team" or "link": what every member may do. */
+  teamCan?: "view" | "edit";
+  /** The link, for its maker and the owner. Absent while links are off. */
+  link?: string;
+  /**
+   * For its maker and the owner: "leaving" while an earlier link's copy is still being taken back
+   * from the relay ("Taking the link back…"); "off" while it is shared by link and the relay is off
+   * ("Links are off while the relay is off.").
+   */
+  linkState?: "leaving" | "off";
+  /** Owner devices only. */
+  projectId?: string;
+  /** Panels and open cards the person is sent. */
+  count: number;
+  /** Of those, changed since the person last opened it (99 at most). */
+  changed: number;
+  pinned: boolean;
+  notify: SpaceNotify;
+  /** Other people looking at it now. */
+  here: (Person & { panelId?: string })[];
+  rev: number;
+  updatedAt: number;
+};
+/** A space's content, asked for with `spaces.read`. Read again when the `rev` in the `spaces` part passes this one. */
+export type SpaceContent = { id: string; rev: number; /** When the person last opened it before this read. */ seenAt: number; /** When they opened a panel or card on its own since (item id → time). Absent from an older computer. */ seenItems?: Record<string, number>; panels: PanelView[]; cards: BoardItem[] };
+export type PanelStart = "checklist" | "tracker" | "chart" | "table" | "notes" | "app";
+export type SpaceShareInput = { access: SpaceAccess; grants?: { id: string; can: "view" | "edit" }[]; teamCan?: "view" | "edit" };
 export type BoardItem = {
   id: string;
   botId: string;
@@ -579,7 +776,20 @@ export type BotTask = {
 export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
-export type Project = { id: string; name: string; description?: string; color?: ProjectColor; folder?: string; todos: ProjectTodo[]; lastUsed: number; createdAt: number };
+export type Project = {
+  folders?: string[];
+  mode?: ChatMode;
+  id: string;
+  name: string;
+  description?: string;
+  color?: ProjectColor;
+  folder?: string;
+  todos: ProjectTodo[];
+  /** The artifacts attached to it, by id, newest attached first ("project-artifacts-v1"). Left out while there are none. */
+  artifacts?: string[];
+  lastUsed: number;
+  createdAt: number;
+};
 
 export type McpAuth =
   | { type: "none" | "header" }
@@ -640,10 +850,15 @@ export type Appearance = {
   font?: string;
   fontPicked?: boolean;
   textSize?: "small" | "default" | "large" | "larger";
+  /** Missing on older computers means the desktop's usual default: on. */
+  avatarAnimations?: boolean;
 };
 export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
 export type Preferences = {
+  fastMode?: FastMode;
   model: ModelChoice;
+  /** The Default routines model ("routine-models-v1"): routines without their own use it before their bot's. */
+  routineModel?: ModelChoice;
   appearance: Appearance;
   foldTools: boolean;
   showThinking: boolean;
@@ -661,11 +876,15 @@ export type Preferences = {
   /** The side menu of the computer's own window: the order of its places, and icons only. */
   sidebar?: { order: string[]; collapsed: boolean; picked?: boolean };
   teamwork?: boolean;
+  /** Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0 for off. Missing on an older computer. */
+  autoSummarize?: number;
+  /** Settings › Experimental › Proactive agent: the computer's switch. Each bot's own is the `proactive` part. Missing on a computer without "proactive-agent-v2". */
+  proactive?: ProactiveSettings;
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
-   * "provider": each provider's own tool (Codex for ChatGPT, Claude Code for Claude).
-   * "pi" and "omp" run the plan models through that program. Missing on an older computer.
+   * "provider": each provider's own tool (Codex for ChatGPT, Claude Code for Claude). "pi" and "omp"
+   * run ChatGPT and Claude plans (harnesses() says whether each is installed). Missing on an older computer.
    */
   harness?: "copilot" | "provider" | "pi" | "omp";
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
@@ -759,12 +978,16 @@ export type UsageReport = {
 
 /**
  * `capabilities` names what this computer's link can do beyond the basics: "credentials-v1",
+ * "pr-panel-v1" (owner-only pull request details and per-file patches),
  * "screen-v1", "prs-v1", "uploads-v1", "relay-v1" (the computer keeps a relay open, so a phone away
  * from its network can reach it), "push-v1" (notifications and Live Activities), "device-v1" (tools
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
  * "frames-v1" (custom views: the page of an html block, for the phone to draw),
  * "provider-usage-v1" (each provider's plan and what is left of its limits),
- * "devices-v1" (the list of paired devices, and renaming and removing one),
+ * "app-update-v1" (the app's: which Botkins the computer runs, checking for a newer release and
+ * starting its install from a phone, and whether a host installs them by itself),
+ * "devices-v1" (the list of paired devices, and renaming and removing one), "device-person-v1" (the
+ * name of the person each device belongs to, and "link.devices.setPerson"),
  * "side-pane-v1" (a bot can open a pane beside a chat: a custom view, a table, a website, the screen),
  * "adoptMcpSignIn", and what the computer's app supports itself: "looks-v2" (eyes and custom colors),
  * "routine-delivery-v1" (where a routine's result lands, and whether it notifies), "models-v2"
@@ -776,12 +999,34 @@ export type UsageReport = {
  * list, a file in pieces, a small picture of it, and the paths written in a chat), and the app's
  * "secure-input-v1" (a bot asks for a password, a code or another secret in a request of kind
  * "secure": the value goes to the computer only, and the bot gets a handle, never the value).
+ * "bot-voice-v1" (the app's: a bot may have a voice of its own, `Bot.voice`, set with `updateBot`;
+ * `link.voice.speak` takes a `botId` and `link.voice.live` applies the bot's live voice).
+ * "provider-signin-v1" (the app's: a model provider signed in from a phone with no browser on the
+ * computer, by its own page and code, its own questions, or a pasted token; and a provider's
+ * command-line tool installed from a phone).
+ * "spaces-v1" (pages of panels, private or shared: the `spaces` part, `spaces.*` and `link.spaces.*`;
+ * the contract is docs/spaces.md).
+ * "team-people-v1" (the people in a chat: `ChatSummary.invited`, `link.team.inviteToChat` and
+ * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
+ * view of bots and chats, kept by the computer for them).
+ * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
+ * "project-folders-v1" (ordered folders and chat folder choice), "project-mode-v1" (saved project mode),
+ * "project-clone-v1" (clone from GitHub on the computer),
+ * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
+ * "sync-push-v1" (sealed sync updates on an open relay request),
+ * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
+ * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
  * as interim messages, answers to requests as messages, a time on every reply, each helper's own
  * steps marked, and how a turn ended; docs/turn-timeline.md).
  * "plugins-v1" (the app's: plugins from GitHub's catalogs, other marketplaces or a folder on the
  * computer, each adding skills, tools, hooks, agents and commands to the person's bots; the part
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
+ * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
+ * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
+ * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
+ * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
+ * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  */
 export type Meta = {
   app: string;
@@ -791,21 +1036,57 @@ export type Meta = {
   serverId: string;
   protocol: number;
   capabilities: string[];
-  you?: { kind: "owner" } | { kind: "member"; memberId: string; name: string };
+  /**
+   * Who this device is. For an owner device, `admin` says whether Admin mode is on: with it off the
+   * device is sent what the owner is part of, not every member's chats, spaces and bots.
+   */
+  you?: { kind: "owner"; admin?: boolean } | { kind: "member"; memberId: string; name: string };
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
+export type ProactiveWatch = "runs" | "tasks" | "requests";
+/** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
+export type ProactiveSettings = { enabled: boolean };
+/** What a bot's Proactive agent is set to. */
+export type ProactiveBotSettings = { enabled: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/**
+ * One bot's agent as this phone is sent it. The owner is sent `person` ("owner", or the member it works for). A member is sent
+ * `mine` for their own agents and, for another person's, only `{ enabled, taken }`: every other field may be missing, and a
+ * computer may add more.
+ */
+export type ProactiveBot = Partial<ProactiveBotSettings> & {
+  enabled: boolean;
+  person?: string;
+  mine?: boolean;
+  taken?: boolean;
+  /** The agent's routine's chat (Check now is `runRoutine` on it). */
+  chatId?: string;
+  lastSweepAt?: number;
+  pings?: number;
+  day?: string;
+  log?: ProactiveLog[];
+};
+export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
   settings: Preferences;
   bots: Bot[];
   sections: Section[];
+  /** The person's own sections for their chats, in their order ("chat-sections-v1"). */
+  chatSections?: Section[];
   chats: ChatSummary[];
   live: Live;
   runs: RunSummary[];
   panels: Panel[];
+  /** Owner devices, "spaces-v1": every panel that has a project, in whichever space it is. A project's "Spaces and panels" is drawn from it. */
+  projectPanels?: PanelView[];
   board: BoardItem[];
+  /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
+  spaces?: SpaceSummary[];
   tasks: BotTask[];
+  /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
+  proactive?: ProactivePart;
   projects: Project[];
   mcp: McpServer[];
   skills: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
@@ -849,6 +1130,40 @@ export type PluginMarketplace = {
   error?: string;
 };
 
+/**
+ * An agent template in a marketplace ("agent-templates-v1", docs/agent-templates.md). `id` is
+ * opaque (`name@marketplace`): never read anything out of it. `name` is the bot's name and the title.
+ */
+export type PiPackageListing = { name: string; description: string; types: string[] };
+export type PiPackageVersion = { name: string; version: string };
+export type InstalledPiPackage = PiPackageVersion & { enabled: boolean };
+
+export type MarketAgent = {
+  id: string;
+  name: string;
+  role: string;
+  /** Shown as the description. */
+  summary: string;
+  /** The look the bot starts with. */
+  look?: BotkinLook;
+  /** One of writing, research, productivity, work, dev, learning, health, finance, home, media, life, other. */
+  category?: string;
+  /** The category's words, such as "Productivity". */
+  categoryName?: string;
+  marketplace: string;
+  /** Such as "Botkins". */
+  marketplaceName: string;
+  /** A marketplace that comes with Botkins. */
+  builtIn: boolean;
+  version?: string;
+  author?: string;
+  keywords?: string[];
+};
+/** A category's chip: how many templates the other filters leave in it. */
+export type MarketAgentCategory = { id: string; name: string; count: number };
+/** A template with what Create a bot is filled in with. */
+export type MarketAgentTemplate = MarketAgent & { instructions: string };
+
 /** A plugin in a catalog. `id` is opaque: never read anything out of it; show `name` and `marketplace`. */
 export type PluginListing = {
   id: string;
@@ -882,16 +1197,55 @@ export type PluginHookEvent =
   | "notification"
   | "permissionRequest";
 
-/** What a plugin adds. A hook's command is as written, at most 300 characters. */
+/** A name and its value as the plugin wrote it. Never a secret: a secret comes from a setting, and the text then has `${NAME}`. */
+export type PluginValue = { name: string; value: string };
+/** A name the plugin asked for that the computer does not set, with the computer's sentence for why. */
+export type PluginNotSet = { name: string; why: string };
+
+/**
+ * A tool (MCP server) of a plugin. `kind` is what the computer does with it: "local" starts
+ * `command` with `args`, in `cwd` (a path that is not a full path is a folder in the plugin's own
+ * copy; without one, the plugin's own folder), with the environment in `env`. "remote" connects to
+ * `url` (`type` "sse" is a stream) and sends `headers`. A computer from before "plugin-starts-v1"
+ * sends only `name`, `kind`, `command` or `url`, `oauth` and `serverId`.
+ */
+export type PluginTool = {
+  name: string;
+  kind: "local" | "remote";
+  command?: string;
+  args?: string[];
+  env?: PluginValue[];
+  envNotSet?: PluginNotSet[];
+  cwd?: string;
+  type?: "http" | "sse";
+  url?: string;
+  headers?: PluginValue[];
+  oauth?: true;
+  /** The client id the plugin names for the sign-in. */
+  oauthClientId?: string;
+  /** An installed plugin's tool with OAuth: the tool server to sign in with "signInMcpServer". */
+  serverId?: string;
+};
+
+/** A hook: the whole command (up to 4,000 characters), its environment and how long it may run. */
+export type PluginHook = { event: PluginHookEvent | (string & {}); command: string; env?: PluginValue[]; envNotSet?: PluginNotSet[]; timeoutSec?: number };
+
+/** What a plugin adds, and with "plugin-starts-v1" everything it starts on the computer, whole. */
 export type PluginContents = {
   skills: string[];
   agents: string[];
   commands: string[];
-  /** `serverId` (an installed plugin's tool with OAuth): the tool server to sign in with "signInMcpServer". */
-  mcpServers: { name: string; kind: "local" | "remote"; command?: string; url?: string; oauth?: true; serverId?: string }[];
-  hooks: { event: PluginHookEvent | (string & {}); command: string }[];
+  mcpServers: PluginTool[];
+  hooks: PluginHook[];
   lspServers?: string[];
+  /** Hooks and tools the plugin has that the computer does not run, the first 40 with the reason. There only when `count` is more than zero. */
+  notRun?: { count: number; items: { what: "hook" | "tool"; name: string; why: string }[] };
+  /** The plugin's files that are not a skill, an agent or a command. `config`: a file tools read by themselves. A folder of dependencies is one row whose `path` ends with "/". */
+  otherFiles?: { count: number; bytes: number; files: { path: string; bytes: number; config?: true; files?: number }[] };
 };
+
+/** Where a setting's value goes: an environment name of a tool or a hook (`hook` is its event), or a header at an address. */
+export type PluginSentTo = { tool: string; env: string } | { tool: string; header: string; url: string } | { hook: string; env: string };
 
 /** One of a plugin's settings: a `userConfig` entry, or a `${NAME}` in its tool and hook files. */
 export type PluginField = {
@@ -905,6 +1259,8 @@ export type PluginField = {
   required: boolean;
   /** Never for a secret. */
   default?: string;
+  /** Each place that gets the value ("plugin-starts-v1"). */
+  sentTo?: PluginSentTo[];
 };
 
 /** A plugin read before install: what it adds, its settings, and what it runs, in sentences. */
@@ -916,6 +1272,12 @@ export type PluginPreview = PluginListing & {
   warnings?: string[];
   /** What was read, as an opaque tag. Install and update send it back; the computer refuses when the plugin changed since. */
   revision?: string;
+  /**
+   * The mark to trust ("plugin-starts-v1"): this description was made by the computer's one reading,
+   * so every command it starts is in it, whole. Decide about one description from this mark. A
+   * description without it asks first, always.
+   */
+  starts?: 1;
 };
 
 /** A plugin installed on the computer, as the part `plugins` holds it. */
@@ -929,7 +1291,7 @@ export type InstalledPlugin = PluginListing & {
   /** `value` only for a field that is not secret. */
   config: (PluginField & { set: boolean; value?: string })[];
   status: "ready" | "needs-config" | "needs-sign-in" | "error";
-  /** A sentence for needs-sign-in and error. */
+  /** A sentence for needs-sign-in and error. A computer up to 0.17.2 also gave one for a plugin it switched off itself (`enabled: false`); a newer one switches nothing off and puts its reason first in `warnings`. */
   detail?: string;
   /** "Hooks run only for bots on the Copilot SDK." */
   limits?: string;
@@ -937,6 +1299,14 @@ export type InstalledPlugin = PluginListing & {
   /** A folder plugin's path on the computer, to show. */
   folder?: string;
   installedAt: number;
+  /** The installed copy's revision: sent with a switch-on and a choice of bots, as the person saw it. */
+  revision?: string;
+  /** See `PluginPreview.starts`. Not there when the installed copy could not be read or is not the reviewed files. */
+  starts?: 1;
+  /** An update is the repair (the copy is not the reviewed files, or could not be read): offer Update also when the source did not change. */
+  repair?: "update";
+  /** What it runs, in the computer's sentences. */
+  warnings?: string[];
 };
 
 /** A plugin setting's value as a phone sends it: text, a saved credential the computer fills in, or null to clear it. */
@@ -947,20 +1317,77 @@ export type PluginConfigValue = string | CredentialRef | null;
 // what a notification says is sealed for the phone, so the relay and Apple carry no message text.
 
 /** What a phone wants to be told about. `previews` off shows "New message" with no text. */
-export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean };
+/** `updates`: a newer Botkins for the computer is out ("app-update-v1"). A computer from before leaves it out; it counts as on. */
+/** `spaces`: notes and changes in the person's spaces ("space-alerts-v1"). A computer from before leaves it out; it counts as on. */
+export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean; updates?: boolean; spaces?: boolean };
+/**
+ * The computer's own Botkins and its updates ("app-update-v1"; docs/link-contract.md). `message` is
+ * the computer's sentence (why it can't install, what failed), shown as it comes. `auto` is there
+ * only on a host that can install by itself. `last` is how the last install ended, kept across the
+ * restart it causes, a rollback too.
+ */
+export type AppUpdate = {
+  status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error";
+  current: string;
+  latest?: string;
+  canInstall: boolean;
+  installer?: string;
+  message?: string;
+  auto?: boolean;
+  last?: { at: string; from: string; to: string; ok: boolean; message?: string };
+};
 /** Where Apple delivers for this phone. `start` is the token that can start a Live Activity (iOS 17.2 or later). */
-export type PushTarget = { token: string; env: "production" | "sandbox"; start?: string };
+/**
+ * `cards: "all"`: one Live Activity for all Botkins, sent only to a computer that names
+ * "activity-all-v1". `cards: "bots"`: one per Botkin, for a computer that names only
+ * "activity-bots-v1" (docs/live-cards.md).
+ */
+export type PushTarget = { token: string; env: "production" | "sandbox"; start?: string; cards?: "bots" | "all" };
 /** A paired phone as the computer knows it. Tokens stay on the computer and are not in here. */
 /**
  * A device paired with the computer (`devices-v1`, "link.devices.list"): a phone, or another
  * computer's Botkins app that uses this one. `connected` is true while it was heard from in the last
  * minute and a half. `current` marks the device that asked. Never a key or a notification address.
+ * `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"), given when
+ * it paired or set by the owner ("device-person-v1"). A device paired before has none.
  */
-export type PairedDevice = { id: string; name: string; platform: string; kind: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean; current?: boolean };
+export type PairedDevice = {
+  id: string;
+  name: string;
+  person?: string;
+  platform: string;
+  kind: "phone" | "desktop" | "gadget";
+  /** A gadget's board and firmware, as it said them, and the bot it talks with ("gadgets-v1"). */
+  gadget?: { board?: string; firmware?: string; botId?: string };
+  createdAt: number;
+  lastSeenAt: number;
+  connected: boolean;
+  current?: boolean;
+};
+/**
+ * What a gadget is handed once a trusted device named it by its key ("gadgets-v1",
+ * "link.gadgets.add"): who the computer is and where to find it. With its own secret key that is
+ * a gadget's whole `Pairing`.
+ */
+export type GadgetIntroduction = { deviceId: string; serverId: string; serverKey: string; name: string; hosts: string[] };
+/** The part a gadget follows in place of the app's parts (gadget/docs/contract.md). */
+export type GadgetPart = {
+  name: string;
+  bot: { id: string; name: string; look?: BotkinLook } | null;
+  bots: { id: string; name: string }[];
+  chat: { id: string; title: string } | null;
+  phase: "idle" | "working" | "writing" | "request";
+  doing?: string;
+  request?: { id: string; kind: AgentRequest["kind"]; title: string; preview?: string; choices?: string[]; remember?: true; freeform?: true };
+  queued?: number;
+  /** The newest reply, as plain words. `parts` is how many pieces "link.gadget.speak" reads it in. */
+  reply?: { id: string; text: string; parts: number };
+  voice: { hear: boolean; speak: boolean; live?: LiveProvider };
+};
 export type PhoneRecord = {
   name: string;
   /** What the device is. Missing on an older computer, where every paired device is a phone. */
-  kind?: "phone" | "desktop";
+  kind?: "phone" | "desktop" | "gadget";
   platform?: string;
   /** The computer keeps this phone's presence key: it paired directly, with a build that has one ("screen-grant-v1"). */
   presence?: true;
@@ -991,6 +1418,16 @@ export type DeviceAnswer = { ok: true; result: unknown } | { ok: false; error: s
 export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom" | "local";
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
 export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
+/**
+ * A voice of a bot's own ("bot-voice-v1"), saved with the bot by the computer's app. Every field is
+ * optional: one that is absent means the same as the shared VoiceSettings. No key is ever in it.
+ * `updateBot(id, { voice })` sets it and `voice: null` clears it; the computer drops what isn't one
+ * of its providers, and `speed` is 0.5 to 2.
+ */
+export type BotVoice = {
+  tts?: { provider?: TtsProvider; model?: string; voice?: string; speed?: number };
+  live?: { provider?: LiveProvider; model?: string; voice?: string };
+};
 export type VoiceKeyProvider = "openai" | "azure" | "elevenlabs" | "gemini" | "custom";
 export type LocalVoiceModel = { id: string; name: string; kind: "stt" | "tts"; installed: boolean; sizeMB?: number; voices?: { id: string; name: string }[] };
 export type VoiceSettings = {
@@ -1034,10 +1471,17 @@ export type LiveSession =
 
 /** The desktop's calls a phone may make (link-host/methods.mjs), with their arguments and answers. */
 export type Calls = {
-  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers">> & { appearance?: Partial<Appearance> }): void;
+  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers" | "proactive">> & { appearance?: Partial<Appearance>; proactive?: Partial<ProactiveSettings> }): void;
   appInfo(): { version: string; electron: string; chrome: string; platform: string };
+  // ---- The computer's own updates ("app-update-v1"; the owner's devices only). None takes a version or an address.
+  appUpdateStatus(): AppUpdate;
+  checkAppUpdate(): AppUpdate;
+  /** Installs `latest` and restarts the computer's Botkins: the link drops and comes back. `last` says how it ended. */
+  installAppUpdate(): AppUpdate;
+  /** Installing by itself, on a host that can (`auto` present). Refused elsewhere. */
+  setAppUpdateAuto(on: boolean): AppUpdate;
   addBot(bot: BotInput): string;
-  updateBot(id: string, patch: Partial<Pick<Bot, "role" | "instructions" | "name" | "clarificationInstructions" | "summary" | "avatar">>): void;
+  updateBot(id: string, patch: Partial<Pick<Bot, "role" | "instructions" | "name" | "clarificationInstructions" | "summary" | "avatar">> & { voice?: BotVoice | null }): void;
   setBotFlags(id: string, flags: Partial<Pick<Bot, "pinned" | "hidden" | "sectionId" | "teamwork">>): void;
   makePrimary(id: string): void;
   reorderBots(ids: string[]): void;
@@ -1045,6 +1489,11 @@ export type Calls = {
   duplicateBot(id: string): string;
   setBotAccess(botId: string, grant: BotAccessGrant): void;
   setBotIntegrations(botId: string, off: { skillsOff?: string[]; mcpOff?: string[] }): void;
+  /**
+   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2".
+   * A role that manages the bot may; the agent works for the person who set it up, and is theirs alone to change (the owner may change any).
+   */
+  setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): void;
   botMemory(botId: string): string;
   setBotMemory(botId: string, text: string): void;
   saveTemplate(botId: string, name?: string): string;
@@ -1057,12 +1506,15 @@ export type Calls = {
   createGroupChat(botIds: string[], title?: string): string;
   setChatFlags(id: string, flags: Partial<Pick<ChatSummary, "pinned" | "archived" | "unread">>): void;
   renameChat(id: string, title: string): void;
+  /** Generates and saves a title from the chat's messages ("chat-title-regeneration-v1"). */
+  regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
-  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
+  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
-  send(chatId: string, text: string, options?: { quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
+  recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
+  send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;
@@ -1075,12 +1527,35 @@ export type Calls = {
   respond(requestId: string, answer: { action: string; value?: string | CredentialRef; content?: Record<string, unknown> }): void;
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
-  setModel(scope: "global" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
+  /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */
+  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null, fastMode?: FastMode | null): void;
   providers(refresh?: boolean): ProviderStatus[];
+  /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
+  harnesses(): HarnessStatus[];
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;
   cancelSignIn(providerId?: string): void;
   signOut(providerId?: string): void;
+  // ---- Signing in and installing from a phone ("provider-signin-v1")
+  /**
+   * Starts the provider's own sign-in on the computer, with no browser there: a page and a code for
+   * the person to open on the phone, or the tool's questions. `service` and `method`: one of
+   * OpenCode's model services and its sign-in. Read it with providerSignInRead.
+   */
+  providerSignInStart(providerId: string, options?: { service?: string; method?: string }): { session: string };
+  /** The events after `after`: at once when there are some or it is over, else within about ten seconds. */
+  providerSignInRead(session: string, after?: number): ProviderSignInView;
+  /** A line the person typed, for a sign-in that waits for one (a code the page showed). */
+  providerSignInInput(session: string, text: string): void;
+  /** Ends a sign-in or an install under way. False when it was already over. */
+  providerSignInCancel(session: string): boolean;
+  /**
+   * Signs a provider in with a token or key the person pasted (or a saved credential, `{ $credential: id }`).
+   * Sent once; the computer keeps it in its own vault or hands it to the tool, and never sends it back.
+   */
+  providerUseToken(providerId: string, token: string, options?: { service?: string }): { connected: boolean; account?: string | null; plan?: string | null };
+  /** Installs a provider's command-line tool with the command the computer names for it (`install.command`). Read it like a sign-in. */
+  installProvider(providerId: string): { session: string };
   providerServices(id: string, query?: string): ProviderService[];
   connectProviderService(id: string, serviceId: string, how: { key: string } | { method: string }): { done?: boolean; instructions?: string; code?: { attempt: string; instructions: string } };
   disconnectProviderService(id: string, serviceId: string): void;
@@ -1111,13 +1586,25 @@ export type Calls = {
   cancelMcpSignIn(id: string): boolean;
   signOutMcpServer(id: string): void;
   createProject(input: { name?: string; description?: string; color?: ProjectColor | null }): string;
+  editProjectFolder(id: string, action: "add" | "remove" | "default", path: string): string[];
+  chatProjectFolder(id: string): string | null;
+  setChatFolder(id: string, path: string | null): void;
+  cloneProjectRepository(repository: string, parent?: string, id?: string, data?: { name?: string; description?: string }): string;
   /** `folder: null` unlinks the project's folder (the folder itself is left alone). */
-  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null }): void;
+  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null; mode?: ChatMode }): void;
   /** The folders inside `path`, or inside the home folder. Needs "folders-v1". */
   listFolders(path?: string): FolderList;
   /** A project for a folder chosen in the folder browser (or the one it already has); answers its id. Needs "folders-v1". */
   addProjectFolder(path: string): string;
   removeProject(id: string): void;
+  /**
+   * A project's artifacts ("project-artifacts-v1"). Adding one that is there moves it to the front;
+   * each of the two answers the list of ids afterwards. `artifactId` is an artifact's id.
+   */
+  addProjectArtifact(projectId: string, artifactId: string): string[];
+  removeProjectArtifact(projectId: string, artifactId: string): string[];
+  /** The attached artifacts, described as `artifacts.list` describes them, newest attached first. One that is gone isn't among them. */
+  projectArtifacts(projectId: string): { items: Artifact[] };
   addTodo(projectId: string, text: string): string;
   updateTodo(projectId: string, todoId: string, patch: { text?: string; done?: boolean }): void;
   deleteTodo(projectId: string, todoId: string): void;
@@ -1133,8 +1620,8 @@ export type Calls = {
   renameSection(id: string, name: string): void;
   deleteSection(id: string): void;
   renameTemplate(id: string, name: string): void;
-  /** Changes the project and mode of a chat that has no messages yet. */
-  setChatProject(chatId: string, projectId: string | null, mode?: "default" | "plan" | "yolo"): void;
+  /** Changes a chat's project or mode. Moving a started chat carries its transcript into the next session. */
+  setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): void;
   linkPreview(url: string): LinkPreview | null;
   /** Pauses, resumes or deletes a schedule a bot made in a chat. */
   changeSchedule(chatId: string, id: number, action: "pause" | "resume" | "delete"): void;
@@ -1148,12 +1635,13 @@ export type Calls = {
   /** Stops using a linked skills folder or plugin (the folder itself is left alone). */
   removeSkillFolder(id: string): void;
   /** Adds a skill, a plugin or a folder of skills from a folder chosen in the folder browser. Needs "folders-v1". */
-  addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number };
+  /** A plugin folder is never linked: it is installed as a plugin (`id`, `enabled`; "plugin-starts-v1"). It arrives on; a computer up to 0.17.2 added it off. */
+  addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean };
   renameProject(id: string, name: string): void;
   /** What changed in a project's folder, one file's changes as text, and committing all of it. */
-  projectChanges(id: string): ProjectChanges;
-  projectDiff(id: string, file: string): { text: string; truncated: boolean };
-  projectCommit(id: string, message: string): string;
+  projectChanges(id: string, folder?: string): ProjectChanges;
+  projectDiff(id: string, file: string, folder?: string): { text: string; truncated: boolean };
+  projectCommit(id: string, message: string, folder?: string): string;
   moveTodo(projectId: string, todoId: string, delta: -1 | 1): void;
   /** Makes the wiki page for a project that has none yet; answers the page's path. */
   createWikiPageFor(record: { kind: "project"; id: string }): string;
@@ -1192,18 +1680,101 @@ export type Calls = {
   "plugins.addFolder"(path: string): InstalledPlugin;
   /** `null` clears a value. A secret is kept in the computer's vault. */
   "plugins.configure"(id: string, values: Record<string, PluginConfigValue>): void;
-  "plugins.setBots"(id: string, bots: "all" | string[]): void;
-  "plugins.setEnabled"(id: string, on: boolean): void;
+  /** `revision` (both calls): the installed plugin's, as the person saw it. The computer refuses when it is another one now. */
+  "plugins.setBots"(id: string, bots: "all" | string[], options?: { revision?: string }): void;
+  "plugins.setEnabled"(id: string, on: boolean, options?: { revision?: string }): void;
   /** `revision` is the preview's the person reviewed; the computer refuses another. */
   "plugins.update"(id: string, options?: { revision?: string }): InstalledPlugin;
   "plugins.uninstall"(id: string): void;
+  /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
+  "plugins.refresh"(): PluginMarketplace[];
+  // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
+  /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "skills.upload"(file: SkillUpload): SkillImportResult;
+  "skillsCatalog.search"(query: string): CatalogSkill[];
+  "skillsCatalog.preview"(id: string): CatalogPreview;
+  "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
+  "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
+  "piPackages.preview"(name: string): PiPackageVersion;
+  "piPackages.list"(): InstalledPiPackage[];
+  "piPackages.install"(name: string, version: string): InstalledPiPackage;
+  "piPackages.setEnabled"(name: string, version: string, enabled: boolean): InstalledPiPackage;
+  "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
+  /** Refused with a sentence when the template is gone. */
+  "agents.template"(id: string): MarketAgentTemplate;
+  // ---- A chat's Connect card (the computer's desktop/connects.mjs): the computer's own Composio account, so its owner only
+  /** Connect: starts or joins the app's sign-in. `url` is the page to open while it waits. */
+  "composio.cardOpen"(chatId: string, cardId: string): ConnectCardState & { url?: string };
+  /** Looks at the card again (back from the browser); the computer goes on with the chat once the app is connected. */
+  "composio.cardCheck"(chatId: string, cardId: string): ConnectCardState;
+  // ---- The view of an MCP App in a chat ("mcp-apps-v1", the computer's desktop/mcp-apps.mjs)
+  /** What the view is shown with; `html` asks for the page too. Showing it never runs the tool again. */
+  "mcpApps.view"(chatId: string, cardId: string, options?: { html?: boolean }): McpAppView;
+  /** A call from the view to its own server: the tool's result, or `needsApproval` when the person must allow it first (then call again with `approved`). */
+  "mcpApps.callTool"(chatId: string, cardId: string, name: string, args: Record<string, unknown>, options?: { approved?: boolean }): { result: McpToolResult } | { needsApproval: { tool: string; title: string; server: string } };
+  "mcpApps.readResource"(chatId: string, cardId: string, uri: string): { contents: Record<string, unknown>[] };
+  // Spaces ("spaces-v1"; docs/spaces.md). The app's calls, then the link's own.
+  "spaces.read"(id: string): SpaceContent;
+  /** A new private space, pinned for its maker. Answers its id. */
+  "spaces.create"(input: { name: string }): string;
+  "spaces.rename"(id: string, name: string): void;
+  /** The space, its panels, their routines, refresh chats and views. Not a built-in. */
+  "spaces.remove"(id: string): void;
+  /** Owner only. */
+  "spaces.setProject"(id: string, projectId: string | null): void;
+  "spaces.setPanelProject"(panelId: string, projectId: string | null): void;
+  /** Starts a chat with the bot in that space and sends the sentence; the app opens the chat. */
+  "spaces.newPanel"(input: { spaceId: string; botId: string; prompt: string; start?: PanelStart; refresh?: { cron: string; timezone: string }; /** The new panel's project. Owner only. */ projectId?: string }): { chatId: string };
+  "spaces.ask"(input: { spaceId: string; botId: string; text: string; panelId?: string }): { chatId: string };
+  /** `before`: a panel id, or null for the end. */
+  "spaces.movePanel"(panelId: string, to: { spaceId: string; before: string | null }): void;
+  /** An app panel's state: a shallow merge of top-level keys; null removes a key. `label` says what the person did. */
+  "spaces.patchState"(panelId: string, patch: Record<string, unknown>, label?: string): { rev: number };
+  "spaces.note"(panelId: string, text: string): string;
+  "spaces.removeNote"(panelId: string, noteId: string): void;
+  /** Who can open a space. "link" makes a link when there is none. */
+  /**
+   * Sections on the Chats screen ("chat-sections-v1"): the caller's own way to group their chats.
+   * A name is 1 to 40 characters and no two of a person's sections share one; 30 sections at most.
+   */
+  "link.chats.addSection"(name: string): string;
+  "link.chats.renameSection"(id: string, name: string): null;
+  /** Its chats stay in the list, in no section. */
+  "link.chats.deleteSection"(id: string): null;
+  /** The caller's order of their sections. */
+  "link.chats.orderSections"(ids: string[]): null;
+  /** Puts one of the caller's chats in a section, or in none (`null`). */
+  "link.chats.setSection"(chatId: string, sectionId: string | null): null;
+  "link.spaces.share"(id: string, input: SpaceShareInput): { link?: string };
+  /** A fresh link; the old one stops working. */
+  "link.spaces.newLink"(id: string): { link: string };
+  /** The caller's own order and pins. */
+  "link.spaces.arrange"(input: { order: string[]; pinned: string[] }): null;
+  /** With `itemId`, only that panel or card was seen (opened). An older computer takes it as the whole space. */
+  "link.spaces.seen"(id: string, itemId?: string): null;
+  "link.spaces.notify"(id: string, mode: SpaceNotify): null;
+  /** The caller is looking at this space (and panel) now; null on leaving. Sent every 30 seconds while it stays in view. */
+  "link.spaces.here"(id: string | null, panelId?: string): null;
+  /** Owner only: whether members may share by link. */
+  "link.team.setLinkSharing"(on: boolean): boolean;
+  /** Owner only, for this device: Admin mode. On: every member's spaces, bots and chats are listed. Answers what it is now. */
+  "link.team.setAdminMode"(on: boolean): boolean;
+  /** Invites a person ("owner" or a member's id) to a chat, or takes them out ("team-people-v1"). Each answers who is invited afterwards. The chat's starter or the owner invites; someone invited may take themselves out. */
+  "link.team.inviteToChat"(chatId: string, personId: string): string[];
+  "link.team.removeFromChat"(chatId: string, personId: string): string[];
   "link.messages"(chatId: string, before: number, limit?: number): ChatDetail | null;
+  /** A step's input and output, for a step that says `more` ("step-details-v1"). Null when the step is gone. */
+  "link.step"(chatId: string, runId: string, stepId: string): StepDetail | null;
   "link.unpair"(): boolean;
   /** Sends a file to the computer for the next message. `data` is base64, at most about 3 MB a call; a larger file goes in parts with the same `id`. */
   /** The devices paired with the computer. Needs "devices-v1". */
   "link.devices.list"(): PairedDevice[];
+  /** Pairs a gadget by introduction ("gadgets-v1"): its public key (X25519, base64url) as it gave it over a cable or Bluetooth. */
+  "link.gadgets.add"(input: { publicKey: string; name?: string; board?: string; botId?: string }): GadgetIntroduction;
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
+  /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */
+  "link.devices.setPerson"(id: string, person: string): PairedDevice[];
   /** Removes a paired device: it can't reach the computer any more. Removing this device is unpairing. Answers the devices that are left. */
   "link.devices.remove"(id: string): PairedDevice[];
   // ---- Teams ("teams-v1")
@@ -1219,12 +1790,15 @@ export type Calls = {
   "link.team.moveMember"(memberId: string, groupId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.removeMember"(memberId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.rename"(name: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.renameMember"(memberId: string, name: string): Extract<TeamPart, { roles: Role[] }>;
   /** A custom view (an html block) as its bot wrote it, and its data. Needs "frames-v1". */
   "link.frame.page"(frame: string): { html: string; data: unknown };
   /** The chat a custom view's answer goes to, for a view in a Today panel. */
   "link.frame.chat"(frame: string): { chatId: string | null };
   "link.upload"(file: { id?: string; name: string; data: string; last?: boolean }): UploadedFile;
   /** Pull requests of the repository behind a chat's project. `available: false` says why there are none to offer. */
+  "link.pullRequest"(input: { url: string }): PullAnswer<{ pull: PullRequestDetail }>;
+  "link.pullRequestDiff"(input: { url: string; path: string }): PullAnswer<{ text: string }>;
   "link.pullRequests"(where: { chatId?: string; projectId?: string }, query?: string): { available: boolean; reason?: string; items: PullRequest[] };
   "link.credentials.save"(input: CredentialInput): string;
   "link.credentials.remove"(id: string): void;
@@ -1283,7 +1857,7 @@ export type Calls = {
   /** Speech to text on the computer's provider. `audio` is base64, at most about two minutes of 16 kHz WAV. */
   "link.voice.transcribe"(input: { audio: string; format: "wav" | "m4a" | "mp3" | "webm"; language?: string }): { text: string };
   /** Text to speech on the computer's provider: base64 audio to play. At most 4,000 characters; split long text by sentence. */
-  "link.voice.speak"(input: { text: string; voice?: string; speed?: number }): { audio: string; format: "mp3" | "wav" };
+  "link.voice.speak"(input: { text: string; voice?: string; speed?: number; botId?: string }): { audio: string; format: "mp3" | "wav" };
   /** Sets up a live voice session for a chat with a bot. `sdp` is this phone's WebRTC offer, for the providers that use WebRTC. */
   /**
    * `context` is what the phone says about itself for the voice: roughly where the person is, only
