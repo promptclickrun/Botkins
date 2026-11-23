@@ -34,6 +34,8 @@ class WifiNetwork : public botkins::Network {
   void join(const std::string& ssid, const std::string& password) override;
   const char* state() override;
   std::string address() override;
+  /** The access point's RSSI in dBm while on the network; 0 otherwise. */
+  int signal() override;
 
  private:
   static void on_event(void* self, const char* base, int32_t id, void* data);
