@@ -24,6 +24,7 @@ import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
 import { moveToSection, runSectionAction, runSectionChoice, sectionActions } from "./sectionMenus";
 import { arrangeChats, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
+import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 
 function remove(chat: ChatSummary) {
   Alert.alert("Delete this chat?", chat.title, [
@@ -64,7 +65,8 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   const prompt = useTextPrompt();
   // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
   const mine = myPlace(chat, me) === "manages";
-  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }] : [];
+  const canRegenerate = useCanRegenerateTitle(chat, mine);
+  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
   const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
   // A section is the person's own way to group their chats, like a pin.
   const filing = sections ? [moveToSection(chat, sections)] : [];
@@ -90,6 +92,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         else if (action === "archive") void attempt(api.setChatFlags(chat.id, { archived: true }), "Archived");
         else if (action === "restore") void attempt(api.setChatFlags(chat.id, { archived: false }), "Restored");
         else if (action === "rename") rename(chat, prompt.ask);
+        else if (action === regenerateTitleAction.id) regenerateTitle(chat.id);
         else if (action === "delete") remove(chat);
       }}
     >
@@ -100,8 +103,12 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         hitSlop={0}
         accessibilityLabel={title + ", " + (live || preview) + (chat.unread ? ", unread" : "")}
         accessibilityHint="Long press for more"
-        accessibilityActions={actions?.list}
-        onAccessibilityAction={actions ? (event) => actions.run(event.nativeEvent.actionName) : undefined}
+        accessibilityActions={canRegenerate ? [...(actions?.list ?? []), { name: regenerateTitleAction.id, label: regenerateTitleAction.title }] : actions?.list}
+        onAccessibilityAction={actions || canRegenerate ? (event) => {
+          const action = event.nativeEvent.actionName;
+          if (canRegenerate && action === regenerateTitleAction.id) regenerateTitle(chat.id);
+          else actions?.run(action);
+        } : undefined}
       >
         <View style={[{ minHeight: 72, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md }, picked && { backgroundColor: colors.sunken, borderRadius: radius.lg, marginHorizontal: -space.sm, paddingHorizontal: space.sm }]} accessibilityState={picked ? { selected: true } : undefined}>
           {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}

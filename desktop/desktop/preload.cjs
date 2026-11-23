@@ -157,6 +157,7 @@ for (const name of [
   "deleteSection",
   "setChatFlags",
   "renameChat",
+  "regenerateChatTitle",
   "deleteChat",
   "boardAct",
   "openApp",

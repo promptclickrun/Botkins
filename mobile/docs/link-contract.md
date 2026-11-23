@@ -109,6 +109,8 @@ A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the r
 
 With `client-message-id-v1`, a client may include a locally generated `clientMessageId` in the options for `send`. The host echoes it on the queued item and on the user message when delivered. A client can show the message immediately and replace its local row when either echo arrives. Each press of Send gets its own ID, even for identical text.
 
+With `chat-title-regeneration-v1`, `regenerateChatTitle(chatId)` asks the host's summarizer to generate and save a title and returns the title. Only the chat's starter or the owner can request it. It needs a message to summarize and does not change the automatic naming setting or add a turn.
+
 ## Devices: list, rename, remove (`devices-v1`)
 
 Any paired client may read the list of paired devices, rename one and remove one, as the person can in the host's own Settings.

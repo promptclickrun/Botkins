@@ -80,6 +80,7 @@ export const WORKSPACE = {
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
   renameChat: cmd("chats rename"),
+  regenerateChatTitle: cmd("chats regenerate-title"),
   deleteChat: cmd("chats delete"),
   forkChat: cmd("chats fork"),
   compact: cmd("chats compact"),
@@ -427,6 +428,7 @@ export const CHANGES = {
   // ── Chats (control-chats.mjs) ──
   // A chat is named by its id: a title is a text that a person (or a model) wrote, so it is not in the log. A section is by its id too, and a new one by its name.
   "chats.rename": (args, value) => value?.id,
+  "chats.regenerateTitle": (args, value) => value?.id,
   "chats.delete": (args, value) => value?.id,
   "chats.fork": (args, value) => value?.from,
   "chats.compact": (args, value) => value?.id,

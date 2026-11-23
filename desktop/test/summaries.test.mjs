@@ -2,6 +2,7 @@
 // few turns, by the Default routines model.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
@@ -124,6 +125,52 @@ test("off, or a title the person gave, keeps the chat's title", async (t) => {
   await turns(ws, named, 6);
   assert.equal(ws.chat(named).title, "My garden");
   assert.equal(summaries(log).length, 1);
+});
+
+test("regenerating a title uses the conversation and saves it even with automatic naming off", async (t) => {
+  const { ws, log } = setup(t);
+  ws.state.settings.routineModel = { model: "routines-model" };
+  const id = ws.createChat("pip");
+  await ws.send(id, "Plan my garden");
+  ws.agents.renameChat(id, "My garden");
+  const messages = structuredClone(ws.chat(id).messages);
+
+  assert.equal(await ws.summaries.regenerate(id), "Title 1");
+  assert.equal(ws.chat(id).title, "Title 1");
+  assert.equal(ws.chat(id).titleSet, true, "automatic naming still respects a manual title");
+  assert.equal(JSON.parse(readFileSync(ws.file, "utf8")).chats.find((chat) => chat.id === id).title, "Title 1");
+  assert.deepEqual(ws.chat(id).messages, messages);
+  const [[session, prompt]] = summaries(log);
+  assert.match(prompt, /The chat is called “My garden”/);
+  assert.match(prompt, /Person: Plan my garden\n\nPip: Reply to Plan my garden/);
+  assert.equal(log.configs.get(session).model, "routines-model");
+});
+
+test("regeneration keeps the title when there is no message or the model can't name it", async (t) => {
+  const { ws, log } = setup(t);
+  const id = ws.createChat("pip");
+  await assert.rejects(ws.summaries.regenerate(id), /Send a message/);
+  assert.equal(summaries(log).length, 0);
+  await ws.send(id, "Plan my garden");
+  const ask = t.mock.method(ws.summaries, "ask", async () => "Title:");
+  await assert.rejects(ws.summaries.regenerate(id), /didn't produce a title/);
+  ask.mock.mockImplementation(async () => { throw new Error("The model is busy"); });
+  await assert.rejects(ws.summaries.regenerate(id), /The model is busy/);
+  assert.equal(ws.chat(id).title, "Plan my garden");
+});
+
+test("a manual rename while regeneration is running wins", async (t) => {
+  const { ws } = setup(t);
+  const id = ws.createChat("pip");
+  await ws.send(id, "Plan my garden");
+  let answer;
+  t.mock.method(ws.summaries, "ask", () => new Promise((resolve) => (answer = resolve)));
+  const pending = ws.summaries.regenerate(id);
+  await assert.rejects(ws.summaries.regenerate(id), /already being generated/);
+  ws.agents.renameChat(id, "Spring planting");
+  answer("Garden plan");
+  await assert.rejects(pending, /title was changed/);
+  assert.equal(ws.chat(id).title, "Spring planting");
 });
 
 test("the choice is off or 5 to 30 turns", (t) => {

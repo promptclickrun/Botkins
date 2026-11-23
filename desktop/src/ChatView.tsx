@@ -11,6 +11,7 @@ import {
   ArrowLeft,
   Clock,
   Copy,
+  Ellipsis,
   File,
   Folder,
   FileDiff,
@@ -64,6 +65,7 @@ import { authorName, chatPeopleView } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
+import { regenerateTitleItem, useMenu } from "./Pages";
 import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
@@ -120,6 +122,27 @@ function Attachments({ list }: { list: Message["attachments"] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (error: unknown) => void }) {
+  const menu = useMenu();
+  const item = regenerateTitleItem(state, chat, fail);
+  if (!item) return null;
+  return (
+    <>
+      <button
+        className="chathead-icon menu-button"
+        aria-label="Chat options"
+        title="Chat options"
+        aria-haspopup="menu"
+        aria-expanded={!!menu.node}
+        onClick={(event) => menu.show(event, chat.title, [item])}
+      >
+        <Ellipsis size={17} />
+      </button>
+      {menu.node}
+    </>
   );
 }
 
@@ -852,6 +875,7 @@ export default function ChatView({
               {unseen && <i className="pane-dot" aria-hidden="true" />}
             </button>
           )}
+          <ChatOptions key={chat.id} state={state} chat={chat} fail={(error) => setNotice(error instanceof Error ? error.message : String(error))} />
         </div>
       </div>
       <div className="messages-wrap">

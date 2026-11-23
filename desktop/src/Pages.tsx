@@ -41,6 +41,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCw,
   Search,
   Star,
   Trash2,
@@ -49,7 +50,7 @@ import {
 } from "lucide-react";
 import { BotAvatar, activityLabel, botActivity, chatActivity } from "./Avatar";
 import type { Bot, Chat, Section, State } from "./types";
-import { teamCan } from "./teamAccess";
+import { memberTeam, teamCan } from "./teamAccess";
 import "./agents.css";
 import "./groups.css";
 
@@ -938,7 +939,26 @@ function chatSectionMenuItems(state: State, section: Section, actions: PageActio
   ];
 }
 
+export function regenerateTitleItem(state: State, chat: Chat, fail: (error: unknown) => void): MenuItem | undefined {
+  const host = state.remote?.using;
+  const member = memberTeam(state);
+  if (
+    (host && !host.capabilities.includes("chat-title-regeneration-v1")) ||
+    !teamCan(state, "agents", "chat") ||
+    (member && chat.createdBy !== member.me.memberId) ||
+    !(chat.count ?? chat.messages.length) ||
+    chat.panelId ||
+    chat.schedules?.some((entry) => entry.routine)
+  ) return undefined;
+  return {
+    label: "Regenerate title",
+    icon: RotateCw,
+    run: () => void api().regenerateChatTitle(chat.id).catch(fail),
+  };
+}
+
 function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskFn): MenuItem[] {
+  const titleItem = regenerateTitleItem(state, chat, actions.fail);
   return [
     {
       label: chat.pinned ? "Unpin" : "Pin",
@@ -968,6 +988,7 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
           })(),
         ),
     },
+    ...(titleItem ? [titleItem] : []),
     {
       label: chat.archived ? "Restore" : "Archive",
       icon: chat.archived ? ArchiveRestore : Archive,
