@@ -311,6 +311,7 @@ for (const name of [
   "providers",
   "harnesses",
   "setProviderEnabled",
+  "providerConfigure",
   "providerServices",
   "connectProviderService",
   "finishProviderService",

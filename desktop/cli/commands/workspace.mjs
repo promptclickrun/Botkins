@@ -313,7 +313,7 @@ export const workspace = {
   },
   providers: {
     summary: "List model providers, and sign them in and out",
-    details: "A provider is where a bot's model runs: GitHub Copilot, Codex (ChatGPT), Claude Code, OpenCode, or an agent that speaks ACP. Each signs in to your own account; no browser is needed on this host.",
+    details: "A provider is where a bot's model runs: GitHub Copilot, Codex (ChatGPT), Claude Code, OpenCode, an agent that speaks ACP, or an endpoint that takes a key (OpenRouter, Azure Foundry, an OpenAI endpoint). Each signs in to your own account or key; no browser is needed on this host.",
     commands: {
       list: {
         summary: "List the providers and whether each is signed in",
@@ -329,7 +329,7 @@ export const workspace = {
         summary: "Sign a provider in",
         usage: "botkins providers login <provider> [--token] [--service <id>] [--method <id>] [--yes]",
         options: {
-          token: { type: "boolean", about: "Paste a token or key instead: typed without showing, or read from standard input" },
+          token: { type: "boolean", about: "Paste a token or key instead: typed without showing, or read from standard input (a key provider always does)" },
           yes: { type: "boolean", about: "Replace the token that Botkins keeps, with no question (with --token)" },
           service: { type: "string", value: "id", about: "OpenCode: the model service to connect (see `botkins providers services opencode`)" },
           method: { type: "string", value: "id", about: "OpenCode: which of the service's sign-ins to use" },
@@ -346,6 +346,8 @@ export const workspace = {
           "  codex     an OpenAI API key (sk-…) or a ChatGPT access token",
           "  claude    the token `claude setup-token` prints on any computer with a browser, or an Anthropic API key",
           "  opencode  the service's API key (with --service)",
+          "  openrouter, foundry, openai-api  the provider's API key (always, with or without --token); then `botkins providers set` for its settings.",
+          "            An OpenAI endpoint on this computer or your own network needs no key: only `botkins providers set openai-api`.",
           "The token is never taken from the command line, where other users could see it: pipe it in, or type it at the prompt.",
           "A new token replaces the token that Botkins keeps for the provider, and the old one is lost. That asks first, and with no terminal it needs --yes. A first token asks nothing.",
         ].join("\n"),
@@ -353,9 +355,11 @@ export const workspace = {
           if (context.args.length !== 1) throw usage("Name the provider (see `botkins providers list`).");
           const [id] = context.args;
           const { service, method } = context.options;
-          if (context.options.token) {
+          // The key (a pasted token): asked for after everything else is checked.
+          const withKey = async () => {
             // Asked before the token is typed, so that nobody types a token that is then not used.
-            const kept = (await context.client.call("providers.list")).some((entry) => entry.id === id && entry.token);
+            const listed = (await context.client.call("providers.list")).find((entry) => entry.id === id);
+            const kept = !!listed?.token;
             if (kept) {
               context.stderr.write("A new token replaces the token that Botkins keeps for " + shownText(id) + ". The old token is lost and cannot be got back.\n");
               if (!(await confirm(context, "Replace the token for " + shownText(id) + "?"))) {
@@ -365,9 +369,18 @@ export const workspace = {
             }
             const token = await secret(context, "Token or key for " + id + " (not shown): ");
             const result = await context.client.call("providers.login", id, { token, service }, ...(kept ? [{ agreed: true }] : []));
+            if (listed?.keyed) return void context.print(result, "Key saved." + (result.needs ? " Still missing: " + result.needs : " " + shownText(listed.name) + " is ready."));
             return void context.print(result, "Signed in" + (result.account ? " as " + result.account : "") + (result.plan ? " (" + result.plan + ")" : "") + ".");
+          };
+          if (context.options.token) return withKey();
+          let started;
+          try {
+            started = await context.client.call("providers.login", id, { service, method });
+          } catch (error) {
+            // A provider that answers on a key has no sign-in page: it takes the key, as --token does.
+            if (error?.code === "NEEDS_KEY") return withKey();
+            throw error;
           }
-          const started = await context.client.call("providers.login", id, { service, method });
           const result = await followSignIn(context, started.session);
           context.print({ done: true, ...result }, "Signed in" + (result?.account ? " as " + result.account : "") + (result?.plan ? " (" + result.plan + ")" : "") + ".");
         },
@@ -385,6 +398,78 @@ export const workspace = {
             return EXIT.failed;
           }
           context.print(await context.client.call("providers.logout", context.args[0], { agreed: true }), (result) => (result.connected ? "The token Botkins kept is removed, and the provider is still signed in another way (its own sign-in, or this host's environment)." : "Signed out."));
+        },
+      },
+      set: {
+        summary: "Set up a provider that answers on a key: its endpoint, address, API and models",
+        usage: "botkins providers set <provider> [--endpoint <url>] [--base-url <url>] [--api responses|completions] [--api-version <version>] [--model <id>[=<api>]] [--model-name <id>=<name>] [--clear-models] [--yes]",
+        options: {
+          endpoint: { type: "string", value: "url", about: "Azure Foundry: your resource's address, like https://NAME.services.ai.azure.com" },
+          "base-url": { type: "string", value: "url", about: "OpenAI endpoint: the server's address, like https://api.openai.com/v1 or http://localhost:11434/v1" },
+          api: { type: "string", value: "api", about: "OpenAI endpoint: responses (the default) or completions" },
+          "api-version": { type: "string", value: "version", about: "Azure Foundry: sent as ?api-version= on each request, for older routes (\"\" for none)" },
+          model: { type: "string", multiple: true, value: "id[=api]", about: "A model (Foundry: a deployment's name), with its API when it is not the usual one. Give it again for each; these replace the list" },
+          "model-name": { type: "string", multiple: true, value: "id=name", about: "The name to show for one of the --model models" },
+          "clear-models": { type: "boolean", about: "Empty the list of models" },
+          yes: { type: "boolean", about: "Change the address that the kept key is sent to, with no question" },
+        },
+        details: [
+          "What you give replaces that setting; the others stay as they are. The key is not set here: `botkins providers login <provider>` takes it from a hidden question or standard input.",
+          "  openrouter  has no settings.",
+          "  foundry     --endpoint, --api-version (optional) and --model: the deployments of your Azure resource. A model speaks completions (Chat Completions) unless you give =responses.",
+          "  openai-api  --base-url, --api, and --model for models the server's own list (GET /models) doesn't show.",
+          "The provider is switched on when its key and settings are complete. `botkins providers list` says what is still missing.",
+          "The key is sent to the address that is set. Changing the address while a key is kept asks first (with no terminal it needs --yes), and says where the key will go.",
+        ].join("\n"),
+        async run(context) {
+          if (context.args.length !== 1) throw usage("Name the provider (see `botkins providers list`).");
+          const [id] = context.args;
+          const o = context.options;
+          const patch = {};
+          if (o.endpoint !== undefined) patch.endpoint = o.endpoint;
+          if (o["base-url"] !== undefined) patch.baseUrl = o["base-url"];
+          if (o.api !== undefined) {
+            if (!["responses", "completions"].includes(o.api)) throw usage("--api is responses or completions.");
+            patch.api = o.api;
+          }
+          if (o["api-version"] !== undefined) patch.apiVersion = o["api-version"];
+          const given = o.model ?? [];
+          if (given.length && o["clear-models"]) throw usage("Give --model or --clear-models, not both.");
+          const names = new Map();
+          for (const entry of o["model-name"] ?? []) {
+            const at = entry.indexOf("=");
+            if (at < 1 || at === entry.length - 1) throw usage("--model-name is <id>=<name>.");
+            names.set(entry.slice(0, at), entry.slice(at + 1));
+          }
+          if (given.length) {
+            patch.models = given.map((entry) => {
+              const at = entry.indexOf("=");
+              const model = at < 0 ? entry : entry.slice(0, at);
+              const api = at < 0 ? undefined : entry.slice(at + 1);
+              if (api !== undefined && !["responses", "completions"].includes(api)) throw usage("A model's api is responses or completions: --model " + shownText(model) + "=responses.");
+              return { id: model, ...(names.has(model) && { name: names.get(model) }), ...(api && { api }) };
+            });
+            for (const name of names.keys()) if (!patch.models.some((model) => model.id === name)) throw usage("--model-name names " + shownText(name) + ", which no --model gives.");
+          } else if (names.size) throw usage("--model-name goes with --model: name the models you list.");
+          if (o["clear-models"]) patch.clearModels = true;
+          if (!Object.keys(patch).length) throw usage("Say what to set: --endpoint, --base-url, --api, --api-version, --model or --clear-models.");
+          // A kept key goes to the new address: that is shown and asked first (also with --json, on standard error).
+          const to = patch.endpoint ?? patch.baseUrl;
+          let agreed = false;
+          if (to !== undefined && to !== "") {
+            const now = (await context.client.call("providers.list")).find((entry) => entry.id === id);
+            const old = now?.keyed?.config?.endpoint ?? now?.keyed?.config?.baseUrl;
+            if (now?.token && !(old && old.replace(/\/openai\/v1$/, "").replace(/\/+$/, "") === to.replace(/\/openai\/v1\/?$/, "").replace(/\/+$/, ""))) {
+              context.stderr.write("The key that Botkins keeps for " + shownText(id) + " is sent to the address that is set. This changes it to " + shownText(to) + ".\n");
+              if (!(await confirm(context, "Send the key to that address?"))) {
+                context.note("Not changed.");
+                return EXIT.failed;
+              }
+              agreed = true;
+            }
+          }
+          const result = await context.client.call("providers.set", id, patch, ...(agreed ? [{ agreed: true }] : []));
+          context.print(result, shownText(result.name) + " is set." + (result.needs ? " Still missing: " + result.needs : result.connected ? " It is ready." : ""));
         },
       },
       enable: {

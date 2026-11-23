@@ -958,7 +958,9 @@ declare global {
       providerSignInRead(session: string, after: number): Promise<ProviderSignInView>;
       providerSignInCancel(session: string): Promise<unknown>;
       providerSignInInput(session: string, text: string): Promise<void>;
-      providerUseToken(id: string, token: string, options?: { service?: string }): Promise<{ connected: boolean }>;
+      providerUseToken(id: string, token: string, options?: { service?: string }): Promise<{ connected: boolean; plan?: string | null; needs?: string }>;
+      /** The settings of OpenRouter, Azure Foundry or an OpenAI endpoint: replaces all of them, and answers the provider's new status. Throws a sentence for a value that isn't acceptable. */
+      providerConfigure(id: string, config: KeyedConfig): Promise<ProviderStatus>;
       /** Switches a provider on or off. At least one stays on. */
       setProviderEnabled(id: string, enabled: boolean): Promise<void>;
       /** For a provider whose signIn is "services" (OpenCode): the model services it can connect, best matches first. */
@@ -1587,6 +1589,26 @@ export type HarnessStatus = {
   error?: string;
   install?: { url: string; command?: string };
 };
+/** Which of OpenAI's APIs a model is spoken to in ("keyed-providers-v1"). */
+export type KeyApi = "responses" | "completions";
+/** A model a person names for Azure Foundry (a deployment) or an OpenAI endpoint. */
+export type KeyedModel = { id: string; name?: string; api?: KeyApi; contextWindow?: number; maxOutput?: number };
+/** The settings of OpenRouter (none), Azure Foundry and an OpenAI endpoint. Never a key. */
+export type KeyedConfig = { endpoint?: string; baseUrl?: string; api?: KeyApi; apiVersion?: string; models?: KeyedModel[] };
+/** What the app shows for a provider that answers on a key (`ProviderStatus.keyed`; its `signIn` is "key"). */
+export type KeyedProvider = {
+  /** The settings this provider takes. OpenRouter: none; Azure Foundry: endpoint, apiVersion, models; an OpenAI endpoint: baseUrl, api, models. */
+  fields: Array<"endpoint" | "baseUrl" | "api" | "apiVersion" | "models">;
+  /** A key is kept on the computer (it is never sent back). */
+  hasKey: boolean;
+  /** True only for an OpenAI endpoint: a server on this computer or your own network needs no key. */
+  keyOptional: boolean;
+  config: KeyedConfig;
+  /** What is still missing, in a sentence, or null when the provider is ready. */
+  needs: string | null;
+  /** Where to get a key. */
+  keyUrl?: string;
+};
 export type ProviderStatus = {
   signInWays?: { guided: boolean; token: boolean };
   id: string;
@@ -1608,7 +1630,7 @@ export type ProviderStatus = {
   /** What to do next when something is missing. */
   message?: string;
   /** "browser": signIn(id) opens a sign-in page. "services": the person connects model services (providerServices). */
-  signIn: "browser" | "services" | null;
+  signIn: "browser" | "services" | "key" | null;
   /** signOut(id) can remove the sign-in. */
   signOut: boolean;
   /** Where to get the tool the provider needs. */
@@ -1617,6 +1639,8 @@ export type ProviderStatus = {
   starting?: boolean;
   /** The provider couldn't be asked. */
   error?: string;
+  /** For a provider whose signIn is "key" (OpenRouter, Azure Foundry, an OpenAI endpoint): its settings and what is missing ("keyed-providers-v1"). */
+  keyed?: KeyedProvider;
 };
 /** A model service a provider can connect (for OpenCode: OpenAI, Anthropic, an OpenCode account…). */
 export type ProviderService = {

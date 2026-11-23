@@ -102,7 +102,7 @@ For an installation for the whole computer, run `botkins` with `sudo`. The comma
 
 ## Sign a model provider in
 
-A bot uses a model from a provider: GitHub Copilot, Codex (ChatGPT), Claude Code, OpenCode, or an agent that speaks ACP. Each provider signs in to your own account. You do not need a browser on the host.
+A bot uses a model from a provider: GitHub Copilot, Codex (ChatGPT), Claude Code, OpenCode, an agent that speaks ACP, or an endpoint that takes a key (OpenRouter, Azure Foundry, an OpenAI endpoint). Each provider signs in to your own account or key. You do not need a browser on the host.
 
 ```sh
 botkins providers list
@@ -141,6 +141,27 @@ printenv CLAUDE_TOKEN | botkins providers login claude --token
 ```
 
 Botkins keeps a pasted Claude or Copilot token in its credential vault and gives it to the tool when the tool starts. Codex and OpenCode keep their own. A new token replaces the one that Botkins keeps, and the old one is lost, so that asks first; with no terminal it needs `--yes`.
+
+### OpenRouter, Azure Foundry and an OpenAI endpoint
+
+These three answer on a key and have no program or sign-in page. They are off until a key and settings are complete, and then they switch on by themselves. A bot's turn on one of their models runs in a harness (Pi or OMP, or the Copilot runtime; `botkins preferences harnesses`), which sends its requests to a gateway on this computer. The gateway adds your key. The key stays in the vault and never reaches the harness, the log or a `--json` answer.
+
+| Provider | Key | Settings (`botkins providers set`) |
+|---|---|---|
+| `openrouter` | An OpenRouter key (`sk-or-…`), made at openrouter.ai/keys. | None. Its models are those on OpenRouter that can call tools. |
+| `foundry` | The key of your Azure resource. | `--endpoint` (the resource's address, for example `https://NAME.services.ai.azure.com`, `https://NAME.openai.azure.com` or `https://NAME.cognitiveservices.azure.com`; kept as `<address>/openai/v1`), `--api-version` (only for an older route; not sent when empty) and `--model` for each deployment. |
+| `openai-api` | An API key. A server on this computer or your own network needs none. | `--base-url` (https; http only for `localhost`, a private address or a `.local` name), `--api responses` or `completions` (the usual is `responses`), and `--model` for models that the server's own list (`GET /models`) does not show. |
+
+```sh
+botkins providers set foundry --endpoint https://NAME.cognitiveservices.azure.com --model DeepSeek-V4-Pro --model o-x=responses
+printenv AZURE_KEY | botkins providers login foundry
+botkins providers set openai-api --base-url http://localhost:11434/v1 --model llama3.3
+```
+
+- **`providers set` changes only what you give.** `--model <id>[=<api>]` can be given again for each model and replaces the whole list; `--model-name <id>=<name>` names one of them; `--clear-models` empties the list. A model speaks Chat Completions unless you give `=responses` (or the provider's `--api`, for an OpenAI endpoint). At most 50 models; an id has letters, digits and `. _ : / @ + -` (a deployment's name is allowed as it is).
+- **A key goes to the address that is set.** So changing the address while a key is kept shows where the key will go and asks first (`--yes` with no terminal). Set the address first and the key after, and nothing is asked.
+- **`providers login <provider>` takes the key** from a hidden question or standard input (it is `--token` for these without saying so). `providers logout` removes the key and keeps the settings. `providers list` says what is still missing. `providers list --json` has `keyed` with the settings, whether a key is kept and what is missing; never the key.
+- **A scratch copy** (a data folder of its own, `botkins --data-dir <folder>` or `BOTKINS_DATA_DIR`) keeps the settings in `<folder>/data/keyed/<provider>.json` and the key in that folder's own vault, apart from any other Botkins.
 
 To sign a provider out, run `botkins providers logout <provider>`. It removes the token that Botkins keeps and the provider's own sign-in, so it asks first; with no terminal it needs `--yes`. To see the models, run `botkins models`.
 

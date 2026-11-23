@@ -63,6 +63,7 @@ export const WORKSPACE = {
   providers: cmd("providers list"),
   harnesses: cmd("preferences harnesses"), // the programs that can run a turn (Pi and OMP) and which choice of the preference `harness` is set
   setProviderEnabled: cmd("providers enable"),
+  providerConfigure: cmd("providers set"),
   providerServices: cmd("providers services"),
   ...each("providerSignInStart providerSignInRead providerSignInInput providerSignInCancel", cmd("providers login")),
   models: cmd("models"),
@@ -386,6 +387,7 @@ export const CHANGES = {
   "providers.enable": 0,
   "providers.login": 0,
   "providers.logout": 0,
+  "providers.set": 0,
   "models.default": null,
   "models.speed": ([scope, id]) => id ?? scope,
   "models.routines": null,

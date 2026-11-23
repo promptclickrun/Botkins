@@ -31,6 +31,7 @@ import { sharingApi } from "./control-sharing.mjs";
 import { teamApi } from "./control-team.mjs";
 import { appsApi } from "./control-apps.mjs";
 import { checkReach } from "./reach.mjs";
+import { normaliseConfig } from "../providers/keyed/config.mjs";
 
 const WAIT_MS = 25_000;
 // false = a caller on the socket gives values that it has, and cannot use a saved credential by reference. true = references are taken as the window and a phone take them.
@@ -413,7 +414,32 @@ export function controlApi(service) {
         ...(entry.install && { install: entry.install }),
         ...(entry.default && { default: true }),
         ...(signIns.token(entry.id) && { token: "kept by Botkins" }),
+        // A provider that answers on a key: what it takes, whether it has one, and what it is still missing. Never the key.
+        ...(entry.keyed && { keyed: { hasKey: entry.keyed.hasKey, keyOptional: entry.keyed.keyOptional, fields: entry.keyed.fields, config: entry.keyed.config, needs: entry.keyed.needs, ...(entry.keyed.keyUrl && { keyUrl: entry.keyed.keyUrl }) } }),
       })),
+    // The settings of OpenRouter, Azure Foundry or an OpenAI endpoint. What is given replaces that setting and the rest stay; `clearModels` empties the list.
+    // A key goes to the address that is set, so a new address while a key is kept needs the mark `{ agreed: true }` as the last argument (a caller that showed the person where the key will go and got a yes).
+    "providers.set": async ([id, patch = {}, mark]) => {
+      const provider = providers.require(String(id));
+      if (typeof provider.configure !== "function") throw new ControlError(provider.name + " has no settings.", "BAD_ARGUMENT");
+      if (patch === null || typeof patch !== "object" || Array.isArray(patch)) throw new ControlError("Give the settings as an object.", "BAD_ARGUMENT");
+      const { clearModels, ...given } = patch;
+      const before = provider.config();
+      const next = { ...before, ...given, ...(clearModels === true && { models: [] }) };
+      let after;
+      try {
+        after = normaliseConfig(provider.id, next);
+      } catch (error) {
+        throw new ControlError(error.message, "BAD_ARGUMENT");
+      }
+      const to = after.endpoint ?? after.baseUrl;
+      if (to && to !== (before.endpoint ?? before.baseUrl) && signIns.hasToken(provider.id) && mark?.agreed !== true)
+        throw new ControlError("The key that Botkins keeps for " + provider.name + " is sent to the address that is set, and this changes it to " + new URL(to).host + ". That needs a yes. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins providers set " + provider.id + " … --yes`).", "NEEDS_YES");
+      const status = await handlers.providerConfigure(provider.id, next).catch((error) => {
+        throw error?.code === "BAD_CONFIG" ? new ControlError(error.message, "BAD_ARGUMENT") : error;
+      });
+      return { id: provider.id, name: provider.name, enabled: status.enabled, connected: status.connected === true, hasKey: status.keyed?.hasKey === true, needs: status.keyed?.needs ?? null, config: status.keyed?.config ?? {} };
+    },
     "providers.enable": async ([id, on]) => void (await workspace.setProviderEnabled(String(id), on === true)),
     "providers.services": ([id, query]) => providers.require(String(id)).services(typeof query === "string" ? query.slice(0, 100) : ""),
     // A token that replaces the one Botkins keeps loses the old one: that needs the mark `{ agreed: true }` as the last argument. A first token loses nothing.
@@ -422,6 +448,8 @@ export function controlApi(service) {
         if (signIns.hasToken(String(id)) && !(mark?.agreed === true)) throw new ControlError("A new token for " + String(id) + " replaces the token that Botkins keeps for it, and the old token is lost. That needs a yes. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins providers login " + String(id) + " --token --yes`).", "NEEDS_YES");
         return signIns.useToken(String(id), options.token, { service: options.service });
       }
+      // A provider that answers on a key has no sign-in to run: the caller gives the key, as a token.
+      if (typeof providers.require(String(id)).configure === "function") throw new ControlError(providers.require(String(id)).name + " takes a key, not a sign-in page. Give it as a token.", "NEEDS_KEY");
       return signIns.start(String(id), { service: options.service, method: options.method });
     },
     "providers.login.read": ([session, after], { signal }) => signIns.read(String(session), { after: Number(after) || 0, signal }),
