@@ -57,6 +57,7 @@ const POLICY = {
   createGroupChat: ["agents", "chat"],
   setChatFlags: ["agents", "chat"],
   renameChat: ["agents", "chat"],
+  regenerateChatTitle: ["agents", "chat"],
   deleteChat: ["agents", "chat"],
   forkChat: ["agents", "chat"],
   warmChat: ["agents", "chat"],
@@ -401,9 +402,9 @@ const SELF_METHODS = new Set([
   "link.unpair",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
+const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
-const CREATOR_METHODS = new Set(["renameChat", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
+const CREATOR_METHODS = new Set(["renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */
 const ROUTINE_METHODS = new Set(["updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine"]);
 

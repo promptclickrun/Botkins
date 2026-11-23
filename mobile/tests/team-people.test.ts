@@ -320,6 +320,13 @@ test("an owner and two members: an invite shares one chat, and each person's vie
     await ben.call("send", chatId, "plan the launch", {});
     // A chat a member starts is read by them from the start: the workspace's unread mark is the owner's.
     assert.equal(typeof link.store.data.team.views[anaId].chats[chatId].seen, "number");
+    assert.ok(ana.parts.meta.capabilities.includes("chat-title-regeneration-v1"));
+    await assert.rejects(ben.call("regenerateChatTitle", chatId), /started this chat/);
+    await ana.call("renameChat", chatId, "Working title");
+    const title = await ana.call<string>("regenerateChatTitle", chatId);
+    assert.equal(title, "plan the launch");
+    await owner.until(() => owner.parts.chats.find((chat: ChatSummary) => chat.id === chatId)?.title === title, "the generated title reached the owner's phone");
+    await ben.until(() => ben.parts.chats.find((chat: ChatSummary) => chat.id === chatId)?.title === title, "the generated title reached Ben");
     await assert.rejects(ben.call("deleteChat", chatId), /started this chat/);
     await assert.rejects(ben.call("link.team.inviteToChat", chatId, OWNER), /started this chat/);
     await assert.rejects(ana.call("link.team.inviteToChat", chatId, "m_nobody"), /no longer on the team/);

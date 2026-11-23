@@ -65,7 +65,7 @@ async function service(t) {
 const titles = async (botkins) => (await botkins(["chats", "list", "--json"])).json().map((chat) => chat.title).sort();
 
 test("a chat is found by its id or its title, and rename, flags, show and list work with text and --json", { skip }, async (t) => {
-  const { botkins, client, chatWith, changes, everything } = await service(t);
+  const { botkins, client, chatWith, changes, everything, workspace } = await service(t);
   await client.call("bots.add", { name: "Nova" });
   await client.call("bots.add", { name: "Orbit" });
   const plan = await chatWith("Nova", "Quarterly plan", ["hello", "hi"]);
@@ -97,6 +97,12 @@ test("a chat is found by its id or its title, and rename, flags, show and list w
   assert.equal((await botkins(["chats", "rename", plan])).exit, 2);
   assert.equal((await botkins(["chats", "rename", plan, "x".repeat(121)])).exit, 1);
 
+  t.mock.method(workspace.summaries, "ask", async () => "Quarterly roadmap");
+  const regenerated = await botkins(["chats", "regenerate-title", "Plan for Q3", "--json"]);
+  assert.equal(regenerated.exit, 0, regenerated.err);
+  assert.equal(regenerated.json().title, "Quarterly roadmap");
+  assert.equal((await botkins(["chats", "show", plan, "--json"])).json().title, "Quarterly roadmap");
+
   // Flags: each way, and the refusals.
   const pinned = await botkins(["chats", "flags", plan, "--pin", "--unread", "--json"]);
   assert.deepEqual([pinned.json().pinned, pinned.json().unread, pinned.json().archived], [true, true, false]);
@@ -107,8 +113,8 @@ test("a chat is found by its id or its title, and rename, flags, show and list w
   assert.match((await botkins(["chats", "flags", plan, "--pin", "--unpin"])).err, /Give --pin or --unpin, not both\./);
 
   // Each change is in the log by the chat's id: never the title.
-  assert.deepEqual(await changes(), ["chats.rename " + plan, "chats.flags " + plan, "chats.flags " + plan, "chats.flags " + plan]);
-  assert.equal(everything().split("Changed from the command line").slice(1).join("").includes("Plan for Q3"), false);
+  assert.deepEqual(await changes(), ["chats.rename " + plan, "chats.regenerateTitle " + plan, "chats.flags " + plan, "chats.flags " + plan, "chats.flags " + plan]);
+  assert.doesNotMatch(everything().split("Changed from the command line").slice(1).join(""), /Plan for Q3|Quarterly roadmap/);
 });
 
 test("a delete asks first, and --yes is the answer with no terminal", { skip }, async (t) => {

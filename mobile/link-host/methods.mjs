@@ -75,7 +75,7 @@ export const REMOTE_METHODS = new Set([
   "addSection", "renameSection", "deleteSection",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "createChat", "createGroupChat", "setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat",
+  "createChat", "createGroupChat", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -431,6 +431,10 @@ function pluginArgs(method, args) {
  * path kept is the file's real one. Its mentions are cleaned to the shapes above.
  */
 export function remoteArgs(method, args, { deviceId, uploads } = {}) {
+  if (method === "regenerateChatTitle") {
+    if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
+    return args;
+  }
   if (method === "send" && args[2] && typeof args[2] === "object") {
     const { attachments, mentions, ...options } = args[2];
     const own = [];

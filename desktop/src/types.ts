@@ -651,6 +651,7 @@ declare global {
         patch: Partial<Pick<Chat, "pinned" | "archived" | "unread">>,
       ): Promise<void>;
       renameChat(id: string, title: string): Promise<void>;
+      regenerateChatTitle(id: string): Promise<string>;
       deleteChat(id: string): Promise<void>;
       /** The person's answer to a Feed post, idea or goal. Returns a new goal's id for "goal". */
       // Projects and Project Changes

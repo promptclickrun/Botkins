@@ -32,6 +32,7 @@ import { GroupFace, workWidth } from "./bits";
 import { arrived, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
+import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
@@ -92,6 +93,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   const teamSize = usePart("team")?.people?.length ?? 0;
   const place = myPlace(chat, myself(usePart("meta")));
   const mine = place === "manages";
+  const canRegenerate = useCanRegenerateTitle(chat, mine);
   const prompt = useTextPrompt();
   const rename = () => prompt.ask({ title: "Rename chat", value: chat.title, onSubmit: (title) => void attempt(api.renameChat(chat.id, title)) });
   const actions = [
@@ -104,6 +106,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     ...(panes > 0 ? [{ id: "pane", title: "Side pane", image: "sidebar.right" }] : []),
     { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
     ...(mine ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
+    ...(canRegenerate ? [regenerateTitleAction] : []),
     ...(mine ? [{ id: "compact", title: "Compact", image: "arrow.down.right.and.arrow.up.left" }, { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
   ];
   return (
@@ -122,6 +125,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
         else if (action === "model") router.push({ pathname: "/chat/model", params: { scope: "chat", id: chat.id } });
         else if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }), chat.pinned ? "Unpinned" : "Pinned");
         else if (action === "rename") rename();
+        else if (action === regenerateTitleAction.id) regenerateTitle(chat.id);
         else if (action === "compact") void attempt(api.compact(chat.id), "Compacting");
         else if (action === "delete")
           Alert.alert("Delete this chat?", "Its messages are deleted too.", [
