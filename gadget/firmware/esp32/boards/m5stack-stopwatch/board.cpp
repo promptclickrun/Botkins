@@ -349,8 +349,9 @@ void keys_task(void*) {
         set_panel(false, "the blue key");
         blue_down_at = blue.since;
         const botkins::View view = g_gadget->view();
-        if (view.speaking || g_audio.playing()) {
-          // A press while it speaks only stops the speaking.
+        if ((view.speaking || g_audio.playing()) && !view.live) {
+          // A press while it reads a reply aloud only stops the reading. With live voice it is how the person
+          // interrupts: the core cuts the voice and starts their turn (below).
           g_gadget->stop_speaking();
           g_audio.cut();
           talking = false;
