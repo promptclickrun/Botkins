@@ -1,10 +1,10 @@
-// The Botkins relay, in memory, for tests. It behaves like the real one (relay/src/index.ts, a
-// Cloudflare Worker with one Durable Object per room), and this header is the relay's wire format.
+// The v2 Botkins relay in memory. Both v2 and v3 forward intermediate follow parts to the phone.
+// The Worker also supports a second host socket and v3 final-answer acknowledgements.
 //
 // WHY A RELAY. A phone that is away from the computer's network can't reach it. The computer keeps
 // one outgoing WebSocket open to the relay; the phone opens one too; the relay passes messages
-// between them. Every message it passes is one of the link's own requests or answers, which are
-// already sealed end to end (see link-host/server.mjs), so the relay learns sizes and timing only.
+// between them. RPC requests, intermediate parts and final answers are sealed end to end
+// (see link-host/server.mjs).
 //
 // ROOMS. The computer makes an Ed25519 key pair and keeps the private key. Its room is
 //   room = base64url(SHA-256("botkins-relay-room-v1:" + base64url(publicKey)))     (43 characters)
@@ -28,7 +28,7 @@
 //
 // MESSAGES (binary; numbers are big-endian).
 //   Phone → relay        [0x01][id u32][route u8][n u8][session: n ASCII bytes][body…]      a request
-//                        route: 1 hello, 2 pair, 3 session, 4 rpc. `session` is the rpc call's
+//                        route: 1 hello, 2 pair, 3 session, 4 rpc, 5 join. `session` is the rpc call's
 //                        session id (empty for the other routes). `body` is the HTTP body the phone
 //                        would have posted (empty for hello).
 //   Relay → computer     [conn 8][from 8] + the phone's message, unchanged
@@ -36,7 +36,8 @@
 //                        address (the same for every socket from one address; for IPv6, from one
 //                        /64), for rate limits. It is 8 bytes of SHA-256(room + ":" + address).
 //   Computer → relay     [conn 8][0x02][id u32][status u16][body…]                           an answer
-//   Relay → phone        the same without the first 8 bytes: [0x02][id u32][status u16][body…]
+//   Computer → relay     [conn 8][0x07][id u32][counter u64][sealed news…]                    follow stays pending
+//   Relay → phone        the follow part or answer with the first 8 bytes removed
 //   Relay → phone        [0x03][id u32]            the computer isn't connected; nothing was passed on
 //   Relay → computer     [conn 8][from 8][0x04]    that phone's socket closed
 //   Relay → every phone  [0x05]                    the computer's socket closed: whatever the phone
@@ -87,6 +88,7 @@ export class FakeSocket {
   static CLOSING = 2;
   static CLOSED = 3;
   readyState = 0;
+  bufferedAmount = 0;
   binaryType = "arraybuffer";
   protocol = "";
   onopen: Listener = null;
@@ -152,6 +154,9 @@ export class FakeRelay {
   private next = 1;
   /** Every message the relay passed on, for tests that check what it could see. */
   passed: Uint8Array[] = [];
+  requests = 0;
+  /** Tests can lose a follow frame on its way to the phone. */
+  dropPart?: (frame: Uint8Array) => boolean;
   /** The network address tag given to the next phone socket (8 bytes). */
   nextFrom = new Uint8Array(8);
   /** When true, new sockets fail to open (the relay is down). */
@@ -247,6 +252,7 @@ export class FakeRelay {
         if (message.length >= 5 && message[0] === 0x01) socket.deliver(concat(Uint8Array.of(0x03), message.subarray(1, 5)));
         return;
       }
+      if (message[0] === 1) this.requests++;
       const forwarded = concat(socket.conn, socket.from, message);
       this.passed.push(forwarded);
       room.host.deliver(forwarded);
@@ -255,7 +261,7 @@ export class FakeRelay {
       const phone = room.phones.get(key(message.subarray(0, 8)));
       if (!phone) return;
       this.passed.push(message);
-      phone.deliver(message.subarray(8));
+      if (message[8] !== 7 || !this.dropPart?.(message)) phone.deliver(message.subarray(8));
     }
   }
 

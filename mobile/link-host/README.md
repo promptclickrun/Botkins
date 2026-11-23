@@ -56,7 +56,7 @@ await link.start(); // listens only when the person has turned phone access on
 What the app may put on `backend`, besides the first four (`info`, `snapshot`, `call`, `subscribe`):
 
 - `extras`: more calls, reached from the phone as `link.<name>`. Each name is also listed as a capability (`adoptMcpSignIn` is one).
-- `capabilities`: more names for `meta().capabilities`, for what the app supports itself. A phone shows a feature only when its name is there. `looks-v2`: the app saves a look's eyes and custom colors (see "Bot looks"). `routine-delivery-v1`: routines take `deliver` (where a run's result lands) and `notify`. `models-v2`: `models()` carries the optional facts of `ModelInfo` (context window and more). `board-mentions-v1`: `send` takes a mention `{ kind: "board", id }`, a Today card being discussed. The link adds its own names (`credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `push-v1`, `device-v1`, `voice-v1`) and, when it keeps the looks itself, `looks-v2`.
+- `capabilities`: more names for `meta().capabilities`, for what the app supports itself. A phone shows a feature only when its name is there. `looks-v2`: the app saves a look's eyes and custom colors (see "Bot looks"). `routine-delivery-v1`: routines take `deliver` (where a run's result lands) and `notify`. `models-v2`: `models()` carries the optional facts of `ModelInfo` (context window and more). `board-mentions-v1`: `send` takes a mention `{ kind: "board", id }`, a Today card being discussed. The link adds its own names (`credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `sync-push-v1`, `push-v1`, `device-v1`, `voice-v1`) and, when it keeps the looks itself, `looks-v2`.
 - `attention()`: `{ focused, chatId? }`, whether the person is looking at the app's own window and at which chat. A reply in that chat then needs no notification on a phone.
 - `voice`: `{ local?, codex? }`, the app's own speech helpers for `voice.mjs` (`VOICE.md`, "What the desktop app provides").
 - `screen`: how to take pictures of the screen (see "The screen").
@@ -193,7 +193,7 @@ A gadget (an ESP32 board with a microphone and a speaker) is a paired device of 
 
 The host takes at most 256 connections, and at most 24 from one address. A connection that sends nothing is dropped after 10 seconds. A call without a known session, or with a body larger than 6 MB (64 KB for pairing), is refused before any of its body is read, and a call from a phone that was removed while its body was on the way is refused too.
 
-A sync follows up to four chats. With `stream-appends-v1`, each cursor has a chat ID and text ID of up to 128 UTF-16 units, plus two non-negative safe integer offsets. Text-only changes flush to a waiting session at most every 200 ms. Other changes use the 60 ms pump, including stream starts, first text and ends. See [the sync contract](../docs/link-contract.md#streaming-text).
+A sync follows up to four chats. With `stream-appends-v1`, each cursor has a chat ID and text ID of up to 128 UTF-16 units, plus two non-negative safe integer offsets. On direct connections, text-only changes flush to a waiting session at most every 200 ms. Other changes use the 60 ms pump, including stream starts, first text and ends. A relay session polls at 250 ms or uses one open `sync-push-v1` follow with updates spaced by 100 ms. Chunked text keeps its own timing. See [the sync contract](../docs/link-contract.md#streaming-text).
 
 Pairing and session tries are counted per address: 20 in 10 seconds, then that address is told to slow down. A phone keeps at most 6 sessions (its oldest end first) and may have two `link.sync` waits open in each; a newer wait ends the oldest. A phone may have 8 unfinished uploads at once.
 
@@ -266,7 +266,7 @@ Without an adapter, macOS falls back on its own `screencapture` and `sips` (one 
 - Let bots use it: switch sources of its calendar, contacts, Health data, location, photos, Apple Music and mail on, and answer what bots ask of it (`link.device.*`). See "Tools that run on a phone".
 - Set the speech providers and their keys, dictate and have replies read, and talk live with a bot (`link.voice.*`). See "Voice".
 
-`meta().capabilities` lists `credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `push-v1`, `device-v1` and `voice-v1`, then the names of the app's own `extras` and `backend.capabilities`, so a phone can tell an app that has a feature from an older one. A look's eyes and custom colors, `looks-v2`, is there when the link keeps the looks (the app gave no `setLook`) or the app names it.
+`meta().capabilities` lists `credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `sync-push-v1`, `push-v1`, `device-v1` and `voice-v1`, then the names of the app's own `extras` and `backend.capabilities`, so a phone can tell an app that has a feature from an older one. A look's eyes and custom colors, `looks-v2`, is there when the link keeps the looks (the app gave no `setLook`) or the app names it.
 
 ## Custom views
 

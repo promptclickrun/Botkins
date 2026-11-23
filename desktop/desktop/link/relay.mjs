@@ -1,19 +1,20 @@
 // The relay link: how a phone that is away from this computer's network reaches it.
 //
-// The computer keeps one outgoing WebSocket to a relay. The phone opens one too, and the relay passes
-// the link's own requests and answers between them. Those are already sealed end to end (see
+// The computer keeps an active relay socket and, with v3, a standby. The phone opens one too, and the relay passes
+// RPC requests, follow parts and final answers between them. Those are already sealed end to end (see
 // server.mjs), so the relay sees sizes and timing, never what a message says. The wire format is in
 // tests/fake-relay.ts, which is also an in-memory relay for tests.
 //
 //   key    = an Ed25519 key pair this computer makes once; the private key stays in link.json
 //   room   = base64url(SHA-256("botkins-relay-room-v1:" + base64url(public key)))
-//   socket = <relay>/v1/host/<room>, subprotocols
+//   socket = <relay>/v1/host/<room>, v2 subprotocols
 //            ["botkins.host.v2", "k." + public key, "t." + seconds, "s." + signature]
 //            where the signature is over "botkins-relay-host-v2:" + room + ":" + seconds, made afresh for
 //            every attempt. Nothing secret is sent: the relay can check the seat, never take it.
 //
 //   relay → computer   [conn 8][from 8][0x01][id u32][route u8][n u8][session n][body…]   a request
 //   computer → relay   [conn 8][0x02][id u32][status u16][body…]                          its answer
+//   computer → relay   [conn 8][0x07][id u32][counter u64][sealed news…]                   a follow part
 //   relay → computer   [conn 8][from 8][0x04]                                             that phone left
 //   v3 relay → computer [conn 8][from 8][0x06][id u32]                                      answer accepted
 //
@@ -27,6 +28,7 @@ export const HOST_PROTOCOL_V3 = "botkins.host.v3";
 export const MAX_MESSAGE = 8 * 1024 * 1024;
 /** The most a phone's message may be (the relay's limit), and so the most a request frame may be, with its 16 bytes of addressing. */
 export const MAX_REQUEST_FRAME = 6 * 1024 * 1024 + 64 * 1024 + 16;
+const PUSH_BUFFER_LIMIT = 256 * 1024; // Recompute news after the active socket drains.
 const MAX_CONNS = 64; // phones with a request in flight at once
 const TAKEN_AFTER = 3; // closes with 4000 in a row before this computer reports the seat as taken
 const TAKEN_RETRY_MS = 10 * 60_000; // and how long it then waits between tries
@@ -546,7 +548,7 @@ export class RelayHost {
       this.schedule(1006);
       return;
     }
-    const meta = { slot, mode: this.mode, ping: null, dead: null, stable: null, opened: false };
+    const meta = { closed: new AbortController(), slot, mode: this.mode, ping: null, dead: null, stable: null, opened: false };
     this.sockets.set(socket, meta);
     const mine = (fn) => (event) => {
       if (this.sockets.get(socket) !== meta) return;
@@ -574,6 +576,7 @@ export class RelayHost {
     this.grace = null;
     const wasUp = this.up;
     if (meta.slot === "active" || !this.socket) {
+      this.sockets.get(this.socket)?.closed.abort();
       this.socket = socket;
       meta.slot = "active";
       this.standby = null;
@@ -649,6 +652,7 @@ export class RelayHost {
     this.clear(meta.dead);
     this.clear(meta.stable);
     this.sockets.delete(socket);
+    meta.closed.abort();
     // A 4000 is a group-level seat loss. Do not promote the standby: a sibling
     // with the same proof would immediately take the room back from its owner.
     if (takenCode) {
@@ -660,6 +664,7 @@ export class RelayHost {
         this.clear(siblingMeta.dead);
         this.clear(siblingMeta.stable);
         this.sockets.delete(sibling);
+        siblingMeta.closed.abort();
         try { sibling.close(4000); } catch {}
       }
       this.socket = null;
@@ -805,7 +810,7 @@ export class RelayHost {
     let state = this.conns.get(conn);
     if (state) return state;
     if (this.conns.size >= V3_MAX_CONNS) return null;
-    state = { busy: 0, entries: new Map(), retired: new Set(), retiredOrder: [], gone: null, release: null };
+    state = { left: new AbortController(), busy: 0, entries: new Map(), retired: new Set(), retiredOrder: [], gone: null, release: null };
     state.gone = new Promise((resolve) => (state.release = resolve));
     this.conns.set(conn, state);
     return state;
@@ -840,6 +845,19 @@ export class RelayHost {
     const route = ROUTES[frame[21]];
     const n = frame[22];
     if (!route || 23 + n > frame.length) return;
+    // Only the room's active seat receives requests. It can reseat before a local close arrives.
+    if (isV3 && this.standby === socket && this.socket) {
+      const previous = this.sockets.get(this.socket);
+      previous.closed.abort();
+      previous.closed = new AbortController();
+      previous.slot = "standby";
+      this.clear(previous.stable);
+      this.standby = this.socket;
+      this.socket = socket;
+      const active = this.sockets.get(socket);
+      active.slot = "active";
+      this.armStable(socket, active);
+    }
     if (isV3) this.pruneAll();
     const state = this.stateFor(conn);
     if (!state) return this.answer(socket, frame.subarray(0, 8), id, 429, json({ error: "slow_down" }));
@@ -866,11 +884,24 @@ export class RelayHost {
       socket,
     };
     if (isV3) this.reservedBytes += V3_RESULT_BYTES;
-    state.entries.set(id, { kind: "pending", at: this.timers.now(), socket });
+    const closed = AbortSignal.any([state.left.signal, this.sockets.get(socket).closed.signal]);
+    const push = {
+      closed,
+      ready: () => this.socket === socket && !(socket.bufferedAmount > PUSH_BUFFER_LIMIT),
+      send: (part) => {
+        if (part.length + 13 > MAX_MESSAGE) throw new Error("Follow part too large");
+        const header = Buffer.alloc(13);
+        item.connBytes.copy(header);
+        header[8] = 0x07;
+        header.writeUInt32BE(id, 9);
+        socket.send(Buffer.concat([header, part]));
+      },
+    };
+    state.entries.set(id, { kind: "pending", at: this.timers.now(), socket, isV3 });
     state.busy++;
     this.inFlight++;
     Promise.resolve()
-      .then(() => this.serve({ route: item.route, session: item.session, body: item.body, from: item.from, conn: item.connBytes.toString("hex"), gone: state.gone }))
+      .then(() => this.serve({ route: item.route, session: item.session, body: item.body, from: item.from, conn: item.connBytes.toString("hex"), gone: state.gone, push }))
       .then(
         (answer) => this.complete(state, item, Number(answer?.status) || 500, Buffer.from(answer?.body ?? "")),
         (error) => {
@@ -930,8 +961,9 @@ export class RelayHost {
     const state = this.conns.get(conn);
     if (!state) return;
     this.conns.delete(conn);
+    state.left.abort();
     for (const entry of state.entries.values()) {
-      this.reservedBytes -= V3_RESULT_BYTES;
+      if (entry.kind === "done" || entry.isV3) this.reservedBytes -= V3_RESULT_BYTES;
       if (entry.kind === "done") this.cacheBytes -= entry.body.length;
     }
     state.entries.clear();
