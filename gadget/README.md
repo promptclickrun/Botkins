@@ -7,8 +7,8 @@ This folder is the SDK: the contract, the firmware's portable core, and a build 
 | Path | What it holds |
 | --- | --- |
 | [`docs/contract.md`](docs/contract.md) | What a gadget builds against: pairing by introduction, what it is sent, its calls, the link's bytes, and setup over USB. Start here. |
-| `firmware/core/` | The gadget in portable C++17, with no board in it: the link (X25519, HKDF-SHA256, ChaCha20-Poly1305), keeping in step with the computer, recording, reading replies aloud, and the setup lines on the USB port. |
-| `firmware/host/` | A gadget on a computer: the same core with a folder for its flash and WAV files for its microphone and speaker. |
+| `firmware/core/` | The gadget in portable C++17, with no board in it: the link (X25519, HKDF-SHA256, ChaCha20-Poly1305), keeping in step with the computer, recording, reading replies aloud, the setup lines on the USB port, and the screen (`include/botkins/draw.hpp`: the home screen and the quick-controls panel, drawn into any RGB565 frame). |
+| `firmware/host/` | A gadget on a computer: the same core with a folder for its flash and WAV files for its microphone and speaker; and `botkins-gadget-screens`, which draws every screen to PNG files. |
 | `firmware/esp32/` | The ESP-IDF project for real boards. |
 | `tests/` | The compiled gadget against the computer's real link (`mobile/link-host`) with the demo backend. |
 
@@ -54,8 +54,9 @@ gadget.begin();
 - Setup over Bluetooth from the phone app, and a Gadgets page in the desktop app's window. Setup today is the USB cable with `botkins gadgets add` or the demo computer.
 - The relay. A gadget reaches the computer on its own network or a tailnet.
 - Live voice on a gadget. The contract says how it will work; the core reads replies aloud by turns.
-- Device tools (a bot switching a gadget's light), Botkin faces on the screen, and firmware updates over the air.
+- Device tools (a bot switching a gadget's light), and firmware updates over the air.
+- The StopWatch board still draws its own screen; it moves to the core's (`draw.hpp`) next.
 
 ## Licenses
 
-The SDK is MIT, like the rest of Botkins. `firmware/core/third_party/monocypher` is Monocypher 4.0.2 by Loup Vaillant and others, under the 2-clause BSD license or CC0 (`LICENCE.md` there). Board support that was adapted from other projects is listed in `firmware/THIRD_PARTY.md`.
+The SDK is MIT, like the rest of Botkins. `firmware/core/third_party/monocypher` is Monocypher 4.0.2 by Loup Vaillant and others, under the 2-clause BSD license or CC0 (`LICENCE.md` there). The screen uses NanoSVG (zlib), stb_truetype (MIT or public domain) and the design kit's DejaVu Serif Bold and Open Sans fonts. Those, and board support that was adapted from other projects, are listed in `firmware/THIRD_PARTY.md`.
