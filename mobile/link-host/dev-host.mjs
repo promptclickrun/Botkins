@@ -176,6 +176,8 @@ if (process.env.BOTKINS_DEV_AWAY === "1" && process.env.BOTKINS_DEV_RELAY) {
   const all = host.hosts.bind(host);
   host.hosts = () => all().filter((entry) => entry.startsWith("relay!"));
 }
+// A relay named here is used, even when this demo computer's saved settings have the relay off.
+if (process.env.BOTKINS_DEV_RELAY && !host.store.data.relay.enabled) host.setRelay({ enabled: true });
 await host.setEnabled(true);
 if (process.env.BOTKINS_DEV_GADGET) {
   const ssid = process.env.BOTKINS_DEV_WIFI_SSID;
