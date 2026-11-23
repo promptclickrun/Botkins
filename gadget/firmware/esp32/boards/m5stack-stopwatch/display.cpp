@@ -34,7 +34,8 @@ constexpr int kCs = 39, kSclk = 40, kD0 = 41, kD1 = 42, kD2 = 46, kD3 = 45;
 constexpr int kGapX = 6;  // the controller's RAM is 480 wide; the glass starts at column 6
 constexpr int kMhz = 40;
 // Even, so every band starts on an even row and spans an even count (the CO5300 wants both).
-constexpr int kBand = 16;
+// Two of 8 rows: as much internal RAM as one band of 16, and one fills while the other is sent.
+constexpr int kBand = 8;
 
 // Waveshare esp32_s3_touch_amoled_1_75 2.0.6, lcd_init_cmds (Apache-2.0).
 const uint8_t k20[] = {0x20}, k10[] = {0x10}, kA0[] = {0xA0}, k00[] = {0x00}, k80[] = {0x80}, k55[] = {0x55}, kFF[] = {0xFF};
@@ -67,9 +68,9 @@ bool on_done(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t*, void*) {
 bool Display::begin() {
   const size_t pixels = (size_t)kWidth * kHeight;
   frame_ = static_cast<uint16_t*>(heap_caps_calloc(pixels, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  band_ = static_cast<uint16_t*>(heap_caps_malloc((size_t)kWidth * kBand * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-  g_done = xSemaphoreCreateBinary();
-  if (!frame_ || !band_ || !g_done) {
+  for (auto& band : band_) band = static_cast<uint16_t*>(heap_caps_malloc((size_t)kWidth * kBand * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  g_done = xSemaphoreCreateCounting(2, 0);  // one count per band sent
+  if (!frame_ || !band_[0] || !band_[1] || !g_done) {
     ESP_LOGE(TAG, "no memory for the frame");
     return false;
   }
@@ -132,19 +133,32 @@ bool Display::begin() {
 
 void Display::flush() {
   if (!panel_) return;
-  for (int y = 0; y < kHeight; y += kBand) {
+  // Band n is copied into one buffer while band n - 1 goes out of the other; a buffer is filled
+  // again only after its band has gone.
+  int queued = 0;
+  bool ok = true;
+  for (int y = 0, n = 0; y < kHeight; y += kBand, n++) {
+    if (queued == 2) {
+      if (xSemaphoreTake(g_done, pdMS_TO_TICKS(200)) != pdTRUE) {
+        ESP_LOGW(TAG, "band before row %d timed out", y);
+        ok = false;
+        break;
+      }
+      queued--;
+    }
+    uint16_t* band = band_[n & 1];
     const int rows = y + kBand <= kHeight ? kBand : kHeight - y;
-    memcpy(band_, frame_ + (size_t)y * kWidth, (size_t)rows * kWidth * 2);
-    if (esp_lcd_panel_draw_bitmap(panel_, 0, y, kWidth, y + rows, band_) != ESP_OK) {
+    memcpy(band, frame_ + (size_t)y * kWidth, (size_t)rows * kWidth * 2);
+    if (esp_lcd_panel_draw_bitmap(panel_, 0, y, kWidth, y + rows, band) != ESP_OK) {
       ESP_LOGW(TAG, "band at row %d not sent", y);
-      return;
+      ok = false;
+      break;
     }
-    // The DMA buffer is filled again only after its band has gone.
-    if (xSemaphoreTake(g_done, pdMS_TO_TICKS(200)) != pdTRUE) {
-      ESP_LOGW(TAG, "band at row %d timed out", y);
-      return;
-    }
+    queued++;
   }
+  // Every band sent is waited for: the next flush starts with both buffers free.
+  while (queued > 0 && xSemaphoreTake(g_done, pdMS_TO_TICKS(200)) == pdTRUE) queued--;
+  if (queued > 0 && ok) ESP_LOGW(TAG, "the last bands timed out");
 }
 
 // Both go through esp_lcd_co5300's own calls. Only the draw task calls them, as it does flush():

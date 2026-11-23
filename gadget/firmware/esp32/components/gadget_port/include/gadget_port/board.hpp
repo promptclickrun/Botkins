@@ -5,7 +5,11 @@
 //   board::begin()           power, display, audio, buttons; before Wi-Fi starts
 //   board::describe(board)   fills in the name, the rates, the screen and the speaker
 //   board::run(gadget)       starts the board's own tasks: microphone, buttons, screen
+//   board::console(line, print)  the board's own console lines, before the gadget sees them
 #pragma once
+#include <functional>
+#include <string>
+
 #include "botkins/gadget.hpp"
 
 namespace board {
@@ -18,5 +22,10 @@ void describe(botkins::Board& out);
 void run(botkins::Gadget& gadget);
 /** Asks for a redraw (cheap; safe from any task). `run` sets this as the gadget's on_change. */
 void redraw();
+/**
+ * A line from the USB console, before `gadget.console()` sees it: true when it was the board's
+ * own (frame, key, touch), answered with `print`, one whole line per call.
+ */
+bool console(const std::string& line, const std::function<void(const std::string&)>& print);
 
 }  // namespace board
