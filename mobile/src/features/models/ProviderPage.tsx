@@ -8,6 +8,8 @@ import { refresh, useCapability, useMember, useModels, useProviders } from "@/st
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Badge, Button, EmptyState, Group, IconButton, IconTile, Label, Loading, Page, ProviderIcon, radius, Row, space, T, useTheme } from "@/ui";
+import { KEYED_CAPABILITY, keyedParts } from "./keyed";
+import { KeyedKey, KeyedSettings } from "./KeyedSettings";
 import { Services } from "./Services";
 import { providerAction, SIGNIN_CAPABILITY } from "./signin";
 import { providerBadge } from "./status";
@@ -38,6 +40,9 @@ function Detail({ provider }: { provider: ProviderStatus }) {
   const badge = providerBadge(provider);
   // "provider-signin-v1": the computer runs the sign-in or the install, and the phone finishes it.
   const action = providerAction(provider, useCapability(SIGNIN_CAPABILITY));
+  // "keyed-providers-v1": the computer takes a keyed provider's endpoint and models from here.
+  const configurable = useCapability(KEYED_CAPABILITY);
+  const keyed = provider.signIn === "key" ? provider.keyed : undefined;
   const openSheet = (mode: "signin" | "install" | "token") => router.push({ pathname: "/models/signin", params: { id: provider.id, mode } });
 
   const setOn = async (on: boolean) => {
@@ -89,6 +94,14 @@ function Detail({ provider }: { provider: ProviderStatus }) {
         <Row leading={<IconTile icon={Power} color={provider.enabled ? colors.success : colors.muted} />} title="On" toggled={provider.enabled} onToggle={(on) => void setOn(on)} />
       </Group>
 
+      {!!keyed?.needs && (
+        <View style={{ padding: space.lg, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }}>
+          <T variant="subhead" weight="600">
+            {keyed.needs}
+          </T>
+        </View>
+      )}
+
       {!!provider.error && provider.installed && (
         <View style={{ padding: space.lg, borderRadius: radius.lg, backgroundColor: colors.dangerSoft }}>
           <T variant="subhead" color="danger">
@@ -119,14 +132,25 @@ function Detail({ provider }: { provider: ProviderStatus }) {
           {action.kind === "signin" && action.token && <Button title="Use a token instead" icon={KeyRound} variant="ghost" wide onPress={() => openSheet("token")} />}
           {action.kind === "token" && <Button title="Sign in with a token" icon={KeyRound} size="lg" wide onPress={() => openSheet("token")} />}
           {action.kind === "computer" && <Button title="Sign in on your computer" size="lg" wide onPress={signIn} />}
-          {(facts.length > 0 || (provider.connected && provider.signOut)) && (
+          {keyed && <KeyedKey provider={provider} keyed={keyed} />}
+          {keyed &&
+            keyedParts(keyed).any &&
+            (configurable ? (
+              // A new answer from the computer starts the form again from what it saved.
+              <KeyedSettings key={JSON.stringify(keyed.config)} provider={provider} keyed={keyed} />
+            ) : (
+              <T variant="footnote" color="muted" style={{ paddingHorizontal: space.lg }}>
+                Set up its endpoint and models in Settings › Model providers on your computer.
+              </T>
+            ))}
+          {(facts.length > 0 || (provider.connected && provider.signOut && !keyed)) && (
             <View>
               <Label>Account</Label>
               <Group>
                 {facts.map((fact) => (
                   <Row key={fact.title} title={fact.title} value={fact.value} />
                 ))}
-                {provider.connected && provider.signOut && <Row leading={<IconTile icon={LogOut} color={colors.danger} />} title="Sign out" tone="danger" onPress={signOut} />}
+                {provider.connected && provider.signOut && !keyed && <Row leading={<IconTile icon={LogOut} color={colors.danger} />} title="Sign out" tone="danger" onPress={signOut} />}
               </Group>
             </View>
           )}

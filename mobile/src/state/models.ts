@@ -4,7 +4,7 @@ import type { Bot, ChatSummary, ModelChoice, ModelInfo, Preferences } from "@/li
 const EFFORTS: Record<string, string> = { xhigh: "Extra high", max: "Max", none: "None", minimal: "Minimal" };
 export const effortLabel = (effort: string) => EFFORTS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1);
 
-export const PROVIDER_NAMES: Record<string, string> = { copilot: "GitHub Copilot", codex: "ChatGPT", claude: "Claude", opencode: "OpenCode", grok: "Grok", kiro: "Kiro", antigravity: "Antigravity", fx: "fx", cursor: "Cursor", pi: "Pi", omp: "OMP" };
+export const PROVIDER_NAMES: Record<string, string> = { copilot: "GitHub Copilot", codex: "ChatGPT", claude: "Claude", opencode: "OpenCode", grok: "Grok", kiro: "Kiro", antigravity: "Antigravity", fx: "fx", cursor: "Cursor", pi: "Pi", omp: "OMP", openrouter: "OpenRouter", foundry: "Azure Foundry", "openai-api": "OpenAI endpoint" };
 export const providerName = (id: string | undefined, models: ModelInfo[] = []) =>
   (id && (models.find((m) => m.provider === id)?.providerName ?? PROVIDER_NAMES[id])) || id || "";
 

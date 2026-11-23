@@ -15,10 +15,11 @@ import type { CredentialRef } from "@/link/types";
 import { refresh, useProviders } from "@/state/hooks";
 import { api } from "@/state/link";
 import { showToast } from "@/state/store";
-import { Button, Field, Group, haptic, radius, Sheet, space, T, useTheme } from "@/ui";
+import { Button, Field, Group, haptic, Loading, radius, Sheet, space, T, useTheme } from "@/ui";
+import { keyedWords, keyPage } from "./keyed";
 import { applyView, codeInLines, finishedLine, pageHost, type RunState, startState } from "./signin";
 
-type Mode = "signin" | "install" | "token";
+type Mode = "signin" | "install" | "token" | "key";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : "That didn't work. Try again.");
@@ -27,7 +28,7 @@ export default function SignInSheet() {
   const params = useLocalSearchParams<{ id: string; mode?: string; service?: string; method?: string; label?: string }>();
   const provider = useProviders()?.find((entry) => entry.id === params.id);
   const name = params.label || provider?.name || "this provider";
-  const [mode, setMode] = useState<Mode>(params.mode === "install" ? "install" : params.mode === "token" ? "token" : "signin");
+  const [mode, setMode] = useState<Mode>(params.mode === "install" ? "install" : params.mode === "token" ? "token" : params.mode === "key" ? "key" : "signin");
   const [round, setRound] = useState(0);
   const [run, setRun] = useState<RunState>(startState);
   const [failed, setFailed] = useState<string>();
@@ -35,7 +36,7 @@ export default function SignInSheet() {
 
   // The run on the computer: started once per round, read until it ends, and cancelled when the sheet goes.
   useEffect(() => {
-    if (mode === "token") return;
+    if (mode === "token" || mode === "key") return;
     let live = true;
     let id: string | undefined;
     setRun(startState());
@@ -87,6 +88,25 @@ export default function SignInSheet() {
   const again = () => setRound((value) => value + 1);
   const title = mode === "install" ? "Install " + name : "Sign in to " + name;
 
+  if (mode === "key" && !provider?.keyed)
+    return (
+      <Sheet title="Add your key">
+        <Loading />
+      </Sheet>
+    );
+  if (mode === "key" && provider?.keyed) {
+    const words = keyedWords(provider.id, provider.keyed);
+    const page = keyPage(provider.keyed);
+    return (
+      <TokenSignIn
+        title={(provider.keyed.hasKey ? "Replace the " : "Add your ") + words.keyName}
+        name={name}
+        providerId={params.id}
+        words={{ label: words.keyLabel, hint: words.keyHint ?? "Botkins keeps it on your computer. It isn't shown again.", button: "Save key", done: "Key saved." }}
+        onGetKey={page ? () => void WebBrowser.openBrowserAsync(page) : undefined}
+      />
+    );
+  }
   if (mode === "token") return <TokenSignIn title={title} name={name} providerId={params.id} service={params.service} onGuided={provider?.signInWays?.guided && !params.service ? () => setMode("signin") : undefined} />;
 
   const finished = run.done && !run.error;
@@ -214,7 +234,24 @@ function Lines({ lines }: { lines: string[] }) {
 }
 
 /** A token or key pasted on the phone, or a saved credential: sent once, and the field is cleared. */
-function TokenSignIn({ title, name, providerId, service, onGuided }: { title: string; name: string; providerId: string; service?: string; onGuided?: () => void }) {
+function TokenSignIn({
+  title,
+  name,
+  providerId,
+  service,
+  onGuided,
+  words,
+  onGetKey,
+}: {
+  title: string;
+  name: string;
+  providerId: string;
+  service?: string;
+  onGuided?: () => void;
+  /** A keyed provider's words: its key's name, a line under the field, the button and the line when it is saved. */
+  words?: { label: string; hint: string; button: string; done: string };
+  onGetKey?: () => void;
+}) {
   const [token, setToken] = useState("");
   const [picked, setPicked] = useState<{ ref: CredentialRef; name: string }>();
   const [busy, setBusy] = useState(false);
@@ -230,7 +267,7 @@ function TokenSignIn({ title, name, providerId, service, onGuided }: { title: st
       const result = await api.providerUseToken(providerId, value, service ? { service } : undefined);
       haptic.success();
       await refresh("providers");
-      setDone(finishedLine({ connected: result.connected, account: result.account }, name));
+      setDone(words ? words.done : finishedLine({ connected: result.connected, account: result.account }, name));
     } catch (error) {
       haptic.warn();
       setProblem(messageOf(error));
@@ -253,7 +290,8 @@ function TokenSignIn({ title, name, providerId, service, onGuided }: { title: st
           ) : (
             <View style={{ gap: space.xs }}>
               <Field
-                label="Token or API key"
+                label={words?.label ?? "Token or API key"}
+                hint={words?.hint}
                 placeholder="Paste it here"
                 value={token}
                 onChangeText={setToken}
@@ -280,7 +318,8 @@ function TokenSignIn({ title, name, providerId, service, onGuided }: { title: st
               {problem}
             </T>
           )}
-          <Button title="Sign in" size="lg" wide loading={busy} disabled={!picked && !token.trim()} onPress={() => void submit()} />
+          <Button title={words?.button ?? "Sign in"} size="lg" wide loading={busy} disabled={!picked && !token.trim()} onPress={() => void submit()} />
+          {onGetKey && <Button title="Get a key" icon={ExternalLink} variant="ghost" wide onPress={onGetKey} />}
           {onGuided && <Button title={"Sign in with " + name + "'s page instead"} variant="ghost" wide onPress={onGuided} />}
         </>
       )}
