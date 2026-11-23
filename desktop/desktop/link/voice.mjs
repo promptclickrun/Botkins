@@ -1201,7 +1201,17 @@ export class Voice {
   async liveAzure({ sdp, model, voice, instructions, tools }) {
     const key = this.keyOf("azure");
     if (!AZURE_MODEL.test(model)) throw new Failure("That model isn't valid.");
-    return this.realtime("azure", { key, base: this.azureLive(), auth: { "api-key": key }, sdp, model, voice, instructions, tools, transcribe: DEFAULTS.azureTranscribe });
+    try {
+      return await this.realtime("azure", { key, base: this.azureLive(), auth: { "api-key": key }, sdp, model, voice, instructions, tools, transcribe: DEFAULTS.azureTranscribe });
+    } catch (error) {
+      // Azure's two usual answers, said so a person knows what to do (both seen from a real resource).
+      const said = String(error?.message ?? "");
+      if (/returned 404: API Not Found/i.test(said))
+        throw new Failure("Your Azure resource doesn't offer realtime voice at its address. Live voice needs a Microsoft Foundry resource in a region with realtime models, and a realtime deployment such as MAI-Realtime-1 or gpt-realtime.");
+      if (/DeploymentNotFound|deployment for this resource does not exist/i.test(said))
+        throw new Failure("Your Azure resource has no deployment named “" + model + "”. Deploy one in Microsoft Foundry, or type your deployment's name as the live model.");
+      throw error;
+    }
   }
   /** One session of the OpenAI realtime protocol, at `base` (OpenAI's, or an Azure resource's), by WebRTC when an offer comes with it, else by socket. */
   async realtime(provider, { key, base, auth, sdp, model, voice, instructions, tools, transcribe }) {

@@ -1689,3 +1689,15 @@ test("live on Azure needs the resource's endpoint and a key, and says so in a se
   failing.setKey("azure", AZURE_KEY);
   await assert.rejects(failing.live({ sdp: OFFER }), (error: Error) => error.message.startsWith("Azure returned 404:") && !error.message.includes(AZURE_KEY));
 });
+
+test("live on Azure: a resource without realtime, and a deployment it doesn't have, are each said plainly", async () => {
+  // Both answers as a real Azure resource gives them (Nov 2026): the route isn't there, or the deployment isn't.
+  const { voice } = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/calls": () => say(404, { error: { code: "Not Found", message: "API Not Found" } }) });
+  voice.set({ live: { provider: "azure" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(voice.live({ sdp: OFFER }), { message: "Your Azure resource doesn't offer realtime voice at its address. Live voice needs a Microsoft Foundry resource in a region with realtime models, and a realtime deployment such as MAI-Realtime-1 or gpt-realtime." });
+  const missing = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/client_secrets": () => say(404, { error: { code: "DeploymentNotFound", message: "The API deployment for this resource does not exist." } }) });
+  missing.voice.set({ live: { provider: "azure", model: "MAI-Realtime-1" }, providers: { azure: SPEECH } });
+  missing.voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(missing.voice.live({}), { message: "Your Azure resource has no deployment named \u201cMAI-Realtime-1\u201d. Deploy one in Microsoft Foundry, or type your deployment's name as the live model." });
+});
