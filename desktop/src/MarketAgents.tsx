@@ -11,6 +11,11 @@ const api = window.botkins;
 /** Named by the computer's app when it reads agent templates (the phone's docs/agent-templates.md). */
 export const AGENT_TEMPLATES = "agent-templates-v1";
 
+export function supportsAgentTemplates(remote: State["remote"]) {
+  const using = remote?.using;
+  return (!using || using.capabilities.includes(AGENT_TEMPLATES)) && typeof api["agents.browse"] === "function";
+}
+
 /** "Productivity · Botkins · v1.0.0 · Botkins": what is known about where a template is from. */
 export function agentMeta(agent: MarketAgent, more = false): string {
   return [agent.categoryName, agent.marketplaceName, more && agent.version ? "v" + agent.version : "", more ? agent.author : ""].filter(Boolean).join(" · ");
@@ -19,7 +24,7 @@ export function agentMeta(agent: MarketAgent, more = false): string {
 /** Marketplace › Agents: agent templates from the marketplaces. Install opens Create a bot, filled in. */
 export default function MarketAgents({ state, createBot, refreshed = 0 }: { state: State; createBot?: (template: MarketAgentTemplate) => void; /** Counts the Marketplace's refreshes: each one reads the list again, keeping the one shown. */ refreshed?: number }) {
   const using = state.remote?.using;
-  const supported = (!using || using.capabilities.includes(AGENT_TEMPLATES)) && typeof api["agents.browse"] === "function";
+  const supported = supportsAgentTemplates(state.remote);
   const allowed = teamCan(state, "agents", "create");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");

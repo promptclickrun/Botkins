@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { agentChips, fromLine, listLine, pageLine } from "../src/features/market/agents/logic";
+import { agentChips, fromLine, listLine, pageLine, templateAvailability } from "../src/features/market/agents/logic";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { MarketAgent, MarketAgentCategory, MarketAgentTemplate } from "../src/link/types";
 
@@ -77,4 +77,10 @@ test("the demo leaves agent-templates-v1 out with BOTKINS_DEV_AGENTS=off", () =>
   } finally {
     delete process.env.BOTKINS_DEV_AGENTS;
   }
+});
+
+test("New bot explains an older computer or a disconnected link before browsing templates", () => {
+  assert.equal(templateAvailability(false, true), "Update the app on your computer");
+  assert.equal(templateAvailability(true, false), "Connect to your computer");
+  assert.equal(templateAvailability(true, true), undefined);
 });
