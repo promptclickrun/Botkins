@@ -436,6 +436,7 @@ else
         return artifactMedia.add(info.mime, info.size, (offset, length) => chunk(info, publicFile(info), { offset, length }));
       },
       closeArtifactMedia: (url) => artifactMedia.close(url),
+      showEmojiPanel: () => { if (app.isEmojiPanelSupported()) app.showEmojiPanel(); },
       artifactMessagePage: (chatId, index) => {
         if (!remote.inUse() || typeof chatId !== "string" || !Number.isSafeInteger(index) || index < 0) throw new Error("Choose a message on the paired computer.");
         return remote.call("link.messages", [chatId, index + 11, 32]);

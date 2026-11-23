@@ -233,6 +233,7 @@ export type Mention =
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
 export type Message = {
+  reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
   /** One utterance in live voice, identified across partials and the final transcript. */
   voiceId?: string;
@@ -1546,6 +1547,7 @@ export type Calls = {
   /** Generates and saves a title from the chat's messages ("chat-title-regeneration-v1"). */
   regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
+  reactToMessage(chatId: string, index: number, time: number | null, emoji: string): NonNullable<Message["reactions"]>;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;

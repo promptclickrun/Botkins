@@ -333,6 +333,22 @@ export const api = new Proxy({} as Api, {
   },
 });
 
+/** Also update an older loaded page, outside the live chat subscription. */
+export async function reactToMessage(chatId: string, index: number, time: number | null, emoji: string) {
+  const host = client;
+  const reactions = await api.reactToMessage(chatId, index, time, emoji);
+  useApp.setState(state => {
+    const view = state.chats[chatId];
+    if (client !== host || !view) return {};
+    const offset = index - view.from;
+    const message = view.messages[offset];
+    if (!message || (message.time ?? null) !== time) return {};
+    const messages = view.messages.slice();
+    messages[offset] = { ...message, reactions };
+    return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
+  });
+}
+
 /** Runs a call and shows its failure as a toast. Resolves to undefined when it failed. */
 export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | undefined> {
   try {

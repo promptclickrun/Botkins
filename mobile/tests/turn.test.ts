@@ -600,7 +600,10 @@ test("the demo computer: 'show me the screen' opens a screen tab, and 'long ques
     await d.until(() => !!detail().pane?.panels.some((panel) => panel.kind === "screen"), "a screen tab");
     const pane = detail().pane!;
     const screen = pane.panels.find((panel) => panel.kind === "screen")!;
-    assert.equal(pane.ask?.panelId, screen.id, "the bot asks to show it");
+    assert.equal(pane.ask, undefined, "the screen waits for a tap");
+    const message = detail().messages[0];
+    await d.client.call("reactToMessage", chatId, detail().from, message.time ?? null, "🌻");
+    await d.until(() => detail().messages[0]?.reactions?.[0]?.emoji === "🌻", "reaction synced to the chat");
     const view = mergeChat(undefined, detail());
     const items = chatTimeline({ messages: view.messages, from: view.from, runs: view.runs, running: null, live: {}, timeline: true, group: false, screens: [screen], prefs: SHOW });
     assert.ok(items.some((item) => item.kind === "screen" && item.panel.id === screen.id), "the chat draws it");

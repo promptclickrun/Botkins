@@ -108,6 +108,9 @@ test("the Screen panel is one per chat, only shown, and details brings the chat'
   const first = await call("side_pane_show", { kind: "screen" });
   const again = await call("side_pane_show", { kind: "screen", title: "Ignored" });
   assert.equal(again.id, first.id);
+  assert.equal(first.opened, false);
+  assert.equal(pane().ask, undefined);
+  assert.equal(pane().active, null);
   assert.deepEqual(pane().panels.map((p) => [p.kind, p.title]), [["screen", "Screen"]]);
   assert.deepEqual(Object.keys(pane().panels[0]).sort(), ["botId", "createdAt", "id", "kind", "title", "updatedAt"], "the panel holds no setting: the switch stays the person's");
   assert.ok(!/setScreen|screenMode|setPhoneScreen/.test(String(ws.sidepane.tools)) && !Object.keys(tools).some((name) => /screen/.test(name)), "no tool changes who may see the screen");

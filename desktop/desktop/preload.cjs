@@ -298,6 +298,8 @@ for (const name of [
   "chooseFiles",
   "unqueue",
   "sendNow",
+  "reactToMessage",
+  "showEmojiPanel",
   "forkChat",
   "retry",
   "compact",

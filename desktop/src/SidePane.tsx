@@ -139,7 +139,7 @@ export default function SidePane({
     if (preview) setPicked(ARTIFACTS);
   }, [preview?.item.id, preview?.local]);
   // A tab that is gone shows Details instead, or in a group chat the newest panel.
-  const shownPanel = panels.find((p) => p.id === wanted) ?? (group ? panels.at(-1) : undefined);
+  const shownPanel = panels.find((p) => p.id === wanted) ?? (group ? panels.filter(p => p.kind !== "screen").at(-1) : undefined);
   const front = wanted === "pull" && pull ? "pull" : wanted === ARTIFACTS ? ARTIFACTS : shownPanel?.id ?? (group ? ARTIFACTS : DETAILS);
   const tabs: { id: string; panel?: PanePanel }[] = [...(group ? [] : [{ id: DETAILS }]), { id: ARTIFACTS }, ...(pull ? [{ id: "pull" }] : []), ...panels.map((panel) => ({ id: panel.id, panel }))];
   const showTabs = true;

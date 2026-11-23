@@ -20,6 +20,8 @@ import {
   FolderGit2,
   GitFork,
   PanelRight,
+  Monitor,
+  Smile,
   Reply,
   RotateCcw,
   SlidersHorizontal,
@@ -67,7 +69,7 @@ import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { sessionTodos } from "../desktop/link/session-todos";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
-import { regenerateTitleItem, useMenu } from "./Pages";
+import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
 import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
@@ -125,6 +127,17 @@ function Attachments({ list }: { list: Message["attachments"] }) {
       ))}
     </ul>
   );
+}
+
+function Reactions({ message, state }: { message: Message; state: State }) {
+  if (!message.reactions?.length) return null;
+  const me = state.team && "me" in state.team ? "member:" + state.team.me.memberId : "owner";
+  return <div className="message-reactions">{message.reactions.map(({ actor, emoji }) => {
+    const name = actor === me ? "You" : actor.startsWith("bot:")
+      ? state.bots.find(bot => bot.id === actor.slice(4))?.name ?? "Bot"
+      : authorName(state, { memberId: actor.replace(/^member:/, ""), name: actor === "owner" ? "Owner" : "Member" });
+    return <span key={actor} title={name} aria-label={name + " reacted " + emoji}>{emoji}</span>;
+  })}</div>;
 }
 
 function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (error: unknown) => void }) {
@@ -203,7 +216,9 @@ function ChatViewBody({
   const [away, setAway] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, string>>({});
   const [drawer, setDrawer] = useState<"" | "tasks" | "helpers">("");
-  const [menu, setMenu] = useState<{ index: number; x: number; y: number }>();
+  const reactionDialog = useAsk();
+  const screenMenu = useMenu();
+  const [menu, setMenu] = useState<{ index: number; message: Message; x: number; y: number }>();
   const [notice, setNotice] = useState("");
   const [showChanges, setShowChanges] = useState(false);
   const [choosingProject, setChoosingProject] = useState(false);
@@ -564,12 +579,12 @@ function ChatViewBody({
         </button>
         {m.role !== "user" && m.text && (
           <button
-            aria-label={reading.key === readKey(i) ? "Stop reading" : "Read aloud"}
-            title={reading.key === readKey(i) ? "Stop" : "Read aloud"}
-            aria-pressed={reading.key === readKey(i)}
-            onClick={() => void readAloud(readKey(i), m.text, m.botId ?? bot.id)}
+            aria-label={reading.key === readKey(loadedFrom + i) ? "Stop reading" : "Read aloud"}
+            title={reading.key === readKey(loadedFrom + i) ? "Stop" : "Read aloud"}
+            aria-pressed={reading.key === readKey(loadedFrom + i)}
+            onClick={() => void readAloud(readKey(loadedFrom + i), m.text, m.botId ?? bot.id)}
           >
-            {reading.key === readKey(i) ? <Square size={13} /> : <Volume2 size={14} />}
+            {reading.key === readKey(loadedFrom + i) ? <Square size={13} /> : <Volume2 size={14} />}
           </button>
         )}
         {!group && (
@@ -577,7 +592,7 @@ function ChatViewBody({
             aria-label="Fork from here"
             title="Fork from here"
             disabled={busy}
-            onClick={() => act.fork(i)}
+            onClick={() => act.fork(loadedFrom + i)}
           >
             <GitFork size={14} />
           </button>
@@ -588,16 +603,17 @@ function ChatViewBody({
 
   const timelineRendered = new Set<string>();
   const timelineBusy = latest?.status === "Working";
+  function messageMenu(e: React.MouseEvent, message: Message, index: number) {
+    if (window.getSelection()?.toString()) return;
+    e.preventDefault();
+    setMenu({ message, index, x: e.clientX, y: e.clientY });
+  }
   const timelineMessage = (m: Message, index: number) => (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
       className={messageClass(m)}
       key={`timeline-message-${index}`}
-      onContextMenu={(e) => {
-        if (window.getSelection()?.toString()) return;
-        e.preventDefault();
-        setMenu({ index, x: e.clientX, y: e.clientY });
-      }}
+      onContextMenu={e => messageMenu(e, m, loadedFrom + index)}
     >
       {m.role === "assistant" ? (
         <b className="speaker">
@@ -620,6 +636,7 @@ function ChatViewBody({
         />
       )}
       {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
+      <Reactions state={state} message={m} />
       {actions(m, index)}
     </article>
   );
@@ -977,10 +994,11 @@ function ChatViewBody({
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
-            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)}>
+            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
               <RichText text={message.text} files={files} />
               <Attachments list={message.attachments} />
+              <Reactions state={state} message={message} />
             </article>
           ))}
           {chat.messages.map((m, i) => {
@@ -998,11 +1016,7 @@ function ChatViewBody({
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
                     className={messageClass(m)}
-                    onContextMenu={(e) => {
-                      if (window.getSelection()?.toString()) return;
-                      e.preventDefault();
-                      setMenu({ index: i, x: e.clientX, y: e.clientY });
-                    }}
+                    onContextMenu={e => messageMenu(e, m, loadedFrom + i)}
                   >
                     {m.interim ? (
                       <InterimUpdate text={m.text} onToggle={disclosed} />
@@ -1049,6 +1063,7 @@ function ChatViewBody({
                       />
                     )}
                       {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
+                      <Reactions state={state} message={m} />
                       {actions(m, i)}
                     </>}
                   </article>
@@ -1095,6 +1110,20 @@ function ChatViewBody({
               )}
             </article>
           )}
+          {panels.filter(panel => panel.kind === "screen").map(panel => (
+            <button key={panel.id} className="screen-card" onClick={() => {
+              setPull(undefined);
+              setPreview(undefined);
+              paneAction(chat.id, "select", panel.id);
+              paneAction(chat.id, "opened");
+              showPane(true);
+            }} onContextMenu={event => screenMenu.show(event, "Screen", [{ label: "Close screen", icon: X, run: () => {
+              if (chat.pane?.active === panel.id && paneShown) closePane();
+              paneAction(chat.id, "remove", panel.id);
+            } }])}>
+              <Monitor size={20} /> {panel.title}
+            </button>
+          ))}
           {pending.map(m => (
             <article className={messageClass(m)} key={m.clientMessageId} aria-label="Sending message">
               {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
@@ -1157,20 +1186,42 @@ function ChatViewBody({
           </div>
         )}
       </div>
-      {menu && chat.messages[menu.index] && (
+      {reactionDialog.node}
+      {screenMenu.node}
+      {menu && (
         <div
           className="msg-menu"
           role="menu"
-          style={{ left: Math.min(menu.x, innerWidth - 190), top: Math.min(menu.y, innerHeight - 130) }}
+          style={{ left: Math.min(menu.x, innerWidth - 190), top: Math.min(menu.y, innerHeight - 195) }}
         >
-          <button role="menuitem" onClick={() => act.copy(chat.messages[menu.index])}>
+          <button role="menuitem" onClick={() => act.copy(menu.message)}>
             <Copy size={14} /> Copy
           </button>
-          <button role="menuitem" onClick={() => act.reply(chat.messages[menu.index])}>
+          {(!state.remote?.using || state.remote.using.capabilities.includes("message-reactions-v1")) &&
+            <button role="menuitem" onClick={async () => {
+              const index = menu.index;
+              const time = menu.message.time ?? null;
+              const emoji = await reactionDialog.ask({ title: "React to message", confirm: "React", field: { label: "Choose one emoji", value: "", max: 64, emoji: true } });
+              if (!emoji) return;
+              try {
+                const reactions = await window.botkins.reactToMessage(chat.id, index, time, emoji);
+                setEarlier(page => {
+                  if (!page || page !== historic || !page.messages[index - page.from]) return page;
+                  const messages = page.messages.slice();
+                  messages[index - page.from] = { ...messages[index - page.from], reactions };
+                  return { ...page, messages };
+                });
+              } catch (error) {
+                setNotice(error instanceof Error ? error.message : String(error));
+              }
+            }}>
+              <Smile size={14} /> React
+            </button>}
+          <button role="menuitem" onClick={() => act.reply(menu.message)}>
             <Reply size={14} /> Reply
           </button>
-          {chat.messages[menu.index].role !== "user" && (
-            <button role="menuitem" onClick={() => void readAloud(readKey(menu.index), chat.messages[menu.index].text, chat.messages[menu.index].botId ?? bot.id)}>
+          {menu.message.role !== "user" && (
+            <button role="menuitem" onClick={() => void readAloud(readKey(menu.index), menu.message.text, menu.message.botId ?? bot.id)}>
               {reading.key === readKey(menu.index) ? (
                 <>
                   <Square size={13} /> Stop reading

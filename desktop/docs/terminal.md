@@ -319,6 +319,7 @@ botkins chats rename "Quarterly plan" "Plan for the third quarter"
 botkins chats flags "Plan for" --pin
 botkins chats regenerate-title "Plan for"
 botkins chats fork "Plan for" --at 4
+botkins chats react "Plan for" 4 👍
 botkins chats group Nova Orbit --title "Launch team"
 botkins chats project "Launch team" Website --mode plan
 botkins chats queue "Plan for"

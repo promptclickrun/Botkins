@@ -80,7 +80,7 @@ Existing standalone local paths in chat become clickable after a main-process ch
 
 Offered in a turn the person is there for (not a routine, a task, a Today panel refresh or a helping teammate).
 
-Bots use chat by default. They open the side pane only when keeping something beside the conversation is more useful than showing it in chat. They show Screen only for live browser or desktop app work worth following, not for terminal commands, file edits, or background checks.
+Bots use chat by default. They open the side pane only when keeping something beside the conversation is more useful than showing it in chat. During visible browser automation or interactive desktop work, a bot can offer Screen as a card in chat. Creating the card preserves the selected panel and the open-request sequence. The person can open the card or hold it to close it.
 
 | Tool | Asks first? | Arguments | Answer |
 | --- | --- | --- | --- |

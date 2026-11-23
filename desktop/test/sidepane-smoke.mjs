@@ -169,6 +169,8 @@ try {
       ipcMain.removeHandler(name);
       ipcMain.handle(name, (_e, ...args) => (globalThis.__phoneChanges.push([name, ...args]), status));
     }
+    ipcMain.removeHandler("showEmojiPanel");
+    ipcMain.handle("showEmojiPanel", () => { globalThis.__pickerOpened = true; });
     ipcMain.removeHandler("openLink");
     ipcMain.handle("openLink", (_e, url) => void globalThis.__opened.push(url));
   });
@@ -186,6 +188,27 @@ try {
   await toggle().click();
   await expect(pane()).toHaveCount(0);
   assert.deepEqual(await calls(), [[main, "closed"]]);
+  await clearCalls();
+
+  const message = page.locator("article.assistant").last();
+  await message.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "React", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "React to message" });
+  await expect(picker.getByRole("textbox")).toBeFocused();
+  assert.ok(await app.evaluate(() => globalThis.__pickerOpened));
+  await picker.getByRole("textbox").fill("👩🏽‍💻");
+  await picker.getByRole("button", { name: "React" }).click();
+  await expect(message.locator(".message-reactions")).toHaveText("👩🏽‍💻");
+
+  await setPane(main, { panels: [screen], active: null });
+  await expect(pane()).toHaveCount(0);
+  const screenCard = page.getByRole("button", { name: "Screen", exact: true });
+  await screenCard.click();
+  await expect(tab("Screen")).toHaveAttribute("aria-selected", "true");
+  await screenCard.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Close screen" }).click();
+  await expect(pane()).toHaveCount(0);
+  await expect(screenCard).toHaveCount(0);
   await clearCalls();
 
   // ---- A bot shows a table: the pane opens on it, wider, and says who opened it.

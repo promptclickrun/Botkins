@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
-import { api, attempt, loadEarlier, watchReasoning } from "@/state/link";
+import { api, attempt, loadEarlier, reactToMessage, watchReasoning } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
@@ -53,6 +53,7 @@ import { endSelecting, selectionEnds } from "./selecting";
 import { MessageLink, openLink } from "@/ui/LinkHold";
 import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
 import { usePane } from "../pane/usePane";
+import { ReactionPicker } from "./ReactionPicker";
 import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
 
@@ -800,8 +801,12 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     else openLink(url);
   }, [chatId, showPulls]);
   // Reply and Fork from here, in each message's menu. A group chat can't be forked.
+  const reactionsOn = useCapability("message-reactions-v1");
+  const [reaction, setReaction] = useState<{chatId: string; computer?: string; index: number; time?: number}>();
+  const computer = useApp(state => state.pairing?.serverId);
   const messageActions = useMemo<MessageActions>(
     () => ({
+      onReact: reactionsOn ? (index, time) => setReaction({ chatId, computer, index, time }) : undefined,
       onReply: (value) => {
         setQuote(quoteOf(value));
         input.current?.focus();
@@ -814,7 +819,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             }),
       busy: working,
     }),
-    [group, chatId, working, paneId],
+    [group, chatId, working, paneId, computer, reactionsOn],
   );
   const pick = (starter: string) => {
     setText(starter);
@@ -921,6 +926,10 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const column = (
     <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      {reaction?.chatId === chatId && reaction.computer === computer && <ReactionPicker close={() => setReaction(undefined)} submit={emoji => {
+        setReaction(undefined);
+        void attempt(reactToMessage(chatId, reaction.index, reaction.time ?? null, emoji));
+      }} />}
       {!paneId && header}
       {/* The chat fills this; the bar, the banners and the message box float over it. */}
       <View style={{ flex: 1 }}>
