@@ -211,7 +211,7 @@ export class OpenAISocketTransport extends LiveBase {
         this.send(withTurns(withTranscription(this.session.session), this.input));
         void this.startAudio().then(resolve, (error: unknown) => {
           reject(error);
-          this.end();
+          this.fail(error instanceof Error ? error.message : "The microphone could not start.");
         });
       };
       socket.onmessage = (event) => this.protocol.handle(event.data);
@@ -242,7 +242,7 @@ export class OpenAISocketTransport extends LiveBase {
       }),
       // The phone could not keep the sound going (the microphone or the speaker was taken away for good).
       this.audio.addListener("interrupted", (event) => {
-        if (event.failed && !this.ended) this.fail("The phone's sound stopped. End the call and try again.");
+        if (event.failed && !this.ended) this.fail(event.problem ?? "The phone's sound stopped. End the call and try again.");
       }),
     );
     await this.audio.start({ inputRate: OpenAISocketTransport.RATE, outputRate: OpenAISocketTransport.RATE, speaker: this.speaker });

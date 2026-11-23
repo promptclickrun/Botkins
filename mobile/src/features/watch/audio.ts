@@ -7,7 +7,7 @@ type EventName = "frame" | "output" | "interrupted";
 type WatchEvents = {
   frame: AudioFrame;
   output: { level: number };
-  interrupted: { began: boolean; failed?: boolean };
+  interrupted: { began: boolean; failed?: boolean; problem?: string };
 };
 type Listener = { [Key in EventName]: Set<(event: WatchEvents[Key]) => void> };
 
@@ -15,6 +15,7 @@ export class WatchAudioEndpoint implements DuplexLike {
   private listeners: Listener = { frame: new Set(), output: new Set(), interrupted: new Set() };
   private native: { remove(): void }[] = [];
   private running = false;
+  private starting = false;
   private stopped = false;
   private muted = false;
   readonly rtc: WatchRtcLike | null;
@@ -62,7 +63,7 @@ export class WatchAudioEndpoint implements DuplexLike {
         }),
       onInterrupted: (listener) =>
         native.addListener("rtcInterrupted", (event) => {
-          if (event.sessionId === sessionId) listener(!!event.failed);
+          if (event.sessionId === sessionId) listener(!!event.failed, event.problem);
         }),
     };
     this.native.push(
@@ -77,7 +78,7 @@ export class WatchAudioEndpoint implements DuplexLike {
       }),
       native.addListener("interrupted", (event) => {
         if (event.sessionId === this.sessionId) {
-          for (const listener of this.listeners.interrupted) listener({ began: event.began, failed: event.failed });
+          for (const listener of this.listeners.interrupted) listener({ began: event.began, failed: event.failed, problem: event.problem });
         }
       }),
     );
@@ -86,12 +87,17 @@ export class WatchAudioEndpoint implements DuplexLike {
   async start(options: { inputRate: number; outputRate: number; speaker?: boolean }) {
     if (!WatchCompanion) throw new Error("This Botkins build has no Watch companion.");
     if (this.stopped) throw new Error("The Watch call ended.");
-    await WatchCompanion.voiceStarted(this.sessionId, options.inputRate, options.outputRate);
-    if (this.stopped) {
-      await WatchCompanion.voiceEnded(this.sessionId, null);
-      throw new Error("The Watch call ended.");
+    this.starting = true;
+    try {
+      await WatchCompanion.voiceStarted(this.sessionId, options.inputRate, options.outputRate);
+      if (this.stopped) {
+        await WatchCompanion.voiceEnded(this.sessionId, null);
+        throw new Error("The Watch call ended.");
+      }
+      this.running = true;
+    } finally {
+      this.starting = false;
     }
-    this.running = true;
   }
 
   play(base64: string) {
@@ -113,7 +119,7 @@ export class WatchAudioEndpoint implements DuplexLike {
 
   async stop() {
     this.stopped = true;
-    const started = this.running;
+    const started = this.running || this.starting;
     this.running = false;
     for (const subscription of this.native.splice(0)) subscription.remove();
     if (started && WatchCompanion) await WatchCompanion.voiceEnded(this.sessionId, null);

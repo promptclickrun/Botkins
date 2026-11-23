@@ -14,7 +14,7 @@ class FakeWatchRTC implements WatchRtcLike {
   private messages = new Set<(message: string) => void>();
   private states = new Set<(state: "open" | "connected" | "failed" | "closed") => void>();
   private levels = new Set<(level: { mic: number; output: number }) => void>();
-  private interruptions = new Set<(failed: boolean) => void>();
+  private interruptions = new Set<(failed: boolean, problem?: string) => void>();
 
   async start() {
     queueMicrotask(() => this.state("open"));
@@ -28,11 +28,11 @@ class FakeWatchRTC implements WatchRtcLike {
   onMessage(listener: (message: string) => void) { this.messages.add(listener); return { remove: () => this.messages.delete(listener) }; }
   onState(listener: (state: "open" | "connected" | "failed" | "closed") => void) { this.states.add(listener); return { remove: () => this.states.delete(listener) }; }
   onLevel(listener: (level: { mic: number; output: number }) => void) { this.levels.add(listener); return { remove: () => this.levels.delete(listener) }; }
-  onInterrupted(listener: (failed: boolean) => void) { this.interruptions.add(listener); return { remove: () => this.interruptions.delete(listener) }; }
+  onInterrupted(listener: (failed: boolean, problem?: string) => void) { this.interruptions.add(listener); return { remove: () => this.interruptions.delete(listener) }; }
   state(value: "open" | "connected" | "failed" | "closed") { for (const listener of this.states) listener(value); }
   message(value: Record<string, unknown>) { for (const listener of this.messages) listener(JSON.stringify(value)); }
   level(mic: number, output: number) { for (const listener of this.levels) listener({ mic, output }); }
-  interrupt(failed = false) { for (const listener of this.interruptions) listener(failed); }
+  interrupt(failed = false, problem?: string) { for (const listener of this.interruptions) listener(failed, problem); }
 }
 
 test("Watch WebRTC sends provider events while feeding the Watch as the peer audio device", async () => {
@@ -89,4 +89,16 @@ test("a lost Watch connection fails the WebRTC transport instead of quietly swit
   rtc.interrupt(true);
   assert.equal(transport.status, "ended");
   assert.match(errors[0] ?? "", /lost their connection/i);
+});
+
+test("Watch WebRTC reports the Watch audio recovery error when resuming fails", async () => {
+  const rtc = new FakeWatchRTC();
+  const transport = new WatchRTCTransport(rtc, async () => ({ id: "voice", kind: "webrtc", sdp: "answer" }), async () => "");
+  const errors: string[] = [];
+  transport.on("error", (error) => errors.push(error));
+  await transport.start();
+  const problem = "Watch audio could not resume. The microphone is unavailable.";
+  rtc.interrupt(true, problem);
+  assert.deepEqual(errors, [problem]);
+  assert.equal(transport.status, "ended");
 });

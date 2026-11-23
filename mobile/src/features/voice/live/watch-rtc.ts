@@ -78,9 +78,9 @@ export class WatchRTCTransport extends LiveBase {
         this.hears({ mic: this.muted ? 0 : mic, out: output });
         this.gate.level(output);
       }),
-      this.rtc.onInterrupted((failed) => {
+      this.rtc.onInterrupted((failed, problem) => {
         if (this.ended) return;
-        if (failed) this.fail("The Watch and iPhone lost their connection.");
+        if (failed) this.fail(problem ?? "The Watch and iPhone lost their connection.");
         else if (!this.muted) this.interrupt();
       }),
     );

@@ -2,7 +2,7 @@
 // microphone and speaker route.
 import { WatchAudioEndpoint } from "./audio";
 import { lastOrNewChat } from "@/features/open/opening";
-import { LiveSessionController, companionLiveKit, selectedLiveProvider } from "@/features/voice/live/session";
+import { LiveSessionController, type LiveSessionState, companionLiveKit, selectedLiveProvider } from "@/features/voice/live/session";
 import { useLiveCall } from "@/features/voice/liveCall";
 import type { WatchVoice } from "./model";
 import { useApp } from "@/state/store";
@@ -71,11 +71,12 @@ async function connect(attempt: number) {
     savesHistory: sessionCapability("voice-history-v1"),
   });
   controller = next;
-  next.subscribe((state) => {
+  let started = false;
+  function publish(state: LiveSessionState) {
     if (attempt !== generation) return;
     if (state.status === "ended") controller = null;
     update({
-      status: state.status,
+      status: started || state.status === "ended" ? state.status : "connecting",
       sessionId: state.status === "ended" ? undefined : id,
       chatId: state.status === "ended" ? undefined : chatId,
       muted: state.muted,
@@ -83,9 +84,11 @@ async function connect(attempt: number) {
       level: state.level,
       ...(state.problem ? { problem: state.problem } : { problem: undefined }),
     });
-  });
-  update({ status: "connecting", sessionId: id, chatId, muted: false, push: false, level: 0, problem: undefined });
+  }
+  next.subscribe(publish);
   await next.start();
+  started = true;
+  publish(next.current);
 }
 
 export function muteWatchVoice(muted: boolean) {

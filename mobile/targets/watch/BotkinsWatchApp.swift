@@ -44,25 +44,40 @@ private struct ConversationView: View {
   @EnvironmentObject private var session: WatchSession
   let bot: WatchBot
 
+  @State private var showingChat = false
+
   var body: some View {
-    VStack(spacing: 0) {
-      Header(bot: bot)
-      if let chat = session.snapshot.chat {
-        Conversation(chat: chat)
-      } else {
-        Spacer()
-        Text("No chat yet")
-          .font(.headline)
-        Text("Start a voice chat with \(bot.name).")
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .padding(.horizontal)
-        Spacer()
+    NavigationStack {
+      VStack(spacing: 2) {
+        Button {
+          showingChat = true
+        } label: {
+          Label("Chat", systemImage: "chevron.down")
+            .font(.caption)
+        }
+        .buttonStyle(.plain)
+        Spacer(minLength: 0)
+        Header(bot: bot)
+        Spacer(minLength: 0)
+        VoiceDock()
       }
-      VoiceDock()
+      .padding(.horizontal, 5)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .contentShape(Rectangle())
+      .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { drag in
+        if drag.translation.height > 30 && drag.translation.height > abs(drag.translation.width) {
+          showingChat = true
+        }
+      })
+      .navigationDestination(isPresented: $showingChat) {
+        if let chat = session.snapshot.chat {
+          Conversation(chat: chat)
+            .navigationTitle(chat.title)
+        } else {
+          Text("No chat yet")
+        }
+      }
     }
-    .padding(.horizontal, 5)
   }
 }
 
@@ -98,40 +113,27 @@ private struct Header: View {
 }
 
 private struct Conversation: View {
-  @EnvironmentObject private var session: WatchSession
   let chat: WatchChat
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(chat.title)
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .padding(.horizontal, 6)
-      ScrollViewReader { proxy in
-        ScrollView {
-          LazyVStack(spacing: 6) {
-            ForEach(chat.messages) { message in
-              MessageBubble(message: message)
-                .id(message.id)
-            }
-          }
-          .padding(.horizontal, 2)
-          .padding(.bottom, 6)
+    ScrollView {
+      LazyVStack(spacing: 6) {
+        if chat.messages.isEmpty {
+          Text("No messages yet")
+            .foregroundStyle(.secondary)
         }
-        .onChange(of: chat.messages.count) {
-          if let id = chat.messages.last?.id {
-            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
-          }
+        ForEach(chat.messages) { message in
+          MessageBubble(message: message)
+        }
+        if !chat.activity.isEmpty {
+          Text(chat.activity)
+            .font(.caption2)
+            .foregroundStyle(.orange)
         }
       }
-      if !chat.activity.isEmpty {
-        Text(chat.activity)
-          .font(.caption2)
-          .foregroundStyle(.orange)
-          .padding(.horizontal, 7)
-      }
+      .padding(.horizontal, 3)
     }
+    .defaultScrollAnchor(.bottom, for: .initialOffset)
   }
 }
 
@@ -144,7 +146,7 @@ private struct MessageBubble: View {
       Text(message.text)
         .font(.footnote)
         .foregroundStyle(message.final ? .primary : .secondary)
-        .lineLimit(5)
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
         .background(message.who == "you" ? Color.orange.opacity(0.22) : Color.white.opacity(0.075))
@@ -157,19 +159,20 @@ private struct MessageBubble: View {
 private struct VoiceDock: View {
   @EnvironmentObject private var session: WatchSession
   @State private var holding = false
+  @State private var showingProblem = false
+
+  private var problem: String? { session.issue ?? voice.problem }
 
   private var voice: WatchVoice { session.voice }
 
   var body: some View {
     VStack(spacing: 5) {
-      if let problem = session.issue ?? voice.problem {
-        Text(problem)
+      if problem != nil {
+        Button("Call details") { showingProblem = true }
           .font(.caption2)
-          .foregroundStyle(.secondary)
-          .lineLimit(2)
-          .multilineTextAlignment(.center)
+          .buttonStyle(.plain)
       } else {
-        Text(voice.label)
+        Text(session.audioPaused ? "Call paused" : voice.label)
           .font(.caption2.weight(.semibold))
           .foregroundStyle(voice.status == "talking" ? .orange : .secondary)
           .lineLimit(1)
@@ -216,6 +219,14 @@ private struct VoiceDock: View {
     }
     .padding(.top, 3)
     .padding(.bottom, 2)
+    .onChange(of: problem, initial: true) { _, value in
+      showingProblem = value != nil
+    }
+    .alert("Watch voice", isPresented: $showingProblem) {
+      Button("OK") {}
+    } message: {
+      Text(problem ?? "")
+    }
   }
 }
 

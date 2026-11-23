@@ -38,7 +38,7 @@ export type DuplexLike = {
   stop(): Promise<void>;
   addListener(name: "frame", listener: (frame: AudioFrame) => void): { remove(): void };
   addListener(name: "output", listener: (event: { level: number }) => void): { remove(): void };
-  addListener(name: "interrupted", listener: (event: { began: boolean; failed?: boolean }) => void): { remove(): void };
+  addListener(name: "interrupted", listener: (event: { began: boolean; failed?: boolean; problem?: string }) => void): { remove(): void };
 };
 
 /** The iPhone's custom WebRTC audio device for a WebRTC-only Watch session. */
@@ -53,7 +53,7 @@ export type WatchRtcLike = {
   onMessage(listener: (message: string) => void): { remove(): void };
   onState(listener: (state: "open" | "connected" | "failed" | "closed") => void): { remove(): void };
   onLevel(listener: (level: { mic: number; output: number }) => void): { remove(): void };
-  onInterrupted(listener: (failed: boolean) => void): { remove(): void };
+  onInterrupted(listener: (failed: boolean, problem?: string) => void): { remove(): void };
 };
 
 export interface LiveTransport {
