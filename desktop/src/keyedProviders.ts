@@ -27,6 +27,8 @@ export type FormProblems = { endpoint?: string; baseUrl?: string; apiVersion?: s
 /** The words and placeholders of one provider's settings. */
 export type KeyedWords = {
   keyLabel: string;
+  /** The key's name inside a sentence. */
+  keyName: string;
   keyHint?: string;
   endpoint: { label: string; placeholder: string };
   baseUrl: { label: string; placeholder: string };
@@ -39,6 +41,7 @@ export function keyedWords(providerId: string, keyed: Pick<KeyedProvider, "keyOp
   const foundry = providerId === "foundry";
   return {
     keyLabel: foundry ? "Resource key" : "API key",
+    keyName: foundry ? "resource key" : "API key",
     keyHint: keyed.keyOptional ? "Leave empty for a server that needs none." : undefined,
     endpoint: { label: "Endpoint", placeholder: "https://your-resource.services.ai.azure.com" },
     baseUrl: { label: "Base URL", placeholder: "https://api.openai.com/v1" },

@@ -711,3 +711,67 @@ small.error-text {
   overflow-wrap: anywhere;
   font-size: calc(12px * var(--text-scale));
 }
+
+/* ------------------------------------------------------------ providers set up with a key */
+.provider-head small.provider-needs {
+  color: var(--ink);
+  font-weight: 500;
+}
+.keyed-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.keyed-settings {
+  gap: 12px;
+}
+.keyed-field {
+  display: grid;
+  gap: 5px;
+}
+.keyed-field input,
+.keyed-model input,
+.keyed-model select {
+  height: 32px;
+  min-width: 0;
+  padding: 4px 10px;
+  font-size: calc(13px * var(--text-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: inherit;
+  font-family: inherit;
+}
+.keyed-field input[aria-invalid="true"],
+.keyed-model input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.keyed-models {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.keyed-models legend {
+  padding: 0;
+  margin-bottom: 2px;
+}
+.keyed-model,
+.keyed-model-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 32px;
+  gap: 6px;
+  align-items: center;
+}
+.keyed-model.with-api,
+.keyed-model-head.with-api {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 150px) 32px;
+}
+.keyed-model-head small {
+  padding-left: 2px;
+}
+.keyed-model .keyed-model-problem {
+  grid-column: 1 / -1;
+}

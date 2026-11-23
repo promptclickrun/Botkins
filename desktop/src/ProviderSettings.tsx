@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type HTMLAttributes, type SyntheticEvent }
 import { ArrowLeft, LoaderCircle, Search } from "lucide-react";
 import type { AuthStatus, ProviderService, ProviderStatus } from "./types";
 import { ProviderInstall, ProviderToken } from "./ProviderSetup";
+import { ProviderKeyed } from "./ProviderKeyed";
 import ProviderIcon from "./ProviderIcon";
 import { useAsk } from "./Pages";
 import { Group, ValueRow } from "./SettingsRows";
@@ -37,6 +38,7 @@ function pill(p: ProviderStatus): { text: string; tone?: "ok" | "warn" } {
   if (p.error) return { text: "Problem", tone: "warn" };
   if (!p.installed) return { text: "Not installed" };
   if (p.connected) return { text: "Connected", tone: "ok" };
+  if (p.signIn === "key") return { text: "Not set up" };
   return { text: p.signIn === "browser" ? "Signed out" : "Not connected" };
 }
 
@@ -168,6 +170,7 @@ export default function ProviderSettings({ general, setup, windows }: { general?
                       {p.name}
                     </h3>
                     <small>{describe(p)}</small>
+                    {p.keyed?.needs && <small className="provider-needs">{p.keyed.needs}</small>}
                     {p.version && (
                       <small className="provider-version">
                         {toolName(p).replace(/^the /, "").replace(/^./, (c) => c.toUpperCase())} {p.version}
@@ -192,7 +195,7 @@ export default function ProviderSettings({ general, setup, windows }: { general?
                   </div>
                 )}
                 <ProviderInstall provider={p} available={setup} windows={windows} />
-                {setup && p.installed && !p.connected && p.signInWays?.token && !p.starting && !waiting && (
+                {setup && p.installed && !p.connected && p.signInWays?.token && p.signIn !== "key" && !p.starting && !waiting && (
                   <ProviderToken provider={p} />
                 )}
                 {p.connected && (p.account || p.plan || managed) && (
@@ -201,6 +204,9 @@ export default function ProviderSettings({ general, setup, windows }: { general?
                     help={managed || undefined}
                     value={p.plan ?? ""}
                   />
+                )}
+                {p.signIn === "key" && p.keyed && !p.starting && (
+                  <ProviderKeyed provider={p} keyed={p.keyed} ask={dialogs.ask} busy={busy} setBusy={setBusy} />
                 )}
                 {p.signIn === "services" && p.installed && !p.starting && !p.error && <Services provider={p} ask={dialogs.ask} />}
                 <div className="set-actions">
@@ -246,7 +252,7 @@ export default function ProviderSettings({ general, setup, windows }: { general?
                       <button type="button" className="set-button" disabled={!!busy} onClick={() => void reload(true)}>
                         Check connection
                       </button>
-                      {canSignOut && (
+                      {canSignOut && p.signIn !== "key" && (
                         <button
                           type="button"
                           className="set-button danger"
