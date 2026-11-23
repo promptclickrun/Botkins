@@ -14,11 +14,13 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gadget_port/board.hpp"
@@ -63,8 +65,9 @@ void handle(const std::string& line) {
     answer_line(answer);
     return;
   }
-  // Lines of the port's own, for measuring: "heap", "heap reset" and "socket <url> [subprotocol|-] [first message]".
+  // Lines of the port's own, for measuring: "heap", "heap reset", "tasks" and "socket <url> [subprotocol|-] [first message]".
   if (line == "heap") log_heap("asked");
+  else if (line == "tasks") log_tasks();
   else if (line.compare(0, 7, "socket ") == 0) probe_socket(line.substr(7));
   else if (line == "heap reset") {
     heap_reset();
@@ -139,6 +142,18 @@ void log_heap(const char* when) {
            (unsigned)least_since_boot(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
            (unsigned)least_since_boot(MALLOC_CAP_SPIRAM));
+}
+
+void log_tasks() {
+  // Each task's least stack left since it started (FreeRTOS's high-water mark, in bytes here), and
+  // where its stack is. Several of the core's threads share the name "botkins".
+  std::vector<TaskStatus_t> tasks(uxTaskGetNumberOfTasks() + 4);
+  const UBaseType_t count = uxTaskGetSystemState(tasks.data(), tasks.size(), nullptr);
+  for (UBaseType_t i = 0; i < count; i++) {
+    const TaskStatus_t& task = tasks[i];
+    ESP_LOGI(TAG, "task %-16s least stack left %5u bytes (%s)", task.pcTaskName, (unsigned)task.usStackHighWaterMark,
+             esp_ptr_external_ram(task.pxStackBase) ? "psram" : "internal");
+  }
 }
 
 void start_console(botkins::Gadget& gadget) {

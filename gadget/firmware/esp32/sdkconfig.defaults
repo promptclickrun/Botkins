@@ -16,6 +16,8 @@ CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=16384
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# Each task's stack high-water mark, for the console's `tasks` line.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_HZ=1000
 
 # Wi-Fi: the port keeps the network in its own NVS namespace, so the driver's own copy
