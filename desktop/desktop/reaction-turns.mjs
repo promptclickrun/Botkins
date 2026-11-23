@@ -53,8 +53,8 @@ export function reactionPrompt(reactions, { usage, provider } = {}) {
     "[Botkins: this is not a message from the person. They reacted to your message" + (reactions.length > 1 ? "s" : "") + " in this chat, and nothing else was said.]",
     ...lines,
     usage ? "The " + (provider || "model") + " plan behind this chat has used " + usage.percent + "% of its " + usage.label + "." : "",
-    "Decide whether a reply would really help. A reaction usually needs no answer: an acknowledgment, thanks or a like is complete in itself. Reply only when it adds something the person would want: a reaction that asks for more (such as 🤔 or ❓ on an explanation), corrects you (such as 👎), or is a natural moment to offer the one next step they were waiting for. Be warm when you do reply, and brief. Don't reply just because something came in, don't thank them for the reaction, and don't react back. Each reply is a model turn on their plan, so the closer it is to its limits, the more a reply has to earn its place.",
-    "If you have nothing to add, reply with exactly " + SILENT + " and nothing else: the person sees nothing.",
+    "Decide what fits, as a thoughtful friend would, from what the reaction means here: read it with the message and the conversation, not by the emoji alone. It may need nothing back, a reaction of your own (react, on the person's latest message) when that is how a friend would answer, or a short reply when that adds something they would want, such as an answer to a question you asked or more on something they want to understand. Don't echo their reaction back by habit, and don't let a reaction stand in for a reply the message needs. Be warm when you answer. Don't reply just because a reaction came in, and don't thank them for it. Each reply is a model turn on their plan, so the closer it is to its limits, the more a reply has to earn its place.",
+    "When you send no text, with or without a reaction of your own, reply with exactly " + SILENT + " and nothing else: the person sees nothing but your reaction, if you made one.",
   ].filter(Boolean).join("\n");
 }
 

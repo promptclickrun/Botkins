@@ -13,8 +13,9 @@ import { mayBeSilent, mostUsed, PER_DAY, reactionPrompt } from "../desktop/react
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), "botkins-reaction-turns-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const script = { reply: ["Hello", " there!"], prompts: [], handlers: new Set(), hold: null };
+  const script = { reply: ["Hello", " there!"], prompts: [], handlers: new Set(), hold: null, tools: [], act: null };
   const session = {
+    setTools: async (tools) => void (script.tools = tools),
     on: (handler) => (script.handlers.add(handler), () => script.handlers.delete(handler)),
     disconnect: async () => {},
     abort: async () => script.release?.(),
@@ -23,6 +24,8 @@ function setup(t) {
       const id = "message:" + script.prompts.length;
       const emit = (event) => { for (const handler of script.handlers) handler(event); };
       emit({ type: "user.message", id, data: { messageId: id } });
+      // A tool the bot calls before it answers, as the runtime would call it.
+      if (script.act) await script.act((name, args) => script.tools.find((t) => t.name === name).handler(args, { toolCallId: "t1" }));
       for (const piece of script.reply) {
         emit({ type: "assistant.message_delta", data: { messageId: id, deltaContent: piece } });
         if (script.hold) await script.hold();
@@ -32,7 +35,8 @@ function setup(t) {
       return id;
     },
   };
-  const client = async () => ({ createSession: async () => session, resumeSession: async () => session, deleteSession: async () => {} });
+  const opened = async (config) => ((script.tools = config?.tools?.definitions ?? script.tools), session);
+  const client = async () => ({ createSession: opened, resumeSession: async (_id, config) => opened(config), deleteSession: async () => {} });
   const seen = [];
   let ws;
   ws = new Workspace(dir, client, () => ws && seen.push(ws.snapshot()), () => ({ kind: "reject" }));
@@ -98,6 +102,24 @@ test("a reaction the bot answers is shown and kept as a reply", async (t) => {
   assert.equal(messages.filter((m) => m.role === "user").length, 1, "the reaction's prompt is not a message");
   assert.ok(seen.slice(from).some((snapshot) => snapshot.runs.some((r) => r.id === run.id)), "the turn was shown once it replied");
   assert.ok(ws.chat(chat).unread);
+});
+
+test("a bot may answer a reaction with a reaction of its own, and nothing else shows", async (t) => {
+  const { ws, script, seen } = setup(t);
+  const { chat, index, time } = await greeted(ws);
+  const before = ws.chat(chat).messages.length;
+  script.act = (tool) => tool("react", { emoji: "❤️" });
+  script.reply = ["[SILENT]"];
+  const from = seen.length;
+  ws.reactToMessage(chat, index, time, "❤️", "owner");
+  const run = await reactionRun(ws, chat);
+  assert.equal(run.status, "Completed", run.detail);
+  assert.equal(ws.chat(chat).messages.length, before, "no new message");
+  const person = ws.chat(chat).messages.findLast((m) => m.role === "user");
+  assert.deepEqual(person.reactions, [{ actor: "bot:pip", emoji: "❤️" }], "the bot's ❤️ is on the person's latest message");
+  for (const snapshot of seen.slice(from)) assert.equal(shows(snapshot, chat, run.id), false);
+  assert.match(script.prompts.at(-1), /a reaction of your own \(react/);
+  assert.doesNotMatch(script.prompts.at(-1), /don't react back/);
 });
 
 test("only a person's reaction to a bot's finished message, in a one-bot chat, starts a turn", async (t) => {
@@ -188,6 +210,11 @@ test("bots are told about reactions and about confirming a routine's notificatio
   const chat = ws.chat(ws.createChat("pip"));
   const text = ws.instructionsFor(chat, ws.bot("pip"), { id: "r" });
   assert.match(text, /react to your messages with an emoji/);
+  // The bot judges a reaction by what it means in the conversation: no emoji is named as one to answer or not.
+  const guidance = text.match(/\nThe person can react[^\n]*/)[0];
+  assert.doesNotMatch(guidance, /\p{Extended_Pictographic}/u);
+  const told = reactionPrompt([{ emoji: "👍", text: "Done.", latest: true }]).split("\n").filter((line) => !line.startsWith("- "));
+  for (const line of told) assert.doesNotMatch(line, /\p{Extended_Pictographic}/u, line);
   assert.match(text, /\[SILENT\]/);
   assert.match(text, /Before you create a routine .* confirm with the person how often it runs, where its result goes, and whether they want a notification/);
 });
