@@ -9,9 +9,11 @@
 //
 // The blue key talks: held, it listens; let go, it sends (a press under 300 ms is given up). A
 // press while it speaks stops the speaking. The yellow key approves a request on show (held for
-// most of a second, it denies it), and otherwise starts a new chat. The red key opens and closes
+// most of a second, it denies it), and otherwise starts a new chat. A tap on the home screen opens
 // the quick controls (core/src/home.cpp), which the touch screen works; they close by themselves
-// after 8 s without a touch, and the blue key closes them before it talks.
+// after 8 s without a touch, and the blue key closes them before it talks. The red key only wakes
+// the screen: it is the StopWatch's power key, and its M5PM1 powers the board off on a double click,
+// so a control that asks to be pressed twice quickly must never be on it.
 #include <atomic>
 #include <cstring>
 #include <set>
@@ -285,10 +287,18 @@ struct Key {
 
 /** A tap on the screen (the touch controller's, or the console's). */
 void tap(int x, int y) {
-  if ((Light)g_light.load() != Light::Bright || !g_panel_open) {
-    // A dim screen only wakes; the home screen has nothing to tap.
-    ESP_LOGI(TAG, "tap at %d,%d: %s", x, y, (Light)g_light.load() != Light::Bright ? "wakes the screen" : "nothing there");
+  if ((Light)g_light.load() != Light::Bright) {
+    ESP_LOGI(TAG, "tap at %d,%d: wakes the screen", x, y);
     activity();
+    return;
+  }
+  if (!g_panel_open) {
+    // A tap on the home screen opens the quick controls, unless a request waits on the keys or the gadget is busy listening.
+    activity();
+    const botkins::View view = g_gadget->view();
+    const bool opens = view.stage == botkins::View::Stage::Online && view.request.id.empty() && !view.listening && !view.sending;
+    ESP_LOGI(TAG, "tap at %d,%d: %s", x, y, opens ? "opens the quick controls" : "nothing there");
+    if (opens) set_panel(true, "a tap");
     return;
   }
   activity();
@@ -384,9 +394,10 @@ void keys_task(void*) {
         forced_red_down = false;
         forced_red_polls = 0;
       }
+      // Only a wake: a double click on this key powers the StopWatch off (the M5PM1 does it itself).
       if (red) {
+        ESP_LOGI(TAG, "the red key: wakes the screen");
         activity();
-        set_panel(!g_panel_open, "the red key");
       }
     }
     if (g_touch_ok && tick % kTouchEvery == 0) {

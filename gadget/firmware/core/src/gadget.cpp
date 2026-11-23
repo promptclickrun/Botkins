@@ -471,7 +471,11 @@ void Gadget::apply_settings(const Json& from) {
     same = now.volume == next.volume && now.mic == next.mic && now.mute == next.mute && now.brightness == next.brightness && now.dim_after == next.dim_after && now.off_after == next.off_after;
   }
   if (same) return;
-  change([&next](View& view) { view.settings = next; });
+  change([&next](View& view) {
+    // Turned on again: the sentence saying it was off is no longer true.
+    if (view.settings.mute && !next.mute && view.notice.rfind("The microphone is off", 0) == 0) view.notice.clear();
+    view.settings = next;
+  });
   board_.storage->save(kSettings, Json::object().set("volume", next.volume).set("mic", next.mic).set("mute", next.mute).set("brightness", next.brightness).set("dimAfter", next.dim_after).set("offAfter", next.off_after).dump());
 }
 

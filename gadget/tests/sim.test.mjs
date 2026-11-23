@@ -177,6 +177,7 @@ test("a gadget is set up over its USB port, talks, listens, reads replies aloud,
   assert.equal(heard.length, 0);
   await sim.ask({ do: "settings", mute: false });
   await until(() => link.status().devices.find((device) => device.id === listed.id).gadget.settings?.mute === false, "unmuted");
+  await until(() => !/microphone is off/.test(sim.view.notice ?? ""), "the sentence about the microphone gone once it is on");
   // Kept across a restart (below): the gadget's own copy.
   assert.match(readFileSync(join(dir, "settings.txt"), "utf8"), /"volume":25/);
 
