@@ -1,8 +1,8 @@
-// The live line's shimmer steps (src/ui/shimmer.ts): a sweep in a few native steps, then a rest with
+// The live line's shimmer steps (src/ui/shimmerSteps.ts): a sweep in a few native steps, then a rest with
 // no updates at all, and nothing left running once it is stopped. Run by `npm test` (tsx).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SHIMMER_PAUSE_MS, SHIMMER_STEPS, SHIMMER_SWEEP_MS, startShimmerSteps } from "../src/ui/shimmer";
+import { SHIMMER_PAUSE_MS, SHIMMER_STEPS, SHIMMER_SWEEP_MS, startShimmerSteps } from "../src/ui/shimmerSteps";
 
 test("a sweep steps from just past the start to the end, then rests before the next", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

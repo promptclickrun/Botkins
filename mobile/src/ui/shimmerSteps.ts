@@ -1,5 +1,5 @@
 // The live line's shimmer, as plain timing (T3 Code's work-shimmer-steps.ts). No React Native
-// imports, so tests/shimmer.test.ts runs it.
+// imports, so tests/shimmer-steps.test.ts runs it.
 //
 // The band crosses the line in SHIMMER_STEPS jumps of a native Animated value, then rests off the
 // line for SHIMMER_PAUSE_MS with no updates at all. That is about four updates a second, each one a
