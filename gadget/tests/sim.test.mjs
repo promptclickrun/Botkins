@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -101,7 +102,14 @@ async function host() {
       },
     },
   };
-  const link = new LinkHost({ relay: false, dir: folder("botkins-gadget-host-"), backend, port: 0, extraHosts: ["127.0.0.1"] });
+  // A port of its own, kept when the link is turned off and on, as the app's is: the gadget finds it again there.
+  const port = await new Promise((resolve) => {
+    const probe = createServer().listen(0, "127.0.0.1", () => {
+      const { port: free } = probe.address();
+      probe.close(() => resolve(free));
+    });
+  });
+  const link = new LinkHost({ relay: false, dir: folder("botkins-gadget-host-"), backend, port, extraHosts: ["127.0.0.1"] });
   await link.setEnabled(true);
   link.voice.set({ stt: { provider: "local" }, tts: { provider: "local" } });
   return { link, backend };
@@ -200,6 +208,11 @@ test("a gadget is set up over its USB port, talks, listens, reads replies aloud,
   await until(() => sim.view.stage === "online" && sim.view.bot === "Quill", "online on the newest introduction");
   assert.equal(JSON.parse(readFileSync(join(dir, "link.txt"), "utf8")).deviceId, third.deviceId);
   assert.equal(link.status().devices.filter((device) => device.kind === "gadget").length, 1);
+  // The computer goes away: after a couple of tries the screen says why it waits, and what to check.
+  await link.setEnabled(false);
+  await until(() => sim.view.stage === "connecting" && /Can't reach .+\. Check that Botkins is open there/.test(sim.view.notice ?? ""), "the gadget saying it can't reach the computer", 20000);
+  await link.setEnabled(true);
+  await until(() => sim.view.stage === "online" && !sim.view.notice, "online again, the sentence gone", 30000);
   // "forget" takes the computer and the network away; "erase" makes it another gadget.
   await sim.ask({ do: "forget" });
   await until(() => sim.view.stage === "setup", "waiting for setup after forget");
