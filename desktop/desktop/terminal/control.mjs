@@ -392,7 +392,14 @@ export function controlApi(service) {
       if (mark?.agreed !== true) throw new ControlError("Signing " + String(id) + " out removes the token that Botkins keeps for it and the provider's own sign-in, and neither can be got back. That needs a yes. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins providers logout " + String(id) + " --yes`).", "NEEDS_YES");
       return signIns.signOut(String(id));
     },
-    models: async () => (await workspace.models()).map((model) => ({ ref: model.provider + "/" + model.id, name: model.name, provider: model.provider, providerName: model.providerName, ...(model.group && { group: model.group }), available: model.available !== false, ...(model.recommended && { recommended: true }), efforts: model.efforts ?? [] })),
+    models: async () => (await workspace.models()).map((model) => ({ ref: model.provider + "/" + model.id, name: model.name, provider: model.provider, providerName: model.providerName, ...(model.group && { group: model.group }), available: model.available !== false, ...(model.recommended && { recommended: true }), ...(model.fastModes && { fastModes: Object.keys(model.fastModes) }), efforts: model.efforts ?? [] })),
+    "models.speed": async ([scope, ref, speed]) => {
+      if (!["chat", "bot", "global"].includes(scope) || !["inherit", "off", "fast", "ultrafast"].includes(speed) || (scope === "global" && speed === "inherit"))
+        throw new ControlError("Choose a valid scope and fast mode.", "BAD_ARGUMENT");
+      const id = scope === "bot" ? bot(ref).id : ref;
+      await workspace.setModel(scope, id, undefined, speed === "inherit" ? null : speed);
+      return { scope, id, speed };
+    },
     "models.default": async ([ref]) => {
       if (ref !== undefined) await workspace.setModel("global", null, await selection(ref));
       return state().settings.model ?? null;

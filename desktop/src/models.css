@@ -244,6 +244,8 @@ p.mp-providers {
   margin: -6px 2px 0;
 }
 
+.model-picker .thinking-control .speed-warning { color: var(--warning); }
+
 /* Thinking: "Default" and the model's own levels. Many levels wrap instead of squeezing. */
 .thinking-levels.segmented {
   display: flex;

@@ -1196,7 +1196,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -2372,8 +2372,8 @@ export class MockBackend {
       const details = {
         "copilot/claude-sonnet-5-5": { contextWindow: 1_000_000, maxOutput: 128_000, maxPrompt: 936_000, vision: true, tools: true, vendor: "Anthropic", tier: "Premium", description: "Fast and capable, through Copilot" },
         "claude/claude-fable-5-2": { contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", effortNotes: { low: "Quick answers", high: "Thinks it through", max: "The longest thinking" } },
-        "claude/claude-opus-5-5": { contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", description: "Deep work and long tasks" },
-        "codex/gpt-5.5-codex": { contextWindow: 400_000, maxOutput: 128_000, vision: true, tools: true, vendor: "OpenAI" },
+        "claude/claude-opus-5-5": { fastModes: { fast: "fast" }, contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", description: "Deep work and long tasks" },
+        "codex/gpt-5.5-codex": { fastModes: { fast: "priority", ultrafast: "ultrafast" }, contextWindow: 400_000, maxOutput: 128_000, vision: true, tools: true, vendor: "OpenAI" },
         "opencode/big-pickle": { contextWindow: 128_000, tools: true, tier: "Free" },
       };
       return MODELS.filter((m) => on[m.provider]?.enabled).map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
@@ -2388,7 +2388,12 @@ export class MockBackend {
       const capable = this.capabilities.includes("provider-signin-v1");
       return PROVIDERS.map((p) => ({ ...this.signIns.status(p, capable), enabled: !!this.state.settings.providers[p.id]?.enabled }));
     },
-    setModel(scope, id, value) {
+    setModel(scope, id, value, fastMode) {
+      if (fastMode !== undefined && scope !== "routines") {
+        const target = scope === "global" ? this.state.settings : scope === "bot" ? this.bot(id) : this.chat(id);
+        if (fastMode === null) delete target.fastMode;
+        else target.fastMode = fastMode;
+      }
       if (scope === "global") this.state.settings.model = value ?? { model: "auto" };
       else if (scope === "routines") {
         if (value) this.state.settings.routineModel = value;

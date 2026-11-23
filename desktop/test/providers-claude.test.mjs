@@ -681,3 +681,11 @@ test("the plan's limits come from Claude Code's own usage call, and the plan is 
   status = { loggedIn: false };
   await assert.rejects(provider.usage(), /isn't signed in/);
 });
+
+test("fast mode opts supported Claude models in and skips unsupported modes", async (t) => {
+  const { provider } = setup(t, () => {}, { models: [{ value: "opus", supportsFastMode: true }, { value: "haiku" }] });
+  for (const [model, fastMode, expected] of [["opus", "fast", true], ["opus", "ultrafast", undefined], ["haiku", "fast", undefined]]) {
+    const session = await provider.openSession(spec({ model: { model, fastMode } }));
+    assert.equal((await session.options()).settings?.fastMode, expected);
+  }
+});

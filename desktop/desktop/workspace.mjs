@@ -508,18 +508,23 @@ export class Workspace {
    */
   effectiveModel(chat) {
     const routine = !!this.state.settings.routineModel && !!chat.schedules?.some((entry) => entry.routine);
-    return (
-      chat.model ?? (routine ? this.state.settings.routineModel : undefined) ?? this.bot(chat.botId).model ?? this.state.settings.model
-    );
+    const bot = this.bot(chat.botId);
+    const model = chat.model ?? (routine ? this.state.settings.routineModel : undefined) ?? bot.model ?? this.state.settings.model;
+    const fastMode = chat.fastMode ?? bot.fastMode ?? this.state.settings.fastMode;
+    return fastMode ? { ...model, fastMode } : model;
   }
   /**
    * Sets a model choice. `scope` is "global" (the default model), "routines" (the Default routines
    * model, null clears it), "bot" or "chat" (null clears them). A routine's own model is its chat's.
    */
-  async setModel(scope, id, value) {
+  async setModel(scope, id, value, fastMode) {
+    if (fastMode !== undefined && (scope === "routines" || (fastMode !== null && !["off", "fast", "ultrafast"].includes(fastMode))))
+      throw new Error("Unknown fast mode or scope");
+    // Validate before changing either setting. Three-argument callers only change the model.
+    const selection = value == null ? null : validateSelection(await this.models(), value);
     if (scope === "routines") {
       if (value == null) delete this.state.settings.routineModel;
-      else this.state.settings.routineModel = validateSelection(await this.models(), value);
+      else this.state.settings.routineModel = selection;
       this.clearCatalogs();
       this.save();
       return;
@@ -533,10 +538,14 @@ export class Workspace {
             ? this.chat(id)
             : null;
     if (!target) throw new Error("Unknown model scope");
-    if (value == null && scope !== "global") delete target.model;
-    else target.model = validateSelection(await this.models(), value);
-    // The person chose the default themselves.
-    if (scope === "global") delete this.state.settings.modelUnset;
+    if (value !== undefined || fastMode === undefined) {
+      if (selection) target.model = selection;
+      else if (scope !== "global") delete target.model;
+      else throw new Error("Choose a global model");
+      if (scope === "global") delete target.modelUnset;
+    }
+    if (fastMode === null) delete target.fastMode;
+    else if (fastMode !== undefined) target.fastMode = fastMode;
     this.clearCatalogs();
     this.save();
   }
@@ -998,6 +1007,7 @@ export class Workspace {
       established: false,
       forkedFrom: { chatId, messageIndex },
       ...(source.model && { model: structuredClone(source.model) }),
+      ...(source.fastMode && { fastMode: source.fastMode }),
     };
     let native = false;
     if (source.established && (atEnd || boundary)) {
@@ -1385,7 +1395,7 @@ export class Workspace {
    */
   menuTarget(bot, chat) {
     // A chat's own model or project changes what its menu shows, so those get their own.
-    const key = bot.id + (chat?.projectId ? "\n" + chat.projectId : "") + (chat?.model ? "\n" + JSON.stringify(chat.model) : "");
+    const key = bot.id + (chat?.projectId ? "\n" + chat.projectId : "") + (chat?.model ? "\n" + JSON.stringify(chat.model) : "") + (chat?.fastMode ? "\nspeed=" + chat.fastMode : "");
     let target = this.menus.get(key);
     if (!target) {
       target = {
@@ -1396,6 +1406,7 @@ export class Workspace {
         menu: true,
         ...(chat?.projectId && { projectId: chat.projectId }),
         ...(chat?.model && { model: chat.model }),
+        ...(chat?.fastMode && { fastMode: chat.fastMode }),
       };
       if (this.menus.size >= 24) this.menus.delete(this.menus.keys().next().value);
       this.menus.set(key, target);
@@ -1676,6 +1687,7 @@ export class Workspace {
       title: chat.title,
       approval: chat.approval,
       messages: chat.messages.filter((m) => m.botId === bot.id),
+      fastMode: chat.fastMode,
       groupInstructions: groupInstructions(bot, members),
       // The group's project gives each member its context and to-do tools, never a folder.
       projectId: chat.projectId,

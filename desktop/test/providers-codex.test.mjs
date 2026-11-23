@@ -937,3 +937,28 @@ test("recovery attaches to the original live Codex turn without starting a secon
   assert.equal(sent("turn/start").length, 0);
   await session.close();
 });
+
+test("fast mode uses the account's model-specific service tier and skips unsupported speeds", async (t) => {
+  const normal = turns(() => {});
+  const { provider, sent } = setup(t, (method, params, server) => method === "model/list"
+    ? { data: [{ model: "gpt-x", serviceTiers: [{ id: "priority", name: "Fast" }, { id: "premium", name: "Ultra Fast" }] }] }
+    : normal(method, params, server));
+  for (const [model, fastMode, expected] of [["gpt-x", "fast", "priority"], ["gpt-x", "ultrafast", "premium"], ["other", "ultrafast", null]]) {
+    const session = await provider.openSession(spec({ model: { model, fastMode } }));
+    await session.send({ prompt: "Hello" }, 2000);
+    assert.equal(sent("turn/start").at(-1).serviceTier, expected);
+    await session.close();
+  }
+});
+
+test("a tier rejected at turn start falls back once before the prompt is accepted", async (t) => {
+  const normal = turns(() => {});
+  const { provider, sent } = setup(t, (method, params, server) => {
+    if (method === "model/list") return { data: [{ model: "gpt-x", additionalSpeedTiers: ["fast"] }] };
+    if (method === "turn/start" && params.serviceTier) throw new Error("Service tier not available for this model");
+    return normal(method, params, server);
+  });
+  const session = await provider.openSession(spec({ model: { model: "gpt-x", fastMode: "fast" } }));
+  await session.send({ prompt: "Hello" }, 2000);
+  assert.deepEqual(sent("turn/start").map((p) => p.serviceTier), ["priority", null]);
+});

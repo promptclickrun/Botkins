@@ -144,6 +144,8 @@ Botkins keeps a pasted Claude or Copilot token in its credential vault and gives
 
 To sign a provider out, run `botkins providers logout <provider>`. It removes the token that Botkins keeps and the provider's own sign-in, so it asks first; with no terminal it needs `--yes`. To see the models, run `botkins models`.
 
+`botkins models --speed fast` sets the global speed. Add `--bot <bot>` or `--chat <id>` to override it. Choose `off`, `fast`, or `ultrafast`, or use `inherit` to clear a bot or chat override. A chat’s explicit choice wins over its bot’s choice, including Off. Fast and Ultrafast use your plan allowance much faster. Models that cannot use the requested speed run at standard speed.
+
 ### From the Botkins phone app
 
 A paired phone does all of this too, from the provider's page in Settings › Models. It shows the code with a button that copies it and opens the page on the phone, asks for a code when the tool waits for one, takes a pasted token, and signs a provider out. When a provider's tool is missing, **Install on your computer** runs the install command that the provider names (for example `npm install -g @openai/codex`, which goes to `~/.npm-global` of the `botkins` user, so it needs no root). Only the owner's phone can do this. A sign-in started on the phone and one started in a terminal are the same kind, so a second one for the same provider waits until the first ends.

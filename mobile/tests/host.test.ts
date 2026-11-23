@@ -1532,3 +1532,21 @@ test("a chat's side pane travels with the chat: the tabs in its detail, their nu
   assert.equal("panes" in list.find((chat: { id: string }) => chat.id === "c2"), false);
   assert.ok(REMOTE_METHODS.has("sidePane"));
 });
+
+test("a paired phone can save speed independently and return a chat to its bot default", async (t) => {
+  const { parts, call, until, done } = await setup();
+  t.after(done);
+  assert.ok(parts.meta.capabilities.includes("fast-mode-v1"));
+  const chat = parts.chats[0];
+  const bot = parts.bots.find((item: { id: string }) => item.id === chat.botId);
+  await call("setModel", "global", null, parts.settings.model, "fast");
+  await call("setModel", "bot", bot.id, bot.model ?? null, "off");
+  await call("setModel", "chat", chat.id, null, "ultrafast");
+  const latest = () => parts.chats.find((item: { id: string }) => item.id === chat.id);
+  await until(() => latest()?.fastMode === "ultrafast", "the chat speed");
+  assert.equal(latest().model, undefined);
+  assert.equal(parts.settings.fastMode, "fast");
+  assert.equal(parts.bots.find((item: { id: string }) => item.id === bot.id).fastMode, "off");
+  await call("setModel", "chat", chat.id, null, null);
+  await until(() => latest()?.fastMode === undefined, "inheritance");
+});

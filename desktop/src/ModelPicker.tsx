@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { BrainCircuit, Check, Search } from "lucide-react";
-import type { Bot, Chat, ModelChoice, ModelInfo, Preferences, ProviderStatus } from "./types";
+import type { Bot, Chat, FastMode, ModelChoice, ModelInfo, Preferences, ProviderStatus } from "./types";
 import ProviderIcon from "./ProviderIcon";
 import { effortLabel, findModel, modelFacts, modelName, plainError, PROVIDER_NAMES, useModelCatalog, useProviders, useProviderUsage } from "./providers";
 import { pickerLine, useNow } from "./ProviderLimits";
@@ -119,6 +119,7 @@ export default function ModelPicker({
   value,
   inherited,
   inheritLabel,
+  speedSettings,
   done,
   onChange,
   openProviders,
@@ -129,6 +130,7 @@ export default function ModelPicker({
   inherited?: ModelChoice;
   /** The words for "no model of its own", when the scope's usual ones don't fit (a routine's chat). */
   inheritLabel?: string;
+  speedSettings?: { value?: FastMode; inherited?: FastMode };
   done?: () => void;
   /** With scope "routine": each change of the choice (undefined is the routines default). */
   onChange?: (choice: ModelChoice | undefined) => void;
@@ -145,6 +147,7 @@ export default function ModelPicker({
   const fallback = providers?.find((p) => p.default)?.id;
   const [draft, setDraft] = useState<ModelChoice | undefined>(value);
   const [dirty, setDirty] = useState(false);
+  const [speedEdit, setSpeedEdit] = useState<FastMode | null>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(""),
     [saved, setSaved] = useState(false),
@@ -162,6 +165,10 @@ export default function ModelPicker({
   const inheritedInfo = findModel(models, inherited, fallback);
   const effective = draft ?? inherited;
   const effectiveInfo = draft ? info : inheritedInfo;
+  const speed = speedEdit === undefined ? speedSettings?.value : speedEdit;
+  const effectiveSpeed = speed ?? speedSettings?.inherited ?? "off";
+  const speeds = effectiveInfo?.fastModes;
+  const speedChoices = ["off", ...(speeds?.fast ? ["fast"] : []), ...(speeds?.ultrafast ? ["ultrafast"] : [])];
   const level = effective?.reasoningEffort ?? "";
   const providerOf = (choice?: ModelChoice) => providers?.find((p) => p.id === (choice?.provider ?? fallback));
   // A saved choice whose provider is still starting isn't unavailable yet; its models are on the way.
@@ -263,7 +270,9 @@ export default function ModelPicker({
         setSaving(true);
         setError("");
         try {
-          await window.botkins.setModel(scope, id, draft ?? null);
+          if (speedSettings && speedEdit !== undefined) await window.botkins.setModel(scope, id, draft ?? null, speedEdit);
+          else await window.botkins.setModel(scope, id, draft ?? null);
+          setSpeedEdit(undefined);
           setSaved(true);
           setDirty(false);
           done?.();
@@ -510,6 +519,21 @@ export default function ModelPicker({
           )}
         </div>
       )}
+      {!empty && speedSettings && (
+        <div className="thinking-control">
+          <div className="thinking-head"><span>Fast mode</span>
+            {scope !== "global" && <small>{scope === "chat" ? "Bot" : "Global"} default · {effortLabel(speedSettings.inherited ?? "off")}</small>}
+          </div>
+          <Levels levels={speedChoices} label="Fast mode" firstLabel={scope === "global" ? null : "Use default"}
+            value={speed ?? (scope === "global" ? "off" : "")} disabled={!ready}
+            change={(next) => { setSpeedEdit((next || null) as FastMode | null); setSaved(false); setError(""); }} />
+          {effectiveSpeed !== "off" && <small role="status" className={speeds?.[effectiveSpeed] ? "speed-warning" : undefined}>
+            {speeds?.[effectiveSpeed] ? effortLabel(effectiveSpeed) + " uses your plan allowance much faster."
+              : effortLabel(effectiveSpeed) + " is unavailable for this model. Turns use standard speed."}
+          </small>}
+          {effectiveSpeed === "off" && !speeds && <small>Fast mode is unavailable for this model.</small>}
+        </div>
+      )}
       {unavailable && (
         <p role="alert">This saved choice is unavailable. Choose a current model and thinking level.</p>
       )}
@@ -539,13 +563,17 @@ function Levels({
   value,
   disabled,
   change,
+  label = "Thinking level",
+  firstLabel = "Default",
 }: {
+  label?: string;
+  firstLabel?: string | null;
   levels: string[];
   value: string;
   disabled: boolean;
   change: (effort: string) => void;
 }) {
-  const all = ["", ...levels];
+  const all = firstLabel ? ["", ...levels] : levels;
   const row = useRef<HTMLDivElement>(null);
   function keys(e: KeyboardEvent<HTMLDivElement>) {
     const at = all.indexOf(value);
@@ -565,18 +593,18 @@ function Levels({
     requestAnimationFrame(() => row.current?.querySelectorAll<HTMLElement>("[role=radio]")[next]?.focus());
   }
   return (
-    <div ref={row} className="segmented thinking-levels" role="radiogroup" aria-label="Thinking level" onKeyDown={keys}>
+    <div ref={row} className="segmented thinking-levels" role="radiogroup" aria-label={label} onKeyDown={keys}>
       {all.map((l) => (
         <button
           key={l || "default"}
           type="button"
           role="radio"
           aria-checked={value === l}
-          tabIndex={value === l ? 0 : -1}
+          tabIndex={value === l || (!all.includes(value) && l === all[0]) ? 0 : -1}
           disabled={disabled}
           onClick={() => change(l)}
         >
-          {l ? effortLabel(l) : "Default"}
+          {l ? effortLabel(l) : firstLabel}
         </button>
       ))}
     </div>

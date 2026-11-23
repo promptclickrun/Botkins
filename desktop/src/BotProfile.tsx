@@ -347,6 +347,7 @@ export default function BotProfile({
               scope="bot"
               id={bot.id}
               value={bot.model}
+              speedSettings={!state.remote?.using || state.remote.using.capabilities.includes("fast-mode-v1") ? { value: bot.fastMode, inherited: state.settings.fastMode } : undefined}
               inherited={state.settings.model}
               openProviders={openProviderSettings}
             />

@@ -26,8 +26,8 @@ export class Gateway {
    * @param options.settleMs How long such a run must have waited before it takes a request (tests pass 0).
    * @param options.fetch, options.launch  For tests.
    */
-  constructor({ chatgpt = null, claude = null, version = "", fetch: fetcher = globalThis.fetch, launch, waiting = 2, settleMs, log = () => {} } = {}) {
-    Object.assign(this, { chatgpt, claude, version, fetch: fetcher, launch, log });
+  constructor({ chatgpt = null, claude = null, speedTier = async () => undefined, version = "", fetch: fetcher = globalThis.fetch, launch, waiting = 2, settleMs, log = () => {} } = {}) {
+    Object.assign(this, { chatgpt, claude, speedTier, version, fetch: fetcher, launch, log });
     // Runs of Claude Code that have finished starting, so a reply begins at once and doesn't stop in its middle.
     this.pool = claude && waiting > 0 ? new ClaudePool({ size: waiting, log, ...(settleMs !== undefined && { settleMs }), ...(launch && { launch }) }) : null;
     this.secret = randomBytes(24).toString("base64url");
@@ -120,17 +120,22 @@ export class Gateway {
       // The runtime hanging up ends the work behind the request.
       const gone = new AbortController();
       response.on("close", () => !response.writableFinished && gone.abort());
-      if (path === "/chatgpt/responses") return await this.chatgptRequest(body, response, gone.signal);
-      if (path === "/claude/v1/messages") return await this.claudeRequest(body, response, gone.signal);
+      const route = path.match(/^\/(chatgpt|claude)(?:\/(fast|ultrafast))?(\/.*)$/);
+      if (route) {
+        const [, plan, speed, endpoint] = route;
+        const tier = speed ? await this.speedTier(plan === "chatgpt" ? "codex" : "claude", body.model, speed).catch(() => undefined) : undefined;
+        if (plan === "chatgpt" && endpoint === "/responses") return await this.chatgptRequest(body, response, gone.signal, tier);
+        if (plan === "claude" && endpoint === "/v1/messages") return await this.claudeRequest(body, response, gone.signal, tier === "fast");
+      }
       throw new PlanError(404, "not_found_error", "Not found");
     } catch (error) {
       fail(error, anthropic);
     }
   }
 
-  async chatgptRequest(body, response, signal) {
+  async chatgptRequest(body, response, signal, serviceTier) {
     if (!this.chatgpt) throw new PlanError(503, "api_error", "ChatGPT isn't set up on this computer.");
-    const answer = await chatgptTurn(body, { ...this.chatgpt, fetch: this.fetch, version: this.version, signal });
+    const answer = await chatgptTurn(body, { ...this.chatgpt, serviceTier, fetch: this.fetch, version: this.version, signal });
     if (!answer.ok) {
       // The endpoint's own words go back as they are: the runtime shows them.
       const text = await answer.text();
@@ -154,7 +159,7 @@ export class Gateway {
     });
   }
 
-  async claudeRequest(body, response, signal) {
+  async claudeRequest(body, response, signal, fastMode) {
     if (!this.claude) throw new PlanError(503, "api_error", "Claude isn't set up on this computer.");
     const run = await this.claude();
     const streaming = body.stream !== false;
@@ -178,7 +183,7 @@ export class Gateway {
       response.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) }).end(text);
     };
     try {
-      await claudeTurn(body, { ...run, emit, signal, ended: finish, ...(this.pool && { pool: this.pool }), ...(this.launch && { launch: this.launch }) });
+      await claudeTurn(body, { ...run, fastMode, emit, signal, ended: finish, ...(this.pool && { pool: this.pool }), ...(this.launch && { launch: this.launch }) });
     } catch (error) {
       if (finished) return;
       // Before the reply began the failure is the answer; after, it ends the stream as Anthropic's own would.

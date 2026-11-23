@@ -1041,6 +1041,7 @@ function App() {
               scope="chat"
               id={chat.id}
               value={chat.model}
+              speedSettings={!state.remote?.using || state.remote.using.capabilities.includes("fast-mode-v1") ? { value: chat.fastMode, inherited: bot.fastMode ?? state.settings.fastMode } : undefined}
               inherited={chatDefault(state.settings, chat, bot)}
               inheritLabel={isRoutineChat(chat) ? "Use the routines default" : undefined}
               done={() => setModal("")}

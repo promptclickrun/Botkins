@@ -2,7 +2,9 @@
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
+export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
+  fastModes?: Partial<Record<Exclude<FastMode, "off">, string>>;
   id: string;
   name: string;
   provider?: string;
@@ -76,6 +78,7 @@ export type BotkinEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curi
 export type BotkinLook = { head: string; palette: string; eyes?: BotkinEyes; colors?: [string, string, string, string] };
 export type BotAccessGrant = { all: boolean; projects: string[] };
 export type Bot = {
+  fastMode?: FastMode;
   id: string;
   name: string;
   role: string;
@@ -330,6 +333,7 @@ export type RoutineInput = { botId: string; name: string; prompt: string; cadenc
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
+  fastMode?: FastMode;
   id: string;
   botId: string;
   /** How many tabs the chat's side pane has ("side-pane-v1"). The tabs come with the chat's detail. */
@@ -643,6 +647,7 @@ export type Appearance = {
 };
 export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
 export type Preferences = {
+  fastMode?: FastMode;
   model: ModelChoice;
   appearance: Appearance;
   foldTools: boolean;
@@ -1075,7 +1080,7 @@ export type Calls = {
   respond(requestId: string, answer: { action: string; value?: string | CredentialRef; content?: Record<string, unknown> }): void;
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
-  setModel(scope: "global" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
+  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null, fastMode?: FastMode | null): void;
   providers(refresh?: boolean): ProviderStatus[];
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;

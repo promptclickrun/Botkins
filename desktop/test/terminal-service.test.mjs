@@ -196,6 +196,10 @@ test("bots are added, changed and removed by name, and a bot answers in a chat a
   await client.call("models.default", "grok/standin-1");
   // A chat: the reply is read while it grows, then whole.
   const { chatId } = await client.call("chat.open", "Nova II");
+  assert.deepEqual(await client.call("models.speed", "global", null, "fast"), { scope: "global", id: null, speed: "fast" });
+  await client.call("models.speed", "bot", nova.id, "off");
+  await client.call("models.speed", "chat", chatId, "ultrafast");
+  await assert.rejects(client.call("models.speed", "bot", nova.id, "typo"), { code: "BAD_ARGUMENT" });
   const sent = await client.call("chat.send", chatId, "What is the capital of France?");
   const lengths = new Set();
   let view;

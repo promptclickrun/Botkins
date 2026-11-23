@@ -179,6 +179,7 @@ class ClaudeSession extends ProviderSession {
       env: await provider.env(),
       ...(binary && { pathToClaudeCodeExecutable: binary }),
       model: this.model.model,
+      ...(info?.supportsFastMode && this.model.fastMode === "fast" && { settings: { fastMode: true } }),
       ...(EFFORTS.includes(effort) && (!info || (info.supportedEffortLevels ?? []).includes(effort)) && { effort }),
       // Thinking streams as short summaries; without this a model that thinks shows nothing while it does.
       ...(info?.supportsAdaptiveThinking && { thinking: { type: "adaptive", display: "summarized" } }),
@@ -772,6 +773,7 @@ export class ClaudeProvider extends ModelProvider {
         id: m.value,
         name: /^claude/i.test(m.displayName) ? m.displayName : "Claude " + m.displayName,
         provider: this.id,
+        ...(m.supportsFastMode && { fastModes: { fast: "fast" } }),
         efforts: m.supportsEffort === false ? [] : [...(m.supportedEffortLevels ?? [])],
         // Claude Code's list has its own line about a model and no numbers. The limits are the ones
         // Claude Code reported for the model on this person's plan, and until it has, Anthropic's

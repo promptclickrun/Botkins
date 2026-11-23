@@ -26,9 +26,24 @@ import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { env } from "../../home.mjs";
 import { ReportedLimits, modelDetails } from "../../modeldetails.mjs";
+import { tierRejected } from "../../model-speed.mjs";
 import { codexUsage } from "../../providerusage.mjs";
 
-/** The bridge's name among a thread's MCP servers. Its tools are Botkins' own and never ask. */
+/** Translate account-specific catalog labels to the tier ids Codex accepts. */
+function fastModes(model) {
+  const modes = {};
+  for (const tier of model.serviceTiers ?? []) {
+    if (!tier?.id) continue;
+    const name = String(tier.name ?? tier.id).toLowerCase().replace(/[ _-]/g, "");
+    if (name === "ultrafast" || tier.id === "ultrafast") modes.ultrafast = tier.id;
+    else if (name === "fast" || tier.id === "priority") modes.fast = tier.id;
+  }
+  // Older Codex versions report the UI name for priority rather than the wire tier.
+  if (!model.serviceTiers && model.additionalSpeedTiers?.includes("fast")) modes.fast = "priority";
+  return modes;
+}
+
+/** The bridge's name among a thread's MCP servers. */
 export const BRIDGE = "botkins";
 
 const PLANS = {
@@ -305,6 +320,10 @@ class CodexSession extends ProviderSession {
     try {
       const threadId = await this.thread();
       const rpc = await this.provider.rpc();
+      const speed = this.model.fastMode;
+      const tier = speed && speed !== "off"
+        ? (await this.provider.models().catch(() => [])).find((m) => m.id === this.model.model)?.fastModes?.[speed]
+        : undefined;
       // Stop was pressed while the thread was still starting: the turn never begins.
       if (this.stopRequested) return { text: "" };
       const settings = approvalSettings(this.mode === "plan" ? "ask" : this.spec.approval);
@@ -318,7 +337,7 @@ class CodexSession extends ProviderSession {
       }
       watching = this.watch(turn);
       try {
-        const started = await rpc.request("turn/start", {
+        const params = {
           threadId,
           input: userInput({
             ...message,
@@ -332,7 +351,20 @@ class CodexSession extends ProviderSession {
           approvalPolicy: settings.approvalPolicy,
           approvalsReviewer: settings.approvalsReviewer,
           sandboxPolicy: settings.sandboxPolicy,
-        });
+        };
+        // Null clears a tier previously set on this thread. Retry only a rejected start,
+        // never an accepted turn, an ambiguous transport failure, or a streamed reply.
+        const start = (serviceTier) => rpc.request("turn/start", { ...params, serviceTier });
+        let started;
+        try {
+          started = await start(tier ?? null);
+        } catch (error) {
+          if (this.stopRequested || !tierRejected(error.message)) throw error;
+          // An old server may reject the field itself. Otherwise clear any previous thread tier.
+          if (/unknown field|unrecognized (field|parameter)/i.test(error.message)) started = await rpc.request("turn/start", params);
+          else if (tier) started = await start(null);
+          else throw error;
+        }
         turn.id = started.turn.id;
         // The turn's id is its fork boundary (see CodexProvider.forkSession).
         if (!this.spec.temporary) this.provider.sessions.update(this.id, (record) => (record.turns = [...(record.turns ?? []), turn.id].slice(-400)));
@@ -947,8 +979,10 @@ export class CodexProvider extends ModelProvider {
       .filter((m) => !m.hidden)
       .map((m) => {
         const id = m.model ?? m.id;
+        const speeds = fastModes(m);
         return {
           id,
+          ...(Object.keys(speeds).length && { fastModes: speeds }),
           name: m.displayName || m.model || m.id,
           provider: this.id,
           efforts: [...new Set((m.supportedReasoningEfforts ?? []).map((e) => e.reasoningEffort))],

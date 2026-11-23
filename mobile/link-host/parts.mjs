@@ -28,6 +28,7 @@ function chatSummary(chat) {
     ...(chat.panelId && { panelId: chat.panelId }),
     // How many tabs the chat's side pane has; the tabs themselves come with the chat's detail.
     ...(Array.isArray(chat.pane?.panels) && chat.pane.panels.length > 0 && { panes: chat.pane.panels.length }),
+    ...(chat.fastMode && { fastMode: chat.fastMode }),
     ...(chat.model && { model: chat.model }),
     ...(chat.forkedFrom && { forkedFrom: chat.forkedFrom }),
     ...(chat.context && { context: chat.context }),
