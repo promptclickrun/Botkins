@@ -5,6 +5,7 @@
 #pragma once
 #include <atomic>
 #include <functional>
+#include <mutex>
 
 #include "botkins/hal.hpp"
 #include "driver/i2c_master.h"
@@ -33,6 +34,13 @@ class Audio : public botkins::Speaker {
   void cut() override;
   bool playing() const { return playing_; }
 
+  /** The output volume, 0 to 100 (0 is silent). Taken by the speaker task before its next write. */
+  void set_volume(int percent);
+  /** The microphone's gain in dB (the ES8311 has 6 dB steps: 18, 24, 30 ...). Taken by the microphone task. */
+  void set_mic_gain(int db);
+  /** 100 ms of a 1 kHz tone at the volume set, so a volume step is heard. Nothing when something else plays. */
+  void tick();
+
  private:
   static void mic_task(void* self);
   static void speaker_task(void* self);
@@ -43,6 +51,8 @@ class Audio : public botkins::Speaker {
   StreamBufferHandle_t queue_ = nullptr;
   SemaphoreHandle_t drained_ = nullptr;
   std::atomic<bool> open_{false}, closing_{false}, flush_{false}, playing_{false}, writing_{false};
+  std::atomic<int> volume_{60}, mic_gain_{24};
+  std::mutex send_;  // the queue takes one writer at a time: the core's reply, or a tick
 };
 
 }  // namespace stopwatch

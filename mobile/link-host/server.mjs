@@ -16,7 +16,8 @@ import { createHash } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, pushNonce, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
-import { GADGET_CAPABILITY, Gadgets } from "./gadget.mjs";
+import { botkinRenderer } from "./botkin-svg.mjs";
+import { GADGET_CAPABILITY, GADGET_DEFAULTS, GADGET_SETTINGS_CAPABILITY, Gadgets } from "./gadget.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
@@ -69,7 +70,7 @@ const MAX_WATCH = 4;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -212,15 +213,18 @@ export class LinkHost extends EventEmitter {
    *                                   differ from `searchPath` (a trial run that must not start the person's own).
    * @param options.screenInput  Replaces how clicks and typing are posted. Tests pass one, so nothing is really clicked.
    * @param options.fetch  Replaces the fetch notifications are sent with (tests pass one, so nothing leaves the machine).
+   * @param options.botkins  How a bot's Botkin is drawn for a gadget (botkin-svg.mjs): the design kit found beside the
+   *   link when not given, `null` for none (a gadget then shows its own default Botkin).
    * @param options.relay  `false` keeps the relay off for this instance, whatever is saved (tests and the demo
    *   computer). An object { url?, WebSocket?, timers? } overrides the saved address, the socket class and the
    *   clock. Without it the saved settings apply (see setRelay and relay.mjs). `own: true` says the relay at
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
     super();
     Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
+    this.botkins = botkins === undefined ? botkinRenderer() : botkins;
     // How often a phone that asked for text in chunks gets it, and how long text may wait for a sentence's end (tests set shorter ones).
     this.chunkTiming = { every: CHUNK_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
@@ -307,6 +311,11 @@ export class LinkHost extends EventEmitter {
       "link.gadget.say": (session, a) => this.gadgets.say(this.gadgets.of(session), a[0]?.text, session.principal),
       "link.gadget.hear": (session, a) => this.gadgets.hear(this.gadgets.of(session), a[0], session.principal),
       "link.gadget.speak": (session, a) => this.gadgets.speak(this.gadgets.of(session), a[0]),
+      "link.gadget.face": async (session, a) => this.gadgets.face(this.gadgets.of(session), a[0]),
+      // The owner's: a gadget's settings and bot, a Wi-Fi network for it, and a restart. Each answers the device list, as rename does.
+      "link.gadgets.configure": async (session, a) => (this.gadgets.configure(a[0], a[1]), this.devices(session.deviceId)),
+      "link.gadgets.wifi": async (_session, a) => this.gadgets.queueWifi(a[0], a[1]),
+      "link.gadgets.restart": async (_session, a) => this.gadgets.restart(a[0]),
       "link.device.sources": async (session, a) => this.device.setSources(session.deviceId, a[0]),
       "link.device.answer": async (session, a) => this.device.answer(session.deviceId, a[0], a[1]),
       "link.device.file": async (session, a) => this.device.file(session.deviceId, a[0]),
@@ -847,7 +856,7 @@ export class LinkHost extends EventEmitter {
       platform: device.platform,
       kind: device.kind,
       // A gadget's board and firmware, as it said them, and the bot it talks with.
-      ...(device.kind === "gadget" && { gadget: (({ board, firmware, botId }) => ({ ...(board && { board }), ...(firmware && { firmware }), ...(botId && { botId }) }))(device.gadget ?? {}) }),
+      ...(device.kind === "gadget" && { gadget: this.gadgetView(device) }),
       createdAt: device.createdAt,
       lastSeenAt: device.lastSeenAt,
       connected: live.has(device.id),
@@ -861,6 +870,30 @@ export class LinkHost extends EventEmitter {
    */
   addGadget(input) {
     return this.gadgets.add(input);
+  }
+  /** A gadget as the device list shows it: its board, firmware and bot, its settings, and its Wi-Fi (names only). */
+  gadgetView(device) {
+    const { board, firmware, botId, settings, wifi } = device.gadget ?? {};
+    return {
+      ...(board && { board }),
+      ...(firmware && { firmware }),
+      ...(botId && { botId }),
+      settings: { ...GADGET_DEFAULTS, ...settings },
+      ...(wifi && { wifi }),
+      ...(this.gadgets.pendingWifi(device.id).length > 0 && { wifiWaiting: this.gadgets.pendingWifi(device.id).map((change) => (change.add ? { add: change.add.ssid } : { forget: change.forget })) }),
+      ...(this.gadgets.restarts.has(device.id) && { restarting: true }),
+    };
+  }
+  /** For the app on this computer (its page for a gadget, `botkins gadgets`): the same as the owner's calls from a phone. */
+  configureGadget(id, patch) {
+    this.gadgets.configure(id, patch);
+    return this.devices().find((device) => device.id === id);
+  }
+  gadgetWifi(id, change) {
+    return this.gadgets.queueWifi(id, change);
+  }
+  restartGadget(id) {
+    return this.gadgets.restart(id);
   }
   renameDevice(id, name, asking) {
     if (typeof id !== "string" || !this.store.device(id)) throw new Failure("That device is no longer paired.");

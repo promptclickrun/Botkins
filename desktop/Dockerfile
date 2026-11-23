@@ -100,6 +100,10 @@ WORKDIR /app
 COPY package.json ./
 COPY desktop/link ./desktop/link
 COPY desktop/headless ./desktop/headless
+# A gadget's Botkin is drawn from the design kit beside the link (desktop/link/botkin-svg.mjs).
+COPY design/botkins-kit/customize.js ./design/botkins-kit/customize.js
+COPY design/botkins-kit/motion ./design/botkins-kit/motion
+COPY design/botkins-kit/avatars ./design/botkins-kit/avatars
 COPY docker/host-entrypoint.sh /usr/local/bin/botkins-headless-host
 
 RUN groupadd --system --gid 10001 botkins \
@@ -150,6 +154,9 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force
 COPY cli ./cli
 COPY desktop ./desktop
+COPY design/botkins-kit/customize.js ./design/botkins-kit/customize.js
+COPY design/botkins-kit/motion ./design/botkins-kit/motion
+COPY design/botkins-kit/avatars ./design/botkins-kit/avatars
 COPY install/botkins ./bin/botkins
 
 RUN groupadd --system --gid 10001 botkins \

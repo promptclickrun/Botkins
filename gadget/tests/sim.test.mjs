@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -101,7 +102,14 @@ async function host() {
       },
     },
   };
-  const link = new LinkHost({ relay: false, dir: folder("botkins-gadget-host-"), backend, port: 0, extraHosts: ["127.0.0.1"] });
+  // A port of its own, kept when the link is turned off and on, as the app's is: the gadget finds it again there.
+  const port = await new Promise((resolve) => {
+    const probe = createServer().listen(0, "127.0.0.1", () => {
+      const { port: free } = probe.address();
+      probe.close(() => resolve(free));
+    });
+  });
+  const link = new LinkHost({ relay: false, dir: folder("botkins-gadget-host-"), backend, port, extraHosts: ["127.0.0.1"] });
   await link.setEnabled(true);
   link.voice.set({ stt: { provider: "local" }, tts: { provider: "local" } });
   return { link, backend };
@@ -147,6 +155,45 @@ test("a gadget is set up over its USB port, talks, listens, reads replies aloud,
   let peak = 0;
   for (let i = 0; i < first.pcm.length; i += 2) peak = Math.max(peak, Math.abs(first.pcm.readInt16LE(i)));
   assert.ok(peak > 6500 && peak <= 8000, "the samples are the tone, peak " + peak);
+
+  // The bot's Botkin arrives in every pose, from the computer's design kit.
+  await until(() => sim.view.faces === 7 && !!sim.view.look, "the Botkin's seven faces");
+  // A working turn counted its steps, for the halo's arc.
+  assert.ok(sim.views.some((view) => view.steps > 0), "the steps of the turn reached the gadget");
+
+  // Settings from the owner's page reach the gadget; the gadget's own reach the page.
+  assert.deepEqual(sim.view.settings, { volume: 60, mic: "normal", mute: false, brightness: 80, dimAfter: 30, offAfter: 300 });
+  link.configureGadget(listed.id, { volume: 25, brightness: 50 });
+  await until(() => sim.view.settings.volume === 25 && sim.view.settings.brightness === 50, "the owner's settings on the gadget");
+  await sim.ask({ do: "settings", mute: true });
+  await until(() => link.status().devices.find((device) => device.id === listed.id).gadget.settings?.mute === true, "the gadget's mute on the computer");
+  assert.equal(sim.view.settings.volume, 25, "the computer's answer kept the volume");
+  // Muted, holding talk says so and sends nothing.
+  heard.length = 0;
+  sim.send("hear " + join(dir, "nothing.wav"));
+  writeFileSync(join(dir, "short.wav"), wavFromPcm(tone(1, 16000), 16000));
+  sim.send("hear " + join(dir, "short.wav"));
+  await until(() => /microphone is off/.test(sim.view.notice ?? ""), "the microphone is off");
+  assert.equal(heard.length, 0);
+  await sim.ask({ do: "settings", mute: false });
+  await until(() => link.status().devices.find((device) => device.id === listed.id).gadget.settings?.mute === false, "unmuted");
+  await until(() => !/microphone is off/.test(sim.view.notice ?? ""), "the sentence about the microphone gone once it is on");
+  // Kept across a restart (below): the gadget's own copy.
+  assert.match(readFileSync(join(dir, "settings.txt"), "utf8"), /"volume":25/);
+
+  // A Wi-Fi network from the owner's page: saved on the gadget, and the page sees it by name.
+  link.gadgetWifi(listed.id, { add: { ssid: "Cabin", password: "pine-needles-9" } });
+  await until(() => (link.status().devices.find((device) => device.id === listed.id).gadget.wifi?.saved ?? []).includes("Cabin"), "the network saved on the gadget");
+  assert.equal(link.devices().find((device) => device.id === listed.id).gadget.wifiWaiting, undefined);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "wifi.txt"), "utf8")).networks.map((network) => network.ssid), ["Cabin"]);
+  assert.ok(!sim.lines.some((line) => line.includes("pine-needles-9")), "the password is in no line the gadget printed");
+  link.gadgetWifi(listed.id, { forget: "Cabin" });
+  await until(() => !existsSync(join(dir, "wifi.txt")), "the network forgotten");
+
+  // A restart from the owner's page: the gadget says it is restarting, and the page stops waiting.
+  link.restartGadget(listed.id);
+  await until(() => sim.lines.includes("restart"), "the gadget restarting");
+  await until(() => !link.devices().find((device) => device.id === listed.id).gadget.restarting, "the restart taken");
 
   // A recording: it goes up in pieces while it is made, and is heard once.
   const recording = join(dir, "question.wav");
@@ -200,6 +247,11 @@ test("a gadget is set up over its USB port, talks, listens, reads replies aloud,
   await until(() => sim.view.stage === "online" && sim.view.bot === "Quill", "online on the newest introduction");
   assert.equal(JSON.parse(readFileSync(join(dir, "link.txt"), "utf8")).deviceId, third.deviceId);
   assert.equal(link.status().devices.filter((device) => device.kind === "gadget").length, 1);
+  // The computer goes away: after a couple of tries the screen says why it waits, and what to check.
+  await link.setEnabled(false);
+  await until(() => sim.view.stage === "connecting" && /Can't reach .+\. Check that Botkins is open there/.test(sim.view.notice ?? ""), "the gadget saying it can't reach the computer", 20000);
+  await link.setEnabled(true);
+  await until(() => sim.view.stage === "online" && !sim.view.notice, "online again, the sentence gone", 30000);
   // "forget" takes the computer and the network away; "erase" makes it another gadget.
   await sim.ask({ do: "forget" });
   await until(() => sim.view.stage === "setup", "waiting for setup after forget");

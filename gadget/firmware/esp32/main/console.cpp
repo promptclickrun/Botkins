@@ -20,6 +20,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "gadget_port/board.hpp"
 #include "hal/usb_serial_jtag_ll.h"
 #include "port.hpp"
 
@@ -51,6 +52,8 @@ void answer_line(const std::string& answer) {
 }
 
 void handle(const std::string& line) {
+  // The board's own lines first (a frame dump, a key or a touch from the console: README.md).
+  if (board::console(line, answer_line)) return;
   const std::string answer = g_gadget->console(line);
   if (!answer.empty()) {
     answer_line(answer);

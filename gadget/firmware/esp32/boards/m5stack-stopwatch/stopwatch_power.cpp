@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 // Adapted from Hermes Gadget firmware/drivers/stopwatch.cpp (StopWatchControl::begin, set_amplifier)
 // and firmware/esp32/main/port_stopwatch.cpp (StopWatchBoard::begin). The register sequence is
-// theirs, unchanged; the battery, key and power-off parts are left out.
+// theirs, unchanged; the red key's reading is their StopWatchControl::take_key_press; the battery
+// and power-off parts are left out.
 #include "stopwatch_power.hpp"
 
 #include "esp_log.h"
@@ -19,6 +20,9 @@ constexpr uint8_t kI2cConfig = 0x09;  // 0 = no I2C idle sleep
 constexpr uint8_t kWatchdog = 0x0A;   // 0 = watchdog off
 constexpr uint8_t kIrqMask1 = 0x43, kIrqMask2 = 0x44, kIrqMask3 = 0x45;  // 1 = masked
 constexpr uint8_t kButtonConfig = 0x49;
+constexpr uint8_t kButtonStatus = 0x48;  // bit 0: down now; bit 7: was pressed, cleared by the read
+constexpr uint8_t kButtonDown = 1 << 0, kButtonWasPressed = 1 << 7;
+constexpr uint8_t kShortPressPolls = 10;  // polled every 100 ms: under a second
 // The PM1 acts on its key by itself: a single click resets the ESP32, a double click powers
 // off, a long press enters download mode. The single-click reset goes; the long press is put
 // at its longest, 4 s.
@@ -111,6 +115,21 @@ bool Power::set_amplifier(bool on) {
   if (!ioe_change(kIoeOut, kAmplifier, on ? kAmplifier : 0)) return false;
   amplifier_ = on;
   return true;
+}
+
+bool Power::take_red_press() {
+  uint8_t status;
+  if (!pm1_ || !pm1_read(kButtonStatus, &status, 1)) return false;
+  if (status & kButtonDown) {
+    red_down_ = true;
+    if (red_polls_ < 255) red_polls_++;
+    return false;
+  }
+  // Up now. A press that began and ended between two polls shows only in the flag.
+  const bool pressed = red_down_ ? red_polls_ < kShortPressPolls : (status & kButtonWasPressed) != 0;
+  red_down_ = false;
+  red_polls_ = 0;
+  return pressed;
 }
 
 }  // namespace stopwatch

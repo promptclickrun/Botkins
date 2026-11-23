@@ -12,10 +12,12 @@
 // to `console()` and print what it returns. gadget/docs/contract.md has every rule.
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,7 +48,12 @@ struct Board {
   int slice_bytes = 16000;
   int screen_width = 0, screen_height = 0;
   bool screen_round = false;
+  /** Restarts the board, when the owner asks for it from the Botkins app. Null: a restart is refused. */
+  std::function<void()> restart;
 };
+
+/** The poses a gadget's Botkin takes. The computer draws each from the bot's own look. */
+inline const char* const kPoses[] = {"ready", "listening", "working", "speaking", "needs", "waiting", "sleepy"};
 
 /** Everything a board draws. Copied out whole, so a port never holds a lock while it draws. */
 struct View {
@@ -76,9 +83,38 @@ struct View {
     std::vector<std::string> choices;
     bool remember = false;
   } request;
+  /** What the gadget's owner set for it. The computer keeps them and the gadget keeps a copy, so it starts with them. */
+  struct Settings {
+    int volume = 60;             // 0 to 100
+    std::string mic = "normal";  // "low", "normal" or "high"
+    bool mute = false;           // the microphone is off: holding talk says so
+    int brightness = 80;         // 5 to 100
+    int dim_after = 30;          // seconds idle before the screen dims; 0: never
+    int off_after = 300;         // seconds idle before it goes dark; 0: never
+  } settings;
+  /** While a turn works: how many steps it has taken. The halo's arc grows with it. */
+  int steps = 0;
+  /**
+   * The bot's Botkin, as SVG text (a 256 by 256 view box, nothing that moves), for each pose of
+   * kPoses that has arrived. `look` names the set: it changes when the bot or its look does.
+   */
+  std::string look;
+  std::shared_ptr<const std::map<std::string, std::string>> faces;
+  /** The Wi-Fi network in use, when there is one. */
+  std::string network;
   /** Goes up with every change. */
   uint32_t revision = 0;
 };
+
+/** The Botkin's pose for what is on show (a board shows "sleepy" itself while the screen is dimmed). */
+inline const char* pose_for(const View& view) {
+  if (view.stage != View::Stage::Online) return view.stage == View::Stage::Setup ? "ready" : "waiting";
+  if (view.listening) return "listening";
+  if (!view.request.id.empty()) return "needs";
+  if (view.speaking) return "speaking";
+  if (view.sending || view.phase == "working" || view.phase == "writing") return "working";
+  return "ready";
+}
 
 class Gadget {
  public:
@@ -106,6 +142,11 @@ class Gadget {
   void new_chat();
   /** The next bot on show, in the computer's order. */
   void next_bot();
+  /**
+   * Changes settings here at once and on the computer: an object with any of "volume", "mic",
+   * "mute", "brightness", "dimAfter", "offAfter" (the part's names). Kept if the computer is away.
+   */
+  void change_settings(const Json& patch);
 
   /**
    * One line from the USB port. Returns the line to print, or "" when the line was not for the
@@ -129,6 +170,14 @@ class Gadget {
   void adopt(const Introduction& introduction);
   void forget_link();
   void upload(Link& link, const std::string& take, std::vector<int16_t> rest, bool last, bool cancel);
+  void apply_settings(const Json& part);
+  void send_settings();
+  void ensure_faces();
+  void fetch_face(Link& link, const std::string& look);
+  void apply_wifi(Link& link, const std::vector<Json>& changes);
+  void load_networks();
+  void save_networks();
+  Json wifi_report();
   void read_aloud(Link& link, const std::string& reply, int parts, uint32_t quiet);
   bool wait(int ms);
 
@@ -144,12 +193,23 @@ class Gadget {
   std::shared_ptr<Link> link_;
   uint32_t generation_ = 0;  // goes up when the introduction changes
   std::deque<Job> jobs_;
+  std::string face_look_;  // the set of faces the computer names; fetched one pose at a time
+  bool fetching_face_ = false;
+  Json settings_unsent_ = Json::object();  // changed on the gadget, not yet taken by the computer
+  int settings_sending_ = 0;
+  std::vector<std::pair<std::string, std::string>> networks_;  // saved Wi-Fi networks, most recent first
+  size_t network_at_ = 0;  // the one being joined
+  std::atomic<bool> report_wifi_{false};
 
   // What the sync thread holds of the computer's state. Its own: no lock.
   Json have_ = Json::object();
   std::string epoch_, chat_id_, text_id_, stream_, last_reply_;
   size_t stream_units_ = 0, thinking_units_ = 0;
   bool greeted_ = false, first_part_ = true;
+  std::string unreachable_;  // the sentence on show about not reaching the computer, while it is
+  std::string restart_seen_;  // the restart the owner asked for, once it was taken
+  std::vector<std::string> wifi_taken_;  // Wi-Fi changes taken, until the computer stops sending them
+  std::chrono::steady_clock::time_point switched_at_{};  // when another saved network was last tried
   std::vector<std::pair<std::string, std::string>> bots_;
   std::string bot_id_;
 

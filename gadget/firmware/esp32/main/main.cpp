@@ -11,6 +11,7 @@
 #include "esp_mac.h"
 #include "esp_pthread.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gadget_port/board.hpp"
@@ -82,6 +83,8 @@ extern "C" void app_main(void) {
   config.network = &g_wifi;
   config.firmware = version;
   config.slice_bytes = 32000;
+  // The owner's restart (the part's `restart`): the core says it is restarting, then calls this.
+  config.restart = [] { esp_restart(); };
   uint8_t mac[6] = {0};
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char text[18];

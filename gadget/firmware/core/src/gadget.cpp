@@ -1,5 +1,6 @@
 #include "botkins/gadget.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -10,6 +11,10 @@ namespace {
 const char* kKey = "key";
 const char* kLink = "link";
 const char* kWifi = "wifi";
+const char* kSettings = "settings";
+const size_t kMaxNetworks = 8;
+// A saved network that isn't answering is left for the next one after this long.
+const int kNetworkSwitchMs = 20000;
 const char* kMark = "@botkins ";
 // A recording goes up in pieces of half a second, while the button is still held.
 const double kPieceSeconds = 0.5;
@@ -17,6 +22,8 @@ const double kPieceSeconds = 0.5;
 const int kAheadSeconds = 12;
 const int kWaits[] = {400, 1000, 2000, 4000, 8000, 15000};
 const int kRemovedWaitMs = 30000;
+// Tries that found nobody before the screen says why it waits: a blip stays quiet, a computer that is gone doesn't.
+const int kTriesBeforeTelling = 2;
 
 std::string reply_line(const Json& json) { return std::string(kMark) + json.dump(); }
 Json args(Json one) { return Json::array().push(std::move(one)); }
@@ -38,7 +45,10 @@ void Gadget::begin() {
   if (board_.storage->load(kLink, saved) && Json::parse(saved, json)) Introduction::from_json(json, intro_);
   // A gadget that knows its computer starts by looking for it, not on the setup screen.
   if (intro_.valid()) view_.stage = View::Stage::Connecting;
-  if (board_.storage->load(kWifi, saved) && Json::parse(saved, json) && !json["ssid"].str().empty()) board_.network->join(json["ssid"].str(), json["password"].str());
+  // The settings it had: the computer's copy comes with the first look, and a gadget starts with these until then.
+  if (board_.storage->load(kSettings, saved) && Json::parse(saved, json)) apply_settings(json);
+  load_networks();
+  if (!networks_.empty()) board_.network->join(networks_[0].first, networks_[0].second);
   running_ = true;
   sync_thread_ = std::thread([this] { sync_loop(); });
   work_thread_ = std::thread([this] { work_loop(); });
@@ -183,14 +193,28 @@ void Gadget::sync_loop() {
     const std::string network = board_.network->state();
     if (network != "on") {
       stage(network == "failed" ? View::Stage::NoNetwork : View::Stage::Joining);
+      // A saved network that refuses or is out of range: the next saved one gets a turn.
+      std::pair<std::string, std::string> next;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto now = std::chrono::steady_clock::now();
+        if (network == "failed" && networks_.size() > 1 && now - switched_at_ > std::chrono::milliseconds(kNetworkSwitchMs)) {
+          network_at_ = (network_at_ + 1) % networks_.size();
+          next = networks_[network_at_];
+          switched_at_ = now;
+        }
+      }
+      if (!next.first.empty()) board_.network->join(next.first, next.second);
       link->reset();
       if (!wait(300)) break;
       continue;
     }
 
     Link::Result result;
+    // Hello again after the saved networks changed: the owner's page shows them.
+    if (report_wifi_.exchange(false)) greeted_ = false;
     if (!greeted_) {
-      Json hello = Json::object().set("board", board_.name).set("firmware", board_.firmware).set("rate", board_.speaker_rate);
+      Json hello = Json::object().set("board", board_.name).set("firmware", board_.firmware).set("rate", board_.speaker_rate).set("wifi", wifi_report());
       if (board_.screen_width > 0) hello.set("screen", Json::object().set("width", board_.screen_width).set("height", board_.screen_height).set("round", board_.screen_round));
       if (!board_.speaker) hello.set("speaker", false);
       result = link->call("link.gadget.hello", args(std::move(hello)), 15000);
@@ -230,11 +254,33 @@ void Gadget::sync_loop() {
       greeted_ = greeted_ && result.error != Link::Error::Remote;
       int ms = kWaits[failures < 5 ? failures : 5];
       failures++;
+      // "Connecting" alone doesn't say what to do. Nobody answering at the computer's addresses almost always
+      // means its Botkins is closed, or it is on another network.
+      if (result.error == Link::Error::Offline && failures == kTriesBeforeTelling) {
+        std::string computer;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          computer = intro_.name.empty() ? "your computer" : intro_.name;
+        }
+        unreachable_ = "Can't reach " + computer + ". Check that Botkins is open there, on the same Wi-Fi.";
+        notice(unreachable_);
+      }
       if (!wait(ms)) break;
       continue;
     }
     failures = 0;
+    if (!unreachable_.empty()) {
+      // Reached again: the sentence about not reaching it goes, and only that one.
+      const std::string told = unreachable_;
+      unreachable_.clear();
+      change([&told](View& view) {
+        if (view.notice == told) view.notice.clear();
+      });
+    }
     stage(View::Stage::Online);
+    // Reached: what waited for the computer goes now (settings changed while it was away, faces not fetched yet).
+    send_settings();
+    ensure_faces();
     if (!greeted_ || !result.value.is_object()) continue;
     const std::string epoch = result.value["epoch"].str();
     if (epoch != epoch_) {
@@ -321,6 +367,47 @@ void Gadget::apply(Json& parts) {
     }
     last_reply_ = reply;
     first_part_ = false;
+
+    // Settings from the computer, unless the gadget's own change hasn't reached it yet.
+    if (part["settings"].is_object()) {
+      bool held;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        held = settings_sending_ > 0 || settings_unsent_.size() > 0;
+      }
+      if (!held) apply_settings(part["settings"]);
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      face_look_ = part["face"]["look"].str();
+    }
+    // Wi-Fi changes from the owner, each taken once.
+    std::vector<Json> changes;
+    std::vector<std::string> sent;
+    for (const Json& change : part["wifi"]["changes"].items()) {
+      const std::string id = change["id"].str();
+      if (id.empty()) continue;
+      sent.push_back(id);
+      if (std::find(wifi_taken_.begin(), wifi_taken_.end(), id) == wifi_taken_.end()) {
+        wifi_taken_.push_back(id);
+        changes.push_back(change);
+      }
+    }
+    // A change the computer no longer sends was taken: its id can go.
+    wifi_taken_.erase(std::remove_if(wifi_taken_.begin(), wifi_taken_.end(), [&sent](const std::string& id) { return std::find(sent.begin(), sent.end(), id) == sent.end(); }), wifi_taken_.end());
+    if (!changes.empty()) post([this, changes](Link& link) { apply_wifi(link, changes); });
+    // A restart the owner asked for: said, then done.
+    const std::string restart = part["restart"].str();
+    if (!restart.empty() && restart != restart_seen_) {
+      restart_seen_ = restart;
+      post([this, restart](Link& link) {
+        link.call("link.gadget.set", args(Json::object().set("restarting", restart)), 15000);
+        if (board_.restart) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(300));
+          board_.restart();
+        }
+      });
+    }
   }
   if (!part.is_object() && !meta.is_object() && !texted) return;
   change([&](View& view) {
@@ -332,6 +419,7 @@ void Gadget::apply(Json& parts) {
       view.doing = part["doing"].str();
       view.can_hear = part["voice"]["hear"].truthy();
       view.can_speak = part["voice"]["speak"].truthy();
+      view.steps = (int)part["steps"].num();
       const Json& request = part["request"];
       view.request = View::Request();
       if (request.is_object()) {
@@ -353,6 +441,187 @@ void Gadget::apply(Json& parts) {
     const uint32_t quiet = quiet_;
     post([this, reply, speak_parts, quiet](Link& link) { read_aloud(link, reply, speak_parts, quiet); });
   }
+  ensure_faces();
+}
+
+// ── Settings ────────────────────────────────────────────────────────────────────────────────────
+
+/** Settings in the part's names, over the ones held: shown and kept, so the next start has them. */
+void Gadget::apply_settings(const Json& from) {
+  View::Settings next;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    next = view_.settings;
+  }
+  auto whole = [&from](const char* name, int low, int high, int& out) {
+    const Json& value = from[name];
+    if (value.type() == Json::Type::Number && value.num() >= low && value.num() <= high) out = (int)value.num();
+  };
+  whole("volume", 0, 100, next.volume);
+  whole("brightness", 5, 100, next.brightness);
+  whole("dimAfter", 0, 3600, next.dim_after);
+  whole("offAfter", 0, 86400, next.off_after);
+  const std::string& mic = from["mic"].str();
+  if (mic == "low" || mic == "normal" || mic == "high") next.mic = mic;
+  if (from["mute"].type() == Json::Type::Bool) next.mute = from["mute"].truthy();
+  bool same;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const View::Settings& now = view_.settings;
+    same = now.volume == next.volume && now.mic == next.mic && now.mute == next.mute && now.brightness == next.brightness && now.dim_after == next.dim_after && now.off_after == next.off_after;
+  }
+  if (same) return;
+  change([&next](View& view) {
+    // Turned on again: the sentence saying it was off is no longer true.
+    if (view.settings.mute && !next.mute && view.notice.rfind("The microphone is off", 0) == 0) view.notice.clear();
+    view.settings = next;
+  });
+  board_.storage->save(kSettings, Json::object().set("volume", next.volume).set("mic", next.mic).set("mute", next.mute).set("brightness", next.brightness).set("dimAfter", next.dim_after).set("offAfter", next.off_after).dump());
+}
+
+void Gadget::change_settings(const Json& patch) {
+  if (!patch.is_object() || !patch.size()) return;
+  apply_settings(patch);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& field : patch.fields()) settings_unsent_.set(field.first, field.second);
+  }
+  send_settings();
+}
+
+/** Tells the computer the settings changed on the gadget, if any wait. Kept for later when it is away. */
+void Gadget::send_settings() {
+  Json patch;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!settings_unsent_.size() || settings_sending_ > 0) return;
+    patch = settings_unsent_;
+    settings_unsent_ = Json::object();
+    settings_sending_++;
+  }
+  post([this, patch](Link& link) {
+    Link::Result result = link.call("link.gadget.set", args(Json::object().set("settings", patch)), 15000);
+    std::lock_guard<std::mutex> lock(mutex_);
+    settings_sending_--;
+    // Away: they wait, under anything changed since.
+    if (result.error == Link::Error::Offline)
+      for (const auto& field : patch.fields())
+        if (!settings_unsent_.has(field.first)) settings_unsent_.set(field.first, field.second);
+  });
+}
+
+// ── The Botkin's faces ──────────────────────────────────────────────────────────────────────────
+
+/** Fetches the next face the set the computer names lacks, one pose a job, so talking never waits long behind them. */
+void Gadget::ensure_faces() {
+  std::string look;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (face_look_.empty() || fetching_face_) return;
+    if (view_.look == face_look_ && view_.faces && view_.faces->size() >= sizeof kPoses / sizeof kPoses[0]) return;
+    fetching_face_ = true;
+    look = face_look_;
+  }
+  post([this, look](Link& link) { fetch_face(link, look); });
+}
+
+void Gadget::fetch_face(Link& link, const std::string& look) {
+  std::string pose;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool fresh = view_.look != look || !view_.faces;
+    for (const char* name : kPoses)
+      if (fresh || !view_.faces->count(name)) {
+        pose = name;
+        break;
+      }
+  }
+  Link::Result result;
+  if (!pose.empty()) result = link.call("link.gadget.face", args(Json::object().set("pose", pose)), 30000);
+  bool more = false;
+  if (result.ok() && result.value["look"].str() == look && result.value["svg"].is_string()) {
+    std::string svg = result.value.take("svg").take_str();
+    change([&](View& view) {
+      // A new look's first face replaces the old set at once; the others join it as they come.
+      auto faces = std::make_shared<std::map<std::string, std::string>>();
+      if (view.look == look && view.faces) *faces = *view.faces;
+      (*faces)[pose] = std::move(svg);
+      view.look = look;
+      view.faces = std::move(faces);
+    });
+    more = true;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fetching_face_ = false;
+  }
+  // The next pose, or the set the computer names now if it changed meanwhile. A failure waits for the next look.
+  if (more) ensure_faces();
+}
+
+// ── Wi-Fi ───────────────────────────────────────────────────────────────────────────────────────
+
+/** The saved networks: `{"networks":[{"ssid","password"}…]}`, or the single `{"ssid","password"}` of before. */
+void Gadget::load_networks() {
+  std::string saved;
+  Json json;
+  std::lock_guard<std::mutex> lock(mutex_);
+  networks_.clear();
+  network_at_ = 0;
+  if (!board_.storage->load(kWifi, saved) || !Json::parse(saved, json)) return;
+  if (json["networks"].is_array()) {
+    for (const Json& item : json["networks"].items())
+      if (!item["ssid"].str().empty() && networks_.size() < kMaxNetworks) networks_.emplace_back(item["ssid"].str(), item["password"].str());
+  } else if (!json["ssid"].str().empty()) {
+    networks_.emplace_back(json["ssid"].str(), json["password"].str());
+  }
+}
+
+/** Called with mutex_ held. */
+void Gadget::save_networks() {
+  Json list = Json::array();
+  for (const auto& network : networks_) list.push(Json::object().set("ssid", network.first).set("password", network.second));
+  if (networks_.empty()) board_.storage->erase(kWifi);
+  else board_.storage->save(kWifi, Json::object().set("networks", std::move(list)).dump());
+}
+
+/** What the owner's page shows: the network in use, the saved names, the signal. Never a password. */
+Json Gadget::wifi_report() {
+  Json saved = Json::array();
+  std::string current;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& network : networks_) saved.push(network.first);
+    if (network_at_ < networks_.size()) current = networks_[network_at_].first;
+  }
+  Json report = Json::object().set("saved", std::move(saved));
+  if (!current.empty() && std::string(board_.network->state()) == "on") report.set("network", current);
+  const int signal = board_.network->signal();
+  if (signal < 0) report.set("signal", signal);
+  return report;
+}
+
+/** Networks the owner added or asked to forget. The one in use stays in use, so the link isn't cut. */
+void Gadget::apply_wifi(Link& link, const std::vector<Json>& changes) {
+  Json done = Json::array();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string current = network_at_ < networks_.size() ? networks_[network_at_].first : "";
+    for (const Json& change : changes) {
+      const std::string added = change["add"]["ssid"].str();
+      const std::string forget = added.empty() ? change["forget"].str() : added;
+      networks_.erase(std::remove_if(networks_.begin(), networks_.end(), [&forget](const auto& network) { return network.first == forget; }), networks_.end());
+      if (!added.empty()) networks_.emplace_back(added, change["add"]["password"].str());
+      done.push(change["id"].str());
+    }
+    while (networks_.size() > kMaxNetworks) networks_.erase(networks_.begin() + 1);
+    network_at_ = 0;
+    for (size_t i = 0; i < networks_.size(); i++)
+      if (networks_[i].first == current) network_at_ = i;
+    save_networks();
+  }
+  link.call("link.gadget.set", args(Json::object().set("wifiDone", std::move(done))), 15000);
+  report_wifi_ = true;
 }
 
 // ── What the person does ────────────────────────────────────────────────────────────────────────
@@ -392,6 +661,15 @@ void Gadget::say(const std::string& text) {
 }
 
 void Gadget::start_listening() {
+  bool muted;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    muted = view_.settings.mute;
+  }
+  if (muted) {
+    notice("The microphone is off. Turn it on in quick controls.");
+    return;
+  }
   stop_speaking();
   {
     std::lock_guard<std::mutex> lock(audio_);
@@ -622,14 +900,29 @@ std::string Gadget::console(const std::string& line) {
     if (wifi.is_object()) {
       const std::string ssid = wifi["ssid"].str(), password = wifi["password"].str();
       if (ssid.empty() || ssid.size() > 32 || password.size() > 64) return reply_line(Json::object().set("error", "That isn't a Wi-Fi network's name and password."));
-      board_.storage->save(kWifi, Json::object().set("ssid", ssid).set("password", password).dump());
+      {
+        // The network given over the cable goes first, ahead of the ones saved before.
+        std::lock_guard<std::mutex> lock(mutex_);
+        networks_.erase(std::remove_if(networks_.begin(), networks_.end(), [&ssid](const auto& network) { return network.first == ssid; }), networks_.end());
+        networks_.insert(networks_.begin(), {ssid, password});
+        if (networks_.size() > kMaxNetworks) networks_.pop_back();
+        network_at_ = 0;
+        save_networks();
+      }
       board_.network->join(ssid, password);
+      report_wifi_ = true;
     }
     if (link.is_object()) adopt(introduction);
     return reply_line(Json::object().set("ok", true));
   }
   if (what == "forget" || what == "erase") {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      networks_.clear();
+      network_at_ = 0;
+    }
     board_.storage->erase(kWifi);
+    board_.storage->erase(kSettings);
     board_.network->join("", "");
     forget_link();
     if (what == "erase") {
@@ -646,7 +939,18 @@ std::string Gadget::console(const std::string& line) {
     Json json = Json::object().set("stage", stages[(int)now.stage]).set("phase", now.phase).set("bot", now.bot).set("text", now.text).set("heard", now.heard).set("notice", now.notice);
     json.set("listening", now.listening).set("sending", now.sending).set("speaking", now.speaking).set("hear", now.can_hear).set("speak", now.can_speak);
     if (!now.request.id.empty()) json.set("request", Json::object().set("kind", now.request.kind).set("title", now.request.title));
+    const auto& s = now.settings;
+    json.set("settings", Json::object().set("volume", s.volume).set("mic", s.mic).set("mute", s.mute).set("brightness", s.brightness).set("dimAfter", s.dim_after).set("offAfter", s.off_after));
+    json.set("look", now.look).set("faces", now.faces ? now.faces->size() : 0).set("steps", now.steps);
     return reply_line(Json::object().set("view", std::move(json)));
+  }
+  if (what == "settings") {
+    // What the quick controls change: the same names as the part's settings.
+    Json patch = Json::object();
+    for (const auto& field : ask.fields())
+      if (field.first != "do") patch.set(field.first, field.second);
+    change_settings(patch);
+    return reply_line(Json::object().set("ok", true));
   }
   if (what == "say") {
     say(ask["text"].str());
@@ -676,3 +980,4 @@ std::string Gadget::console(const std::string& line) {
 }
 
 }  // namespace botkins
+

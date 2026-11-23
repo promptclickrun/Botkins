@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Monitor, Smartphone, Trash2, TriangleAlert } from "lucide-react";
+import { Monitor, Smartphone, Speaker, Trash2, TriangleAlert } from "lucide-react";
 import type { PhoneLink, State } from "./types";
 import { plural, when } from "./wikiModel";
 import { useAsk } from "./Pages";
 import { Group, SwitchRow, errorText } from "./SettingsRows";
 import { stopCancel } from "./SkillsSettings";
 import { Permission, ScreenRows, screenWaiting } from "./ScreenSettings";
+import GadgetSettingsPage from "./GadgetPage";
 import "./integrations.css";
 import "./remotehosts.css";
 
@@ -42,6 +43,8 @@ export default function PhoneSettings({ state }: { state: State }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  // A gadget's own page, open in place of this one ("gadget-settings-v1").
+  const [gadgetId, setGadgetId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const dialogs = useAsk();
   const revision = state.phones?.revision ?? 0;
@@ -150,6 +153,8 @@ export default function PhoneSettings({ state }: { state: State }) {
         <span>Phone access was set up by the installed Botkins app. Pair phones there.</span>
       </div>
     );
+  const gadget = status.gadgetSettings && gadgetId ? status.devices.find((d) => d.id === gadgetId && d.kind === "gadget") : undefined;
+  if (gadget) return <GadgetSettingsPage device={gadget} state={state} back={() => setGadgetId(null)} onStatus={setStatus} />;
   const open = pairing && !expired ? pairing : null;
   const [first, ...others] = status.addresses;
   return (
@@ -299,7 +304,7 @@ export default function PhoneSettings({ state }: { state: State }) {
               status.devices.map((d) => (
                 <div className="set-row int-item compact" key={d.id}>
                   <span className="int-glyph" aria-hidden="true">
-                    {d.kind === "desktop" ? <Monitor size={14} /> : <Smartphone size={14} />}
+                    {d.kind === "desktop" ? <Monitor size={14} /> : d.kind === "gadget" ? <Speaker size={14} /> : <Smartphone size={14} />}
                   </span>
                   <div className="set-label">
                     {renaming?.id === d.id ? (
@@ -322,14 +327,19 @@ export default function PhoneSettings({ state }: { state: State }) {
                       <span className="set-name">{d.person || d.name}</span>
                     )}
                     <small className="int-line">
-                      {d.person ? d.name : d.kind === "desktop" ? "Computer" : "Phone"} · {d.connected ? "Connected" : "Last seen " + when(d.lastSeenAt)}
+                      {d.person ? d.name : d.kind === "desktop" ? "Computer" : d.kind === "gadget" ? "Gadget" : "Phone"} · {d.connected ? "Connected" : "Last seen " + when(d.lastSeenAt)}
                     </small>
                     {/* What the person chose on that phone, shown here so it can be seen from the computer. */}
-                    {d.kind !== "desktop" && <small className="int-line">{notified(status, d.id)}</small>}
-                    {d.kind !== "desktop" && <small className="int-line">{shared(status, d.id)}</small>}
+                    {d.kind !== "desktop" && d.kind !== "gadget" && <small className="int-line">{notified(status, d.id)}</small>}
+                    {d.kind !== "desktop" && d.kind !== "gadget" && <small className="int-line">{shared(status, d.id)}</small>}
                   </div>
                   <div className="set-control">
-                    {status.canSetPerson && renaming?.id !== d.id && (
+                    {d.kind === "gadget" && status.gadgetSettings && (
+                      <button type="button" className="set-button" aria-label={"Settings for " + d.name} onClick={() => setGadgetId(d.id)}>
+                        Settings…
+                      </button>
+                    )}
+                    {status.canSetPerson && renaming?.id !== d.id && d.kind !== "gadget" && (
                       <button type="button" className="set-button" disabled={busy} aria-label={d.person ? "Change name for " + d.person : "Add name for " + d.name} onClick={() => setRenaming({ id: d.id, name: d.person || "" })}>
                         {d.person ? "Change name" : "Add name"}
                       </button>

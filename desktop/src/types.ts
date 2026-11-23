@@ -984,6 +984,10 @@ declare global {
       cancelPhonePairing(): Promise<void>;
       removePhone(id: string): Promise<void>;
       renamePhoneLinkComputer(name: string): Promise<void>;
+      /** A gadget's page ("gadget-settings-v1"): any of its settings and its bot, a Wi-Fi network to add or forget, a restart. Each answers what Settings › Phone shows. */
+      configureGadget(id: string, patch: Partial<GadgetSettings> & { botId?: string }): Promise<PhoneLink>;
+      gadgetWifi(id: string, change: GadgetWifiChange): Promise<PhoneLink>;
+      restartGadget(id: string): Promise<PhoneLink>;
       /** What a paired phone may do with this screen. Only this window can change it. */
       setPhoneScreen(mode: PhoneLink["screen"]["mode"]): Promise<PhoneLink>;
       /** Away from home, on or off. Turning it on needs phone access on. Only this window can change it. */
@@ -1616,6 +1620,34 @@ export type ProviderService = {
   methods: { type: "key" | "oauth"; id?: string; label: string }[];
 };
 /** Phone access as Settings › Phone shows it. */
+/** A gadget's settings ("gadget-settings-v1", gadget/docs/contract.md "Settings"). The link keeps them; the gadget applies them. */
+export type GadgetSettings = {
+  /** 0 to 100. */
+  volume: number;
+  mic: "low" | "normal" | "high";
+  /** The microphone is off. */
+  mute: boolean;
+  /** 5 to 100. */
+  brightness: number;
+  /** Seconds idle before the screen dims, and before it goes dark. 0 is never. */
+  dimAfter: number;
+  offAfter: number;
+};
+/** A gadget as the device list shows it: the same shape a phone gets from "link.devices.list". */
+export type GadgetInfo = {
+  board?: string;
+  firmware?: string;
+  botId?: string;
+  settings?: GadgetSettings;
+  /** The network in use, the saved networks' names and the signal in dBm, as the gadget last said. Never a password. */
+  wifi?: { network?: string; saved: string[]; signal?: number };
+  /** Wi-Fi changes the gadget hasn't taken yet. */
+  wifiWaiting?: ({ add: string } | { forget: string })[];
+  /** A restart was asked for and hasn't happened yet. */
+  restarting?: true;
+};
+/** A Wi-Fi change for a gadget: a network with its password, or one to forget. */
+export type GadgetWifiChange = { add: { ssid: string; password: string } } | { forget: string };
 export type PhoneLink = {
   canSetPerson?: boolean;
   /** The server operator handles pairing outside this virtual workspace. */
@@ -1629,7 +1661,9 @@ export type PhoneLink = {
   /** The name phones show for this computer. */
   name: string;
   addresses: { address: string; kind: "lan" | "tailnet" | "loopback" | "link"; interface: string }[];
-  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean }[];
+  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop" | "gadget"; gadget?: GadgetInfo; createdAt: number; lastSeenAt: number; connected: boolean }[];
+  /** The link has "gadget-settings-v1": a gadget's page with its settings, Wi-Fi and restart, and `gadget` on each gadget above. */
+  gadgetSettings?: boolean;
   /** An open pairing code. `qr` is the code's link as one SVG path in a square of `size` units. */
   pairing: { code: string; expiresAt: number; url: string; qr: { size: number; d: string } } | null;
   /**

@@ -37,7 +37,7 @@ No code is typed, and no code is open on the computer.
 - `publicKey` is 32 bytes as base64url. Anything else answers "That isn't a gadget's key."
 - `name` is what the device list shows (60 characters). Without one the gadget is named by its `board`, else "Gadget".
 - `botId` is the bot the gadget talks with first. Without one it is the first bot on show. An id that is gone answers "This bot no longer exists."
-- A gadget that is introduced again (its settings were erased, or it is given another bot) replaces its own earlier entry. The earlier entry's sessions end at once. A key that a phone or a computer paired with is refused ("That key belongs to another paired device."), and so is a key no session could be opened with.
+- A gadget that is introduced again (its settings were erased, or it is given another bot) replaces its own earlier entry, and keeps that entry's settings and bot unless another bot is named. The earlier entry's sessions end at once. A key that a phone or a computer paired with is refused ("That key belongs to another paired device."), and so is a key no session could be opened with.
 - Only the owner's devices may introduce a gadget. A team member's device is refused ("Only the owner can do that."), and a member's device that pairs saying it is a gadget is kept as a phone, with a member's cut of everything.
 - The introduction holds nothing secret. It is still for the gadget only: `serverKey` is how the gadget knows it reached the right computer.
 
@@ -69,6 +69,11 @@ type GadgetPart = {
   queued?: number;                                // messages waiting for the turn to end
   reply?: { id: string; text: string; parts: number };  // the newest reply, once the turn is over
   voice: { hear: boolean; speak: boolean; live?: "codex" | "openai" | "gemini" | "elevenlabs" };
+  steps?: number;                                 // while working: the steps the turn has taken
+  settings: { volume: number; mic: "low" | "normal" | "high"; mute: boolean; brightness: number; dimAfter: number; offAfter: number };
+  face?: { look: string };                        // names the bot's Botkin; a new name means new faces
+  wifi?: { changes: ({ id: string } & ({ add: { ssid: string; password: string } } | { forget: string }))[] };
+  restart?: string;                               // a restart the owner asked for
 };
 ```
 
@@ -89,6 +94,7 @@ Each is refused for a device that is not a gadget ("Only a gadget can do that.")
 | `link.gadget.say({ text })` | `{ chatId }` |
 | `link.gadget.hear({ take, rate, audio, last?, cancel?, language? })` | `{ got }`, and for the last piece `{ text, chatId }` |
 | `link.gadget.speak({ reply, part, from?, max?, rate? })` | `{ audio, from, total, rate, part, parts }` |
+| `link.gadget.face({ pose })` | `{ look, pose, svg }` |
 
 - **`hello`** says what the gadget is, once after each start. `board` and `firmware` are short labels (letters, digits and `` .:+()/- ``, 40 characters). `rate` is the speaker's sample rate, one of 8000, 16000, 22050, 24000, 32000, 44100, 48000; replies are read at it. `screen` is `{ width, height, round? }`.
 - **`set`** changes the bot (the chat with the bot before is left), goes to another chat, or with `newChat` starts a new chat with the next thing said.
@@ -99,7 +105,29 @@ Each is refused for a device that is not a gadget ("Only a gadget can do that.")
   - The first part is short (40 to 80 characters) so sound starts soon. Later parts hold up to 240 characters.
   - "That reply is gone.", "That reply has no more to read.", "Your speech provider sent audio a gadget can't play."
 
+- **`face`** answers the bot's Botkin in one pose as SVG text, for the gadget to draw (`gadget/firmware/core` uses nanosvg). The poses: `ready`, `listening`, `working`, `speaking`, `needs`, `waiting`, `sleepy`. The SVG has a 256 by 256 view box and only paths, ellipses, circles and groups with plain fills; nothing moves. `look` names the set and is the part's `face.look`: fetch each pose once for a look, `ready` first, one at a time so talking never waits behind them. A computer without the design kit sends no `face` in the part, and the call answers "This computer can't draw Botkins."; the gadget then shows its own default Botkin.
+
 Everything else is the link's and the app's own calls: `respond`, `stop(chatId)`, `link.voice.live`, and the rest.
+
+## Settings (`gadget-settings-v1`)
+
+The computer keeps each gadget's settings, and the part carries them whole. The gadget applies them, keeps a copy so it starts with them, and changes them itself from its quick controls.
+
+| Setting | Values | Before anyone changes it |
+| --- | --- | --- |
+| `volume` | 0 to 100 | 60 |
+| `mic` | `"low"`, `"normal"`, `"high"`: how sensitive the microphone is | `"normal"` |
+| `mute` | the microphone is off: holding talk says "The microphone is off." and sends nothing | `false` |
+| `brightness` | 5 to 100 | 80 |
+| `dimAfter` | seconds idle before the screen dims; 0 is never | 30 |
+| `offAfter` | seconds idle before it goes dark; 0 is never | 300 |
+
+- **On the gadget.** `link.gadget.set({ settings: { … } })` with any of them. The gadget shows its change at once, and holds it against the part until the computer took it; one made while the computer is away goes when it is back.
+- **From the owner** (a phone's Settings › Devices, the app's own page, `botkins gadgets set`): `link.gadgets.configure(id, patch)` with any of them and `botId` (another bot, in a new chat). It answers the device list. A bad value changes nothing ("Volume is from 0 to 100.").
+- **Wi-Fi from the owner.** `link.gadgets.wifi(id, { add: { ssid, password } })` or `{ forget: ssid }` answers `{ queued: true }`. The change waits in the part's `wifi.changes` (sealed for that gadget, and kept nowhere else: never in a file, never in the device list) until the gadget says `link.gadget.set({ wifiDone: [ids] })`, for at most 10 minutes. A password has 8 to 63 characters, or none for an open network. The gadget keeps up to 8 networks, stays on the one it is on, and tries the next saved one when its network refuses it for 20 seconds. Forgetting the network in use leaves the gadget on it until it drops; then it tries the saved ones.
+- **What the gadget reports.** `link.gadget.hello` takes `wifi: { network?, saved: [names], signal? }` (dBm), and a gadget says hello again when its saved networks change. Never a password.
+- **Restart.** `link.gadgets.restart(id)` puts `restart: id` in the part; the gadget says `link.gadget.set({ restarting: id })`, then restarts.
+- **The device list** shows a gadget's `settings`, its `wifi` report, `wifiWaiting` (the names of changes not taken yet) and `restarting`.
 
 ### Live voice
 
@@ -138,6 +166,7 @@ toPhone = HKDF(master, salt, "botkins/s2c/v1")
 
 - `403 { "error": "unknown_device" }`: the gadget was removed. Say so ("This gadget was removed. Set it up again to use it."), keep the introduction, and ask again every half minute. Do not erase anything: this answer is not sealed, so any device on the network could give it, and it must not be able to make a gadget forget its computer. Setup replaces the introduction.
 - `403 { "error": "bad_session" }`, `429`: wait and try again; do not forget anything.
+- Nobody answering at any address: wait and try again, 0.4 s growing to 15 s. After the second try, tell the person what to check ("Can't reach Demo Mac. Check that Botkins is open there, on the same Wi-Fi."), and take that sentence away once the computer answers.
 - `hosts` are the computer's addresses now, best first, with a `relay!<room>@<host>` entry when the relay is on. Keep them in flash: this is how a gadget finds a computer whose address changed.
 - A new `epoch` means the computer's app restarted: forget the versions held (`have`) and every text cursor.
 
@@ -193,6 +222,7 @@ A gadget with no introduction waits for setup on its USB serial port (115200 bau
 | `@botkins {"do":"listen","ms":3000}` | holds the talk button for that long (300 to 10,000 ms), then sends the recording |
 | `@botkins {"do":"answer","action":"approve"}` | answers the request on show (`value` for an `answer`) |
 | `@botkins {"do":"quiet"}` | stops reading aloud |
+| `@botkins {"do":"settings","volume":40}` | changes settings as the quick controls do (any of the part's settings) |
 
 These do nothing a person holding the gadget can't do: whoever has the cable has the gadget.
 

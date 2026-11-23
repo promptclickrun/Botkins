@@ -11,7 +11,7 @@ class Display {
   static constexpr int kWidth = 466, kHeight = 466;
   bool begin();
   uint16_t* frame() { return frame_; }
-  /** Sends the whole frame (about 30 ms). */
+  /** Sends the whole frame (about 30 ms): bands through two DMA buffers, one filled while the other goes. */
   void flush();
   /** The panel's own brightness (DCS 0x51, Write Display Brightness), 0 to 100. */
   bool brightness(uint8_t percent);
@@ -20,7 +20,7 @@ class Display {
 
  private:
   uint16_t* frame_ = nullptr;
-  uint16_t* band_ = nullptr;
+  uint16_t* band_[2] = {nullptr, nullptr};
   esp_lcd_panel_handle_t panel_ = nullptr;
 };
 

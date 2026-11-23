@@ -1,7 +1,9 @@
 // The devices paired with the computer: phones, and other computers' Botkins apps that use this
 // one. The same list as Settings › Phone on the computer, with the same things to do: name the
 // person a device belongs to ("device-person-v1"), rename the device, and remove it
-// (docs/link-contract.md). Needs "devices-v1". A row shows the person first, then the model.
+// (docs/link-contract.md). Needs "devices-v1". A row shows the person first, then the model. A gadget
+// opens its own page with every setting when the computer has "gadget-settings-v1" (GadgetPage.tsx).
+import { router } from "expo-router";
 import { Monitor, Smartphone, Speaker } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
@@ -10,6 +12,7 @@ import { deviceSubtitle, deviceTitle } from "@/features/pair/person";
 import { useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
+import { GADGET_SETTINGS } from "./gadget";
 import { brand, Group, IconTile, Label, Row, useTextPrompt } from "@/ui";
 
 /** "This phone", "Connected", or when it was last heard from. */
@@ -29,6 +32,7 @@ export function Devices() {
   const supported = capabilities?.includes("devices-v1");
   const named = capabilities?.includes("device-person-v1");
   const prompt = useTextPrompt();
+  const gadgetPages = capabilities?.includes(GADGET_SETTINGS);
   // The part changes when a device is paired, renamed or removed: the list is read again then.
   const phones = usePart("phones");
   const [devices, setDevices] = useState<PairedDevice[]>();
@@ -70,7 +74,9 @@ export function Devices() {
       { text: "Remove", style: "destructive", onPress: () => void attempt(api["link.devices.remove"](device.id), "Removed").then((list) => list && setDevices(list)) },
     ]);
   const open = (device: PairedDevice) =>
-    Alert.alert(deviceTitle(device), deviceSubtitle(device, statusOf(device)), [
+    device.kind === "gadget" && gadgetPages
+      ? router.push({ pathname: "/settings/gadget/[id]", params: { id: device.id } })
+      : Alert.alert(deviceTitle(device), deviceSubtitle(device, statusOf(device)), [
       ...(named ? [{ text: device.person ? "Change name" : "Add name", onPress: () => changePerson(device) }] : []),
       { text: "Rename device", onPress: () => rename(device) },
       // This phone is let go with "Unpair this phone" below.

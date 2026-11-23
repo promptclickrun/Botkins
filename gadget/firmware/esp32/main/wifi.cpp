@@ -49,6 +49,8 @@ void WifiNetwork::join(const std::string& ssid, const std::string& password) {
     address_.clear();
   }
   state_ = ssid.empty() ? kOff : kJoining;
+  // Leaving the network in use (the core moving on to the next saved one, or a setup over USB):
+  // its "disconnected" event names it, and is not counted against the new one (on_event).
   esp_wifi_disconnect();
   if (ssid.empty()) return;
   wifi_config_t config = {};
@@ -79,19 +81,27 @@ void WifiNetwork::retry_later() {
 void WifiNetwork::on_event(void* arg, const char* base, int32_t id, void* data) {
   auto* self = static_cast<WifiNetwork*>(arg);
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    bool have;
-    int failures;
+    const auto* event = static_cast<wifi_event_sta_disconnected_t*>(data);
+    bool have, other = false;
+    int failures = 0;
     {
       std::lock_guard<std::mutex> lock(self->mutex_);
       have = !self->ssid_.empty();
-      failures = ++self->failures_;
+      // The network that was left when join() switched: not a failure of the one being joined,
+      // and no retry of its own (join() has already asked for the new one).
+      if (have && event && event->ssid_len > 0)
+        other = self->ssid_.size() != event->ssid_len || memcmp(self->ssid_.data(), event->ssid, event->ssid_len) != 0;
+      if (!other) failures = ++self->failures_;
       self->address_.clear();
     }
     if (!have) {
       self->state_ = kOff;
       return;
     }
-    const auto* event = static_cast<wifi_event_sta_disconnected_t*>(data);
+    if (other) {
+      ESP_LOGI(TAG, "left the earlier network (reason %d)", event->reason);
+      return;
+    }
     ESP_LOGW(TAG, "not on the network (reason %d, try %d)", event ? event->reason : -1, failures);
     self->state_ = failures >= kFailedAfter ? kFailed : kJoining;
     self->retry_later();
@@ -118,6 +128,13 @@ void WifiNetwork::on_event(void* arg, const char* base, int32_t id, void* data) 
 const char* WifiNetwork::state() {
   static const char* names[] = {"off", "joining", "on", "failed"};
   return names[state_.load()];
+}
+
+int WifiNetwork::signal() {
+  if (state_ != kOn) return 0;
+  wifi_ap_record_t ap = {};
+  if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return 0;
+  return ap.rssi < 0 ? ap.rssi : 0;
 }
 
 std::string WifiNetwork::address() {
