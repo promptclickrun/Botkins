@@ -13,13 +13,13 @@ import { type ComponentRef, memo, useLayoutEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { create } from "zustand";
-import type { Bot, Step } from "@/link/types";
+import type { Bot, Run } from "@/link/types";
 import { BotAvatar, space, T, Tap, useTheme } from "@/ui";
 import { Aside } from "./Aside";
 import { workWidth } from "./bits";
 import { type FoldEntry } from "./fold";
-import { type Item, stepLabel } from "./turn";
-import { FACE, FACE_INDENT, StepRow } from "./WorkRows";
+import { type Item } from "./turn";
+import { FACE, FACE_INDENT, StepLine } from "./WorkRows";
 
 /** The folds a person opened, by chat and turn. */
 const useOpenFolds = create<Record<string, true>>(() => ({}));
@@ -43,17 +43,11 @@ const ROW = 36;
 
 const activity = (chatId: string, runId: string, stepId?: string) => router.push({ pathname: "/chat/activity", params: stepId ? { chatId, runId, stepId } : { chatId, runId } });
 
-function StepLine({ chatId, runId, step }: { chatId: string; runId: string; step: Step }) {
-  return (
-    <Tap onPress={() => activity(chatId, runId, step.id)} feel="select" sink={0.99} hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel={stepLabel(step) + ", " + step.status + ", show in activity"} style={{ minHeight: 36, justifyContent: "center" }}>
-      <StepRow step={step} />
-    </Tap>
-  );
-}
-
 /** The fold's contents, in order. Steps next to each other sit together, in the work's column under the face. */
-function Body({ chatId, runId, entries, bot }: { chatId: string; runId: string; entries: FoldEntry[]; bot?: Bot }) {
+function Body({ chatId, run, entries, bot }: { chatId: string; run: Run; entries: FoldEntry[]; bot?: Bot }) {
   const { colors } = useTheme();
+  const runId = run.id;
+  const helpers = new Map(run.agents?.map((agent) => [agent.id, agent.name]));
   const groups: FoldEntry[][] = [];
   for (const entry of entries) {
     const last = groups.at(-1);
@@ -67,7 +61,7 @@ function Body({ chatId, runId, entries, bot }: { chatId: string; runId: string; 
         if (first.kind === "step")
           return (
             <View key={first.key} style={{ paddingLeft: FACE_INDENT }}>
-              {group.map((entry) => entry.kind === "step" && <StepLine key={entry.key} chatId={chatId} runId={runId} step={entry.step} />)}
+              {group.map((entry) => entry.kind === "step" && <StepLine key={entry.key} chatId={chatId} runId={runId} step={entry.step} helperName={entry.step.agentId ? helpers.get(entry.step.agentId) : undefined} height={36} />)}
             </View>
           );
         if (first.kind === "thought") return <Aside key={first.key} kind="thinking" text={first.text} bot={bot} />;
@@ -138,7 +132,7 @@ export const FoldRow = memo(function FoldRow({ chatId, bot, group, item, hold }:
           <Chevron size={14} color={colors.faint} strokeWidth={2.4} />
         </View>
       </Tap>
-      {open && <Body chatId={chatId} runId={item.run.id} entries={item.entries} bot={bot} />}
+      {open && <Body chatId={chatId} run={item.run} entries={item.entries} bot={bot} />}
     </View>
   );
 });

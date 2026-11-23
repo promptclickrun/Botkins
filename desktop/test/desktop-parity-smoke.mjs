@@ -136,6 +136,8 @@ try {
   await settings.locator('.set-sidebar [role="tab"]').filter({ hasText: "Chat" }).click();
   await expect(settings.getByText(/Fold finished tool activity|Steps/).first()).toBeVisible();
   await expect(settings.getByText(/Show the bot.s thinking|Thinking and updates/).first()).toBeVisible();
+  assert.deepEqual(await settings.locator('select').nth(0).locator('option').allTextContents(), ["Folded", "Open", "Failed only"], "Steps exposes the three requested choices");
+  assert.deepEqual(await settings.locator('select').nth(2).locator('option').allTextContents(), ["Folded", "Open", "Hidden"], "Thinking and updates keeps Hidden as its third choice");
   await shot(restarted, "settings-chat");
   await settings.getByRole("button", { name: "Close dialog" }).click();
 

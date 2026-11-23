@@ -3,9 +3,10 @@
 // ink, a failed one has its icon and a small X in the danger color. Nothing here moves (no spinner,
 // no shimmer): the owner's battery rule. The bot's thinking and its updates are in Aside.tsx.
 import { Ban, Bot, Eye, FilePlus, Globe, LayoutTemplate, ListTodo, type LucideIcon, MessageCircleQuestionMark, PanelsTopLeft, Plug, Search, Sparkles, SquarePen, SquareTerminal, Wrench, X } from "lucide-react-native";
+import { router } from "expo-router";
 import { View } from "react-native";
 import type { Step } from "@/link/types";
-import { T, useTheme } from "@/ui";
+import { T, Tap, useTheme } from "@/ui";
 import { stepKind, stepLabel } from "./turn";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -36,14 +37,15 @@ export const FACE = 22;
 export const FACE_INDENT = FACE + 8;
 
 /** One step as a quiet row. The press belongs to whatever holds the rows. */
-export function StepRow({ step }: { step: Step }) {
+export function StepRow({ step, helperName }: { step: Step; /** The helper that ran this call, when known. */ helperName?: string }) {
   const { colors } = useTheme();
   const Icon = stepIcon(step);
   const label = stepLabel(step);
+  const spoken = (helperName ? helperName + ": " : "") + label;
   const running = step.status === "Running";
   const failed = step.status === "Failed";
   return (
-    <View accessible accessibilityLabel={label + ", " + step.status.toLowerCase()} style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: STEP_ROW }}>
+    <View accessible accessibilityLabel={spoken + ", " + step.status.toLowerCase()} style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: STEP_ROW }}>
       <View style={{ width: 20, alignItems: "center" }}>
         <Icon size={14} color={failed ? colors.danger : running ? colors.ink : colors.muted} strokeWidth={2.2} />
       </View>
@@ -53,6 +55,18 @@ export function StepRow({ step }: { step: Step }) {
       {failed && <X size={12} color={colors.danger} strokeWidth={2.6} />}
       {step.status === "Stopped" && <Ban size={12} color={colors.faint} strokeWidth={2.4} />}
     </View>
+  );
+}
+
+/** The same drill-down for a call in the canvas and in an expanded turn. */
+export function StepLine({ chatId, runId, step, helperName, height = 28 }: { chatId: string; runId: string; step: Step; helperName?: string; height?: number }) {
+  const label = (helperName ? helperName + ": " : "") + stepLabel(step);
+  return (
+    <Tap onPress={() => router.push({ pathname: "/chat/activity", params: { chatId, runId, stepId: step.id } })}
+      feel="select" sink={0.99} accessibilityLabel={label + ", " + step.status + ", show in activity"}
+      style={{ minHeight: height, justifyContent: "center" }}>
+      <StepRow step={step} helperName={helperName} />
+    </Tap>
   );
 }
 

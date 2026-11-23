@@ -16,7 +16,7 @@ export type RunTimelineEvent =
 export function orderedRunEvents(
   run: Run,
   messages: Message[],
-  options: { includeReplies?: boolean } = {},
+  options: { includeReplies?: boolean; includeHelperSteps?: boolean } = {},
 ): RunTimelineEvent[] {
   const events: RunTimelineEvent[] = [];
   messages.forEach((message, index) => {
@@ -40,7 +40,7 @@ export function orderedRunEvents(
   });
   for (const [index, reasoning] of (run.reasoning ?? []).entries()) events.push({ kind: "reasoning", at: reasoning.started, order: 1, sequence: messages.length + index, key: "reason-" + reasoning.id, value: reasoning });
   for (const [index, step] of (run.steps ?? []).entries()) {
-    if (!step.agentId) events.push({ kind: "step", at: step.started, order: 4, sequence: messages.length + (run.reasoning?.length ?? 0) + index, key: "step-" + step.id, value: step });
+    if (!step.agentId || options.includeHelperSteps) events.push({ kind: "step", at: step.started, order: 4, sequence: messages.length + (run.reasoning?.length ?? 0) + index, key: "step-" + step.id, value: step });
   }
   return events.sort((a, b) => {
     const byTime = a.at - b.at;

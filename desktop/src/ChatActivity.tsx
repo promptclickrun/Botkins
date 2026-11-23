@@ -1,12 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  Activity,
   AppWindow,
   Ban,
   Bot,
-  Brain,
   Check,
-  ChevronDown,
   ChevronRight,
   Circle,
   CircleAlert,
@@ -50,83 +47,9 @@ export function useNow(active: boolean) {
   return now;
 }
 
-/** The end of a long thought: from a line or word start, so it never opens mid-word. */
-function newestWords(text: string, length = 320) {
-  if (text.length <= length) return text;
-  const tail = text.slice(-length);
-  const half = tail.slice(0, length / 2);
-  const cut = half.indexOf("\n") >= 0 ? half.indexOf("\n") : tail.search(/\s/);
-  return "…" + tail.slice(Math.max(0, cut)).trim();
-}
-
 /** Reasoning summaries use Markdown bold for headings; show them as plain lines. */
 function plain(text: string) {
   return text.replace(/\*\*(.+?)\*\*/g, "$1");
-}
-
-/** A turn's reasoning, above its tool work: "Thinking…" live, then "Thought for 12s". */
-export function Reasoning({
-  run,
-  live,
-  onToggle,
-  display = "open",
-}: {
-  run: Run;
-  live?: string;
-  onToggle?: () => void;
-  /** Thinking and updates setting. `hide` leaves the work available in the activity view. */
-  display?: "open" | "folded" | "hidden";
-}) {
-  const running = run.status === "Working";
-  const [open, setOpen] = useState(display !== "hidden");
-  const [all, setAll] = useState(false);
-  const entries = run.reasoning ?? [];
-  const text = running
-    ? plain(live || entries.map((r) => r.text).join("\n\n"))
-    : entries
-        .map((r) => plain(r.text).trim())
-        .filter(Boolean)
-        .join("\n\n");
-  if (!text.trim() || display === "hidden") return null;
-  // Thinking starts with the turn, before the first summary word arrives.
-  const started = run.time;
-  const ended = Math.max(...entries.map((r) => r.finished ?? r.started), started);
-  const title = running ? "Thinking…" : "Thought for " + duration(ended - started);
-  const long = text.length > 520 || text.split("\n").length > 6;
-  return (
-    <section className={"reasoning" + (running ? " live" : "")} aria-label="Thought process">
-      <button
-        className="reasoning-head"
-        aria-expanded={open}
-        onClick={() => {
-          onToggle?.();
-          setOpen(!open);
-        }}
-      >
-        {running ? <span className="activity-pulse" /> : <Brain size={14} />}
-        <span>{title}</span>
-        <ChevronDown size={14} />
-      </button>
-      {open && (
-        <>
-            <p className={"reasoning-text" + (all || (running && display === "open") ? "" : " folded")}>
-            {running && !all ? newestWords(text) : text}
-          </p>
-          {long && (!running || display === "folded") && (
-            <button
-              className="show-more"
-              onClick={() => {
-                onToggle?.();
-                setAll(!all);
-              }}
-            >
-              {all ? "Show less" : "Show more"}
-            </button>
-          )}
-        </>
-      )}
-    </section>
-  );
 }
 
 function StepGlyph({ step }: { step: Step }) {
@@ -194,33 +117,26 @@ export function StepList({ steps }: { steps: Step[] }) {
 /** Text the bot wrote while a turn was moving between tools. It reads like a reply (the same
  * Markdown at the same size) in the second ink, with no box, label or mark, and keeps its place
  * in the turn, apart from the bot's thinking. */
-export function InterimUpdate({ text, onToggle, display = "open" }: { text: string; onToggle?: () => void; display?: "open" | "folded" | "hidden" }) {
+export function InterimUpdate({ text, onToggle }: { text: string; onToggle?: () => void }) {
   const value = text.trim();
-  if (!value || display === "hidden") return null;
+  if (!value) return null;
   return (
     <article className="assistant interim-update" onClick={onToggle}>
-      <RichText text={display === "folded" ? newestWords(value, 320) : value} />
+      <RichText text={value} />
     </article>
   );
 }
 
-/** One thought in a turn's work: quiet muted text, no box. The live turn shows only its newest
- * thought, in the lead row (`latestThought`); an opened fold or every-step mode shows each one. */
-export function ReasoningUpdate({ text, title = "Thinking", display = "open" }: { text: string; title?: string; display?: "open" | "folded" | "hidden" }) {
+/** One timestamped thought in the canvas or the expanded activity list. */
+export function ReasoningUpdate({ text }: { text: string }) {
   // A summary's heading and paragraphs read as lines, without blank lines between them.
   const value = plain(text).trim().replace(/\n\s*\n/g, "\n");
-  if (!value || display === "hidden") return null;
+  if (!value) return null;
   return (
-    <p className={"work-thought" + (display === "folded" ? " folded" : "")} aria-label={title}>
-      {display === "folded" ? newestWords(value) : value}
+    <p className="work-thought" aria-label="Thinking">
+      {value}
     </p>
   );
-}
-
-/** The last line of the bot's thinking so far, for the live lead row. */
-export function latestThought(text = "") {
-  const line = plain(text).split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
-  return newestWords(line, 280);
 }
 
 /** The icon for each kind of work (tool-kind.mjs, which the work summaries use too). */
@@ -290,7 +206,7 @@ export function WorkSteps({ steps }: { steps: Step[] }) {
   );
 }
 
-/** The top of a live turn: the bot's still face, what it is doing in ink, then its newest thought. */
+/** The top of a live turn: the bot's still face, what it is doing in ink, and its current intent. */
 export function LiveLead({ avatar, label, thought }: { avatar: ReactNode; label: string; thought?: string }) {
   return (
     <div className="work-lead" role="status">
@@ -340,7 +256,7 @@ export function TimelineFold({
   const [open, setOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const toggle = () => {
-    if (live) return onDetails?.();
+    if (live) onDetails?.();
     setOpen((value) => !value);
   };
   const showDetails = () => {
@@ -349,7 +265,7 @@ export function TimelineFold({
   };
   return (
     <section className={"timeline-fold" + (live ? " live" : "")} aria-label={live ? "Turn status" : "Turn activity"}>
-      <button className="timeline-fold-line" aria-expanded={live ? undefined : open} onClick={toggle}>
+      <button className="timeline-fold-line" aria-expanded={open} onClick={toggle}>
         {!live && avatar}
         <span>
           {line}
@@ -358,13 +274,13 @@ export function TimelineFold({
         </span>
         {!live && <ChevronRight size={14} className="fold-chevron" aria-hidden="true" />}
       </button>
-      {open && !live && (
+      {open && (
         <div className="timeline-fold-body">
           {body}
           <button className="timeline-details" onClick={showDetails}>Details</button>
         </div>
       )}
-      {detailsOpen && !live && (
+      {detailsOpen && (
         <div className="timeline-activity" role="dialog" aria-label="Work activity">
           <div className="timeline-activity-head">
             <strong>Work activity</strong>
@@ -373,86 +289,6 @@ export function TimelineFold({
           <div className="timeline-activity-body">{detailsBody ?? body}</div>
         </div>
       )}
-    </section>
-  );
-}
-
-/**
- * A turn's tool work. Live: "<Bot> is working" with the newest steps. Done: one row,
- * "Worked for 1m 51s · 7 steps" over a plain summary, opening to every step.
- */
-export function ToolTrail({
-  run,
-  fold,
-  bot = "Bot",
-  avatar,
-  onToggle,
-  mode,
-  intent,
-}: {
-  run: Run;
-  fold: boolean;
-  bot?: string;
-  /** The working bot's small still face, shown while live. */
-  avatar?: ReactNode;
-  onToggle?: () => void;
-  /** The four Settings › Chat › Steps choices. `fold` remains for older callers. */
-  mode?: "folded" | "every" | "failed" | "hidden";
-  intent?: string;
-}) {
-  const live = run.status === "Working";
-  const choice = mode ?? (fold ? "folded" : "every");
-  const [expanded, setExpanded] = useState(choice === "every");
-  useEffect(() => {
-    setExpanded(choice === "every");
-  }, [live, choice]);
-  const now = useNow(live);
-  const steps = run.steps ?? [];
-  const visibleSteps = choice === "hidden" ? [] : choice === "failed" ? steps.filter((step) => step.status === "Failed") : steps;
-  const count = visibleSteps.length || (choice === "hidden" ? 0 : run.usedTools?.length || 0);
-  // Keep a stable status row even before the first tool arrives. This is the anchor that becomes
-  // the finished work line when the turn ends.
-  if (!live && !count && !run.summary) return null;
-  const toggle = () => {
-    onToggle?.();
-    setExpanded(!expanded);
-  };
-  const plural = count === 1 ? " step" : " steps";
-  if (live)
-    return (
-      <section className="tool-trail work-live" aria-label="Tool activity">
-        <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
-          {avatar ?? <Activity size={15} />}
-          <strong>{bot}</strong>
-          <span className="work-intent">{intent?.trim() || "Working…"}</span>
-          {count > 0 && <span className="work-count">{count + plural}</span>}
-        </button>
-        {expanded && <StepList steps={visibleSteps} />}
-      </section>
-    );
-  const last = Math.max(run.time, ...steps.map((s) => s.finished ?? s.started));
-  const elapsed = (run.finished ?? last) - run.time;
-  return (
-    <section className="tool-trail work-done" aria-label="Tool activity">
-      <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
-        <Activity size={15} />
-        <span className="work-title">
-          <strong>Worked for {duration(elapsed)}</strong>
-          {run.summary && <small>{run.summary}</small>}
-        </span>
-        {count > 0 && <span className="work-count">{count + plural}</span>}
-      </button>
-      {expanded && <RunLead agents={run.agents} todos={run.todos} />}
-      {expanded &&
-        (steps.length ? (
-          <StepList steps={visibleSteps} />
-        ) : (
-          <ol>
-            {run.usedTools?.map((name) => (
-              <li key={name}>{name} · Done</li>
-            ))}
-          </ol>
-        ))}
     </section>
   );
 }

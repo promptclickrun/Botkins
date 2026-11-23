@@ -1,4 +1,4 @@
-// How chats show a bot's work and replies on this phone, and the choices kept on the computer (chat titles, thinking, steps).
+// Display choices belong to this phone. Automatic chat titles are configured on the computer.
 import { MenuView } from "@react-native-menu/menu";
 import { ChevronsUpDown } from "lucide-react-native";
 import { View } from "react-native";
@@ -10,15 +10,14 @@ import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { Group, Label, Page, Row, space, T, useTheme } from "@/ui";
 
 const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = [
-  { value: "folded", label: "Folded", subtitle: "Every step while it works; one line when it's done" },
-  { value: "show", label: "Every step", subtitle: "Each step, thought and update in order" },
-  { value: "failed", label: "Failed only", subtitle: "Only steps that went wrong" },
-  { value: "hide", label: "Hidden", subtitle: "Approvals and errors still show" },
+  { value: "folded", label: "Folded", subtitle: "Tool calls stay in the working rail" },
+  { value: "show", label: "Open", subtitle: "Show every tool call in the chat as it happens" },
+  { value: "failed", label: "Failed only", subtitle: "Show only failed tool calls in the chat" },
 ];
 const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string }[] = [
-  { value: "show", label: "Open", subtitle: "All of it, as it comes" },
-  { value: "folded", label: "Folded", subtitle: "The last few lines; tap for more" },
-  { value: "hide", label: "Hidden", subtitle: "Not in the chat; the activity has it" },
+  { value: "folded", label: "Folded", subtitle: "Thinking and updates stay in the working rail" },
+  { value: "show", label: "Open", subtitle: "Show thinking and updates in the chat as they arrive" },
+  { value: "hide", label: "Hidden", subtitle: "Hide thinking and updates in the chat and working rail" },
 ];
 
 /** Auto-summarize: off, or every 5 to 30 turns (the computer's desktop/summaries.mjs). */
@@ -58,6 +57,7 @@ export default function Chat() {
         <Group>
           <ChoiceMenu title="Steps" subtitle="A bot's work in a turn" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
           <ChoiceMenu title="Thinking and updates" subtitle="Its reasoning and notes while it works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
+          <Row title="Fold finished steps" subtitle="One line with elapsed time and step count" subtitleLines={2} toggled={prefs.foldFinishedSteps} onToggle={(foldFinishedSteps) => setChatPrefs({ foldFinishedSteps })} />
           <Row title="Text streaming" subtitle="Receive sentence-sized updates while it writes" toggled={prefs.textStreaming} onToggle={(textStreaming) => setChatPrefs({ textStreaming })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />

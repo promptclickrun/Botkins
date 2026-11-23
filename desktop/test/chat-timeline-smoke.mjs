@@ -42,6 +42,37 @@ workspace.runs.unshift({
   todos: [{ id: "t1", title: "Check both files", status: "done" }, { id: "t2", title: "Write the summary", status: "pending" }],
   agents: [{ id: "h1", name: "File reader", description: "Reads the second file", status: "Done", started: now + 12, finished: now + 22 }],
 });
+const groupChatId = randomUUID();
+const groupRunId = randomUUID();
+const groupNow = Date.now();
+workspace.chats.unshift({
+  id: groupChatId,
+  botId: workspace.bots[0].id,
+  botIds: [workspace.bots[0].id, workspace.bots[1].id],
+  title: "Pip, Scout",
+  time: groupNow,
+  established: true,
+  messages: [
+    { role: "user", text: "Ask both", runId: groupRunId, time: groupNow },
+    { role: "assistant", text: "Pip is checking", interim: true, runId: groupRunId, botId: "pip", time: groupNow + 10 },
+    { role: "assistant", text: "Pip found an answer", runId: groupRunId, botId: "pip", time: groupNow + 20 },
+    { role: "command", text: "scout-search", runId: groupRunId, time: groupNow + 25 },
+    { role: "assistant", text: "Scout is checking", interim: true, runId: groupRunId, botId: "scout", time: groupNow + 30 },
+    { role: "assistant", text: "Scout found an answer", runId: groupRunId, botId: "scout", time: groupNow + 40 },
+  ],
+});
+workspace.runs.unshift({
+  id: groupRunId,
+  chatId: groupChatId,
+  title: "Ask both",
+  time: groupNow,
+  finished: groupNow + 50,
+  status: "Completed",
+  detail: "",
+  speakers: ["pip", "scout"],
+  reasoning: [],
+  steps: [],
+});
 writeFileSync(workspaceFile, JSON.stringify(workspace));
 
 let app;
@@ -51,13 +82,14 @@ try {
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getAllWindows()[0].webContents.send("open-chat", id), chatId);
   await expect(page.locator(".chathead-title h2")).toContainText(bot.name);
-  // Exercise the renderer's current setting, rather than relying on how the host happened to
-  // serialize a fixture workspace. (The settings IPC is intentionally still owned by the host
-  // preference work; this injects only an isolated renderer snapshot.)
+  // Use the same viewer-local preference record and change event as Settings.
+  const display = (steps, thinking, foldFinishedSteps) => page.evaluate((choices) => {
+    localStorage.setItem("botkins.chatDisplay", JSON.stringify(choices));
+    window.dispatchEvent(new Event("botkins.chatDisplay"));
+  }, { steps, stepsPicked: true, thinking, foldFinishedSteps });
   const current = await page.evaluate(() => window.botkins.snapshot());
-  current.settings.steps = "folded";
-  current.settings.thinking = "hidden";
-  await app.evaluate(({ BrowserWindow }, snapshot) => BrowserWindow.getAllWindows()[0].webContents.send("changed", snapshot), current);
+  const publish = () => app.evaluate(({ BrowserWindow }, snapshot) => BrowserWindow.getAllWindows()[0].webContents.send("changed", snapshot), current);
+  await display("folded", "hidden", true);
   await expect(page.locator(".timeline-fold-line")).toContainText("Worked for");
   await expect(page.locator("article.user").filter({ hasText: "Continue with the second file" })).toBeVisible();
   await expect(page.locator("article.assistant")).toContainText("All done.");
@@ -80,40 +112,78 @@ try {
   assert.equal(chips.length, 2, "one chip for the helpers and one for the to-do list");
   assert.match(chips[0], /In the background/, "the helpers' chip comes first");
   assert.match(chips[1], /Tasks 1\/2/, "the to-do list's chip comes after it");
+  await page.getByRole("button", { name: "Close work activity" }).click();
+  await page.locator(".timeline-fold-line").click();
+  const run = current.runs.find((item) => item.id === runId);
+  const chat = current.chats.find((item) => item.id === chatId);
+  const final = chat.messages.pop();
+  const firstThought = run.reasoning[0].text;
+  const secondThought = "Now check the second file.";
+  const interim = "I checked the first file.";
+  const titles = ["Read file", "Helper search", "Failed check", "Build index", "Verify index", "Load metadata"];
+  run.reasoning.push({ id: "thought-two", text: secondThought, started: now + 17 });
+  for (const [index, label] of titles.slice(1).entries()) {
+    run.steps.push({ id: "extra-" + index, name: "read", label, status: index === 1 ? "Failed" : "Done", started: now + 21 + index, ...(index === 0 && { agentId: "h1" }) });
+  }
+  run.status = "Working";
+  delete run.finished;
+  await display("folded", "folded", true);
+  await publish();
+  const column = page.locator(".chat-column");
+  const rail = column.locator(".timeline-fold-line");
+  // Assert on the closed canvas first, then open the actual rail to verify each call is accessible.
+  await expect(rail).toContainText("6 steps");
+  await expect(column).not.toContainText(titles[0]);
+  await expect(column).not.toContainText(firstThought);
+  await expect(column).not.toContainText(secondThought);
+  await expect(column).not.toContainText(interim);
+  await rail.click();
+  for (const title of [...titles, firstThought, secondThought, interim]) await expect(column).toContainText(title);
+  const closeRail = async () => {
+    const close = page.getByRole("button", { name: "Close work activity" });
+    if (await close.isVisible()) await close.click();
+    else await rail.click();
+  };
+  await closeRail();
+  await display("open", "open", false);
+  await expect(column.locator(".work-step-label")).toHaveText(titles);
+  assert.ok(inOrder(await column.innerText(), [firstThought, interim, titles[0], secondThought, "Continue with the second file", ...titles.slice(1)]), "live activity follows event order");
+  run.status = "Completed";
+  run.finished = now + 40;
+  chat.messages.push(final);
+  await publish();
+  await expect(column).toContainText("All done.");
+  await expect(column.locator(".work-step-label")).toHaveText(titles);
+  await expect(rail).toBeVisible();
+  await display("failed", "hidden", false);
+  await expect(column.locator(".work-step-label")).toHaveText(["Failed check"]);
+  await expect(column).not.toContainText(interim);
+  await expect(column).not.toContainText(firstThought);
+  await rail.click();
+  for (const title of titles) await expect(column).toContainText(title);
+  await expect(column).not.toContainText(firstThought);
+  await closeRail();
+  await display("failed", "hidden", true);
+  await expect(rail).toContainText("6 steps");
+  await expect(column.locator(".work-step-label")).toHaveCount(0);
+  await expect(column).toContainText("All done.");
+  await display("folded", "folded", true);
+  // A remote page can start at a steer, or deliver the run before any of its messages.
+  chat.messages = chat.messages.filter((m) => m.text === "Continue with the second file" || m === final);
+  await publish();
+  await expect(column.locator("article.user")).toHaveCount(1);
+  await expect(column.locator("article.assistant")).toHaveCount(1);
+  await expect(rail).toHaveCount(1);
+  chat.messages = [];
+  run.status = "Working";
+  delete run.finished;
+  await display("open", "open", false);
+  await publish();
+  await expect(column.locator(".work-step-label")).toHaveText(titles);
+  await expect(rail).toHaveCount(1);
+  await display("folded", "folded", true);
   // A group turn has one run but several speakers. Each final reply must stay in the message
   // order around the shared activity, and the run's current speaker owns the live/status avatar.
-  const groupChatId = randomUUID();
-  const groupRunId = randomUUID();
-  const groupNow = Date.now();
-  current.chats.unshift({
-    id: groupChatId,
-    botId: workspace.bots[0].id,
-    botIds: [workspace.bots[0].id, workspace.bots[1].id],
-    title: "Pip, Scout",
-    time: groupNow,
-    established: true,
-    messages: [
-      { role: "user", text: "Ask both", runId: groupRunId, time: groupNow },
-      { role: "assistant", text: "Pip is checking", interim: true, runId: groupRunId, botId: "pip", time: groupNow + 10 },
-      { role: "assistant", text: "Pip found an answer", runId: groupRunId, botId: "pip", time: groupNow + 20 },
-      { role: "command", text: "scout-search", runId: groupRunId, time: groupNow + 25 },
-      { role: "assistant", text: "Scout is checking", interim: true, runId: groupRunId, botId: "scout", time: groupNow + 30 },
-      { role: "assistant", text: "Scout found an answer", runId: groupRunId, botId: "scout", time: groupNow + 40 },
-    ],
-  });
-  current.runs.unshift({
-    id: groupRunId,
-    chatId: groupChatId,
-    title: "Ask both",
-    time: groupNow,
-    finished: groupNow + 50,
-    status: "Completed",
-    detail: "",
-    speakers: ["pip", "scout"],
-    reasoning: [],
-    steps: [],
-  });
-  await app.evaluate(({ BrowserWindow }, snapshot) => BrowserWindow.getAllWindows()[0].webContents.send("changed", snapshot), current);
   await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.getAllWindows()[0].webContents.send("open-chat", id), groupChatId);
   await expect(page.locator(".chathead-title h2")).toContainText("Pip, Scout");
   await expect(page.locator(".chat-column")).toContainText("Pip found an answer");
@@ -126,6 +196,20 @@ try {
   assert.ok(groupOrder.findIndex((text) => text.includes("Pip found an answer")) < groupOrder.findIndex((text) => text.includes("Scout found an answer")), "group replies retain order");
   await page.locator(".timeline-fold-line").click();
   await expect(page.locator(".interim-update").filter({ hasText: "Pip is checking" })).toBeVisible();
+  const groupRun = current.runs.find((item) => item.id === groupRunId);
+  groupRun.status = "Working";
+  delete groupRun.finished;
+  await publish();
+  const groupRail = page.getByRole("region", { name: "Turn status" }).locator(".timeline-fold-line");
+  if (await groupRail.getAttribute("aria-expanded") === "false") await groupRail.click();
+  await expect(groupRail).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("region", { name: "Turn status" }).getByRole("button", { name: "Details", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Work activity" })).toContainText("Pip is checking");
+  await page.getByRole("button", { name: "Close work activity" }).click();
+  groupRun.status = "Completed";
+  groupRun.finished = groupNow + 50;
+  await publish();
+  await expect(page.getByRole("region", { name: "Turn activity" }).locator(".timeline-fold-line")).toHaveAttribute("aria-expanded", "false");
   console.log("Timeline renderer smoke: single and group turns retain order, speaker identity, and folded activity.");
 } finally {
   if (app) await app.close().catch(() => {});
