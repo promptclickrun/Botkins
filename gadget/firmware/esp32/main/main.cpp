@@ -22,6 +22,8 @@
 namespace {
 const char* TAG = "botkins";
 const char* kWifi = "wifi";  // the core's name for the saved network (core/src/gadget.cpp)
+// The live voice's thread stack (Board::thread, below).
+const int kLiveStack = 16 * 1024;
 
 // esp_fill_random gives true random numbers once the radio is on (WifiNetwork::begin runs first).
 void fill_random(uint8_t* out, size_t size) { esp_fill_random(out, size); }
@@ -88,6 +90,28 @@ extern "C" void app_main(void) {
   config.socket = [] { return std::unique_ptr<botkins::Socket>(new port::EspSocket()); };
   // The owner's restart (the part's `restart`): the core says it is restarting, then calls this.
   config.restart = [] { esp_restart(); };
+  // The live voice's thread, made while a session is open beside the relay's socket and the live one.
+  // Its stack is internal RAM: a call it makes may open a link session and save the computer's
+  // addresses to flash, which a task with its stack in PSRAM must not do. As the thread ends, the log
+  // says how much of the stack it never used.
+  config.thread = [](const char* name, std::function<void()> run) {
+    esp_pthread_cfg_t before = esp_pthread_get_default_config();
+    if (esp_pthread_get_cfg(&before) != ESP_OK) before = esp_pthread_get_default_config();
+    esp_pthread_cfg_t own = esp_pthread_get_default_config();
+    own.stack_size = kLiveStack;
+    own.prio = 5;
+    own.inherit_cfg = false;
+    own.thread_name = name;
+    esp_pthread_set_cfg(&own);
+    std::string label = name;
+    std::thread thread([run = std::move(run), label] {
+      run();
+      ESP_LOGI(TAG, "%s thread ended; its stack had at least %u of %d bytes left", label.c_str(), (unsigned)uxTaskGetStackHighWaterMark(nullptr), kLiveStack);
+    });
+    // Only this one: the calling task's own threads are made as before.
+    esp_pthread_set_cfg(&before);
+    return thread;
+  };
   uint8_t mac[6] = {0};
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char text[18];

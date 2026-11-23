@@ -292,7 +292,9 @@ void LiveVoice::press() {
       // The thread before this one has returned (it says so last): joined at once.
       if (thread_.joinable()) thread_.join();
       running_ = true;
-      thread_ = std::thread([this] { run(); });
+      // The board may make it (its stack): Board::thread.
+      if (board_.thread) thread_ = board_.thread("live", [this] { run(); });
+      else thread_ = std::thread([this] { run(); });
     }
     wake_.notify_all();
   }

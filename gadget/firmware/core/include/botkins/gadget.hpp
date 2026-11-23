@@ -60,6 +60,12 @@ struct Board {
   int relay_probe_ms = 30000;
   /** A live voice session closes after this long with no press and no sound (botkins/live.hpp). */
   int live_idle_ms = 180000;
+  /**
+   * Starts one of the core's threads that come and go: the live voice's, named "live", which runs while
+   * a session is open. Null: a plain std::thread. A port may give it a stack of its own size, or log
+   * how much of it was used. It must start `run` and return the thread; the core joins it.
+   */
+  std::function<std::thread(const char* name, std::function<void()> run)> thread;
 };
 
 /** The poses a gadget's Botkin takes. The computer draws each from the bot's own look. */
