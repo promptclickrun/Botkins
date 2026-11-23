@@ -24,11 +24,11 @@ type Native = {
   addListener(name: "frame", listener: (event: WatchAudioFrame) => void): EventSubscription;
   addListener(name: "reachability", listener: (event: WatchReachability) => void): EventSubscription;
   addListener(name: "output", listener: (event: { sessionId: string; level: number }) => void): EventSubscription;
-  addListener(name: "interrupted", listener: (event: { sessionId: string; began: boolean; failed?: boolean }) => void): EventSubscription;
+  addListener(name: "interrupted", listener: (event: { sessionId: string; began: boolean; failed?: boolean; problem?: string }) => void): EventSubscription;
   addListener(name: "rtcMessage", listener: (event: { sessionId: string; message: string }) => void): EventSubscription;
   addListener(name: "rtcState", listener: (event: { sessionId: string; state: "open" | "connected" | "failed" | "closed" }) => void): EventSubscription;
   addListener(name: "rtcLevel", listener: (event: { sessionId: string; mic: number; output: number }) => void): EventSubscription;
-  addListener(name: "rtcInterrupted", listener: (event: { sessionId: string; failed?: boolean }) => void): EventSubscription;
+  addListener(name: "rtcInterrupted", listener: (event: { sessionId: string; failed?: boolean; problem?: string }) => void): EventSubscription;
 };
 
 export const WatchCompanion = requireOptionalNativeModule<Native>("BotkinsWatch");

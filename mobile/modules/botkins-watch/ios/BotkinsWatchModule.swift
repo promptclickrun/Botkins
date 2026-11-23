@@ -193,7 +193,7 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     }
   }
 
-  func voiceStarted(_ sessionId: String, _ inputRate: Int, _ outputRate: Int) throws {
+  func voiceStarted(_ sessionId: String, _ inputRate: Int, _ outputRate: Int) async throws {
     guard let session = self.session, session.isPaired, session.isWatchAppInstalled, session.isReachable else {
       throw Exception(name: "E_WATCH_UNREACHABLE", description: "The Watch and iPhone are not reachable.")
     }
@@ -215,7 +215,27 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
       try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
       throw Exception(name: "E_WATCH_AUDIO", description: "The Watch voice session could not keep audio active.")
     }
-    self.send(["kind": "voiceStarted", "sessionId": sessionId, "inputRate": inputRate, "outputRate": outputRate])
+    do {
+      let message: [String: Any] = ["kind": "voiceStarted", "sessionId": sessionId, "inputRate": inputRate, "outputRate": outputRate]
+      try await withCheckedThrowingContinuation { (reply: CheckedContinuation<Void, Error>) in
+        session.sendMessage(message) { result in
+          if result["sessionId"] as? String == sessionId, result["microphoneReady"] as? Bool == true {
+            reply.resume()
+          } else {
+            let reason = result["problem"] as? String ?? "Update Botkins on your Watch to start voice."
+            reply.resume(throwing: Exception(name: "E_WATCH_MIC", description: reason))
+          }
+        } errorHandler: { error in
+          reply.resume(throwing: error)
+        }
+      }
+      guard voiceSession == sessionId else {
+        throw Exception(name: "E_WATCH_ENDED", description: "The Watch call ended.")
+      }
+    } catch {
+      voiceEnded(sessionId, (error as? Exception)?.message ?? error.localizedDescription)
+      throw error
+    }
   }
 
   func voiceEnded(_ sessionId: String, _ reason: String?) {
@@ -237,9 +257,7 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     self.outputSequence &+= 1
     let packet = WatchAudioPacket(kind: .output, sessionId: sessionId, sampleRate: self.outputRate, sequence: self.outputSequence, pcm: pcm)
     guard let data = packet.data() else { return }
-    session.sendMessageData(data, replyHandler: nil) { [weak self] _ in
-      Task { @MainActor in self?.emit?("interrupted", ["sessionId": sessionId, "began": true, "failed": true]) }
-    }
+    sendOutputPacket(data, over: session, sessionId: sessionId)
   }
 
   func flush(_ sessionId: String) {
@@ -250,15 +268,9 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
   }
 
   func rtcStart(_ sessionId: String) async throws -> String {
-    guard let session = self.session, session.isPaired, session.isWatchAppInstalled, session.isReachable else {
-      throw Exception(name: "E_WATCH_UNREACHABLE", description: "The Watch and iPhone are not reachable.")
-    }
     self.rtc?.close()
-    self.voiceSession = sessionId
-    self.outputRate = 24_000
-    self.inputSequence = 0
-    self.outputSequence = 0
-    self.lastRtcLevel = Date.distantPast
+    self.rtc = nil
+    try await voiceStarted(sessionId, 24_000, 24_000)
     let peer = WatchRTCPeer(
       sessionId: sessionId,
       onMessage: { [weak self] message in
@@ -282,14 +294,7 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
       }
     )
     self.rtc = peer
-    self.send(["kind": "voiceStarted", "sessionId": sessionId, "inputRate": 24_000, "outputRate": 24_000])
     do {
-      let audio = AVAudioSession.sharedInstance()
-      try audio.setCategory(.playback, mode: .spokenAudio, options: [])
-      try audio.setPreferredSampleRate(24_000)
-      try audio.setPreferredIOBufferDuration(0.02)
-      try audio.setActive(true)
-      try self.startKeepAliveAudio()
       return try await peer.offer()
     } catch {
       peer.close()
@@ -382,8 +387,19 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     outputSequence &+= 1
     let packet = WatchAudioPacket(kind: .output, sessionId: sessionId, sampleRate: 24_000, sequence: outputSequence, pcm: pcm)
     if let data = packet.data() {
-      session.sendMessageData(data, replyHandler: nil) { [weak self] _ in
-        Task { @MainActor in self?.emit?("rtcInterrupted", ["sessionId": sessionId, "failed": true]) }
+      sendOutputPacket(data, over: session, sessionId: sessionId)
+    }
+  }
+
+  private func sendOutputPacket(_ data: Data, over session: WCSession, sessionId: String) {
+    session.sendMessageData(data, replyHandler: nil) { [weak self] error in
+      // Reachability already gives a disconnected Watch time to return.
+      if (error as? WCError)?.code == .notReachable { return }
+      Task { @MainActor in
+        guard let self, self.voiceSession == sessionId else { return }
+        let event = self.rtc?.sessionId == sessionId ? "rtcInterrupted" : "interrupted"
+        self.emit?(event, ["sessionId": sessionId, "began": true, "failed": true,
+                           "problem": "Audio could not reach the Watch. " + error.localizedDescription])
       }
     }
   }
@@ -495,9 +511,9 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     if message["kind"] as? String == "audioInterrupted" {
       if let id = message["sessionId"] as? String, id == voiceSession {
         if rtc?.sessionId == id {
-          emit?("rtcInterrupted", ["sessionId": id, "failed": true])
+          if message["failed"] as? Bool == true { emit?("rtcInterrupted", message) }
         } else {
-          emit?("interrupted", ["sessionId": id, "began": true, "failed": message["failed"] as? Bool ?? false])
+          emit?("interrupted", message)
         }
       }
       return

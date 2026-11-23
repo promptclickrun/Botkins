@@ -7,7 +7,7 @@ final class WatchVoiceEngine {
   private let queue = DispatchQueue(label: "app.botkins.watch.voice")
   private let sendFrame: (Data, UInt32) -> Void
   private let reportLevel: (Double) -> Void
-  private let interrupted: (Bool) -> Void
+  private let interrupted: (Bool, Bool) -> Void
   private var engine: AVAudioEngine?
   private var player: AVAudioPlayerNode?
   private var converter: AVAudioConverter?
@@ -16,38 +16,42 @@ final class WatchVoiceEngine {
   private var pending = Data()
   private var queuedFrames = 0
   private var observer: NSObjectProtocol?
-  private var sessionId = ""
   private(set) var running = false
 
   init(
     sendFrame: @escaping (Data, UInt32) -> Void,
     reportLevel: @escaping (Double) -> Void,
-    interrupted: @escaping (Bool) -> Void
+    interrupted: @escaping (Bool, Bool) -> Void
   ) {
     self.sendFrame = sendFrame
     self.reportLevel = reportLevel
     self.interrupted = interrupted
   }
 
-  func start(sessionId: String, inputRate: Int, outputRate: Int) throws {
-    try queue.sync {
-      stopLocked()
-      self.sessionId = sessionId
-      let audio = AVAudioSession.sharedInstance()
-      try audio.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
-      try audio.setActive(true)
+  static func activate() async throws {
+    let audio = AVAudioSession.sharedInstance()
+    guard try await audio.activate(options: []) else {
+      throw NSError(domain: "BotkinsWatchVoice", code: 3, userInfo: [
+        NSLocalizedDescriptionKey: "watchOS could not activate the audio route."
+      ])
+    }
+  }
 
+  func start(inputRate: Int, outputRate: Int) throws {
+    try queue.sync {
       let engine = AVAudioEngine()
       let player = AVAudioPlayerNode()
-      try engine.inputNode.setVoiceProcessingEnabled(true)
+      // Some Watch audio routes provide ordinary input without voice processing.
+      try? engine.inputNode.setVoiceProcessingEnabled(true)
       engine.attach(player)
       guard
         let wire = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(inputRate), channels: 1, interleaved: true),
         let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(outputRate), channels: 1, interleaved: false)
       else { throw NSError(domain: "BotkinsWatchVoice", code: 1) }
       let source = engine.inputNode.outputFormat(forBus: 0)
-      guard let converter = AVAudioConverter(from: source, to: wire) else {
-        throw NSError(domain: "BotkinsWatchVoice", code: 2)
+      guard source.sampleRate > 0, source.channelCount > 0,
+            let converter = AVAudioConverter(from: source, to: wire) else {
+        throw NSError(domain: "BotkinsWatchVoice", code: 2, userInfo: [NSLocalizedDescriptionKey: "No usable microphone input is available."])
       }
       self.engine = engine
       self.player = player
@@ -69,11 +73,32 @@ final class WatchVoiceEngine {
       ) { [weak self] note in
         let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
         let value = raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) }
-        self?.interrupted(value == .began)
+        guard let value else { return }
+        let options = AVAudioSession.InterruptionOptions(rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+        self?.interrupted(value == .began, options.contains(.shouldResume))
       }
       engine.prepare()
       try engine.start()
       player.play()
+      running = true
+    }
+  }
+
+  func pause() {
+    queue.sync {
+      running = false
+      player?.stop()
+      engine?.pause()
+      pending.removeAll()
+      queuedFrames = 0
+    }
+  }
+
+  func resume() throws {
+    try queue.sync {
+      guard let engine else { throw CancellationError() }
+      try engine.start()
+      player?.play()
       running = true
     }
   }
@@ -106,6 +131,7 @@ final class WatchVoiceEngine {
 
   func flush() {
     queue.async {
+      guard self.running else { return }
       self.player?.stop()
       self.player?.play()
       self.queuedFrames = 0
@@ -120,7 +146,7 @@ final class WatchVoiceEngine {
     if let observer { NotificationCenter.default.removeObserver(observer) }
     observer = nil
     running = false
-    try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    defer { try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation]) }
     guard let engine else { return }
     engine.inputNode.removeTap(onBus: 0)
     engine.mainMixerNode.removeTap(onBus: 0)
@@ -136,7 +162,7 @@ final class WatchVoiceEngine {
   }
 
   private func heard(_ buffer: AVAudioPCMBuffer, source: AVAudioFormat, wire: AVAudioFormat, converter: AVAudioConverter) {
-    guard running, buffer.frameLength > 0 else { return }
+    guard buffer.frameLength > 0 else { return }
     let ratio = wire.sampleRate / source.sampleRate
     let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
     guard let output = AVAudioPCMBuffer(pcmFormat: wire, frameCapacity: capacity) else { return }
@@ -155,6 +181,7 @@ final class WatchVoiceEngine {
     let bytes = Int(output.frameLength) * 2
     let data = Data(bytes: samples, count: bytes)
     queue.async {
+      guard self.running else { return }
       self.pending.append(data)
       let piece = Int(wire.sampleRate * 0.04) * 2
       while self.pending.count >= piece {

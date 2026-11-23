@@ -272,6 +272,23 @@ test("OpenAI: a tool call runs once, answers, then asks for a response", async (
   assert.equal(sent.length, 2);
 });
 
+test("a Watch microphone startup failure reaches the call before the socket ends", async () => {
+  const h = harness();
+  const reason = "Watch microphone could not start. No input route is available.";
+  let refuse!: (error: Error) => void;
+  h.audio.start = () => new Promise<void>((_, reject) => { refuse = reject; });
+  const transport = new OpenAISocketTransport({ url: "wss://x", token: "ek_1", session: {} }, h.audio, h.connect, h.tools);
+  const events: string[] = [];
+  transport.on("error", (message) => events.push(message));
+  transport.on("status", (status) => events.push(status));
+  const started = transport.start();
+  h.sockets[0]!.open();
+  assert.equal(transport.status, "connecting");
+  refuse(new Error(reason));
+  await assert.rejects(started, { message: reason });
+  assert.deepEqual(events, [reason, "ended"]);
+});
+
 test("OpenAI socket: the bot thinks while the tool runs", async () => {
   const h = harness();
   const transport = new OpenAISocketTransport({ url: "wss://x", token: "ek_1", session: { type: "session.update", session: {} } }, h.audio, h.connect, h.tools);

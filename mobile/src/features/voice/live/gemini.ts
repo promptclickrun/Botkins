@@ -68,7 +68,7 @@ export class GeminiTransport extends LiveBase {
         this.ready = null;
         void this.startAudio().then(resolve, (error: unknown) => {
           reject(error);
-          this.end();
+          this.fail(error instanceof Error ? error.message : "The microphone could not start.");
         });
       };
       socket.onopen = () => {
@@ -110,7 +110,7 @@ export class GeminiTransport extends LiveBase {
       }),
       // The phone could not keep the sound going (the microphone or the speaker was taken away for good).
       this.audio.addListener("interrupted", (event) => {
-        if (event.failed && !this.ended) this.fail("The phone's sound stopped. End the call and try again.");
+        if (event.failed && !this.ended) this.fail(event.problem ?? "The phone's sound stopped. End the call and try again.");
       }),
     );
     await this.audio.start({ inputRate: this.session.input.sampleRate, outputRate: this.session.output.sampleRate, speaker: this.speaker });
