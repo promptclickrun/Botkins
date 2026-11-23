@@ -16,6 +16,21 @@ import { ModelProvider } from "../provider.mjs";
 import { modelDetails } from "../../modeldetails.mjs";
 import { KEYED, KEYED_IDS, OPENROUTER_BASE, modelApi, needs, normaliseConfig } from "./config.mjs";
 
+/**
+ * A server's model list is often every model it has, most of which can't hold a chat: an Azure
+ * resource listed 501, from DALL·E and Whisper up (Nov 2026). These are left out of the picker. A
+ * person can still name one by hand (the configured models).
+ */
+const NOT_CHAT = /(^|[/:_-])(text-embedding|embedding|embed|tts|whisper|dall-e|gpt-image|image|moderation|transcribe|realtime|audio|davinci|babbage|sora|computer-use|search-preview)(?=$|[/:_.-])/i;
+/** An entry whose server says it can't chat (Azure's `capabilities`), or whose retirement date has passed. */
+function chats(item) {
+  if (!item || typeof item !== "object") return false;
+  const can = item.capabilities;
+  if (can && typeof can === "object" && can.chat_completion === false) return false;
+  const retired = Date.parse(item.deprecation?.inference ?? "");
+  return !(Number.isFinite(retired) && retired < Date.now());
+}
+
 export { KEYED, KEYED_IDS, KEY_PATHS } from "./config.mjs";
 
 /** Where a provider's key is kept in the vault: the same place as a token pasted for any provider (desktop/terminal/signin.mjs). */
@@ -185,7 +200,7 @@ export class KeyedProvider extends ModelProvider {
     if (!answer.ok) throw new Error(this.name + " answered " + answer.status + " to the model list.");
     return answer.json();
   }
-  /** `GET <baseUrl>/models`: the ids a server lists. */
+  /** `GET <baseUrl>/models`: the ids a server lists that a bot can chat with. */
   async serverModels(config) {
     if (!config.baseUrl) return [];
     const key = this.key();
@@ -195,8 +210,9 @@ export class KeyedProvider extends ModelProvider {
     } catch (error) {
       throw new Error("Couldn't read the model list from " + new URL(config.baseUrl).host + ": " + (error?.cause?.code ?? error?.message ?? error));
     }
-    const ids = (Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : []).map((item) => (typeof item === "string" ? item : item?.id));
-    return [...new Set(ids.filter((id) => typeof id === "string" && id && id.length <= 200))].slice(0, MAX_LISTED);
+    const items = (Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : []).filter((item) => typeof item === "string" || chats(item));
+    const ids = items.map((item) => (typeof item === "string" ? item : item?.id));
+    return [...new Set(ids.filter((id) => typeof id === "string" && id && id.length <= 200 && !NOT_CHAT.test(id)))].slice(0, MAX_LISTED);
   }
   /** OpenRouter's public list, keeping the models that can call tools (a bot's work is tool calls). */
   async openRouterModels() {

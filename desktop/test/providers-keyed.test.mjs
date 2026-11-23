@@ -242,6 +242,23 @@ test("an OpenAI endpoint lists its own models with the key, and the configured o
   assert.equal(models[1].contextWindow, 9000);
 });
 
+test("an OpenAI endpoint's list leaves out what can't chat: flagged, retired, or of a family that only embeds, speaks, hears or draws", async () => {
+  // The shape an Azure resource's /openai/v1/models answers with (Nov 2026), and OpenAI's plain one.
+  const data = [
+    { id: "gpt-4o", capabilities: { chat_completion: true } },
+    { id: "gpt-4-0314", capabilities: { chat_completion: true }, deprecation: { inference: "2024-06-13T00:00:00Z" } },
+    { id: "dall-e-3-3.0", capabilities: { chat_completion: false, inference: true } },
+    { id: "whisper-001", capabilities: { chat_completion: false } },
+    { id: "text-embedding-3-large" }, { id: "tts-1-hd" }, { id: "gpt-4o-realtime-preview" }, { id: "gpt-4o-mini-transcribe" },
+    { id: "gpt-image-1" }, { id: "omni-moderation-latest" }, { id: "gpt-4o-audio-preview" }, { id: "mistral-embed" },
+    { id: "gpt-5-mini" }, { id: "llama3.1:8b" }, { id: "Phi-4-multimodal-instruct" }, "qwen2.5-coder",
+  ];
+  const fetch = async () => json({ data });
+  const { provider } = make("openai-api", { key: "sk-live", fetch, config: { baseUrl: "https://api.example.com/v1", api: "completions", models: [{ id: "tts-1-hd", name: "Named by hand" }] } });
+  const models = await provider.models();
+  assert.deepEqual(models.map((m) => m.id), ["tts-1-hd", "gpt-4o", "gpt-5-mini", "llama3.1:8b", "Phi-4-multimodal-instruct", "qwen2.5-coder"]);
+});
+
 test("an OpenAI endpoint that can't list its models offers the configured ones, or says why", async () => {
   const fail = async () => {
     throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
