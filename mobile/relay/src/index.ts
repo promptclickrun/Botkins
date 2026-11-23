@@ -854,7 +854,11 @@ export class Room extends DurableObject<Env> {
   private async beginRecovery(group: string, leaving?: Uint8Array, until = Date.now() + V3_RECONNECT_WINDOW): Promise<RecoveryState | null> {
     if (this.open("host").length) return null;
     const current = await this.recovery();
-    if (current?.group === group) return current;
+    if (current?.group === group) {
+      // A phone leaving can open the window before the host's own close: still keep what is in flight.
+      this.holdUntil(current.until);
+      return current;
+    }
     const phones = this.open("phone").map(ws => hex((ws.deserializeAttachment() as PhoneAttachment).ids));
     if (leaving && !phones.includes(hex(leaving))) phones.push(hex(leaving));
     const recovery = { version: "v3", group, until, phones } satisfies RecoveryState;
