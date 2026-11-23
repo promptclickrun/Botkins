@@ -39,6 +39,7 @@ import { delimiter, dirname, join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { ENDED_FOR_PORT } from "../oauth.mjs";
 import { cliEnv, run } from "../providers/cli.mjs";
+import { KEYED, KEYED_IDS, keyVaultId } from "../providers/keyed/index.mjs";
 import { shownText } from "../shown-text.mjs";
 
 const MAX_EVENTS = 400;
@@ -57,7 +58,7 @@ export const TOOL_ANSWER_MS = 10 * 60_000;
 /** A sign-in that `--start` left open is read by nobody on purpose: it is ended as a left one only after the whole wait. */
 const HELD_ABANDONED_MS = TOOL_ANSWER_MS;
 /** The providers whose sign-in a token can stand in for (useToken), and those with a sign-in of their own here (flow). */
-const TOKEN_PROVIDERS = new Set(["codex", "claude", "copilot"]);
+const TOKEN_PROVIDERS = new Set(["codex", "claude", "copilot", ...KEYED_IDS]);
 const GUIDED_PROVIDERS = new Set(["codex", "claude", "copilot"]);
 const KEEP_MS = 60_000;
 /** How long the second step waits for the sign-in server after it has the address. */
@@ -77,7 +78,7 @@ const refusal = (message, code) => Object.assign(new Error(message), { code });
 /** The codes of desktop/oauth.mjs for a refusal that is not "this address is turned away, and the sign-in is open". */
 const REFUSALS = new Set(["ANSWERED", "NO_SIGN_IN"]);
 /** Where a pasted token is kept in the vault, by provider. */
-const vaultId = (provider) => "terminal-provider-" + provider;
+const vaultId = keyVaultId;
 
 /** What a pasted Claude token is, by its shape: an API key is billed by use, anything else is the plan's own token. */
 const claudeEnv = (token) => (/^sk-ant-api/.test(token) ? { ANTHROPIC_API_KEY: token } : { CLAUDE_CODE_OAUTH_TOKEN: token });
@@ -91,8 +92,8 @@ export class SignIns {
    * @param options.env        The service's own environment, which the tools it starts inherit.
    * @param options.launch     For tests: replaces spawn.
    */
-  constructor({ providers, vault, changed = async () => {}, env = process.env, launch = spawn, runTool = run, platform = process.platform, home = homedir() }) {
-    Object.assign(this, { providers, vault, changed, env, launch, runTool, platform, home });
+  constructor({ providers, vault, changed = async () => {}, enable = async () => {}, env = process.env, launch = spawn, runTool = run, platform = process.platform, home = homedir() }) {
+    Object.assign(this, { providers, vault, changed, enable, env, launch, runTool, platform, home });
     this.sessions = new Map();
   }
 
@@ -136,6 +137,7 @@ export class SignIns {
     let previous = null;
     const secret = String(token ?? "").trim();
     if (!secret || secret.length > 8000 || /\s/.test(secret)) throw new Error("That isn't a token or key: it is one word with no spaces.");
+    if (KEYED_IDS.includes(provider.id)) return this.useKey(provider, secret);
     if (provider.id === "codex") {
       const file = await provider.locate();
       if (!file) throw new Error("The Codex CLI isn't installed on this host.");
@@ -167,6 +169,19 @@ export class SignIns {
       throw new Error(provider.name + " didn't accept that token." + (status?.message ? " " + status.message : ""));
     }
     return { connected: true, account: status.account ?? null, plan: status.plan ?? null };
+  }
+  /**
+   * Keeps the key of a provider that answers on one (providers/keyed). The key alone may not make
+   * it ready (Foundry also needs an endpoint and a model), so it is kept either way; what is still
+   * missing is said in the answer. Once the provider has all it needs it is switched on.
+   */
+  async useKey(provider, secret) {
+    if (provider.id === "openrouter" && !/^sk-or-/.test(secret)) throw new Error("That isn't an OpenRouter key: they start with sk-or- (make one at " + KEYED.openrouter.keyUrl + ").");
+    this.keep(provider, secret);
+    const status = await provider.status();
+    if (status.connected) await this.enable(provider.id);
+    await this.changed(provider.id);
+    return { connected: !!status.connected, account: null, plan: status.plan ?? null, ...(status.keyed?.needs && { needs: status.keyed.needs }) };
   }
   /** Puts a token in the vault and where the tools read it. */
   keep(provider, secret) {
@@ -204,6 +219,7 @@ export class SignIns {
    */
   async start(id, { service, method, abandonedMs } = {}) {
     const provider = this.providers().require(id);
+    if (KEYED_IDS.includes(provider.id)) throw new Error(provider.name + " has no sign-in page: it takes a key. Paste it (`botkins providers login " + provider.id + " --token`, or the key field on a phone).");
     return this.begin(provider, "sign-in", (session) => this.flow(provider, session, { service, method }), {
       abandonedMs,
       settle: async (status) => {

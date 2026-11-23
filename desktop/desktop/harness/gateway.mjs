@@ -5,8 +5,11 @@
 //   POST /chatgpt/responses    OpenAI Responses format    → the person's ChatGPT plan (chatgpt.mjs)
 //   POST /claude/v1/messages   Anthropic Messages format  → the person's Claude plan, through
 //                                                           Claude Code (claude.mjs)
+//   POST /key/<provider>/chat/completions | /responses     → OpenRouter, Azure Foundry or an
+//                                                           OpenAI endpoint, with the key the
+//                                                           person gave (providers/keyed)
 //
-// Neither plan's sign-in passes through the Copilot runtime: it is added here, for the one
+// Neither plan's sign-in, and no key, passes through a harness: it is added here, for the one
 // request that needs it.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
@@ -14,6 +17,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { assemble, ClaudePool, claudeTurn, PlanError } from "./claude.mjs";
 import { chatgptTurn, completeOutput } from "./chatgpt.mjs";
+import { KEYED, KEY_PATHS } from "../providers/keyed/config.mjs";
 
 const MAX_BODY = 64 * 1024 * 1024;
 
@@ -21,13 +25,15 @@ export class Gateway {
   /**
    * @param options.chatgpt  { signIn(), renew() } for the ChatGPT plan, or null when there is none.
    * @param options.claude   async () => ({ file, env, cwd, bridge, report? }) for the Claude plan, or null.
+   * @param options.keyed    (providerId) => { baseUrl, query?, headers, secrets } | null: where a key provider's
+   *                         requests go, with its key in the headers (providers/keyed). Null for none.
    * @param options.version  Botkins' version.
    * @param options.waiting  How many runs of Claude Code wait for a request (claude.mjs, ClaudePool). 0 for none.
    * @param options.settleMs How long such a run must have waited before it takes a request (tests pass 0).
    * @param options.fetch, options.launch  For tests.
    */
-  constructor({ chatgpt = null, claude = null, speedTier = async () => undefined, version = "", fetch: fetcher = globalThis.fetch, launch, waiting = 2, settleMs, log = () => {} } = {}) {
-    Object.assign(this, { chatgpt, claude, speedTier, version, fetch: fetcher, launch, log });
+  constructor({ chatgpt = null, claude = null, keyed = () => null, speedTier = async () => undefined, version = "", fetch: fetcher = globalThis.fetch, launch, waiting = 2, settleMs, log = () => {} } = {}) {
+    Object.assign(this, { chatgpt, claude, keyed, speedTier, version, fetch: fetcher, launch, log });
     // Runs of Claude Code that have finished starting, so a reply begins at once and doesn't stop in its middle.
     this.pool = claude && waiting > 0 ? new ClaudePool({ size: waiting, log, ...(settleMs !== undefined && { settleMs }), ...(launch && { launch }) }) : null;
     this.secret = randomBytes(24).toString("base64url");
@@ -111,15 +117,23 @@ export class Gateway {
         if (size > MAX_BODY) throw new PlanError(413, "request_too_large", "The request is too large.");
         chunks.push(chunk);
       }
+      const raw = Buffer.concat(chunks).toString("utf8");
       let body;
       try {
-        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        body = JSON.parse(raw);
       } catch {
         throw new PlanError(400, "invalid_request_error", "The request isn't JSON.");
       }
       // The runtime hanging up ends the work behind the request.
       const gone = new AbortController();
       response.on("close", () => !response.writableFinished && gone.abort());
+      // A key provider's request goes on as it is, with the person's key in place of this run's secret.
+      const keyRoute = path.match(/^\/key\/([^/]+)\/(.+)$/);
+      if (keyRoute) {
+        const [, id, endpoint] = keyRoute;
+        if (!Object.hasOwn(KEYED, id) || !KEY_PATHS.includes(endpoint)) throw new PlanError(404, "not_found_error", "Not found");
+        return await this.keyedRequest(id, endpoint, raw, request, response, gone.signal);
+      }
       const route = path.match(/^\/(chatgpt|claude)(?:\/(fast|ultrafast))?(\/.*)$/);
       if (route) {
         const [, plan, speed, endpoint] = route;
@@ -131,6 +145,46 @@ export class Gateway {
     } catch (error) {
       fail(error, anthropic);
     }
+  }
+
+  /**
+   * Sends one request to a key provider and streams the answer back as it comes: the status, the
+   * content type and the body (an event stream is not touched). The key is in the headers only;
+   * where it appears in an error from upstream it is hidden.
+   */
+  async keyedRequest(id, endpoint, text, request, response, signal) {
+    const name = KEYED[id].name;
+    const connection = this.keyed(id);
+    if (!connection) throw new PlanError(503, "api_error", name + " isn't set up on this computer. Add its key and settings in Settings › Model providers.");
+    const url = new URL(connection.baseUrl + "/" + endpoint);
+    for (const [key, value] of Object.entries(connection.query ?? {})) url.searchParams.set(key, value);
+    let answer;
+    try {
+      answer = await this.fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: String(request.headers.accept ?? "application/json"), ...connection.headers },
+        body: text,
+        signal,
+        redirect: "error",
+      });
+    } catch (error) {
+      if (signal.aborted) return response.destroy();
+      throw new PlanError(502, "api_error", "Couldn't reach " + name + " (" + (error?.cause?.code ?? "no answer") + ").");
+    }
+    const type = answer.headers.get("content-type") ?? "application/json";
+    const retry = answer.headers.get("retry-after");
+    const head = { "content-type": type, ...(retry && { "retry-after": retry }) };
+    if (!answer.ok || !answer.body) {
+      let reply = answer.body ? await answer.text() : "";
+      for (const secret of connection.secrets ?? []) if (secret) reply = reply.split(secret).join("[key]");
+      response.writeHead(answer.status, { ...head, "content-length": Buffer.byteLength(reply) }).end(reply);
+      return;
+    }
+    response.writeHead(answer.status, { ...head, ...(/event-stream/i.test(type) && { "cache-control": "no-cache" }) });
+    await pipeline(Readable.fromWeb(answer.body), response).catch((error) => {
+      if (!signal.aborted) this.log("gateway: " + name + "'s stream ended early: " + (error?.cause?.code ?? error?.code ?? "no reason given"));
+      response.destroy();
+    });
   }
 
   async chatgptRequest(body, response, signal, serviceTier) {
