@@ -1378,7 +1378,7 @@ export type ActivityState = { phase: "thinking" | "working" | "waiting" | "needs
 // ---------------------------------------------------------------------------------------------
 // Device access (capability "device-v1"): tools a bot can call that run on a paired phone.
 
-export type DeviceSource = "calendar" | "contacts" | "health" | "location" | "photos" | "mail";
+export type DeviceSource = "calendar" | "contacts" | "health" | "location" | "photos" | "music" | "mail";
 /** off: bots can't use it. read: look only. interact: look, and add or change. */
 export type DeviceLevel = "off" | "read" | "interact";
 export type DeviceSources = Partial<Record<DeviceSource, DeviceLevel>>;

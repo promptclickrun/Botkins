@@ -152,6 +152,7 @@ export async function boot() {
   // The Home Screen and Lock Screen widgets read what the app last saw (src/state/widgets.ts).
   void import("./widgets").then((widgets) => widgets.startWidgets()).catch(() => {});
   void import("./device").then((device) => device.startDeviceAnswers()).catch(() => {});
+  void import("./watch").then((watch) => watch.startWatchCompanion()).catch(() => {});
   AppState.addEventListener("change", (state) => {
     if (state === "active") {
       nearbyPace.reset();
@@ -270,6 +271,13 @@ export async function switchComputer(serverId: string) {
   kept = next;
   startOver();
   await saveIndex().catch(() => {});
+}
+
+/** The Shortcuts computer picker can open before the foreground app has booted. */
+export async function shortcutHosts() {
+  const { kept } = await readSaved();
+  return kept.list.slice().sort((a, b) => Number(b.serverId === kept.current) - Number(a.serverId === kept.current))
+    .map(({ serverId, name }) => ({ id: serverId, name }));
 }
 
 /** An App Intent may run before a scene exists. Read its pairing without starting the UI or changing its computer. */

@@ -31,13 +31,21 @@ export const PHONE_TOOLS = {
   phone_photos_recent: { source: "photos", level: "read", args: ["limit", "from", "to", "album", "kind"], label: "Listed your photos" },
   phone_photos_get: { source: "photos", level: "read", args: ["id", "maxSize"], label: "Brought over a photo" },
   phone_photos_save: { source: "photos", level: "interact", args: ["path", "album"], label: "Saved a picture to Photos" },
+  phone_music_now_playing: { source: "music", level: "read", args: [], label: "Checked what is playing" },
+  phone_music_search: { source: "music", level: "read", args: ["query", "types", "source", "limit"], label: "Searched Apple Music" },
+  phone_music_library: { source: "music", level: "read", args: ["type", "limit"], label: "Read your Apple Music library" },
+  phone_music_play: { source: "music", level: "interact", args: ["id", "type", "source", "query", "shuffle"], label: "Played Apple Music" },
+  phone_music_control: { source: "music", level: "interact", args: ["action"], label: "Controlled Apple Music" },
+  phone_music_create_playlist: { source: "music", level: "interact", args: ["name", "description", "songIds"], label: "Made an Apple Music playlist" },
+  phone_music_add_playlist: { source: "music", level: "interact", args: ["playlistId", "songIds"], label: "Added songs to an Apple Music playlist" },
+  phone_music_add_library: { source: "music", level: "interact", args: ["id", "type"], label: "Added music to your library" },
   phone_mail_compose: { source: "mail", level: "interact", args: ["to", "cc", "bcc", "subject", "body", "html"], hands: true, label: "Opened an email for you" },
 } satisfies Record<string, PhoneTool>;
 
 export type PhoneToolName = keyof typeof PHONE_TOOLS;
 
-export const SOURCES: DeviceSource[] = ["calendar", "contacts", "health", "location", "photos", "mail"];
-export const SOURCE_NAMES: Record<DeviceSource, string> = { calendar: "Calendar", contacts: "Contacts", health: "Health", location: "Location", photos: "Photos", mail: "Mail" };
+export const SOURCES: DeviceSource[] = ["calendar", "contacts", "health", "location", "photos", "music", "mail"];
+export const SOURCE_NAMES: Record<DeviceSource, string> = { calendar: "Calendar", contacts: "Contacts", health: "Health", location: "Location", photos: "Photos", music: "Apple Music", mail: "Mail" };
 
 const RANK: Record<DeviceLevel, number> = { off: 0, read: 1, interact: 2 };
 

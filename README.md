@@ -77,8 +77,10 @@ Pair the phone app, and your team goes with you.
 ### Botkins on your phone
 
 - **Pair in seconds.** Scan a QR code. Your phone can do what your computer can do.
-- **Chat, approve and steer** from anywhere. Get notifications and Live Activities.
-- **Let bots use your phone, if you allow it.** Calendar, contacts, Health, location and photos. You choose Off, Read, or Read and interact for each one.
+- **Chat, approve and steer** from anywhere. Get notifications and Live Activities, including a compact CarPlay view.
+- **Take the primary Botkin to your Watch.** See its latest conversation and avatar, talk live through the paired iPhone, and hear replies on Watch.
+- **Let bots use your phone, if you allow it.** Calendar, contacts, Health, location, photos and Apple Music. You choose Off, Read, or Read and interact for each one.
+- **Open from Shortcuts.** Open Botkins, open a selected Botkin's latest or new chat, send a background prompt, or start a voice chat.
 - **See your computer's screen.** View only, or view and control. Face ID checks it is you.
 - **Use it away from home.** Turn on the relay, and your phone reaches your computer from any network.
 

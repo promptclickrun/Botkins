@@ -9,8 +9,8 @@
 # TEAM_ID         the identifier for the Apple developer team that signs the app.
 #
 # The upload is signed with the "Apple Distribution" certificate in this Mac's keychain and the
-# provisioning profiles named in scripts/ExportOptions.plist: one for the app ("Botkins App Store")
-# and one for each extension in targets/ (the Live Activity and the notification extension). After it uploads,
+# provisioning profiles named in scripts/ExportOptions.plist: one for the app ("Botkins App Store"),
+# one for the embedded Watch app, and one for each extension in targets/. After it uploads,
 # Apple takes a few minutes to process the build; the internal TestFlight group gets it by itself.
 set -eu
 cd "$(dirname "$0")/.."

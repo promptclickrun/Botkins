@@ -1,11 +1,12 @@
 // What the Device access screen shows and asks iOS for, per source.
-import { CalendarDays, Contact, HeartPulse, Images, type LucideIcon, Mail, MapPin } from "lucide-react-native";
+import { CalendarDays, Contact, HeartPulse, Images, type LucideIcon, Mail, MapPin, Music2 } from "lucide-react-native";
 import type { Access } from "@/device/access";
 import { askCalendar, calendarAccess } from "@/device/calendar";
 import { askContacts, chooseMoreContacts, contactsAccess } from "@/device/contacts";
 import { askHealth, healthAccess } from "@/device/health";
 import { askLocation, locationAccess } from "@/device/location";
 import { mailReady } from "@/device/mail";
+import { askMusic, musicAccess } from "@/device/music";
 import { askPhotos, chooseMorePhotos, photosAccess } from "@/device/photos";
 import type { DeviceLevel, DeviceSource } from "@/link/types";
 import { brand } from "@/ui";
@@ -68,6 +69,14 @@ export const SOURCE_UI: Record<DeviceSource, SourceUI> = {
     check: () => photosAccess(),
     ask: () => askPhotos(),
     more: { label: "Choose more photos", run: chooseMorePhotos },
+  },
+  music: {
+    icon: Music2,
+    color: brand.rose,
+    says: { off: "Bots can't use Apple Music on this phone", read: "Bots can search and see what is playing", interact: "Bots can also play music and change playlists" },
+    labels: { interact: "Play and change" },
+    check: () => musicAccess(),
+    ask: () => askMusic(),
   },
   mail: {
     icon: Mail,

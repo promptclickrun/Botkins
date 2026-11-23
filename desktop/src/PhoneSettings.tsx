@@ -21,7 +21,7 @@ function remaining(ms: number) {
 }
 
 /** Settings › Phone: turn phone access on, pair a phone with a QR code, let phones reach this computer from away, choose what a phone may do with this screen, and see or remove paired phones. */
-const SOURCE_NAMES: Record<string, string> = { calendar: "Calendar", contacts: "Contacts", health: "Health", location: "Location", photos: "Photos", mail: "Mail" };
+const SOURCE_NAMES: Record<string, string> = { calendar: "Calendar", contacts: "Contacts", health: "Health", location: "Location", photos: "Photos", music: "Apple Music", mail: "Mail" };
 const list = (items: string[]) => (items.length < 2 ? items.join("") : items.slice(0, -1).join(", ") + " and " + items.at(-1));
 /** What a phone is notified about, as it chose on the phone. */
 export function notified(status: Pick<PhoneLink, "push">, deviceId: string) {

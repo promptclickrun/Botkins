@@ -332,7 +332,7 @@ Experimental. A bot that is proactive watches, with no model, for what its perso
 ## What differs for a desktop client
 
 - **Notifications.** A desktop client does not register for push (`link.push.register` is for phones). It should call `link.push.presence(active, chatId?)` when its window comes to the front, goes away, or shows another chat. While a desktop client is in front, the host treats it like its own window: a reply in the chat on that screen sends no notification to a phone.
-- **Tools on the device.** `link.device.*` (calendar, contacts, Health, location, photos, mail) are for phones. A desktop client sets no sources and answers no asks.
+- **Tools on the device.** `link.device.*` (calendar, contacts, Health, location, photos, Apple Music, mail) are for phones. A desktop client sets no sources and answers no asks.
 - **The screen.** `link.screen.*` shows the host's screen. A desktop client may use it under the same rule as a phone (the host's person allows view or control).
 - **Secrets.** As for a phone: a client saves a credential or links a field, then sends `{ $credential: id }`. No call returns a secret.
 - **Which host is in use.** Show `meta.name` (the host's name) wherever the client shows data from a host, and let the person switch between "This Mac" and each paired host. Keep one `Pairing` and one `LinkClient` for each host.
