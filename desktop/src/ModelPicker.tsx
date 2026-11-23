@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { BrainCircuit, Check, Search } from "lucide-react";
+import { BrainCircuit, Check, ChevronDown, Search } from "lucide-react";
 import type { Bot, Chat, FastMode, ModelChoice, ModelInfo, Preferences, ProviderStatus } from "./types";
 import ProviderIcon from "./ProviderIcon";
 import { effortLabel, findModel, modelFacts, modelName, plainError, PROVIDER_NAMES, useModelCatalog, useProviders, useProviderUsage } from "./providers";
 import { pickerLine, useNow } from "./ProviderLimits";
+import { moreAccessibilityLabel, moreLabel, PAGE_SIZE, pageGroups, pageMatches } from "./modelPages";
 import "./models.css";
 
 /** A model choice as plain text: "Claude Opus 5.5 · High". Pass the catalog for friendly names. */
@@ -69,7 +70,24 @@ const SAVED = "saved";
 export const names = (list: string[]) =>
   list.length < 2 ? list.join("") : list.slice(0, -1).join(", ") + " and " + list[list.length - 1];
 
-type Group = { provider: string; name: string; group?: string; models: { m: ModelInfo; index: number }[] };
+type Row = { m: ModelInfo; index: number };
+type Group = { provider: string; name: string; group?: string; models: Row[] };
+/** A provider's groups (one per service, or just one), for paging the provider as a whole. */
+type ProviderGroups = { provider: string; name: string; sections: Group[] };
+/** The key of a "Show more" row: a provider's, or the search's (MORE alone). */
+const MORE = "more:";
+const isMore = (key: string) => key.startsWith(MORE);
+
+/** Groups of the same provider, which groupModels keeps side by side, together. */
+function byProvider(groups: Group[]): ProviderGroups[] {
+  const out: ProviderGroups[] = [];
+  for (const g of groups) {
+    const last = out[out.length - 1];
+    if (last?.provider === g.provider) last.sections.push(g);
+    else out.push({ provider: g.provider, name: g.name, sections: [g] });
+  }
+  return out;
+}
 
 /** Models under their provider, in the catalog's order; a provider with services (OpenCode) is split by service. */
 function groupModels(models: ModelInfo[], query: string): Group[] {
@@ -152,6 +170,13 @@ export default function ModelPicker({
   const [error, setError] = useState(""),
     [saved, setSaved] = useState(false),
     [query, setQuery] = useState("");
+  // How many pages of models each provider shows, and a search's matches; both start at one when
+  // the picker opens, and a new search starts its matches at one.
+  const [pages, setPages] = useState<Record<string, number>>({});
+  const [searchPages, setSearchPages] = useState(1);
+  // The row the arrow keys are on when it isn't the chosen one: a "Show more" row, or the first
+  // model it revealed. Undefined follows the chosen row.
+  const [cursor, setCursor] = useState<string>();
   const uid = useId();
   const list = useRef<HTMLDivElement>(null);
   // A choice changed elsewhere (the main process moves the default when its provider leaves) shows here
@@ -179,24 +204,60 @@ export default function ModelPicker({
   const selected = !draft ? INHERIT : info ? keyFor(info) : SAVED;
 
   const groups = useMemo(() => groupModels(models, query), [models, query]);
+  const providerGroups = useMemo(() => byProvider(groups), [groups]);
+  const searching = !!query.trim();
+  // Only a page of each provider's models is drawn (a provider can list hundreds); the chosen one
+  // is always among them. A search pages its matches across every provider.
+  const chosenInfo = draft ? info : undefined;
+  const paged = useMemo(() => {
+    const isChosen = (row: Row) => !!chosenInfo && row.m === chosenInfo;
+    return searching
+      ? pageMatches<Row, Group, ProviderGroups>(providerGroups, searchPages, isChosen)
+      : { groups: pageGroups<Row, Group, ProviderGroups>(providerGroups, pages, isChosen), rest: 0 };
+  }, [providerGroups, searching, searchPages, pages, chosenInfo]);
   const searchable = models.length > 8;
-  // The choices in the order arrow keys move through them.
+  // The rows in the order arrow keys move through them: the choices, and the "Show more" rows.
   const order = [
     ...(scope !== "global" ? [INHERIT] : []),
     ...(draft && !info ? [SAVED] : []),
-    ...groups.flatMap((g) => g.models.filter(({ m }) => m.available).map(({ m }) => keyFor(m))),
+    ...paged.groups.flatMap((p) => [
+      ...p.sections.flatMap((g) => g.models.filter(({ m }) => m.available).map(({ m }) => keyFor(m))),
+      ...(p.rest > 0 ? [MORE + p.group.provider] : []),
+    ]),
+    ...(paged.rest > 0 ? [MORE] : []),
   ];
   const optionId = (key: string) => {
     if (key === INHERIT) return uid + "-inherit";
     if (key === SAVED) return uid + "-saved";
+    if (isMore(key)) return uid + "-more-" + key.slice(MORE.length).replace(/[^\w-]/g, "_");
     return uid + "-m" + models.findIndex((m) => keyFor(m) === key);
   };
-  const visible = order.includes(selected);
+  const active = cursor !== undefined && order.includes(cursor) ? cursor : selected;
+  const visible = order.includes(active);
   useEffect(() => {
-    if (visible) reveal(list.current, document.getElementById(optionId(selected)));
-  }, [selected, visible, groups]);
+    if (visible) reveal(list.current, document.getElementById(optionId(active)));
+  }, [active, visible, groups]);
+
+  /**
+   * Draws the next page behind a "Show more" row. From the keyboard, the arrow keys go on from the
+   * first model it revealed (or stay on the row when none of them can be chosen).
+   */
+  function showMore(key: string, fromKeys: boolean) {
+    const provider = key.slice(MORE.length);
+    const entry = paged.groups.find((p) => p.group.provider === provider);
+    const rows = key === MORE ? paged.groups.flatMap((p) => p.group.sections) : (entry?.group.sections ?? []);
+    const from = (key === MORE ? searchPages : (pages[provider] ?? 1)) * PAGE_SIZE;
+    if (key === MORE) setSearchPages((n) => n + 1);
+    else setPages((all) => ({ ...all, [provider]: (all[provider] ?? 1) + 1 }));
+    if (!fromKeys) return setCursor(undefined);
+    // Under a search, the providers' later matches aren't in paged.groups yet: count them from groups.
+    const flat = key === MORE ? groups.flatMap((g) => g.models) : rows.flatMap((g) => g.models);
+    const next = flat.slice(from, from + PAGE_SIZE).find(({ m }) => m.available);
+    setCursor(next ? keyFor(next.m) : key);
+  }
 
   const change = (choice?: ModelChoice) => {
+    setCursor(undefined);
     setDraft(choice);
     setDirty(true);
     setSaved(false);
@@ -215,7 +276,7 @@ export default function ModelPicker({
   }
   function keys(e: KeyboardEvent<HTMLDivElement>) {
     if (!ready) return;
-    const at = order.indexOf(selected);
+    const at = order.indexOf(active);
     const next =
       e.key === "ArrowDown"
         ? Math.min(order.length - 1, at + 1)
@@ -227,14 +288,22 @@ export default function ModelPicker({
               ? order.length - 1
               : -2;
     if (next === -2) {
-      if (e.key === "Enter" && !held) {
+      if (e.key === "Enter" && active !== selected && visible) {
+        // On a "Show more" row, or a model the arrow keys reached through one.
+        e.preventDefault();
+        if (isMore(active)) showMore(active, true);
+        else pick(active);
+      } else if (e.key === "Enter" && !held) {
         e.preventDefault();
         e.currentTarget.closest("form")?.requestSubmit();
       }
       return;
     }
     e.preventDefault();
-    if (order[next] !== undefined) pick(order[next]);
+    const key = order[next];
+    if (key === undefined) return;
+    if (isMore(key)) setCursor(key);
+    else pick(key);
   }
   function setLevel(effort: string) {
     const m = effectiveInfo;
@@ -296,11 +365,15 @@ export default function ModelPicker({
               aria-controls={uid + "-list"}
               placeholder="Search models"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSearchPages(1);
+                setCursor(undefined);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown" || e.key === "Enter") {
                   e.preventDefault();
-                  if (!visible && order.length) pick(order[0]);
+                  if (!visible && order.length && !isMore(order[0])) pick(order[0]);
                   list.current?.focus();
                 }
                 if (e.key === "Escape" && query) {
@@ -308,6 +381,8 @@ export default function ModelPicker({
                   e.preventDefault();
                   e.stopPropagation();
                   setQuery("");
+                  setSearchPages(1);
+                  setCursor(undefined);
                 }
               }}
             />
@@ -334,7 +409,7 @@ export default function ModelPicker({
           className="mp-list"
           role="listbox"
           aria-labelledby={uid + "-label"}
-          aria-activedescendant={visible ? optionId(selected) : undefined}
+          aria-activedescendant={visible ? optionId(active) : undefined}
           aria-busy={catalog.loading || undefined}
           tabIndex={0}
           onKeyDown={keys}
@@ -346,7 +421,7 @@ export default function ModelPicker({
               aria-selected={selected === INHERIT}
               aria-label={inheritText}
               aria-describedby={uid + "-inherit-desc"}
-              className="mp-option mp-inherit"
+              className={"mp-option mp-inherit" + (active === INHERIT ? " active" : "")}
               onClick={() => ready && pick(INHERIT)}
             >
               <span className="mp-check" aria-hidden="true">
@@ -367,7 +442,7 @@ export default function ModelPicker({
               aria-selected={selected === SAVED}
               aria-label={modelName(draft, models, fallback)}
               aria-describedby={uid + "-saved-desc"}
-              className="mp-option unavailable"
+              className={"mp-option unavailable" + (active === SAVED ? " active" : "")}
             >
               <span className="mp-check" aria-hidden="true">
                 <Check size={14} />
@@ -393,8 +468,9 @@ export default function ModelPicker({
               Loading models…
             </div>
           )}
-          {groups.map((g, gi) => {
-            const first = gi === 0 || groups[gi - 1].provider !== g.provider;
+          {paged.groups.flatMap((entry) => entry.sections.map((g, gi) => {
+            const first = gi === 0;
+            const last = gi === entry.sections.length - 1;
             const left = first ? pickerLine(usage?.find((u) => u.provider === g.provider), now) : undefined;
             return (
               <div
@@ -422,6 +498,7 @@ export default function ModelPicker({
                 {g.models.map(({ m, index }) => {
                   const key = keyFor(m);
                   const on = selected === key;
+                  const current = active === key;
                   const facts = modelFacts(m);
                   const desc = [
                     m.recommended && uid + "-r" + index,
@@ -440,7 +517,7 @@ export default function ModelPicker({
                       aria-disabled={!m.available || undefined}
                       aria-label={m.name}
                       aria-describedby={desc || undefined}
-                      className={"mp-option" + (m.available ? "" : " unavailable")}
+                      className={"mp-option" + (m.available ? "" : " unavailable") + (current ? " active" : "")}
                       onClick={() => ready && pick(key)}
                     >
                       <span className="mp-check" aria-hidden="true">
@@ -470,9 +547,21 @@ export default function ModelPicker({
                     </div>
                   );
                 })}
+                {last && entry.rest > 0 && (
+                  <MoreRow
+                    id={optionId(MORE + g.provider)}
+                    rest={entry.rest}
+                    providerName={g.name}
+                    active={active === MORE + g.provider}
+                    onClick={() => showMore(MORE + g.provider, false)}
+                  />
+                )}
               </div>
             );
-          })}
+          }))}
+          {paged.rest > 0 && (
+            <MoreRow id={optionId(MORE)} rest={paged.rest} active={active === MORE} onClick={() => showMore(MORE, false)} />
+          )}
           {!!query.trim() && !groups.length && (
             <div className="mp-note" role="status">
               No models match “{query.trim()}”.
@@ -554,6 +643,27 @@ export default function ModelPicker({
         </div>
       )}
     </Frame>
+  );
+}
+
+/** The row under a page of models that draws the next page: "Show 25 more", or "Show the last 3". */
+function MoreRow({ id, rest, providerName, active, onClick }: { id: string; rest: number; providerName?: string; active: boolean; onClick: () => void }) {
+  return (
+    <div
+      role="option"
+      id={id}
+      aria-selected={false}
+      aria-label={moreAccessibilityLabel(rest, providerName)}
+      className={"mp-option mp-more" + (active ? " active" : "")}
+      onClick={onClick}
+    >
+      <span className="mp-check" aria-hidden="true">
+        <ChevronDown size={14} />
+      </span>
+      <span className="mp-text">
+        <span className="mp-name">{moreLabel(rest)}</span>
+      </span>
+    </div>
   );
 }
 
