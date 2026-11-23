@@ -27,9 +27,10 @@ struct Transport {
 
 /**
  * A WebSocket client: one connection, whole binary and text messages. The core uses it for the relay
- * (botkins/relay.hpp), so a board without one reaches its computer only on its own network. A board's
- * needs wss:// (TLS, checked against the usual certificate authorities); ws:// is only for a relay on
- * the same machine (127.0.0.1, localhost).
+ * (botkins/relay.hpp), so a board without one reaches its computer only on its own network, and for
+ * live voice (botkins/live.hpp: the live provider's own socket). A board's needs wss:// (TLS, checked
+ * against the usual certificate authorities); ws:// is only for a server on the same machine
+ * (127.0.0.1, localhost).
  */
 struct Socket {
   struct Events {
@@ -43,9 +44,10 @@ struct Socket {
   };
   virtual ~Socket() = default;
   /**
-   * Connects to `url` offering one subprotocol, which the server must choose. Waits up to `timeout_ms`.
-   * Events come only after it returned true. A message longer than `max_message` closes the
-   * connection (1009).
+   * Connects to `url` (its path and query whole) offering one subprotocol, which the server must
+   * choose; an empty `protocol` offers none, and the server must then name none. Waits up to
+   * `timeout_ms`. Events come only after it returned true. A message longer than `max_message` closes
+   * the connection (1009).
    */
   virtual bool open(const std::string& url, const std::string& protocol, int timeout_ms, size_t max_message, Events events) = 0;
   /** Sends one message whole. Safe from any thread, also while another sends. False when the connection is gone. */

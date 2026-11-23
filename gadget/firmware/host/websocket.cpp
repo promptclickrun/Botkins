@@ -131,8 +131,9 @@ bool HostSocket::open(const std::string& url, const std::string& protocol, int t
   uint8_t nonce[16];
   random_bytes(nonce, sizeof nonce);
   const std::string key = base64(nonce, sizeof nonce);
+  // No subprotocol offered (a live provider's socket) sends no header for one.
   const std::string ask = "GET " + path + " HTTP/1.1\r\nHost: " + authority + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key +
-                          "\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: " + protocol + "\r\n\r\n";
+                          "\r\nSec-WebSocket-Version: 13\r\n" + (protocol.empty() ? "" : "Sec-WebSocket-Protocol: " + protocol + "\r\n") + "\r\n";
   std::string answer;
   size_t end = std::string::npos;
   bool ok = send_all(fd, (const uint8_t*)ask.data(), ask.size(), deadline);
