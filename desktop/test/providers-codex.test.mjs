@@ -10,6 +10,8 @@ import { Providers, defineTool } from "../desktop/providers/index.mjs";
 import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { BRIDGE, CodexProvider, approvalSettings, threadConfig } from "../desktop/providers/codex/index.mjs";
 import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
+import { piModel } from "../desktop/harness/index.mjs";
+import { meterLimit } from "../desktop/modeldetails.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { pass, until as soon, watching } from "./quiet-turns.mjs";
 
@@ -767,6 +769,31 @@ test("a model's window and prompt limit come from the models_cache.json in Codex
   assert.deepEqual([byId(list, "gpt-a").contextWindow, byId(list, "gpt-a").maxPrompt], [272000, 258400], "the prompt limit is the window times the share Codex fills");
   assert.equal(byId(list, "gpt-b").contextWindow, 128000);
   assert.equal("maxPrompt" in byId(list, "gpt-b"), false, "no share said, no prompt limit");
+});
+
+test("the resolved Codex override reaches Pi and the meter, capped by each model's maximum", async (t) => {
+  const home = join(tempDir(t), "codex-home");
+  catalogIn(home, [
+    { slug: "gpt-a", context_window: 500000, max_context_window: 872000, effective_context_window_percent: 95 },
+    { slug: "gpt-b", context_window: 128000, max_context_window: 272000, effective_context_window_percent: 95 },
+    { slug: "gpt-c", context_window: 1000000, effective_context_window_percent: 95 },
+  ]);
+  const { provider } = setup(t, (method) => method === "config/read" ? { config: { model_context_window: 872000 } } : listing()(method), { home });
+  const list = await provider.models();
+  assert.deepEqual(list.map((model) => [piModel(model).contextWindow, meterLimit(model)]), [[872000, 828400], [272000, 258400], [872000, 828400]]);
+});
+
+test("if Codex cannot answer config/read, the model list keeps the catalog defaults", async (t) => {
+  const home = join(tempDir(t), "codex-home");
+  catalogIn(home, [{ slug: "gpt-a", context_window: 500000, max_context_window: 872000, effective_context_window_percent: 95 }]);
+  const { provider, sent } = setup(t, (method) => {
+    if (method === "config/read") throw new Error("Method not found");
+    return listing()(method);
+  }, { home });
+  const model = byId(await provider.models(), "gpt-a");
+  assert.equal(sent("config/read").length, 1);
+  assert.equal(piModel(model).contextWindow, 500000);
+  assert.equal(meterLimit(model), 475000);
 });
 
 test("a share of the window that is not between none and all gives no prompt limit", async (t) => {
