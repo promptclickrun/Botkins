@@ -153,6 +153,14 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.rename", ref, title.join(" ")), (chat) => "The chat is called " + JSON.stringify(safe(chat.title)) + " now.");
         },
       },
+      "regenerate-title": {
+        summary: "Summarize a chat into a new title",
+        usage: "botkins chats regenerate-title <chat>",
+        details: "Uses the same summarizer as Regenerate title in the app, even when automatic naming is off. It doesn't add a turn to the chat.",
+        async run(context) {
+          context.print(await context.client.call("chats.regenerateTitle", one(context, CHAT)), (chat) => "The chat is called " + JSON.stringify(safe(chat.title)) + " now.");
+        },
+      },
       delete: {
         summary: "Delete a chat, with its messages and its runs",
         usage: "botkins chats delete <chat> [--yes]",

@@ -128,6 +128,11 @@ export function chatsApi({ workspace, handlers, bot }) {
       await handlers.renameChat(found.id, text(title, 120, "the chat a title (up to 120 characters)"));
       return view(chat(found.id));
     },
+    async "chats.regenerateTitle"([ref]) {
+      const found = chat(ref);
+      await handlers.regenerateChatTitle(found.id);
+      return view(chat(found.id));
+    },
     /** Removes the chat with its messages and its runs. It cannot be undone, and a chat that works is refused. */
     async "chats.delete"([ref]) {
       const found = chat(ref);
