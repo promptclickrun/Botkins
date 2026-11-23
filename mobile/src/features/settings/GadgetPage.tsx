@@ -202,7 +202,7 @@ export default function GadgetPage() {
         <Label>Gadget</Label>
         <Group>
           <Row title="Rename" chevron disabled={disabled} onPress={rename} />
-          <Row title="Restart" value={gadget?.restarting ? "Restarting…" : undefined} disabled={disabled || !!gadget?.restarting} onPress={() => void restart()} />
+          <Row title="Restart" subtitle={gadget?.restarting ? "Restarting…" : undefined} disabled={disabled || !!gadget?.restarting} onPress={() => void restart()} />
           <Row title="Firmware" value={firmwareLabel(gadget)} />
         </Group>
       </View>
@@ -256,6 +256,12 @@ function WifiSheet({ deviceId, onClose, onSent }: { deviceId: string; onClose: (
   const [sending, setSending] = useState(false);
   const nameProblem = ssid ? networkProblem(ssid) : null;
   const keyProblem = passwordProblem(password);
+  // Closed with a password typed, the field is emptied first: a secure field that goes away with text
+  // in it makes iOS offer to save it as a password.
+  const close = () => {
+    setPassword("");
+    requestAnimationFrame(onClose);
+  };
   const send = async () => {
     const change = { add: { ssid, password } };
     // The typed password leaves the field as it is sent.
@@ -265,12 +271,12 @@ function WifiSheet({ deviceId, onClose, onSent }: { deviceId: string; onClose: (
     setSending(false);
     if (queued) {
       onSent();
-      onClose();
+      close();
     }
   };
   return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <Sheet title="Add a network" onClose={onClose} action="Add" onAction={() => void send()} actionDisabled={!ssid || !!networkProblem(ssid) || !!keyProblem} actionLoading={sending}>
+    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={close}>
+      <Sheet title="Add a network" onClose={close} action="Add" onAction={() => void send()} actionDisabled={!ssid || !!networkProblem(ssid) || !!keyProblem} actionLoading={sending}>
         <Field label="Network" value={ssid} onChangeText={setSsid} placeholder="Name" autoCapitalize="none" autoCorrect={false} autoFocus error={nameProblem ?? undefined} />
         <View style={{ gap: space.sm }}>
           <SecretField label="Password" value={password} onChangeText={setPassword} placeholder="None for an open network" error={password.length > 0 ? (keyProblem ?? undefined) : undefined} />
