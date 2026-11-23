@@ -8,8 +8,7 @@
 //
 // It speaks both host protocols, as the Worker does. A botkins.host.v3 room has an active and a standby
 // socket from one runtime group, keeps a bounded set of opaque requests so a host socket reset loses
-// nothing, and acknowledges each answer to the host with 0x06. The Worker keeps that state in Durable
-// Object storage and wakes on an alarm; here it is the room's own fields and one timer.
+// nothing while the queue survives, and acknowledges answers to the host with 0x06.
 // Push notifications are forwarded, signed by the computer and unchanged, to PUSH_UPSTREAM, because only
 // the Botkins relay holds the Apple key. Set PUSH_UPSTREAM=off to send none.
 //
@@ -23,14 +22,13 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "../src/pure.ts";
+import { PendingRequests } from "../src/pending.ts";
 import { spaceFrame, spacePage } from "../src/space.ts";
 import {
   BASE64URL_22,
   BASE64URL_43,
   INVITE_ROUTE,
   MAX_MESSAGE,
-  MAX_PENDING_BYTES,
-  MAX_PENDING_REQUESTS,
   MAX_PER_FROM,
   MAX_PHONES,
   MAX_PHONE_MESSAGE,
@@ -40,7 +38,6 @@ import {
   NOTICE_OFFLINE,
   NOTICE_PHONE_CLOSED,
   PAGE_CSS,
-  PENDING_LIFE,
   REQUEST,
   ROOM_NAME,
   ROUTE,
@@ -380,11 +377,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       this.recovery = null;
       /** The runtime group that last took the seat with v3, or null. */
       this.seat = null;
-      /** Opaque requests kept for replay, and the ones already answered: the Worker's PendingState. */
-      this.next = 1;
-      this.total = 0;
-      this.items = [];
-      this.done = [];
+      this.pending = new PendingRequests();
       this.timer = null;
       this.due = Infinity;
     }
@@ -423,6 +416,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
 
     acceptHost(ws, version, group) {
       const now = Date.now();
+      this.expirePending(now);
       const oldHosts = this.openHosts();
       let recovery = this.recovery;
       if (!oldHosts.length && !recovery && this.seat) recovery = this.beginRecovery(this.seat.group);
@@ -458,12 +452,13 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       } else {
         this.seat = null;
         this.recovery = null;
-        this.clearPending();
+        this.pending.clear();
       }
       this.attach(side);
     }
 
     acceptPhone(ws, from) {
+      this.expirePending(Date.now());
       // A new phone is never turned away. Its address's oldest socket makes room first, then the room's.
       const list = this.openPhones().sort((a, b) => a.at - b.at);
       const closing = new Set();
@@ -474,6 +469,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       const conn = crypto.getRandomValues(new Uint8Array(8));
       const side = { kind: "phone", ws, conn: hex(conn), from, ids: prefixed(conn, unhex(from)), at: Date.now(), notified: false };
       this.phones.set(side.conn, side);
+      this.reapStaleHosts(Date.now());
       this.attach(side);
     }
 
@@ -503,14 +499,16 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     }
 
     message(side, bytes) {
+      this.expirePending(Date.now());
       if (side.ws.readyState !== side.ws.OPEN) return;
       if (side.kind === "phone") {
+        this.reapStaleHosts(Date.now());
         const host = this.activeHost();
         if (!host) {
           // A v3 host has a short reconnect window. Keep opaque requests for that window; a v2 room
           // still gets the immediate per-request offline answer.
           if (!this.recovery && this.seat) this.beginRecovery(this.seat.group);
-          const held = this.recovery && this.recovery.until > Date.now() ? this.storePending(side.ids, bytes) : null;
+          const held = this.recovery && this.recovery.until > Date.now() ? this.pending.add(side.ids, bytes) : null;
           if (!held && isRequest(bytes)) send(side.ws, offline(readU32(bytes, 1)));
           return;
         }
@@ -520,35 +518,33 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
         }
         if (!isRequest(bytes)) return;
         // If a reconnect just drained held requests, they keep their arrival order before a new one.
-        this.drainPending(host);
-        const pending = this.storePending(side.ids, bytes);
+        const pending = this.pending.add(side.ids, bytes);
         if (!pending) send(side.ws, offline(readU32(bytes, 1)));
-        else if (send(host.ws, prefixed(side.ids, bytes))) pending.sent = true;
+        else this.drainPending(host);
         return;
       }
       if (side.closing) return;
       if (side.version === "v3") side.lastBinaryAt = Date.now();
       // [conn 8] + the answer. A short message, or a phone that is gone, is dropped.
       if (bytes.length < 9) return;
+      const conn = hex(bytes.subarray(0, 8));
+      const phone = this.openPhone(conn);
       if (side.version === "v3" && bytes.length >= 13 && bytes[8] === 0x02) {
-        const accepted = this.ackPending(bytes.subarray(0, 8), readU32(bytes, 9));
-        if (!accepted) return;
-        // The host can now evict its replay cache; a duplicate answer gets the same acknowledgement.
-        send(side.ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), u32Bytes(accepted.requestId))));
+        const accepted = this.pending.accept(conn, readU32(bytes, 9), phone?.ids);
+        send(side.ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), bytes.subarray(9, 13))));
         if (accepted.duplicate) return;
       }
-      const phone = this.openPhone(hex(bytes.subarray(0, 8)));
       if (phone) send(phone.ws, bytes.subarray(8));
     }
 
     /** A socket is gone, by its own close or by an error. `ws` reports both, so the second call finds nothing to do. */
     closed(side) {
+      this.expirePending(Date.now());
       const first = !side.notified && !side.closing;
       if (side.kind === "host") this.hosts = this.hosts.filter((entry) => entry !== side);
       else if (this.phones.get(side.conn) === side) this.phones.delete(side.conn);
       this.ended(side);
       if (side.kind === "host" && first) this.hostEnded(side);
-      if (side.kind === "phone") this.dropPendingFor(side.ids);
       this.settle();
     }
 
@@ -577,11 +573,11 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       this.timer = null;
       this.due = Infinity;
       const now = Date.now();
+      this.expirePending(now);
       this.reapStaleHosts(now);
       if (this.recovery && this.activeHost()) this.recovery = null;
       // The old runtime did not return. Fail both queued and in-flight phones once.
       else if (this.recovery && this.recovery.until <= now) this.failRecovery();
-      this.expirePending(now);
       this.settle();
     }
 
@@ -598,19 +594,23 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
         survivors.forEach((side, at) => (side.role = at === 0 ? "active" : "standby"));
         this.drainPending(survivors[0], true);
       } else if (!survivors.length && stale[0].group) {
-        this.beginRecovery(stale[0].group);
+        this.beginRecovery(stale[0].group, undefined, Math.max(...stale.map(side => this.activity(side).deadline)) + V3_RECONNECT_WINDOW);
       }
     }
 
-    beginRecovery(group, leaving) {
+    beginRecovery(group, leaving, until = Date.now() + V3_RECONNECT_WINDOW) {
       if (this.openHosts().length) return null;
       if (this.recovery?.group === group) return this.recovery;
+      if (until <= Date.now()) {
+        this.failRecovery();
+        return null;
+      }
       // Every phone the computer has not been told about. One whose close has begun counts too: `ws`
       // reports a close only when the connection is gone, so a phone and the computer leaving together
       // can arrive here in either order.
       const ids = [...this.phones.values()].filter((side) => !side.notified).map((side) => hex(side.ids));
       if (leaving && !ids.includes(hex(leaving))) ids.push(hex(leaving));
-      this.recovery = { group, until: Date.now() + V3_RECONNECT_WINDOW, phones: ids };
+      this.recovery = { group, until, phones: ids };
       return this.recovery;
     }
 
@@ -630,87 +630,28 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
         this.beginRecovery(side.group);
       } else {
         this.seat = null;
-        this.clearPending(true);
+        this.pending.clear(true);
         this.recovery = null;
       }
     }
 
     /** Ends a v3 reconnect window or an explicit cross-runtime takeover. */
     failRecovery(notify = true) {
-      this.clearPending(true);
+      this.pending.clear(true);
       this.recovery = null;
       this.seat = null;
       if (notify) for (const phone of this.openPhones()) send(phone.ws, Uint8Array.of(NOTICE_HOST_CLOSED));
     }
 
-    pruneDone(now = Date.now()) {
-      this.done = this.done.filter((entry) => entry.at + PENDING_LIFE > now).slice(-128);
-    }
-
-    storePending(ids, body) {
-      if (!isRequest(body) || body.length > MAX_PHONE_MESSAGE) return null;
-      if (this.items.length >= MAX_PENDING_REQUESTS || this.total + body.length > MAX_PENDING_BYTES) return null;
-      const conn = hex(ids);
-      const requestId = readU32(body, 1);
-      const now = Date.now();
-      this.pruneDone(now);
-      const same = (entry) => entry.ids === conn && entry.requestId === requestId;
-      if (this.items.some(same) || this.done.some(same)) return null;
-      // A copy: the bytes the socket handed over belong to its read buffer.
-      const item = { id: this.next, ids: conn, requestId, size: body.length, at: now, sent: false, body: body.slice() };
-      this.next = this.next < 2_000_000_000 ? this.next + 1 : 1;
-      this.items.push(item);
-      this.total += item.size;
-      return item;
-    }
-
-    removePending(item) {
-      this.items = this.items.filter((entry) => entry !== item);
-      this.total -= item.size;
-      this.done.push({ ids: item.ids, requestId: item.requestId, at: Date.now() });
-    }
-
-    drainPending(host, force = false) {
-      for (const item of [...this.items]) {
-        if (item.sent && !force) continue;
-        if (!send(host.ws, prefixed(unhex(item.ids), item.body))) break;
-        item.sent = true;
-      }
-    }
-
-    ackPending(conn, requestId) {
-      this.pruneDone();
-      const prefix = hex(conn);
-      const same = (entry) => entry.requestId === requestId && entry.ids.startsWith(prefix);
-      const item = this.items.find(same);
-      if (!item) {
-        const done = this.done.find(same);
-        return done ? { ...done, duplicate: true } : null;
-      }
-      this.removePending(item);
-      return { ids: item.ids, requestId, duplicate: false };
-    }
-
-    dropPendingFor(ids) {
-      const prefix = hex(ids);
-      this.items = this.items.filter((item) => item.ids !== prefix);
-      this.total = this.items.reduce((sum, item) => sum + item.size, 0);
-      this.done = this.done.filter((item) => item.ids !== prefix);
-    }
-
-    clearPending(keepDone = false) {
-      this.items = [];
-      this.total = 0;
-      if (!keepDone) this.done = [];
+    drainPending(host, replay = false) {
+      this.pending.drain(item => send(host.ws, prefixed(unhex(item.ids), item.body)), replay);
     }
 
     expirePending(now) {
-      for (const item of this.items.filter((entry) => entry.at + PENDING_LIFE <= now)) {
+      this.pending.expire(now, item => {
         const phone = this.openPhone(item.ids.slice(0, 16));
         if (phone) send(phone.ws, offline(item.requestId));
-        this.removePending(item);
-      }
-      this.pruneDone(now);
+      });
     }
 
     /** Tells the other side, once, that a socket is gone: the computer about a phone, every phone about the computer. */
@@ -718,6 +659,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       if (side.notified) return;
       side.notified = true;
       if (side.kind === "phone") {
+        this.pending.drop(side.ids);
         const host = this.activeHost();
         if (host) send(host.ws, prefixed(side.ids, Uint8Array.of(NOTICE_PHONE_CLOSED)));
         else if (this.seat) this.beginRecovery(this.seat.group, side.ids);
@@ -744,9 +686,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     settle() {
       const times = [
         this.recovery?.until ?? Infinity,
-        ...this.openHosts().map((side) => (side.version === "v3" ? this.activity(side).deadline : Infinity)),
-        ...this.items.map((item) => item.at + PENDING_LIFE),
-        ...this.done.map((item) => item.at + PENDING_LIFE),
+        ...(this.openPhones().length ? this.openHosts() : []).map((side) => (side.version === "v3" ? this.activity(side).deadline : Infinity)),
       ];
       const due = Math.min(...times);
       if (due !== this.due) {
@@ -759,7 +699,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
           this.timer.unref();
         }
       }
-      if (!this.hosts.length && !this.phones.size && !this.recovery && !this.seat && !this.items.length && !this.done.length && rooms.get(this.name) === this) {
+      if (!this.hosts.length && !this.phones.size && !this.recovery && !this.seat && rooms.get(this.name) === this) {
         rooms.delete(this.name);
       }
     }

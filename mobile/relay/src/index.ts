@@ -2,9 +2,10 @@
 // copies of spaces shared by link.
 //
 // The host and phone wire formats are documented in ../README.md. A v3 room retains a bounded
-// set of opaque requests for transport recovery. It never inspects their bodies. Logs contain only
-// event kinds, counts and close codes or fixed reasons.
+// set of opaque requests in instance memory for short transport gaps. It never inspects their bodies.
+// Logs contain only event kinds, counts and close codes or fixed reasons.
 
+import { PendingRequests } from "./pending.ts";
 import { DurableObject } from "cloudflare:workers";
 import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "./pure.ts";
 import { handlePush } from "./push.ts";
@@ -16,8 +17,6 @@ import {
   BASE64URL_43,
   INVITE_ROUTE,
   MAX_MESSAGE,
-  MAX_PENDING_BYTES,
-  MAX_PENDING_REQUESTS,
   MAX_PER_FROM,
   MAX_PHONES,
   MAX_PHONE_MESSAGE,
@@ -26,7 +25,6 @@ import {
   NOTICE_HOST_CLOSED,
   NOTICE_OFFLINE,
   NOTICE_PHONE_CLOSED,
-  PENDING_LIFE,
   REQUEST,
   ROOM_NAME,
   ROUTE,
@@ -57,9 +55,6 @@ import {
   u32Bytes,
 } from "./shared.ts";
 
-// Pending bodies are opaque to the relay. Chunks stay below Durable Object per-value limits, and
-// admission is bounded before any body is copied into storage.
-const PENDING_CHUNK = 64 * 1024;
 const RECOVERY_KEY = "room:recovery";
 const SEAT_KEY = "room:seat";
 const PENDING_KEY = "room:pending";
@@ -459,8 +454,7 @@ type HostAttachment = {
   openedAt?: number;
   lastBinaryAt?: number;
   lastAutoResponseAt?: number;
-  autoProbeAt?: number;
-  autoProbeCount?: number;
+  sampledAt?: number;
   heartbeat?: "legacy" | "fast";
   notified: boolean;
   closing?: boolean;
@@ -469,14 +463,13 @@ type PhoneAttachment = { kind: "phone"; ids: Uint8Array; at: number; notified: b
 type Attachment = HostAttachment | PhoneAttachment;
 type RecoveryState = { version: "v3"; group: string; until: number; phones?: string[] };
 type SeatState = { version: "v3"; group: string };
-type PendingItem = { id: number; ids: string; requestId: number; size: number; at: number; sent: boolean };
-type PendingDone = { ids: string; requestId: number; at: number };
-type PendingState = { next: number; total: number; items: PendingItem[]; done: PendingDone[] };
 
-/** One room. Nothing lives in memory between events: every handler finds sockets by tag. */
+/** Socket attachments survive hibernation. The bounded request queue can be lost on any wake. */
 export class Room extends DurableObject<Env> {
-  // Membership and the replay index change together. Each event finishes its bounded storage
-  // work before another event changes either one. None of these handlers waits on a peer.
+  private readonly pending = new PendingRequests();
+  private savedSeat?: SeatState | null;
+  private savedRecovery?: RecoveryState | null;
+  private holdTimer?: ReturnType<typeof setTimeout>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -495,6 +488,7 @@ export class Room extends DurableObject<Env> {
     if (request.headers.get("Upgrade") !== "websocket" || !/^[0-9a-f]{16}$/.test(from)) {
       return plain("Bad request", 400);
     }
+    this.expirePending();
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -505,6 +499,7 @@ export class Room extends DurableObject<Env> {
       if (version !== "v2" && version !== "v3") return plain("Bad request", 400);
       if (version === "v3" && !new RegExp(`^[A-Za-z0-9_-]{${HOST_GROUP_LENGTH}}$`).test(group)) return plain("Bad request", 400);
 
+      await this.cleanLegacyPending();
       const oldHosts = this.open("host");
       const oldSides = oldHosts.map((ws) => ws.deserializeAttachment() as Attachment | null);
       let recovery = await this.recovery();
@@ -527,7 +522,7 @@ export class Room extends DurableObject<Env> {
         if (replacingV3 || staleRecovery) {
           // A new incarnation must not inherit opaque requests from the old one. Fail them before
           // closing the old seats; v3's normal disconnect path waits for the reconnect window.
-          await this.failRecovery(!(staleRecovery && !replacingV3 && oldHosts.length > 0));
+          this.failPending(!(staleRecovery && !replacingV3 && oldHosts.length > 0));
         }
         for (const old of oldHosts) await this.end(old, 4000, "replaced");
       } else {
@@ -537,6 +532,7 @@ export class Room extends DurableObject<Env> {
         role = reseat.role;
         replayPending ||= reseat.replay;
       }
+      this.releaseHold();
       this.ctx.acceptWebSocket(server, ["host"]);
       server.serializeAttachment({
         kind: "host",
@@ -546,22 +542,17 @@ export class Room extends DurableObject<Env> {
         openedAt: Date.now(),
         notified: false,
       } satisfies Attachment);
+      await this.setSeat(version === "v3" ? group : null);
+      if (recovery) await this.clearRecovery();
       if (version === "v3") {
-        await this.ctx.storage.put(SEAT_KEY, { version: "v3", group } satisfies SeatState);
-        if (recovery) await this.clearRecovery();
-        // A standby join must not erase a pending-body expiry alarm. Recompute it after any
-        // reconnect alarm is cleared, including when the active seat was already present.
-        await this.scheduleAlarm();
         if (replayPending) {
           for (const ids of recovery?.phones ?? []) {
             if (!this.open("c:" + ids.slice(0, 16)).length) send(server, prefixed(unhex(ids), Uint8Array.of(NOTICE_PHONE_CLOSED)));
           }
-          await this.drainPending(server, true);
+          this.drainPending(server, true);
         }
       } else {
-        await this.ctx.storage.delete(SEAT_KEY);
-        await this.clearRecovery();
-        await this.clearPending();
+        this.pending.clear();
       }
     } else if (kind === "phone") {
       // A new phone is never turned away. Its address's oldest socket makes room first, then the room's.
@@ -579,65 +570,35 @@ export class Room extends DurableObject<Env> {
       const ids = prefixed(conn, unhex(from));
       this.ctx.acceptWebSocket(server, ["phone", "c:" + hex(conn)]);
       server.serializeAttachment({ kind: "phone", ids, at: Date.now(), notified: false } satisfies Attachment);
+      await this.reapStaleHosts(Date.now());
     } else {
       return plain("Bad request", 400);
     }
+    await this.scheduleAlarm();
     log("open", { kind, phones: this.open("phone").length });
     const protocol = kind === "host" ? (request.headers.get(HOST_VERSION_HEADER) === "v3" ? HOST_PROTOCOL_V3 : HOST_PROTOCOL) : PHONE_PROTOCOL;
     return new Response(null, { status: 101, webSocket: client, headers: { "Sec-WebSocket-Protocol": protocol } });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    return this.ctx.blockConcurrencyWhile(() => this.message(ws, message));
-  }
-
-  private async message(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void> {
+    this.expirePending();
     // "ping" never gets here (auto-response). Any other text is ignored.
     if (typeof message === "string" || ws.readyState !== OPEN) return;
     const bytes = new Uint8Array(message);
     const side = ws.deserializeAttachment() as Attachment | null;
-    if (message.byteLength > (side?.kind === "phone" ? MAX_PHONE_MESSAGE : MAX_MESSAGE)) return this.end(ws, 1009, "too big");
+    if (message.byteLength > (side?.kind === "phone" ? MAX_PHONE_MESSAGE : MAX_MESSAGE)) return this.ctx.blockConcurrencyWhile(() => this.end(ws, 1009, "too big"));
 
     if (side?.kind === "phone") {
-      const host = this.activeHost();
-      if (!host) {
-        // A v3 host has a short, durable reconnect window. Keep opaque requests for that window;
-        // an old/v2 room still gets the immediate per-request offline answer.
-        let recovery = await this.recovery();
-        // A simultaneous loss can deliver a phone frame before either close callback has written
-        // the grace record. The durable seat marker closes that small event-ordering gap.
-        if (!recovery) {
-          const seat = await this.seatedV3();
-          if (seat) {
-            await this.beginRecovery(seat.group);
-            recovery = await this.recovery();
-          }
-        }
-        if (recovery && recovery.until > Date.now()) {
-          if (!(await this.storePending(side.ids, bytes)) && bytes.length >= 5 && bytes[0] === REQUEST) {
-            ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
-          }
-        } else if (bytes.length >= 5 && bytes[0] === REQUEST) {
-          ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
-        }
-        return;
+      const now = Date.now();
+      const hosts = this.open("host");
+      if (hosts.some(host => (this.hostActivity(host)?.deadline ?? Infinity) <= now)) {
+        return this.ctx.blockConcurrencyWhile(async () => {
+          await this.reapStaleHosts(now);
+          await this.forwardRequest(ws, side, bytes);
+        });
       }
-      // If a reconnect just drained opaque requests, preserve their arrival order before a new
-      // request. This is a bounded storage read, not a wait for the host to answer anything.
-      const hostSide = host.deserializeAttachment() as Attachment | null;
-      const pendingAllowed = hostSide?.kind === "host" && hostSide.version === "v3";
-      if (pendingAllowed && (bytes.length < 5 || bytes[0] !== REQUEST)) return;
-      if (pendingAllowed) await this.drainPending(host);
-      if (pendingAllowed && bytes.length >= 5 && bytes[0] === REQUEST) {
-        const pending = await this.storePending(side.ids, bytes);
-        if (!pending) {
-          ws.send(prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
-        } else if (send(host, prefixed(side.ids, bytes))) {
-          await this.markPendingSent(pending.id);
-        }
-      } else {
-        send(host, prefixed(side.ids, bytes));
-      }
+      if (!hosts.length) return this.ctx.blockConcurrencyWhile(() => this.holdOrRefuse(ws, side.ids, bytes));
+      return this.forwardRequest(ws, side, bytes);
     } else if (side?.kind === "host") {
       if (side.closing) return;
       if (side.version === "v3") {
@@ -645,17 +606,44 @@ export class Room extends DurableObject<Env> {
       }
       // [conn 8] + the answer. A short message, or a phone that is gone, is dropped.
       if (bytes.length < 9) return;
+      const conn = hex(bytes.subarray(0, 8));
+      const phone = this.open("c:" + conn)[0];
       if (side.version === "v3" && bytes.length >= 13 && bytes[8] === 0x02) {
-        const accepted = await this.ackPending(bytes.subarray(0, 8), readU32(bytes, 9));
-        if (!accepted) return;
-        // Commit the room's durable answer acknowledgement before forwarding the answer. The
-        // host can now evict its replay cache, while a duplicate answer gets this idempotent ack.
-        send(ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), u32Bytes(accepted.requestId))));
+        const phoneSide = phone?.deserializeAttachment() as PhoneAttachment | undefined;
+        const accepted = this.pending.accept(conn, readU32(bytes, 9), phoneSide?.ids);
+        send(ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), bytes.subarray(9, 13))));
         if (accepted.duplicate) return;
       }
-      const phone = this.open("c:" + hex(bytes.subarray(0, 8)))[0];
       // A view of the same bytes: the 8 are stripped without a copy.
       if (phone) send(phone, bytes.subarray(8));
+    }
+  }
+
+  private forwardRequest(ws: WebSocket, side: PhoneAttachment, bytes: Uint8Array): void | Promise<void> {
+    const host = this.activeHost();
+    if (!host) return this.holdOrRefuse(ws, side.ids, bytes);
+    if ((host.deserializeAttachment() as HostAttachment).version !== "v3") {
+      send(host, prefixed(side.ids, bytes));
+      return;
+    }
+    if (bytes.length < 5 || bytes[0] !== REQUEST) return;
+    const pending = this.pending.add(side.ids, bytes);
+    if (pending) this.drainPending(host);
+    else send(ws, prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+  }
+
+  private async holdOrRefuse(ws: WebSocket, ids: Uint8Array, bytes: Uint8Array): Promise<void> {
+    if (bytes.length < 5 || bytes[0] !== REQUEST) return;
+    // A phone frame can precede the last host's close handler.
+    let recovery = await this.recovery();
+    if (!recovery) {
+      const seat = await this.seatedV3();
+      if (seat) recovery = await this.beginRecovery(seat.group);
+    }
+    if (recovery && recovery.until > Date.now() && this.pending.add(ids, bytes)) {
+      this.holdUntil(recovery.until);
+    } else {
+      send(ws, prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
     }
   }
 
@@ -664,11 +652,12 @@ export class Room extends DurableObject<Env> {
   }
 
   private async closed(ws: WebSocket, code: number): Promise<void> {
+    this.expirePending();
     log("close", { kind: this.kindOf(ws), code });
     const side = ws.deserializeAttachment() as Attachment | null;
     await this.ended(ws);
     if (side?.kind === "host" && !side.closing && !side.notified) await this.hostEnded(side);
-    if (side?.kind === "phone") await this.dropPendingFor(side.ids);
+    await this.scheduleAlarm();
     // Complete the handshake. Codes that cannot be sent (1005, 1006, ...) go without a code.
     try {
       if (code >= 1000 && code < 5000 && ![1004, 1005, 1006, 1015].includes(code)) ws.close(code);
@@ -683,11 +672,12 @@ export class Room extends DurableObject<Env> {
   }
 
   private async errored(ws: WebSocket): Promise<void> {
+    this.expirePending();
     log("error", { kind: this.kindOf(ws) });
     const side = ws.deserializeAttachment() as Attachment | null;
     await this.ended(ws);
     if (side?.kind === "host" && !side.closing && !side.notified) await this.hostEnded(side);
-    if (side?.kind === "phone") await this.dropPendingFor(side.ids);
+    await this.scheduleAlarm();
     try {
       ws.close();
     } catch {
@@ -734,35 +724,17 @@ export class Room extends DurableObject<Env> {
       // Older local workerd builds did not expose the timestamp accessor. Binary traffic and the
       // conservative legacy deadline still give those builds safe stale-seat behavior.
     }
-    if (autoAt > 0 && autoAt !== side.lastAutoResponseAt) {
-      const interval = side.lastAutoResponseAt && autoAt > side.lastAutoResponseAt ? autoAt - side.lastAutoResponseAt : 0;
-      side = {
-        ...side,
-        lastAutoResponseAt: autoAt,
-        ...(interval > 0 && !side.heartbeat
-          ? { heartbeat: interval <= V3_FAST_HEARTBEAT ? ("fast" as const) : ("legacy" as const), autoProbeAt: undefined }
-          : interval <= 0 && !side.heartbeat
-            ? { autoProbeAt: Math.max(autoAt + V3_HEARTBEAT_PROBE, now + V3_HEARTBEAT_PROBE) }
-            : {}),
-      };
+    if (autoAt > 0 && (autoAt !== side.lastAutoResponseAt || (!side.heartbeat && side.sampledAt !== now))) {
+      const interval = autoAt - (side.lastAutoResponseAt ?? 0);
+      // Two nearby pongs prove a fast cadence. Widely spaced samples can miss intervening pings.
+      const fast = side.lastAutoResponseAt && side.sampledAt && now - side.sampledAt <= V3_FAST_HEARTBEAT &&
+        interval > 0 && interval <= V3_FAST_HEARTBEAT;
+      side = { ...side, sampledAt: now, lastAutoResponseAt: autoAt, heartbeat: side.heartbeat ?? (fast ? "fast" : undefined) };
       ws.serializeAttachment(side satisfies Attachment);
     }
-    const last = Math.max(side.openedAt ?? 0, side.lastBinaryAt ?? 0, side.lastAutoResponseAt ?? 0, autoAt);
+    const last = Math.max(side.openedAt ?? 0, side.lastBinaryAt ?? 0, side.lastAutoResponseAt ?? 0);
     const silence = side.heartbeat === "fast" ? V3_FAST_SILENCE : V3_LEGACY_SILENCE;
-    if (!side.heartbeat && side.autoProbeAt === undefined) {
-      side = {
-        ...side,
-        autoProbeAt: (side.lastAutoResponseAt ?? side.openedAt ?? now) + V3_HEARTBEAT_PROBE,
-        autoProbeCount: side.autoProbeCount ?? 1,
-      };
-      ws.serializeAttachment(side satisfies Attachment);
-    }
-    if (!side.heartbeat && !autoAt && side.autoProbeAt !== undefined && side.autoProbeAt <= now && (side.autoProbeCount ?? 0) < 2) {
-      side = { ...side, autoProbeAt: now + V3_HEARTBEAT_PROBE, autoProbeCount: (side.autoProbeCount ?? 0) + 1 };
-      ws.serializeAttachment(side satisfies Attachment);
-    }
-    const probe = !side.heartbeat && side.autoProbeAt && side.autoProbeAt > now ? side.autoProbeAt : Infinity;
-    return { side, last, deadline: Math.min(last + silence, probe) };
+    return { side, last, deadline: last + silence };
   }
 
   /**
@@ -809,7 +781,8 @@ export class Room extends DurableObject<Env> {
 
   private async expire(): Promise<void> {
     const now = Date.now();
-    await this.reapStaleHosts(now);
+    this.expirePending();
+    if (this.open("phone").length) await this.reapStaleHosts(now);
     const recovery = await this.recovery();
     if (recovery && this.activeHost()) {
       await this.clearRecovery();
@@ -818,11 +791,10 @@ export class Room extends DurableObject<Env> {
       // subsequent requests to the normal immediate [0x03][id] path.
       await this.failRecovery();
     }
-    await this.expirePending(now);
     await this.scheduleAlarm();
   }
 
-  /** Runs only at an alarm deadline; no interval or timer keeps the Durable Object resident. */
+  /** Check on phone activity and on a liveness alarm. */
   private async reapStaleHosts(now: number): Promise<void> {
     const hosts = this.open("host");
     const entries = hosts
@@ -846,39 +818,61 @@ export class Room extends DurableObject<Env> {
       for (const survivor of survivors.slice(1)) {
         survivor.ws.serializeAttachment({ ...survivor.side, role: "standby" } satisfies Attachment);
       }
-      await this.drainPending(promoted.ws, true);
+      this.drainPending(promoted.ws, true);
     } else if (!survivors.length) {
       const group = stale[0]?.side.group;
-      if (group) await this.beginRecovery(group);
+      if (group) {
+        const until = Math.max(...stale.map(entry => entry.activity!.deadline)) + V3_RECONNECT_WINDOW;
+        if (until <= now) await this.failRecovery();
+        else await this.beginRecovery(group, undefined, until);
+      }
     }
   }
 
   private async recovery(): Promise<RecoveryState | null> {
+    if (this.savedRecovery !== undefined) return this.savedRecovery;
     const stored = await this.ctx.storage.get<RecoveryState>(RECOVERY_KEY);
-    if (!stored || stored.version !== "v3" || !/^[A-Za-z0-9_-]{43}$/.test(stored.group) || !Number.isSafeInteger(stored.until)) return null;
-    return stored;
+    this.savedRecovery = stored?.version === "v3" && BASE64URL_43.test(stored.group) && Number.isSafeInteger(stored.until) ? stored : null;
+    return this.savedRecovery;
   }
 
   private async seatedV3(): Promise<SeatState | null> {
+    if (this.savedSeat !== undefined) return this.savedSeat;
     const stored = await this.ctx.storage.get<SeatState>(SEAT_KEY);
-    return stored?.version === "v3" && /^[A-Za-z0-9_-]{43}$/.test(stored.group) ? stored : null;
+    this.savedSeat = stored?.version === "v3" && BASE64URL_43.test(stored.group) ? stored : null;
+    return this.savedSeat;
   }
 
-  private async beginRecovery(group: string, leaving?: Uint8Array): Promise<RecoveryState | null> {
+  private async setSeat(group: string | null): Promise<void> {
+    if (((await this.seatedV3())?.group ?? null) === group) return;
+    const seat = group ? { version: "v3", group } satisfies SeatState : null;
+    if (seat) await this.ctx.storage.put(SEAT_KEY, seat);
+    else await this.ctx.storage.delete(SEAT_KEY);
+    this.savedSeat = seat;
+  }
+
+  private async beginRecovery(group: string, leaving?: Uint8Array, until = Date.now() + V3_RECONNECT_WINDOW): Promise<RecoveryState | null> {
     if (this.open("host").length) return null;
     const current = await this.recovery();
-    if (current?.group === group) return current;
+    if (current?.group === group) {
+      // A phone leaving can open the window before the host's own close: still keep what is in flight.
+      this.holdUntil(current.until);
+      return current;
+    }
     const phones = this.open("phone").map(ws => hex((ws.deserializeAttachment() as PhoneAttachment).ids));
     if (leaving && !phones.includes(hex(leaving))) phones.push(hex(leaving));
-    const recovery = { version: "v3", group, until: Date.now() + V3_RECONNECT_WINDOW, phones } satisfies RecoveryState;
+    const recovery = { version: "v3", group, until, phones } satisfies RecoveryState;
+    this.holdUntil(until);
     await this.ctx.storage.put(RECOVERY_KEY, recovery);
+    this.savedRecovery = recovery;
     await this.scheduleAlarm();
     return recovery;
   }
 
   private async clearRecovery(): Promise<void> {
+    this.releaseHold();
     await this.ctx.storage.delete(RECOVERY_KEY);
-    await this.ctx.storage.deleteAlarm();
+    this.savedRecovery = null;
   }
 
   private async hostEnded(side: HostAttachment): Promise<void> {
@@ -893,7 +887,7 @@ export class Room extends DurableObject<Env> {
         if (standby) {
           const candidate = standby.deserializeAttachment() as HostAttachment;
           standby.serializeAttachment({ ...candidate, role: "active" } satisfies Attachment);
-          await this.drainPending(standby, true);
+          this.drainPending(standby, true);
         }
       }
       return;
@@ -901,184 +895,76 @@ export class Room extends DurableObject<Env> {
     if (side.version === "v3" && side.group && /^[A-Za-z0-9_-]{43}$/.test(side.group)) {
       await this.beginRecovery(side.group);
     } else {
-      await this.ctx.storage.delete(SEAT_KEY);
-      await this.clearPending(true);
-      await this.clearRecovery();
-      await this.scheduleAlarm();
+      this.pending.clear(true);
     }
   }
 
   /** Ends a v3 reconnect window or an explicit cross-runtime takeover. */
-  private async failRecovery(notify = true): Promise<void> {
-    await this.clearPending(true);
-    await this.clearRecovery();
-    await this.ctx.storage.delete(SEAT_KEY);
-    await this.scheduleAlarm();
+  private async failRecovery(): Promise<void> {
+    if (await this.recovery()) await this.clearRecovery();
+    await this.setSeat(null);
+    this.failPending();
+  }
+
+  private failPending(notify = true): void {
+    this.pending.clear(true);
     if (notify) for (const phone of this.open("phone")) send(phone, Uint8Array.of(NOTICE_HOST_CLOSED));
   }
 
-  private async pending(): Promise<PendingState> {
-    const stored = await this.ctx.storage.get<PendingState>(PENDING_KEY);
-    if (!stored || !Number.isSafeInteger(stored.next) || !Number.isSafeInteger(stored.total) || !Array.isArray(stored.items)) {
-      return { next: 1, total: 0, items: [], done: [] };
+  private drainPending(host: WebSocket, replay = false): void {
+    this.pending.drain(item => send(host, prefixed(unhex(item.ids), item.body)), replay);
+  }
+
+  private expirePending(): void {
+    this.pending.expire(Date.now(), item => {
+      const phone = this.open("c:" + item.ids.slice(0, 16))[0];
+      if (phone) send(phone, prefixed(Uint8Array.of(NOTICE_OFFLINE), u32Bytes(item.requestId)));
+    });
+    if (!this.pending.length) this.releaseHold();
+  }
+
+  private holdUntil(until: number): void {
+    if (!this.pending.length || this.holdTimer !== undefined) return;
+    // The durable alarm handles expiry, including after eviction. This timer only retains the
+    // queue through the short gap and is cancelled when the host returns or the queue empties.
+    this.holdTimer = setTimeout(() => { this.holdTimer = undefined; }, Math.max(0, until - Date.now()));
+  }
+
+  private releaseHold(): void {
+    if (this.holdTimer !== undefined) clearTimeout(this.holdTimer);
+    this.holdTimer = undefined;
+  }
+
+  private async cleanLegacyPending(): Promise<void> {
+    // Old chunk keys can outlive their index. Bound the values read in each pass.
+    if (await this.ctx.storage.get(PENDING_KEY) !== undefined) await this.ctx.storage.delete(PENDING_KEY);
+    for (;;) {
+      const keys = await this.ctx.storage.list({ prefix: PENDING_KEY + ":", limit: 32 });
+      if (!keys.size) return;
+      await this.ctx.storage.delete([...keys.keys()]);
     }
-    const items = stored.items.filter(
-      (item) =>
-        item &&
-        Number.isSafeInteger(item.id) &&
-        /^[0-9a-f]{32}$/.test(item.ids) &&
-        Number.isSafeInteger(item.requestId) &&
-        Number.isSafeInteger(item.size) &&
-        item.size >= 0 &&
-        Number.isSafeInteger(item.at) &&
-        typeof item.sent === "boolean",
-    );
-    const total = items.reduce((sum, item) => sum + item.size, 0);
-    const done = (Array.isArray(stored.done) ? stored.done : []).filter(
-      (item) => item && /^[0-9a-f]{32}$/.test(item.ids) && Number.isSafeInteger(item.requestId) && Number.isSafeInteger(item.at),
-    ).filter((item) => item.at + PENDING_LIFE > Date.now()).slice(-128);
-    return { next: stored.next > 0 ? stored.next : 1, total, items, done };
-  }
-
-  private chunkKey(id: number, at: number): string {
-    return `room:pending:${id}:${at}`;
-  }
-
-  private async storePending(ids: Uint8Array, body: Uint8Array): Promise<PendingItem | null> {
-    if (body.length < 5 || body[0] !== REQUEST || body.length > MAX_PHONE_MESSAGE) return null;
-    const state = await this.pending();
-    if (state.items.length >= MAX_PENDING_REQUESTS || state.total + body.length > MAX_PENDING_BYTES) return null;
-    const conn = hex(ids);
-    const requestId = readU32(body, 1);
-    const now = Date.now();
-    state.done = state.done.filter((entry) => entry.at + PENDING_LIFE > now);
-    if (state.items.some((entry) => entry.ids === conn && entry.requestId === requestId) || state.done.some((entry) => entry.ids === conn && entry.requestId === requestId)) return null;
-    const id = state.next > 0 && state.next < 2_000_000_000 ? state.next : 1;
-    const item: PendingItem = { id, ids: conn, requestId, size: body.length, at: now, sent: false };
-    const puts: Record<string, Uint8Array> = {};
-    for (let at = 0; at < body.length; at += PENDING_CHUNK) puts[this.chunkKey(id, at / PENDING_CHUNK)] = body.slice(at, Math.min(body.length, at + PENDING_CHUNK));
-    try {
-      await this.ctx.storage.put(puts);
-      await this.ctx.storage.put(PENDING_KEY, { next: id + 1, total: state.total + body.length, items: [...state.items, item], done: state.done } satisfies PendingState);
-      await this.scheduleAlarm();
-      return item;
-    } catch {
-      await this.ctx.storage.delete(Object.keys(puts)).catch(() => {});
-      return null;
-    }
-  }
-
-  private async readPendingBody(item: PendingItem): Promise<Uint8Array | null> {
-    const count = Math.ceil(item.size / PENDING_CHUNK);
-    const values = await this.ctx.storage.get<Uint8Array>(Array.from({ length: count }, (_, at) => this.chunkKey(item.id, at)));
-    const body = new Uint8Array(item.size);
-    for (let at = 0; at < count; at++) {
-      const chunk = values.get(this.chunkKey(item.id, at));
-      if (!chunk) return null;
-      body.set(new Uint8Array(chunk), at * PENDING_CHUNK);
-    }
-    return body;
-  }
-
-  private async deletePendingItem(item: PendingItem): Promise<void> {
-    const count = Math.ceil(item.size / PENDING_CHUNK);
-    await this.ctx.storage.delete(Array.from({ length: count }, (_, at) => this.chunkKey(item.id, at)));
-  }
-
-  private async markPendingSent(id: number): Promise<void> {
-    const state = await this.pending();
-    const item = state.items.find((entry) => entry.id === id);
-    if (!item || item.sent) return;
-    item.sent = true;
-    await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
-  }
-
-  private async removePending(id: number, tombstone: boolean): Promise<PendingItem | null> {
-    const state = await this.pending();
-    const item = state.items.find((entry) => entry.id === id);
-    if (!item) return null;
-    await this.deletePendingItem(item);
-    state.items = state.items.filter((entry) => entry.id !== id);
-    state.total -= item.size;
-    if (tombstone) state.done.push({ ids: item.ids, requestId: item.requestId, at: Date.now() });
-    if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
-    else await this.ctx.storage.delete(PENDING_KEY);
-    await this.scheduleAlarm();
-    return item;
-  }
-
-  private async drainPending(host = this.activeHost(), force = false): Promise<void> {
-    if (!host) return;
-    const state = await this.pending();
-    for (const item of [...state.items]) {
-      if (item.sent && !force) continue;
-      const body = await this.readPendingBody(item);
-      if (!body) {
-        this.notifyOffline(item);
-        await this.removePending(item.id, true);
-        continue;
-      }
-      if (!send(host, prefixed(unhex(item.ids), body))) break;
-      await this.markPendingSent(item.id);
-    }
-  }
-
-  private async ackPending(conn: Uint8Array, requestId: number): Promise<(PendingItem | PendingDone) & { duplicate: boolean } | null> {
-    const state = await this.pending();
-    const item = state.items.find((entry) => entry.requestId === requestId && entry.ids.startsWith(hex(conn)));
-    if (!item) {
-      const done = state.done.find((entry) => entry.requestId === requestId && entry.ids.startsWith(hex(conn)));
-      return done ? { ...done, duplicate: true } : null;
-    }
-    await this.removePending(item.id, true);
-    return { ...item, duplicate: false };
-  }
-
-  private async dropPendingFor(ids: Uint8Array): Promise<void> {
-    const prefix = hex(ids);
-    const state = await this.pending();
-    const dropped = state.items.filter((item) => item.ids === prefix);
-    if (!dropped.length && !state.done.some((item) => item.ids === prefix)) return;
-    for (const item of dropped) await this.deletePendingItem(item);
-    state.items = state.items.filter((item) => item.ids !== prefix);
-    state.total = state.items.reduce((sum, item) => sum + item.size, 0);
-    state.done = state.done.filter((item) => item.ids !== prefix);
-    if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
-    else await this.ctx.storage.delete(PENDING_KEY);
-    await this.scheduleAlarm();
-  }
-
-  private async clearPending(keepDone = false): Promise<void> {
-    const state = await this.pending();
-    for (const item of state.items) await this.deletePendingItem(item);
-    if (keepDone && state.done.length) await this.ctx.storage.put(PENDING_KEY, { next: state.next, total: 0, items: [], done: state.done } satisfies PendingState);
-    else await this.ctx.storage.delete(PENDING_KEY);
-  }
-
-  private async expirePending(now: number): Promise<void> {
-    const state = await this.pending();
-    const expired = state.items.filter((item) => item.at + PENDING_LIFE <= now);
-    if (!expired.length) return;
-    for (const item of expired) {
-      this.notifyOffline(item);
-      await this.removePending(item.id, true);
-    }
-  }
-
-  private notifyOffline(item: PendingItem): void {
-    const phone = this.open("c:" + item.ids.slice(0, 16))[0];
-    if (phone) send(phone, prefixed(Uint8Array.of(NOTICE_OFFLINE), Uint8Array.of((item.requestId >>> 24) & 255, (item.requestId >>> 16) & 255, (item.requestId >>> 8) & 255, item.requestId & 255)));
   }
 
   private async scheduleAlarm(): Promise<void> {
     const recovery = await this.recovery();
-    const state = await this.pending();
-    const hostDeadlines = this.open("host").map((ws) => this.hostActivity(ws)?.deadline ?? Infinity);
-    const times = [recovery?.until ?? Infinity, ...hostDeadlines, ...state.items.map((item) => item.at + PENDING_LIFE), ...state.done.map((item) => item.at + PENDING_LIFE)].filter(Number.isFinite);
-    if (state.items.length || state.done.length) await this.ctx.storage.put(PENDING_KEY, state satisfies PendingState);
-    else await this.ctx.storage.delete(PENDING_KEY);
-    if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
-    else await this.ctx.storage.deleteAlarm();
+    let due = recovery?.until ?? Infinity;
+    const phones = this.open("phone").length;
+    const now = Date.now();
+    for (const host of this.open("host")) {
+      const activity = this.hostActivity(host);
+      if (!activity) continue;
+      if (phones) due = Math.min(due, activity.deadline);
+      const { openedAt, heartbeat } = activity.side;
+      if (!heartbeat && openedAt) {
+        // Four samples at fixed offsets from admission. Later events cannot extend the probe.
+        const step = Math.floor((now - openedAt) / V3_HEARTBEAT_PROBE) + 1;
+        if (step <= 4) due = Math.min(due, openedAt + step * V3_HEARTBEAT_PROBE);
+      }
+    }
+    const current = await this.ctx.storage.getAlarm();
+    if (Number.isFinite(due)) {
+      if (current !== due) await this.ctx.storage.setAlarm(due);
+    } else if (current !== null) await this.ctx.storage.deleteAlarm();
   }
 
   /** Tells the other side, once, that a socket is gone: the computer about a phone, every phone about the computer. */
@@ -1087,6 +973,8 @@ export class Room extends DurableObject<Env> {
     if (!side || side.notified) return;
     ws.serializeAttachment({ ...side, notified: true } satisfies Attachment);
     if (side.kind === "phone") {
+      this.pending.drop(side.ids);
+      if (!this.pending.length) this.releaseHold();
       const host = this.activeHost();
       if (host) send(host, prefixed(side.ids, Uint8Array.of(NOTICE_PHONE_CLOSED)));
       else {
