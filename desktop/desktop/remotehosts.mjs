@@ -35,6 +35,7 @@ export const HERE = new Set([
   "viewing",
   "openLink",
   "copyText",
+  "showEmojiPanel",
   "artifactMessagePage",
   "artifactMedia",
   "closeArtifactMedia",
@@ -88,6 +89,7 @@ export function snapshotOf(parts, own = {}) {
       messages: detail?.messages ?? [],
       // Where the loaded page starts and how many messages the chat has in all.
       ...(detail ? { loaded: { from: detail.from ?? 0, total: detail.total ?? detail.messages?.length ?? 0 } } : { loaded: null }),
+      ...(detail?.pane && { pane: detail.pane }),
       ...(detail?.todos && { todos: detail.todos }),
     };
   });

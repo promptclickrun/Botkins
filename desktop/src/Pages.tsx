@@ -256,7 +256,7 @@ type Ask = {
   confirm: string;
   danger?: boolean;
   /** Set to ask for text; the answer is the trimmed text. */
-  field?: { label: string; value: string; max: number };
+  field?: { label: string; value: string; max: number; emoji?: boolean };
 };
 
 function AskDialog({ ask, done }: { ask: Ask; done: (answer: string | null) => void }) {
@@ -264,6 +264,7 @@ function AskDialog({ ask, done }: { ask: Ask; done: (answer: string | null) => v
   const [value, setValue] = useState(ask.field?.value ?? "");
   useEffect(() => {
     ref.current?.showModal();
+    if (ask.field?.emoji) void window.botkins.showEmojiPanel();
   }, []);
   return createPortal(
     <dialog

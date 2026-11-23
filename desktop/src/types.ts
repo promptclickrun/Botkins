@@ -104,6 +104,7 @@ export type Mention =
 /** What the composer sends for a mention; the main process checks it and fills in the label. */
 export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "file" | "wiki"; path: string };
 export type Message = {
+  reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
   voiceCaption?: string;
   role: "assistant" | "user" | "command";
@@ -715,6 +716,8 @@ declare global {
       chooseFiles(): Promise<Attachment[]>;
       /** Resolves a dropped or pasted File to its path. Synchronous, in the preload. */
       pathForFile(file: File): string;
+      reactToMessage(chatId: string, index: number, time: number | null, emoji: string): Promise<NonNullable<Message["reactions"]>>;
+      showEmojiPanel(): Promise<void>;
       forkChat(chatId: string, messageIndex: number): Promise<string>;
       retry(runId: string): Promise<void>;
       compact(chatId: string): Promise<void>;

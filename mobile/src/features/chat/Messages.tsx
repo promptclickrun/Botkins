@@ -29,18 +29,20 @@ import { Blocks, BotAvatar, Button, Chip, IconButton, Markdown, type PathLinks, 
 export type { Item };
 
 /** What a message's menu can do beyond copying and selecting: quote it in a reply, and fork the chat from it. */
-export type MessageActions = { onReply: (text: string) => void; /** Missing in a group chat, which can't be forked. */ onFork?: (index: number) => void; /** A turn is under way, so forking waits. */ busy: boolean };
+export type MessageActions = { onReact?: (index: number, time?: number) => void; onReply: (text: string) => void; /** Missing in a group chat, which can't be forked. */ onFork?: (index: number) => void; /** A turn is under way, so forking waits. */ busy: boolean };
 
 /** Reply and Fork from here, for a message's hold menu (the desktop's words). */
 function extraActions(actions: MessageActions | undefined) {
   if (!actions) return [];
   return [
+    ...(actions.onReact ? [{ id: "react", title: "React", image: "face.smiling" }] : []),
     { id: "reply", title: "Reply", image: "arrowshape.turn.up.left" },
     ...(actions.onFork ? [{ id: "fork", title: "Fork from here", image: "arrow.triangle.branch", attributes: { disabled: actions.busy } }] : []),
   ];
 }
 function runExtra(event: string, message: Message, index: number, actions: MessageActions | undefined) {
-  if (event === "reply") actions?.onReply(message.text);
+  if (event === "react") actions?.onReact?.(index, message.time);
+  else if (event === "reply") actions?.onReply(message.text);
   else if (event === "fork") actions?.onFork?.(index);
 }
 
@@ -134,6 +136,11 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
   );
 }
 
+function Reactions({ message }: { message: Message }) {
+  if (!message.reactions?.length) return null;
+  return <T variant="callout">{message.reactions.map(r => r.emoji).join(" ")}</T>;
+}
+
 function Stamp({ time, align }: { time?: number; align: "flex-start" | "flex-end" }) {
   if (!time) return null;
   return (
@@ -155,7 +162,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
   const chips = (message.mentions ?? []).filter((mention) => mention.kind !== "board");
   // An answer to a bot's request shows the request it answered above it, as a quote does.
   const above = message.quote || message.answer?.title;
-  return (
+  const bubble = (
     <View style={{ alignItems: "flex-end", gap: 4, paddingLeft: "16%" }}>
       {!!speaker && (
         <T variant="caption" weight="600" color="muted" numberOfLines={1}>
@@ -238,9 +245,14 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
           </TextHoldMenu>
         ))}
       {media.length > 0 && <ArtifactChips items={media} align="flex-end" />}
+      <Reactions message={message} />
       {timestamps && <Stamp time={message.time} align="flex-end" />}
     </View>
   );
+  if (rest || !actions?.onReact) return bubble;
+  return <TextHoldMenu actions={extraActions(actions)} onPressAction={({ nativeEvent }) => runExtra(nativeEvent.event, message, index, actions)}>
+    {bubble}
+  </TextHoldMenu>;
 }
 
 function CommandBlock({ message }: { message: Message }) {
@@ -343,16 +355,21 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
   if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} speaker={speakerLabel(message, run, chat, people, me)} />;
-  if (message.role === "command") return <CommandBlock message={message} />;
+  if (message.role === "command") return (
+    <TextHoldMenu actions={extraActions(actions)} onPressAction={({ nativeEvent }) => runExtra(nativeEvent.event, message, item.index, actions)}>
+      <View><CommandBlock message={message} /><Reactions message={message} /></View>
+    </TextHoldMenu>
+  );
   // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).
   return (
     <View ref={replyRef} collapsable={replyRef ? false : undefined} style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
       {message.voiceCaption ? (
-        <Markdown text={message.voiceCaption} plain={!markdown} />
+        <Reply message={{ ...message, text: message.voiceCaption }} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} />
       ) : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}
+      <Reactions message={message} />
       {!!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} botId={speaker} />

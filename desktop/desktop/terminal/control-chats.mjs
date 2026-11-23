@@ -140,6 +140,11 @@ export function chatsApi({ workspace, handlers, bot }) {
       await handlers.deleteChat(found.id);
       return { removed: found.id, id: found.id, title: found.title };
     },
+    async "chats.react"([ref, index, emoji]) {
+      const found = chat(ref);
+      await handlers.reactToMessage(found.id, index, found.messages[index]?.time ?? null, emoji);
+      return { id: found.id, index, emoji };
+    },
     /** A new chat of the same bot with the conversation up to a message (`at`: its place in the chat, 0 is the first; the last without it). */
     async "chats.fork"([ref, at]) {
       const found = chat(ref);

@@ -9,7 +9,8 @@ import { useState } from "react";
 import { StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import type { PanePanel } from "@/link/types";
 import { useApp } from "@/state/store";
-import { Dot, radius, space, T, Tap, useTheme } from "@/ui";
+import { api, attempt } from "@/state/link";
+import { Dot, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
 import { GateCover, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
 import { cardRole, cardSize, screenLabel, WORDS } from "./screenLive";
 
@@ -55,16 +56,19 @@ export function ScreenCard({ chatId, panel, onOpen, inView }: ScreenCardProps) {
 
   return (
     <View onLayout={({ nativeEvent }) => setWidth(nativeEvent.layout.width)} style={{ gap: space.sm }}>
-      {tappable ? (
-        <Tap onPress={onOpen} feel="select" sink={0.99} accessibilityLabel={label} style={box}>
-          {content}
-        </Tap>
-      ) : (
-        // Covered, its "Show screen" is a button of its own; otherwise the card reads as one line.
-        <View style={box} accessible={screen.gate.kind !== "covered"} accessibilityLabel={label}>
-          {content}
-        </View>
-      )}
+      <HoldMenu actions={[{ id: "close", title: "Close screen", image: "xmark" }]}
+        onPressAction={() => void attempt(api.sidePane(chatId, "remove", panel.id))}>
+        {tappable ? (
+          <Tap onPress={onOpen} feel="select" sink={0.99} accessibilityLabel={label} style={box}>
+            {content}
+          </Tap>
+        ) : (
+          // Covered, its "Show screen" is a button of its own; otherwise the card reads as one line.
+          <View style={box} accessible={screen.gate.kind !== "covered"} accessibilityLabel={label}>
+            {content}
+          </View>
+        )}
+      </HoldMenu>
       <View style={styles.caption} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
         <T variant="footnote" color="muted" numberOfLines={1} style={{ flex: 1 }}>
           {panel.title || WORDS.title}

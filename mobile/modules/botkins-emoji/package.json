@@ -1,0 +1,7 @@
+{
+  "name": "botkins-emoji",
+  "version": "1.0.0",
+  "description": "An iOS text field that opens the emoji keyboard.",
+  "license": "MIT",
+  "private": true
+}

@@ -1,3 +1,4 @@
+import { setReaction } from "./message-reactions.mjs";
 import { changedFolders, repositoryName } from "./project-folders.mjs";
 // A stand-in for the desktop app, for developing and testing the phone app without it.
 // It keeps a small workspace in memory, shaped like the desktop's, and answers a message with a
@@ -1204,7 +1205,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -1855,13 +1856,13 @@ export class MockBackend {
       }
       this.changed();
     } else if (live() && /show me the screen/i.test(prompt)) {
-      // The bot shows the computer's screen: a side pane tab of kind "screen", and an ask to show it.
+      // The bot shows the computer's screen: a side pane tab of kind "screen", opened from its card.
       // The chat draws a card for each such tab at the time it was made.
       const chatNow = this.chat(id);
       const before = chatNow.pane ?? { panels: [], active: null };
       const at = now();
       const screen = { id: randomUUID(), kind: "screen", title: "Screen", botId: chat.botId, createdAt: at, updatedAt: at };
-      chatNow.pane = { panels: [...before.panels, screen].slice(-8), active: screen.id, ask: { seq: (before.ask?.seq ?? 0) + 1, panelId: screen.id, runId: run.id, botId: chat.botId, at } };
+      if (!before.panels.some(p => p.kind === "screen")) chatNow.pane = { ...before, panels: [...before.panels, screen].slice(-8) };
       reply = "Here is your computer's screen. Tap it to see it larger.";
       this.changed();
     } else if (live() && /side pane/i.test(prompt)) {
@@ -2214,6 +2215,13 @@ export class MockBackend {
       recordVoiceLine(this.chat(chatId), id, text, final, author, options);
     },
     // A new chat with the messages up to and including `messageIndex`.
+    reactToMessage(chatId, index, time, emoji) {
+      const message = this.chat(chatId).messages[index];
+      if (!Number.isSafeInteger(index) || !message || (message.time ?? null) !== time)
+        throw new Error("The message changed. Choose it again.");
+      setReaction(message, emoji, this.caller.id === "owner" ? "owner" : "member:" + this.caller.id);
+      return message.reactions;
+    },
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
       if (from.botIds) throw new Error("A group chat can't be forked.");

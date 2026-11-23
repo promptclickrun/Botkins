@@ -159,6 +159,10 @@ test("fork, group chats, projects and compact", { skip }, async (t) => {
   await client.call("bots.add", { name: "Orbit" });
   const source = await chatWith("Nova", "Plan", ["one", "two", "three", "four"]);
 
+  const reacted = await botkins(["chats", "react", source, "2", "🥳", "--json"]);
+  assert.equal(reacted.exit, 0, reacted.err);
+  assert.deepEqual(workspace.chat(source).messages[2].reactions, [{ actor: "owner", emoji: "🥳" }]);
+
   // A fork holds the conversation up to a message, and is a new chat. No message, or one that is not there, is refused.
   const forked = await botkins(["chats", "fork", "Plan", "--at", "1", "--json"]);
   assert.equal(forked.exit, 0, forked.err);
@@ -211,6 +215,7 @@ test("fork, group chats, projects and compact", { skip }, async (t) => {
   // Each change is in the log by a chat's id.
   const lines = await changes();
   assert.ok(lines.includes("chats.fork " + source));
+  assert.ok(lines.includes("chats.react " + source));
   assert.ok(lines.includes("chats.compact " + source));
   assert.equal(lines.filter((line) => line.startsWith("chats.group ")).length, 2);
   assert.equal(lines.filter((line) => line.startsWith("chats.project " + source)).length, 5);

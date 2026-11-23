@@ -173,6 +173,15 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.delete", chat.id), (gone) => "Deleted the chat " + JSON.stringify(safe(gone.title)) + ".");
         },
       },
+      react: {
+        summary: "React to a message with one emoji",
+        usage: "botkins chats react <chat> <message-index> <emoji>",
+        async run(context) {
+          const [chat, at, emoji] = context.args;
+          if (context.args.length !== 3 || !/^\d+$/.test(at)) throw usage("Give the chat, zero-based message index and one emoji.");
+          context.print(await context.client.call("chats.react", chat, Number(at), emoji), (result) => "Reacted " + result.emoji);
+        },
+      },
       fork: {
         summary: "Make a new chat that holds this one up to a message",
         usage: "botkins chats fork <chat> [--at <number>]",

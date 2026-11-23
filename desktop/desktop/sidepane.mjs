@@ -224,7 +224,7 @@ export class SidePane {
     return [
       tool(
         "side_pane_show",
-        "Open the side pane beside this chat and show a panel in it. Use it only when keeping something in view beside the conversation is more useful than showing it in chat. `kind` is \"rich_ui\" (send one self-contained HTML document in `html`, with inline CSS and JavaScript, and optional JSON in `data`; it runs in a sandbox with no network, and reads its data with window.botkins.getData() and onData), \"table\" (send `columns` and `rows` of text), \"screen\" (only for live browser or desktop app work worth watching, not for terminal commands, file edits, or background checks; only the person can change screen access) or \"details\" (the chat's own details). Each panel becomes a tab, so earlier ones stay. The person can close the pane; if they did during this turn it stays closed and your panel waits as a tab. Keep your reply short and point to the panel. Use side_pane_web for a website.",
+        "Open the side pane beside this chat and show a panel in it. Use it only when keeping something in view beside the conversation is more useful than showing it in chat. `kind` is \"rich_ui\" (send one self-contained HTML document in `html`, with inline CSS and JavaScript, and optional JSON in `data`; it runs in a sandbox with no network, and reads its data with window.botkins.getData() and onData), \"table\" (send `columns` and `rows` of text), \"screen\" (offers a clickable chat card for visible browser automation or interactive desktop actions worth watching; skip code, scripts, terminal work and background checks; only the person can change screen access) or \"details\" (the chat's own details). Each panel becomes a tab, so earlier ones stay. The person can close the pane; if they did during this turn it stays closed and your panel waits as a tab. Keep your reply short and point to the panel. Use side_pane_web for a website.",
         {
           kind: { type: "string", enum: ["rich_ui", "table", "screen", "details"] },
           title: { type: "string", description: "A few words for the tab." },
@@ -241,9 +241,9 @@ export class SidePane {
             return { kind: "details", ...result };
           }
           if (args.kind === "screen") {
-            // One Screen panel per chat: asking again brings it to the front.
+            // The chat card opens this tab only when the person chooses it.
             const panel = this.pane(chat).panels.find((p) => p.kind === "screen") ?? this.add(chat, bot, run, { kind: "screen", title: "Screen" });
-            return shown(panel, this.front(chat, bot, run, panel));
+            return shown(panel, { opened: false, note: "Screen is available in chat. The person can open it." });
           }
           if (args.kind === "rich_ui") {
             const fields = frameFields({ html: args.html, data: args.data });
