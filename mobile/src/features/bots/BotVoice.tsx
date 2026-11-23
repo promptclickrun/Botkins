@@ -62,7 +62,7 @@ function Reading({ bot, voice }: { bot: Bot; voice: VoiceSettings }) {
   const effective = effectiveTts(voice.tts, own);
   const provider: TtsProvider = effective.provider;
   const onPhone = provider === "device";
-  const options = useVoiceOptions("tts", provider, voice);
+  const options = useVoiceOptions("tts", provider, voice, effective.model);
   const local = usePhoneVoice((prefs) => prefs.bots?.[bot.id]);
   const phoneSpeed = usePhoneVoice((prefs) => prefs.speed);
   const [voices, setVoices] = useState<PhoneVoice[] | undefined>();
@@ -100,7 +100,7 @@ function Reading({ bot, voice }: { bot: Bot; voice: VoiceSettings }) {
       <Label>Reading aloud</Label>
       <Group>
         <Choice title="Provider" subtitle={lack ?? undefined} value={own?.provider ?? ""} options={providerChoices} onChange={(next) => saveVoice(bot, withProvider(bot.voice, "tts", next || undefined))} />
-        {!onPhone && !!options?.models.length && <Choice title="Model" value={own?.model ?? ""} options={listed(none, options.models)} onChange={(model) => saveVoice(bot, unpinIfBare(withSection(bot.voice, "tts", { ...(model ? { provider: own?.provider ?? provider } : {}), model: model || undefined }), "tts", voice.tts.provider))} />}
+        {!onPhone && !!options?.models.length && <Choice title="Model" value={own?.model ?? ""} options={listed(none, options.models.filter((item) => item.id))} onChange={(model) => saveVoice(bot, unpinIfBare(withSection(bot.voice, "tts", { ...(model ? { provider: own?.provider ?? provider } : {}), model: model || undefined }), "tts", voice.tts.provider))} />}
         {loadingVoices ? <Row title="Voice" value="Loading…" disabled /> : voiceOptions.length > 1 && <Choice title="Voice" value={onPhone ? (local?.voice ?? "") : (own?.voice ?? "")} options={voiceOptions} onChange={(next) => (onPhone ? setBotDeviceVoice(bot.id, { voice: next || undefined }) : saveVoice(bot, unpinIfBare(withSection(bot.voice, "tts", { ...(next ? { provider: own?.provider ?? provider } : {}), voice: next || undefined }), "tts", voice.tts.provider)))} />}
         {hasSpeed && (
           <View style={{ paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.sm }}>

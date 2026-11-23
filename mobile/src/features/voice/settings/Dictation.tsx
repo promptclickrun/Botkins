@@ -4,10 +4,10 @@ import { View } from "react-native";
 import type { SttProvider } from "@/link/types";
 import { useOnline } from "@/state/hooks";
 import { Group, Loading, Page } from "@/ui";
-import { LANGUAGES, providerName, STT_PROVIDERS, missing } from "../choices";
+import { LANGUAGES, OTHER_MODEL, providerName, STT_PROVIDERS, missing } from "../choices";
 import { useVoiceOptions } from "../options";
 import { UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "../state";
-import { Choice, Note, providerOptions, save, SetupRow, useProviderSheet, withDefault } from "./shared";
+import { Choice, Note, providerOptions, save, SetupRow, TypedChoice, useProviderSheet, withDefault } from "./shared";
 
 export default function Dictation() {
   const supported = useVoiceSupported();
@@ -29,7 +29,12 @@ export default function Dictation() {
             onChange={(next) => save({ stt: { provider: next as SttProvider } })}
             disabled={!voice}
           />
-          {!!options?.models.length && <Choice title="Model" value={voice?.stt.model ?? ""} options={withDefault(options.models)} onChange={(model) => save({ stt: { model: model || undefined } })} />}
+          {/* Azure's model may be typed: a model it has that the list doesn't, or the deployment of Azure OpenAI audio. */}
+          {provider === "azure" ? (
+            <TypedChoice title="Model" value={voice?.stt.model ?? ""} items={withDefault(options?.models ?? [])} typing={OTHER_MODEL} onChange={(model) => save({ stt: { model } })} />
+          ) : (
+            !!options?.models.length && <Choice title="Model" value={voice?.stt.model ?? ""} options={withDefault(options.models)} onChange={(model) => save({ stt: { model: model || undefined } })} />
+          )}
           {!!voice && <Choice title="Language" value={voice.stt.language ?? ""} options={LANGUAGES} onChange={(language) => save({ stt: { language: language || undefined } })} />}
         </Group>
         {!supported && <Note>{UPDATE_COMPUTER + " for other providers."}</Note>}

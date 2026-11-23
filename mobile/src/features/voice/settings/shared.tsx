@@ -6,8 +6,8 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import type { VoicePatch, VoiceSettings } from "@/link/types";
 import { api, attempt } from "@/state/link";
-import { Group, IconTile, ProviderIcon, Row, space, T, useTheme } from "@/ui";
-import { markOf, missing, providerName, providerState } from "../choices";
+import { Group, IconTile, ProviderIcon, Row, space, T, useTextPrompt, useTheme } from "@/ui";
+import { markOf, missing, OTHER, providerName, providerState, type Typing, withTyped } from "../choices";
 import { ProviderSheet } from "../ProviderSheet";
 import { type SheetProvider, setupFor } from "./summary";
 
@@ -34,8 +34,29 @@ export function Choice({ title, subtitle, value, options, onChange, disabled }: 
   );
 }
 
-/** "Default" first, then what the provider offers. */
-export const withDefault = (items: { id: string; name: string; subtitle?: string }[]): Option[] => [{ value: "", label: "Default" }, ...items.map((item) => ({ value: item.id, label: item.name, subtitle: item.subtitle }))];
+/** "Default" first, then what the provider offers. A provider that names its own default (an item with no id, such as Azure's standard voices) is not given a second one. */
+export const withDefault = (items: { id: string; name: string; subtitle?: string }[]): Option[] => [...(items.some((item) => !item.id) ? [] : [{ value: "", label: "Default" }]), ...items.map((item) => ({ value: item.id, label: item.name, subtitle: item.subtitle }))];
+
+/**
+ * A choice that also lets the person type what isn't listed ("Other model…"): what is saved shows
+ * even when the list lacks it, and the typed text goes to `onChange` like a choice made.
+ */
+export function TypedChoice({ title, subtitle, items, value, typing, onChange, disabled }: { title: string; subtitle?: string; items: Option[]; value: string; typing: Typing; onChange: (value: string) => void; disabled?: boolean }) {
+  const prompt = useTextPrompt();
+  return (
+    <>
+      <Choice
+        title={title}
+        subtitle={subtitle}
+        value={value}
+        options={withTyped(items, value, typing)}
+        onChange={(next) => (next === OTHER ? prompt.ask({ title: typing.title, message: typing.message, confirm: typing.confirm, value, max: 64, onSubmit: onChange }) : onChange(next))}
+        disabled={disabled}
+      />
+      {prompt.node}
+    </>
+  );
+}
 
 export function providerOptions(kind: "stt" | "tts" | "live", list: string[], voice: VoiceSettings | undefined): Option[] {
   return list.map((provider) => ({ value: provider, label: providerName(provider), subtitle: voice ? (missing(kind, provider, voice) ?? undefined) : undefined }));

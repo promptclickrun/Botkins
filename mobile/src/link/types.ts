@@ -1477,7 +1477,7 @@ export type DeviceAnswer = { ok: true; result: unknown } | { ok: false; error: s
 
 export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom" | "local";
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
-export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
+export type LiveProvider = "codex" | "openai" | "azure" | "gemini" | "elevenlabs";
 /**
  * A voice of a bot's own ("bot-voice-v1"), saved with the bot by the computer's app. Every field is
  * optional: one that is absent means the same as the shared VoiceSettings. No key is ever in it.
@@ -1924,8 +1924,8 @@ export type Calls = {
   "link.voice.set"(patch: VoicePatch): void;
   /** Saves a provider's key on the computer (a string, or a saved credential), or removes it with null. It is never sent back. */
   "link.voice.key"(provider: VoiceKeyProvider, key: string | { $credential: string } | null): void;
-  /** The models and voices a provider offers. */
-  "link.voice.options"(kind: "stt" | "tts" | "live", provider: string): VoiceOptions;
+  /** The models and voices a provider offers. For Azure, `model` is the model whose voices are wanted ("" is the standard voices); without it, the saved one. */
+  "link.voice.options"(kind: "stt" | "tts" | "live", provider: string, model?: string): VoiceOptions;
   /** Speech to text on the computer's provider. `audio` is base64, at most about two minutes of 16 kHz WAV. */
   "link.voice.transcribe"(input: { audio: string; format: "wav" | "m4a" | "mp3" | "webm"; language?: string }): { text: string };
   /** Text to speech on the computer's provider: base64 audio to play. At most 4,000 characters; split long text by sentence. */

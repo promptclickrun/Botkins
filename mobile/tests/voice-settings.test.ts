@@ -4,6 +4,8 @@ import { test } from "node:test";
 import type { VoiceSettings } from "../src/link/types";
 import { effectiveLive, effectiveTts, tidyVoice, unpinIfBare, withProvider } from "../src/features/voice/botVoice";
 import { effectiveLive as computersLive, effectiveTts as computersTts } from "../link-host/voice.mjs";
+import { LIVE_PROVIDERS, missing, OTHER, OTHER_MODEL, OTHER_VOICE, withTyped } from "../src/features/voice/choices";
+import { planFor } from "../src/features/voice/live";
 import { botVoiceSummary, dictationSummary, keysSummary, LIVE_INPUTS, liveInputLine, liveSummary, readingSummary, setupFor, UNBUILT } from "../src/features/voice/settings/summary";
 
 const settings = (patch: Partial<VoiceSettings> = {}, providers: Partial<VoiceSettings["providers"]> = {}): VoiceSettings => ({
@@ -106,4 +108,37 @@ test("the phone resolves a bot's voice as the computer does, and another provide
   const mine = { tts: { provider: "openai" as const, model: "tts-1", voice: "nova", speed: 1.25 }, live: { voice: "Puck" } };
   assert.deepEqual(withProvider(mine, "tts", "gemini"), { tts: { provider: "gemini", speed: 1.25 }, live: { voice: "Puck" } });
   assert.equal(tidyVoice({ tts: { provider: undefined, voice: "" } }), null);
+});
+
+test("Azure live voice: a provider with the resource's endpoint, and the same transport as OpenAI", () => {
+  assert.deepEqual(LIVE_PROVIDERS, ["codex", "openai", "azure", "gemini", "elevenlabs"]);
+  const azure = (p: Partial<VoiceSettings["providers"]["azure"]>, patch: Partial<VoiceSettings> = {}) => settings(patch, { azure: { kind: "speech", hasKey: true, ...p } });
+  assert.equal(missing("live", "azure", settings()), "Needs an Azure key");
+  assert.equal(missing("live", "azure", azure({ region: "eastus" })), "Needs an Azure resource endpoint", "a region is not an address live voice can use");
+  assert.equal(missing("live", "azure", azure({ endpoint: "https://a.cognitiveservices.azure.com" })), null);
+  assert.equal(missing("stt", "azure", azure({ region: "eastus" })), null, "dictation and reading still work from a region");
+  const rtc = {} as never;
+  const audio = {} as never;
+  for (const [kit, plan] of [[{ webrtc: rtc, duplex: audio }, "offer"], [{ webrtc: null, duplex: audio }, "socket"], [{ webrtc: null, duplex: null }, null]] as const) {
+    assert.equal(planFor("azure", { ...kit, watchRtc: null }), plan);
+    assert.equal(planFor("azure", { ...kit, watchRtc: null }), planFor("openai", { ...kit, watchRtc: null }));
+  }
+});
+
+test("an Azure model typed for Azure OpenAI audio is the deployment, so no deployment is asked for", () => {
+  const base = { azure: { kind: "openai" as const, hasKey: true, endpoint: "https://a.openai.azure.com" } };
+  assert.equal(missing("stt", "azure", settings({ stt: { provider: "azure" } }, base)), "Needs a transcription deployment");
+  assert.equal(missing("stt", "azure", settings({ stt: { provider: "azure", model: "my-whisper" } }, base)), null);
+  assert.equal(missing("tts", "azure", settings({ tts: { provider: "azure", model: "my-tts" } }, base)), null);
+  // A model that belongs to another provider is not Azure's deployment.
+  assert.equal(missing("stt", "azure", settings({ stt: { provider: "openai", model: "whisper-1" } }, base)), "Needs a transcription deployment");
+});
+
+test("Other model… and Other voice… follow the listed choices, and a saved name that isn't listed still shows", () => {
+  const listed = [{ value: "", label: "Standard neural voices" }, { value: "MAI-Voice-2.1", label: "MAI-Voice-2.1 (preview)" }];
+  assert.deepEqual(withTyped(listed, "MAI-Voice-2.1", OTHER_MODEL), [...listed, { value: OTHER, label: "Other model…" }]);
+  assert.deepEqual(withTyped(listed, "", OTHER_MODEL).at(-1), { value: OTHER, label: "Other model…" });
+  assert.deepEqual(withTyped(listed, "MAI-Voice-3", OTHER_MODEL), [...listed, { value: "MAI-Voice-3", label: "MAI-Voice-3" }, { value: OTHER, label: "Other model…" }]);
+  assert.equal(withTyped([], undefined, OTHER_VOICE).length, 1);
+  assert.equal(OTHER_VOICE.choice, "Other voice…");
 });

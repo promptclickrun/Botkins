@@ -17,7 +17,8 @@ export type Kit = { webrtc: WebRTC | null; duplex: DuplexLike | null; watchRtc?:
 /** Whether this build can talk to a provider, and how: with an offer (WebRTC) or without one (a socket). */
 export function planFor(provider: LiveProvider, kit: Pick<Kit, "webrtc" | "duplex" | "watchRtc">): "offer" | "socket" | null {
   if (provider === "codex") return kit.webrtc || kit.watchRtc ? "offer" : null;
-  if (provider === "openai") return kit.webrtc ? "offer" : kit.duplex ? "socket" : null;
+  // Azure speaks the same protocol as OpenAI: WebRTC when this build has it (the computer holds the key either way).
+  if (provider === "openai" || provider === "azure") return kit.webrtc ? "offer" : kit.duplex ? "socket" : null;
   return kit.duplex ? "socket" : null;
 }
 

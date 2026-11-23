@@ -5,13 +5,13 @@ import { View } from "react-native";
 import type { LiveProvider } from "@/link/types";
 import { useOnline } from "@/state/hooks";
 import { Group, Label, Loading, Page, Row, Segmented } from "@/ui";
-import { LIVE_PROVIDERS, missing, providerName } from "../choices";
+import { LIVE_PROVIDERS, missing, OTHER_MODEL, providerName } from "../choices";
 import { planFor } from "../live/index";
 import { duplexAudio, webrtcModule } from "../native";
 import { useVoiceOptions } from "../options";
 import { setPhoneVoice, usePhoneVoice } from "../prefs";
 import { UPDATE_COMPUTER, useVoiceSettings, useVoiceSupported } from "../state";
-import { Choice, Note, type Option, save, SetupRow, useProviderSheet, withDefault } from "./shared";
+import { Choice, Note, type Option, save, SetupRow, TypedChoice, useProviderSheet, withDefault } from "./shared";
 import { LIVE_INPUTS, liveInputLine, UNBUILT } from "./summary";
 
 /** Whether this build has what a live provider needs. */
@@ -42,7 +42,12 @@ export default function LiveVoice() {
     <Page title="Live voice">
       <Group>
         <Choice title="Provider" subtitle={lack ?? undefined} value={provider ?? ""} options={choices} onChange={(next) => save({ live: { provider: (next || null) as LiveProvider | null } })} />
-        {!!provider && !!options?.models.length && <Choice title="Model" value={voice.live.model ?? ""} options={withDefault(options.models)} onChange={(model) => save({ live: { model: model || undefined } })} />}
+        {/* On Azure the model is the realtime deployment's name, so it may be typed. */}
+        {provider === "azure" ? (
+          <TypedChoice title="Model" value={voice.live.model ?? ""} items={withDefault(options?.models ?? [])} typing={OTHER_MODEL} onChange={(model) => save({ live: { model } })} />
+        ) : (
+          !!provider && !!options?.models.length && <Choice title="Model" value={voice.live.model ?? ""} options={withDefault(options.models)} onChange={(model) => save({ live: { model: model || undefined } })} />
+        )}
         {!!provider && !!options?.voices.length && <Choice title="Voice" value={voice.live.voice ?? ""} options={withDefault(options.voices)} onChange={(next) => save({ live: { voice: next || undefined } })} />}
       </Group>
       <SetupRow kind="live" provider={provider} voice={voice} onOpen={openSheet} />
