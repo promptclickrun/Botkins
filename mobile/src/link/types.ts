@@ -1303,8 +1303,8 @@ export type PairedDevice = {
   person?: string;
   platform: string;
   kind: "phone" | "desktop" | "gadget";
-  /** A gadget's board and firmware, as it said them, and the bot it talks with ("gadgets-v1"). */
-  gadget?: { board?: string; firmware?: string; botId?: string };
+  /** A gadget's board and firmware, as it said them, the bot it talks with ("gadgets-v1"), and its settings and Wi-Fi ("gadget-settings-v1"). */
+  gadget?: GadgetInfo;
   createdAt: number;
   lastSeenAt: number;
   connected: boolean;
@@ -1316,6 +1316,34 @@ export type PairedDevice = {
  * a gadget's whole `Pairing`.
  */
 export type GadgetIntroduction = { deviceId: string; serverId: string; serverKey: string; name: string; hosts: string[] };
+/** A gadget's settings ("gadget-settings-v1"). The computer keeps them; the gadget applies them. */
+export type GadgetSettings = {
+  /** 0 to 100. */
+  volume: number;
+  mic: "low" | "normal" | "high";
+  /** The microphone is off. */
+  mute: boolean;
+  /** 5 to 100. */
+  brightness: number;
+  /** Seconds idle before the screen dims, and before it goes dark. 0 is never. */
+  dimAfter: number;
+  offAfter: number;
+};
+/** A gadget as the device list shows it. */
+export type GadgetInfo = {
+  board?: string;
+  firmware?: string;
+  botId?: string;
+  settings?: GadgetSettings;
+  /** The network in use, the saved networks' names and the signal in dBm, as the gadget last said. Never a password. */
+  wifi?: { network?: string; saved: string[]; signal?: number };
+  /** Wi-Fi changes the gadget hasn't taken yet. */
+  wifiWaiting?: ({ add: string } | { forget: string })[];
+  /** A restart was asked for and hasn't happened yet. */
+  restarting?: true;
+};
+/** A Wi-Fi change for a gadget: a network with its password, or one to forget. */
+export type GadgetWifiChange = { add: { ssid: string; password: string } } | { forget: string };
 /** The part a gadget follows in place of the app's parts (gadget/docs/contract.md). */
 export type GadgetPart = {
   name: string;
@@ -1329,6 +1357,15 @@ export type GadgetPart = {
   /** The newest reply, as plain words. `parts` is how many pieces "link.gadget.speak" reads it in. */
   reply?: { id: string; text: string; parts: number };
   voice: { hear: boolean; speak: boolean; live?: LiveProvider };
+  /** While working: how many steps the turn has taken. */
+  steps?: number;
+  settings: GadgetSettings;
+  /** Names the bot's Botkin: a new one means the faces ("link.gadget.face") are new. Absent on a computer without the design kit. */
+  face?: { look: string };
+  /** Wi-Fi changes for the gadget to take and then report done ("link.gadget.set" `wifiDone`). */
+  wifi?: { changes: ({ id: string } & ({ add: { ssid: string; password: string } } | { forget: string }))[] };
+  /** A restart the owner asked for: the gadget says `restarting` with this id, then restarts. */
+  restart?: string;
 };
 export type PhoneRecord = {
   name: string;
@@ -1702,6 +1739,11 @@ export type Calls = {
   "link.devices.list"(): PairedDevice[];
   /** Pairs a gadget by introduction ("gadgets-v1"): its public key (X25519, base64url) as it gave it over a cable or Bluetooth. */
   "link.gadgets.add"(input: { publicKey: string; name?: string; board?: string; botId?: string }): GadgetIntroduction;
+  /** A gadget's settings and its bot ("gadget-settings-v1"): any of them. Answers the device list afterwards. */
+  "link.gadgets.configure"(id: string, patch: Partial<GadgetSettings> & { botId?: string }): PairedDevice[];
+  /** A Wi-Fi network to add, with its password, or to forget. The gadget takes it at its next look (within 10 minutes). */
+  "link.gadgets.wifi"(id: string, change: GadgetWifiChange): { queued: true };
+  "link.gadgets.restart"(id: string): null;
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
   /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */

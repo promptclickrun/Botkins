@@ -3,7 +3,7 @@
 // through the computer as plain samples; and it is the owner's, so a bot's request is its to answer.
 // The "gadget" here is the phone's own link client with a gadget's key: the firmware speaks the same link.
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -124,7 +124,7 @@ test("a phone introduces a gadget by its key, and the gadget opens a session wit
   const list = await phone.client.call<PairedDevice[]>("link.devices.list");
   const listed = list.find((item) => item.id === intro.deviceId)!;
   assert.deepEqual([listed.name, listed.kind, listed.platform, listed.connected], ["Desk gadget", "gadget", "esp32", true]);
-  assert.deepEqual(listed.gadget, { board: "esp32-s3-box-3", botId: "bot-mira" });
+  assert.deepEqual(listed.gadget, { board: "esp32-s3-box-3", botId: "bot-mira", settings: { volume: 60, mic: "normal", mute: false, brightness: 80, dimAfter: 30, offAfter: 300 } });
 
   // A key nobody introduced is a stranger, and a bad key is refused in words.
   // (The gadget's id with another key: the session's box doesn't open, so it never gets in.)
@@ -314,6 +314,9 @@ test("gadgets are the owner's: a team member can't add one, and a member's devic
   await assert.rejects(member.client.call("link.gadgets.add", { publicKey: newGadget().publicKey }), /Only the owner can do that/);
   await assert.rejects(member.client.call("link.gadget.say", { text: "Hello" }), /Only the owner can do that/);
   await assert.rejects(member.client.call("link.gadget.hello", {}), /Only the owner can do that/);
+  await assert.rejects(member.client.call("link.gadgets.configure", "any", { volume: 10 }), /Only the owner can do that/);
+  await assert.rejects(member.client.call("link.gadgets.wifi", "any", { forget: "Home" }), /Only the owner can do that/);
+  await assert.rejects(member.client.call("link.gadgets.restart", "any"), /Only the owner can do that/);
   assert.equal(link.status().devices.filter((device: PairedDevice) => device.kind === "gadget").length, 0);
 
   // A key some phone paired with is not a gadget's to take: the phone stays paired.
@@ -321,6 +324,120 @@ test("gadgets are the owner's: a team member can't add one, and a member's devic
   await assert.rejects(phone.client.call("link.gadgets.add", { publicKey: phoneKey }), /belongs to another paired device/);
   assert.ok(Array.isArray(await phone.client.call("models")), "the phone is still served");
   for (const each of [member, phone]) each.client.stop();
+  await link.stop();
+});
+
+test("a gadget is sent its bot's Botkin in each pose, and a new look gives it new faces", async () => {
+  const { link, phone } = await host();
+  const device = newGadget();
+  const gadget = follow(device.pairing(link.addGadget({ publicKey: device.publicKey, botId: "bot-mira" })));
+  await until(() => !!gadget.gadget()?.face, "the gadget's face");
+  const first = gadget.gadget().face!.look;
+  type Face = { look: string; pose: string; svg: string };
+  for (const pose of ["ready", "listening", "working", "speaking", "needs", "waiting", "sleepy"]) {
+    const face = await gadget.client.call<Face>("link.gadget.face", { pose });
+    assert.equal(face.look, first);
+    assert.match(face.svg, /^<svg [^>]*viewBox="0 0 256 256"/);
+    // Nothing that moves, nothing a gadget can't draw.
+    assert.ok(!/<style|<title|<animate/.test(face.svg), pose + " has nothing that moves");
+  }
+  // Speaking and listening are told apart by the eyes.
+  const listening = await gadget.client.call<Face>("link.gadget.face", { pose: "listening" });
+  const speaking = await gadget.client.call<Face>("link.gadget.face", { pose: "speaking" });
+  assert.notEqual(listening.svg, speaking.svg);
+  await assert.rejects(gadget.client.call("link.gadget.face", { pose: "dancing" }), /isn't a pose/);
+  await assert.rejects(phone.client.call("link.gadget.face", { pose: "ready" }), /Only a gadget can do that/);
+
+  // The bot gets another look on the phone: the gadget is told its faces are new.
+  await phone.client.call("link.setLook", "bot-mira", { head: "spool", palette: "honey" });
+  await until(() => gadget.gadget().face?.look !== first, "a new look");
+  assert.match((await gadget.client.call<Face>("link.gadget.face", { pose: "ready" })).svg, /^<svg/);
+
+  // Without the design kit there are no faces: the part says nothing of them, and asking says why.
+  const plain = new LinkHost({ relay: false, dir: folder("botkins-gadget-plain-"), backend: new MockBackend({ speed: 0.05 }), port: 0, extraHosts: ["127.0.0.1"], botkins: null });
+  await plain.setEnabled(true);
+  const other = newGadget();
+  const bare = follow(other.pairing(plain.addGadget({ publicKey: other.publicKey })));
+  await until(() => !!bare.parts.gadget, "the gadget's part");
+  assert.equal(bare.gadget().face, undefined);
+  await assert.rejects(bare.client.call("link.gadget.face", { pose: "ready" }), /can't draw Botkins/);
+  for (const each of [gadget, bare, phone]) each.client.stop();
+  await link.stop();
+  await plain.stop();
+});
+
+test("the owner sets a gadget's volume, microphone and screen from a phone, and the gadget's own changes reach the phone", async () => {
+  const { link, phone } = await host();
+  const device = newGadget();
+  const intro = link.addGadget({ publicKey: device.publicKey, botId: "bot-mira" });
+  const gadget = follow(device.pairing(intro));
+  await until(() => !!gadget.parts.gadget, "the gadget's part");
+  assert.deepEqual(gadget.gadget().settings, { volume: 60, mic: "normal", mute: false, brightness: 80, dimAfter: 30, offAfter: 300 });
+  assert.ok((phone.parts.meta as Meta).capabilities.includes("gadget-settings-v1"));
+
+  const listed = await phone.client.call<PairedDevice[]>("link.gadgets.configure", intro.deviceId, { volume: 35, mic: "high", dimAfter: 60 });
+  assert.deepEqual(listed.find((item) => item.id === intro.deviceId)!.gadget!.settings, { volume: 35, mic: "high", mute: false, brightness: 80, dimAfter: 60, offAfter: 300 });
+  await until(() => gadget.gadget().settings.volume === 35 && gadget.gadget().settings.mic === "high", "the new settings on the gadget");
+  // A bad value changes nothing, also the good ones beside it.
+  await assert.rejects(phone.client.call("link.gadgets.configure", intro.deviceId, { volume: 101, brightness: 50 }), /Volume is from 0 to 100/);
+  await assert.rejects(phone.client.call("link.gadgets.configure", intro.deviceId, { mic: "loud" }), /low, normal or high/);
+  assert.equal(link.status().devices.find((item: { id: string }) => item.id === intro.deviceId).gadget.settings.brightness, undefined);
+  await assert.rejects(phone.client.call("link.gadgets.configure", "nobody", { volume: 10 }), /no longer paired/);
+  await assert.rejects(phone.client.call("link.gadgets.configure", phone.pairing.deviceId, { volume: 10 }), /no longer paired/);
+
+  // The person mutes the microphone on the gadget itself: the phone's list says so.
+  await gadget.client.call("link.gadget.set", { settings: { mute: true } });
+  await until(() => gadget.gadget().settings.mute, "muted on the gadget");
+  assert.equal((await phone.client.call<PairedDevice[]>("link.devices.list")).find((item) => item.id === intro.deviceId)!.gadget!.settings!.mute, true);
+
+  // Another bot, chosen on the phone: the gadget talks with it in a new chat.
+  await gadget.client.call("link.gadget.say", { text: "Hello" });
+  await until(() => !!gadget.gadget().chat, "a chat");
+  await phone.client.call("link.gadgets.configure", intro.deviceId, { botId: "bot-quill" });
+  await until(() => gadget.gadget().bot?.id === "bot-quill" && gadget.gadget().chat === null, "the other bot, no chat");
+  await assert.rejects(phone.client.call("link.gadgets.configure", intro.deviceId, { botId: "bot-nobody" }), /no longer exists/);
+  for (const each of [gadget, phone]) each.client.stop();
+  await link.stop();
+});
+
+test("a Wi-Fi network and a restart go to the gadget once, and a password is kept nowhere but on its way", async () => {
+  const { link, phone } = await host();
+  const device = newGadget();
+  const intro = link.addGadget({ publicKey: device.publicKey });
+  const gadget = follow(device.pairing(intro));
+  await until(() => !!gadget.parts.gadget, "the gadget's part");
+  // The gadget says which networks it knows: names only.
+  await gadget.client.call("link.gadget.hello", { board: "test", wifi: { network: "Home network", saved: ["Home network", "Studio", "Home network"], signal: -58, password: "nope" } });
+  const shown = () => phone.client.call<PairedDevice[]>("link.devices.list").then((list) => list.find((item) => item.id === intro.deviceId)!.gadget!);
+  assert.deepEqual((await shown()).wifi, { network: "Home network", saved: ["Home network", "Studio"], signal: -58 });
+
+  assert.deepEqual(await phone.client.call("link.gadgets.wifi", intro.deviceId, { add: { ssid: "Cabin", password: "pine-needles-9" } }), { queued: true });
+  await until(() => (gadget.gadget().wifi?.changes.length ?? 0) === 1, "the change on the gadget");
+  const change = gadget.gadget().wifi!.changes[0] as { id: string; add: { ssid: string; password: string } };
+  assert.deepEqual(change.add, { ssid: "Cabin", password: "pine-needles-9" });
+  // The phone sees that it waits, by name; the password is in no list, status or file.
+  assert.deepEqual((await shown()).wifiWaiting, [{ add: "Cabin" }]);
+  assert.ok(!JSON.stringify(await phone.client.call("link.devices.list")).includes("pine-needles-9"));
+  assert.ok(!JSON.stringify(link.status()).includes("pine-needles-9"));
+  assert.ok(!readFileSync(join(link.store.dir ?? "", "link.json"), "utf8").includes("pine-needles-9"));
+  assert.ok(!(phone.parts.phones && JSON.stringify(phone.parts.phones).includes("pine-needles-9")));
+  // Taken: it leaves the part and the list.
+  await gadget.client.call("link.gadget.set", { wifiDone: [change.id] });
+  await until(() => !gadget.gadget().wifi, "the change taken");
+  assert.equal((await shown()).wifiWaiting, undefined);
+
+  await phone.client.call("link.gadgets.wifi", intro.deviceId, { forget: "Studio" });
+  await until(() => (gadget.gadget().wifi?.changes[0] as { forget?: string } | undefined)?.forget === "Studio", "a network to forget");
+  await assert.rejects(phone.client.call("link.gadgets.wifi", intro.deviceId, { add: { ssid: "Cabin", password: "short" } }), /8 to 63 characters/);
+  await assert.rejects(phone.client.call("link.gadgets.wifi", intro.deviceId, { add: { ssid: "", password: "" } }), /network's name/);
+
+  // A restart: the gadget says it is restarting, and the request is gone.
+  assert.equal(await phone.client.call("link.gadgets.restart", intro.deviceId), null);
+  await until(() => typeof gadget.gadget().restart === "string", "the restart on the gadget");
+  assert.equal((await shown()).restarting, true);
+  await gadget.client.call("link.gadget.set", { restarting: gadget.gadget().restart });
+  await until(() => gadget.gadget().restart === undefined, "the restart taken");
+  for (const each of [gadget, phone]) each.client.stop();
   await link.stop();
 });
 
@@ -390,7 +507,10 @@ test("the gadget's part: one small object for the face, the request and the repl
   const device = { name: "Desk", gadget: { botId: "b2" } };
   const bots = [{ id: "b1", name: "Mira" }, { id: "b2", name: "Quill", look: { head: "owl", palette: "fern" } }, { id: "b3", name: "Hidden", hidden: true }];
   const idle = gadgetPart({ device, bots, voice: { hear: true, speak: false, live: "gemini" } });
-  assert.deepEqual(idle, { name: "Desk", bot: { id: "b2", name: "Quill", look: { head: "owl", palette: "fern" } }, bots: [{ id: "b1", name: "Mira" }, { id: "b2", name: "Quill" }], chat: null, phase: "idle", voice: { hear: true, speak: false, live: "gemini" } });
+  assert.deepEqual(idle, { name: "Desk", bot: { id: "b2", name: "Quill", look: { head: "owl", palette: "fern" } }, bots: [{ id: "b1", name: "Mira" }, { id: "b2", name: "Quill" }], chat: null, phase: "idle", voice: { hear: true, speak: false, live: "gemini" }, settings: { volume: 60, mic: "normal", mute: false, brightness: 80, dimAfter: 30, offAfter: 300 } });
+  // What the computer adds: the steps of a working turn, the face's name, waiting Wi-Fi changes and a restart.
+  const extras = gadgetPart({ device: { name: "Desk", gadget: { settings: { volume: 20 } } }, bots, chat: { id: "c1", botId: "b1", title: "T", messages: [] }, live: { active: ["c1"], streams: { c1: "" }, requests: [] }, steps: 3, face: { look: "abc" }, wifi: [{ id: "w1", forget: "Studio" }], restart: "r1" });
+  assert.deepEqual([extras.steps, extras.face, extras.wifi, extras.restart, extras.settings.volume, extras.settings.mic], [3, { look: "abc" }, { changes: [{ id: "w1", forget: "Studio" }] }, "r1", 20, "normal"]);
   const chat = { id: "c1", botId: "b1", title: "Launch", messages: [{ role: "user", text: "Hi" }, { role: "assistant", text: "**Hello** there." }] };
   // The chat's bot wins over the gadget's saved one; the reply is the newest thing the bot said.
   const done = gadgetPart({ device, bots, chat, live: { active: [], streams: {}, requests: [] } });

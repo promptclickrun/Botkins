@@ -22,6 +22,7 @@ These modules let a paired phone running Botkins use a desktop app over the loca
 | `device.mjs` | `DeviceTools`: tools that run on a paired phone, and the list of them. See "Tools that run on a phone". |
 | `gadget.mjs` | Gadgets: small devices that talk with a bot. Pairing by introduction, the two small parts a gadget follows, and speech in and out as plain samples. The contract is `gadget/docs/contract.md`. See "Gadgets". |
 | `gadget-setup.mjs` | Setting a gadget up over its USB port: the introducer's half, for the app's own page and `botkins gadgets add`. |
+| `botkin-svg.mjs` | A bot's Botkin in each pose a gadget shows, as SVG from the design kit found beside the link (`new LinkHost({ botkins })` replaces it; `null` is none). |
 | `voice.mjs` | `Voice`: speech to text, text to speech and live voice sessions, through providers the person chose. `VOICE.md` has the contract and every provider. See "Voice". |
 | `tools.mjs` | Runs the computer's command-line tools without a shell, with a time limit and a small environment. |
 | `net.mjs` | Which addresses to offer a phone, and which callers count as nearby. |
@@ -187,7 +188,9 @@ A gadget (an ESP32 board with a microphone and a speaker) is a paired device of 
 - **It is the owner's device.** Nothing is cut from what a bot may do in a gadget's chat, and the gadget answers a bot's requests itself. So adding a gadget is a full-trust step, like pairing a phone: say so where one is added. A team member can't add one.
 - **What it is sent.** Two small parts, `meta` and `gadget` (`gadgetPart`), and the reply's text for its own chat. The app's own parts never go to a gadget.
 - **Speech.** `link.gadget.hear` takes a recording in pieces and `link.gadget.speak` reads a reply as 16-bit samples at the gadget's rate. Both use the providers of Settings › Voice, so a gadget needs a provider there that is not "This device". `Voice.speak({ samples: true })` asks each provider for plain samples in place of MP3 (`VOICE.md`).
-- **In the device list** a gadget has `gadget: { board, firmware, botId }`. `link.status().devices` has the whole record. `removeDevice` works as for a phone.
+- **In the device list** a gadget has `gadget: { board, firmware, botId, settings, wifi, wifiWaiting?, restarting? }`. `link.status().devices` has the whole record. `removeDevice` works as for a phone.
+- **Settings, Wi-Fi and restart** (`gadget-settings-v1`): `link.configureGadget(id, patch)`, `link.gadgetWifi(id, change)` and `link.restartGadget(id)` for the app's own page, the same as a phone's `link.gadgets.*` calls. A Wi-Fi password is held in memory for the gadget, for 10 minutes at most, and written nowhere.
+- **The Botkin's faces.** A gadget draws its bot's Botkin itself, from SVG the link makes with the design kit (`botkin-svg.mjs`). The link finds the kit at `design/botkins-kit` beside it (one or two folders up), so an app that ships the link ships that folder's `customize.js`, `motion/` and `avatars/` too. Without them a gadget shows its own default Botkin.
 
 ## Limits
 

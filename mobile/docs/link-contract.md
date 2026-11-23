@@ -334,6 +334,7 @@ A gadget is a small device with a microphone, a speaker and maybe a screen that 
 - **It is in the device list** with `kind: "gadget"`, `platform: "esp32"` and `gadget: { board?, firmware?, botId? }`. Rename and remove work as for any device. Show it as a gadget, not as a phone.
 - **Its chats are the owner's own chats.** A phone lists them, opens them and answers in them like any other.
 - **A gadget follows two parts, `meta` and `gadget`,** in place of the app's parts, and makes its own calls (`link.gadget.*`). Those are refused for a phone or a desktop ("Only a gadget can do that.").
+- **Its settings are the owner's to change from a client** (`gadget-settings-v1`): `link.gadgets.configure(id, patch)` (volume, microphone, mute, brightness, the screen's timers, the bot) answers the device list; `link.gadgets.wifi(id, { add: { ssid, password } } | { forget: ssid })` answers `{ queued: true }` and the gadget takes it within 10 minutes; `link.gadgets.restart(id)`. The device list's `gadget` carries `settings`, the gadget's own `wifi` report (names, never a password), `wifiWaiting` and `restarting`. The values and their rules: `gadget/docs/contract.md`, "Settings". The app on the host does the same with `link.configureGadget`, `link.gadgetWifi` and `link.restartGadget`.
 
 ## The relay
 
