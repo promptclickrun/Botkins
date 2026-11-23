@@ -583,3 +583,62 @@ p.int-auth-line {
   min-height: 30px;
   padding: 3px 12px;
 }
+
+/* ------------------------------------------------------------ a gadget's page (GadgetPage.tsx) */
+.gadget-page {
+  display: grid;
+  gap: 18px;
+}
+.gadget-crumbs .set-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  text-decoration: none;
+}
+.gadget-head {
+  display: grid;
+  justify-items: start;
+  text-align: left;
+}
+.gadget-head h2 {
+  margin: 0;
+}
+.gadget-head p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+.gadget-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.gadget-dot.on {
+  background: var(--success);
+}
+.gadget-bot {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.gadget-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.gadget-slider output {
+  min-width: 3.2em;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.gadget-add {
+  text-decoration: none;
+}
+.gadget-remove {
+  color: var(--danger);
+  text-decoration: none;
+}

@@ -287,6 +287,9 @@ export const WORKSPACE = {
   renamePhone: cmd("devices rename"),
   setPhonePerson: cmd("devices set-person"),
   removePhone: cmd("devices remove"),
+  configureGadget: cmd("gadgets set"),
+  gadgetWifi: cmd("gadgets wifi"),
+  restartGadget: cmd("gadgets restart"),
   setPhoneRelay: cmd("relay on"),
   resetPhoneRelay: cmd("relay reset"),
   // ── What needs a window ──
