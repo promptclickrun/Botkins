@@ -192,11 +192,11 @@ export const markdownRules = { remarkPlugins, rehypePlugins, callouts: CALLOUTS 
 export type LinkRenderer = (href: string, children: ReactNode) => ReactNode;
 
 /**
- * Markdown text. Unchanged text is not parsed again when the chat around it updates.
- * `link` draws links to other places in the app (the Wiki uses it for its pages); without it, as in
- * chats, such a link is plain text.
+ * The Markdown of `text` as the page's elements, with no box around them: the rows of a box that
+ * other blocks share (a reply that is still arriving, see src/StreamingText.tsx) sit side by side.
+ * Unchanged text is not parsed again when what is around it updates.
  */
-export const RichText = memo(function RichText({ text, link, files }: { text: string; link?: LinkRenderer; files?: ChatFiles }) {
+export const RichBody = memo(function RichBody({ text, link, files }: { text: string; link?: LinkRenderer; files?: ChatFiles }) {
   const found = useChatFiles(text, files);
   const plugins = useMemo<Options["remarkPlugins"]>(() => found.length
     ? [...remarkPlugins!, pathMarkup(text, found)]
@@ -209,9 +209,18 @@ export const RichText = memo(function RichText({ text, link, files }: { text: st
       return <InLink.Provider value>{link(href, props.children)}</InLink.Provider>;
     },
   } : undefined, [link]);
-  return <div className="md">
+  return (
     <ChatFileContext.Provider value={{ files, found }}>
       <Markdown components={own ?? components} remarkPlugins={plugins} rehypePlugins={rehypePlugins}>{text}</Markdown>
     </ChatFileContext.Provider>
-  </div>;
+  );
+});
+
+/**
+ * Markdown text. Unchanged text is not parsed again when the chat around it updates.
+ * `link` draws links to other places in the app (the Wiki uses it for its pages); without it, as in
+ * chats, such a link is plain text.
+ */
+export const RichText = memo(function RichText({ text, link, files }: { text: string; link?: LinkRenderer; files?: ChatFiles }) {
+  return <div className="md"><RichBody text={text} link={link} files={files} /></div>;
 });

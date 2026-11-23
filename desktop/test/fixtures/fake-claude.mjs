@@ -13,11 +13,18 @@
 //       cut     the start of a reply, then the program ends
 //       silent  nothing at all, until it is killed (or 30 seconds have gone)
 //       crash   a line on stderr and exit code 1
+//       rounds:<n>  the tool call while the conversation holds fewer than <n> tool results, then the text
 //
 // FAKE_CLAUDE_LOG names a file that gets, as JSON, what the program was started with and what it
 // was sent: { pid, argv, systemFile, systemPrompt, mcpFile, mcpConfig, settingsFile, settings,
-// controls, cwd, env, frames, frameTimes, ackTimes, tools, toolCall }. For a run that was told its
-// request by control message, systemPrompt, mcpConfig and settings are what those messages said.
+// controls, controlTimes, cwd, env, frames, frameTimes, ackTimes, answeredAt, tools, toolCall }. For
+// a run that was told its request by control message, systemPrompt, mcpConfig and settings are
+// what those messages said. FAKE_CLAUDE_ACK_MS is how long an acknowledgement is held back (60).
+//
+// With FAKE_CLAUDE_HEARD set, the reply's message id is "msg_" and a digest of the system prompt
+// and the turns this run was given, so a test can tell from a reply alone exactly what the run
+// that wrote it was told.
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -33,7 +40,8 @@ const read = (path) => {
 const say = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const native = (event) => say({ type: "stream_event", event });
 
-const mode = process.env.FAKE_CLAUDE || "text";
+const asked = process.env.FAKE_CLAUDE || "text";
+const ackMs = Number(process.env.FAKE_CLAUDE_ACK_MS ?? 60);
 
 // A run that waits keeps a log, and its caller reads from it when the startup is over. With
 // FAKE_CLAUDE_STARTUP=ok the log says at once that the system reports changed files; with
@@ -52,9 +60,11 @@ const frameTimes = [];
 const ackTimes = [];
 const acks = [];
 const controls = [];
+const controlTimes = [];
 const told = (subtype) => controls.find((request) => request.subtype === subtype);
 
-const start = () => native({ type: "message_start", message: { id: "msg_fake", type: "message", role: "assistant", model: "claude-fake", content: [], stop_reason: null, usage: { input_tokens: 3, output_tokens: 0 } } });
+let heard = "fake";
+const start = () => native({ type: "message_start", message: { id: "msg_" + heard, type: "message", role: "assistant", model: "claude-fake", content: [], stop_reason: null, usage: { input_tokens: 3, output_tokens: 0 } } });
 const end = (stop_reason) => {
   native({ type: "message_delta", delta: { stop_reason }, usage: { output_tokens: 2 } });
   native({ type: "message_stop" });
@@ -79,6 +89,7 @@ lines.on("line", (line) => {
   // FAKE_CLAUDE_CONTROL=refuse answers them with an error; =silent doesn't answer.
   if (frame.type === "control_request") {
     controls.push(frame.request);
+    controlTimes.push(Date.now());
     const how = process.env.FAKE_CLAUDE_CONTROL;
     if (how === "silent") return;
     say({ type: "control_response", response: how === "refuse" ? { subtype: "error", request_id: frame.request_id, error: "no" } : { subtype: "success", request_id: frame.request_id, response: {} } });
@@ -93,7 +104,7 @@ lines.on("line", (line) => {
           ackTimes.push(Date.now());
           say({ type: "result", subtype: "success", is_error: false, num_turns: 0 });
           resolve();
-        }, 60),
+        }, ackMs),
       ),
     );
   }
@@ -116,12 +127,16 @@ async function askTools(config) {
 
 lines.on("close", async () => {
   await Promise.all(acks);
+  const results = frames.flatMap((frame) => frame.message?.content ?? []).filter((block) => block?.type === "tool_result").length;
+  const mode = asked.startsWith("rounds:") ? (results < Number(asked.slice(7)) ? "tool" : "text") : asked;
   const systemFile = after("--system-prompt-file");
   const mcpFile = after("--mcp-config");
   const mcpText = mcpFile && read(mcpFile);
   // A run that waited was told these by control message instead of by file.
   const mcpConfig = mcpText ? JSON.parse(mcpText) : controls.length ? { mcpServers: told("mcp_set_servers")?.servers ?? {} } : null;
   const probe = await askTools(mcpConfig);
+  const systemPrompt = systemFile ? read(systemFile) : (told("initialize")?.systemPrompt?.join("\n\n") ?? null);
+  if (process.env.FAKE_CLAUDE_HEARD) heard = createHash("sha256").update(JSON.stringify([systemPrompt, frames.map(({ shouldQuery: _replayed, ...frame }) => frame)])).digest("hex").slice(0, 24);
   if (process.env.FAKE_CLAUDE_LOG) {
     const names = ["CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_DISABLE_ARTIFACT", "CLAUDE_CODE_MAX_RETRIES", "CLAUDE_CODE_EXTRA_BODY", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"];
     const settingsFile = after("--settings");
@@ -132,12 +147,14 @@ lines.on("close", async () => {
         pid: process.pid,
         argv,
         systemFile,
-        systemPrompt: systemFile ? read(systemFile) : (told("initialize")?.systemPrompt?.join("\n\n") ?? null),
+        systemPrompt,
         mcpFile,
         mcpConfig,
         settingsFile,
         settings: settingsText ? JSON.parse(settingsText) : (told("apply_flag_settings")?.settings ?? null),
         controls,
+        controlTimes,
+        answeredAt: Date.now(),
         cwd: process.cwd(),
         env: Object.fromEntries(names.map((name) => [name, process.env[name] ?? null])),
         frames,

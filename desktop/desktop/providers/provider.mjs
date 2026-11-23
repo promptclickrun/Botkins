@@ -171,6 +171,12 @@ export class ModelProvider {
   /** Releases every warm session, for a change that all of them must pick up (such as a new MCP sign-in). */
   async releaseSessions(_options) {}
   /**
+   * Starts what this provider's first turn would otherwise start (its runtime, its program), in
+   * the background, so that turn doesn't wait for it. It opens no session and must be cheap to call
+   * again. A failure is the real turn's to report, so it is ignored here.
+   */
+  async warm() {}
+  /**
    * Lets go of what the provider keeps running (a process, a local server) while the person has
    * it switched off. Unlike stop(), the next use starts it again.
    */
@@ -199,6 +205,12 @@ export class ModelProvider {
 export class ProviderSession {
   /** The conversation id. */
   id = "";
+
+  /**
+   * Starts what this session's first message would start (a harness program), ahead of it. A
+   * session that starts nothing of its own does nothing (Workspace.prewarm).
+   */
+  async warm() {}
 
   /** Subscribes to session events (see the contract above). Returns an unsubscribe function. */
   on(_handler) {

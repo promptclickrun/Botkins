@@ -46,8 +46,12 @@ const MAX_CARDS = 6;
 const MAX_DOMAINS = 16;
 const CALL_MS = 120_000;
 const OPEN_MS = 15_000;
-/** How long a turn waits for the routed servers it already knows to answer before it falls back to the harness. */
-const READY_MS = 4_000;
+/**
+ * How long a turn waits for a routed server that is not connected yet before it falls back to the
+ * harness. Launch and opening a chat connect them ahead of the turn (`warm`), so a turn normally
+ * finds them ready and waits for nothing; this only bounds the wait for one that is still cold.
+ */
+const READY_MS = 1_200;
 const IDLE_MS = 15 * 60_000;
 /** How long a server that couldn't be reached is left alone: its turns go to the harness meanwhile. */
 const RETRY_MS = 60_000;
@@ -368,26 +372,43 @@ export class McpApps {
     const routed = new Map();
     const waits = [];
     for (const server of servers) {
-      if (!this.wanted(server)) {
-        this.discover(server);
-        continue;
-      }
-      // A server that couldn't be reached a moment ago goes to the harness, without a wait each turn.
-      if (Date.now() - (this.failed.get(server.id) ?? -Infinity) < RETRY_MS) continue;
-      const upstream = this.upstream(server);
-      waits.push(
-        upstream.tools().then(
-          (tools) => routed.set(server.name, { server, upstream, tools }),
-          () => {
-            this.failed.set(server.id, Date.now());
-            if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
-            void upstream.close();
-          },
-        ),
-      );
+      const ready = this.ready(server);
+      if (!ready) continue;
+      const { upstream, tools } = ready;
+      // Connected and listed already (the usual case once warm): taken at once, with no wait.
+      if (upstream.list) routed.set(server.name, { server, upstream, tools: upstream.list });
+      else waits.push(tools.then((list) => list && routed.set(server.name, { server, upstream, tools: list })));
     }
     if (waits.length) await Promise.race([Promise.all(waits), new Promise((resolve) => setTimeout(resolve, READY_MS).unref?.())]);
     return routed;
+  }
+  /**
+   * Connects the servers Botkins runs, in the background, so a turn finds them ready: at launch
+   * (Workspace.warmUp) and when a chat opens (Workspace.warmRoute, through `prepare`).
+   */
+  warm() {
+    for (const server of this.ws.integrations?.servers ?? []) if (server.enabled) this.ready(server);
+  }
+  /**
+   * Starts connecting to a server Botkins runs: { upstream, tools } where `tools` settles to its
+   * tools, or to null when it couldn't be reached (it then goes to the harness for a while). Null
+   * for a server Botkins doesn't run (it is looked at in the background instead) or one that
+   * failed a moment ago (it goes to the harness, without a wait each turn).
+   */
+  ready(server) {
+    if (!this.wanted(server)) {
+      this.discover(server);
+      return null;
+    }
+    if (Date.now() - (this.failed.get(server.id) ?? -Infinity) < RETRY_MS) return null;
+    const upstream = this.upstream(server);
+    const tools = upstream.tools().catch(() => {
+      this.failed.set(server.id, Date.now());
+      if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
+      void upstream.close();
+      return null;
+    });
+    return { upstream, tools };
   }
 
   /** The routed servers' tools for the model, as Botkins tools. */

@@ -4,6 +4,8 @@
 // Hidden narrow the steps. The work is drawn the way T3 Code draws it, with the bot
 // leading: its face (held still, for battery) and what it is doing beside it ("Coding · …", its
 // latest thought), and the steps under it as quiet rows on the chat, with no card (WorkRows.tsx).
+// The turn's live line shimmers while the bot is on it and nothing waits for the person: the running
+// step, or "Coding" beside the face while no step runs (T3 Code's look, the owner's pick 2026-11-23).
 // While the turn runs, its status is the glass capsule over the message box (StatusCapsule.tsx), and
 // its line under the text keeps the fold line's place (FoldRow.tsx). A turn that will fold once it
 // ends keeps room under its text for the reply's row. The work keeps away from the screen's edge
@@ -26,7 +28,7 @@ const SHOWN_STEPS = 4;
 const READ_ALOUD_ROW = 28;
 
 /** A part of the turn under way's steps, under the face: the last few (failed ones only, on "Failed only"). A tap opens the turn's activity. */
-function Steps({ chatId, runId, all, mode }: { chatId: string; runId?: string; all: Step[]; mode: ChatPrefs["steps"] }) {
+function Steps({ chatId, runId, all, mode, live }: { chatId: string; runId?: string; all: Step[]; mode: ChatPrefs["steps"]; /** The bot is on it: a running step shimmers. */ live: boolean }) {
   if (all.length === 0 || mode === "hide") return null;
   const steps = mode === "failed" ? all.filter((step) => step.status === "Failed") : all;
   if (steps.length === 0) return null;
@@ -48,10 +50,15 @@ function Steps({ chatId, runId, all, mode }: { chatId: string; runId?: string; a
         </T>
       )}
       {steps.slice(-SHOWN_STEPS).map((step) => (
-        <StepRow key={step.id} step={step} />
+        <StepRow key={step.id} step={step} live={live} />
       ))}
     </Tap>
   );
+}
+
+/** The bot is on its turn now: nothing it asked waits for the person. */
+function useOnIt(chatId: string): boolean {
+  return useApp((state) => !state.parts.live?.requests?.some((request) => request.chatId === chatId));
 }
 
 /** What the bot is doing, as the line beside its face says it ("Coding"), and the pose its face holds. */
@@ -68,6 +75,7 @@ export function WorkPart({ chatId, bot, item }: { chatId: string; bot?: Bot; ite
     const run = state.running[chatId];
     return item.reasoningIds && run?.id === item.run.id ? segmentThinking(item.reasoningIds, run) : item.thinking;
   });
+  const onIt = useOnIt(chatId);
   if (!item.live) return <WorkLine chatId={chatId} runId={item.run.id} label={item.label} steps={item.steps} failed={stepsMode === "failed"} />;
   return (
     <View style={{ gap: space.xs }}>
@@ -76,7 +84,7 @@ export function WorkPart({ chatId, bot, item }: { chatId: string; bot?: Bot; ite
           <Aside kind="thinking" text={thinking} bot={bot} />
         </View>
       )}
-      <Steps chatId={chatId} runId={item.run.id} all={item.steps} mode={stepsMode} />
+      <Steps chatId={chatId} runId={item.run.id} all={item.steps} mode={stepsMode} live={onIt} />
     </View>
   );
 }
@@ -94,6 +102,7 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const doing = useDoing(chatId);
+  const onIt = useOnIt(chatId);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
   // Relay chunks are received text, not a typewriter animation. Markdown keeps completed blocks
   // cached while reparsing the active tail; the finished MessageRow performs the exact final parse.
@@ -102,6 +111,8 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const steps = stepsMode === "hide" ? [] : stepsMode === "failed" ? item.steps.filter((step) => step.status === "Failed") : item.steps;
   // The face leads the work: what the bot is doing and its latest thought. A reply with no work has none.
   const lead = !!thinking || steps.length > 0;
+  // One live line at a time: a running step shown below, or else what the bot is doing.
+  const leadShimmers = onIt && !steps.some((step) => step.status === "Running");
   return (
     <View style={{ gap: space.md }}>
       {group && !!stream && (
@@ -115,9 +126,9 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
       {lead && (
         <View style={{ gap: space.xs }}>
           <View style={workWidth}>
-            <Aside kind="thinking" text={thinking} bot={speaker} state={doing.state} label={doing.label} live />
+            <Aside kind="thinking" text={thinking} bot={speaker} state={doing.state} label={doing.label} live shimmer={leadShimmers} />
           </View>
-          <Steps chatId={chatId} runId={item.run?.id} all={item.steps} mode={stepsMode} />
+          <Steps chatId={chatId} runId={item.run?.id} all={item.steps} mode={stepsMode} live={onIt} />
         </View>
       )}
       {stream && item.reserve ? (
@@ -133,7 +144,7 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
         !item.run &&
         !lead && (
           <View style={workWidth} accessibilityLiveRegion="polite">
-            <Aside kind="thinking" text={intent ?? ""} bot={speaker} state="thinking" label="Thinking" live />
+            <Aside kind="thinking" text={intent ?? ""} bot={speaker} state="thinking" label="Thinking" live shimmer={onIt} />
           </View>
         )
       )}

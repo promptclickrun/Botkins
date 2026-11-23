@@ -355,6 +355,12 @@ api.subscribe = (fn) => {
   ipcRenderer.on("changed", listener);
   return () => ipcRenderer.removeListener("changed", listener);
 };
+// The small updates while a bot streams (desktop/window-push.mjs).
+api.subscribeHot = (fn) => {
+  const listener = (_, message) => fn(message);
+  ipcRenderer.on("changed-hot", listener);
+  return () => ipcRenderer.removeListener("changed-hot", listener);
+};
 // A notification click asks the renderer to open its chat.
 api.onOpenChat = (fn) => {
   const listener = (_, chatId) => fn(chatId);

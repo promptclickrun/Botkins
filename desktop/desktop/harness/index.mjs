@@ -1,11 +1,14 @@
 // The harness: what runs a bot's turn (the loop, the tools, the approvals) around the model.
 //
-// Settings › General offers four choices (settings.harness):
+// Settings › General offers four choices (settings.harness), in this order:
+//   "pi", "provider", "copilot", "omp". Pi is the default (2026-11-23). A choice the person made
+//   (settings.harnessPicked) is kept; while nobody chose, a default whose program isn't on this
+//   computer gives way to the next in the order (Harness.effective).
 //   "copilot"   One harness for every plan. The Copilot runtime runs the turn, and the model's own
 //               plan answers the model requests: GitHub Copilot's models as always, a ChatGPT plan
 //               and a Claude plan through the gateway (gateway.mjs). Skills, tools, MCP servers
 //               and their sign-ins, plugins and approvals are then the same whichever model a chat
-//               uses, because one program carries them. This is the usual choice.
+//               uses, because one program carries them.
 //   "provider"  Each provider's own tool runs the turn, as before: Codex for ChatGPT, Claude Code
 //               for Claude, the Copilot runtime for GitHub Copilot.
 //   "pi"        Pi (pi.dev, desktop/providers/pi) runs the turns of ChatGPT and Claude plan
@@ -21,8 +24,12 @@ import { Gateway } from "./gateway.mjs";
 import { chatgptSignIn } from "./chatgpt.mjs";
 import { friendlyModel } from "../modelnames.mjs";
 
-export const HARNESSES = ["copilot", "provider", "pi", "omp"];
-export const DEFAULT_HARNESS = "copilot";
+export const HARNESSES = ["pi", "provider", "copilot", "omp"];
+export const DEFAULT_HARNESS = "pi";
+/** The program harnesses: each needs its program on this computer. */
+const PROGRAMS = ["pi", "omp"];
+/** How long whether a program is on this computer is believed before it is looked for again. */
+const PROGRAM_CHECK_MS = 60_000;
 /** A saved choice made whole: anything unknown is the usual one. */
 export const harnessField = (value) => (HARNESSES.includes(value) ? value : DEFAULT_HARNESS);
 
@@ -112,8 +119,11 @@ export class Harness {
    * @param options.version    Botkins' version.
    * @param options.gateway    For tests: a gateway to use instead of making one.
    */
-  constructor({ providers, choice, dir, bridge, version = "", gateway }) {
-    Object.assign(this, { providers, choice, dir, bridge });
+  constructor({ providers, choice, picked = () => true, dir, bridge, version = "", gateway }) {
+    Object.assign(this, { providers, choice, picked, dir, bridge });
+    // Program harnesses known not to be on this computer, and when that was last looked at.
+    this.missing = new Set();
+    this.checkedAt = 0;
     const codex = providers.byId.get("codex");
     const claude = providers.byId.get("claude");
     this.gateway =
@@ -148,10 +158,34 @@ export class Harness {
    * Which harness runs a selection's turns when it isn't the model's own provider: "copilot" (the
    * Copilot runtime), "pi", "omp", or null. Only a plan the gateway carries can be run by another.
    */
+  /**
+   * The harness that runs turns: the person's choice, or while nobody chose, the default, or the
+   * next in the order when the default's program isn't on this computer (as far as `checkPrograms`
+   * last saw).
+   */
+  effective() {
+    const choice = harnessField(this.choice());
+    if (this.picked() || !this.missing.has(choice)) return choice;
+    return HARNESSES.slice(HARNESSES.indexOf(choice) + 1).find((id) => !this.missing.has(id)) ?? choice;
+  }
+  /** Looks for the program harnesses on this computer, at most once a minute. Never throws. */
+  async checkPrograms(now = Date.now()) {
+    if (now - this.checkedAt < PROGRAM_CHECK_MS) return this.checking;
+    this.checkedAt = now;
+    this.checking = Promise.all(
+      PROGRAMS.map(async (id) => {
+        const provider = this.providers.byId.get(id);
+        const file = provider?.locate ? await provider.locate().catch(() => null) : null;
+        if (file) this.missing.delete(id);
+        else this.missing.add(id);
+      }),
+    ).then(() => {});
+    return this.checking;
+  }
   via(selection) {
     const owner = this.providers.for(selection);
     if (!Object.hasOwn(PLANS, owner.id)) return null;
-    const choice = harnessField(this.choice());
+    const choice = this.effective();
     if (choice === "copilot" && this.host && owner !== this.host) return HOST;
     if (PI_COMPATIBLE.has(choice) && this.providers.byId.has(choice)) return choice;
     return null;

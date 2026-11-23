@@ -2,6 +2,7 @@ import {
   Fragment,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -27,6 +28,9 @@ import {
 } from "lucide-react";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { RichText } from "./RichText";
+import { StreamingText } from "./StreamingText";
+import { useRowCache } from "./rowCache";
+import { useStableFunctions } from "./stable";
 import type { FilePreview } from "./ChatFileLink";
 import {
   HelperChip,
@@ -124,7 +128,7 @@ function Attachments({ list }: { list: Message["attachments"] }) {
 }
 
 /** One conversation: header, transcript, pending requests and the composer slot. */
-export default function ChatView({
+function ChatViewBody({
   completions,
   pending,
   onScreen,
@@ -258,10 +262,18 @@ export default function ChatView({
     paneAction(chat.id, paneShown ? "closed" : "opened");
     if (narrow && !paneShown) requestAnimationFrame(() => document.querySelector<HTMLElement>(".side-pane.drawer :is([role=tab][aria-selected=true], .pane-close)")?.focus());
   };
-  const files = { chatId: chat.id, botId: bot.id, hostId: state.remote?.using?.id, remote: !!state.remote?.using, preview: (file: FilePreview) => {
+  // Rows that did not change are kept (src/rowCache.ts), so a stream tick makes only the live turn again.
+  const rows = useRowCache();
+  useEffect(() => rows.sweep());
+  // One object for as long as the chat and computer are the same: the messages' Markdown is not read again for a new one.
+  const showPaneNow = useRef(showPane);
+  showPaneNow.current = showPane;
+  const hostId = state.remote?.using?.id;
+  const remoteHost = !!state.remote?.using;
+  const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, preview: (file: FilePreview) => {
     setPreview({ ...file, chatId: chat.id });
-    showPane(true);
-  } };
+    showPaneNow.current(true);
+  } }), [chat.id, bot.id, hostId, remoteHost]);
   const closePane = () => {
     showPane(false);
     paneAction(chat.id, "closed");
@@ -557,6 +569,12 @@ export default function ChatView({
     if (owner && runs.has(owner)) timelineRunIds.add(owner);
   }
   const timelineBusy = !!latest && latest.status === "Working" && timelineRunIds.has(latest.id);
+  // What a row of a finished turn reads from outside itself. A turn that runs is made again every time.
+  const rowEnv = [chat.id, bot, group, state.bots, state.projects, state.settings, files, busy, reading.key, loadedFrom, stepsMode, thinkingMode, canManageAgents];
+  const runMessages = new Map<string, unknown[]>();
+  chat.messages.forEach((m, i) => {
+    for (const id of new Set([m.runId, m.steeredRunId, m.answer?.runId])) if (id && runs.has(id)) (runMessages.get(id) ?? runMessages.set(id, []).get(id)!).push(i, m);
+  });
   const timelineMessage = (m: Message, index: number) => (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
@@ -601,6 +619,9 @@ export default function ChatView({
     if (!initial) return null;
     const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim);
     const ownSteps = (run.steps ?? []).filter((step) => !step.agentId);
+    // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
+    // shimmers (T3 Code's look): the running step, or the lead while no step runs.
+    const onIt = run.status === "Working" && !requests.length;
     const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode !== "hidden" && (stepsMode !== "failed" || step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
@@ -637,7 +658,7 @@ export default function ChatView({
           });
         }
       } else {
-        const body = <WorkSteps steps={[event.value]} />;
+        const body = <WorkSteps steps={[event.value]} live={onIt} />;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: showStep(event.value) ? body : null, details: body });
       }
     }
@@ -693,7 +714,7 @@ export default function ChatView({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thought || state.intents[chat.id]?.trim()} />}
+        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thought || state.intents[chat.id]?.trim()} shimmer={onIt && doingNow !== "Needs you" && !ownSteps.some((step) => step.status === "Running" && showStep(step))} />}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
         {!group && !live && folded && fold}
@@ -706,7 +727,7 @@ export default function ChatView({
                 <span className="speaker-name">{currentBot.name}</span>
               </b>
             )}
-            <RichText text={stream} files={files} />
+            <StreamingText text={stream} files={files} />
           </article>
         )}
         {(live || group) && (live || folded) && fold}
@@ -947,7 +968,7 @@ export default function ChatView({
                 // A paginated/remote chat can contain a reply without the opening user message.
                 // Only claim the run after the timeline renderer found its anchor; otherwise let
                 // the legacy map render the partial page instead of dropping it.
-                const rendered = renderTimeline(run);
+                const rendered = rows.row("turn:" + run.id, run.status === "Working" ? null : [...rowEnv, run, lastUserRun === run.id, ...(runMessages.get(run.id) ?? [])], () => renderTimeline(run));
                 if (rendered) {
                   timelineRendered.add(timelineOwner);
                   return rendered;
@@ -955,7 +976,7 @@ export default function ChatView({
               }
               if (timelineRendered.has(timelineOwner)) return null;
             }
-            return (
+            return rows.row("message:" + i, run?.status === "Working" ? null : [...rowEnv, m, i, chat.messages[i - 1], run, !!run && lastUserRun === run.id, run && state.intents[chat.id]], () => (
               <Fragment key={i}>
                 {(m.text || m.role !== "assistant") && (
                   <article
@@ -1060,7 +1081,7 @@ export default function ChatView({
                   </>
                 )}
               </Fragment>
-            );
+            ));
           })}
           {busy && !timelineBusy && group && (
             <article className="assistant live">
@@ -1071,7 +1092,7 @@ export default function ChatView({
                 </b>
               )}
               {stream ? (
-                <RichText text={stream} files={files} />
+                <StreamingText text={stream} files={files} />
               ) : (
                 <p className="typing" role="status">
                   {requests.length ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
@@ -1088,7 +1109,7 @@ export default function ChatView({
                 </b>
               )}
               {stream ? (
-                <RichText text={stream} files={files} />
+                <StreamingText text={stream} files={files} />
               ) : (
                 <p className="typing" role="status">
                   {requests.length ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
@@ -1261,4 +1282,9 @@ export default function ChatView({
       )}
     </div>
   );
+}
+
+/** The window's functions from the page above are made anew on every render; the rows below keep what they were given. */
+export default function ChatView(props: Parameters<typeof ChatViewBody>[0]) {
+  return <ChatViewBody {...useStableFunctions(props)} />;
 }

@@ -215,6 +215,94 @@ article > .interim-update {
   flex: none;
   color: var(--danger);
 }
+/* The live line's shimmer (Shimmer.tsx, T3 Code's live-activity-focus): a muted line with a soft
+   band of ink sweeping across it. The band is a masked copy that moves by transform only, in 30
+   steps per sweep, and runs only while it can be seen (visibleAnimation.ts). */
+.shimmer-host {
+  position: relative;
+  overflow: hidden;
+}
+.shimmering {
+  color: var(--muted);
+}
+.live-shimmer {
+  --live-shimmer-width: 4.5rem;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--live-shimmer-width));
+  width: calc(100% + 2 * var(--live-shimmer-width));
+  pointer-events: none;
+  user-select: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, rgb(0 0 0 / 12%) 0.675rem, rgb(0 0 0 / 55%) 1.575rem, black 2.25rem, rgb(0 0 0 / 55%) 2.925rem, rgb(0 0 0 / 12%) 3.825rem, transparent var(--live-shimmer-width), transparent 100%);
+  -webkit-mask-repeat: no-repeat;
+  mask-image: linear-gradient(to right, transparent 0, rgb(0 0 0 / 12%) 0.675rem, rgb(0 0 0 / 55%) 1.575rem, black 2.25rem, rgb(0 0 0 / 55%) 2.925rem, rgb(0 0 0 / 12%) 3.825rem, transparent var(--live-shimmer-width), transparent 100%);
+  mask-repeat: no-repeat;
+  animation: live-shimmer 2.2s steps(30) infinite;
+  animation-play-state: var(--visible-animation-state, paused);
+  will-change: var(--visible-animation-will-change, auto);
+}
+.live-shimmer-counter {
+  display: block;
+  width: 100%;
+  animation: live-shimmer-counter 2.2s steps(30) infinite;
+  animation-play-state: var(--visible-animation-state, paused);
+  will-change: var(--visible-animation-will-change, auto);
+}
+.live-shimmer-copy {
+  display: block;
+  width: calc(100% - 2 * var(--live-shimmer-width));
+  margin-inline-start: var(--live-shimmer-width);
+  color: var(--ink);
+}
+.live-shimmer-copy .work-step-icon {
+  opacity: 1;
+}
+@keyframes live-shimmer {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes live-shimmer-counter {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+/* Less motion, or forced colors: no band, and the live line is in ink as before. */
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .shimmering {
+    color: var(--ink);
+  }
+  .live-shimmer {
+    display: none;
+  }
+}
+/* A running step's icon and label, as one line the shimmer sweeps. */
+.work-step-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.live-shimmer-copy.work-step-main {
+  display: flex;
+}
+/* The lead's "Coding", when no step is running: a short word that the band crosses. */
+.work-lead .shimmer-host {
+  display: inline-block;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+.work-lead .shimmering b,
+.work-lead .live-shimmer-copy b {
+  color: inherit;
+}
 .work-step .step-detail {
   padding-left: 32px;
 }

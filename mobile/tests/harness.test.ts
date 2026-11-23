@@ -14,10 +14,12 @@ const status = (id: string, installed: boolean): HarnessStatus => ({
 });
 
 test("harness choices show each program only when the computer reports it or it is selected", () => {
-  assert.deepEqual(HARNESSES.map((choice) => choice.value), ["copilot", "provider", "pi", "omp"]);
-  assert.deepEqual(harnessChoices("copilot", undefined).map((choice) => choice.value), ["copilot", "provider"]);
-  assert.deepEqual(harnessChoices("copilot", [status("pi", true)]).map((choice) => choice.value), ["copilot", "provider", "pi"]);
-  assert.deepEqual(harnessChoices("omp", []).map((choice) => choice.value), ["copilot", "provider", "omp"]);
+  // The computer's order: Pi (the default), each provider's own, the Copilot SDK, OMP.
+  assert.deepEqual(HARNESSES.map((choice) => choice.value), ["pi", "provider", "copilot", "omp"]);
+  assert.deepEqual(harnessChoices("copilot", undefined).map((choice) => choice.value), ["provider", "copilot"]);
+  assert.deepEqual(harnessChoices("copilot", [status("pi", true)]).map((choice) => choice.value), ["pi", "provider", "copilot"]);
+  assert.deepEqual(harnessChoices("omp", []).map((choice) => choice.value), ["provider", "copilot", "omp"]);
+  assert.deepEqual(harnessChoices("pi", []).map((choice) => choice.value), ["pi", "provider", "copilot"]);
   assert.equal(harnessName("omp"), "OMP");
 });
 

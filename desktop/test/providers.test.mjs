@@ -13,7 +13,7 @@ import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 function warm(t, reply, options = {}) {
   const dir = tempDir(t);
   const fake = fakeClient(reply, options.extra);
-  const copilot = new CopilotProvider({ connect: fake.client, keepWarmMs: options.keepWarmMs ?? 60000, maxWarm: options.maxWarm ?? 6, stallTimeoutMs: options.stallTimeoutMs });
+  const copilot = new CopilotProvider({ connect: fake.client, keepWarmMs: options.keepWarmMs ?? 60000, maxWarm: options.maxWarm ?? 6, keepOne: options.keepOne, stallTimeoutMs: options.stallTimeoutMs });
   t.after(() => copilot.stop());
   const ws = new Workspace(join(dir, "data"), new Providers([copilot, ...(options.more ?? [])]), () => {});
   return { ws, dir, copilot, ...fake };
@@ -250,6 +250,33 @@ test("a warm session closes by itself after the keep-warm time", async (t) => {
   assert.ok(!copilot.pool.has(id));
   await ws.send(id, "Two");
   assert.deepEqual(log.resumed, [id]);
+});
+
+test("with keepOne, the last open session outlives the keep-warm time, and only the last", async (t) => {
+  const { ws, log, copilot } = warm(t, undefined, { keepWarmMs: 15, keepOne: true });
+  const first = ws.createChat("pip");
+  const second = ws.createChat("pip");
+  await ws.send(first, "One");
+  await ws.send(second, "Two");
+  await tick(60);
+  assert.deepEqual(log.disconnected, [first], "the older one closes; the newest stays open");
+  await tick(60);
+  assert.ok(copilot.pool.has(second), "the last one stays open beyond the keep-warm time");
+  await ws.send(second, "Three");
+  assert.deepEqual(log.resumed ?? [], [], "its next message needs no reopening");
+});
+
+test("opening a new chat starts the harness's runtime without opening a session", async (t) => {
+  const { ws, log, copilot } = warm(t);
+  let warmed = 0;
+  copilot.warm = async () => void warmed++;
+  const id = ws.createChat("pip");
+  await ws.prewarm(id);
+  assert.equal(warmed, 1, "the runtime is started while the person writes");
+  assert.deepEqual(log.created, [], "no session is opened for a chat with no conversation");
+  assert.equal(ws.chat(id).established, false);
+  await ws.warmUp();
+  assert.equal(warmed, 2, "launch starts the default harness's runtime too");
 });
 
 test("Copilot activity keeps a turn alive beyond the old wall-clock deadline", async (t) => {
@@ -937,6 +964,8 @@ test("a restarted plan gateway reopens the same session with the new listener an
     return { data: { content: "Recovered" } };
   }, { more: [plan] });
   t.after(() => ws.harness.stop());
+  // The Copilot runtime hosts the plan model: chosen, since Pi is the default now (desktop/harness).
+  Object.assign(ws.state.settings, { harness: "copilot", harnessPicked: true });
   const id = ws.createChat("pip");
   ws.chat(id).model = { provider: "codex", model: "plan-model" };
   await ws.send(id, "Make a list");

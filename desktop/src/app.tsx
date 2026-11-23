@@ -28,6 +28,7 @@ import ProviderIcon from "./ProviderIcon";
 import { isConnected, useModelCatalog, useProviders } from "./providers";
 import { AvatarAnimations } from "./Avatar";
 import ChatView, { type SideAnswer } from "./ChatView";
+import { applyHot, share, type HotMessage } from "./hotState";
 import { ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
 import { ActivityPage } from "./Work";
 import { WORK_TABS, WorkBack, type WorkNav, type WorkTab } from "./WorkBar";
@@ -76,7 +77,13 @@ function App() {
   const [completionByHost] = useState(() => new Map<string, CompletionScroll>());
   const [display, setDisplay] = useState(readChatDisplay);
   const position = useRef(settleChatDisplay(display).completionPosition);
-  function receiveSnapshot(next: State) {
+  /** The state the window has, and the newest number it has been given (desktop/window-push.mjs). */
+  const held = useRef<{ state?: State; seq: number }>({ seq: 0 });
+  function receiveSnapshot(received: State) {
+    // A whole state older than what the window has already took in is not taken in.
+    if (received.seq !== undefined && received.seq < held.current.seq) return;
+    // Parts that did not change stay the same objects, so only what changed is drawn again.
+    const next = share(held.current.state, received);
     const hostId = next.remote?.using?.id ?? "local";
     const scroll = completionByHost.get(hostId) ?? new CompletionScroll();
     completionByHost.set(hostId, scroll);
@@ -85,6 +92,29 @@ function App() {
     if (box) for (const id of box.chatIds()) {
       const chat = next.chats.find(chat => chat.id === id);
       box.observe(id, chat?.loaded?.from ?? 0, chat?.messages ?? [], next.queued?.[id] ?? []);
+    }
+    held.current = { state: next, seq: Math.max(held.current.seq, next.seq ?? 0) };
+    setSnapshot(next);
+  }
+  /** A small update from a streaming turn: onto the state it was made for, or the whole state is asked for. */
+  function receiveHot(hot: HotMessage) {
+    const { state: now, seq } = held.current;
+    if (!now || now.seq !== hot.base || hot.seq <= seq) return;
+    const next = applyHot(now, hot);
+    if (!next) {
+      void api.snapshot().then(receiveSnapshot).catch(fail);
+      return;
+    }
+    held.current = { state: next, seq: hot.seq };
+    if (next === now) return;
+    // Messages the phone link or this window sent wait in the outbox until the computer's queue has them.
+    if (next.queued !== now.queued) {
+      const hostId = next.remote?.using?.id ?? "local";
+      const box = outboxes.get(hostId);
+      if (box) for (const id of box.chatIds()) {
+        const chat = next.chats.find(chat => chat.id === id);
+        box.observe(id, chat?.loaded?.from ?? 0, chat?.messages ?? [], next.queued?.[id] ?? []);
+      }
     }
     setSnapshot(next);
   }
@@ -101,9 +131,11 @@ function App() {
       window.removeEventListener("storage", read);
     };
   }, []);
-  const state = useMemo(() => snapshot && ({ ...snapshot, settings: {
+  // The settings are one object until they change, so the rows that read them are not made again for a streamed word.
+  const shownSettings = useMemo(() => snapshot && ({
     ...snapshot.settings, ...settleChatDisplay(display, snapshot.settings.showThinking)
-  } }), [snapshot, display]);
+  }), [snapshot?.settings, display]);
+  const state = useMemo(() => snapshot && shownSettings && ({ ...snapshot, settings: shownSettings }), [snapshot, shownSettings]);
   const [page, setPage] = useState<Page>("Home");
   const [chatId, setChatId] = useState("");
   /** The space whose page is open (page "Space"). */
@@ -201,6 +233,7 @@ function App() {
     setError(e instanceof Error ? e.message : String(e));
   useEffect(() => {
     const off = api.subscribe(receiveSnapshot);
+    const offHot = api.subscribeHot?.(receiveHot);
     api.snapshot().then(receiveSnapshot).catch(fail);
     const shortcut = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ",") {
@@ -217,6 +250,7 @@ function App() {
     window.addEventListener("keydown", shortcut);
     return () => {
       off();
+      offHot?.();
       window.removeEventListener("keydown", shortcut);
     };
   }, []);

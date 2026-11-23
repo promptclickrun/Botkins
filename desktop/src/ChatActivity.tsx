@@ -26,6 +26,7 @@ import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { RichText } from "./RichText";
+import { Shimmer } from "./Shimmer";
 import { Block } from "./Today";
 import type { Run, Step, Subagent, Todo } from "./types";
 
@@ -242,9 +243,10 @@ function stepIcon(step: Step) {
 }
 
 /** A turn's steps as bare rows: an icon for the kind, the label on one line. A running step is
- * drawn in ink, a failed one with a faded danger icon and a small X. A row opens to its input
- * and output. */
-export function WorkSteps({ steps }: { steps: Step[] }) {
+ * muted with a band of ink sweeping across it (`Shimmer`, T3 Code's live row) while the bot is on
+ * it (`live`; off while it waits for the person), a failed one has a faded danger icon and a small
+ * X. A row opens to its input and output. */
+export function WorkSteps({ steps, live = false }: { steps: Step[]; live?: boolean }) {
   if (!steps.length) return null;
   return (
     <ol className="work-steps">
@@ -258,8 +260,10 @@ export function WorkSteps({ steps }: { steps: Step[] }) {
           <li key={s.id} className={"work-step" + (running ? " running" : "") + (failed ? " failed" : "")}>
             <details>
               <summary title={s.name + " · " + s.status}>
-                <span className="work-step-icon" aria-hidden="true"><Icon size={16} /></span>
-                <span className="work-step-label">{label}</span>
+                <Shimmer on={running && live} className="work-step-main">
+                  <span className="work-step-icon" aria-hidden="true"><Icon size={16} /></span>
+                  <span className="work-step-label">{label}</span>
+                </Shimmer>
                 {failed && <X size={12} className="work-step-failed" aria-label="Failed" />}
               </summary>
               {detail && (
@@ -290,13 +294,15 @@ export function WorkSteps({ steps }: { steps: Step[] }) {
   );
 }
 
-/** The top of a live turn: the bot's still face, what it is doing in ink, then its newest thought. */
-export function LiveLead({ avatar, label, thought }: { avatar: ReactNode; label: string; thought?: string }) {
+/** The top of a live turn: the bot's still face, what it is doing in ink, then its newest thought.
+ * `shimmer`: the bot is thinking with no step running, so this is the live line (T3 Code's
+ * "Thinking" row) and the band sweeps across what it is doing. */
+export function LiveLead({ avatar, label, thought, shimmer = false }: { avatar: ReactNode; label: string; thought?: string; shimmer?: boolean }) {
   return (
     <div className="work-lead" role="status">
       {avatar}
       <p>
-        <b>{label}</b>
+        <Shimmer on={shimmer}><b>{label}</b></Shimmer>
         {thought && <> · {thought}</>}
       </p>
     </div>

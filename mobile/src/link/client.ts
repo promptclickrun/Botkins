@@ -385,14 +385,15 @@ export type LinkOptions = {
   /**
    * How a reply's text comes on this route (default "live", as it is written; true is "live" too). "whole" or
    * false sends `text: false` ("text-streaming-off-v1"): the indicators stay and the reply comes whole when it
-   * ends. "chunks" sends `text: "chunks"` ("text-chunks-v1"): the text comes in complete sentences every
-   * couple of seconds, or whole from a computer without that. Read on each sync; call `textStreamingChanged`
+   * ends. "chunks" sends `text: "chunks"` ("text-chunks-v1"): the reply's text comes after whole words a few
+   * times a second, the first words at once (older computers: whole sentences every couple of seconds), or
+   * whole from a computer without that. Read on each sync; call `textStreamingChanged`
    * when the answer may have changed.
    */
   textStreaming?(route: LinkRoute): boolean | TextMode;
 };
 
-/** How a reply's text is followed: as it is written, in complete sentences now and then, or whole when it ends. */
+/** How a reply's text is followed: as it is written, in whole words now and then, or whole when it ends. */
 export type TextMode = "live" | "chunks" | "whole";
 
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];

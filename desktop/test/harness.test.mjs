@@ -1325,22 +1325,22 @@ const standIn = () => {
 };
 const harness = (providers, choice = () => "copilot", gate = standIn()) => new Harness({ providers, choice, dir: root, bridge: null, gateway: gate });
 
-test("one harness is the usual choice, and a saved value that is not a harness is that choice", () => {
-  assert.deepEqual(HARNESSES, ["copilot", "provider", "pi", "omp"]);
+test("Pi is the usual choice, and a saved value that is not a harness is that choice", () => {
+  assert.deepEqual(HARNESSES, ["pi", "provider", "copilot", "omp"]);
   assert.equal(harnessField("copilot"), "copilot");
   assert.equal(harnessField("provider"), "provider");
   assert.equal(harnessField("pi"), "pi");
   assert.equal(harnessField("omp"), "omp");
-  for (const value of ["opencode", "", "COPILOT", undefined, null, 3, {}]) assert.equal(harnessField(value), "copilot", String(value));
+  for (const value of ["opencode", "", "COPILOT", undefined, null, 3, {}]) assert.equal(harnessField(value), "pi", String(value));
 });
 
 test("the Copilot runtime hosts a ChatGPT or Claude selection when the choice is copilot", () => {
   const providers = registry();
-  for (const choice of [() => "copilot", () => undefined, () => "something else"]) {
-    const one = harness(providers, choice);
-    assert.equal(one.hosts({ provider: "codex", model: "gpt-6-astra" }), true);
-    assert.equal(one.hosts({ provider: "claude", model: "opus" }), true);
-  }
+  const one = harness(providers, () => "copilot");
+  assert.equal(one.hosts({ provider: "codex", model: "gpt-6-astra" }), true);
+  assert.equal(one.hosts({ provider: "claude", model: "opus" }), true);
+  // No choice, or one that isn't a harness, is Pi's now (desktop/harness): the Copilot runtime hosts nothing then.
+  for (const choice of [() => undefined, () => "something else"]) assert.equal(harness(providers, choice).hosts({ provider: "codex", model: "gpt-6-astra" }), false);
 });
 
 test("the Copilot runtime does not host its own models, OpenCode, or anything when the choice is provider", () => {

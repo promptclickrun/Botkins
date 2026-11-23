@@ -2,6 +2,8 @@
 // The server versions these snapshots. An opted-in phone gets boolean stream indicators in live
 // and only the missing reply and thinking text for its watched chats.
 
+import { interned } from "./json-cache.mjs";
+
 const PREVIEW = 160;
 const STEP_TEXT = 4000;
 export const CHAT_PAGE = 60;
@@ -54,13 +56,19 @@ function runSummary(run) {
   };
 }
 
+/**
+ * A step as a chat shows it, long tool text cut. A step that did not change since the last page is
+ * the same object again (`interned`), which is what lets the link keep its JSON instead of writing
+ * every step of a long turn again each time the reply grows.
+ */
+const clippedStep = (s) => interned(s, (s) => ({ ...s, ...(s.input && { input: clip(s.input, STEP_TEXT) }), ...(s.output && { output: clip(s.output, STEP_TEXT) }) }));
+
 /** A run as a chat shows it. Long tool text is cut: a phone shows the start of it. */
 function runDetail(run) {
-  const step = (s) => ({ ...s, ...(s.input && { input: clip(s.input, STEP_TEXT) }), ...(s.output && { output: clip(s.output, STEP_TEXT) }) });
   return {
     ...run,
-    ...(run.steps && { steps: run.steps.map(step) }),
-    ...(run.teamwork && { teamwork: run.teamwork.map((ask) => ({ ...ask, ...(ask.steps && { steps: ask.steps.map(step) }) })) }),
+    ...(run.steps && { steps: run.steps.map(clippedStep) }),
+    ...(run.teamwork && { teamwork: run.teamwork.map((ask) => ({ ...ask, ...(ask.steps && { steps: ask.steps.map(clippedStep) }) })) }),
   };
 }
 
@@ -120,8 +128,20 @@ export function quietLive(live) {
   return { ...live, streams: flags(live.streams), thinking: flags(live.thinking) };
 }
 
-/** A phone that asked for text in chunks ("text-chunks-v1") gets text at most this often. */
+/**
+ * A phone that asked for text in chunks ("text-chunks-v1") gets thinking, and any text that waits for a
+ * sentence's end, at most this often. Each answer through the relay is two billed relay messages
+ * (the phone's request and the computer's answer, 20 to 1; relay/README.md, "Pricing notes").
+ */
 export const CHUNK_MS = 2000;
+/**
+ * The reply's own text goes this often, cut after a whole word, and the first words of a reply go at
+ * once. At 650 ms a phone that follows a reply costs the relay about 9 requests a minute (0.15 a
+ * second), against 3 a minute at 2 s. The Free plan's 100,000 a day is then about 10,000 minutes
+ * of following a reply, for every phone and computer on the relay together. A phone draws each chunk
+ * whole, with no animation between two.
+ */
+export const CHUNK_LIVE_MS = 650;
 /** Text held for want of a complete sentence goes anyway after this long, or once it is this long. */
 export const CHUNK_HOLD_MAX_MS = 6000;
 export const CHUNK_HOLD_MAX_CHARS = 1200;
@@ -163,6 +183,19 @@ export function completeUpTo(text, from, to) {
   return from;
 }
 
+/** Text with no spaces between words (Han and kana, and the full-width marks) may be cut after any one of its characters. */
+const spaceless = (code) => (code >= 0x3000 && code <= 0x30ff) || (code >= 0x3400 && code <= 0x9fff) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xff00 && code <= 0xffef);
+
+/**
+ * Where to cut `text` between `from` and `to` after a whole word: after the last whitespace, or after
+ * a character of a script written without spaces. Not after a word that may not be finished (the one
+ * at the end, which only a space after it completes). `from` when there is none.
+ */
+export function wordUpTo(text, from, to) {
+  for (let i = to - 1; i >= from; i--) if (isSpace(text[i]) || spaceless(text.charCodeAt(i))) return i + 1;
+  return from;
+}
+
 /** The cut when nothing complete came for too long: after the last whitespace, or all of it. Never inside a surrogate pair. */
 export function looseUpTo(text, from, to) {
   let cut = to;
@@ -178,10 +211,12 @@ export function looseUpTo(text, from, to) {
 
 /**
  * A `textDelta` cut to complete sentences and lines, for a phone that asked for chunks. `loose` (held
- * too long) cuts at a word instead when nothing is complete. `held` says text is left for later;
- * `delta` is undefined when nothing is worth sending yet.
+ * too long) cuts at a word instead when nothing is complete. `live` cuts the reply's own text
+ * (`stream`) after any whole word instead, so it can go every `CHUNK_LIVE_MS`; thinking keeps to
+ * sentences and lines. `held` says text is left for later; `delta` is undefined when nothing is worth
+ * sending yet.
  */
-export function chunkDelta(text, delta, cursor, loose) {
+export function chunkDelta(text, delta, cursor, loose, live = false) {
   if (!delta) return { delta, held: false };
   let held = false;
   let any = false;
@@ -189,7 +224,7 @@ export function chunkDelta(text, delta, cursor, loose) {
     const { from, add } = delta[field];
     const body = text[field];
     const to = from + add.length;
-    let at = completeUpTo(body, from, to);
+    let at = live && field === "stream" ? wordUpTo(body, from, to) : completeUpTo(body, from, to);
     if (at === from && add && (loose || add.length > CHUNK_HOLD_MAX_CHARS)) at = looseUpTo(body, from, to);
     if (at < to) held = true;
     if (at > from) any = true;
@@ -298,7 +333,7 @@ export function chatPart(state, chatId, runs = runsByChat(state, [chatId]).get(c
   const all = chat.messages ?? [];
   const end = Number.isInteger(before) ? Math.max(0, Math.min(before, all.length)) : all.length;
   const from = Math.max(0, end - limit);
-  const messages = all.slice(from, end).map(({ context: _context, ...message }) => message);
+  const messages = all.slice(from, end).map((message) => interned(message, ({ context: _context, ...rest }) => rest));
   const ids = new Set(messages.map((m) => m.runId).filter(Boolean));
   return {
     id: chatId,

@@ -146,16 +146,16 @@ test("preferences harnesses: the choices, the one that is set, and whether a har
   ];
   const shown = await botkins(["preferences", "harnesses"]);
   assert.equal(shown.exit, 0, shown.err);
-  assert.match(shown.out, /^CHOICE +CHOSEN +WHAT IT IS\ncopilot +yes +One harness runs every chat/m);
-  assert.match(shown.out, /^pi +- +The Pi program runs the chats/m);
+  assert.match(shown.out, /^CHOICE +CHOSEN +WHAT IT IS\npi +yes +The Pi program runs the chats/m);
+  assert.match(shown.out, /^copilot +- +One harness runs every chat/m);
   assert.match(shown.out, /^PROGRAM +INSTALLED +VERSION +NOTE\npi +yes +1\.0\.0 +-$/m);
   const before = (await botkins(["preferences", "harnesses", "--json"])).json();
-  assert.deepEqual([before.chosen, before.choices.map((entry) => entry.id), before.programs.map((entry) => [entry.id, entry.installed])], ["copilot", ["copilot", "provider", "pi", "omp"], [["pi", true], ["omp", false]]]);
+  assert.deepEqual([before.chosen, before.choices.map((entry) => entry.id), before.programs.map((entry) => [entry.id, entry.installed])], ["pi", ["pi", "provider", "copilot", "omp"], [["pi", true], ["omp", false]]]);
   assert.equal(before.programs[0].version, "1.0.0");
   // The choice is the preference `harness`: setting it moves the mark.
-  assert.equal((await botkins(["preferences", "set", "harness", "pi"])).exit, 0);
-  assert.equal((await client.call("preferences.harnesses")).chosen, "pi");
-  assert.match((await botkins(["preferences", "harnesses"])).out, /^pi +yes +The Pi program/m);
+  assert.equal((await botkins(["preferences", "set", "harness", "copilot"])).exit, 0);
+  assert.equal((await client.call("preferences.harnesses")).chosen, "copilot");
+  assert.match((await botkins(["preferences", "harnesses"])).out, /^copilot +yes +One harness runs every chat/m);
   assert.equal((await botkins(["preferences", "set", "harness", "omp"])).exit, 0);
   assert.equal((await client.call("preferences.harnesses")).chosen, "omp");
   assert.match((await botkins(["preferences", "harnesses"])).out, /^omp +yes +The OMP program/m);

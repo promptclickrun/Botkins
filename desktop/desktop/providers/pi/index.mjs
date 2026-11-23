@@ -16,7 +16,7 @@
 import { PiPackages } from "./packages.mjs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,7 @@ export const BRIDGE = "botkins";
 export const ASK = "botkins:permission";
 const PROVIDER_DIR = dirname(fileURLToPath(import.meta.url));
 export const EXTENSION = join(PROVIDER_DIR, "extension.mjs");
+const RUN_BUNDLED = join(PROVIDER_DIR, "run-bundled.mjs");
 export const OMP_EXTENSION = join(PROVIDER_DIR, "..", "omp", "extension.mjs");
 export const INSTALL = { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" };
 export const OMP_INSTALL = { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" };
@@ -58,6 +59,28 @@ const RUNTIMES = {
     sessionEnv: "BOTKINS_OMP_SESSION",
   },
 };
+/**
+ * The Pi that ships with Botkins (the @earendil-works/pi-coding-agent dependency): its command
+ * line script, or null where it isn't installed. It runs on this program's own Node.js, the
+ * app's Electron or the terminal host's Node.js 24, so nothing else needs installing.
+ */
+export function bundledPi() {
+  try {
+    const main = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const cli = join(dirname(main), "bundle", "cli.js");
+    return existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * How to start a Pi program: a script (the bundled Pi) runs on this program's own Node.js, as
+ * Node even inside Electron; anything else runs as it is.
+ */
+export function launcher(file, args) {
+  if (!/\.[cm]?js$/.test(file)) return { file, args, env: {} };
+  return { file: process.execPath, args: [RUN_BUNDLED, file, ...args], env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {} };
+}
 /** Pi's thinking levels. Botkins' efforts are the same words. */
 const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effort : null);
@@ -155,6 +178,9 @@ export class PiRpc {
       this.child.on("close", () => done());
     });
     this.child.stdin.on("error", () => {});
+    // Decode as the bytes arrive: a character split across two reads must not become U+FFFD.
+    this.child.stdout.setEncoding("utf8");
+    this.child.stderr.setEncoding("utf8");
     this.child.stderr.on("data", (chunk) => (this.stderr = (this.stderr + chunk).slice(-8000)));
     let buffer = "";
     this.child.stdout.on("data", (chunk) => {
@@ -308,6 +334,10 @@ class PiSession extends ProviderSession {
       prompt: (spec.instructions ?? "") + this.skills.instructions + (spec.context ?? "") + this.lost,
     };
   }
+  /** Starts this conversation's process when its chat opens, so its first message doesn't wait for it (Workspace.prewarm). */
+  async warm() {
+    await this.start();
+  }
   start() {
     // The slash menu and a turn can both need the same process as it starts.
     this.starting ??= this.openProcess().finally(() => { this.starting = null; });
@@ -326,7 +356,12 @@ class PiSession extends ProviderSession {
     if (!spec.temporary && !known) provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
     return this.live;
   }
-  async send(message, timeoutMs = TURN_TIMEOUT_MS) {
+  /**
+   * Runs one turn. `onReady(deliver)` is called once the harness is working on it: `deliver({ prompt,
+   * attachments })` steers the turn (Pi's and OMP's `steer`, delivered after the tool calls under
+   * way and before the model's next request) and resolves to whether the harness took it.
+   */
+  async send(message, timeoutMs = TURN_TIMEOUT_MS, onReady) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;
@@ -335,30 +370,59 @@ class PiSession extends ProviderSession {
       const live = await this.start();
       if (this.stopRequested || this.closed) return { text: "" };
       const { rpc } = live;
-      const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map() });
-      const settled = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
-        const off = rpc.on((event) => {
-          if (event.type === "botkins_exit") return reject(event.error);
-          this.event(event);
-          if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) resolve(event);
-        });
-        stop = () => {
-          clearTimeout(timer);
-          off();
-        };
+      // `users`: the person's messages the harness took into the run (the prompt, then each steer it
+      // delivered); `steered`: the steers it accepted.
+      const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map(), rows: new Map(), users: 0, steered: 0, ended: false });
+      // One listener for the whole turn; a run started again for a late steer waits on a new settle.
+      let settle = () => {};
+      let fail = () => {};
+      const nextSettle = () => new Promise((resolve, reject) => ((settle = resolve), (fail = reject)));
+      let settled = nextSettle();
+      const timer = setTimeout(() => fail(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
+      const off = rpc.on((event) => {
+        if (event.type === "botkins_exit") return fail(event.error);
+        this.event(event);
+        if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) settle(event);
       });
-      const files = (message.attachments ?? []).map((a) => "- " + a.path).join("\n");
+      stop = () => {
+        clearTimeout(timer);
+        off();
+      };
+      const withFiles = (prompt, attachments) => {
+        const files = (attachments ?? []).map((a) => "- " + a.path).join("\n");
+        return prompt + (files ? "\n\nAttached:\n" + files : "");
+      };
       const text =
         (this.mode === "plan" ? "Plan mode: do not change any file. Work out a plan, show it, and ask before carrying it out.\n\n" : "") +
-        message.prompt +
-        (files ? "\n\nAttached:\n" + files : "");
+        withFiles(message.prompt, message.attachments);
       this.emit("user.message", {});
+      const deliver = async ({ prompt, attachments }) => {
+        if (this.turn !== turn || turn.ended || this.stopRequested || this.closed) return false;
+        await rpc.request({ type: "steer", message: withFiles(prompt, attachments) }, 30000);
+        turn.steered++;
+        return true;
+      };
       try {
         const answer = await rpc.request({ type: "prompt", message: text }, 30000);
         // An extension command can finish inside prompt() without starting an agent turn.
-        if (answer?.disposition !== "handled") await settled;
+        if (answer?.disposition !== "handled") {
+          onReady?.(deliver);
+          await settled;
+          // A steer the harness took as the run was ending, but never delivered, goes as one more
+          // prompt in the same turn, so nothing the person wrote is dropped.
+          while (!this.stopRequested && !this.closed && turn.steered > Math.max(0, turn.users - 1)) {
+            const left = await rpc.request({ type: "clear_queue" }, 15000).catch(() => null);
+            const pending = [...(left?.steering ?? []), ...(left?.followUp ?? [])].filter((each) => typeof each === "string" && each);
+            turn.users = turn.steered + 1;
+            if (!pending.length) break;
+            settled = nextSettle();
+            const again = await rpc.request({ type: "prompt", message: pending.join("\n\n") }, 30000);
+            if (again?.disposition !== "handled") await settled;
+          }
+        }
+        turn.ended = true;
       } catch (error) {
+        turn.ended = true;
         this.interrupt();
         throw error;
       }
@@ -375,6 +439,8 @@ class PiSession extends ProviderSession {
       if (!reply && turn.stopReason === "length") throw new Error(this.provider.name + " ran out of room before it could answer.");
       return { text: reply };
     } finally {
+      // A call that never ran (stopped, or the process went away) must not stay Running.
+      if (this.turn) this.stopRows(this.turn);
       stop();
       this.turn = null;
       this.sending = false;
@@ -397,11 +463,23 @@ class PiSession extends ProviderSession {
         } else if (update.type === "thinking_delta" && update.delta) {
           turn.thinking ??= "thought-" + Date.now();
           this.emit("assistant.reasoning_delta", { reasoningId: turn.thinking, deltaContent: update.delta });
+        } else if (update.type === "toolcall_start" && update.id) {
+          // The row appears while the model is still writing the call's arguments.
+          this.toolRow(turn, update.id, { toolName: update.toolName });
+        } else if (update.type === "toolcall_end" && update.toolCall?.id) {
+          // The arguments are complete: the row's label can say what it will do.
+          const call = update.toolCall;
+          this.toolRow(turn, call.id, { toolName: call.name ?? call.toolName }, call.arguments);
         }
         return;
       }
+      case "turn_end":
+      case "agent_end":
+        this.stopRows(turn);
+        return;
       case "message_end": {
         const message = event.message ?? {};
+        if (message.role === "user") turn.users++;
         if (message.role !== "assistant") return;
         const finalText = textOf(message.content);
         if (!turn.text && finalText) {
@@ -421,26 +499,45 @@ class PiSession extends ProviderSession {
         return;
       }
       case "tool_execution_start": {
-        Object.assign(turn, { thinking: null, gap: true });
-        const metadata = turn.calls.get(event.toolCallId) ?? toolIdentity(event);
-        const { name, server } = metadata;
-        const own = server === BRIDGE;
-        this.emit("tool.execution_start", {
-          toolCallId: event.toolCallId,
-          toolName: name,
-          arguments: event.args && typeof event.args === "object" ? event.args : {},
-          ...(server && !own && { mcpServerName: server, mcpToolName: name }),
-        });
+        this.toolRow(turn, event.toolCallId, event, event.args);
         return;
       }
       case "tool_execution_end": {
         turn.calls.delete(event.toolCallId);
+        turn.rows.delete(event.toolCallId);
         const output = textOf(event.result?.content) || (event.result?.details ? displayValue(event.result.details, 12000) : "");
         const success = !event.isError;
         this.emit("tool.execution_complete", { toolCallId: event.toolCallId, success, ...(output && { result: { content: output } }), ...(!success && { error: { message: output || "Failed" } }) });
         return;
       }
     }
+  }
+  /**
+   * The step for one tool call, shown from Pi's `toolcall_start` and kept as the same step through
+   * `tool_execution_start`: the first call emits `tool.execution_start`, and a later one repeats it
+   * only when the arguments are new, which the activity record uses to improve the label.
+   */
+  toolRow(turn, id, call, args) {
+    Object.assign(turn, { thinking: null, gap: true });
+    const row = turn.rows.get(id);
+    const given = args && typeof args === "object" && Object.keys(args).length ? args : null;
+    const key = given ? JSON.stringify(given) : "";
+    // What the permission question learned (an MCP tool's server and name) beats what the name alone says.
+    const { name, server } = turn.calls.get(id) ?? toolIdentity(call);
+    if (row && (!given || row.args === key) && row.name === name && row.server === server) return;
+    turn.rows.set(id, { name, server, args: key || row?.args || "" });
+    this.emit("tool.execution_start", {
+      toolCallId: id,
+      toolName: name,
+      arguments: given ?? {},
+      ...(server && server !== BRIDGE && { mcpServerName: server, mcpToolName: name }),
+    });
+  }
+  /** Ends every step that began but never finished: its call was stopped before it could run. */
+  stopRows(turn) {
+    for (const id of turn.rows.keys()) this.emit("tool.execution_complete", { toolCallId: id, success: false, stopped: true, error: { message: "Stopped" } });
+    turn.rows.clear();
+    turn.calls.clear();
   }
   windowOf(id) {
     for (const connection of this.spec.inference?.providers ?? []) {
@@ -578,15 +675,26 @@ export class PiProvider extends ModelProvider {
       // Older Pi versions can ask npm for a global install. Keep that prefix inside staging too.
       npm_config_prefix: join(dir, "npm"), npm_config_registry: "https://registry.npmjs.org",
     }, this.baseEnv);
-    const result = await run(file, ["install", source, "--no-approve"], { cwd: dir, env, timeoutMs: 120000 });
+    const start = launcher(file, ["install", source, "--no-approve"]);
+    const result = await run(start.file, start.args, { cwd: dir, env: { ...env, ...start.env }, timeoutMs: 120000 });
     if (result.code !== 0) throw new Error("Pi couldn't install the package. " + (result.stderr || result.stdout).trim().slice(-600));
   }
-  locate() {
-    return findBinary(this.program.binary, { override: this.binary, env: this.baseEnv });
+  /**
+   * Where the program is. Pi: the copy that ships with Botkins, which this adapter is built and
+   * tested against, else one on the PATH. OMP: on the PATH (it doesn't ship with Botkins).
+   */
+  async locate() {
+    if (this.binary) return findBinary(this.program.binary, { override: this.binary, env: this.baseEnv });
+    if (this.runtime === PI_ID) {
+      const bundled = this.bundled === undefined ? bundledPi() : this.bundled;
+      if (bundled) return bundled;
+    }
+    return findBinary(this.program.binary, { env: this.baseEnv });
   }
   async status() {
     const file = await this.locate();
-    const version = file ? versionOf((await run(file, ["--version"], { env: await cliEnv({ PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1" }, this.baseEnv), timeoutMs: 15000 }).catch(() => ({ stdout: "" }))).stdout) : "";
+    const start = file && launcher(file, ["--version"]);
+    const version = start ? versionOf((await run(start.file, start.args, { env: { ...(await cliEnv({ PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1" }, this.baseEnv)), ...start.env }, timeoutMs: 15000 }).catch(() => ({ stdout: "" }))).stdout) : "";
     // The version answer distinguishes the harness from another program with the same command name.
     if (!version)
       return {
@@ -696,7 +804,8 @@ export class PiProvider extends ModelProvider {
       PI_OFFLINE: "1",
       [this.program.sessionEnv]: live.file,
     }, this.baseEnv);
-    live.rpc = new PiRpc(file, args, { env, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
+    const start = launcher(file, args);
+    live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
     live.rpc.on((event) => {
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
