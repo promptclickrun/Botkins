@@ -80,6 +80,8 @@ Existing standalone local paths in chat become clickable after a main-process ch
 
 Offered in a turn the person is there for (not a routine, a task, a Today panel refresh or a helping teammate).
 
+Bots use chat by default. They open the side pane only when keeping something beside the conversation is more useful than showing it in chat. They show Screen only for live browser or desktop app work worth following, not for terminal commands, file edits, or background checks.
+
 | Tool | Asks first? | Arguments | Answer |
 | --- | --- | --- | --- |
 | `side_pane_show` | Never | `kind`: `"rich_ui"` \| `"table"` \| `"screen"` \| `"details"` (required); `title`; `html`, `data` (rich_ui); `columns`, `rows` (table) | `{ id, kind, title, opened, note? }` |
