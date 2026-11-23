@@ -359,3 +359,27 @@ test("a recurring native chat schedule survives restart and dispatches one overd
   assert.equal(ws.state.runs[0].trigger, "scheduled");
   assert.equal(ws.chat(chat.id).schedules[0].nextAt, 121000);
 });
+
+test("fast mode persists separately from the model at all three scopes", async (t) => {
+  const f = fixture(t);
+  let ws = f.open();
+  const id = ws.createChat("pip");
+  const speed = () => ws.effectiveModel(ws.chat(id)).fastMode;
+  await ws.setModel("global", null, { model: "model-a" }, "ultrafast");
+  await ws.setModel("bot", "pip", null, "off");
+  assert.equal(speed(), "off");
+  await ws.setModel("chat", id, null, "fast");
+  assert.equal(ws.chat(id).model, undefined);
+  await ws.send(id, "Hello");
+  assert.equal(f.config().model, "model-a");
+  ws = f.open();
+  assert.equal(speed(), "fast");
+  await ws.setModel("chat", id, { model: "model-b" });
+  assert.equal(speed(), "fast", "a model-only edit preserves speed");
+  await assert.rejects(ws.setModel("chat", id, null, "invalid"));
+  assert.equal(ws.chat(id).model.model, "model-b");
+  await ws.setModel("chat", id, null, null);
+  assert.equal(speed(), "off");
+  await ws.setModel("bot", "pip", null, null);
+  assert.equal(speed(), "ultrafast");
+});

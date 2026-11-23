@@ -133,7 +133,7 @@ jobs:
           load: true
           tags: botkins:check
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: The image serves, and reports this version
         run: sh .github/scripts/check-image.sh botkins:check "$(jq -r .version desktop/package.json)"
 
@@ -173,7 +173,7 @@ jobs:
           load: true
           tags: botkins-display-e2e-host
           cache-from: type=gha,scope=display-host
-          cache-to: type=gha,mode=max,scope=display-host
+          cache-to: type=gha,mode=max,ignore-error=true,scope=display-host
       - name: Build the workspace image
         uses: docker/build-push-action@v7
         with:
@@ -182,7 +182,7 @@ jobs:
           load: true
           tags: botkins-display-e2e-workspace
           cache-from: type=gha,scope=display-workspace
-          cache-to: type=gha,mode=max,scope=display-workspace
+          cache-to: type=gha,mode=max,ignore-error=true,scope=display-workspace
       - name: An owner's phone and a member's phone use the two containers
         run: sh desktop/test/display-e2e/run.sh --no-build
 

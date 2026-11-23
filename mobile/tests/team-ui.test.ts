@@ -9,6 +9,7 @@ import {
   readJoinResume,
   savedJoin,
 } from "../src/features/pair/joinLogic";
+import { memberActions, memberChoice } from "../src/features/settings/team/memberMenu";
 import { can, toggleRoleAction } from "../src/state/team";
 
 test("team permissions treat a later action as implying the first action", () => {
@@ -43,6 +44,23 @@ test("role toggles keep every permission gated by its first action", () => {
   const hidden = toggleRoleAction(more, "agents", "view", false);
   assert.deepEqual(hidden.agents, []);
   assert.deepEqual(toggleRoleAction({ today: ["view", "use"] }, "today", "use", false).today, ["view"]);
+});
+
+test("a member's hold menu offers Rename only when the computer can, with the group they are in checked", () => {
+  const groups = [{ id: "g_a", name: "Writers" }, { id: "g_b", name: "Editors" }];
+  const member = { groupId: "g_b" };
+  const without = memberActions(member, groups, false);
+  assert.deepEqual(without.map((action) => action.id), ["group", "remove"]);
+  const full = memberActions(member, groups, true);
+  assert.deepEqual(full.map((action) => action.id), ["rename", "group", "remove"]);
+  assert.deepEqual(full[1].subactions?.map((action) => [action.id, action.state]), [["group:g_a", "off"], ["group:g_b", "on"]]);
+  assert.equal(full[2].attributes?.destructive, true);
+
+  assert.deepEqual(memberChoice("rename"), { do: "rename" });
+  assert.deepEqual(memberChoice("remove"), { do: "remove" });
+  assert.deepEqual(memberChoice("group:g_a"), { do: "move", groupId: "g_a" });
+  assert.equal(memberChoice("group"), null);
+  assert.equal(memberChoice("pin"), null);
 });
 
 test("invite input normalizes aliases and formats ten characters live", () => {

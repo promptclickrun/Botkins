@@ -50,7 +50,7 @@ export function AddChatDialog({ state, project, close }: { state: State; project
     setBusy(chat.id);
     setError("");
     try {
-      await api.setChatProject(chat.id, project.id, "default");
+      await api.setChatProject(chat.id, project.id);
       setAdded((n) => n + 1);
     } catch (e) {
       setError(clean(e));

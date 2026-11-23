@@ -70,12 +70,12 @@ export const REMOTE_METHODS = new Set([
   // no call takes a version, an address or a channel (appUpdateArgs).
   "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto",
   // Bots
-  "addBot", "updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
+  "addBot", "updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
   "importableAgents", "importAgents", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory",
   "addSection", "renameSection", "deleteSection",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "createChat", "createGroupChat", "setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat",
+  "createChat", "createGroupChat", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -99,6 +99,7 @@ export const REMOTE_METHODS = new Set([
   "cancelMcpSignIn", "signOutMcpServer", "importMcpServers",
   "credentials", "removeCredential",
   // Projects
+  "editProjectFolder", "setChatFolder", "chatProjectFolder", "cloneProjectRepository",
   "createProject", "updateProject", "renameProject", "removeProject", "projectChanges", "projectDiff", "projectCommit",
   "addTodo", "updateTodo", "deleteTodo", "moveTodo",
   // What a project keeps of the artifacts ("project-artifacts-v1"): a list of ids on the project.
@@ -118,6 +119,7 @@ export const REMOTE_METHODS = new Set([
   ...PLUGIN_METHODS,
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
+  "skills.upload", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install",
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")
@@ -431,6 +433,10 @@ function pluginArgs(method, args) {
  * path kept is the file's real one. Its mentions are cleaned to the shapes above.
  */
 export function remoteArgs(method, args, { deviceId, uploads } = {}) {
+  if (method === "regenerateChatTitle") {
+    if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
+    return args;
+  }
   if (method === "send" && args[2] && typeof args[2] === "object") {
     const { attachments, mentions, ...options } = args[2];
     const own = [];

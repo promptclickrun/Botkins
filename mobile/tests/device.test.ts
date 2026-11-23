@@ -52,19 +52,20 @@ test("each source offers the levels some tool needs", () => {
   assert.deepEqual(levelsOf("health"), ["off", "read", "interact"]);
   assert.deepEqual(levelsOf("location"), ["off", "read"]);
   assert.deepEqual(levelsOf("photos"), ["off", "read", "interact"]);
+  assert.deepEqual(levelsOf("music"), ["off", "read", "interact"]);
   assert.deepEqual(levelsOf("mail"), ["off", "interact"]);
 });
 
 test("the switches the phone sends are the ones the computer keeps", () => {
-  const all = { calendar: "interact", contacts: "read", health: "interact", location: "interact", photos: "interact", mail: "read", extra: "read" };
+  const all = { calendar: "interact", contacts: "read", health: "interact", location: "interact", photos: "interact", music: "read", mail: "read", extra: "read" };
   const clean = cleanSources(all);
   // Location has nothing to change and Mail nothing to read, so those two are dropped.
-  assert.deepEqual(clean, { calendar: "interact", contacts: "read", health: "interact", photos: "interact" });
+  assert.deepEqual(clean, { calendar: "interact", contacts: "read", health: "interact", photos: "interact", music: "read" });
   assert.deepEqual(hostCleanSources(clean), clean);
   for (const source of SOURCES) for (const level of levelsOf(source)) assert.deepEqual(hostCleanSources(cleanSources({ [source]: level })), cleanSources({ [source]: level }));
   assert.ok(sameSources({ calendar: "read", mail: "off" }, { calendar: "read" }));
   assert.ok(!sameSources({ calendar: "read" }, { calendar: "interact" }));
-  assert.equal(countOn({ calendar: "read", mail: "interact", location: "off" }), 2);
+  assert.equal(countOn({ calendar: "read", music: "interact", mail: "interact", location: "off" }), 3);
   assert.deepEqual(cleanSources(null), {});
 });
 
@@ -77,6 +78,8 @@ test("a switch allows its level and the ones below", () => {
 
 test("the activity list says what a tool did in plain words", () => {
   assert.equal(toolLabel("phone_calendar_events"), "Read your calendar");
+  assert.equal(toolLabel("phone_music_play"), "Played Apple Music");
+  assert.equal(toolLabel("phone_music_create_playlist"), "Made an Apple Music playlist");
   assert.equal(toolLabel("phone_nope"), "Used a phone tool");
   assert.equal(toolOf("constructor"), undefined);
   for (const name of Object.keys(PHONE_TOOLS)) assert.ok(!toolLabel(name).includes("_"), name);

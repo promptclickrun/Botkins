@@ -95,6 +95,13 @@ export function seqNonce(seq) {
   return nonce;
 }
 
+// The first four bytes of every RPC nonce are zero.
+export function pushNonce(counter) {
+  const nonce = seqNonce(counter);
+  nonce[0] = 1;
+  return nonce;
+}
+
 // Pairing codes leave out the characters people confuse (0 O 1 I).
 export const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export function newCode(length = 12) {

@@ -227,6 +227,8 @@ export class Agents {
     this.ws.apps?.removeChats([...chatIds]);
     this.ws.tasks?.removeBot(id);
     this.ws.memory?.remove(id);
+    // The bot's Proactive agent goes with it (desktop/proactive.mjs).
+    this.ws.proactive?.sync();
     this.state.bots[0].hidden = false;
     this.ws.clearCatalogs();
     this.ws.save();

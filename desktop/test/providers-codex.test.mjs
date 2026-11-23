@@ -11,6 +11,7 @@ import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { BRIDGE, CodexProvider, approvalSettings, threadConfig } from "../desktop/providers/codex/index.mjs";
 import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
+import { pass, until as soon, watching } from "./quiet-turns.mjs";
 
 /** Waits until `ready()` is true. A stand-in server works at its own pace, so a fixed time is not enough on a slow runner. */
 const until = async (ready, what) => {
@@ -593,6 +594,72 @@ test("a thread stays loaded for the next message and is unloaded when it is let 
   assert.equal(provider.loaded.size, 0);
 });
 
+test("a ChatGPT turn that is quiet for hours is not given up on; it ends when Codex says the thread is gone, or when it is stopped", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let release;
+  let state = "active";
+  const play = turns(async ({ server, threadId }) => {
+    say(server, threadId, "m", "Working");
+    await new Promise((resolve) => (release = resolve));
+  });
+  const { provider, sent } = setup(t, (method, params, server) => {
+    if (method === "thread/read") {
+      if (state === "missing") throw Object.assign(new Error("thread not found: " + params.threadId), { code: -32600 });
+      if (state === "flaky") throw new Error("Internal error");
+      return { thread: { id: params.threadId, status: { type: state } } };
+    }
+    // Codex ends an interrupted turn.
+    if (method === "turn/interrupt") release?.();
+    return play(method, params, server);
+  });
+  const session = await provider.openSession(spec());
+  const quiet = async (message) => {
+    release = undefined;
+    const sending = watching(session.send({ prompt: message }));
+    await soon(() => release, "the turn is quiet");
+    await pass(t, 3 * 60 * 60 * 1000);
+    return sending;
+  };
+  // Alive, and Codex's answer to the check is odd once: no news, and the turn goes on.
+  state = "flaky";
+  const first = await quiet("One");
+  assert.equal(first.seen.state, "pending", "three hours of silence did not end the turn");
+  assert.ok(sent("thread/read").length > 10, "Codex was asked whether it still runs the turn");
+  state = "active";
+  await pass(t, 10 * 60 * 1000);
+  assert.equal(first.seen.state, "pending");
+  release();
+  await first.done;
+  assert.deepEqual(first.seen.value, { text: "Working" });
+  // Codex says the thread is idle although the turn never completed: it is gone.
+  state = "idle";
+  const idle = await quiet("Two");
+  await idle.done;
+  assert.equal(idle.seen.value.code, "BOTKINS_SESSION_LOST");
+  assert.match(idle.seen.value.message, /stopped working on this reply/);
+  assert.deepEqual(sent("turn/interrupt").at(-1), { threadId: "thread-1", turnId: "turn-2" }, "what Codex may still run is stopped");
+  // Codex no longer has the thread.
+  state = "missing";
+  const missing = await quiet("Three");
+  await missing.done;
+  assert.equal(missing.seen.value.code, "BOTKINS_SESSION_LOST");
+  // Stop ends a quiet turn.
+  state = "active";
+  const stopping = await quiet("Four");
+  await session.abort();
+  await stopping.done;
+  assert.equal(stopping.seen.state, "done");
+  assert.deepEqual(sent("turn/interrupt").at(-1), { threadId: "thread-1", turnId: "turn-4" });
+});
+
+test("a caller that names a time limit gets it from Codex", async (t) => {
+  const alive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(alive));
+  const { provider } = setup(t, turns(() => new Promise(() => {})));
+  const session = await provider.openSession(spec());
+  await assert.rejects(session.send({ prompt: "Summarize" }, 40), (error) => error.code === "BOTKINS_TURN_TIMEOUT");
+});
+
 test("Stop reaches a turn that hasn't started yet, and a turn nobody waits for is not left running", async (t) => {
   // The provider's own timers never keep a process alive; this test waits on one, so it keeps the loop running itself.
   const alive = setInterval(() => {}, 1000);
@@ -869,4 +936,29 @@ test("recovery attaches to the original live Codex turn without starting a secon
   assert.equal(sent("turn/steer")[0].expectedTurnId, "active");
   assert.equal(sent("turn/start").length, 0);
   await session.close();
+});
+
+test("fast mode uses the account's model-specific service tier and skips unsupported speeds", async (t) => {
+  const normal = turns(() => {});
+  const { provider, sent } = setup(t, (method, params, server) => method === "model/list"
+    ? { data: [{ model: "gpt-x", serviceTiers: [{ id: "priority", name: "Fast" }, { id: "premium", name: "Ultra Fast" }] }] }
+    : normal(method, params, server));
+  for (const [model, fastMode, expected] of [["gpt-x", "fast", "priority"], ["gpt-x", "ultrafast", "premium"], ["other", "ultrafast", null]]) {
+    const session = await provider.openSession(spec({ model: { model, fastMode } }));
+    await session.send({ prompt: "Hello" }, 2000);
+    assert.equal(sent("turn/start").at(-1).serviceTier, expected);
+    await session.close();
+  }
+});
+
+test("a tier rejected at turn start falls back once before the prompt is accepted", async (t) => {
+  const normal = turns(() => {});
+  const { provider, sent } = setup(t, (method, params, server) => {
+    if (method === "model/list") return { data: [{ model: "gpt-x", additionalSpeedTiers: ["fast"] }] };
+    if (method === "turn/start" && params.serviceTier) throw new Error("Service tier not available for this model");
+    return normal(method, params, server);
+  });
+  const session = await provider.openSession(spec({ model: { model: "gpt-x", fastMode: "fast" } }));
+  await session.send({ prompt: "Hello" }, 2000);
+  assert.deepEqual(sent("turn/start").map((p) => p.serviceTier), ["priority", null]);
 });

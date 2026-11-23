@@ -707,8 +707,10 @@ dialog.bot-sheet .sectionhead {
   min-height: 34px;
 }
 
-/* "Start from a template" popover */
+/* Create a bot start options */
 .template-picker {
+  display: flex;
+  gap: 6px;
   position: relative;
 }
 .template-trigger {
@@ -744,14 +746,6 @@ dialog.bot-sheet .sectionhead {
 }
 .template-section {
   display: grid;
-}
-/* The six built-ins sit in two columns so the whole menu fits without scrolling. */
-.template-section[aria-label="Built-in templates"] {
-  grid-template-columns: 1fr 1fr;
-  column-gap: 2px;
-}
-.template-section[aria-label="Built-in templates"] .template-heading {
-  grid-column: 1 / -1;
 }
 .template-section + .template-section {
   border-top: 1px solid var(--line);
@@ -797,6 +791,7 @@ dialog.bot-sheet .sectionhead {
   font-weight: 600;
 }
 .template-item small {
+  display: block;
   font-size: calc(12px * var(--text-scale));
   white-space: nowrap;
   overflow: hidden;
@@ -819,12 +814,6 @@ dialog.bot-sheet .sectionhead {
 .template-empty {
   padding: 4px 8px 8px;
   font-size: calc(12px * var(--text-scale));
-}
-.template-foot {
-  border-top: 1px solid var(--line);
-  margin-top: 6px;
-  padding: 6px 4px 2px;
-  display: flex;
 }
 
 /* --------------------------------------------------------------- Bot Studio */
@@ -1019,6 +1008,93 @@ dialog.bot-studio:not([open]) {
   font-size: calc(13px * var(--text-scale));
   padding: 4px 8px;
   border-radius: var(--radius-sm);
+}
+/* A first-run step's way back to the one before, where the wordmark would be. */
+.welcome-back {
+  margin: 0 0 18px -8px;
+  gap: 6px;
+}
+/* The first launch's choice (src/SetupChoice.tsx): three large buttons, the first one filled. */
+.setup-card {
+  width: min(520px, 100%);
+}
+.setup-choices {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  width: 100%;
+  display: grid;
+  gap: 12px;
+}
+.setup-choice {
+  width: 100%;
+  min-height: 84px;
+  justify-content: flex-start;
+  gap: 16px;
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+}
+.setup-choice:hover:not(:disabled) {
+  background: var(--sunken);
+}
+.setup-choice.here,
+.setup-choice.here:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.setup-choice.here:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 86%, var(--canvas));
+}
+.setup-choice-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: var(--radius);
+}
+.setup-choice.here .setup-choice-icon {
+  background: color-mix(in srgb, var(--on-accent) 16%, transparent);
+}
+.setup-choice.computer .setup-choice-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.setup-choice.team .setup-choice-icon {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.setup-choice-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.setup-choice-text strong {
+  font-size: calc(17px * var(--text-scale));
+  font-weight: 700;
+}
+.setup-choice-text small {
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--muted);
+}
+.setup-choice.here small {
+  color: color-mix(in srgb, var(--on-accent) 80%, transparent);
+}
+.setup-choice > svg {
+  flex: none;
+  color: var(--muted);
+}
+.setup-choice.here > svg {
+  color: inherit;
+}
+.setup-step {
+  width: 100%;
+  margin-top: 24px;
 }
 /* First run with no bots: the person's existing agents, or the Create a bot form (src/FirstBot.tsx). */
 .firstbot-card {

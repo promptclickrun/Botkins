@@ -22,6 +22,90 @@ private func hosts(in identifiers: [String]) -> Set<String> {
   Set(identifiers.compactMap { id in id.firstIndex(of: "|").map { String(id[..<$0]) } })
 }
 
+@available(iOS 17.0, *)
+struct ShortcutHost: AppEntity {
+  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Computer"
+  static let defaultQuery = HostQuery()
+  static let current = Self(id: "current", name: "Current computer")
+  let id: String
+  let name: String
+  var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(title: "\(name)", image: .init(systemName: "desktopcomputer"))
+  }
+  var fields: [String: String] { id == Self.current.id ? [:] : ["host": id] }
+
+  struct HostQuery: EntityQuery {
+    private func load() async throws -> [ShortcutHost] {
+      let json = try await runShortcut(["action": "hosts"])
+      struct Item: Decodable { let id, name: String }
+      let items = try JSONDecoder().decode([Item].self, from: Data(json.utf8))
+      return items.map { ShortcutHost(id: $0.id, name: $0.name) }
+    }
+    func defaultResult() async -> ShortcutHost? { .current }
+    func suggestedEntities() async throws -> [ShortcutHost] {
+      let listed = try await load()
+      return [.current] + listed
+    }
+    func entities(for identifiers: [String]) async throws -> [ShortcutHost] {
+      let options = [.current] + (try await load())
+      return try identifiers.map { id in
+        guard let host = options.first(where: { $0.id == id }) else {
+          throw ShortcutError.message("Choose a computer that is still paired in Botkins.")
+        }
+        return host
+      }
+    }
+  }
+}
+
+@available(iOS 17.0, *)
+struct ShortcutChatAgent: AppEntity {
+  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Botkin"
+  static let defaultQuery = ChatAgentQuery()
+  static let primary = Self(id: "primary", name: "Primary Botkin")
+  let id: String
+  let name: String
+  var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(title: "\(name)", image: .init(systemName: "person.crop.circle"))
+  }
+
+  func fields(computer: ShortcutHost) -> [String: String] {
+    var fields = computer.fields
+    if let split = id.firstIndex(of: "|") {
+      fields["botHost"] = String(id[..<split])
+      fields["bot"] = String(id[id.index(after: split)...])
+    }
+    return fields
+  }
+
+  struct ChatAgentQuery: EntityQuery {
+    @IntentParameterDependency<ChatWithYourBotkin>(\.$computer) var intent
+    private func host() -> String? {
+      guard let id = intent?.computer.id, id != ShortcutHost.current.id else { return nil }
+      return id
+    }
+    private func agents(on host: String?) async throws -> [ShortcutChatAgent] {
+      let catalog = try await Catalog.load(host: host)
+      return catalog.bots.map { ShortcutChatAgent(id: catalog.host + "|" + $0.id, name: $0.name) }
+    }
+    func defaultResult() async -> ShortcutChatAgent? { .primary }
+    func suggestedEntities() async throws -> [ShortcutChatAgent] {
+      let listed = try await agents(on: host())
+      return [.primary] + listed
+    }
+    func entities(for identifiers: [String]) async throws -> [ShortcutChatAgent] {
+      var options: [ShortcutChatAgent] = [.primary]
+      for host in hosts(in: identifiers) { options += try await agents(on: host) }
+      return try identifiers.map { id in
+        guard let agent = options.first(where: { $0.id == id }) else {
+          throw ShortcutError.message("Choose a Botkin that is still available on the selected computer.")
+        }
+        return agent
+      }
+    }
+  }
+}
+
 struct ShortcutAgent: AppEntity {
   static let typeDisplayRepresentation: TypeDisplayRepresentation = "Agent"
   static let defaultQuery = AgentQuery()

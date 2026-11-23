@@ -17,6 +17,7 @@
 // The sign-in is Codex's file (auth.json in the Codex home). It is read when a request needs it,
 // used for that request and kept nowhere. When the token is about to end, Codex is asked to renew
 // it (its own "account/read" with refreshToken), and the file is read again.
+import { tierRejected } from "../model-speed.mjs";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -132,8 +133,8 @@ export function completeOutput(seen = () => {}) {
  * @param options.version  Botkins' version, for the request's own name.
  * @returns the endpoint's answer (a fetch Response). Throws PlanError when there is no sign-in.
  */
-export async function chatgptTurn(body, { signIn = chatgptSignIn, renew = async () => {}, fetch: fetcher = globalThis.fetch, version = "", signal, url = CHATGPT_URL } = {}) {
-  const send = (auth) =>
+export async function chatgptTurn(body, { serviceTier, signIn = chatgptSignIn, renew = async () => {}, fetch: fetcher = globalThis.fetch, version = "", signal, url = CHATGPT_URL } = {}) {
+  const send = (auth, tier) =>
     fetcher(url, {
       method: "POST",
       headers: {
@@ -145,7 +146,7 @@ export async function chatgptTurn(body, { signIn = chatgptSignIn, renew = async 
         originator: "botkins",
         "user-agent": "Botkins" + (version ? "/" + version : ""),
       },
-      body: JSON.stringify(planRequest(body)),
+      body: JSON.stringify({ ...planRequest(body), ...(tier && { service_tier: tier }) }),
       signal,
     });
   let auth = signIn();
@@ -153,13 +154,20 @@ export async function chatgptTurn(body, { signIn = chatgptSignIn, renew = async 
     await renew().catch(() => {});
     auth = signIn();
   }
-  let answer = await send(auth);
+  let answer = await send(auth, serviceTier);
   if (answer.status === 401) {
     // Turned down: Codex renews the token once, and the request is sent again.
     await answer.body?.cancel().catch(() => {});
     await renew().catch(() => {});
     const again = signIn();
-    if (again.token !== auth.token) answer = await send(again);
+    if (again.token !== auth.token) {
+      auth = again;
+      answer = await send(auth, serviceTier);
+    }
+  }
+  if (serviceTier && [400, 403, 422].includes(answer.status) && tierRejected(await answer.clone().text())) {
+    await answer.body?.cancel().catch(() => {});
+    answer = await send(auth);
   }
   return answer;
 }

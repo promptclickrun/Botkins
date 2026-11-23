@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { backgroundField } from "./startup.mjs";
 import { DEFAULT_HARNESS, HARNESSES } from "./harness/index.mjs";
 import { AUTO_SUMMARIZE_DEFAULT, autoSummarizeField } from "./summaries.mjs";
+import { defaultProactive, proactiveField } from "./proactive-settings.mjs";
 
 // The app's themes, each in light and dark, and the fonts a person can read it in
 // (desktop/themes.json, written by scripts/build-themes.mjs; the same as the phone app's). The
@@ -158,6 +159,8 @@ export const defaultSettings = {
   // Model providers the person switched on or off: { [id]: { enabled } }. A provider that isn't
   // named here is on or off as it comes (desktop/providers). Changed with Workspace.setProviderEnabled.
   providers: {},
+  // The Proactive agent: the computer's switch, and each proactive bot's own settings (desktop/proactive.mjs). Off until the owner turns it on.
+  proactive: defaultProactive,
   clarify: ["missing"],
   clarificationInstructions: "",
   notifications: {
@@ -312,6 +315,9 @@ export function changeSettings(settings, patch) {
         break;
       case "background":
         next.background = backgroundField(value, backgroundField(settings.background));
+        break;
+      case "proactive":
+        next.proactive = proactiveField(value, settings.proactive);
         break;
       case "sidebar":
         // Opening or collapsing the menu is the person's own choice from then on.

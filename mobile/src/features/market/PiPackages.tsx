@@ -93,7 +93,7 @@ function Packages({ host, hostName, switcher }: { host: string; hostName: string
             (current ? "" : "Pi will run pi install npm:" + shownText(name + "@" + version) + ". ") +
               "This package can run code on " +
               shownText(hostName) +
-              ". It will load on the next turn in every Botkins chat using Pi.",
+              ". It will load on the next turn in every Botkins chat using Pi or OMP.",
             [
               { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
               { text: action, onPress: () => resolve(true) },
@@ -143,7 +143,7 @@ function Packages({ host, hostName, switcher }: { host: string; hostName: string
         </T>
       )}
       <T variant="footnote" color="muted">
-        Changes apply on the next turn in every Botkins chat using Pi.
+        Changes apply on the next turn in every Botkins chat using Pi or OMP.
       </T>
       {!!error && <T color="danger">{shownText(error)}</T>}
       <SearchField

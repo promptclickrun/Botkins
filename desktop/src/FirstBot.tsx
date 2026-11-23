@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, CircleAlert, LoaderCircle } from "lucide-react";
 import BotForm from "./BotForm";
 import { WelcomeFrame } from "./Welcome";
 import ProviderIcon from "./ProviderIcon";
-import type { BotTemplate, ImportableAgent } from "./types";
+import type { BotTemplate, ImportableAgent, State } from "./types";
 import "./settings.css";
 
 const api = window.botkins;
@@ -15,10 +15,12 @@ const api = window.botkins;
  */
 export default function FirstBot({
   saved,
+  remote,
   created,
 }: {
   /** Templates the person saved or imported. */
   saved?: BotTemplate[];
+  remote?: State["remote"];
   /** The workspace has bots now. */
   created: () => Promise<void> | void;
 }) {
@@ -72,6 +74,7 @@ export default function FirstBot({
           )}
           <div className="firstbot-form">
             <BotForm
+              remote={remote}
               saved={saved}
               agents={agents}
               fail={fail}

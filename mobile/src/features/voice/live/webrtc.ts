@@ -10,7 +10,7 @@
 // talk turns turn detection off and the track is on only while the button is held.
 import type { LiveSession } from "@/link/types";
 import { MIN_TURN_MS, RELEASE_TAIL_MS } from "./input";
-import { OpenAIRealtime, TRANSCRIBE_MODEL, turnsByHand } from "./openai";
+import { OpenAIRealtime, transcription, turnsByHand } from "./openai";
 import { LiveBase, obj, type ToolRunner } from "./types";
 
 type WebRTC = typeof import("react-native-webrtc");
@@ -49,6 +49,8 @@ export class WebRTCTransport extends LiveBase {
     private readonly negotiate: Negotiate,
     runTool: ToolRunner,
     private readonly route: (speaker: boolean) => Promise<void>,
+    /** The person's language, a hint for their transcript. */
+    private readonly language?: string,
   ) {
     super(runTool);
     this.protocol = new OpenAIRealtime({
@@ -135,7 +137,7 @@ export class WebRTCTransport extends LiveBase {
     channel.addEventListener("open", () => {
       // The person's words are written down only when the session asks for it. Push to talk turns
       // the provider's turn detection off (the Realtime conversations guide, "push-to-talk").
-      const input = { transcription: { model: TRANSCRIBE_MODEL }, ...(this.input === "push" && { turn_detection: null }) };
+      const input = { transcription: transcription(this.language), ...(this.input === "push" && { turn_detection: null }) };
       this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
       this.setStatus("listening");
       this.meter ??= setInterval(() => void this.readLevels(), METER_MS);
@@ -183,6 +185,7 @@ export class WebRTCTransport extends LiveBase {
       this.sending = null;
     } else {
       this.turnMs = 0;
+      this.startTurn();
       if (this.responding || this.sounding) this.interrupt();
       this.send({ type: "input_audio_buffer.clear" });
     }
@@ -202,7 +205,7 @@ export class WebRTCTransport extends LiveBase {
       this.apply();
       // Where the provider kept its own turn detection, it hears the silence and answers by itself.
       if (this.ended || !this.manual) return;
-      if (held < MIN_TURN_MS) {
+      if (held < MIN_TURN_MS || this.quietTurn) {
         this.send({ type: "input_audio_buffer.clear" });
         return;
       }

@@ -28,9 +28,14 @@ export function phonePage({ link, qrPath, screens, managed = false, nearby = () 
   const status = () => {
     const host = link();
     const { serverId: _serverId, relay, ...rest } = host.status();
+    const gadgetSettings = host.meta().capabilities.includes("gadget-settings-v1") && typeof host.gadgetView === "function";
     return {
       ...rest,
+      // A gadget as the device list shows it to a phone: its settings over the defaults, its Wi-Fi (names
+      // only), the changes it hasn't taken yet and a restart under way. Never its key or a password.
+      ...(gadgetSettings && { devices: rest.devices.map((device) => (device.kind === "gadget" ? { ...device, gadget: host.gadgetView(device) } : device)) }),
       canSetPerson: host.meta().capabilities.includes("device-person-v1"),
+      ...(gadgetSettings && { gadgetSettings: true }),
       ...(managed && { managed: true }),
       screen: screenStatus(rest.screen, screens, rest.devices),
       nearby: nearby(),
@@ -58,6 +63,21 @@ export function phonePage({ link, qrPath, screens, managed = false, nearby = () 
     renamePhone: (id, name) => void editable().renameDevice(String(id), String(name ?? "")),
     setPhonePerson: (id, person) => void editable().setDevicePerson(id, person),
     renamePhoneLinkComputer: (name) => editable().setName(name),
+    // A gadget's page ("gadget-settings-v1"): the same calls as a phone's link.gadgets.*, each checked by
+    // the link (desktop/link/gadget.mjs) and answering what the page shows. A Wi-Fi password goes to the
+    // link and is in nothing that comes back.
+    configureGadget: (id, patch) => {
+      editable().configureGadget(String(id), patch);
+      return status();
+    },
+    gadgetWifi: (id, change) => {
+      editable().gadgetWifi(String(id), change);
+      return status();
+    },
+    restartGadget: (id) => {
+      editable().restartGadget(String(id));
+      return status();
+    },
     // What a paired phone may do with this screen: "off", "view" or "control".
     setPhoneScreen: (mode) => {
       editable().setScreenMode(String(mode));

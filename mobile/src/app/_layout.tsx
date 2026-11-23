@@ -117,6 +117,7 @@ export default function RootLayout() {
               <Stack.Screen name="bot/[id]/memory" options={tall} />
               <Stack.Screen name="bot/[id]/voice" options={tall} />
               <Stack.Screen name="bot/[id]/capabilities" />
+              <Stack.Screen name="bot/[id]/proactive" />
               <Stack.Screen name="bot/access" />
               <Stack.Screen name="today" />
               <Stack.Screen name="today/new" options={half} />
@@ -150,6 +151,8 @@ export default function RootLayout() {
               <Stack.Screen name="market/add-marketplace" options={half} />
               <Stack.Screen name="settings/index" />
               <Stack.Screen name="settings/desktop" />
+              <Stack.Screen name="settings/computers" />
+              <Stack.Screen name="settings/gadget/[id]" />
               <Stack.Screen name="settings/tabs" />
               <Stack.Screen name="settings/appearance" />
               <Stack.Screen name="settings/approvals" />
@@ -157,6 +160,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/usage" />
               <Stack.Screen name="settings/about" />
               <Stack.Screen name="settings/chat" />
+              <Stack.Screen name="settings/experimental" />
               <Stack.Screen name="settings/voice" />
               <Stack.Screen name="settings/voice/dictation" />
               <Stack.Screen name="settings/voice/reading" />
@@ -186,6 +190,7 @@ export default function RootLayout() {
             <Stack.Screen name="pair/manual" options={{ ...sheet, sheetAllowedDetents: [0.62, 1] }} />
             <Stack.Screen name="pair/name" options={{ ...sheet, sheetAllowedDetents: [0.5, 1] }} />
             <Stack.Screen name="join" options={{ ...sheet, sheetAllowedDetents: [0.72, 1] }} />
+            <Stack.Screen name="setup" options={tall} />
           </Stack>
           <ToastHost />
         </ThemeProvider>

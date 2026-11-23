@@ -2,11 +2,12 @@
 // OMP's RPC-UI protocol. Nothing here starts the real OMP or reaches a model.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OmpProvider } from "../desktop/providers/omp/index.mjs";
+import { PiPackages } from "../desktop/providers/pi/packages.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
 
@@ -195,4 +196,34 @@ test("the registry keeps OMP beside Pi and outside the model-provider list", { s
   const statuses = await providers.harnessStatuses();
   assert.deepEqual(statuses.map((item) => item.id), ["pi", "omp"]);
   assert.equal(statuses[1].version, "19.1.0");
+});
+
+test("OMP loads the Marketplace Pi packages that are on, and stops when one is turned off", { skip }, async (t) => {
+  const name = "@garden/pi-rose";
+  const market = new PiPackages({
+    dataDir: join(root, "pi-market"),
+    fetch: async () => new Response("<dt>Package</dt><dd><code>" + name + "</code></dd><dt>Version</dt><dd><code>1.2.3</code></dd>"),
+    install: async (source, agentDir) => {
+      const pkg = join(agentDir, "npm", "node_modules", name);
+      mkdirSync(pkg, { recursive: true });
+      writeFileSync(join(pkg, "package.json"), JSON.stringify({ name, version: "1.2.3" }));
+    },
+  });
+  await market.install(name, "1.2.3");
+  const { dir, seen } = setup();
+  const provider = new OmpProvider({ dataDir: dir, binary, packages: market, env: { ...process.env, FAKE_OMP_LOG: join(dir, "log.jsonl") } });
+  t.after(() => provider.stop());
+  const loaded = (args) => args.flatMap((arg, i) => (args[i - 1] === "-e" ? [arg] : []));
+  const session = await provider.openSession(spec());
+  await session.send({ prompt: "one" });
+  const [path] = market.activePaths();
+  assert.deepEqual(loaded(seen().find((entry) => entry.started).started.args), [provider.program.extension, path]);
+
+  market.setEnabled(name, "1.2.3", false);
+  await session.send({ prompt: "two" });
+  const starts = seen().filter((entry) => entry.started).map((entry) => entry.started);
+  assert.equal(starts.length, 2, "a changed package restarts OMP on the next turn");
+  assert.deepEqual(loaded(starts[1].args), [provider.program.extension]);
+  await session.close();
+  await provider.stop();
 });

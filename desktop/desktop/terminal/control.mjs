@@ -9,6 +9,8 @@
 // reason that it has none (desktop/terminal/coverage.mjs).
 //
 // Every value is plain JSON: `--json` prints it as it is.
+import { introduce, serialLines } from "../link/gadget-setup.mjs";
+import { Failure } from "../link/tools.mjs";
 import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
@@ -134,6 +136,17 @@ export function controlApi(service) {
     })();
     if (!found) throw new ControlError("No paired device is called " + wanted + ". See `botkins devices list`.", "NOT_FOUND");
     return found;
+  };
+  /** A paired device that is a gadget, by name or id. */
+  const gadget = (ref) => {
+    const found = device(ref);
+    if (found.kind !== "gadget") throw new ControlError(found.name + " isn't a gadget. See `botkins devices list`.", "NOT_FOUND");
+    if (typeof link.configureGadget !== "function") throw new ControlError("This version of Botkins has no gadget settings yet.", "UNSUPPORTED");
+    return found;
+  };
+  const gadgetView = (id) => {
+    const listed = link.devices().find((entry) => entry.id === id);
+    return { id, name: listed?.name, connected: listed?.connected === true, ...listed?.gadget };
   };
   const deviceView = (entry) => ({
     id: entry.id,
@@ -301,6 +314,57 @@ export function controlApi(service) {
       phone.removePhone(found.id);
       return { removed: found.id, name: found.name };
     },
+    /**
+     * Sets a gadget up over a USB port of this computer (gadget/docs/contract.md): reads its key,
+     * pairs it by introduction and hands it the Wi-Fi network. The password goes to the gadget and nowhere else.
+     */
+    /** A paired gadget, by name or id, with its settings and Wi-Fi as the device list shows them. */
+    "gadgets.get": ([ref]) => gadgetView(gadget(ref).id),
+    /** Volume, microphone, mute, brightness, the screen's timers, and the bot (desktop/link/gadget.mjs checks each). */
+    "gadgets.set": ([ref, patch = {}]) => {
+      const found = gadget(ref);
+      const { bot: botRef, ...settings } = patch && typeof patch === "object" ? patch : {};
+      try {
+        link.configureGadget(found.id, { ...settings, ...(botRef !== undefined && { botId: bot(botRef).id }) });
+      } catch (error) {
+        throw new ControlError(error.message, "BAD_ARGUMENT");
+      }
+      return gadgetView(found.id);
+    },
+    /** A Wi-Fi network for a gadget: `{ add: { ssid, password } }` or `{ forget: ssid }`. The password is in no log line. */
+    "gadgets.wifi": ([ref, change]) => {
+      const found = gadget(ref);
+      try {
+        link.gadgetWifi(found.id, change);
+      } catch (error) {
+        throw new ControlError(error.message, "BAD_ARGUMENT");
+      }
+      return { ...gadgetView(found.id), queued: true };
+    },
+    "gadgets.restart": ([ref]) => {
+      const found = gadget(ref);
+      link.restartGadget(found.id);
+      return gadgetView(found.id);
+    },
+    async "gadgets.add"([{ port, name, bot: botRef, wifi } = {}] = []) {
+      if (!link.status().enabled) throw new ControlError("Phone access is off, so a gadget couldn't reach this computer. " + (service.inApp ? "Turn it on in the app's Settings, under Phone." : "Turn it on with `botkins config set link.enabled true`."), "LINK_OFF");
+      if (typeof link.addGadget !== "function") throw new ControlError("This version of Botkins has no gadgets yet.", "UNSUPPORTED");
+      const path = text(port, 200, "the gadget's serial port");
+      const botId = botRef === undefined ? undefined : bot(botRef).id;
+      if (wifi !== undefined && (typeof wifi?.ssid !== "string" || !wifi.ssid || wifi.ssid.length > 32 || typeof wifi.password !== "string" || wifi.password.length > 64)) throw new ControlError("Give the Wi-Fi network's name and its password.", "BAD_ARGUMENT");
+      let io;
+      try {
+        io = serialLines(path);
+        const done = await introduce({ io, add: (input) => link.addGadget(input), ...(wifi && { wifi }), ...(name !== undefined && { name: text(name, 60, "the gadget a name") }), ...(botId && { botId }) });
+        return { ...deviceView(device(done.deviceId)), board: done.board, firmware: done.firmware, mac: done.mac };
+      } catch (error) {
+        // The introducer's sentences are for a person (a cable, a password, a network); anything else is this computer's own trouble.
+        if (error instanceof ControlError) throw error;
+        throw new ControlError(error instanceof Failure ? error.message : "That didn't work on this computer.", "GADGET_SETUP");
+      } finally {
+        io?.close();
+      }
+    },
 
     // ── Bots ─────────────────────────────────────────────────────────────────────────────────
     "bots.list": () => state().bots.map(botView),
@@ -367,7 +431,14 @@ export function controlApi(service) {
       if (mark?.agreed !== true) throw new ControlError("Signing " + String(id) + " out removes the token that Botkins keeps for it and the provider's own sign-in, and neither can be got back. That needs a yes. Show that to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins providers logout " + String(id) + " --yes`).", "NEEDS_YES");
       return signIns.signOut(String(id));
     },
-    models: async () => (await workspace.models()).map((model) => ({ ref: model.provider + "/" + model.id, name: model.name, provider: model.provider, providerName: model.providerName, ...(model.group && { group: model.group }), available: model.available !== false, ...(model.recommended && { recommended: true }), efforts: model.efforts ?? [] })),
+    models: async () => (await workspace.models()).map((model) => ({ ref: model.provider + "/" + model.id, name: model.name, provider: model.provider, providerName: model.providerName, ...(model.group && { group: model.group }), available: model.available !== false, ...(model.recommended && { recommended: true }), ...(model.fastModes && { fastModes: Object.keys(model.fastModes) }), efforts: model.efforts ?? [] })),
+    "models.speed": async ([scope, ref, speed]) => {
+      if (!["chat", "bot", "global"].includes(scope) || !["inherit", "off", "fast", "ultrafast"].includes(speed) || (scope === "global" && speed === "inherit"))
+        throw new ControlError("Choose a valid scope and fast mode.", "BAD_ARGUMENT");
+      const id = scope === "bot" ? bot(ref).id : ref;
+      await workspace.setModel(scope, id, undefined, speed === "inherit" ? null : speed);
+      return { scope, id, speed };
+    },
     "models.default": async ([ref]) => {
       if (ref !== undefined) await workspace.setModel("global", null, await selection(ref));
       return state().settings.model ?? null;
@@ -504,7 +575,7 @@ export function controlApi(service) {
     }
   }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
-  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.")) && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
+  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   // A reference to a saved credential is refused by the named call too, before its own work starts.
   for (const name of WITHOUT_REFERENCES) {
     if (!Object.hasOwn(api, name)) continue;

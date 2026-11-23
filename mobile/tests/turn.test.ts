@@ -11,6 +11,7 @@ import { MockBackend } from "../link-host/mock-backend.mjs";
 import { type FetchLike, LinkClient, pair, type Pairing } from "../src/link/client";
 import { parsePairingUrl } from "../src/link/pairing";
 import type { ChatDetail, Live, Message, PanePanel, Run, Step, Subagent } from "../src/link/types";
+import { sessionTodos, todoLabel } from "../link-host/session-todos";
 import { helperDetail, latestTurn, railLabel } from "../src/features/chat/helpers";
 import { answerText, chatTimeline, createTimelineRunSelector, endingOf, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, markKeys, noteMarks, type RunMarks, stepLabel, TIMELINE_V1, type TimelineInput, underWay, workSummary } from "../src/features/chat/turn";
 import { mergeChat } from "../src/state/store";
@@ -19,10 +20,11 @@ const T0 = 1_700_000_000_000;
 const at = (seconds: number) => T0 + seconds * 1000;
 const step = (id: string, seconds: number, more: Partial<Step> = {}): Step => ({ id, name: "bash", label: "Ran " + id, status: "Done", started: at(seconds), finished: at(seconds + 1), ...more });
 const run = (more: Partial<Run> = {}): Run => ({ id: "r1", chatId: "c1", title: "Do the thing", time: at(0), status: "Working", ...more });
-const SHOW = { steps: "show", thinking: "folded" } as const;
+const SHOW = { steps: "show", thinking: "show", foldFinishedSteps: false } as const;
 
-function input(more: Partial<TimelineInput>): TimelineInput {
-  return { messages: [], from: 0, runs: {}, timeline: false, group: false, prefs: SHOW, ...more };
+function input(more: Partial<Omit<TimelineInput, "prefs">> & { prefs?: Partial<TimelineInput["prefs"]> }): TimelineInput {
+  const { prefs, ...rest } = more;
+  return { messages: [], from: 0, runs: {}, timeline: false, group: false, prefs: { ...SHOW, ...prefs }, ...rest };
 }
 /** A short picture of the list, oldest first: "user:Do the thing", "work:a,b", "text:…", "live:…". */
 function shape(items: Item[]): string[] {
@@ -38,6 +40,8 @@ function shape(items: Item[]): string[] {
         return "thought:" + item.text;
       case "screen":
         return "screen:" + item.panel.id;
+      case "activity":
+        return "activity";
       case "ended":
         return "ended:" + item.ending.label + (item.retry ? " (try again)" : "");
       case "live":
@@ -65,9 +69,9 @@ test("a steer from a computer without the capability lands between the steps aro
   const done = run({ status: "Completed", finished: at(9), steps: steps.map((s) => ({ ...s, status: "Done", finished: s.started + 500 })) });
   const reply: Message = { role: "assistant", text: "All done on staging.", runId: "r1" };
   const after = chatTimeline(input({ messages: [ask, steer, reply], runs: { r1: done } }));
-  assert.deepEqual(shape(after), ["user:Do the thing", "work:a,b", "user:Use staging", "work:c", "assistant:All done on staging."]);
-  const last = after.at(-1);
-  assert.ok(last?.kind === "message" && last.end && !last.workUnder, "the reply ends its turn and has no work line of its own");
+  assert.deepEqual(shape(after), ["user:Do the thing", "work:a,b", "user:Use staging", "work:c", "assistant:All done on staging.", "activity"]);
+  const last = after.at(-2);
+  assert.ok(last?.kind === "message" && last.end, "the reply ends its turn and has no work line of its own");
 });
 
 test("without marks the live text stays at the end, as before, and the steer still sits among the steps by time", () => {
@@ -93,13 +97,13 @@ test("a computer with turn-timeline-v1 sends interim text and answers as message
   const done = run({ status: "Completed", finished: at(11), steps: steps.map((s) => ({ ...s, status: "Done" })), reasoning: thinking });
   const after = chatTimeline(input({ timeline: true, messages: [ask, interim, question, second, reply], runs: { r1: done } }));
   // Finished, Every step keeps the thinking where it began too (Thinking and updates says how).
-  assert.deepEqual(shape(after), ["user:Do the thing", "thought:Read the logs first.", "text:Let me look at the logs.", "work:a,b", "user:Staging", "text:Staging it is.", "work:c", "assistant:Deployed."]);
+  assert.deepEqual(shape(after), ["user:Do the thing", "thought:Read the logs first.", "text:Let me look at the logs.", "work:a,b", "user:Staging", "text:Staging it is.", "work:c", "assistant:Deployed.", "activity"]);
 });
 
-test("a helper's own steps are not the turn's: they stay in the helper's activity", () => {
+test("helper-attributed calls stay ordered in the turn and remain drillable in helper activity", () => {
   const steps = [step("task-1", 1, { name: "task" }), step("h1", 2, { agentId: "task-1" }), step("a", 3)];
   const shown = chatTimeline(input({ timeline: true, messages: [ask], running: run({ steps }), live: { stream: "" } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "live:task-1,a|", "fold"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "live:task-1,h1,a|", "fold"]);
 });
 
 test("a turn that ended without a reply says how, keeps its work, and only the latest offers Try again", () => {
@@ -114,17 +118,17 @@ test("a turn that ended without a reply says how, keeps its work, and only the l
 
   // The computer still sends the failed run as the chat's run part: the phone must not take it for a turn under way.
   const shown = chatTimeline(input({ messages: [ask], runs: { r1: stalled }, running: stalled }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "work:a,b", "ended:Timed out (try again)"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "work:a,b", "activity", "ended:Timed out (try again)"]);
 
   // What the phone saw written before it stopped is kept (an older computer drops it).
   const remembered = chatTimeline(input({ messages: [ask], runs: { r1: stalled }, running: stalled, marks: { r1: { marks: { "s:a": 0, "s:b": 0 }, text: "I found three files and" } } }));
-  assert.deepEqual(shape(remembered), ["user:Do the thing", "work:a,b", "unfinished:I found three files and", "ended:Timed out (try again)"]);
+  assert.deepEqual(shape(remembered), ["user:Do the thing", "work:a,b", "unfinished:I found three files and", "activity", "ended:Timed out (try again)"]);
 
   // An earlier failed turn keeps its line but not the button; the newer turn has its reply.
   const next: Message = { role: "user", text: "Again", runId: "r2", time: at(800) };
   const reply: Message = { role: "assistant", text: "Done this time.", runId: "r2" };
   const both = chatTimeline(input({ messages: [ask, next, reply], runs: { r1: stalled, r2: run({ id: "r2", time: at(800), status: "Completed" }) } }));
-  assert.deepEqual(shape(both), ["user:Do the thing", "work:a,b", "ended:Timed out", "user:Again", "assistant:Done this time."]);
+  assert.deepEqual(shape(both), ["user:Do the thing", "work:a,b", "activity", "ended:Timed out", "user:Again", "assistant:Done this time."]);
   // Nothing to try again while a turn is under way.
   const busy = chatTimeline(input({ messages: [ask], runs: { r1: stalled }, live: { stream: "" } }));
   assert.ok(busy.some((item) => item.kind === "ended" && !item.retry));
@@ -134,7 +138,7 @@ test("a reply that already holds the text the phone remembered is not shown twic
   const done = run({ status: "Completed", steps: [step("a", 1)] });
   const reply: Message = { role: "assistant", text: "Checking.\n\nAll good.", runId: "r1" };
   const shown = chatTimeline(input({ messages: [ask, reply], runs: { r1: done }, marks: { r1: { marks: { "s:a": 9 }, text: "Checking.\n\nAll good." } } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "work:a", "assistant:Checking.\n\nAll good."]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "work:a", "assistant:Checking.\n\nAll good.", "activity"]);
 });
 
 test("Settings › Chat still decides what shows", () => {
@@ -143,12 +147,13 @@ test("Settings › Chat still decides what shows", () => {
   const done = run({ status: "Completed", steps, summary: "Ran 3 commands" });
   const reply: Message = { role: "assistant", text: "Done.", runId: "r1" };
   const base = { messages: [ask, steer, reply], runs: { r1: done } };
-  assert.deepEqual(shape(chatTimeline(input({ ...base, prefs: { steps: "hide", thinking: "folded" } }))), ["user:Do the thing", "user:Stop at two", "assistant:Done."]);
-  // Failed only folds the turn like Folded does (tests/fold.test.ts), with only the failed step in it.
+  assert.deepEqual(shape(chatTimeline(input({ ...base, prefs: { steps: "folded", thinking: "folded" } }))), ["user:Do the thing", "user:Stop at two", "assistant:Done.", "activity"]);
+  // With finished folding off, Failed only keeps the failed call on the canvas; the activity rail
+  // still has the complete run.
   const failed = chatTimeline(input({ ...base, prefs: { steps: "failed", thinking: "folded" } }));
-  assert.deepEqual(shape(failed), ["user:Do the thing", "user:Stop at two", "assistant:Done.", "fold"]);
-  const line = failed[3];
-  assert.ok(line.kind === "fold" && line.line === "1 step failed" && line.entries.filter((entry) => entry.kind === "step").length === 1);
+  assert.deepEqual(shape(failed), ["user:Do the thing", "work:b", "user:Stop at two", "assistant:Done.", "activity"]);
+  const line = failed[1];
+  assert.ok(line.kind === "work" && line.label === "1 step failed" && line.steps.length === 1 && line.steps[0].id === "b");
   // Every step: an unsplit turn keeps the computer's own summary; a split one says what each part did.
   const whole = chatTimeline(input({ messages: [ask, reply], runs: { r1: done } }));
   assert.ok(whole[1].kind === "work" && whole[1].label === "Ran 3 commands");
@@ -156,14 +161,57 @@ test("Settings › Chat still decides what shows", () => {
   assert.ok(split[1].kind === "work" && split[1].label === "Ran 2 commands");
 });
 
-test("a group chat keeps its replies in order with the work line under the last one", () => {
+test("a group chat keeps its calls and replies in order, followed by the rail", () => {
   const first: Message = { role: "assistant", text: "Mira here.", runId: "r1", botId: "mira", time: at(3) };
   const second: Message = { role: "assistant", text: "Otto here.", runId: "r1", botId: "otto", time: at(6) };
   const done = run({ status: "Completed", steps: [step("a", 1)] });
   const shown = chatTimeline(input({ group: true, messages: [ask, first, second], runs: { r1: done } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "assistant:Mira here.", "assistant:Otto here."]);
-  const last = shown.at(-1);
-  assert.ok(last?.kind === "message" && last.workUnder);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "work:a", "assistant:Mira here.", "assistant:Otto here.", "activity"]);
+  assert.equal(shown.at(-2)?.kind, "message");
+  assert.equal(shown.at(-1)?.kind, "activity");
+});
+
+test("one-bot and group turns keep their canvas filters independent of their activity and completion", () => {
+  const steps = Array.from({ length: 6 }, (_, i) => step(String(i + 1), i + 1, {
+    status: i === 4 ? "Failed" : "Done", ...(i === 1 && { agentId: "helper" }),
+  }));
+  const reasoning = [{ id: "thought", started: at(3.2), text: "Check the remaining files." }];
+  const active = run({ steps, reasoning });
+  const note: Message = { role: "assistant", runId: active.id, time: at(3.5), text: "Halfway done.", interim: true };
+  const reply: Message = { role: "assistant", runId: active.id, time: at(7), text: "Finished." };
+  const finished = { ...active, status: "Completed" as const, finished: at(8) };
+  function visible(items: Item[]) {
+    return items.flatMap((item) => {
+      if (item.kind === "work" || item.kind === "live") return [...(item.thinking ? [item.thinking] : []), ...item.steps.map((s) => s.id)];
+      return item.kind === "text" || item.kind === "thought" ? [item.text] : [];
+    });
+  }
+  for (const group of [false, true]) {
+    for (const stepMode of ["show", "folded", "failed"] as const) {
+      for (const thinking of ["show", "folded", "hide"] as const) {
+        const prefs = { steps: stepMode, thinking, foldFinishedSteps: false };
+        const expected = [
+          ...(stepMode === "show" ? ["1", "2", "3"] : []),
+          ...(thinking === "show" ? [reasoning[0].text, note.text] : []),
+          ...(stepMode === "show" ? ["4", "5", "6"] : stepMode === "failed" ? ["5"] : []),
+        ];
+        const base = { timeline: true, group, prefs };
+        const live = chatTimeline(input({ ...base, messages: [ask, note], running: active }));
+        assert.deepEqual(visible(live), expected);
+        const complete = { ...base, messages: [ask, note, reply], runs: { [finished.id]: finished } };
+        const kept = chatTimeline(input(complete));
+        assert.deepEqual(visible(kept), expected);
+        assert.equal(kept.filter((item) => item.kind === "activity" && item.runId === finished.id).length, 1);
+        const collapsed = chatTimeline(input({ ...complete, prefs: { ...prefs, foldFinishedSteps: true } }));
+        assert.deepEqual(visible(collapsed), []);
+        const fold = collapsed.find((item) => item.kind === "fold");
+        assert.equal(fold?.line, "Worked for 8s · 6 steps");
+        assert.equal(fold?.entries.filter((entry) => entry.kind === "step").length, 6);
+        assert.equal(fold?.entries.some((entry) => entry.kind === "thought"), thinking !== "hide");
+        assert.equal(fold?.entries.some((entry) => entry.kind === "text"), thinking !== "hide");
+      }
+    }
+  }
 });
 
 test("the screen a bot showed sits in the chat at the time it showed it", () => {
@@ -192,6 +240,20 @@ test("work lines and step labels use the desktop app's words", () => {
   assert.equal(workSummary([{ ...step("a", 1), name: "x", source: "github" }]), "Used a tool");
   assert.equal(stepLabel({ ...step("q", 1), name: "ask_user", label: "ask_user", input: JSON.stringify({ question: "Which one?", choices: ["A"] }, null, 2) }), "Asked you: Which one?");
   assert.equal(stepLabel(step("a", 1)), "Ran a");
+});
+
+test("the session Todo rail keeps open work and retires a closed list only at the next turn", () => {
+  const closed = ["done", "cancelled", "failed"].map((status) => ({ status }));
+  assert.equal(todoLabel(closed), "Todos 3/3");
+  assert.equal(sessionTodos(closed, undefined), closed);
+  assert.equal(sessionTodos(undefined, closed), undefined);
+  for (const status of ["pending", "in_progress", "blocked"]) {
+    const open = [...closed, { status }];
+    assert.equal(sessionTodos(undefined, open), open);
+    assert.deepEqual(sessionTodos([], open), []);
+    assert.equal(sessionTodos(open, closed), open);
+  }
+  assert.equal(sessionTodos(undefined, undefined), undefined);
 });
 
 test("the helpers of a turn: the rail's words, and what each was asked, did and came back with", () => {
@@ -342,7 +404,7 @@ for (const timeline of [true, false]) {
       const steer = kinds.indexOf("user:Skip the docs");
       assert.ok(steer > 1 && kinds.slice(1, steer).some((k) => k.startsWith("work:")), "work before the steer: " + kinds.join(" | "));
       assert.ok(kinds.slice(steer + 1).some((k) => k.startsWith("work:")), "work after it");
-      assert.ok(kinds.at(-1)?.startsWith("assistant:"));
+      assert.ok(kinds.at(-2)?.startsWith("assistant:") && kinds.at(-1) === "activity");
     } finally {
       await d.close();
     }
@@ -508,13 +570,14 @@ test("the worked example in docs/turn-timeline.md reads as the doc says, from ei
   assert.deepEqual(labels(chatTimeline(input({ timeline: true, messages, runs: { r1 } }))), [
     "Check the deploy and fix what's broken",
     "I'll look at the last deploy first.",
-    "work:Ran a command, started a helper",
+    "work:Ran a command, started a helper, read a web page",
     "Only staging, please",
     "Staging only, then. One question first.",
     "work:Asked you a question",
     "Yes",
     "work:Ran a command",
     "Restarted. Staging is healthy again.",
+    "activity",
   ]);
   // An older computer: no interim messages, no answer, no time on the reply, no agentId.
   const older = [messages[0], messages[2], { role: "assistant", text: "Restarted. Staging is healthy again.", runId: "r1" } as Message];
@@ -525,6 +588,7 @@ test("the worked example in docs/turn-timeline.md reads as the doc says, from ei
     "Only staging, please",
     "work:Asked you a question, ran a command",
     "Restarted. Staging is healthy again.",
+    "activity",
   ]);
 });
 

@@ -461,6 +461,13 @@ export function teamApi({ workspace, handlers, bot }) {
       const now = await raw();
       return { ...memberView(now, now.members.find((item) => item.id === look.member.id)), added: look.added, removed: look.removed };
     },
+    /** Gives a member another name, up to 60 characters. The member and their devices take it. It changes nothing a member may do, so it needs no yes. */
+    async "team.renameMember"([ref, name]) {
+      const who = member(await raw(), ref);
+      await handlers.renameTeamMember(who.id, text(name, 200, "the member a name of up to 60 characters"));
+      const now = await raw();
+      return { ...memberView(now, now.members.find((item) => item.id === who.id)), previous: who.name };
+    },
     /** The member leaves the team: their devices go and their sessions end at once. Needs `agreed: true`. */
     async "team.removeMember"([ref, options]) {
       const team = await raw();

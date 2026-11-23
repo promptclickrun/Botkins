@@ -1,4 +1,4 @@
-/* Using another computer's Botkins: the switcher, the line across the top, the pairing form (src/RemoteHosts.tsx). */
+/* Using another computer's Botkins: the switcher, the line across the top, the state while it can't be reached, the pairing and team join forms and Settings › Computers and teams (src/RemoteHosts.tsx). */
 /* The switcher sits right under Settings. The space above the side menu's bottom rows belongs to
    Settings' row alone (.sidebar-foot): a second row that asked for it too would be pushed apart from it. */
 .host-switch {
@@ -113,28 +113,6 @@
 .host-banner .secondary {
   flex: none;
 }
-.host-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-}
-.host-form input {
-  flex: 1 1 130px;
-  min-width: 0;
-}
-.host-form input[aria-label="Pairing link"] {
-  flex: 1 1 100%;
-}
-.host-form input[aria-label="Pairing code"] {
-  flex: 0 1 150px;
-}
-.host-or {
-  flex: 1 1 100%;
-  color: var(--muted);
-  font-size: calc(12px * var(--text-scale));
-}
 .host-rename {
   display: flex;
   gap: 6px;
@@ -144,26 +122,6 @@
   flex: 1;
   min-width: 0;
 }
-.host-team-title {
-  display: flex !important;
-  align-items: center;
-  gap: 7px;
-}
-.host-team-form,
-.host-join-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.host-team-form input {
-  flex: 1;
-  min-width: 180px;
-  height: 32px;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--canvas);
-}
 .host-join-message,
 .host-join-confirm {
   display: grid;
@@ -172,4 +130,177 @@
 .host-join-message small,
 .host-join-confirm small {
   color: var(--muted);
+}
+.host-join-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.host-join-message > .set-button {
+  justify-self: start;
+}
+
+/* The pairing form and the team join form, in Settings and in the first-run steps. */
+.host-form {
+  display: grid;
+  gap: 8px;
+}
+.host-form-label {
+  display: block;
+  margin: 0;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+}
+.host-form-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.host-form-line input {
+  flex: 1 1 160px;
+  min-width: 0;
+  min-height: 36px;
+  background: var(--canvas);
+}
+.host-form-line input[aria-label="Pairing code"] {
+  flex: 0 1 140px;
+}
+.host-form-line .set-button {
+  min-height: 36px;
+  padding-inline: 18px;
+}
+.host-form-help {
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--muted);
+}
+.host-team {
+  display: grid;
+  gap: 8px;
+}
+
+/* Settings › Computers and teams: the list, then Connect another computer and Join a team. */
+.host-lede {
+  margin: 0 0 16px 2px;
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.5;
+  color: var(--muted);
+}
+.host-row {
+  gap: 12px;
+  min-height: 60px;
+}
+.host-row-glyph {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--sunken);
+  color: var(--ink);
+}
+.host-row-glyph.computer {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.host-row-glyph.team {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.host-in-use {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--success);
+  white-space: nowrap;
+}
+.host-more-button {
+  width: 32px;
+  padding: 0;
+  background: none;
+  color: var(--muted);
+}
+.host-menu[aria-label^="More for"] {
+  min-width: 200px;
+}
+.host-menu button.danger {
+  color: var(--danger);
+}
+.host-note {
+  display: block;
+  margin: -12px 2px 14px;
+}
+.host-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.host-add-button {
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+}
+.host-panel {
+  margin-bottom: 22px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* The main window while the computer in use has sent nothing: what is wrong, and the way back. */
+.host-down {
+  display: grid;
+  place-items: center;
+}
+.host-down-card {
+  width: min(460px, 100%);
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 24px;
+}
+.host-down-card .host-row-glyph {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+.host-down[data-state="offline"] .host-row-glyph,
+.host-down[data-state="connecting"] .host-row-glyph {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.host-down[data-state="revoked"] .host-row-glyph {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.host-down-card h1 {
+  margin: 4px 0 0;
+  font-size: calc(22px * var(--text-scale));
+  letter-spacing: -0.3px;
+}
+.host-down-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.host-down-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.host-down-actions .set-button {
+  min-height: 36px;
+  padding-inline: 16px;
+}
+.host-down-foot {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
 }

@@ -14,6 +14,7 @@ import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, IconButton, IconTile, Label, Loading, Page, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
+import { CloneForm, FolderChoice } from "./ProjectFolders";
 import { PROJECT_COLORS, projectColor } from "./colors";
 import { canUseProject, globalAccess, grantOf, toggleProject } from "@/features/bots/projectAccess";
 import { ACCESS_REASON, accessVia, artifactCount, MODES, moveSteps, orderedTodos } from "./logic";
@@ -60,6 +61,7 @@ function ProjectDetail({ project }: { project: Project }) {
       <Panels project={project} />
       <Access project={project} />
       <Folder project={project} />
+      <CloneForm id={project.id} />
       <Group>
         <Row leading={<IconTile icon={Trash2} color={theme.colors.danger} />} title="Delete project" tone="danger" onPress={() => remove(project)} />
       </Group>
@@ -279,11 +281,14 @@ function Chats({ project }: { project: Project }) {
   const blocked = visible.filter((bot) => !canUseProject(settings, bot, project));
   const mine = useMemo(() => chats.filter((chat) => chat.projectId === project.id && !chat.archived).sort((a, b) => b.time - a.time), [chats, project.id]);
   const [starting, setStarting] = useState<string | null>(null);
-  const [mode, setMode] = useState<ChatMode>("default");
+  const [localMode, setMode] = useState<ChatMode>("default");
+  const savedMode = useCapability("project-mode-v1");
+  const mode = savedMode ? project.mode ?? "default" : localMode;
+  const [folder, setFolder] = useState<string>();
   const start = async (botId: string) => {
     if (starting) return;
     setStarting(botId);
-    const id = await attempt(api.startProjectChat([botId], project.id, project.folder ? mode : "default"));
+    const id = await attempt(api.startProjectChat([botId], project.id, project.folder ? mode : "default", project.folders?.includes(folder ?? "") ? folder : undefined));
     setStarting(null);
     if (id) router.push({ pathname: "/chat/[id]", params: { id } });
   };
@@ -300,14 +305,13 @@ function Chats({ project }: { project: Project }) {
                   key={chat.id}
                   actions={[{ id: "remove", title: "Remove from project", image: "folder.badge.minus" }]}
                   onPressAction={({ nativeEvent }) => {
-                    // The computer says why when a chat can't leave (it started in the project's folder).
                     if (nativeEvent.event === "remove") void attempt(api.setChatProject(chat.id, null), "Removed from " + project.name);
                   }}
                 >
                   <Row
                     leading={<BotAvatar bot={bot ?? { id: chat.botId }} size={36} badge={false} />}
                     title={chat.title || bot?.name || "Chat"}
-                    subtitle={bot?.name}
+                    subtitle={[bot?.name, project.folders && (chat.folder ?? project.folder)].filter(Boolean).join(" · ")}
                     value={ago(chat.time)}
                     chevron
                     onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })}
@@ -321,7 +325,8 @@ function Chats({ project }: { project: Project }) {
       <Button title="Add a chat…" icon={MessagesSquare} variant="secondary" wide onPress={() => router.push({ pathname: "/projects/add-chats", params: { id: project.id } })} />
       {!!project.folder && shown.length > 0 && (
         <View style={{ gap: space.sm }}>
-          <Segmented options={MODES} value={mode} onChange={setMode} />
+          <FolderChoice project={project} value={folder} change={setFolder} />
+          <Segmented options={MODES} value={mode} onChange={(next) => savedMode ? void attempt(api.updateProject(project.id, { mode: next })) : setMode(next)} />
           <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
             {MODES.find((item) => item.value === mode)!.hint}
           </T>
@@ -504,6 +509,19 @@ function Folder({ project }: { project: Project }) {
       { text: "Cancel", style: "cancel" },
       { text: "Remove folder", style: "destructive", onPress: () => void attempt(api.updateProject(project.id, { folder: null }), "Folder removed") },
     ]);
+  const multiple = useCapability("project-folders-v1");
+  if (multiple) return <View style={{ gap: space.sm }}>
+    <Label>Folders</Label>
+    <Group>{project.folders?.map((folder, index) => <View key={folder}>
+      <Row title={folder} subtitle={!index ? "Default folder" : undefined} />
+      {!!index && <Row title="Make default" onPress={() => void attempt(api.editProjectFolder(project.id, "default", folder))} />}
+      <Row title="Remove folder" onPress={() => Alert.alert("Remove this folder?", folder + " stays on the computer.", [
+        { text: "Cancel", style: "cancel" }, { text: "Remove folder", style: "destructive", onPress: () => void attempt(api.editProjectFolder(project.id, "remove", folder)) },
+      ])} />
+    </View>)}</Group>
+    {canFolders && <Button title="Add folder…" onPress={pickFolder} />}
+    {!!project.folder && <Button title="Project Changes" variant="secondary" onPress={() => router.push(("/chat/changes?id=" + encodeURIComponent(project.id)) as Href)} />}
+  </View>;
   return (
     <View>
       <Label>Folder</Label>

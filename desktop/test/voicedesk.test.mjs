@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { ASK_BOT, VoiceDesk, cutForSpeech, liveInstructions, speakable, splitSentences } from "../desktop/voicedesk.mjs";
 import { CodexVoice } from "../desktop/codexvoice.mjs";
-import { Voice, effectiveLive as linkLive, effectiveTts as linkTts } from "../desktop/link/voice.mjs";
+import { Voice, effectiveLive as linkLive, effectiveTts as linkTts, wavFromPcm } from "../desktop/link/voice.mjs";
 import { botVoiceSummary, effectiveLive, effectiveTts, withProvider } from "../src/botVoice.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,6 +117,33 @@ test("transcribe takes the page's bytes, checks them, and trims the text", async
   await assert.rejects(desk.transcribe("not bytes", "wav"), /nothing to hear/);
   const big = new Uint8Array(new ArrayBuffer(25 * 1024 * 1024 + 1));
   await assert.rejects(desk.transcribe(big, "wav"), /over 25 MB/);
+});
+
+test("through the real Voice module: a silent or tap-short WAV is never sent to a provider, and live voice gets the language hint", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-voicedesk-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const asked = [];
+  const fetch = async (url) => {
+    asked.push(String(url));
+    // A speech model's answer to silence: a made-up word in another language.
+    return Response.json(String(url).endsWith("/audio/transcriptions") ? { text: "Qué" } : {});
+  };
+  const voice = new Voice({ dir, fetch });
+  voice.setKey("openai", SECRET);
+  voice.set({ stt: { provider: "openai", language: "en-US" } });
+  const wav = (ms, loud) => {
+    const pcm = Buffer.alloc(16 * ms * 2);
+    if (loud) for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(loud * Math.sin(i / 3)), i * 2);
+    return wavFromPcm(pcm, 16000);
+  };
+  const desk = new VoiceDesk({ voice: () => voice, workspace: fakeWorkspace });
+  assert.deepEqual(await desk.transcribe(wav(1000, 0), "wav"), { text: "" });
+  assert.deepEqual(await desk.transcribe(wav(100, 8000), "wav"), { text: "" });
+  assert.deepEqual(asked, []);
+  assert.deepEqual(await desk.transcribe(wav(1000, 8000), "wav"), { text: "Qué" });
+  assert.equal(asked.length, 1);
+  const { audio } = voice.openaiSession({ model: "gpt-realtime-2.1", voice: "marin", tools: [] }, false);
+  assert.deepEqual(audio.input.transcription, { model: "gpt-transcribe", language: "en" });
 });
 
 test("speak: This computer speaks in the page; a provider's audio comes in parts at sentence ends", async () => {

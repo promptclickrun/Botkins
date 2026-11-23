@@ -7,7 +7,7 @@
 // Rules:
 // - Settings › Teamwork turns it on or off for the whole app; a bot can be kept out of it.
 // - A teammate needs access to the chat's project to be asked there.
-// - A teammate gets only the message written for it, never the chat.
+// - A teammate gets only the message written for it, never the chat, and one line saying whose request it is.
 // - A teammate can't ask further teammates, so requests never loop.
 // - Up to 8 asks per reply, and the same message is never sent to the same teammate twice.
 // - Anything a teammate needs approved is asked in the chat it was called from.
@@ -20,8 +20,6 @@ import { recordCanvas } from "./canvas.mjs";
 
 export const MAX_TEAM = 16;
 export const MAX_ASKS = 8;
-// Shorter than a turn's own ten minutes, so a slow teammate fails its ask before the turn times out.
-const ASK_TIMEOUT = 8 * 60 * 1000;
 const MESSAGE_MAX = 16000;
 const REPLY_MAX = 32000;
 
@@ -113,7 +111,10 @@ export class Teamwork {
     };
     asks.push(entry);
     this.ws.notify();
+    // The teammate is told whose request this is, as the asker was (desktop/team-turn.mjs).
+    const whose = this.ws.speakerLine(chat, run, task, { helping: true });
     const prompt =
+      (whose ? whose + "\n" : "") +
       "Message from " + bot.name + " (" + bot.role + "):\n" + body +
       (entry.expecting ? "\n\nWhat they need back: " + entry.expecting : "") +
       (optional(constraints) ? "\n\nConstraints: " + optional(constraints) : "");
@@ -153,8 +154,13 @@ export class Teamwork {
       approval: chat.approval,
       messages: [],
       projectId: chat.projectId,
+      folder: chat.folder,
       helper: true,
       extraInstructions: this.helperNote(asker),
+      get restartSession() { return record.restartSession; },
+      set restartSession(value) { record.restartSession = value; },
+      get sessionFolder() { return record.sessionFolder; },
+      set sessionFolder(value) { record.sessionFolder = value; },
       get established() {
         return record.established;
       },
@@ -191,17 +197,17 @@ export class Teamwork {
           recordCanvas(run, null, null, { ...event, agentId: event.agentId ?? "teammate" });
         else recordActivity(entry, event, this.ws.notify);
       });
-      const { text } = await session.send({ prompt }, ASK_TIMEOUT);
+      const { text } = await session.send({ prompt });
       if (over()) throw stopped();
       if (!text) throw new Error("no reply came back");
       return text;
     } catch (error) {
-      if (error?.code === "BOTKINS_SESSION_STALL") {
+      if (error?.code === "BOTKINS_SESSION_LOST") {
         let recovered;
         try {
           recovered = await session?.completedReply?.(rootEventId);
         } catch {
-          // A disconnected journal cannot be recovered here; preserve the original stall error.
+          // A disconnected journal cannot be recovered here; preserve the original error.
         }
         if (typeof recovered === "string" && recovered.trim()) return recovered.trim();
       }

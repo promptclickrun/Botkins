@@ -15,6 +15,7 @@ import { CALLER, ClaudePool, PlanError, assemble, claudeTurn, cliArgs, extraBody
 import { CHATGPT_URL, chatgptSignIn, chatgptTurn, completeOutput, planRequest } from "../desktop/harness/chatgpt.mjs";
 import { Gateway } from "../desktop/harness/gateway.mjs";
 import { HARNESSES, Harness, PI_PLANS, harnessField, piModel, planModel } from "../desktop/harness/index.mjs";
+import { until as soon } from "./quiet-turns.mjs";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/fake-claude.mjs", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "botkins-harness-test-"));
@@ -225,7 +226,6 @@ function session(t, mode, extra = {}) {
     bridge,
     emit: (event) => events.push(event),
     launch,
-    idleMs: 10_000,
     ...extra,
   };
   return { bridge, options, events, logFile, log: () => JSON.parse(readFileSync(logFile, "utf8")), turn: (body = BODY) => claudeTurn(body, options) };
@@ -659,13 +659,25 @@ test("a program that stops before it answers is a 500, and one that stops in the
   assert.equal(cut.events.length, 3, "what was said before it stopped was passed on");
 });
 
-test("a program that says nothing for too long is a 504, and is stopped", async (t) => {
+test("a program that says nothing is waited for, however long, until the request is cancelled", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   let child;
-  const run = session(t, "silent", { idleMs: 200, launch: (...args) => (child = launch(...args)) });
-  await assert.rejects(run.turn(), failsWith(504, "api_error"));
-  // Even when the fixture times out before its first log write, the OS assigned its pid.
+  const run = session(t, "silent", { launch: (...args) => (child = launch(...args)) });
+  const controller = new AbortController();
+  const result = claudeTurn(BODY, { ...run.options, signal: controller.signal }).then(() => null, (error) => error);
+  await soon(() => existsSync(run.logFile) && run.log().pid, "the program started");
+  const pid = run.log().pid;
+  assert.ok(alive(pid));
+  // Three hours of silence from a program that is still running: the old limit was four minutes.
+  for (let i = 0; i < 180; i++) {
+    t.mock.timers.tick(60_000);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(alive(pid), "it was not stopped for being quiet");
+  controller.abort();
+  assert.ok(failsWith(499)(await result), "the person's Stop ends the run");
+  await soon(() => !alive(pid), "the program stopped");
   assert.ok(child.pid);
-  await until(() => !alive(child.pid));
 });
 
 test("an aborted signal stops the program", async (t) => {
@@ -1529,4 +1541,50 @@ test("a Harness made without a gateway makes one that serves only the plans it h
   assert.equal(none.gateway.chatgpt, null);
   assert.equal(none.gateway.claude, null);
   assert.equal(none.gateway.server, null, "nothing is listening until a session asks");
+});
+
+test("hosted sessions keep speed on their own connections across all harnesses", async () => {
+  const one = harness(registry({ models: async () => CATALOG }));
+  for (const route of ["copilot", "pi", "omp"]) {
+    const [fast, standard] = await Promise.all(["ultrafast", "off"].map((fastMode) =>
+      one.session({ provider: "codex", model: "gpt-6-astra", fastMode }, route)));
+    const url = (session) => {
+      const provider = session.inference.providers[0];
+      return (provider.config ?? provider).baseUrl;
+    };
+    assert.equal(url(fast), url(standard) + "/ultrafast");
+  }
+});
+
+test("the gateway applies only advertised speeds to concurrent requests", async (t) => {
+  const { base, bearer, upstream } = await gateway(t, {
+    speedTier: async (_provider, model, speed) => model === RESPONSES.model && speed === "ultrafast" ? "premium" : undefined,
+  });
+  const results = await Promise.all(["/ultrafast", "/fast", ""].map((suffix, i) =>
+    http(base, "/chatgpt" + suffix + "/responses", { headers: bearer, body: { ...RESPONSES, model: i === 1 ? "other" : RESPONSES.model } })));
+  assert.ok(results.every((r) => r.status === 200));
+  assert.deepEqual(upstream.map(({ init }) => init.body.service_tier ?? "standard").sort(), ["premium", "standard", "standard"]);
+});
+
+test("the harness retries an explicitly rejected tier at standard speed", async () => {
+  const tiers = [];
+  const response = await chatgptTurn({ instructions: "Sys", input: "Hello" }, {
+    serviceTier: "priority", signIn: () => ({ token: "fixture" }),
+    fetch: async (_url, init) => {
+      tiers.push(JSON.parse(init.body).service_tier);
+      return tiers.length === 1 ? new Response("Unsupported service_tier", { status: 400 }) : ok();
+    },
+  });
+  assert.ok(response.ok);
+  assert.deepEqual(tiers, ["priority", undefined]);
+});
+
+test("hosted Claude fast mode reaches both waiting and cold Claude processes", async (t) => {
+  for (const waiting of [0, 1]) {
+    const { server, base, bearer, log } = await gateway(t, { waiting, speedTier: async () => "fast" });
+    await server.warm(MESSAGES.model);
+    const result = await http(base, "/claude/fast/v1/messages", { headers: bearer, body: MESSAGES });
+    assert.equal(result.status, 200);
+    assert.equal(log().settings.fastMode, true);
+  }
 });

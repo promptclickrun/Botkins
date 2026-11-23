@@ -51,11 +51,11 @@ export function chatsApi({ workspace, handlers, bot }) {
   /** The project and the mode that a `chats.project` call asks for, checked: `{ project, mode }`. */
   const aimOf = (found, options) => {
     const { project: to, none, mode } = options && typeof options === "object" && !Array.isArray(options) ? options : {};
-    if (to === undefined && none !== true && mode === undefined) throw new ControlError("Give a project, none, or a mode.", "BAD_ARGUMENT");
+    if (to === undefined && none !== true && mode === undefined && options?.folder === undefined) throw new ControlError("Give a project, none, or a mode.", "BAD_ARGUMENT");
     if (to !== undefined && none === true) throw new ControlError("Give a project, or none, not both.", "BAD_ARGUMENT");
     if (mode !== undefined && !MODES.includes(mode)) throw new ControlError("A mode is one of " + MODES.join(", ") + ".", "BAD_ARGUMENT");
     const project = none === true ? null : to === undefined ? (state().projects ?? []).find((entry) => entry.id === found.projectId) ?? null : lookup(to);
-    return { project, mode: mode ?? found.mode ?? "default" };
+    return { project, mode: mode ?? (project && project.id !== found.projectId ? project.mode : found.mode) ?? "default" };
   };
   /** The owner's sections, `{ list: [{ id, name }], of: { chatId: sectionId } }`, or null when the phone link keeps none (it is still opening, or too old). */
   const held = () => {
@@ -94,6 +94,7 @@ export function chatsApi({ workspace, handlers, bot }) {
       archived: entry.archived === true,
       unread: entry.unread === true,
       projectId: entry.projectId ?? null,
+      ...(entry.projectId && { folder: workspace.projects.folderFor(entry) }),
       project: (state().projects ?? []).find((candidate) => candidate.id === entry.projectId)?.name ?? null,
       mode: entry.mode ?? "default",
       ...(of && { sectionId, section: of.list.find((candidate) => candidate.id === sectionId)?.name ?? null }),
@@ -126,6 +127,11 @@ export function chatsApi({ workspace, handlers, bot }) {
     async "chats.rename"([ref, title]) {
       const found = chat(ref);
       await handlers.renameChat(found.id, text(title, 120, "the chat a title (up to 120 characters)"));
+      return view(chat(found.id));
+    },
+    async "chats.regenerateTitle"([ref]) {
+      const found = chat(ref);
+      await handlers.regenerateChatTitle(found.id);
       return view(chat(found.id));
     },
     /** Removes the chat with its messages and its runs. It cannot be undone, and a chat that works is refused. */
@@ -165,7 +171,7 @@ export function chatsApi({ workspace, handlers, bot }) {
       const found = chat(ref);
       const aim = aimOf(found, options);
       const project = aim.project;
-      return { id: found.id, title: found.title, projectId: project?.id ?? null, project: project?.name ?? null, folder: project?.folder ?? null, mode: aim.mode };
+      return { id: found.id, title: found.title, projectId: project?.id ?? null, project: project?.name ?? null, folder: options.folder ?? (found.projectId === project?.id && found.folder || project?.folder) ?? null, mode: aim.mode };
     },
     /**
      * The project of a chat and the way it works there. `options` holds `project` (a project's name or id) or
@@ -177,7 +183,7 @@ export function chatsApi({ workspace, handlers, bot }) {
       const found = chat(ref);
       const aim = aimOf(found, options);
       if (aim.mode === "yolo" && options.agreed !== true) throw new ControlError("Yolo mode gives each request of the bot in this chat a yes with no question, but for one that leaves the sandbox. Give agreed: true. `botkins chats project <chat> --mode yolo --yes` does so after it shows what the mode gives.", "BAD_ARGUMENT");
-      await handlers.setChatProject(found.id, aim.project?.id ?? null, aim.mode);
+      await handlers.setChatProject(found.id, aim.project?.id ?? null, aim.mode, options.folder);
       return view(chat(found.id));
     },
     /** A group chat of 2 to 6 bots, each named once. */

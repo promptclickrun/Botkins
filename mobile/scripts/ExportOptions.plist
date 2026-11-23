@@ -9,6 +9,7 @@
   <key>provisioningProfiles</key>
   <dict>
     <key>app.botkins.mobile</key><string>Botkins App Store</string>
+    <key>app.botkins.mobile.watchkitapp</key><string>Botkins Watch App Store</string>
     <key>app.botkins.mobile.widgets</key><string>Botkins Widgets App Store</string>
     <key>app.botkins.mobile.notify</key><string>Botkins Notify App Store</string>
     <key>app.botkins.mobile.notifyui</key><string>Botkins Notify UI App Store</string>

@@ -57,6 +57,7 @@ const KEYS = [
   ["background.runAtStartup", "on | off", "For the desktop app's window (this host starts with `botkins service install`)"],
   ["sidebar.order", "Home, Today, Chats, Work, Wiki", "The order of the places in the side menu"],
   ["sidebar.collapsed", "on | off", "The side menu shows icons only"],
+  ["proactive.enabled", "on | off", "Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"],
 ];
 /** The keys, for the help of `preferences set`. */
 export const PREFERENCE_KEYS = KEYS.map(([key]) => key);
@@ -74,6 +75,7 @@ const WIDENS = {
   approval: (now, word) => (APPROVAL.indexOf(word) > APPROVAL.indexOf(now) ? { gives: APPROVAL_GIVES[word], question: "Change the approval level from " + now + " to " + word + "?" } : null),
   "access.allBots": (now, word) => (ON.includes(word) && now !== true ? { gives: "Every bot can then use every project. The grant that each bot has in its own Access settings no longer limits it.", question: "Let every bot use every project?" } : null),
   teamwork: (now, word) => (ON.includes(word) && now !== true ? { gives: "A bot can then bring other bots into a chat to work for it. A teammate works with its own tools, memory and model. What it needs approved is asked in the chat.", question: "Let bots ask each other for help from a chat?" } : null),
+  "proactive.enabled": (now, word) => (ON.includes(word) && now !== true ? { gives: "Every bot that has its own Proactive agent switched on then wakes on its own, reads what its tools reach (such as your inbox and calendar) and messages you, with nobody watching. Each wake uses the model.", question: "Turn on the Proactive agent for this computer?" } : null),
   "background.runAtStartup": (now, word) => (ON.includes(word) && now !== true ? { lead: "This changes this computer.", gives: "Botkins then starts when you log in to this computer. This adds a login item to this computer.", question: "Make Botkins start when you log in to this computer?" } : null),
 };
 const asText = (value) => (Array.isArray(value) ? (value.length ? value.join(", ") : "none") : typeof value === "boolean" ? (value ? "on" : "off") : String(value));
@@ -130,6 +132,7 @@ const preferences = {
         "",
         "approval, access.allBots, teamwork: a switch that takes a question away or gives bots more room is shown first, with what it gives, and needs your yes (--yes when there is no terminal). That is a looser approval level, and access.allBots or teamwork switched on. What it gives is printed on standard error with --yes and --json too. A change that gives nothing more (a tighter level, a switch turned off) needs no yes.",
         "background.*: these two are for the desktop app's window. This host stores them and does nothing with them.",
+        "proactive.enabled: Settings › Experimental › Proactive agent, the computer's switch. Off pauses every bot's agent without forgetting its settings; turning it on is shown first and needs your yes. Which bots are proactive, and how, is `botkins bots proactive <bot>`.",
       ].join("\n"),
       async run(context) {
         const [key, given, ...extra] = context.args;

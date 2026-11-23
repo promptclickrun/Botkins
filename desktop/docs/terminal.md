@@ -144,6 +144,8 @@ Botkins keeps a pasted Claude or Copilot token in its credential vault and gives
 
 To sign a provider out, run `botkins providers logout <provider>`. It removes the token that Botkins keeps and the provider's own sign-in, so it asks first; with no terminal it needs `--yes`. To see the models, run `botkins models`.
 
+`botkins models --speed fast` sets the global speed. Add `--bot <bot>` or `--chat <id>` to override it. Choose `off`, `fast`, or `ultrafast`, or use `inherit` to clear a bot or chat override. A chat’s explicit choice wins over its bot’s choice, including Off. Fast and Ultrafast use your plan allowance much faster. Models that cannot use the requested speed run at standard speed.
+
 ### From the Botkins phone app
 
 A paired phone does all of this too, from the provider's page in Settings › Models. It shows the code with a button that copies it and opens the page on the phone, asks for a code when the tool waits for one, takes a pasted token, and signs a provider out. When a provider's tool is missing, **Install on your computer** runs the install command that the provider names (for example `npm install -g @openai/codex`, which goes to `~/.npm-global` of the `botkins` user, so it needs no root). Only the owner's phone can do this. A sign-in started on the phone and one started in a terminal are the same kind, so a second one for the same provider waits until the first ends.
@@ -208,6 +210,7 @@ botkins bots skills Nova --off weekly-report
 - **One sign-in at a time for a tool.** The plain form (at a terminal) follows its sign-in. A second `tools sign-in` for a tool whose sign-in somebody follows is refused. One that nobody follows any more (the command went away, and nobody has read its sign-in for 45 seconds) is ended, and the new one takes its place. `--start` is different. It leaves the sign-in open for `--finish`, and nobody follows it on purpose, so nothing takes it over. A second `--start` for the same tool does not start a new sign-in. It gives the same page and the same `back` again, with `already: true` in `--json`. In text, its first line says that the sign-in is already open and how many minutes it stays open. The plain form is refused while such a sign-in is open, and the sentence names `--finish` and `--cancel`. `--cancel` ends the sign-in, and a new `--start` then makes a new page. While a terminal's sign-in for a tool is open (up to ten minutes), the window and the phone cannot start a sign-in for that same tool, and `--cancel` ends it. A sign-in for another tool is not held back by it (see "One port").
 - **When the browser is on the host itself.** The sign-in can end with no pasted address, because the browser reaches the address on the computer by itself. The plain form then closes its question, drops what you typed, says that the tool is signed in, and ends with exit code 0.
 - **The log has one line for a sign-in that is done.** It names the tool and says `signed in`, or `signed in again` when the sign-in replaces one: `Changed from the command line: tools.signIn words (signed in)`. A sign-in that is started, cancelled, turned away or timed out leaves no line. The name is the service's own record of the tool, never a word that the caller typed. Neither the page nor the pasted address nor its code is in the log or in the workspace's file.
+- `botkins skills upload <file>` imports Markdown or a zip and enables each skill. To use the skills.sh catalog, run `botkins skills search <query>`, read `botkins skills preview <id>`, then use its ten-minute token with `botkins skills install <preview-token>`.
 - `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills. The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk; `botkins folders` lists what you can choose, and on a server you copy the folder there first. A plugin folder is not taken as a folder of skills, because a plugin can run commands.
 - **A skill's header and the question.** A skill is a folder with a `SKILL.md`, and that file has a header with the skill's `name` and `description`. A header can have more keys. In other tools, `allowed-tools` lets a skill use tools with no question, and `hooks` or `mcp-servers` start programs. In Botkins a skill's header does none of that: Botkins asks before a command runs, as it does with no skill, and the header starts nothing. A check that uses the real runtime holds this for each version of the runtime (`test/skill-allowed-tools-live.mjs`).
 - `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers; like each turn of the bot, it starts the bot's tools that are programs and are on.
@@ -294,6 +297,7 @@ botkins templates use inbox-sorter@botkins --name Sorter
 - **`bots duplicate <bot>`** makes a copy named `<name> copy`. It has the same role, instructions and model. It has no chats and no memory yet.
 - **`bots order`** lists the bots in their order. `bots order <bot>…` puts the bots that you name first, in the order that you give them. The other bots follow in the order they have. The first bot is the primary bot. `bots primary <bot>` makes one bot the first. The primary bot is never hidden.
 - **`bots flags <bot>`** shows the flags. `--pin` and `--unpin`, `--hide` and `--show`, `--teamwork` and `--no-teamwork` (whether other bots may ask this bot for help), `--section <section>` and `--no-section` change them. Only what you name changes. `bots sections list`, `add`, `rename` and `remove` keep the sections. `sections remove` asks first. Its bots stay, in no section.
+- **`bots proactive <bot>`** shows or changes a bot's Proactive agent (experimental): `on` or `off`, how often it checks, looks around and may alert, where alerts go, what it watches and your rules. It is its own bullet under Preferences below. The log says `bots.proactive.set <bot>` and never the rules.
 - **A long text comes from a file or standard input.** `bots memory <bot>` prints a bot's memory. `--json` gives the text as it is. `--file <path>` replaces the memory with the text of a file, and `--file -` reads standard input. `--clear` clears it. A memory that has text is gone after a replace, so the command asks first. With no terminal, and when the text comes from standard input, it needs `--yes`. The log names the bot and never the text.
 - **`bots import` lists the agents** of the providers that are on, and whether each one is a bot already. `bots import <agent>…` makes a bot of each agent that you name, by name, by the start of a name or by its key (`copilot:Reviewer`). An agent that is a bot already is left out. The bot is a copy: later changes to the agent do not reach it.
 - **Words from elsewhere are shown first.** An agent's instructions, and a template file, steer a bot. So `bots import <agent>` and `templates import <file>` print the whole text first: the name, the role, the model, the file the agent comes from, and the instructions. Then they ask. With no terminal they fail and name `--yes`. The text is printed on standard error with `--yes` and with `--json` too. A template that is imported is saved as a template only. No bot is made.
@@ -313,6 +317,7 @@ When the bot asks for an approval in `botkins chat`, the command shows the reque
 botkins chats list
 botkins chats rename "Quarterly plan" "Plan for the third quarter"
 botkins chats flags "Plan for" --pin
+botkins chats regenerate-title "Plan for"
 botkins chats fork "Plan for" --at 4
 botkins chats group Nova Orbit --title "Launch team"
 botkins chats project "Launch team" Website --mode plan
@@ -325,6 +330,7 @@ botkins chats delete "Fork of Plan" --yes
 ```
 
 - **A chat is named by its id or by its title.** The title can be all of it or the start of it, when only one chat starts so. When more than one chat matches, the command lists them with their ids. `botkins chats list` shows ids and titles, and `--json` gives each chat's flags, project, mode and section too. A title is text that someone wrote, so in text form it is made safe before it is printed.
+- **`chats regenerate-title <chat>`** uses the same summarizer as **Regenerate title** in the chat menu. It works even with auto-summarize off and doesn't add a turn or change the automatic naming setting.
 - **Delete cannot be undone, so it asks first.** `botkins chats delete <chat>` shows the chat and asks. With no terminal it fails and names `--yes`. A chat that is working is refused: stop it first. Deleting a section is asked the same way, but it keeps its chats.
 - **Three commands start a turn of a model.** `chats retry` sends the message of a stopped or failed turn again, `chats compact` asks the model to summarize the conversation, and `chats aside` asks a side question, as `/btw` does on the phone. Each uses the chat's provider and counts against its plan. `chats aside` does not add the question or the answer to the chat. `chats send-now` can start one too, when the chat is free. `chats retry <chat>` sends the chat's latest turn again (`botkins chats show <chat> --json` names it in `latestTurn`), and refuses a chat that is working.
 - **A long question comes from `--file <path>` or from standard input.** `botkins chats aside <chat> -` reads the question from standard input.
@@ -360,7 +366,8 @@ botkins models --routines claude/claude-sonnet-5-5 --effort low
 - **`routines when` says what a schedule means.** It takes the same options, or a cron line as its one word, and prints the meaning, the zone and the next five times. It saves nothing.
 - **A prompt is a long text.** Give it with `--prompt <text>`, with `--file <path>`, or on standard input with the word `-`. The prompt shown on a screen is made safe: a control character is written as its number. `--json` has the text as it is (`instructions`).
 - **Where the result goes** is `--deliver routine` (the routine's own chat, the usual way), `none`, `chat` (with `--chat <chat>`, else the bot's latest chat), `feed`, `idea` or `goal` (with `--category`). `--quiet` stops the notification when a run ends, and `--notify` turns it back on.
-- **A routine can run a script in place of a prompt:** `--script <text>` or `--script-file <path>` (`-` reads standard input). The script runs on the computer that runs Botkins with no model, in your shell, in the bot's folder, for up to 10 minutes. With `--follow-up` the bot then follows the prompt, with the script's output and exit code; without it the script's output is the run's result. `routines edit` takes `--no-script` and `--no-follow-up`. The whole script is shown before it is saved. Only the computer's owner adds or changes a script: a bot's routine tools and a team member can't.
+- **A run can stay silent.** When a routine's reply is only `[SILENT]`, the run completes with no message, no delivery and no notification (the run keeps `silent: true`). A failed run still notifies. Ask for it in the prompt, such as "If nothing changed, reply with only [SILENT]." In a person's own chat the word is an ordinary reply.
+- **A routine can run a script in place of a prompt:** `--script <text>` or `--script-file <path>` (`-` reads standard input). The script runs on the computer that runs Botkins with no model, in your shell, in the bot's folder, for up to 10 minutes (Stop on the routine ends it sooner). With `--follow-up` the bot then follows the prompt, with the script's output and exit code; without it the script's output is the run's result. When the script exits 0 and its last line is `{"wakeAgent": false}`, the run ends there, silent: no model turn, no message and no notification. A watcher's script can check for news and only wake the bot when there is some. `routines edit` takes `--no-script` and `--no-follow-up`. The whole script is shown before it is saved. Only the computer's owner adds or changes a script: a bot's routine tools and a team member can't.
 - **A routine can have its own model:** `--model <provider/model>` with `--effort <level>` (see `botkins models`); `routines edit --model default` goes back to the Default routines model. `botkins models --routines <provider/model>` sets the Default routines model, and `--routines none` clears it. A routine uses its own model, else the Default routines model, else its bot's, else the default model.
 - `botkins routines show <routine>` shows one routine whole: the bot, the schedule, its next three times and its prompt. `routines pause`, `resume` and `run` are as before.
 - **`routines remove` asks first.** It removes the routine, its chat and every run it kept. With no terminal it needs `--yes`. `routines pause` stops a routine and keeps it.
@@ -370,7 +377,7 @@ botkins models --routines claude/claude-sonnet-5-5 --effort low
 
 ### Projects, to-dos, tasks and artifacts
 
-A **project** keeps a folder, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
+A **project** keeps folders, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
 
 ```sh
 botkins folders
@@ -386,6 +393,8 @@ botkins artifacts list --bot Nova
 botkins artifacts read <artifact> --output ./notes.pdf
 ```
 
+- Use `botkins projects folder <project> <add|remove|default> <path>` to manage the ordered list. `botkins projects clone <owner/repo> [--parent <path>] [--project <project>]` clones on this host, creating a project when none is given. The default parent is the host user's home directory.
+- Save a project's mode with `projects edit <project> --mode plan` (or `default` or `yolo`). `projects chat` and `chats project` accept `--folder <path>`. A moved chat carries its transcript to the next session. `projects changes`, `diff` and `commit` also accept `--folder`.
 - **A project's folder is a path on this computer.** It must be one that the window's folder chooser can show a paired phone: in the home folder of the user that runs Botkins, or on a plugged-in disk (`botkins folders` lists what you can choose). `projects add <folder>`, `projects edit --folder` use the app's own check and its own refusal; there is no second rule. A folder that has a project is not added twice. `projects edit --no-folder` takes the folder away.
 - **`projects remove` asks first.** The question says what goes with the project (its to-do list, its list of attached artifacts) and that its chats stay, with no project. The folder and its files are not touched. With no terminal it needs `--yes`.
 - **`projects commit` shows the files first and asks.** It prints the folder, the branch and each file that goes into the commit, then asks (`--yes` with no terminal). It stages every change in the project's folder (`git add -A`), so a project in a folder of a larger repository commits only that folder's files, and the files that were staged before. `projects changes` marks each file with whether a commit takes it. Git hooks do not run. The message comes from `--message <text>`, from `--file <path>` or `--message -` or `--file -` (standard input), or, at a terminal, from a question. If the changes are not the files that were shown, nothing is committed. The log has the project's name, never the message or the files.
@@ -445,7 +454,8 @@ botkins mac-tools set mail read --yes
 - **`cache show` and `cache clear`.** The cache holds the bot menus that a chat offers when you type `/`, and the window's cache. This host has no window, so its cache is 0 bytes. `cache clear` asks first, and needs `--yes` with no terminal. The menus are built again at their next use.
 - **`mac-tools` lets bots use iMessage and Mail, on a Mac only.** `botkins mac-tools status` shows the level of each tool (`off`, `read` or `interact`), whether the `imsg` program is installed, and which permissions macOS has given. `botkins mac-tools set <tool> <level>` changes one level. `on` is the same as `read`. A level that gives bots more than the one now shows what it gives first, on standard error also with `--yes` and with `--json` (the tools that bots get, and the program that Botkins runs: `imsg` for iMessage, `/usr/bin/osascript` for Mail), and needs your yes. With no terminal it fails and names `--yes`. The call `macTools.set` refuses such a level unless it carries `{ "agreed": true }` after the level, as `preferences.set` does. Off, and a lower level, need no yes. On a computer that is not a Mac the app's own answer is passed on as it is: `status` says that the tools work on a Mac only, and a level above `off` is refused with that sentence, with no question first.
 - **`preferences harnesses` shows what can run a bot's turn.** The choice is the preference `harness`: `copilot` (one harness for every plan, the usual choice), `provider` (each provider's own tool), `pi` (the Pi program) or `omp` (the OMP program). The command shows each choice and which one is set, and for each program that is a harness of its own (Pi and OMP) whether it is installed. Change the choice with `botkins preferences set harness <choice>`; `botkins providers install pi` and `botkins providers install omp` install the programs.
-- The log has `preferences.set` with the key, `cache.clear`, and `macTools.set` with the tool. Some lines also say the new value, because it says how many questions bots ask or how much room they have: `preferences.set approval to all`, `preferences.set access.allBots to on`, `preferences.set teamwork to on`, and `macTools.set mail to read`. No other line has a value.
+- **The Proactive agent (experimental) is each bot's own, with one switch for the computer.** It is on a bot's profile in the window and on a phone, and Settings › Experimental has the computer's switch and the list of bots that have one. `botkins bots proactive <bot>` shows a bot's agent; `botkins bots proactive <bot> on` or `off` turns it on or off, and `--every <minutes>` (15, 30, 60, 120), `--look-around <hours>` (0 for never, 1, 2, 3, 6, 12), `--max-alerts <n>` (3, 6, 10, 20), `--deliver chat|feed`, `--watch runs,tasks,requests|none` and `--rules <text>` (or `--rules-file <path>`, `-` for standard input) change only what they name. `--reset` forgets the bot's settings and routine. Any number of bots may have one, each with its own routine, its own count of alerts a day and its own record of what it already raised. Turning one on is shown first and needs your yes (`--yes` with no terminal), because the bot then wakes with nobody watching, reads what its tools reach and messages you. The computer's switch is the preference `proactive.enabled`: off pauses every bot's agent and keeps their settings, on brings them back, and turning it on is shown first and needs your yes too. Each agent has a routine, "Proactive agent", that you see in `routines list` and start with `routines run "Proactive agent"` (Check now). It can't be edited or copied there. Removing it, or deleting its bot, turns that bot's agent off. Every few minutes a gate with no model looks for what changed in Botkins (`--watch`: `runs` failed routine and task runs, `tasks` tasks in Review or Blocked over four hours, `requests` approvals and questions open over 15 minutes). Each change wakes the bot once, and a change that one bot raised does not wake another bot of the same person. Every `--look-around` hours it also wakes the bot to look at its own sources. Quiet hours and `--max-alerts` hold it back. Awake, the bot reads and drafts only, and replies `[SILENT]` when nothing qualifies. Alerts go to its chat with you, or to your Feed (`--deliver`). A team member whose role manages a bot sets that bot's agent from their phone or window; it works for that member (their chats, their runs and questions, their chat or Feed), never looks around the computer's own accounts, and is not set from here: this command is the owner's. An agent that a member set up shows `person` as the member, and `--reset` forgets it so that you can set one up for yourself.
+- The log has `preferences.set` with the key, `cache.clear`, and `macTools.set` with the tool. Some lines also say the new value, because it says how many questions bots ask or how much room they have: `preferences.set approval to all`, `preferences.set access.allBots to on`, `preferences.set teamwork to on`, `preferences.set proactive.enabled to on`, and `macTools.set mail to read`. No other line has a value.
 
 ### Credentials, the vault, password managers and the rest of a provider
 
@@ -566,6 +576,7 @@ botkins team invite --group Reviewers --days 7 --uses 1
 botkins team requests list
 botkins team requests approve Sam
 botkins team members move Sam Admins
+botkins team members rename Sam "Sam Lee"
 botkins team members remove Sam
 botkins team chat invite "Launch plan" Sam
 ```
@@ -575,6 +586,7 @@ botkins team chat invite "Launch plan" Sam
 - **An approval is always needed.** A code only lets a person ask. `team requests list` shows who waits, and `team requests approve` lets them in, in the group of the invite or the group named with `--group`. It shows who asks, the group, the role's rights and the bots they see, and asks (`--yes` with no terminal). `team requests deny` asks too.
 - **A role that gives more room asks.** `team roles save` shows the role as it will be, and what changes against the role as it is, on standard error. A role that gets more rights or more bots, and a new role that has any, asks (`--yes` with no terminal). A change that only takes away asks nothing. Name a right as `<scope>.<action>`, such as `agents.chat`; `<scope>.all` and `all` give more; `--deny` of the first right of a scope (`view`, `read`) takes the whole scope, because the other rights need it. `--file` takes the same as JSON: `{ "name": …, "perms": { "agents": ["view", "chat"] }, "allow": […], "deny": […], "bots": "all" }`. `help team roles save` lists the rights.
 - **A group or a member that moves to more room asks too.** `team groups save --role`, `team members move` and `team groups remove --move-to` show what is added when the new role has more than the old one. A move to less asks nothing.
+- **A rename asks nothing.** `team members rename <member> <name>` gives a member another name of up to 60 characters (the words after the member make the name). It changes what the member may do in no way. The member and all of their devices take the name: it is the one in the team's people, in the window's chats and on the phone. The call is `team.renameMember`, and the log has the member's id, never the name.
 - **Removes ask, and a remove takes a whole name or an id.** `team members remove` says what the member loses: their devices and their sessions at once, their place in chats, and that they need a new invite and an approval to come back. `team roles remove`, `team groups remove` and `team invites revoke` ask too. A role that a group has cannot be removed. The group Everyone cannot be removed. Other names are found as in the other commands: id, exact name, then the start of a name when only one has it.
 - **The socket's own call needs the mark.** `team.saveRole`, `team.saveGroup`, `team.moveMember`, `team.removeGroup` (when the move gives more), `team.approve`, `team.deny`, `team.revokeInvite`, `team.removeRole`, `team.removeMember` and `team.inviteToChat` refuse unless they carry `agreed: true`, which the commands give after the yes.
 - **The people in a chat.** `team chat list <chat>` shows who started a chat and who was invited. `team chat invite` and `team chat remove` change it. An invite makes the whole chat visible to one more person, so it shows who and which chat and asks (`--yes` with no terminal), and `team.inviteToChat` needs `agreed: true`. A person whose role cannot use the chat's bot cannot be invited: the link says so. The log names the chat's id and the person's id.
@@ -610,6 +622,20 @@ botkins devices set-person <device> <person>
 botkins devices remove <device>
 ```
 
+### Add a gadget
+
+A gadget is a small device with a microphone and a speaker that talks with a bot. It is paired over its USB cable, with no code:
+
+```sh
+botkins gadgets add /dev/ttyACM0 --wifi "Home network"
+```
+
+The command asks for the network's password and does not show it. It reads the gadget's key, pairs it, hands it the network and waits until the gadget reaches this host over Wi-Fi. Leave `--wifi` out for a gadget that already has its network. `--name` gives it a name and `--bot` the bot it talks with first.
+
+- The gadget and the host must be on the same network. Phone access must be on (`botkins config set link.enabled true`).
+- A gadget is one of your own devices: a bot may do in its chats what it may do in any of yours. Whoever holds the gadget can talk to your bots until you unpair it with `botkins devices remove`.
+- `botkins devices list` shows a gadget with the kind `gadget`.
+
 ## Configure the host
 
 The settings of the host are in `config.json` in the data folder. The service checks the whole file before it uses it. A file with a mistake does not start the service, and `botkins doctor` names each mistake.
@@ -631,6 +657,7 @@ botkins config edit
 | `link.addresses` | `[]` | More names or addresses, without a port, to offer phones in a pairing code. Needs a restart. |
 | `relay.enabled` | `false` | Away from home, through the relay. |
 | `relay.url` | `https://relay.botkins.app` | The address of the relay. |
+| `relay.own` | `false` | The relay at `relay.url` runs on this server, and phones can reach the server only through it. A phone can then turn on screen access through the relay. Use it only for a server like that. Needs a restart. |
 | `providers.only` | `[]` | Start only these providers. Empty means all. Needs a restart. |
 | `secrets.source` | `auto` | Where the host key comes from: `auto`, `systemd`, `keychain` or `file`. |
 | `secrets.keyFile` | none | The key file for the source `file`. |
@@ -800,7 +827,7 @@ The earlier setup, with an Electron workspace on a virtual display, is still the
 
 ### A screen without Docker
 
-On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View** and **Control**, as they do with the desktop app. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
+On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View only** and **View and control**. A phone sets the level only on the server's own network, unless `relay.own` is on. The [Azure deployment](../../deploy/azure/README.md) sets all of this up. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
 
 For a fresh Debian VM, install the screen tools and a browser, then start Botkins on a private virtual display as the service user:
 
@@ -980,7 +1007,7 @@ Use `botkins pi browse [<search>]` to search the Pi marketplace. Use
 `botkins pi install <package>` to install it and turn it on. A noninteractive
 install takes `--yes --revision <version>`. The package can run code on this
 computer. Botkins keeps it in its own Pi profile and loads it on the next
-turn in every chat using the Pi harness.
+turn in every chat using the Pi or OMP harness.
 
 `botkins pi list` shows installed versions and whether they are on.
 `botkins pi disable <package>` turns one off and `botkins pi enable <package>`

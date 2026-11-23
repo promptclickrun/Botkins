@@ -22,6 +22,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { REMOTE_METHODS } from "./link/methods.mjs";
+import { cleanBotVoice, effectiveTts } from "./link/voice.mjs";
 
 /** What this app can do as a client, by the name another build would look for. */
 export const REMOTE_HOSTS = "remote-hosts-v1";
@@ -51,7 +52,7 @@ export const HERE = new Set([
   "renameRemoteHost",
 ]);
 /** Window calls that are the link's own on another computer, by the name the link knows them. */
-const LINK_NAMES = { inviteToChat: "link.team.inviteToChat", removeFromChat: "link.team.removeFromChat" };
+const LINK_NAMES = { inviteToChat: "link.team.inviteToChat", removeFromChat: "link.team.removeFromChat", voiceOptions: "link.voice.options" };
 /** Settings that belong to the window a person sits at, not to the computer whose bots it shows. */
 const OWN_SETTINGS = ["appearance", "sidebar", "background", "onboarded"];
 
@@ -118,6 +119,8 @@ export function snapshotOf(parts, own = {}) {
     // Admin mode as the other computer keeps it for this device, when this device is its owner's.
     ...(parts.meta?.you?.kind === "owner" && typeof parts.meta.you.admin === "boolean" && { adminMode: parts.meta.you.admin }),
     tasks: parts.tasks ?? [],
+    // The Proactive agent: the computer's switch and each bot's agent (a member is sent only their own).
+    ...(parts.proactive && { proactive: parts.proactive }),
     projects: parts.projects ?? [],
     mcpServers: parts.mcp ?? [],
     plugins: parts.plugins ?? [],
@@ -487,7 +490,12 @@ export class RemoteHosts {
       return null;
     }
     const host = this.find(id);
-    if (this.current === host.id && this.client) return this.inUse();
+    if (this.current === host.id && this.client) {
+      // Choosing the computer in use again while it can't be reached is Try again: it is looked
+      // for at once, at every address, also one where a different computer answered before.
+      if (this.state !== "online") this.client.wake("network");
+      return this.inUse();
+    }
     this.stop();
     this.current = host.id;
     this.state = "connecting";
@@ -550,6 +558,22 @@ export class RemoteHosts {
       // Only that host can resolve a selected reference when it receives the approval.
       if (host.member || this.state !== "online" || !Array.isArray(this.parts.credentials)) throw new Error("The paired host’s saved credentials are unavailable.");
       return { entries: this.parts.credentials };
+    }
+    // A bot's own voice ("bot-voice-v1"): the card reads the shared choices the host sends this person (never a key; an owner's
+    // device and a role that manages bots get them), and lists voices and reads a sample through the host's providers.
+    if (name === "voiceSettings") {
+      const voice = this.parts.voice;
+      if (!voice) throw new Error(host.name + " doesn't share its voice settings with this person.");
+      return { ...voice, ready: true, device: { stt: true, tts: true } };
+    }
+    if (name === "speak") {
+      const [text, options = {}] = args;
+      const shared = this.parts.voice;
+      const own = cleanBotVoice((this.parts.bots ?? []).find((bot) => bot.id === options.botId)?.voice)?.tts;
+      // "This computer" is the voice for the bot (or for everyone): the window reads it with its own.
+      if (!shared || effectiveTts(shared.tts, own).provider === "device") return { device: true };
+      const spoken = await this.call("link.voice.speak", [{ text, ...options }]);
+      return { parts: [{ audio: new Uint8Array(Buffer.from(spoken.audio, "base64")), format: spoken.format }] };
     }
     name = LINK_NAMES[name] ?? name;
     if (!name.startsWith("link.") && !REMOTE_METHODS.has(name)) throw new Error("That can only be done on " + host.name + " itself.");

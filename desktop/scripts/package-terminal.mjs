@@ -49,6 +49,8 @@ export function build({ out, only = TARGETS, npm = process.env.npm_execpath, log
     try {
       mkdirSync(join(stage, "bin"), { recursive: true });
       for (const item of ["cli", "desktop"]) cpSync(join(root, item), join(stage, item), { recursive: true });
+      // A gadget's Botkin is drawn from the design kit beside the link (desktop/link/botkin-svg.mjs).
+      for (const item of ["customize.js", "motion", "avatars"]) cpSync(join(root, "design", "botkins-kit", item), join(stage, "design", "botkins-kit", item), { recursive: true });
       // The command line's own package: what it is, how it starts, and what it needs.
       const { name: packageName, version, license, type, bin, dependencies, repository, description } = pkg;
       writeFileSync(join(stage, "package.json"), JSON.stringify({ name: packageName.replace(/-desktop$/, "-terminal"), version, description, license, private: true, type, bin, dependencies, repository }, null, 2) + "\n");

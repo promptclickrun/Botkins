@@ -5,6 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, X } from "lucide-react";
 import { BotAvatar, type AvatarState } from "./Avatar";
+import { PullRequestPanel } from "./PullRequestPanel";
 import ChatSide from "./ChatSide";
 import HtmlFrame from "./HtmlFrame";
 import { ScreenPanel } from "./ScreenSettings";
@@ -105,6 +106,7 @@ export default function SidePane({
   openBot,
   openChat,
   preview,
+  pull,
 }: {
   state: State;
   chat: Chat;
@@ -121,6 +123,7 @@ export default function SidePane({
   openBot?: () => void;
   openChat?: (id: string, messageIndex?: number) => void;
   preview?: { item: Artifact; local: boolean };
+  pull?: { url: string };
 }) {
   const panels = chat.pane?.panels ?? [];
   const active = chat.pane?.active ?? null;
@@ -128,6 +131,7 @@ export default function SidePane({
   const [picked, setPicked] = useState<string | null>();
   const askSeq = chat.pane?.ask?.seq ?? 0;
   useEffect(() => setPicked(undefined), [active, askSeq]);
+  useEffect(() => { if (pull) setPicked("pull"); }, [pull]);
   const wanted = picked !== undefined ? picked : active;
   // A chat-path preview is an explicit navigation request from ChatView. Keep this
   // local to the pane so it does not mutate the bot's persisted pane selection.
@@ -136,13 +140,13 @@ export default function SidePane({
   }, [preview?.item.id, preview?.local]);
   // A tab that is gone shows Details instead, or in a group chat the newest panel.
   const shownPanel = panels.find((p) => p.id === wanted) ?? (group ? panels.at(-1) : undefined);
-  const front = wanted === ARTIFACTS ? ARTIFACTS : shownPanel?.id ?? (group ? ARTIFACTS : DETAILS);
-  const tabs: { id: string; panel?: PanePanel }[] = [...(group ? [] : [{ id: DETAILS }]), { id: ARTIFACTS }, ...panels.map((panel) => ({ id: panel.id, panel }))];
+  const front = wanted === "pull" && pull ? "pull" : wanted === ARTIFACTS ? ARTIFACTS : shownPanel?.id ?? (group ? ARTIFACTS : DETAILS);
+  const tabs: { id: string; panel?: PanePanel }[] = [...(group ? [] : [{ id: DETAILS }]), { id: ARTIFACTS }, ...(pull ? [{ id: "pull" }] : []), ...panels.map((panel) => ({ id: panel.id, panel }))];
   const showTabs = true;
   const botOf = (id: string) => state.bots.find((b) => b.id === id);
 
   const select = (id: string) => {
-    if (id === ARTIFACTS) { setPicked(ARTIFACTS); return; }
+    if (id === ARTIFACTS || id === "pull") { setPicked(id); return; }
     const panelId = id === DETAILS ? null : id;
     setPicked(panelId);
     paneAction(chat.id, "select", panelId);
@@ -163,7 +167,7 @@ export default function SidePane({
     else if (e.key === "ArrowLeft") next = (at - 1 + tabs.length) % tabs.length;
     else if (e.key === "Home") next = 0;
     else if (e.key === "End") next = tabs.length - 1;
-    else if (e.key === "Delete" && shownPanel) {
+    else if (e.key === "Delete" && shownPanel && shownPanel.id === front) {
       e.preventDefault();
       remove(shownPanel);
       return;
@@ -203,7 +207,7 @@ export default function SidePane({
                 const selected = id === front;
                 const who = panel ? botOf(panel.botId) : undefined;
                 const Icon = panel ? KIND_ICONS[panel.kind] : id === ARTIFACTS ? File : Info;
-                const title = panel ? panel.title : id === ARTIFACTS ? "Artifacts" : "Details";
+                const title = panel ? panel.title : id === "pull" ? "Pull request" : id === ARTIFACTS ? "Artifacts" : "Details";
                 const name = title + (panel ? ", " + KIND_NAMES[panel.kind].toLowerCase() + " from " + (who?.name ?? "a removed bot") : "") + (panel?.pinned ? ", pinned" : "") + (panel?.unseen && !selected ? ", new" : "");
                 return (
                   <div key={id} className={"pane-tab" + (selected ? " selected" : "") + (panel?.pinned ? " pinned" : "")}>
@@ -242,7 +246,7 @@ export default function SidePane({
           </button>
         </div>
       )}
-      {shownPanel && (
+      {shownPanel && front === shownPanel.id && (
         <div className="pane-meta">
           {opener && <BotAvatar bot={opener} size={18} badge={false} />}
           <span className="pane-opener">
@@ -269,6 +273,7 @@ export default function SidePane({
             <ChatSide state={state} bot={bot} face={face} openRoutines={openRoutines} openBot={openBot} />
           </Body>
         )}
+        {front === "pull" && pull && <Body chatId={chat.id} id="pull" tabs><PullRequestPanel key={pull.url} url={pull.url} /></Body>}
         {front === ARTIFACTS && <Body chatId={chat.id} id={ARTIFACTS} tabs={showTabs}><ArtifactsPanel bot={bot} chat={chat} state={state} openChat={openChat} preview={preview} /></Body>}
         {/* A website stays loaded while its tab is behind another, so switching back doesn't reload it. */}
         {panels.map((panel) =>

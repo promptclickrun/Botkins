@@ -3,12 +3,12 @@
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
 import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, FileText, FolderKanban, LayoutGrid, Square, TimerOff, Volume2 } from "lucide-react-native";
-import { memo, type ReactNode } from "react";
+import { memo, type ComponentRef, type ReactNode, type RefObject } from "react";
 import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
 import type { Artifact, Bot, Message, Run, Step } from "@/link/types";
-import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
-import { useChat } from "@/state/hooks";
+import { useChatPrefs } from "@/state/chatPrefs";
+import { useChat, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { clockTime } from "@/state/time";
@@ -20,10 +20,11 @@ import { workWidth } from "./bits";
 import { boardKindLabel, splitBoardQuote } from "./compose";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
+import { myself, speakerLabel } from "./people";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
-import { answerText, type Ending, type Item, workSummary } from "./turn";
+import { answerText, type Ending, type Item } from "./turn";
 import { FACE_INDENT, mostIcon } from "./WorkRows";
-import { Blocks, BotAvatar, Button, Chip, HoldMenu, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, Chip, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, TextHoldMenu, useTheme } from "@/ui";
 
 export type { Item };
 
@@ -41,17 +42,6 @@ function extraActions(actions: MessageActions | undefined) {
 function runExtra(event: string, message: Message, index: number, actions: MessageActions | undefined) {
   if (event === "reply") actions?.onReply(message.text);
   else if (event === "fork") actions?.onFork?.(index);
-}
-
-const failedSteps = (run: Run) => (run.steps ?? []).filter((step) => step.status === "Failed").length;
-
-/** A group chat's work line, under its turn's last reply. */
-function GroupWorkLine({ chatId, run, mode }: { chatId: string; run: Run; mode: ChatPrefs["steps"] }) {
-  const steps = run.steps?.length ?? 0;
-  const failed = failedSteps(run);
-  if (mode === "hide" || (mode === "failed" && failed === 0)) return null;
-  const label = mode === "failed" ? (failed === 1 ? "1 step failed" : failed + " steps failed") : run.summary || workSummary(run.steps ?? []) || (steps === 1 ? "1 step" : steps + " steps");
-  return <WorkLine chatId={chatId} runId={run.id} label={label} steps={run.steps} failed={mode === "failed"} />;
 }
 
 /**
@@ -153,7 +143,7 @@ function Stamp({ time, align }: { time?: number; align: "flex-start" | "flex-end
   );
 }
 
-export function UserBubble({ message, index, timestamps, id, actions, paths, media }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[] }) {
+export function UserBubble({ message, index, timestamps, id, actions, paths, media, speaker }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[]; /** Who wrote it, in a chat several people write in. */ speaker?: string }) {
   const { colors } = useTheme();
   const selecting = useSelecting((state) => state.id === id);
   // A Today item the person chose to discuss is a card here: it comes as a record the computer kept
@@ -167,6 +157,11 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
   const above = message.quote || message.answer?.title;
   return (
     <View style={{ alignItems: "flex-end", gap: 4, paddingLeft: "16%" }}>
+      {!!speaker && (
+        <T variant="caption" weight="600" color="muted" numberOfLines={1}>
+          {speaker}
+        </T>
+      )}
       {!!above && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" }} accessibilityLabel={(message.answer ? "Answered: " : "Replying to: ") + above}>
           <CornerDownRight size={13} color={colors.faint} strokeWidth={2.2} />
@@ -223,7 +218,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
             <SelectableText text={rest} markdown={false} color={colors.onBubble} onDone={() => useSelecting.getState().id === id && select(null)} />
           </View>
         ) : (
-          <HoldMenu
+          <TextHoldMenu
             actions={[
               { id: "copy", title: "Copy", image: "doc.on.doc" },
               { id: "select", title: "Select text", image: "text.cursor" },
@@ -240,7 +235,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
                 <Markdown text={rest} inline color={colors.onBubble} paths={paths} />
               </View>
             </DoubleTap>
-          </HoldMenu>
+          </TextHoldMenu>
         ))}
       {media.length > 0 && <ArtifactChips items={media} align="flex-end" />}
       {timestamps && <Stamp time={message.time} align="flex-end" />}
@@ -299,7 +294,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
       </View>
     );
   return (
-    <HoldMenu
+    <TextHoldMenu
       actions={[
         { id: "copy", title: "Copy", image: "doc.on.doc" },
         { id: "select", title: "Select text", image: "text.cursor" },
@@ -327,29 +322,31 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
           <Markdown text={message.text} plain={!markdown} paths={paths} />
         )}
       </DoubleTap>
-    </HoldMenu>
+    </TextHoldMenu>
   );
 }
 
-export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions }: { item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
-  const steps = useChatPrefs((prefs) => prefs.steps);
+export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions, replyRef }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
   const rich = useChatPrefs((prefs) => prefs.richCards);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
   const { message, run, end, latest } = item;
   // Whose voice reads it: the bot that wrote it, or the chat's bot.
-  const chatBot = useChat(chatId)?.botId;
+  const chat = useChat(chatId);
+  const chatBot = chat?.botId;
   const speaker = message.botId ?? chatBot;
+  // In a chat several people write in, a person's message says who wrote it.
+  const people = usePart("team")?.people;
+  const me = myself(usePart("meta"));
   // Paths the computer knows become links, and a reply's MEDIA: attachments are drawn where they were
   // written (under the text in the person's own message). A reply still
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
-  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} />;
+  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} speaker={speakerLabel(message, run, chat, people, me)} />;
   if (message.role === "command") return <CommandBlock message={message} />;
   // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).
-  const worked = item.workUnder && run && run.status !== "Working";
   return (
-    <View style={{ gap: space.sm }}>
+    <View ref={replyRef} collapsable={replyRef ? false : undefined} style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
       {message.voiceCaption ? (
         <Markdown text={message.voiceCaption} plain={!markdown} />
@@ -363,7 +360,6 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
         </View>
       )}
       {!message.text.trim() && timestamps && <Stamp time={message.time} align="flex-start" />}
-      {worked && <GroupWorkLine chatId={chatId} run={run} mode={steps} />}
       {end && run && <Cards run={run} latest={latest} rich={rich} onSend={onSend} onDraft={onDraft} />}
     </View>
   );

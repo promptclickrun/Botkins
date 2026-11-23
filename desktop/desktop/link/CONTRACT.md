@@ -7,7 +7,7 @@ A host serves many clients at once. Each client has its own credential. Pairing 
 ## Words
 
 - **Host**: the computer whose Botkins app holds the bots, chats and settings. It runs `LinkHost`.
-- **Client**: a paired device. Its `kind` is `"phone"` or `"desktop"`.
+- **Client**: a paired device. Its `kind` is `"phone"`, `"desktop"` or `"gadget"` (a small device that talks with a bot; see "Gadgets").
 - **Pairing**: the one step that makes a device a client. It is a full-trust step: a client can do what the person can do in the app on the host.
 
 ## Use the client library, do not write a second one
@@ -69,7 +69,7 @@ client.watch([chatId]);                                       // at most 4 chats
 
 - Transport: plain HTTP under `/botkins/v1/` (`hello`, `pair`, `session`, `rpc`). The link encrypts every message itself, so there is no certificate. A session mixes a one-time key exchange into the device's key; every message is ChaCha20-Poly1305 under a numbered nonce that is accepted once.
 - A device may hold 6 sessions at once (so a client may run more than one window). The host keeps 48 sessions in all, and a device's own oldest goes first.
-- **State arrives by itself.** The client follows named parts (`meta`, `settings`, `bots`, `chats`, `live`, `runs`, `panels`, `board`, `tasks`, `projects`, `mcp`, `skills`, `phones`, `asks`, `voice`, `credentials`, `host`, …). After any change on the host, every connected client is sent the parts that changed. Do not update state by hand after a call.
+- **State arrives by itself.** The client follows named parts (`meta`, `settings`, `bots`, `chats`, `live`, `runs`, `panels`, `board`, `tasks`, `projects`, `mcp`, `skills`, `phones`, `asks`, `voice`, `credentials`, `host`, `proactive` (the Proactive agent: the computer's switch and each proactive bot's settings and log, "proactive-agent-v2"; see below), …). After any change on the host, every connected client is sent the parts that changed. Do not update state by hand after a call.
 - **Every client is served alike.** A streaming reply (`live.streams[chatId]`, `run:<id>`), the task board (`tasks`) and Today (`board`, `panels`) reach every connected client, not only the one that acted.
 - **Calls from two clients at the same moment** are handled one after another by the host's app. Each call is one change; no call spans two requests. A client must not assume it is the only one acting: read the parts after a call, do not keep its own copy as the truth.
 - `LinkClient` reconnects by itself. Call `client.wake()` when the app comes to the front or the network changes.
@@ -97,7 +97,7 @@ A working run's reasoning travels in a separate `reasoning:<chatId>` part for ea
 
 When the live thinking preview exactly matches the latest 4,000 characters of that reasoning, `text:<chatId>` carries `preview: {run, botId?}` with an empty thinking body. The phone rebuilds the preview from the indicated run and speaker and acknowledges the empty wire body. A provider-specific preview still travels as text. Sliding a reasoning preview leaves the reply cursor intact.
 
-A waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
+A direct waiting sync with only text changes flushes at most once per 200 ms per session, including legacy full-string syncs. The first change after silence and all changes to other followed state (including text beginning, a request, or a step) use the ordinary 60 ms pump and carry pending text.
 
 A host with `text-streaming-off-v1` also accepts `text: false` in the `link.sync` argument, to save relay messages. The session gets the boolean `live` form (with or without `appends`) and no text bodies: a held cursor gets `null` once. Text growing alone does not answer a waiting sync. The reply arrives whole in `chat:<chatId>` when it ends. Without the field, or from an older host, the sync is as above.
 
@@ -108,6 +108,8 @@ A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the r
 `link-host/methods.mjs` (`REMOTE_METHODS`) lists the app's calls. A call that opens a window, a file dialog or the browser on the host is not in it. The link's own calls start with `link.`; `Calls` in `types.ts` types all of them. Check `meta.capabilities` before using a feature, and say "Update the app on your computer" when its name is missing.
 
 With `client-message-id-v1`, a client may include a locally generated `clientMessageId` in the options for `send`. The host echoes it on the queued item and on the user message when delivered. A client can show the message immediately and replace its local row when either echo arrives. Each press of Send gets its own ID, even for identical text.
+
+With `chat-title-regeneration-v1`, `regenerateChatTitle(chatId)` asks the host's summarizer to generate and save a title and returns the title. Only the chat's starter or the owner can request it. It needs a message to summarize and does not change the automatic naming setting or add a turn.
 
 ## Devices: list, rename, remove (`devices-v1`)
 
@@ -126,7 +128,8 @@ type PairedDevice = {
   name: string;          // the device ("iPhone 17 Pro")
   person?: string;       // who it belongs to ("Jordan"; device-person-v1). Absent until someone gives one
   platform: string;
-  kind: "phone" | "desktop";
+  kind: "phone" | "desktop" | "gadget";
+  gadget?: { board?: string; firmware?: string; botId?: string }; // a gadget's board and firmware, as it said them, and its bot (gadgets-v1)
   createdAt: number;     // when it was paired (ms)
   lastSeenAt: number;    // when it last made a call (ms; written at most once a minute)
   connected: boolean;    // heard from in the last 90 seconds
@@ -196,6 +199,7 @@ A **person** is the owner (id `"owner"`) or a member (their member id). The owne
 - `ChatSummary.invited?: string[]` goes to the owner and to the chat's people. The `team` part has `people: { id, name }[]`: the whole team for the owner and for a member who can start a chat (and so invite); for anyone else only the owner and the people of the chats they are in.
 - `link.team.inviteToChat(chatId, personId)` and `link.team.removeFromChat(chatId, personId)` answer the invited list afterwards. The chat's starter or the owner invites and removes; someone invited may take themselves out. A chat holds up to 20 people.
 - Someone invited sees the chat and may read it, send, stop, answer its questions, fork it and set their own flags on it. An invite never widens a role: a person whose role can't use the chat's bot can't be invited ("That person's role can't use this chat's bot. Change their role in Team settings first."), and loses the chat if their role later loses the bot. They may not rename, compact or delete it, change its model, project or schedule, or invite. Their messages carry their name, and a turn they start runs under the narrower of the starter's limits and their own (decided by the host's app).
+- Whom the bot is told it is talking to is the host app's own (`team-turn.mjs`); no call or field is added. Every turn starts with one line that names the person it is for by their Botkins name and person id, never by an email or the computer's account; the owner nobody named is left out. In a chat of more than one person each person's message also starts with their name (`[Sam] ...`), and the line lists the chat's people. A routine's, task's or panel refresh's turn is labelled as started on its own, never as the owner's. A teammate asked through `ask_teammate` is told whose request it is. Phones show the name over someone else's message from `author` (and, for the owner's, from `people`) in a chat of more than one person.
 - Removing a member drops their invitations and their view. Deleting a chat through the link drops its people and everyone's marks on it. Taking a person out of a chat ends that chat's card on their phones.
 - For the app on the host: `link.chatPeople(chatId)` → `{ createdBy, invited }` (never throws), `link.inChat(chatId, personId)`, `link.notifiesOwner(chatId)`, `link.inviteToChat`, `link.removeFromChat`, `link.removeChatPeople(chatId)`.
 
@@ -317,21 +321,95 @@ type AppUpdate = {
 - **When `canInstall` is false**, `message` says what to do instead (pull a new image, `git pull`); a client shows it as it comes.
 - **A notification.** When a computer learns of a newer release it calls `link.push.updateAvailable(version)` (`link-host/push.mjs`). Each owner device whose notifications are on and whose `updates` choice is on (the default) gets one sealed alert for that version, titled with the computer's name: "Botkins 0.16.5 is available." A member device never gets it. A device counts as told only once the relay took its alert, so one that missed it is told at a later check. The alert's kind is `"update"`, and its unsealed line is "An update is available"; a tap opens the computer's page.
 
+## Fast mode (`fast-mode-v1`)
+
+`setModel(scope, id, model, fastMode?)` saves the model and speed together for a chat, bot, or the global default. Omit the fourth argument to preserve the saved speed. Pass `null` to inherit, or `"off"`, `"fast"`, or `"ultrafast"` for an explicit choice. Settings, bots and chat summaries carry the optional `fastMode` independently of their model. A catalog model’s optional `fastModes` maps supported choices to provider tier ids. Clients offer the speed control when the host advertises this capability.
+
+## A bot's Proactive agent (`proactive-agent-v2`)
+
+Experimental. A bot that is proactive watches, with no model, for what its person should hear of (a failed routine or task run, a task waiting in Review or Blocked, an unanswered approval or question), wakes only when something is new or a look around is due, and says it once. Each such bot has its own settings, its own managed routine (`proactive: true` on its schedule entry, "Proactive agent" in the routines) and its own gate state (what it raised, today's alerts, its log). Any number of bots may be proactive at once.
+
+- **The computer's switch** is a preference: `setPreferences({ proactive: { enabled } })`, the owner's alone (a member's `setPreferences` takes display fields only). Off pauses every bot's agent without forgetting its settings. It takes no other field: an older client that sends `botId` is refused, so the capability is `-v2`.
+- **A bot's own settings** are set with `setBotProactive(botId, patch)`: `patch` is `{ enabled?, every?, sweepHours?, maxPerDay?, deliver?, watch?, instructions? }` and changes only what it names, or `null` to forget the bot's settings and routine. It answers the bot's entry (below). It needs `agents.manage` on a bot the role sees. A member's call also needs the agent to be theirs: the person who first sets an agent up is the one it works for (`person`), and another member's call is refused ("This bot's Proactive agent is set up for someone else."). The owner may change any, and forgets one to take it over.
+- **The `proactive` part** is `{ enabled, bots: { [botId]: { enabled, person, every, sweepHours, maxPerDay, deliver, watch, instructions, chatId?, pings?, day?, lastSweepAt?, log } } }`. `chatId` is the routine's chat (Check now is `runRoutine(chatId)`); `log` holds the last wakes, newest first (`{ at, reason, signals, outcome, runId, said? }`). A bot that was never set up has no entry: read it as off, with the usual settings. Decode tolerantly, the entry may gain fields.
+- **A member is sent** the switch, the whole entry of each bot their role manages whose agent is theirs (without `person`, and with `mine: true`), and for a bot whose agent is another person's only `{ enabled, taken: true }`. Never the owner's or another member's settings, rules or log.
+- **Whose agent it is.** A member's agent hears only of runs and questions in chats that member is part of, for bots their role sees. It never hears of the owner's tasks or of approvals and secure inputs (only the owner answers those), and it never looks around the computer's own tools and accounts (`sweepHours` stays 0, `tasks` is not watched). Its routine and chat are the member's (`createdBy`), and its alerts are a message in that member's chat with the bot (`deliver: "chat"`) or a card in that member's own Feed (`deliver: "feed"`, with `today` view). It pauses while the member's role stops managing the bot. The owner's agent hears of the owner's own chats and of what only the owner can answer.
+
 ## What differs for a desktop client
 
 - **Notifications.** A desktop client does not register for push (`link.push.register` is for phones). It should call `link.push.presence(active, chatId?)` when its window comes to the front, goes away, or shows another chat. While a desktop client is in front, the host treats it like its own window: a reply in the chat on that screen sends no notification to a phone.
-- **Tools on the device.** `link.device.*` (calendar, contacts, Health, location, photos, mail) are for phones. A desktop client sets no sources and answers no asks.
+- **Tools on the device.** `link.device.*` (calendar, contacts, Health, location, photos, Apple Music, mail) are for phones. A desktop client sets no sources and answers no asks.
 - **The screen.** `link.screen.*` shows the host's screen. A desktop client may use it under the same rule as a phone (the host's person allows view or control).
 - **Secrets.** As for a phone: a client saves a credential or links a field, then sends `{ $credential: id }`. No call returns a secret.
 - **Which host is in use.** Show `meta.name` (the host's name) wherever the client shows data from a host, and let the person switch between "This Mac" and each paired host. Keep one `Pairing` and one `LinkClient` for each host.
 
+## Gadgets (`gadgets-v1`)
+
+A gadget is a small device with a microphone, a speaker and maybe a screen that talks with a bot. It is a client of kind `"gadget"`, and the owner's, like the owner's phone. Its whole contract, with the link's bytes for firmware that has no client library, is `gadget/docs/contract.md`. What a client of the other two kinds needs to know:
+
+- **A gadget is paired by introduction, with no code.** An owner device that read a gadget's public key (over a cable, or Bluetooth) calls `link.gadgets.add({ publicKey, name?, board?, botId? })` and hands the answer, `{ deviceId, serverId, serverKey, name, hosts }`, to the gadget. It is the owner's call only. The app on the host does the same with `link.addGadget(…)`.
+- **It is in the device list** with `kind: "gadget"`, `platform: "esp32"` and `gadget: { board?, firmware?, botId? }`. Rename and remove work as for any device. Show it as a gadget, not as a phone.
+- **Its chats are the owner's own chats.** A phone lists them, opens them and answers in them like any other.
+- **A gadget follows two parts, `meta` and `gadget`,** in place of the app's parts, and makes its own calls (`link.gadget.*`). Those are refused for a phone or a desktop ("Only a gadget can do that.").
+- **Its settings are the owner's to change from a client** (`gadget-settings-v1`): `link.gadgets.configure(id, patch)` (volume, microphone, mute, brightness, the screen's timers, the bot) answers the device list; `link.gadgets.wifi(id, { add: { ssid, password } } | { forget: ssid })` answers `{ queued: true }` and the gadget takes it within 10 minutes; `link.gadgets.restart(id)`. The device list's `gadget` carries `settings`, the gadget's own `wifi` report (names, never a password), `wifiWaiting` and `restarting`. The values and their rules: `gadget/docs/contract.md`, "Settings". The app on the host does the same with `link.configureGadget`, `link.gadgetWifi` and `link.restartGadget`.
+
 ## The relay
 
 Away from the host's network a client goes through the relay (`relay.botkins.app`). The host lists it as one more address, `relay!<room>@<host>`, and `relayFetch` carries the same sealed requests over a socket. The relay sees sizes and timing, never contents. A room takes 16 client sockets at once (8 from one address). The relay is off until the person turns it on on the host.
+
+### Following through the relay (`sync-push-v1`)
+
+A client that receives this capability in `meta` and can receive intermediate relay frames calls `link.follow` on its relay route. Its argument is the `link.sync` argument without `wait`, including the versions, watches, append cursors, reasoning watches, text mode and step detail. Direct clients and clients without both capabilities poll. A host with this feature paces relay poll news at 250 ms per session. Chunked text retains its sentence and hold timers.
+
+The phone sends the ordinary sealed RPC request. Each intermediate frame from the computer is `[conn 8][0x07][request ID u32][counter u64][sealed news]`. The relay strips the connection prefix. The request stays pending until the usual `0x02` final answer. All integers are big-endian. The decrypted part is a sync result with `epoch`, `v` and `parts`.
+
+The computer seals each part with the session's computer-to-phone key. Its nonce is the four bytes `01 00 00 00` followed by the clear counter's eight bytes. The counter starts at one and increases across all follows under that key. Both endpoints limit it to the positive safe-integer range. RPC answer nonces start with four zero bytes. The UTF-8 associated data is `push:<session id>:<RPC sequence in decimal>:first` for the first frame and ends in `:more` for later frames. The client authenticates this label using the sequence of its own follow RPC. The first counter must exceed every previously accepted counter for that session. Later counters must be consecutive. A missing first frame, replay, gap or authentication failure starts a fresh follow from the client's actual versions and cursors.
+
+The first available news goes immediately. Subsequent frames coalesce changes at 100 ms intervals. After a send the host advances the follow's versions and cursors. A backed-up socket holds the changes at the host. At 25 seconds of silence the host sends an empty sync result. At four minutes it finishes the call and the client renews it. After 40 seconds without a part or final answer the client uses its ordinary sync timeout recovery.
+
+A new follow or sync replaces the session's follow. On rest, stop or departure for a direct connection the client sends a best-effort `link.unfollow` with no arguments. Waking first proves the path with a short-deadline `link.sync` and `wait: 0`. Closing either socket, reseating, ending the session or stopping the host releases the follow. The host deduplicates replayed requests and caches only final answers.
 
 ## Upgrades
 
 - `link.json` is version 1 and has not changed shape. A device paired before `kind` existed gets its kind from its platform when the file is read. No device has to pair again.
 - A host without `devices-v1` has no `link.devices.*` calls and no `kind` in `phones`. A client then shows only itself.
 - A host without `device-person-v1` ignores `person` and has no `link.devices.setPerson`; a client offers only Rename. A device paired before has no `person` until the owner adds one.
+- A host without `member-rename-v1` has no `link.team.renameMember(memberId, name)` (owner only; the name has the rules of a team's name: trimmed, 60 characters at most). A client leaves Rename out of a member's menu. Its rules are in `TEAMS.md`.
 - When this contract changes, the change is made here first, then in `link-host/` and `src/link/` together, with a test in `tests/devices.test.ts` or `tests/link.test.ts`.
+
+## Pull request panel (`pr-panel-v1`)
+
+An owner can open a github.com pull request from any readable repository. The host uses its signed-in GitHub CLI. The project picker continues to use `link.pullRequests({ chatId }, query?)` under `prs-v1`.
+
+- `link.pullRequest({ url })` returns `{ available: true, pull }`. The list item's fields are joined by `body`, `createdAt`, `checks: [{ name, result }]`, overall `summary`, `review` and `files: [{ path, additions, deletions }]`.
+- `link.pullRequestDiff({ url, path })` returns `{ available: true, text }` for the selected changed file. Tool output is limited to 1 MiB and a displayed patch to 128 KiB and 3,000 lines.
+- An unavailable read returns `{ available: false, reason }`. Both reads accept the overview, files and commits URLs and fragments. They time out after 15 seconds and cache answers for 30 seconds. Members cannot call either method.
+
+## Skill uploads and the skills.sh catalog
+
+With `skill-upload-v1`, `skills.upload({filename, data, replace?})` accepts one Markdown or zip file. `data` is standard base64. The computer accepts up to 3 MiB before encoding, 12 MiB unpacked, 512 archive entries and 24 skills. It checks paths and file types, imports the folders and enables the skills. The result is `{added: string[], conflicts: string[]}`. A conflict leaves the batch untouched. Ask the person, then repeat with only the approved names in `replace`.
+
+With `skills-catalog-v1`, the computer makes these calls available:
+
+- `skillsCatalog.search(query)` takes 2–200 characters and returns up to 40 rows sorted by installs. Each row has `id, source, skillId, name, installs, available` and an optional installed skill name in `installed`. The computer caches successful searches for two minutes.
+- `skillsCatalog.preview(id)` reads a GitHub skill and returns `{name, description, text, token, installed?}`. Domain sources open at `https://skills.sh/<id>`.
+- `skillsCatalog.install(token, replace?)` imports the files pinned by the preview and returns the upload result. The preview token expires after ten minutes.
+
+Search and preview need the team's Skills read permission. Upload and install need create permission, and confirming replacement also needs manage permission. Phones use the link for every file and catalog operation.
+
+## Project folders, modes and GitHub
+
+These calls are owner-only. A computer advertising `project-folders-v1` sends `project.folders`, an ordered list of up to 12 absolute paths. The first is also `project.folder` for older clients. An empty list omits the legacy field. A chat can carry a non-default `folder`. If it disappears, the computer uses the first folder that the project designates as default.
+
+| Call | Answer |
+| --- | --- |
+| `editProjectFolder(id, "add" / "remove" / "default", path)` | Updated ordered paths |
+| `chatProjectFolder(chatId)` | Effective working folder, or null |
+| `setChatFolder(chatId, pathOrNull)` | Void. Null selects the default |
+| `startProjectChat(botIds, id, mode?, folder?)` | New chat ID |
+| `setChatProject(chatId, idOrNull, mode?, folder?)` | Void |
+| `projectChanges(id, folder?)`, `projectDiff(id, file, folder?)`, `projectCommit(id, message, folder?)` | Existing changes, diff and commit answers for the chosen folder |
+
+With `project-mode-v1`, `updateProject(id, { mode })` saves Plan or YOLO and clears the preference for Default. Starting or assigning a chat inherits the preference when the caller omits the mode. Changing a started chat's project or working folder carries its transcript into a fresh provider session. A reply in progress must finish first. Group chats use folderless projects.
+
+With `project-clone-v1`, `cloneProjectRepository(repository, parent?, projectId?, { name?, description? }?)` returns the project ID after the computer has cloned the repository. Omitting the project ID creates a project. The destination is the repository name under the supplied parent or the host user's home directory. It must be new or empty. The computer uses its signed-in GitHub CLI for private repositories and falls back to HTTPS Git for public ones. The link validates a supplied parent through its folder browser.

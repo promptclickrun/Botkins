@@ -86,8 +86,60 @@ struct StartBotkinsVoiceChat: AppIntent {
 }
 
 @available(iOS 17.0, *)
+struct OpenBotkins: AppIntent {
+  static let title: LocalizedStringResource = "Open Botkins"
+  static let description = IntentDescription("Open the Botkins app.")
+  static let openAppWhenRun = true
+  static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
+
+  func perform() async throws -> some IntentResult {
+    .result()
+  }
+}
+
+@available(iOS 17.0, *)
+enum ShortcutChatDestination: String, AppEnum {
+  case latest
+  case new
+
+  static let typeDisplayRepresentation: TypeDisplayRepresentation = "Chat"
+  static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+    .latest: DisplayRepresentation(title: "Latest chat"),
+    .new: DisplayRepresentation(title: "New chat"),
+  ]
+}
+
+@available(iOS 17.0, *)
+struct ChatWithYourBotkin: AppIntent {
+  static let title: LocalizedStringResource = "Chat with your Botkin"
+  static let description = IntentDescription("Open the latest or a new chat with a Botkin on one of your paired computers.")
+  static let openAppWhenRun = true
+  static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
+
+  @Parameter(title: "Computer") var computer: ShortcutHost
+  @Parameter(title: "Agent") var agent: ShortcutChatAgent
+  @Parameter(title: "Chat", default: ShortcutChatDestination.latest) var destination: ShortcutChatDestination
+
+  static var parameterSummary: some ParameterSummary {
+    Summary("Chat with \(\.$agent) on \(\.$computer)") {
+      \.$destination
+    }
+  }
+
+  func perform() async throws -> some IntentResult {
+    var fields = agent.fields(computer: computer)
+    fields["action"] = "open"
+    fields["destination"] = destination.rawValue
+    _ = try await runShortcut(fields)
+    return .result()
+  }
+}
+
+@available(iOS 17.0, *)
 struct BotkinsShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
+    AppShortcut(intent: OpenBotkins(), phrases: ["Open \(.applicationName)"], shortTitle: "Open Botkins", systemImageName: "bubble.left.and.bubble.right")
+    AppShortcut(intent: ChatWithYourBotkin(), phrases: ["Chat with my Botkin in \(.applicationName)"], shortTitle: "Chat with your Botkin", systemImageName: "person.bubble")
     AppShortcut(intent: SendBotkinsChat(), phrases: ["Send a chat with \(.applicationName)"], shortTitle: "Send a Botkins Chat", systemImageName: "paperplane")
     AppShortcut(intent: StartBotkinsVoiceChat(), phrases: ["Start a voice chat with \(.applicationName)"], shortTitle: "Start a Voice Chat", systemImageName: "waveform")
   }

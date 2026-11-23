@@ -12,6 +12,7 @@
 // Chats that keep a title of their own are left alone: a routine's chat, a panel's chat, a temporary
 // chat, and a chat the person renamed (`chat.titleSet`, set by Agents.renameChat). The new title is
 // saved like any other change, so the window and every paired phone show it at once.
+// Regenerate title is explicit: it can replace a manual title without changing its protection.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -33,6 +34,8 @@ const MESSAGE_CHARS = 2000;
 const TRANSCRIPT_CHARS = 12000;
 const TITLE_CHARS = 80;
 const TIMEOUT = 120000;
+// Leave room for session setup and closing within the link and terminal's 60-second call.
+const MANUAL_TIMEOUT = 45000;
 // A first title that fails is tried twice more, 2 and then 4 seconds later (as T3 Code does). A later
 // summary is not: the next one comes a round of turns later anyway.
 const FIRST_RETRIES = 2;
@@ -103,30 +106,44 @@ export class Summaries {
     chat.titleTurns = 0;
     return true;
   }
-  eligible(chat) {
-    return !!chat && !chat.temporary && !chat.panelId && !chat.titleSet && !chat.schedules?.some((entry) => entry.routine);
+  eligible(chat, manual = false) {
+    return !!chat && !chat.temporary && !chat.panelId && (manual || !chat.titleSet) && !chat.schedules?.some((entry) => entry.routine);
+  }
+  /** Explicitly asks for a title without changing the chat's automatic naming policy. */
+  regenerate(chatId) {
+    return this.summarize(chatId, { manual: true });
   }
   /**
    * Summarizes one chat now and renames it. Resolves the new title, or null when the chat kept its
-   * own; a failure of the model rejects. `first` names it as a new chat, even after the bot replied.
+   * own; a manual request reports why it couldn't generate a title instead. `first` names it as
+   * a new chat, even after the bot replied.
    */
-  async summarize(chatId, { first = false } = {}) {
+  async summarize(chatId, { first = false, manual = false } = {}) {
     const ws = this.ws;
+    const unavailable = (message) => {
+      if (manual) throw new Error(message);
+      return null;
+    };
     const chat = ws.state.chats.find((c) => c.id === chatId);
-    if (!this.eligible(chat) || this.working.has(chatId) || ws.closing) return null;
+    if (!this.eligible(chat, manual) || ws.closing) return unavailable("This chat's title can't be regenerated.");
+    if (this.working.has(chatId)) return unavailable("This chat's title is already being generated.");
     const bot = ws.state.bots.find((b) => b.id === chat.botId);
-    if (!bot) return null;
+    if (!bot) return unavailable("This chat's bot is no longer available.");
     const transcript = this.transcript(chat);
-    if (!transcript) return null;
+    if (!transcript) return unavailable("Send a message before regenerating the title.");
+    const { title: previousTitle, titleSet } = chat;
     this.working.add(chatId);
     try {
-      // A chat with more than its first message is named again: the model is told the title it has.
-      const named = !first && (chat.messages ?? []).some((m) => m.role === "assistant") ? "The chat is called “" + chat.title + "”. Name it again from what it is about now.\n\n" : "";
-      const reply = await this.ask(bot, named + "<conversation>\n" + transcript + "\n</conversation>\n\nReply with the title.");
+      // When naming a chat again, the model is told the title it has.
+      const named = manual || (!first && (chat.messages ?? []).some((m) => m.role === "assistant")) ? "The chat is called “" + previousTitle + "”. Name it again from what it is about now.\n\n" : "";
+      const prompt = named + "<conversation>\n" + transcript + "\n</conversation>\n\nReply with the title.";
+      const reply = await this.ask(bot, prompt, manual ? MANUAL_TIMEOUT : TIMEOUT);
       const title = titleFrom(reply);
       // The chat may be gone, renamed by the person, or moved to a routine while the model answered.
       const now = ws.state.chats.find((c) => c.id === chatId);
-      if (!title || !this.eligible(now) || ws.closing) return null;
+      if (!this.eligible(now, manual) || ws.closing) return unavailable("This chat's title can no longer be regenerated.");
+      if (manual && (now.title !== previousTitle || now.titleSet !== titleSet)) return unavailable("The chat title was changed while it was being generated.");
+      if (!title) return unavailable("The model didn't produce a title.");
       if (now.title !== title) {
         now.title = title;
         ws.save();
@@ -163,7 +180,7 @@ export class Summaries {
     return [line(opening), ...(skipped ? ["…"] : []), ...lines].join("\n\n");
   }
   /** One question to the Default routines model, in a session of its own with nothing to use. Resolves its reply. */
-  async ask(bot, prompt) {
+  async ask(bot, prompt, timeout) {
     const ws = this.ws;
     const settings = ws.state.settings;
     const choice = settings.routineModel ?? bot.model ?? settings.model;
@@ -191,7 +208,7 @@ export class Summaries {
       handlers: null,
     });
     try {
-      const { text } = await session.send({ prompt }, TIMEOUT);
+      const { text } = await session.send({ prompt }, timeout);
       return text;
     } finally {
       await session.close({ discard: true }).catch(() => {});

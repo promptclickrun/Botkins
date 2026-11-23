@@ -6,18 +6,20 @@ Botkins is the phone app for the Botkins app on your computer. Pair your phone w
 
 ## What you can do
 
-- **Pair in seconds.** Turn on phone access in the Botkins app on your computer (Settings › Phone), then scan the code with your phone. Or choose "Enter a code instead": the phone finds your computer on the network by itself and you type only the code. Typing an address and port is there as a last resort. A paired phone can do what you can do in the app on your computer, so pair only your own phone. You can remove it there at any time.
+- **Pair in seconds.** Turn on phone access in the Botkins app on your computer (Settings › Phone), then choose "Connect to my computer" on your phone and scan the code. Or choose "Enter a code instead" under the camera: the phone finds your computer on the network by itself and you type only the code. Typing an address and port is there as a last resort. A paired phone can do what you can do in the app on your computer, so pair only your own phone. You can remove it there at any time. No Botkins yet? "Set up a new Botkins" links to the download for a Mac, Windows or Linux computer, and to "Deploy to Azure" for a server of your own. Settings › Computers and teams lists every computer and team the phone knows, with "Connect a computer", "Join a team" and "Set up a new Botkins".
 - **Chat with your bots.** Replies stream in as they are written. You see what a bot is doing, approve what it asks for, answer its questions, stop it, and queue the next message. A command that looks risky needs a press and hold to allow. Tables in a reply fit your screen.
 - **Mention and attach.** Type `/` for commands and skills. Type `#` for projects, wiki pages, files and artifacts, then the pull requests of the chat's project (your computer reads them with the GitHub CLI). Type `@` for bots (a group chat's members, or the teammates a bot may ask) and the same records. Attach photos, camera pictures and files; the phone sends them to your computer. Use Discuss on a card in Today to start a chat about it.
 - **See the context window.** A ring in a chat's header shows how full the model's context is. Tap it to see what fills it and to compact the chat.
 - **See what a bot built.** A chart, a dashboard or any small page a bot shows in a chat or in Today is drawn on the phone (a custom view). It has no network and cannot leave its page; a button in it can put text in your message box, and a link asks before it opens.
 - **Select part of a message.** Double tap a message, or hold it and choose "Select text", then drag the handles and copy.
 - **Talk.** One voice button sits where Send is when the field is empty. With a live voice provider chosen in Settings › Voice it opens a live call with the bot. Without one it talks by turns: the phone listens, sends what you said, reads the reply aloud and listens again. A bot can also read any reply aloud.
+- **Talk from Apple Watch.** The companion Watch app mirrors the primary Botkin's avatar and latest conversation. iPhone owns the pairing and live provider session; the Watch sends microphone PCM and plays the response audio for the same live voice mode.
 - **Answer a bot's form.** When a bot asks for a password or key, the field is masked and is cleared when you send. You can answer with a saved credential instead.
 - **Create and manage bots.** Each bot is a Botkin: pick one of 20 characters, its eyes, and a palette or four colors of your own, give it a name, a role and instructions, choose its model, its skills and tools, and read or edit its memory.
 - **Run routines and tasks.** Schedule a bot (once, daily, weekdays, weekly or custom), pause and run routines, choose where a routine's result lands (its own chat, your chat with the bot, or Today) and whether it notifies you, add tasks to the board and approve finished work.
-- **Get told.** Settings › Notifications turns on notifications for replies, requests and routines, and Live Activities that show a chat's running turn on the Lock Screen and in the Dynamic Island. What a notification says is sealed between your phone and your computer: Apple and the relay carry only "New message". When a turn ends, its card says "Done" with how long it took and stays; a new turn in that chat takes the same card over.
+- **Get told.** Settings › Notifications turns on notifications for replies, requests and routines, and Live Activities that show a chat's running turn on the Lock Screen, in the Dynamic Island and in a compact CarPlay card. What a notification says is sealed between your phone and your computer: Apple and the relay carry only "New message". When a turn ends, its card says "Done" with how long it took and stays; a new turn in that chat takes the same card over.
 - **Let bots use your phone.** Tools › Device access lets bots read your calendar, contacts, Health data, location and photos, and add or change some of them. You switch each source off, to read, or to read and interact, and you see what bots used. A bot can also write an email on your phone for you to read and send.
+- **Use Apple Music.** Turn on Music in Tools › Device access to let a bot inspect what is playing, search your library or the Apple Music catalog, start playback, control the Music app's queue, and create or change playlists. Catalog playback and additions use the person’s Apple Music subscription. For signed builds, enable the MusicKit App Service on the iPhone app ID in the Apple Developer portal.
 - **Manage tools and skills.** Add MCP servers, sign them in, test them, write skills, and switch each on or off.
 - **Keep credentials.** Save an API key, a login or a note in Settings › Credentials. It is stored encrypted on your computer. You can also link a field from 1Password, Bitwarden or Proton Pass. The phone never receives a value. It sends a reference, and your computer fills the value in. Face ID, Touch ID or your passcode opens this page.
 - **See your computer's screen.** Settings › Screen shows your screen and, when your computer allows it, lets you use its pointer and keyboard. You choose what phones may do on your computer, and the phone asks for Face ID, Touch ID or your passcode each time.
@@ -29,9 +31,11 @@ Botkins is the phone app for the Botkins app on your computer. Pair your phone w
 
 ### iPhone Shortcuts
 
-In Shortcuts, search for **Botkins**. **Send a Botkins Chat** takes text from a previous action or asks for a prompt. It starts a new chat with your primary bot by default. You can choose another agent, a model and a thinking level. Leave **Wait for Result** on to pass the reply to the next action. Turn **Notify Me** off to silence the reply alert for that turn. Quiet replies need a paired computer running a version with this feature.
+In Shortcuts, search for **Botkins**. **Open Botkins** opens the app. **Chat with your Botkin** chooses a paired computer, an agent and whether to open its latest chat or create a new one. It only navigates; it does not send a prompt.
 
-**Start a Voice Chat** opens a new chat with the selected agent and starts the same voice mode as the microphone button. The two actions are available together on iOS 17 and later.
+**Send a Botkins Chat** remains the background action for text. It takes text from a previous action or asks for a prompt. It starts a new chat with your primary bot by default. You can choose another agent, a model and a thinking level. Leave **Wait for Result** on to pass the reply to the next action. Turn **Notify Me** off to silence the reply alert for that turn. Quiet replies need a paired computer running a version with this feature.
+
+**Start a Voice Chat** opens a new chat with the selected agent and starts the same voice mode as the microphone button. All four actions are available together on iOS 17 and later.
 
 ## Development
 
@@ -48,7 +52,7 @@ npm test                # 243 tests: the link, your computer's end of it, the re
 
 Three scripts rebuild pictures from the design kit and need macOS: `node scripts/build-botkins.mjs` (the Botkins), `node scripts/check-botkins-layers.mjs` (checks the layers used for custom colors; it also needs Python with Pillow and numpy) and `node scripts/build-widget-assets.mjs` (the Live Activity's pictures).
 
-In the simulator, choose **Enter a code instead**, then **Type an address instead**, and type `127.0.0.1:47620` and the code that `npm run dev-host` printed. (The demo computer does not announce itself on the network; the desktop app does.)
+In the simulator, choose **Connect to my computer**, then **Enter a code instead**, then **Type an address instead**, and type `127.0.0.1:47620` and the code that `npm run dev-host` printed. (The demo computer does not announce itself on the network; the desktop app does.)
 
 `AGENTS.md` describes the code layout, how screens read and change the computer's state, and the design rules.
 
@@ -71,7 +75,7 @@ The demo computer opens no outside connection by itself, with one exception: whe
 
 ### Shipping
 
-Set `TEAM_ID`, `ASC_KEY_ID`, and `ASC_ISSUER_ID` in your shell. Set `BOTKINS_BUILD` to the next build number. Install the Apple Distribution certificate and the three provisioning profiles in `scripts/ExportOptions.plist`. Run `sh scripts/testflight.sh` to build the app and upload it to TestFlight. The script includes the Live Activity images and selects the production push service.
+Set `TEAM_ID`, `ASC_KEY_ID`, and `ASC_ISSUER_ID` in your shell. Set `BOTKINS_BUILD` to the next build number. Install the Apple Distribution certificate and all five provisioning profiles in `scripts/ExportOptions.plist`: the iPhone app, Watch app, widgets/Live Activities, notification service and notification UI. Run `sh scripts/testflight.sh` to build the app and upload it to TestFlight. The script includes the Live Activity images and selects the production push service.
 
 - **The relay:** `cd relay && npm test && npm run deploy` (Cloudflare, through Wrangler). It serves `https://relay.botkins.app`. Notifications also need the Worker's Apple push key and ids, set once as Worker secrets (`relay/README.md`, "Push notifications").
 

@@ -1,6 +1,6 @@
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { AudioLines, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
+import { AudioLines, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, Sparkles, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
 import { useMemo } from "react";
 import { Alert, View } from "react-native";
 import { newBotChat, openBotChat } from "@/features/chat/open";
@@ -11,13 +11,14 @@ import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability,
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
-import { AvatarMotion, BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
 import { BotArtifacts } from "@/features/artifacts/ArtifactBits";
 import { sectionOf } from "@/features/home/arrange";
 import { usePhoneVoice } from "@/features/voice/prefs";
 import { botVoiceSummary } from "@/features/voice/settings/summary";
 import { useBotVoiceSupported, useVoiceSettings } from "@/features/voice/state";
 import { grantSummary } from "./projectAccess";
+import { isPaused, PROACTIVE_CAPABILITY, proactiveOf } from "./proactive";
 import { moveToSection, runSectionChoice, toggleHidden } from "./menus";
 
 function BotPageScreen() {
@@ -41,6 +42,7 @@ function EditButton({ id }: { id: string }) {
 
 function BotDetail({ bot }: { bot: Bot }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const canFiles = useCapability("files-v1");
   const state = useBotActivity(bot.id);
   const bots = useBots();
@@ -66,6 +68,9 @@ function BotDetail({ bot }: { bot: Bot }) {
   const phoneVoice = usePhoneVoice((prefs) => prefs.bots?.[bot.id]);
   const canCreateToday = useCan("today", "create");
   const member = useMember();
+  const proactiveSupported = useCapability(PROACTIVE_CAPABILITY);
+  const proactivePart = usePart("proactive");
+  const proactive = proactiveOf(proactivePart?.bots?.[bot.id]);
 
   const model = describeChoice(bot.model ?? settings?.model, models, defaultProvider);
   const firstLine = bot.instructions.split("\n").find((line) => line.trim())?.trim();
@@ -98,6 +103,7 @@ function BotDetail({ bot }: { bot: Bot }) {
   return (
     <Page>
       <Stack.Screen options={{ headerRight: canManage ? () => <EditButton id={bot.id} /> : undefined }} />
+      {prompt.node}
 
       <View style={{ alignItems: "center", gap: space.lg }}>
         <BotAvatar bot={bot} state={state} size={136} />
@@ -135,8 +141,19 @@ function BotDetail({ bot }: { bot: Bot }) {
         />
         {canManage && <Row leading={<IconTile icon={ScrollText} color={colors.info} />} title="Instructions" subtitle={firstLine ?? "None yet"} chevron onPress={() => router.push({ pathname: "/bot/[id]/instructions", params: { id: bot.id } })} />}
         {canManage && <Row leading={<IconTile icon={Palette} color={colors.accent} />} title="Look" chevron onPress={() => router.push({ pathname: "/bot/[id]/look", params: { id: bot.id } })} />}
-        {/* Voice settings are the owner's (a member's phone is not sent them), so a bot's voice is too. */}
-        {canManage && !member && <Row leading={<IconTile icon={AudioLines} color={colors.ink2} />} title="Voice" subtitle={botVoice ? botVoiceSummary(bot.voice, sharedVoice, phoneVoice) : "Update the app on your computer"} chevron={botVoice} disabled={!botVoice} onPress={botVoice ? () => router.push({ pathname: "/bot/[id]/voice", params: { id: bot.id } }) : undefined} />}
+        {/* A role that manages bots sets a bot's voice. The shared settings are sent to it without keys or addresses; an older computer sends a member none, and then there is nothing to choose from. */}
+        {canManage && (!member || !!sharedVoice) && <Row leading={<IconTile icon={AudioLines} color={colors.ink2} />} title="Voice" subtitle={botVoice ? botVoiceSummary(bot.voice, sharedVoice, phoneVoice) : "Update the app on your computer"} chevron={botVoice} disabled={!botVoice} onPress={botVoice ? () => router.push({ pathname: "/bot/[id]/voice", params: { id: bot.id } }) : undefined} />}
+        {/* The route is new: typed routes learn it the next time Metro starts. A role that manages bots sets a bot's Proactive agent; the computer says whose it is, and a member's is theirs. */}
+        {canManage && proactiveSupported && (
+          <Row
+            leading={<IconTile icon={Sparkles} color={colors.accent} />}
+            title="Proactive"
+            subtitle={proactivePart?.bots?.[bot.id]?.taken ? "Set up by someone else" : isPaused(proactivePart, proactivePart?.bots?.[bot.id]) ? "Paused by the owner" : undefined}
+            value={proactive.enabled ? "On" : "Off"}
+            chevron
+            onPress={() => router.push(("/bot/" + encodeURIComponent(bot.id) + "/proactive") as Href)}
+          />
+        )}
         {!member && <Row leading={<IconTile icon={Wrench} color={colors.success} />} title="Skills & tools" value={capabilities} chevron onPress={() => router.push({ pathname: "/bot/[id]/capabilities", params: { id: bot.id } })} />}
         {!member && <Row leading={<IconTile icon={Brain} color={colors.warning} />} title="Memory" chevron onPress={() => router.push({ pathname: "/bot/[id]/memory", params: { id: bot.id } })} />}
         {/* The route is new: typed routes learn it the next time Metro starts. */}
@@ -147,7 +164,7 @@ function BotDetail({ bot }: { bot: Bot }) {
         {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
         {canArrange && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
         {canManage && !member && sections && (
-          <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event)}>
+          <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event, prompt.ask)}>
             <View accessible accessibilityRole="button" accessibilityLabel={"Section, " + (section?.name ?? "None")} accessibilityHint="Moves the bot to a section">
               <Row leading={<IconTile icon={Folder} color={colors.ink2} />} title="Section" value={section?.name ?? "None"} chevron />
             </View>

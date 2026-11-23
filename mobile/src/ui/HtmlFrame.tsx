@@ -276,7 +276,9 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill, state }: HtmlF
           allowsBackForwardNavigationGestures={false}
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction
-          dataDetectorTypes="none"
+          // An array, not a string: iOS wraps a string for you, Android hands the raw value to a native setter
+          // that takes an array, and a string there stops the app the moment the view mounts.
+          dataDetectorTypes={["none"]}
           scrollEnabled={!!fill}
           bounces={!!fill}
           showsVerticalScrollIndicator={!!fill}

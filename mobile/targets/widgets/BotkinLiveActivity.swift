@@ -1,4 +1,4 @@
-// The Live Activities on the Lock Screen and in the Dynamic Island. The card for all Botkins
+// The Live Activities on the Lock Screen, in the Dynamic Island and as a compact CarPlay card. The card for all Botkins
 // ("activity-all-v1") is drawn by FeedCard.swift, a Botkin's card ("activity-bots-v1") by BotCard.swift. A chat's card (an older computer's) is drawn here:
 // the bot's Botkin, its name, what it is doing in a few words, and how long it has been at it.
 // Tapping opens the chat.
@@ -189,23 +189,46 @@ private func detail(_ state: BotkinActivityAttributes.ContentState) -> String {
 
 struct BotkinLiveActivity: Widget {
   var body: some WidgetConfiguration {
+    if #available(iOS 18.0, *) {
+      return configuration().supplementalActivityFamilies([.small])
+    }
+    return configuration()
+  }
+
+  private func configuration() -> some WidgetConfiguration {
     ActivityConfiguration(for: BotkinActivityAttributes.self) { context in
       if context.attributes.card == "all" {
         // The card for all Botkins (FeedCard.swift).
         let model = CardModel(context)
-        FeedLock(model: model)
+        Group {
+          if #available(iOS 18.0, *) {
+            FeedAdaptive(model: model)
+          } else {
+            FeedLock(model: model)
+          }
+        }
           .activityBackgroundTint(Color(white: 0.09).opacity(0.82))
           .activitySystemActionForegroundColor(.white)
           .widgetURL(model.first.map { Links.chat($0.id, host: model.host) })
       } else if context.attributes.card == "bot" {
         // A Botkin's card (BotCard.swift).
         let model = CardModel(context)
-        BotCardLock(model: model)
+        Group {
+          if #available(iOS 18.0, *) {
+            BotCardAdaptive(model: model)
+          } else {
+            BotCardLock(model: model)
+          }
+        }
           .activityBackgroundTint(Color(white: 0.09).opacity(0.82))
           .activitySystemActionForegroundColor(.white)
           .widgetURL(model.first.map { Links.chat($0.id, host: model.host) } ?? Links.bot(context.attributes.botId, host: model.host))
       } else {
-        chatCard(context)
+        if #available(iOS 18.0, *) {
+          ChatCardAdaptive(context: context)
+        } else {
+          ChatCardMedium(context: context)
+        }
       }
     } dynamicIsland: { context in
       context.attributes.card == "all" ? feedIsland(context) : context.attributes.card == "bot" ? botIsland(context) : chatIsland(context)
@@ -242,8 +265,24 @@ struct BotkinLiveActivity: Widget {
 
   // ── A chat's card (an older computer's) ───────────────────────────────────────────────────
 
-  private func chatCard(_ context: ActivityViewContext<BotkinActivityAttributes>) -> some View {
-      // The Lock Screen, and the banner on phones without a Dynamic Island.
+  @available(iOS 18.0, *)
+  private struct ChatCardAdaptive: View {
+    @Environment(\.activityFamily) private var family
+    let context: ActivityViewContext<BotkinActivityAttributes>
+
+    var body: some View {
+      if family == .small {
+        ChatCardSmall(context: context)
+      } else {
+        ChatCardMedium(context: context)
+      }
+    }
+  }
+
+  private struct ChatCardMedium: View {
+    let context: ActivityViewContext<BotkinActivityAttributes>
+
+    var body: some View {
       HStack(spacing: 12) {
         BotkinFace(about: context.attributes, phase: context.state.phase, size: 48)
         VStack(alignment: .leading, spacing: 2) {
@@ -257,6 +296,33 @@ struct BotkinLiveActivity: Widget {
       .padding(.vertical, 14)
       .activityBackgroundTint(Color(.systemBackground).opacity(0.85))
       .widgetURL(URL(string: "botkins://chat/\(context.attributes.chatId)"))
+    }
+  }
+
+  private struct ChatCardSmall: View {
+    let context: ActivityViewContext<BotkinActivityAttributes>
+
+    var body: some View {
+      HStack(spacing: 10) {
+        BotkinFace(about: context.attributes, phase: context.state.phase, size: 38)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(context.attributes.botName).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+          Text(context.isStale ? "Open Botkins for the latest" : detail(context.state))
+            .font(.system(size: 12.5))
+            .foregroundStyle(context.state.phase == "needs-you" ? phaseColor("needs-you") : .secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 4)
+        if context.state.phase == "needs-you" {
+          Image(systemName: "questionmark.circle.fill").foregroundStyle(phaseColor("needs-you"))
+        } else {
+          Elapsed(state: context.state).font(.caption)
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .widgetURL(URL(string: "botkins://chat/\(context.attributes.chatId)"))
+    }
   }
 
   private func chatIsland(_ context: ActivityViewContext<BotkinActivityAttributes>) -> DynamicIsland {

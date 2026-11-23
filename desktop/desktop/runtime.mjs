@@ -24,6 +24,7 @@ import { Notifier } from "./notify.mjs";
 import { usageCsv, usageReport } from "./usage.mjs";
 import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
+import { cloneProjectRepository } from "./project-clone.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
 import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
@@ -43,6 +44,8 @@ import { liveContextFor } from "./live-context.mjs";
 import { PHONE_PATIENCE_MS, SignIns } from "./terminal/signin.mjs";
 import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
+import { pickedSkill, uploadSkill } from "./link/skill-import.mjs";
+import { skillsCatalog } from "./skills-catalog.mjs";
 import { zip } from "./zip.mjs";
 import { LinkPreviews } from "./linkpreview.mjs";
 // Phone access: the Botkins link, copied unchanged from the Botkins repo (desktop/link/README.md).
@@ -51,7 +54,8 @@ import { DEFAULT_RELAY_URL } from "./link/relay.mjs";
 import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { LOOKS_CAPABILITY } from "./looks.mjs";
-import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS } from "./routines.mjs";
+import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
+import { PROACTIVE } from "./proactive.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
 import { LoginLookups } from "./headless/login-lookups.mjs";
@@ -109,13 +113,14 @@ export const APP_UPDATE = "app-update-v1";
 export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
-export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1"];
+const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
+export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -128,7 +133,8 @@ export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", 
  *   stays quiet on the local network, unless an environment variable asks for one of those.
  * @param options.pushed   Called when the app's own view of things is out of date (the desktop
  *   app tells its window). Calls may come in bursts: the listener coalesces them.
- * @param options.link     For a host that sets the link up itself: { port?, extraHosts?, announce? }.
+ * @param options.link     For a host that sets the link up itself: { port?, extraHosts?, announce?, relayOwn? }.
+ *   `relayOwn`: the relay in the link's settings is this server's own and phones' only way in (desktop/link/grant.mjs).
  * @param options.copilot  { github? }: () → { token } | undefined, for a host that keeps the
  *   GitHub sign-in of the Copilot runtime itself (the terminal host, for a pasted token).
  * @returns What the program around it uses: `handlers`, `workspace`, `providers`, `link`, `phone`,
@@ -247,7 +253,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
     // Pi-compatible harnesses for the ChatGPT and Claude plans, not model providers.
     pi,
-    new OmpProvider({ dataDir: join(dataDir, "omp"), bridge }),
+    new OmpProvider({ dataDir: join(dataDir, "omp"), bridge, packages: pi.packages }),
   ];
   // BOTKINS_PROVIDERS=copilot,claude keeps only those (in that list's order here), for tests
   // that must not depend on which tools this computer happens to have.
@@ -358,7 +364,16 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return { kind: "plugin", name: added.name, id: added.id, enabled: added.enabled === true };
     }
   };
+  const catalog = skillsCatalog(() => workspace.integrations);
   const handlers = {
+    pickSkillUpload: async () => {
+      const paths = await host.dialogs.open({title: "Upload skill", properties: ["openFile"], filters: [{ name: "Skills", extensions: ["md", "zip"] }]});
+      return paths?.length ? pickedSkill(paths[0]) : null;
+    },
+    "skills.upload": (file) => uploadSkill(workspace.integrations, file),
+    "skillsCatalog.search": catalog.search,
+    "skillsCatalog.preview": catalog.preview,
+    "skillsCatalog.install": catalog.install,
     ...pluginHandlers(workspace.plugins, savedCredentials),
     "piPackages.browse": (query) => pi.packages.browse(query),
     "piPackages.preview": (name) => pi.packages.preview(name),
@@ -440,7 +455,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return true;
     },
     models: () => workspace.models(),
-    setModel: (scope, id, value) => workspace.setModel(scope, id, value),
+    setModel: (scope, id, value, fastMode) => workspace.setModel(scope, id, value, fastMode),
     setPreferences: (patch) => {
       const before = workspace.state.settings.background;
       workspace.setPreferences(patch);
@@ -524,6 +539,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return host.shell.openExternal(parsed.href);
     },
     updateBot: (id, data) => workspace.updateBot(id, data),
+    // A bot's Proactive agent, for the person who calls: the window and the command line are the owner's (desktop/device-call.mjs names a member).
+    setBotProactive: (id, patch, person = "owner") => workspace.proactive.setBot(id, patch, person),
     // Skills and MCP servers for every bot (desktop/integrations.mjs)
     saveMcpServer: (data) => workspace.integrations.saveServer(data),
     setMcpServerEnabled: (id, enabled) => workspace.integrations.setServerEnabled(id, enabled),
@@ -621,6 +638,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     deleteSection: (id) => workspace.agents.deleteSection(id),
     setChatFlags: (id, patch) => workspace.agents.setChatFlags(id, patch),
     renameChat: (id, title) => workspace.agents.renameChat(id, title),
+    regenerateChatTitle: (id) => workspace.summaries.regenerate(id),
     deleteChat: async (id) => {
       const result = await workspace.agents.deleteChat(id);
       // The link keeps who was invited into a chat; a chat that is gone has no people.
@@ -701,12 +719,24 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     renameProject: (id, name) => workspace.projects.rename(id, name),
     removeProject: (id) => workspace.projects.remove(id),
-    setChatProject: (chatId, projectId, mode) => workspace.projects.setChatProject(chatId, projectId, mode),
-    projectChanges: (id) => workspace.projects.changes(id),
-    projectDiff: (id, file) => workspace.projects.diff(id, file),
-    projectCommit: (id, message) => workspace.projects.commit(id, message),
-    revealProject: (id) => {
-      const folder = workspace.projects.folderOf(id);
+    editProjectFolder: (id, action, path) => workspace.projects.editFolder(id, action, path),
+    chatProjectFolder: (id) => workspace.projects.folderFor(workspace.chat(id)),
+    setChatFolder: (id, path) => {
+      const chat = workspace.chat(id);
+      if (!chat.projectId) throw new Error("Choose a project first.");
+      workspace.projects.setChatProject(id, chat.projectId, chat.mode, path ?? null);
+    },
+    cloneProjectRepository: (repository, parent, id, data) => cloneProjectRepository(repository, parent, (folder) => {
+      if (!id) return workspace.projects.create({ name: data?.name, description: data?.description, folder });
+      workspace.projects.editFolder(id, "add", folder);
+      return id;
+    }),
+    setChatProject: (...args) => workspace.projects.setChatProject(...args),
+    projectChanges: (...args) => workspace.projects.changes(...args),
+    projectDiff: (...args) => workspace.projects.diff(...args),
+    projectCommit: (...args) => workspace.projects.commit(...args),
+    revealProject: (id, path) => {
+      const folder = workspace.projects.folderOf(id, path);
       // Opening a folder that is an app (or another bundle) would start it: such a folder is shown in its place.
       if (extname(folder) && existsSync(join(folder, "Contents"))) return void host.shell.showItemInFolder(folder);
       return host.shell.openPath(folder);
@@ -714,13 +744,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Project workspaces, to-dos and agent access (desktop/projects.mjs, access.mjs)
     createProject: (data) => workspace.projects.create(data),
     updateProject: (id, patch) => workspace.projects.update(id, patch),
-    chooseProjectFolder: async (id) => {
+    chooseProjectFolder: async (id, append) => {
       const paths = await host.dialogs.open({ title: "Choose a folder for this project", properties: ["openDirectory", "createDirectory"] });
       if (!paths) return null;
-      workspace.projects.update(id, { folder: paths[0] });
+      if (append) workspace.projects.editFolder(id, "add", paths[0]);
+      else workspace.projects.update(id, { folder: paths[0] });
       return paths[0];
     },
-    startProjectChat: (botIds, projectId, mode) => workspace.projects.startChat(botIds, projectId, mode),
+    startProjectChat: (...args) => workspace.projects.startChat(...args),
     // Artifacts a person attached to a project (capability "project-artifacts-v1").
     addProjectArtifact: (projectId, artifactId) => workspace.projects.addArtifact(projectId, artifactId),
     removeProjectArtifact: (projectId, artifactId) => workspace.projects.removeArtifact(projectId, artifactId),
@@ -927,6 +958,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     renamePhone: (id, name) => phone.renamePhone(id, name),
     setPhonePerson: (id, person) => phone.setPhonePerson(id, person),
     renamePhoneLinkComputer: (name) => phone.renamePhoneLinkComputer(name),
+    configureGadget: (id, patch) => phone.configureGadget(id, patch),
+    gadgetWifi: (id, change) => phone.gadgetWifi(id, change),
+    restartGadget: (id) => phone.restartGadget(id),
     setPhoneScreen: (mode) => phone.setPhoneScreen(mode),
     setPhoneRelay: (enabled) => phone.setPhoneRelay(enabled),
     resetPhoneRelay: () => phone.resetPhoneRelay(),
@@ -1094,6 +1128,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...(trial && { managerSearchPath: trialToolDirs(env("TOOL_PATH")) }),
     ...(linkPort !== undefined && { port: linkPort }),
     ...(linkOptions.extraHosts?.length && { extraHosts: linkOptions.extraHosts }),
+    ...(linkOptions.relayOwn && { relay: { own: true } }),
     // (Only the relay is refused: the same fetch carries the voice providers' requests.)
     ...(trial && env("PUSH") !== "1" && { fetch: (url, init) => (hostOf(url) === hostOf(DEFAULT_RELAY_URL) ? Promise.reject(new Error("A trial run sends no notifications.")) : fetch(url, init)) }),
     backend: linkBackend,

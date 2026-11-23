@@ -44,6 +44,8 @@ try {
   page = await home(app);
   page.on("pageerror", (error) => errors.push(error.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor({ timeout: 30000 });
+  // Only the local fixture is needed. Treat the public catalog as offline.
+  await app.evaluate(() => { globalThis.fetch = async () => { throw new Error("Offline smoke"); }; });
   assert.equal((await call("plugins.addMarketplace", market)).name, "local-agent-market");
 
   // The Marketplace button sits left of New chat at the top of the side menu, and opens Marketplace.
@@ -62,8 +64,6 @@ try {
 
   // Agents: the local templates, with their categories as chips.
   await dialog.getByRole("tab", { name: "Agents", exact: true }).click();
-  // Only this smoke's own marketplace is looked at: the built-in catalog is read from the network,
-  // and it can have templates with the same names or words.
   const mine = dialog.locator(".agent-listing", { hasText: "local-agent-market" });
   const listing = (text) => mine.filter({ hasText: text });
   const sorter = listing("Sorter");
@@ -97,7 +97,7 @@ try {
   await expect(sheet.locator("input[name=summary]")).toHaveValue("Sorts your inbox into what needs you today and what can wait.");
   await expect(sheet.locator("textarea[name=instructions]")).toHaveValue(/Ask before you send or delete anything\./);
   await expect(sheet.getByRole("note")).toContainText("From local-agent-market. Someone else wrote these instructions: read them first.");
-  await expect(sheet.locator(".template-trigger")).toContainText("Marketplace: Sorter");
+  await expect(sheet.getByRole("button", { name: "Start from template", exact: true })).toBeVisible();
   await shot(page, "create-bot-filled");
   await sheet.locator("input[name=name]").fill("Sorter Two");
   await sheet.getByRole("button", { name: "Create bot", exact: true }).click();

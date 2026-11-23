@@ -27,21 +27,46 @@ own. A request makes its sound through the card; a finished turn still gets its 
   the widgets' snapshot.
 - **Starting.** Only the phone starts it, while the app is in front and a chat is at work or needs
   the person. It is never started by a push: the computer could not change it until the app said
-  its address, and often the app never did. The computer keeps it up to date from then on.
-- **Ending.** Once every chat on it has ended, the computer (or the phone, while the app is in
-  front) ends it with its final state, which stays for four minutes. A card with nothing left on it
-  is ended at once. The computer also looks at its cards when it starts, so a card left from before
-  a restart is ended without waiting for a change. When the app comes to the front it ends any card
-  that is not its card for all Botkins, and takes away cards iOS ended by itself but left on the Lock
-  Screen (`dismissEnded`).
+  its address, and often the app never did.
+- **Who draws it.** The phone, only while the app is in front (it knows a turn's steps only for the
+  chat on screen). The computer holds back then, and sends the whole card again the moment the app
+  leaves (`link.push.presence` false), so the card shows each chat's current step from then on.
+- **One chat.** With one chat on it, the card shows that chat's last two steps and the latest
+  sentence of thinking under its row (from the sealed `s` and `th`).
+- **Ending.** Once every chat on it has ended, the computer sends that as an update and keeps the
+  card for a minute (`OVER_HOLD_MS`; a new turn in that minute takes it over), then ends it with its
+  final state, which stays on the Lock Screen four more minutes. A card with nothing left on it is
+  ended at once. The computer also looks at its cards when it starts, so a card left from before a
+  restart is ended a minute later without waiting for a change. When the app comes to the front it
+  ends a finished card it didn't draw, any card that is not its card for all Botkins, and cards iOS
+  ended by itself but left on the Lock Screen (`dismissEnded`, only in front: a card that just ended
+  keeps its final state).
 - **A request.** While the phone has the card, the request's notification is not sent. The card's
   first update that shows the request carries `aps.alert` (`"Botkins"`, `"A bot needs you"`) and
   `sound`, which lights the screen and plays the sound. A request the card doesn't show is a
   notification, as before. Without the card (Live Activities off, or none running) every request is
   a notification.
-- **A finished turn** ends the card quietly and gets its notification, as before.
+- **A finished turn.** When its end leaves every chat on the card ended, the card's update that says
+  so carries `aps.alert` (`"Botkins"`, `"All done"` or `"A chat stopped"`) and `sound`: the Dynamic
+  Island opens and the sound plays. The turn's notification still comes, without `sound`. A turn
+  that ends while others still work gets its notification as before, with its sound.
+  The card's sound doesn't wait on that notification: it also plays when the notification is left
+  out because the chat is open in the computer's own window. The card stays quiet only when the
+  person stopped the turn themselves, when finished replies are switched off, or when the app is in
+  front on that phone (the notification then keeps its sound).
+- **How the pushes are sent.** Apple holds a priority 5 push back to save power, most of all on a
+  locked phone, and allows only so many at priority 10. A push with an alert, and a change that
+  matters (a chat needs the person, a chat ended, a new turn, the app left the front), goes at 10.
+  Steps and thinking go at most every 2.5 seconds: at 10 when the last push at 10 was 15 seconds
+  ago or more (`ACTIVITY_LOUD_GAP_MS`), else at 5. The app declares
+  `NSSupportsLiveActivitiesFrequentUpdates`. A push's `timestamp` is the second rounded up, and
+  always later than the one before: Apple orders a card's updates by it, the phone's own too.
+- **A row's words** (`l`). The step that runs, else what the bot says it is doing, else the step it
+  did last, else "Thinking…". A step takes moments and the thinking between two takes most of a
+  turn, so a row never says only "Working…" once the turn has done something.
+- **The card's address** reaching the computer brings the whole card, never a chat's catch-up.
 
-These rules (the end, and the start at a restart) apply to a Botkin's card too.
+The hold before the end, and the look at a restart, apply to a Botkin's card too (it never chimes).
 
 ## 1. A phone asks for cards per Botkin
 

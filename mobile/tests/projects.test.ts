@@ -8,7 +8,7 @@ import { after, test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { remoteArgs, REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { TEAM_METHODS } from "../link-host/team.mjs";
+import { TEAM_METHODS, authorize } from "../link-host/team.mjs";
 import { addableChats, artifactCount } from "../src/features/projects/logic";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { Artifact, ArtifactPage, ChatSummary, Project } from "../src/link/types";
@@ -99,7 +99,7 @@ test("the demo keeps a project's artifacts: attach, list, move to the front, rem
   }
 });
 
-test("the demo moves a started chat into a project unless its folder would change", async () => {
+test("the demo moves a started chat into a project even when its folder changes", async () => {
   const { backend, call, stop } = await demo();
   try {
     const started = backend.state.chats.find((item: any) => item.messages.length > 0 && !item.projectId);
@@ -109,7 +109,34 @@ test("the demo moves a started chat into a project unless its folder would chang
     await call("setChatProject", started.id, null);
     assert.equal(started.projectId, undefined);
     const withFolder = backend.state.projects.find((item: any) => item.folder);
-    if (withFolder) await assert.rejects(call("setChatProject", started.id, withFolder.id, "default"), /another folder/);
+    if (withFolder) await call("setChatProject", started.id, withFolder.id, "default");
+  } finally {
+    await stop();
+  }
+});
+
+test("folder edits, chat folder, clone and mode changes are owner-only", async () => {
+  for (const method of ["editProjectFolder", "setChatFolder", "chatProjectFolder", "cloneProjectRepository", "updateProject", "setChatProject", "startProjectChat"]) {
+    assert.ok(REMOTE_METHODS.has(method));
+    assert.equal(TEAM_METHODS[method], "owner");
+    const team = { groups: [{ id: "g", roleId: "r" }], roles: [{ id: "r" }] };
+    assert.equal(authorize({ kind: "member", groupId: "g" }, team, method), "Only the owner can do that.");
+    assert.equal(authorize({ kind: "owner" }, team, method), "");
+  }
+  const { call, backend, stop } = await demo();
+  try {
+    const id = await call<string>("cloneProjectRepository", "owner/website");
+    const project = backend.state.projects.find((p: Project) => p.id === id);
+    const path = "/Users/demo/Code/mobile";
+    await call("editProjectFolder", id, "add", path);
+    await call("updateProject", id, { mode: "plan" });
+    const chat = backend.chat(await call<string>("startProjectChat", ["bot-mira"], id));
+    assert.equal(chat.mode, "plan");
+    await call("setChatFolder", chat.id, path);
+    assert.equal(chat.folder, path);
+    await call("editProjectFolder", id, "default", path);
+    assert.equal(project.folder, path);
+    assert.equal(chat.folder, undefined);
   } finally {
     await stop();
   }

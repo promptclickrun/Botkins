@@ -2,7 +2,7 @@ import { useEffect, useState, type HTMLAttributes, type SyntheticEvent } from "r
 import { FolderOpen, FolderPlus, Pencil, Plus, Search, ShieldAlert, Sparkles, Trash2, X } from "lucide-react";
 import type { InstalledPlugin, SkillFolders, SkillInfo } from "./types";
 import { decisionText, readTold, skillsOff, toldKey, writeTold } from "./pluginStarts";
-import { useAsk } from "./Pages";
+import { useAsk, useMenu } from "./Pages";
 import { Group, Sheet, errorText } from "./SettingsRows";
 import "./integrations.css";
 import "./plugins.css";
@@ -50,8 +50,10 @@ export default function SkillsSettings({
   plugins = [],
   hostId = "",
   openPlugin,
+  initialSkill,
 }: {
   stamp: string;
+  initialSkill?: string;
   /** The installed plugins, for the skills that are off with their plugin. */
   plugins?: InstalledPlugin[];
   /** The computer in use, when it is another one: what was told is kept for each computer. */
@@ -63,7 +65,7 @@ export default function SkillsSettings({
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
-  const [editing, setEditing] = useState<{ name?: string } | null>(null);
+  const [editing, setEditing] = useState<{ name?: string } | null>(initialSkill ? {name: initialSkill} : null);
   const [told, setTold] = useState(() => readTold(TOLD));
   /** A plugin folder that "Add from folder…" installed as a plugin just now. */
   const [installed, setInstalled] = useState<{ id: string; name: string; enabled: boolean }>();
@@ -76,6 +78,20 @@ export default function SkillsSettings({
   }
   const [platform, setPlatform] = useState("darwin");
   const dialogs = useAsk();
+  const menu = useMenu();
+  async function upload() {
+    const file = await api.pickSkillUpload();
+    if (!file) return;
+    if ((await api.remoteHosts()).using) throw new Error("Choose the file again on this computer.");
+    let result = await api["skills.upload"](file);
+    if (result.conflicts.length) {
+      if (!await dialogs.ask({ title: "Replace existing skills?", body: result.conflicts.join(", "), confirm: "Replace", danger: true })) return;
+      if ((await api.remoteHosts()).using) throw new Error("Choose the file again on this computer.");
+      result = await api["skills.upload"]({...file, replace: result.conflicts});
+    }
+    if (result.conflicts.length) throw new Error("The skills changed. Upload again to review the names.");
+    setNote("Added " + plural(result.added.length, "skill") + ".");
+  }
   useEffect(() => {
     api
       .appInfo()
@@ -137,9 +153,12 @@ export default function SkillsSettings({
         <FolderPlus size={14} />
         Add from folder…
       </button>
-      <button type="button" className="set-button primary" onClick={() => setEditing({})}>
+      <button type="button" className="set-button primary" aria-haspopup="menu" onClick={e => menu.show(e, "Add skill", [
+        { label: "Create skill", run: () => setEditing({}) },
+        ...(hostId ? [] : [{ label: "Upload skill", run: () => void run(upload) }]),
+      ])}>
         <Plus size={14} />
-        New skill
+        Add skill
       </button>
     </span>
   );
@@ -337,6 +356,8 @@ export default function SkillsSettings({
           }}
         />
       )}
+      {hostId && <p className="set-status">To upload a file, open Skills on the connected computer or its paired phone.</p>}
+      {menu.node}
       {dialogs.node}
     </div>
   );

@@ -163,7 +163,7 @@ export function controlClient(socketPath, { timeout = 60_000 } = {}) {
       }
     },
     async call(method, ...args) {
-      const answer = await exchange(socketPath, { method: "POST", path: "/v1/call", payload: { method, args }, timeout });
+      const answer = await exchange(socketPath, { method: "POST", path: "/v1/call", payload: { method, args }, timeout: method === "projects.clone" ? Math.max(timeout, 300_000) : timeout });
       if (answer?.ok) return answer.value;
       throw new ControlError(answer?.error?.message ?? "The service refused that call.", answer?.error?.code ?? "FAILED");
     },

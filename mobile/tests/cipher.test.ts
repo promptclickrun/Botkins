@@ -53,3 +53,16 @@ test("Node's cipher and the library seal the same bytes and open each other's", 
     assert.equal(hex(open(key, nonce, Buffer.from(theirs.sealed, "hex"), c.aad)), c.plain);
   });
 });
+
+test("host and phone encode the session push counter outside the entire RPC nonce domain", async () => {
+  const host = await import("../link-host/crypto.mjs");
+  const phone = await import("../src/link/crypto");
+  for (const n of [1, 255, 256, 2 ** 32, Number.MAX_SAFE_INTEGER]) {
+    const push = host.pushNonce(n);
+    assert.deepEqual(push, Buffer.from(phone.pushNonce(n)));
+    assert.equal(push.readUInt32BE(0), 0x01000000);
+    assert.equal(push.readBigUInt64BE(4), BigInt(n));
+    assert.equal(host.seqNonce(n).readUInt32BE(0), 0);
+    assert.deepEqual(host.seqNonce(n), Buffer.from(phone.seqNonce(n)));
+  }
+});

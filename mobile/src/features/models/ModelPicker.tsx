@@ -3,8 +3,8 @@ import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Info,
 import { type ReactNode, useMemo, useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { ModelChoice, ModelInfo } from "@/link/types";
-import { useBot, useCan, useChat, useModels, useProviders, useSettings } from "@/state/hooks";
+import type { FastMode, ModelChoice, ModelInfo } from "@/link/types";
+import { useBot, useCan, useChat, useModels, usePart, useProviders, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { chooseModel, effectiveModel, effortLabel, findModel, groupModels, modelKey, routineDefault } from "@/state/models";
@@ -110,6 +110,13 @@ function Picker() {
   const held = scope === "routine" ? heldRoutineModel() : null;
   const { colors } = useTheme();
   const settings = useSettings();
+  const speedAllowed = !!usePart("meta")?.capabilities?.includes("fast-mode-v1") && ["chat", "bot", "global"].includes(scope);
+  const insets = useSafeAreaInsets();
+  const savedSpeed = scope === "chat" ? chat?.fastMode : scope === "bot" ? bot?.fastMode : settings?.fastMode;
+  const inheritedSpeed = (scope === "chat" ? bot?.fastMode : undefined) ?? settings?.fastMode ?? "off";
+  const [speedEdit, setSpeedEdit] = useState<FastMode | null>();
+  const speed = speedEdit === undefined ? savedSpeed : speedEdit;
+  const effectiveSpeed = speed ?? (scope === "global" ? "off" : inheritedSpeed);
   const models = useModels();
   const providers = useProviders();
   const defaultProvider = defaultProviderOf(providers);
@@ -132,6 +139,7 @@ function Picker() {
   const [busy, setBusy] = useState(false);
 
   const chosen = findModel(models ?? [], choice ?? undefined, defaultProvider);
+  const speeds = (choice ? chosen : findModel(models ?? [], inherited, defaultProvider))?.fastModes;
   const savedMissing = !!saved && !!models && !findModel(models, saved, defaultProvider);
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -163,7 +171,9 @@ function Picker() {
       return;
     }
     setBusy(true);
-    const done = await attempt(api.setModel(scope, scope === "global" || scope === "routines" ? null : (params.id ?? null), choice).then(() => true));
+    const id = scope === "global" || scope === "routines" ? null : (params.id ?? null);
+    const request = speedAllowed && speedEdit !== undefined ? api.setModel(scope, id, choice, speedEdit) : api.setModel(scope, id, choice);
+    const done = await attempt(request.then(() => true));
     setBusy(false);
     if (done) router.back();
   };
@@ -171,8 +181,33 @@ function Picker() {
   const fallback = scope !== "global" ? describeChoice(inherited, models, defaultProvider) : undefined;
   const thinking = chosen && choice ? <Thinking model={chosen} effort={choice.reasoningEffort} onChange={(effort) => setChoice(chooseModel(chosen, effort))} /> : null;
 
+  const footer = (thinking || (speedAllowed && !!models?.length)) ? (
+    <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, backgroundColor: colors.canvas, paddingBottom: insets.bottom + space.sm }}>
+      {thinking}
+      {speedAllowed && (
+        <View style={{ paddingTop: space.md, paddingHorizontal: space.xl, gap: space.sm }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: space.xs }}>
+            <T variant="label" accessibilityRole="header">Fast mode</T>
+            {scope !== "global" && <T variant="footnote" color="muted">{scope === "chat" ? "Bot" : "Global"} default · {effortLabel(inheritedSpeed)}</T>}
+          </View>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+            {scope !== "global" && <Chip label="Use default" selected={!speed} onPress={() => setSpeedEdit(null)} />}
+            {(["off", "fast", "ultrafast"] as const).filter((mode) => mode === "off" || speeds?.[mode]).map((mode) => (
+              <Chip key={mode} label={effortLabel(mode)} selected={(speed ?? (scope === "global" ? "off" : null)) === mode} onPress={() => setSpeedEdit(mode)} />
+            ))}
+          </View>
+          {effectiveSpeed !== "off" && <T variant="footnote" color={speeds?.[effectiveSpeed] ? "warning" : "muted"}>
+            {speeds?.[effectiveSpeed] ? effortLabel(effectiveSpeed) + " uses your plan allowance much faster."
+              : effortLabel(effectiveSpeed) + " is unavailable for this model. Turns use standard speed."}
+          </T>}
+          {effectiveSpeed === "off" && !speeds && <T variant="footnote" color="muted">Fast mode is unavailable for this model.</T>}
+        </View>
+      )}
+    </View>
+  ) : null;
+
   return (
-    <Sheet title="Model" action={scope === "routine" ? "Done" : "Save"} onAction={() => void save()} actionDisabled={same(choice, saved) || (scope === "global" && !choice)} actionLoading={busy} footer={thinking}>
+    <Sheet title="Model" action={scope === "routine" ? "Done" : "Save"} onAction={() => void save()} actionDisabled={(same(choice, saved) && (speed ?? null) === (savedSpeed ?? null)) || (scope === "global" && !choice)} actionLoading={busy} footer={footer}>
       {!models ? (
         <Loading />
       ) : models.length === 0 ? (
@@ -309,10 +344,9 @@ function SearchField({ value, onChange }: { value: string; onChange: (text: stri
 /** The thinking levels the chosen model takes, pinned under the list so it is always in reach. */
 function Thinking({ model, effort, onChange }: { model: ModelInfo; effort?: string; onChange: (effort: string | undefined) => void }) {
   const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
   const current = effort ?? model.defaultEffort;
   return (
-    <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, backgroundColor: colors.canvas, paddingTop: space.md, paddingBottom: insets.bottom + space.sm, gap: space.sm }}>
+    <View style={{ paddingTop: space.md, gap: space.sm }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xl }}>
         <ProviderIcon provider={model.provider} name={model.providerName} size={14} />
         <T variant="label" color="muted" style={{ textTransform: "uppercase" }} accessibilityRole="header">

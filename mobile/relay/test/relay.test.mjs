@@ -332,6 +332,75 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     stopDev();
   });
 
+  it("leaves a host-only room asleep and immediately reports a long-silent host offline", { timeout: 70_000 }, async () => {
+    const room = newRoom();
+    await hostV3(room, randomBytes(32).toString("base64url"));
+    // Allow the bounded opening probes to finish. Run first so other rooms cannot add wake logs.
+    await sleep(30_000);
+    const wakes = (output.match(/"event":"wake"/g) ?? []).length;
+    await sleep(27_000); // Beyond the 40-second legacy silence limit plus 15 seconds of recovery.
+    if (!NODE_RELAY) assert.equal((output.match(/"event":"wake"/g) ?? []).length, wakes);
+    const client = await phone(room);
+    client.send(request(1));
+    assert.deepEqual(await client.next(), bytes(0x05));
+    assert.deepEqual(await client.next(), bytes(0x03, u32(1)));
+  });
+
+  it("delivers and acknowledges an answer whose request is absent from room memory", async () => {
+    const room = newRoom();
+    const host = await hostV3(room, randomBytes(32).toString("base64url"));
+    const client = await phone(room);
+    host.send("ping");
+    assert.equal(await host.next(), "pong");
+    client.send(request(1));
+    const ids = (await host.next()).subarray(0, 16);
+    // Establish a fast cadence before the second phone joins. Its admission replaces the
+    // opening probe with the 15-second silence deadline, leaving time for a real hibernation.
+    await sleep(100);
+    host.send("ping");
+    assert.equal(await host.next(), "pong");
+    await phone(room);
+    const wakes = (output.match(/"event":"wake"/g) ?? []).length;
+    await sleep(11_500);
+    // Node retains the first request. Both targets also get a cache reply with no local entry.
+    for (const id of [1, 2]) {
+      const answer = bytes(0x02, u32(id), 0, 200);
+      host.send(bytes(ids.subarray(0, 8), answer));
+      assert.deepEqual(await client.next(), answer);
+      assert.deepEqual(await host.next(), bytes(ids, 0x06, u32(id)));
+    }
+    if (!NODE_RELAY) assert.ok((output.match(/"event":"wake"/g) ?? []).length > wakes);
+    client.close();
+    assert.deepEqual(await host.next(), bytes(ids, 0x04));
+    host.send(bytes(ids.subarray(0, 8), 0x02, u32(3)));
+    const ack = await host.next();
+    assert.deepEqual(ack.subarray(0, 8), ids.subarray(0, 8));
+    assert.deepEqual(ack.subarray(16), bytes(0x06, u32(3)));
+  });
+
+  it("forwards a pushed part and replays its request until the final answer", async () => {
+    const room = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const host = await hostV3(room, group);
+    const standby = await hostV3(room, group);
+    const client = await phone(room);
+    client.send(request(9));
+    const frame = await host.next();
+    const part = bytes(0x07, u32(9), 123);
+    host.send(bytes(frame.subarray(0, 8), part));
+    assert.deepEqual(await client.next(), part);
+    await host.silent(100);
+    host.close();
+    assert.deepEqual(await standby.next(), frame);
+    const answer = bytes(0x02, u32(9), 0, 200);
+    standby.send(bytes(frame.subarray(0, 8), answer));
+    assert.deepEqual(await client.next(), answer);
+    assert.deepEqual(await standby.next(), bytes(frame.subarray(0, 16), 0x06, u32(9)));
+    standby.send(bytes(frame.subarray(0, 8), answer));
+    assert.deepEqual(await standby.next(), bytes(frame.subarray(0, 16), 0x06, u32(9)));
+    await client.silent(100);
+  });
+
   it("answers health and the front page, and 404s everything else", async () => {
     const health = await fetch(base + "/v1/health");
     assert.equal(health.status, 200);
@@ -715,6 +784,7 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
       for (let i = 0; i < 8; i++) {
         await sleep(3_000);
         standby.send("ping");
+        standby.send(bytes(0)); // Binary activity keeps the replay queue resident during this test.
       }
     })();
     // The hibernation-friendly probe samples this first auto-response around seven seconds.
@@ -997,7 +1067,7 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     }
   });
 
-  it("recovers a held request and its original connection after the room hibernates", { timeout: 35_000 }, async () => {
+  it("replays held requests in order near the end of the reconnect window", { timeout: 35_000 }, async () => {
     const r = newRoom();
     const group = randomBytes(32).toString("base64url");
     const h = await hostV3(r, group);
@@ -1008,7 +1078,6 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     await h.closed();
     p.send(request(11, "in the gap"));
     await sleep(200);
-    const wakesBefore = (output.match(/"event":"wake"/g) ?? []).length;
     await sleep(11_500);
     const replacement = await hostV3(r, group);
     for (const id of [10, 11]) {
@@ -1019,9 +1088,6 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
       replacement.send(bytes(replay.subarray(0, 8), reply));
       assert.deepEqual(await p.next(), reply);
     }
-    // The Node relay keeps the held requests in memory: there is no hibernation to wake from.
-    if (NODE_RELAY) return;
-    assert.ok((output.match(/"event":"wake"/g) ?? []).length > wakesBefore, "the room must wake during recovery");
   });
 
   it("refuses overflow with an offline answer and preserves earlier held requests", { timeout: 30_000 }, async () => {

@@ -77,8 +77,10 @@ Pair the phone app, and your team goes with you.
 ### Botkins on your phone
 
 - **Pair in seconds.** Scan a QR code. Your phone can do what your computer can do.
-- **Chat, approve and steer** from anywhere. Get notifications and Live Activities.
-- **Let bots use your phone, if you allow it.** Calendar, contacts, Health, location and photos. You choose Off, Read, or Read and interact for each one.
+- **Chat, approve and steer** from anywhere. Get notifications and Live Activities, including a compact CarPlay view.
+- **Take the primary Botkin to your Watch.** See its latest conversation and avatar, talk live through the paired iPhone, and hear replies on Watch.
+- **Let bots use your phone, if you allow it.** Calendar, contacts, Health, location, photos and Apple Music. You choose Off, Read, or Read and interact for each one.
+- **Open from Shortcuts.** Open Botkins, open a selected Botkin's latest or new chat, send a background prompt, or start a voice chat.
 - **See your computer's screen.** View only, or view and control. Face ID checks it is you.
 - **Use it away from home.** Turn on the relay, and your phone reaches your computer from any network.
 
@@ -86,10 +88,10 @@ Pair the phone app, and your team goes with you.
 
 - **macOS, Windows and Linux.** Signed and notarized on Mac. Updates check GitHub Releases.
 - **Headless servers.** Run Botkins as a service on a computer with no screen, and use it from your phone. One command installs it, and `botkins` operates it from a terminal. See [Run Botkins from a terminal](desktop/docs/terminal.md).
-- **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. By default the VM runs the terminal host, with no display. Turn on **Screen access** to see and control the server's screen from your phone. See [Botkins on Azure](deploy/azure/README.md).
+- **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. It works from a phone, with no SSH key. Turn on **Screen access** to also get a virtual screen with Chrome that you can see and control from your phone. See [Botkins on Azure](deploy/azure/README.md).
 
   [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
-- **Other computers.** Pair one Botkins with another, and switch between them from the side menu.
+- **Computers and teams.** Pair one Botkins with another, or join a team with an invite code, from the first launch or Settings → Computers and teams, and switch between them from the side menu.
 
 ## Privacy and security
 
@@ -130,6 +132,7 @@ For your phone, join the [iOS or Android beta](https://botkins.app/downloads). T
 | [Desktop](desktop/README.md) · Electron | In `desktop/`, run `npm ci`, then `npm start`. |
 | [Mobile](mobile/README.md) · Expo and React Native | In `mobile/`, run `npm ci`. Run `npm start` for Metro, or `npm run ios` to build for an iOS simulator. |
 | [Relay](mobile/relay/README.md) · Cloudflare Worker | In `mobile/relay/`, run `npm ci` and `npm test`. |
+| [Gadget](gadget/README.md) · ESP32 firmware and its contract | In `gadget/`, run `sh firmware/build-host.sh`, then `node --test tests/*.test.mjs`. |
 
 Each component has its own package manifest and lockfile. Run `npm test` in the component you change. For changes to the desktop–phone link, run both app suites and read the [link contract](mobile/docs/link-contract.md).
 

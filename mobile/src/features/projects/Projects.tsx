@@ -8,6 +8,7 @@ import { useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Button, EmptyState, Field, Group, IconButton, IconTile, Loading, Mascot, Page, Row, space, useTheme } from "@/ui";
+import { CloneForm } from "./ProjectFolders";
 import { projectColor } from "./colors";
 
 function subtitleOf(project: Project) {
@@ -51,6 +52,7 @@ function NewProject({ onClose }: { onClose: () => void }) {
         />
         <Button title="Add" onPress={() => void add()} disabled={!name.trim()} loading={busy} />
       </View>
+      <CloneForm name={name} done={(id) => { onClose(); router.push({ pathname: "/projects/[id]", params: { id } }); }} />
       {canFolders && <Button title="Add folder…" icon={FolderPlus} variant="ghost" size="sm" onPress={fromFolder} style={{ alignSelf: "flex-start" }} />}
     </View>
   );

@@ -1,5 +1,5 @@
 // How chats look and behave on this phone: steps, thinking, rich cards, Markdown, code, typing and
-// reading aloud. Saved on the phone only; the computer keeps its own two (Show thinking, Fold steps).
+// reading aloud. These choices stay on this phone when it connects to another computer.
 import { type CompletionPosition, completionPositionOf } from "@/features/chat/completion";
 import { settleSteps, type StepsChoice } from "@/features/chat/fold";
 import { type BotTap, botTapOf } from "@/features/chat/habits";
@@ -11,12 +11,14 @@ import { useApp } from "./store";
 const KEY = "botkins.chatPrefs.v1";
 
 export type ChatPrefs = {
-  /** A turn's work. folded: one line per turn (the default). show: every step, thought and update in order. failed: failed steps only. hide: nothing. */
+  /** Which tool calls appear in the conversation. The activity rail always has the full list. */
   steps: StepsChoice;
   /** The person chose `steps`. Until then it is Folded (settleSteps in src/features/chat/fold.ts). */
   stepsPicked?: boolean;
   /** A bot's live reasoning. */
   thinking: "show" | "folded" | "hide";
+  /** Collapse finished activity into a single expandable line. */
+  foldFinishedSteps: boolean;
   /** Cards, charts, tables and suggested replies a bot attaches. Off keeps only a card's title. */
   richCards: boolean;
   /** Off shows replies as plain text. */
@@ -47,6 +49,7 @@ export const textMode = (on: boolean, route: "direct" | "relay" | null): "live" 
 export const chatPrefDefaults: ChatPrefs = {
   steps: "folded",
   thinking: "folded",
+  foldFinishedSteps: true,
   richCards: true,
   markdown: true,
   highlight: true,
@@ -71,7 +74,16 @@ export function loadChatPrefs(): Promise<void> {
       const saved = await readKept(KEY);
       if (saved) {
         const read = JSON.parse(saved) as Partial<ChatPrefs>;
-        useChatPrefs.setState({ ...chatPrefDefaults, ...read, steps: settleSteps(read), completionPosition: completionPositionOf(read.completionPosition), botTap: botTapOf(read.botTap), textStreaming: typeof read.textStreaming === "boolean" ? read.textStreaming : chatPrefDefaults.textStreaming });
+        const steps = settleSteps(read);
+        useChatPrefs.setState({
+          ...chatPrefDefaults, ...read,
+          steps,
+          thinking: read.thinking === "show" || read.thinking === "hide" ? read.thinking : "folded",
+          foldFinishedSteps: typeof read.foldFinishedSteps === "boolean" ? read.foldFinishedSteps : steps !== "show",
+          completionPosition: completionPositionOf(read.completionPosition),
+          botTap: botTapOf(read.botTap),
+          textStreaming: typeof read.textStreaming === "boolean" ? read.textStreaming : chatPrefDefaults.textStreaming,
+        });
       }
     } catch {
       // Unreadable choices fall back to the defaults.

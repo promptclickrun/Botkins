@@ -100,8 +100,9 @@ try {
     assert.equal((await snap()).queued[id]?.[0]?.text, queuedText);
     // Wait for visible work so the live screenshot shows it.
     await wait(async () => ((await runOf(id, main))?.steps?.length ?? 0) > 0, 180000).toBe(true);
-    await expect(page.locator(".work-live")).toBeVisible();
-    await expect(page.locator(".work-live")).toContainText("Pip is working");
+    const liveRail = page.getByRole("region", { name: "Turn status" });
+    await expect(liveRail).toBeVisible();
+    await expect(liveRail).toContainText(/Pip.*·.*step/);
     await shot("live-turn");
     const run = await done(id, main);
     assert.ok(run.steps.length >= 1, "steps recorded");
@@ -127,14 +128,21 @@ try {
     assert.equal((await snap()).queued[id], undefined);
     console.log("Queued message was sent after the turn and answered.");
     // Finished turn UI: one folded row with the summary.
-    const trail = page.locator(".work-done").first();
-    await expect(trail).toContainText("Worked for");
-    await expect(trail).toContainText(run.summary);
-    if (run.reasoning?.length) await expect(page.locator(".reasoning").first()).toContainText("Thought for");
-    if (run.todos?.length || (await chatOf(id)).todos?.length) {
-      await page.locator(".canvas-chip", { hasText: "Tasks" }).click();
-      await expect(page.getByRole("region", { name: "Tasks" })).toBeVisible();
-    }
+    const trail = page.getByRole("region", { name: "Turn activity" }).first();
+    const summary = trail.getByRole("button", { name: /Worked for/ });
+    await expect(summary).toContainText(run.steps.length + (run.steps.length === 1 ? " step" : " steps"));
+    await summary.click();
+    // A helper's own steps open in its activity; the rail lists the rest.
+    const listed = run.steps.filter((step) => !run.agents?.some((agent) => agent.id === (step.agentId ?? step.id)));
+    await expect(trail.locator(".work-step-label")).toHaveCount(listed.length);
+    if (run.reasoning?.some((thought) => thought.text.trim())) await expect(trail.getByLabel("Thinking").first()).toBeVisible();
+    await summary.click();
+    const rail = page.getByRole("button", { name: /^Todos / });
+    const carried = (await chatOf(id)).todos?.some((todo) => ["pending", "in_progress", "blocked"].includes(todo.status));
+    if (queuedRun.todos ? queuedRun.todos.length > 0 : carried) {
+      await rail.click();
+      await expect(page.locator("#task-drawer")).toBeVisible();
+    } else await expect(rail).toHaveCount(0);
     if (ctx) await expect(page.locator(".context-meter")).toContainText("% of context");
     const scrollable = await page
       .locator(".messages")

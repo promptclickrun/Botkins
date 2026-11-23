@@ -355,20 +355,21 @@ const approvalHelp: Record<Values["approval"], string> = {
 export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
   return (
     <Group title="Chat">
-      <Row label="Steps" help={({folded:"Every step while it works; one line when it's done", every:"Each step, thought and update in order", failed:"Only steps that failed", hidden:"Hide steps"})[settings.steps ?? "folded"]}>
-        {(id, desc) => <select id={id} aria-describedby={desc} value={settings.steps ?? "folded"} onChange={e => saveChatDisplay({steps:e.target.value as Values["steps"], stepsPicked:true})}>
-          <option value="folded">Folded</option><option value="every">Every step</option><option value="failed">Failed only</option><option value="hidden">Hidden</option>
+      <Row label="Steps" help={({folded:"Tool calls stay in the working rail", open:"Show every tool call in the chat as it happens", failed:"Show only failed tool calls in the chat"})[settings.steps ?? "folded"]}>
+        {(id, desc) => <select id={id} aria-describedby={desc} value={settings.steps ?? "folded"} onChange={e => saveChatDisplay({steps:e.target.value as Values["steps"], stepsPicked:true, foldFinishedSteps: settings.foldFinishedSteps ?? true})}>
+          <option value="folded">Folded</option><option value="open">Open</option><option value="failed">Failed only</option>
         </select>}
       </Row>
+      <SwitchRow label="Fold finished steps" help="Collapse finished work into one expandable line with its time and step count." checked={settings.foldFinishedSteps ?? true} onChange={(on) => saveChatDisplay({ foldFinishedSteps: on })} />
       <Row label="Position after response completes">
         {(id) => <select className="completion-position" id={id} value={settings.completionPosition ?? "latest"} onChange={e => saveChatDisplay({ completionPosition: e.target.value === "beginning" ? "beginning" : "latest" })}>
           <option value="latest">Keep at latest content</option>
           <option value="beginning">Show beginning of completed response</option>
         </select>}
       </Row>
-      <Row label="Thinking and updates" help="Its reasoning and notes while it works">
+      <Row label="Thinking and updates" help={({ folded: "Thinking and updates stay in the working rail", open: "Show thinking and updates in the chat as they arrive", hidden: "Hide thinking and updates in the chat and working rail" })[settings.thinking ?? "folded"]}>
         {(id, desc) => <select id={id} aria-describedby={desc} value={settings.thinking ?? "folded"} onChange={e => saveChatDisplay({thinking:e.target.value as Values["thinking"]})}>
-          <option value="open">Open</option><option value="folded">Folded</option><option value="hidden">Hidden</option>
+          <option value="folded">Folded</option><option value="open">Open</option><option value="hidden">Hidden</option>
         </select>}
       </Row>
       <Row label="When you select a bot">

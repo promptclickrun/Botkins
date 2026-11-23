@@ -3,6 +3,7 @@ import { ArrowLeft, FolderGit2, FolderOpen, FolderPlus, GitBranch, GitCommitHori
 import type { Bot, ChatMode, Project, ProjectChanges as Changes, State } from "./types";
 import { canUseProject } from "./access";
 import { sortedProjects } from "./Projects";
+import { FolderChoice, projectCapability } from "./ProjectFolders";
 import "./projects.css";
 
 const api = window.botkins;
@@ -19,7 +20,7 @@ export const modeLabels: Record<ChatMode, { label: string; hint: string }> = {
 export function ProjectPicker({
   state,
   projectId,
-  mode,
+  mode, folder,
   change,
   fail,
   botIds = [],
@@ -27,7 +28,8 @@ export function ProjectPicker({
   state: State;
   projectId?: string;
   mode: ChatMode;
-  change: (projectId: string | undefined, mode: ChatMode) => void;
+  folder?: string;
+  change: (projectId: string | undefined, mode: ChatMode, folder?: string) => void;
   fail: (e: unknown) => void;
   /** The bots that will answer. A group can't use a project with a folder. */
   botIds?: string[];
@@ -49,7 +51,7 @@ export function ProjectPicker({
         <select
           aria-label="Project"
           value={projectId ?? ""}
-          onChange={(e) => change(e.target.value || undefined, mode)}
+          onChange={(e) => change(e.target.value || undefined, projects.find((p) => p.id === e.target.value)?.mode ?? "default")}
         >
           <option value="">No project</option>
           {projects.map((p) => {
@@ -70,13 +72,14 @@ export function ProjectPicker({
           onClick={() =>
             api
               .addProject()
-              .then((id) => id && change(id, mode))
+              .then((id) => id && change(id, projects.find((p) => p.id === id)?.mode ?? "default"))
               .catch(fail)
           }
         >
           <FolderPlus size={15} /> Add folder…
         </button>
       )}
+      {!group && <FolderChoice project={chosen} value={folder} change={(path) => change(projectId, mode, path)} />}
       {chosen?.folder && !group && (
         <div className="filters mode-picker" role="radiogroup" aria-label="Mode">
           {(Object.keys(modeLabels) as ChatMode[]).map((m) => (
@@ -87,7 +90,10 @@ export function ProjectPicker({
               aria-checked={mode === m}
               aria-pressed={mode === m}
               title={modeLabels[m].hint}
-              onClick={() => change(projectId, m)}
+              onClick={() => {
+                if (projectCapability(state, "project-mode-v1")) void api.updateProject(chosen.id, { mode: m }).then(() => change(projectId, m, folder)).catch(fail);
+                else change(projectId, m, folder);
+              }}
             >
               {modeLabels[m].label}
             </button>
@@ -100,7 +106,7 @@ export function ProjectPicker({
   );
 }
 
-function DiffView({ text }: { text: string }) {
+export function DiffView({ text }: { text: string }) {
   return (
     <pre className="diff-view" aria-label="Diff">
       {text.split("\n").map((line, i) => (
@@ -126,15 +132,24 @@ function DiffView({ text }: { text: string }) {
 }
 
 /** Bighelp's Project Changes: the branch, changed files, each file's diff, and Commit all. */
-export default function ProjectChanges({
-  state,
-  projectId,
-  close,
-}: {
-  state: State;
-  projectId: string;
-  close: () => void;
-}) {
+type ChangesProps = { state: State; projectId: string; close: () => void; chatId?: string };
+export default function ProjectChanges(props: ChangesProps) {
+  const project = props.state.projects?.find((p) => p.id === props.projectId);
+  const [picked, pick] = useState<string>();
+  const [working, setWorking] = useState<string | null>();
+  const chatId = props.chatId && projectCapability(props.state, "project-folders-v1") ? props.chatId : undefined;
+  useEffect(() => {
+    if (!chatId) return;
+    let live = true;
+    api.chatProjectFolder(chatId).then((path) => { if (live) setWorking(path); }, () => { if (live) setWorking(null); });
+    return () => { live = false; };
+  }, [chatId, project?.folders?.join("\n")]);
+  if (chatId && working === undefined) return null;
+  const selected = picked ?? working;
+  const folder = selected && project?.folders?.includes(selected) ? selected : project?.folder;
+  return <><FolderChoice project={project} value={folder} change={pick} /><ChangesBody key={folder} {...props} folder={folder} /></>;
+}
+function ChangesBody({ state, projectId, close, folder }: ChangesProps & { folder?: string }) {
   const project = state.projects?.find((p) => p.id === projectId);
   const [changes, setChanges] = useState<Changes>();
   const [file, setFile] = useState("");
@@ -148,7 +163,7 @@ export default function ProjectChanges({
     setBusy(true);
     setError("");
     try {
-      setChanges(await api.projectChanges(projectId));
+      setChanges(await api.projectChanges(projectId, folder));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -164,7 +179,7 @@ export default function ProjectChanges({
     if (!file) return;
     setDiff(undefined);
     api
-      .projectDiff(projectId, file)
+      .projectDiff(projectId, file, folder)
       .then(setDiff)
       .catch((e) => setError(String(e)));
   }, [file, projectId]);
@@ -181,7 +196,7 @@ export default function ProjectChanges({
         )}
         <strong>{file || "Project Changes"}</strong>
         <span className="pc-actions">
-          <button aria-label="Open folder" title={project.folder} onClick={() => api.revealProject(projectId).catch((e) => setError(String(e)))}>
+          <button aria-label="Open folder" title={project.folder} onClick={() => api.revealProject(projectId, folder).catch((e) => setError(String(e)))}>
             <FolderOpen size={16} />
           </button>
           <button aria-label="Refresh changes" disabled={busy} onClick={() => void load()}>
@@ -248,7 +263,7 @@ export default function ProjectChanges({
                   e.preventDefault();
                   setBusy(true);
                   try {
-                    const sha = await api.projectCommit(projectId, message);
+                    const sha = await api.projectCommit(projectId, message, folder);
                     setNote("Committed " + sha + " on " + changes.branch + ".");
                     setMessage("");
                     setCommitting(false);

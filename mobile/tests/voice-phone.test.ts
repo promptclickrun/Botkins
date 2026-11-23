@@ -10,9 +10,10 @@ import { GeminiTransport } from "../src/features/voice/live/gemini";
 import { OpenAIRealtime, OpenAISocketTransport, withTranscription } from "../src/features/voice/live/openai";
 import { askBot, type ChatMessage, CUT_NOTE, LOOK_AT_PHONE, MAX_REPLY, replyText, STILL_WORKING } from "../src/features/voice/live/askBot";
 import { liveContext, locationFor, locationOn } from "../src/features/voice/live/context";
-import { BARGE_IN, CUT_SETTLE_MS, ECHO_TAIL_MS, MicGate, MIN_TURN_MS, pcmMs, RELEASE_TAIL_MS, silenceLike } from "../src/features/voice/live/input";
+import { BARGE_IN, CUT_SETTLE_MS, ECHO_TAIL_MS, MicGate, MIN_TURN_MS, pcmMs, RELEASE_TAIL_MS, silenceLike, SPEECH_LEVEL } from "../src/features/voice/live/input";
 import { type AudioFrame, type DuplexLike, LEVEL_EVERY_MS, type Line, type LiveStatus, textOf } from "../src/features/voice/live/types";
 import { WebRTCTransport } from "../src/features/voice/live/webrtc";
+import { CLIP_SPEECH_LEVEL, hasSpeech, MIN_CLIP_MS } from "../src/features/voice/clip";
 import { FIRST_PART, LATER_PART_MAX, nextPhrase, speakable, splitForSpeech } from "../src/features/voice/speakable";
 
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -70,6 +71,13 @@ test("dictation keeps a phrase the recognizer dropped after a pause", () => {
   assert.deepEqual(nextPhrase("Hello there, how are you doing today", "Fine"), { done: "Hello there, how are you doing today", current: "Fine" });
   // A correction of the same phrase is not a new phrase.
   assert.deepEqual(nextPhrase("I scream", "Ice cream for everyone"), { current: "Ice cream for everyone" });
+});
+
+test("a recording is sent to be read only when it is long enough and loud enough to hold speech", () => {
+  assert.equal(hasSpeech(MIN_CLIP_MS, CLIP_SPEECH_LEVEL), true);
+  assert.equal(hasSpeech(MIN_CLIP_MS - 1, 1), false, "a tap");
+  assert.equal(hasSpeech(5000, CLIP_SPEECH_LEVEL / 2), false, "a quiet room");
+  assert.equal(hasSpeech(5000, 0), false, "no level at all");
 });
 
 // ---- Fakes for the transports
@@ -186,6 +194,9 @@ test("OpenAI: the session asks for the person's transcript, once", () => {
   assert.deepEqual(out.session.audio.input.format, { type: "audio/pcm", rate: 24000 });
   const already = { type: "session.update", session: { audio: { input: { transcription: null } } } };
   assert.equal(withTranscription(already), already);
+  // The person's language (the primary subtag) keeps silence from being read as another language.
+  const hinted = withTranscription(given, "es-MX") as typeof given & { session: { audio: { input: Record<string, unknown> } } };
+  assert.deepEqual(hinted.session.audio.input.transcription, { model: "gpt-transcribe", language: "es" });
 });
 
 test("OpenAI socket: token, first message, microphone, transcripts and sound", async () => {
@@ -259,6 +270,23 @@ test("OpenAI: a tool call runs once, answers, then asks for a response", async (
   await tick(1);
   assert.equal(calls.length, 1);
   assert.equal(sent.length, 2);
+});
+
+test("a Watch microphone startup failure reaches the call before the socket ends", async () => {
+  const h = harness();
+  const reason = "Watch microphone could not start. No input route is available.";
+  let refuse!: (error: Error) => void;
+  h.audio.start = () => new Promise<void>((_, reject) => { refuse = reject; });
+  const transport = new OpenAISocketTransport({ url: "wss://x", token: "ek_1", session: {} }, h.audio, h.connect, h.tools);
+  const events: string[] = [];
+  transport.on("error", (message) => events.push(message));
+  transport.on("status", (status) => events.push(status));
+  const started = transport.start();
+  h.sockets[0]!.open();
+  assert.equal(transport.status, "connecting");
+  refuse(new Error(reason));
+  await assert.rejects(started, { message: reason });
+  assert.deepEqual(events, [reason, "ended"]);
 });
 
 test("OpenAI socket: the bot thinks while the tool runs", async () => {
@@ -602,6 +630,37 @@ test("OpenAI socket: push to talk turns OpenAI's turn detection off and sends th
   transport.end();
 });
 
+test("OpenAI socket: a push to talk turn with no speech in it is cleared, not committed or answered", async () => {
+  const h = harness();
+  const c = clock();
+  const event = { type: "session.update", session: { type: "realtime", audio: { input: { format: { type: "audio/pcm", rate: 24000 } } } } };
+  const transport = new OpenAISocketTransport({ url: "wss://x", token: "ek_1", session: event }, h.audio, h.connect, h.tools, c.now);
+  transport.setInput("push");
+  const started = transport.start();
+  const socket = h.sockets[0]!;
+  socket.open();
+  await started;
+
+  // Held for a second in a quiet room: the model would invent a word from it.
+  transport.press();
+  h.audio.frame("HISS", SPEECH_LEVEL / 4);
+  c.advance(1000);
+  transport.release();
+  await tick(RELEASE_TAIL_MS + 30);
+  assert.deepEqual(socket.types().slice(-2), ["input_audio_buffer.append", "input_audio_buffer.clear"]);
+  assert.ok(!socket.types().includes("response.create"));
+  assert.notEqual(transport.status, "thinking");
+
+  // The next turn starts fresh: speech in it is sent as ever.
+  transport.press();
+  h.audio.frame("TALK", 0.2);
+  c.advance(1000);
+  transport.release();
+  await tick(RELEASE_TAIL_MS + 30);
+  assert.deepEqual(socket.types().slice(-2), ["input_audio_buffer.commit", "response.create"]);
+  transport.end();
+});
+
 class FakeTrack {
   enabled = true;
   stop() {}
@@ -628,7 +687,8 @@ class FakeChannel {
     return this.sent.map((event) => event.type);
   }
 }
-function fakeWebRTC() {
+/** `mic` makes the connection's statistics report the microphone's level, as a build with them does; a test changes it. */
+function fakeWebRTC(mic?: { level: number }) {
   const track = new FakeTrack();
   const stream = { getAudioTracks: () => [track], getTracks: () => [track], release() {} };
   const channels: FakeChannel[] = [];
@@ -644,6 +704,7 @@ function fakeWebRTC() {
     async createOffer() {
       return { sdp: "v=0 offer", type: "offer" };
     }
+    getStats = mic ? async () => new Map([["source", { type: "media-source", kind: "audio", audioLevel: mic.level }]]) : undefined;
     async setLocalDescription() {}
     async setRemoteDescription() {}
     close() {}
@@ -731,6 +792,45 @@ test("WebRTC: where turn detection stayed on, a release sends only silence and t
   await tick(RELEASE_TAIL_MS + 40);
   assert.ok(!rtc.track.enabled);
   assert.ok(!channel.types().includes("input_audio_buffer.commit"), "no second answer on top of the provider's own");
+  transport.end();
+});
+
+test("WebRTC: a push to talk turn the microphone's level says was silent is cleared, not committed", async () => {
+  const h = harness();
+  const mic = { level: 0 };
+  const rtc = fakeWebRTC(mic);
+  const transport = new WebRTCTransport(rtc.webrtc, rtc.negotiate, h.tools, async () => {});
+  transport.setInput("push");
+  await transport.start();
+  const channel = rtc.channels[0]!;
+  channel.open();
+  channel.receive({ type: "session.updated", session: { audio: { input: { turn_detection: null } } } });
+
+  transport.press();
+  await tick(MIN_TURN_MS + 200);
+  transport.release();
+  await tick(RELEASE_TAIL_MS + 40);
+  assert.deepEqual(channel.types().slice(-2), ["input_audio_buffer.clear", "input_audio_buffer.clear"]);
+  assert.ok(!channel.types().includes("response.create"));
+
+  mic.level = 0.2;
+  transport.press();
+  await tick(MIN_TURN_MS + 200);
+  transport.release();
+  await tick(RELEASE_TAIL_MS + 40);
+  assert.deepEqual(channel.types().slice(-2), ["input_audio_buffer.commit", "response.create"]);
+  transport.end();
+});
+
+test("WebRTC: the person's language goes with the transcript request", async () => {
+  const h = harness();
+  const rtc = fakeWebRTC();
+  const transport = new WebRTCTransport(rtc.webrtc, rtc.negotiate, h.tools, async () => {}, "en-US");
+  await transport.start();
+  const channel = rtc.channels[0]!;
+  channel.open();
+  const update = channel.sent[0] as { session: { audio: { input: Record<string, unknown> } } };
+  assert.deepEqual(update.session.audio.input.transcription, { model: "gpt-transcribe", language: "en" });
   transport.end();
 });
 

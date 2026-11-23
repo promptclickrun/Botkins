@@ -1,25 +1,24 @@
 import { type Href, router, useLocalSearchParams } from "expo-router";
-import { Bot as BotIcon, FileUp, Palette, Shuffle } from "lucide-react-native";
+import { Bot as BotIcon, FileUp, LayoutTemplate, Palette, Shuffle } from "lucide-react-native";
 import { type ReactNode, useEffect, useState } from "react";
-import { Alert, ScrollView, View } from "react-native";
+import { ScrollView, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { type BotkinLook, cleanLook, lookOf, needsLooksV2, randomLook } from "@/data/botLook";
-import { STARTERS } from "@/data/templates";
+import { MarketTemplates } from "./MarketTemplates";
 import { fromLine } from "@/features/market/agents/logic";
 import type { BotInput, BotTemplate, ImportableAgent, MarketAgentTemplate } from "@/link/types";
 import { pickTextFile, shareFrom } from "@/state/files";
 import { useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
-import { BotAvatar, Button, Chip, EmptyState, Field, HoldMenu, Label, Sheet, space, T } from "@/ui";
+import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, Label, Row, Sheet, space, T, type TextPromptOptions, useTextPrompt } from "@/ui";
 import { LookEditor, useLooksV2 } from "./LookEditor";
 import { LookStage } from "./LookStage";
 import { addable } from "./agents";
 import { counter, LIMITS } from "./limits";
 
-type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; face: string; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent };
+type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent };
 
-const starterStart = (starter: (typeof STARTERS)[number]): Start => ({ key: "starter:" + starter.name, name: starter.name, role: starter.role, instructions: starter.instructions, look: starter.look, face: starter.face, avatar: starter.avatar });
 const savedStart = (template: BotTemplate): Start => ({
   key: "saved:" + template.id,
   name: template.name,
@@ -27,7 +26,6 @@ const savedStart = (template: BotTemplate): Start => ({
   instructions: template.instructions,
   summary: template.summary || undefined,
   look: lookOf(template),
-  face: "idle",
   avatar: template.avatar,
 });
 /** A template from Marketplace › Agents (docs/agent-templates.md). */
@@ -38,9 +36,8 @@ const marketStart = (template: MarketAgentTemplate): Start => ({
   instructions: template.instructions,
   summary: template.summary || undefined,
   look: template.look ? cleanLook(lookOf({ id: template.id, look: template.look })) : undefined,
-  face: "idle",
 });
-const agentStart = (agent: ImportableAgent): Start => ({ key: "agent:" + agent.key, name: agent.name, role: agent.role, instructions: agent.instructions, summary: agent.summary || undefined, face: "idle", agent });
+const agentStart = (agent: ImportableAgent): Start => ({ key: "agent:" + agent.key, name: agent.name, role: agent.role, instructions: agent.instructions, summary: agent.summary || undefined, agent });
 
 /** A row of chips under a small heading. */
 function StartRow({ label, children }: { label: string; children: ReactNode }) {
@@ -54,23 +51,16 @@ function StartRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function renameTemplate(template: BotTemplate) {
-  Alert.prompt(
-    "Rename template",
-    undefined,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Rename",
-        onPress: (value?: string) => {
-          const name = value?.trim().slice(0, LIMITS.name);
-          if (name && name !== template.name) void attempt(api.renameTemplate(template.id, name));
-        },
-      },
-    ],
-    "plain-text",
-    template.name,
-  );
+function renameTemplate(template: BotTemplate, ask: (options: TextPromptOptions) => void) {
+  ask({
+    title: "Rename template",
+    value: template.name,
+    confirm: "Rename",
+    onSubmit: (value) => {
+      const name = value.slice(0, LIMITS.name);
+      if (name !== template.name) void attempt(api.renameTemplate(template.id, name));
+    },
+  });
 }
 
 /** Makes a bot: a look, a name, a role, a line about it and what it should do. */
@@ -82,7 +72,9 @@ export default function NewBot() {
 function NewBotEditor() {
   const canManage = useCan("agents", "manage");
   const saved = usePart("templates");
+  const [picker, setPicker] = useState<"templates" | "import">();
   const advanced = useLooksV2();
+  const prompt = useTextPrompt();
   const [look, setLook] = useState<BotkinLook>(() => randomLook());
   const [customizing, setCustomizing] = useState(false);
   const [name, setName] = useState("");
@@ -91,7 +83,7 @@ function NewBotEditor() {
   const [instructions, setInstructions] = useState("");
   const [start, setStart] = useState<Start | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  // Agents the person already has in a provider's own tool. The row is simply missing when the lookup fails.
+  // A failed provider lookup still leaves file import available.
   const [agents, setAgents] = useState<ImportableAgent[]>([]);
   useEffect(() => {
     api.importableAgents().then(setAgents, () => {});
@@ -123,6 +115,7 @@ function NewBotEditor() {
     setInstructions(next.instructions);
     if (next.look) setLook(next.look);
     setStart(next);
+    setPicker(undefined);
   };
 
   // "Import…": a template file someone shared. The computer makes the template; when it arrives it is chosen, as on the computer.
@@ -156,7 +149,7 @@ function NewBotEditor() {
       if (fields.instructions !== agent.instructions.trim()) patch.instructions = fields.instructions;
       if (id && canManage && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
     } else {
-      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: start?.face ?? "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }) };
+      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }) };
       id = await attempt(api.addBot(bot));
     }
     if (id) {
@@ -168,9 +161,69 @@ function NewBotEditor() {
     setBusy(false);
   };
 
+  if (picker === "templates") return (
+    <Sheet title="Start from template" onClose={() => setPicker(undefined)}>
+      {prompt.node}
+      <View>
+        <Label>Marketplace</Label>
+        <MarketTemplates pick={(template) => {
+          setMarket(template);
+          pick(marketStart(template));
+        }} />
+      </View>
+      <View>
+        <Label>Your templates</Label>
+        {saved?.length ? <Group>
+          {saved.map((template) => {
+            const item = savedStart(template);
+            return (
+              <HoldMenu
+                key={item.key}
+                title={template.name}
+                actions={[
+                  { id: "rename", title: "Rename…", image: "pencil" },
+                  ...(canFiles ? [{ id: "export", title: "Export…", image: "square.and.arrow.up" }] : []),
+                  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+                ]}
+                onPressAction={({ nativeEvent }) => {
+                  if (nativeEvent.event === "rename") renameTemplate(template, prompt.ask);
+                  else if (nativeEvent.event === "export") void shareFrom(api.exportTemplateText({ templateId: template.id }), "Template exported. Anyone with Botkins can import it.");
+                  else if (nativeEvent.event === "delete") {
+                    if (start?.key === item.key) setStart(undefined);
+                    void attempt(api.deleteTemplate(template.id), "Template deleted");
+                  }
+                }}
+              >
+                <Row title={item.name} subtitle={[item.role, item.summary].filter(Boolean).join("\n")} subtitleLines={3} onPress={() => pick(item)} leading={<BotAvatar look={item.look} size={40} />} />
+              </HoldMenu>
+            );
+          })}
+        </Group> : <T variant="footnote" color="muted">No saved templates yet.</T>}
+      </View>
+    </Sheet>
+  );
+  if (picker === "import") return (
+    <Sheet title="Import" onClose={() => setPicker(undefined)}>
+      {canFiles && <Button title="Import from file…" icon={FileUp} variant="secondary" onPress={() => void importOne()} />}
+      {providers.map((provider) => (
+        <StartRow key={provider} label={"Your " + provider + " agents"}>
+          {agents
+            .filter((item) => item.providerName === provider)
+            .map(agentStart)
+            .map((item) => (
+              <Chip key={item.key} label={item.agent?.added ? item.name + " · Already a bot" : item.name} selected={start?.key === item.key} onPress={() => pick(item)} icon={BotIcon} />
+            ))}
+          {addable(agents.filter((item) => item.providerName === provider)).length > 1 && <Chip label="Add several…" onPress={() => router.replace("/bot/agents" as Href)} />}
+        </StartRow>
+      ))}
+      {!canFiles && !providers.length && <EmptyState title="No agents found" />}
+    </Sheet>
+  );
+
   const agent = start?.agent;
   return (
     <Sheet title="New bot" action="Create" onAction={() => void create()} actionDisabled={!ready} actionLoading={busy}>
+      {prompt.node}
       <LookStage look={look} size={120}>
         <View style={{ flexDirection: "row", gap: space.sm }}>
           <Button title="Shuffle" icon={Shuffle} variant="secondary" size="sm" onPress={() => setLook(randomLook({ advanced }))} />
@@ -184,53 +237,10 @@ function NewBotEditor() {
         </Animated.View>
       )}
 
-      <StartRow label="Start from">
-        {STARTERS.map(starterStart).map((item) => (
-          <Chip key={item.key} label={item.name} selected={start?.key === item.key} onPress={() => pick(item)} leading={item.look ? <BotAvatar look={item.look} size={22} /> : undefined} />
-        ))}
-      </StartRow>
-
-      {(!!saved?.length || canFiles) && (
-        <StartRow label="Your templates">
-          {(saved ?? []).map((template) => {
-            const item = savedStart(template);
-            return (
-              <HoldMenu
-                key={item.key}
-                title={template.name}
-                actions={[
-                  { id: "rename", title: "Rename…", image: "pencil" },
-                  ...(canFiles ? [{ id: "export", title: "Export…", image: "square.and.arrow.up" }] : []),
-                  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-                ]}
-                onPressAction={({ nativeEvent }) => {
-                  if (nativeEvent.event === "rename") renameTemplate(template);
-                  else if (nativeEvent.event === "export") void shareFrom(api.exportTemplateText({ templateId: template.id }), "Template exported. Anyone with Botkins can import it.");
-                  else if (nativeEvent.event === "delete") {
-                    if (start?.key === item.key) setStart(undefined);
-                    void attempt(api.deleteTemplate(template.id), "Template deleted");
-                  }
-                }}
-              >
-                <Chip label={item.name} selected={start?.key === item.key} onPress={() => pick(item)} leading={item.look ? <BotAvatar look={item.look} size={22} /> : undefined} />
-              </HoldMenu>
-            );
-          })}
-          {canFiles && <Chip label="Import…" icon={FileUp} onPress={() => void importOne()} />}
-        </StartRow>
-      )}
-
-      {providers.map((provider) => (
-        <StartRow key={provider} label={"Your " + provider + " agents"}>
-          {agents
-            .filter((item) => item.providerName === provider)
-            .map(agentStart)
-            .map((item) => (
-              <Chip key={item.key} label={item.agent?.added ? item.name + " · Already a bot" : item.name} selected={start?.key === item.key} onPress={() => pick(item)} icon={BotIcon} />
-            ))}
-          {addable(agents.filter((item) => item.providerName === provider)).length > 1 && <Chip label="Add several…" onPress={() => router.replace("/bot/agents" as Href)} />}
-        </StartRow>
-      ))}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+        <Button title="Start from template" icon={LayoutTemplate} variant="secondary" size="sm" onPress={() => setPicker("templates")} />
+        <Button title="Import" icon={FileUp} variant="secondary" size="sm" onPress={() => setPicker("import")} />
+      </View>
 
       {!!marketNote && (
         <T variant="footnote" color="muted">

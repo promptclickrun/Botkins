@@ -1,12 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  Activity,
   AppWindow,
   Ban,
   Bot,
-  Brain,
   Check,
-  ChevronDown,
   ChevronRight,
   Circle,
   CircleAlert,
@@ -21,6 +18,8 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { todoLabel } from "../desktop/link/session-todos";
+import { activitySteps } from "../desktop/link/activity-steps.mjs";
 import { toolKind } from "../desktop/tool-kind.mjs";
 import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
@@ -51,83 +50,9 @@ export function useNow(active: boolean) {
   return now;
 }
 
-/** The end of a long thought: from a line or word start, so it never opens mid-word. */
-function newestWords(text: string, length = 320) {
-  if (text.length <= length) return text;
-  const tail = text.slice(-length);
-  const half = tail.slice(0, length / 2);
-  const cut = half.indexOf("\n") >= 0 ? half.indexOf("\n") : tail.search(/\s/);
-  return "…" + tail.slice(Math.max(0, cut)).trim();
-}
-
 /** Reasoning summaries use Markdown bold for headings; show them as plain lines. */
 function plain(text: string) {
   return text.replace(/\*\*(.+?)\*\*/g, "$1");
-}
-
-/** A turn's reasoning, above its tool work: "Thinking…" live, then "Thought for 12s". */
-export function Reasoning({
-  run,
-  live,
-  onToggle,
-  display = "open",
-}: {
-  run: Run;
-  live?: string;
-  onToggle?: () => void;
-  /** Thinking and updates setting. `hide` leaves the work available in the activity view. */
-  display?: "open" | "folded" | "hidden";
-}) {
-  const running = run.status === "Working";
-  const [open, setOpen] = useState(display !== "hidden");
-  const [all, setAll] = useState(false);
-  const entries = run.reasoning ?? [];
-  const text = running
-    ? plain(live || entries.map((r) => r.text).join("\n\n"))
-    : entries
-        .map((r) => plain(r.text).trim())
-        .filter(Boolean)
-        .join("\n\n");
-  if (!text.trim() || display === "hidden") return null;
-  // Thinking starts with the turn, before the first summary word arrives.
-  const started = run.time;
-  const ended = Math.max(...entries.map((r) => r.finished ?? r.started), started);
-  const title = running ? "Thinking…" : "Thought for " + duration(ended - started);
-  const long = text.length > 520 || text.split("\n").length > 6;
-  return (
-    <section className={"reasoning" + (running ? " live" : "")} aria-label="Thought process">
-      <button
-        className="reasoning-head"
-        aria-expanded={open}
-        onClick={() => {
-          onToggle?.();
-          setOpen(!open);
-        }}
-      >
-        {running ? <span className="activity-pulse" /> : <Brain size={14} />}
-        <span>{title}</span>
-        <ChevronDown size={14} />
-      </button>
-      {open && (
-        <>
-            <p className={"reasoning-text" + (all || (running && display === "open") ? "" : " folded")}>
-            {running && !all ? newestWords(text) : text}
-          </p>
-          {long && (!running || display === "folded") && (
-            <button
-              className="show-more"
-              onClick={() => {
-                onToggle?.();
-                setAll(!all);
-              }}
-            >
-              {all ? "Show less" : "Show more"}
-            </button>
-          )}
-        </>
-      )}
-    </section>
-  );
 }
 
 function StepGlyph({ step }: { step: Step }) {
@@ -195,33 +120,26 @@ export function StepList({ steps }: { steps: Step[] }) {
 /** Text the bot wrote while a turn was moving between tools. It reads like a reply (the same
  * Markdown at the same size) in the second ink, with no box, label or mark, and keeps its place
  * in the turn, apart from the bot's thinking. */
-export function InterimUpdate({ text, onToggle, display = "open" }: { text: string; onToggle?: () => void; display?: "open" | "folded" | "hidden" }) {
+export function InterimUpdate({ text, onToggle }: { text: string; onToggle?: () => void }) {
   const value = text.trim();
-  if (!value || display === "hidden") return null;
+  if (!value) return null;
   return (
     <article className="assistant interim-update" onClick={onToggle}>
-      <RichText text={display === "folded" ? newestWords(value, 320) : value} />
+      <RichText text={value} />
     </article>
   );
 }
 
-/** One thought in a turn's work: quiet muted text, no box. The live turn shows only its newest
- * thought, in the lead row (`latestThought`); an opened fold or every-step mode shows each one. */
-export function ReasoningUpdate({ text, title = "Thinking", display = "open" }: { text: string; title?: string; display?: "open" | "folded" | "hidden" }) {
+/** One timestamped thought in the canvas or the expanded activity list. */
+export function ReasoningUpdate({ text }: { text: string }) {
   // A summary's heading and paragraphs read as lines, without blank lines between them.
   const value = plain(text).trim().replace(/\n\s*\n/g, "\n");
-  if (!value || display === "hidden") return null;
+  if (!value) return null;
   return (
-    <p className={"work-thought" + (display === "folded" ? " folded" : "")} aria-label={title}>
-      {display === "folded" ? newestWords(value) : value}
+    <p className="work-thought" aria-label="Thinking">
+      {value}
     </p>
   );
-}
-
-/** The last line of the bot's thinking so far, for the live lead row. */
-export function latestThought(text = "") {
-  const line = plain(text).split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
-  return newestWords(line, 280);
 }
 
 /** The icon for each kind of work (tool-kind.mjs, which the work summaries use too). */
@@ -294,7 +212,7 @@ export function WorkSteps({ steps, live = false }: { steps: Step[]; live?: boole
   );
 }
 
-/** The top of a live turn: the bot's still face, what it is doing in ink, then its newest thought.
+/** The top of a live turn: the bot's still face, what it is doing in ink, and its current intent.
  * `shimmer`: the bot is thinking with no step running, so this is the live line (T3 Code's
  * "Thinking" row) and the band sweeps across what it is doing. */
 export function LiveLead({ avatar, label, thought, shimmer = false }: { avatar: ReactNode; label: string; thought?: string; shimmer?: boolean }) {
@@ -330,6 +248,7 @@ export function TimelineFold({
   avatar,
   count,
   onDetails,
+  todoRail,
 }: {
   line: string;
   live?: boolean;
@@ -342,11 +261,16 @@ export function TimelineFold({
   avatar?: ReactNode;
   count?: string;
   onDetails?: () => void;
+  todoRail?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const toggle = () => {
-    if (live) return onDetails?.();
+    if (live) {
+      onDetails?.();
+      setDetailsOpen((value) => !value);
+      return;
+    }
     setOpen((value) => !value);
   };
   const showDetails = () => {
@@ -355,22 +279,25 @@ export function TimelineFold({
   };
   return (
     <section className={"timeline-fold" + (live ? " live" : "")} aria-label={live ? "Turn status" : "Turn activity"}>
-      <button className="timeline-fold-line" aria-expanded={live ? undefined : open} onClick={toggle}>
-        {!live && avatar}
-        <span>
-          {line}
-          {live && since !== undefined && <> · <Elapsed since={since} /></>}
-          {count && " · " + count}
-        </span>
-        {!live && <ChevronRight size={14} className="fold-chevron" aria-hidden="true" />}
-      </button>
+      <div className="turn-rails">
+        <button className="timeline-fold-line" aria-expanded={live ? detailsOpen : open} onClick={toggle}>
+          {!live && avatar}
+          <span>
+            {line}
+            {live && since !== undefined && <> · <Elapsed since={since} /></>}
+            {count && " · " + count}
+          </span>
+          {!live && <ChevronRight size={14} className="fold-chevron" aria-hidden="true" />}
+        </button>
+        {todoRail}
+      </div>
       {open && !live && (
         <div className="timeline-fold-body">
           {body}
           <button className="timeline-details" onClick={showDetails}>Details</button>
         </div>
       )}
-      {detailsOpen && !live && (
+      {detailsOpen && (
         <div className="timeline-activity" role="dialog" aria-label="Work activity">
           <div className="timeline-activity-head">
             <strong>Work activity</strong>
@@ -383,95 +310,16 @@ export function TimelineFold({
   );
 }
 
-/**
- * A turn's tool work. Live: "<Bot> is working" with the newest steps. Done: one row,
- * "Worked for 1m 51s · 7 steps" over a plain summary, opening to every step.
- */
-export function ToolTrail({
-  run,
-  fold,
-  bot = "Bot",
-  avatar,
-  onToggle,
-  mode,
-  intent,
-}: {
-  run: Run;
-  fold: boolean;
-  bot?: string;
-  /** The working bot's small still face, shown while live. */
-  avatar?: ReactNode;
-  onToggle?: () => void;
-  /** The four Settings › Chat › Steps choices. `fold` remains for older callers. */
-  mode?: "folded" | "every" | "failed" | "hidden";
-  intent?: string;
-}) {
-  const live = run.status === "Working";
-  const choice = mode ?? (fold ? "folded" : "every");
-  const [expanded, setExpanded] = useState(choice === "every");
-  useEffect(() => {
-    setExpanded(choice === "every");
-  }, [live, choice]);
-  const now = useNow(live);
-  const steps = run.steps ?? [];
-  const visibleSteps = choice === "hidden" ? [] : choice === "failed" ? steps.filter((step) => step.status === "Failed") : steps;
-  const count = visibleSteps.length || (choice === "hidden" ? 0 : run.usedTools?.length || 0);
-  // Keep a stable status row even before the first tool arrives. This is the anchor that becomes
-  // the finished work line when the turn ends.
-  if (!live && !count && !run.summary) return null;
-  const toggle = () => {
-    onToggle?.();
-    setExpanded(!expanded);
-  };
-  const plural = count === 1 ? " step" : " steps";
-  if (live)
-    return (
-      <section className="tool-trail work-live" aria-label="Tool activity">
-        <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
-          {avatar ?? <Activity size={15} />}
-          <strong>{bot}</strong>
-          <span className="work-intent">{intent?.trim() || "Working…"}</span>
-          {count > 0 && <span className="work-count">{count + plural}</span>}
-        </button>
-        {expanded && <StepList steps={visibleSteps} />}
-      </section>
-    );
-  const last = Math.max(run.time, ...steps.map((s) => s.finished ?? s.started));
-  const elapsed = (run.finished ?? last) - run.time;
-  return (
-    <section className="tool-trail work-done" aria-label="Tool activity">
-      <button className="trail-toggle" aria-expanded={expanded} onClick={toggle}>
-        <Activity size={15} />
-        <span className="work-title">
-          <strong>Worked for {duration(elapsed)}</strong>
-          {run.summary && <small>{run.summary}</small>}
-        </span>
-        {count > 0 && <span className="work-count">{count + plural}</span>}
-      </button>
-      {expanded && <RunLead agents={run.agents} todos={run.todos} />}
-      {expanded &&
-        (steps.length ? (
-          <StepList steps={visibleSteps} />
-        ) : (
-          <ol>
-            {run.usedTools?.map((name) => (
-              <li key={name}>{name} · Done</li>
-            ))}
-          </ol>
-        ))}
-    </section>
-  );
-}
-
 function TodoGlyph({ status }: { status: Todo["status"] }) {
   if (status === "done") return <Check size={14} aria-label="Done" />;
   if (status === "in_progress") return <LoaderCircle size={14} className="spin" aria-label="In progress" />;
+  if (status === "failed") return <CircleAlert size={14} aria-label="Failed" />;
   if (status === "blocked" || status === "cancelled")
     return <Ban size={14} aria-label={status === "blocked" ? "Blocked" : "Cancelled"} />;
   return <Circle size={14} aria-label="Pending" />;
 }
 
-/** "Tasks 3/5" above the composer, opening the chat's task list. */
+/** The session’s tracked todos, including the closed count. */
 export function TaskChip({
   todos,
   open,
@@ -481,12 +329,11 @@ export function TaskChip({
   open: boolean;
   toggle: () => void;
 }) {
-  const done = todos.filter((t) => t.status === "done").length;
   const active = todos.some((t) => t.status === "in_progress");
   return (
     <button className="canvas-chip" aria-expanded={open} aria-controls="task-drawer" onClick={toggle}>
       {active ? <LoaderCircle size={14} className="spin" /> : <ListChecks size={14} />}
-      Tasks {done}/{todos.length}
+      {todoLabel(todos)}
     </button>
   );
 }
@@ -499,6 +346,7 @@ function TodoItems({ todos }: { todos: Todo[] }) {
           <TodoGlyph status={t.status} />
           <span>{t.title}</span>
           {t.status === "blocked" && <em>Blocked</em>}
+          {t.status === "failed" && <em>Failed</em>}
         </li>
       ))}
     </ol>
@@ -532,7 +380,7 @@ export function HelperChip({
   );
 }
 
-function HelperItems({ agents }: { agents: Subagent[] }) {
+function HelperItems({ agents, byAgent }: { agents: Subagent[]; byAgent?: Map<string, Step[]> }) {
   const now = useNow(agents.some((a) => a.status === "Running"));
   return (
     <ol>
@@ -547,10 +395,16 @@ function HelperItems({ agents }: { agents: Subagent[] }) {
           ) : (
             <CircleAlert size={14} />
           )}
-          <span>
+          <div className="helper-info">
             <strong>{a.name}</strong>
             {(a.detail || a.description) && <small>{a.detail || a.description}</small>}
-          </span>
+            {!!byAgent?.get(a.id)?.length && (
+              <details>
+                <summary>Tool calls</summary>
+                <WorkSteps steps={byAgent.get(a.id)!} />
+              </details>
+            )}
+          </div>
           <em>
             {a.status === "Running" ? "Running" : a.status} · {duration((a.finished ?? now) - a.started)}
           </em>
@@ -568,25 +422,28 @@ export function HelperDrawer({ agents }: { agents: Subagent[] }) {
   );
 }
 
-/**
- * What a turn's work list starts with: its helpers, then its to-do list, and after them the steps
- * and everything else (the owner's order, 2026-11-20; the phone's Activity sheet has the same).
- * Nothing when the turn had neither.
- */
-export function RunLead({ agents, todos }: { agents?: Subagent[]; todos?: Todo[] }) {
-  if (!agents?.length && !todos?.length) return null;
+/** Tasks, helpers and background commands lead the activity feed. */
+export function ActivitySections({ run, steps }: { run: Run; steps?: Step[] }) {
+  const { tools, background, byAgent } = activitySteps(steps, run.agents);
   return (
     <>
-      {!!agents?.length && (
-        <section className="run-lead" aria-label="Helpers">
-          <h4>Helpers</h4>
-          <HelperItems agents={agents} />
+      {!!run.todos?.length && (
+        <section className="run-lead" aria-label="Tasks">
+          <h4>Tasks</h4>
+          <TodoItems todos={run.todos} />
         </section>
       )}
-      {!!todos?.length && (
-        <section className="run-lead" aria-label="To do">
-          <h4>To do</h4>
-          <TodoItems todos={todos} />
+      {(!!run.agents?.length || background.length > 0) && (
+        <section className="run-lead" aria-label="Subagents">
+          <h4>Subagents</h4>
+          {!!run.agents?.length && <HelperItems agents={run.agents} byAgent={byAgent} />}
+          <WorkSteps steps={background} />
+        </section>
+      )}
+      {!!tools.length && (
+        <section className="activity-tools" aria-label="Tool calls">
+          <h4>Tool calls</h4>
+          <WorkSteps steps={tools} />
         </section>
       )}
     </>

@@ -1,9 +1,25 @@
 // Phones and other devices: pairing, the paired devices, and the relay for away from home.
 import { ago, CliError, EXIT, table, usage } from "../output.mjs";
-import { confirm } from "./input.mjs";
+import { confirm, secret } from "./input.mjs";
 
 // The longest a pairing code may stay open: a day (desktop/terminal/control.mjs checks the same).
 const MAX_PAIR_MINUTES = 24 * 60;
+/** A gadget's settings and Wi-Fi, as lines for a person. */
+const gadgetLines = (gadget) => {
+  const s = gadget.settings ?? {};
+  const seconds = (value) => (value === 0 ? "never" : value + " s");
+  return [
+    gadget.name + (gadget.connected ? " (connected)" : " (not connected)"),
+    "  Volume       " + s.volume,
+    "  Microphone   " + s.mic + (s.mute ? ", off" : ""),
+    "  Brightness   " + s.brightness,
+    "  Dims after   " + seconds(s.dimAfter),
+    "  Dark after   " + seconds(s.offAfter),
+    "  Wi-Fi        " + (gadget.wifi?.network ?? "not reported") + (gadget.wifi?.saved?.length ? " (saved: " + gadget.wifi.saved.join(", ") + ")" : ""),
+    ...(gadget.wifiWaiting?.length ? ["  Waiting      " + gadget.wifiWaiting.map((change) => (change.add ? "add " + change.add : "forget " + change.forget)).join(", ")] : []),
+    ...(gadget.restarting ? ["  Restarting when it next looks"] : []),
+  ].join("\n");
+};
 const deviceRows = (devices) => devices.map((device) => [device.name, device.person ?? "", device.kind, device.platform, device.connected ? "connected" : "last seen " + ago(device.lastSeenAt), device.id]);
 
 export const link = {
@@ -82,6 +98,90 @@ export const link = {
           if (context.args.length !== 1) throw usage("Name the device (its name or id).");
           if (!(await confirm(context, "Unpair " + context.args[0] + "? It will have to pair again to use this host."))) return EXIT.failed;
           context.print(await context.client.call("devices.remove", context.args[0]), (gone) => "Unpaired " + gone.name + ".");
+        },
+      },
+    },
+  },
+  gadgets: {
+    summary: "Set up a gadget: a small device that talks with a bot",
+    details: "A gadget is paired over its USB cable, with no code. It then reaches this host over Wi-Fi, so both must be on the same network. A gadget is one of the owner's devices: `botkins devices list` shows it, and `botkins devices remove` unpairs it.",
+    commands: {
+      add: {
+        summary: "Set up the gadget on a USB port of this computer",
+        usage: "botkins gadgets add <serial port> [--name <name>] [--bot <bot>] [--wifi <network>]",
+        options: {
+          name: { type: "string", value: "name", about: "What to call the gadget (its board's name)" },
+          bot: { type: "string", value: "bot", about: "The bot it talks with first (the first bot)" },
+          wifi: { type: "string", value: "network", about: "The Wi-Fi network to give it. The password is asked for, hidden, or read from standard input" },
+        },
+        details: "The serial port is the gadget's USB port, such as /dev/cu.usbmodem101 on a Mac or /dev/ttyACM0 on Linux. Leave --wifi out for a gadget that already has its network. Pairing a gadget is a full-trust step, as pairing a phone is: whoever holds the gadget can talk to your bots until you remove it.",
+        async run(context) {
+          if (context.args.length !== 1) throw usage("Name the gadget's serial port.");
+          const o = context.options;
+          const wifi = o.wifi === undefined ? undefined : { ssid: o.wifi, password: await secret(context, "Password for " + o.wifi) };
+          const added = await context.client.call("gadgets.add", { port: context.args[0], ...(o.name !== undefined && { name: o.name }), ...(o.bot !== undefined && { bot: o.bot }), ...(wifi && { wifi }) });
+          context.print(added, (gadget) => gadget.name + " is set up and online (" + [gadget.board, gadget.firmware && "firmware " + gadget.firmware].filter(Boolean).join(", ") + ").");
+        },
+      },
+      set: {
+        summary: "Show or change a gadget's volume, microphone, screen and bot",
+        usage: "botkins gadgets set <gadget> [--volume <0-100>] [--mic low|normal|high] [--mute | --unmute] [--brightness <5-100>] [--dim-after <seconds>] [--off-after <seconds>] [--bot <bot>]",
+        options: {
+          volume: { type: "string", value: "0-100", about: "How loud it speaks" },
+          mic: { type: "string", value: "level", about: "How sensitive the microphone is: low, normal or high" },
+          mute: { type: "boolean", about: "Turn the microphone off" },
+          unmute: { type: "boolean", about: "Turn the microphone on" },
+          brightness: { type: "string", value: "5-100", about: "How bright the screen is" },
+          "dim-after": { type: "string", value: "seconds", about: "Idle time before the screen dims (0: never)" },
+          "off-after": { type: "string", value: "seconds", about: "Idle time before the screen goes dark (0: never)" },
+          bot: { type: "string", value: "bot", about: "The bot it talks with, in a new chat" },
+        },
+        details: "With no option it shows the settings. The gadget takes a change at once when it is on, and when it next comes online otherwise.",
+        async run(context) {
+          if (context.args.length !== 1) throw usage("Name the gadget (its name or id).");
+          const o = context.options;
+          if (o.mute && o.unmute) throw usage("Give --mute or --unmute, not both.");
+          const number = (name) => {
+            if (o[name] === undefined) return undefined;
+            const value = Number(o[name]);
+            if (!Number.isInteger(value)) throw usage("--" + name + " takes a whole number.");
+            return value;
+          };
+          const patch = {
+            ...(number("volume") !== undefined && { volume: number("volume") }),
+            ...(o.mic !== undefined && { mic: o.mic }),
+            ...(o.mute && { mute: true }),
+            ...(o.unmute && { mute: false }),
+            ...(number("brightness") !== undefined && { brightness: number("brightness") }),
+            ...(number("dim-after") !== undefined && { dimAfter: number("dim-after") }),
+            ...(number("off-after") !== undefined && { offAfter: number("off-after") }),
+            ...(o.bot !== undefined && { bot: o.bot }),
+          };
+          const shown = Object.keys(patch).length ? await context.client.call("gadgets.set", context.args[0], patch) : await context.client.call("gadgets.get", context.args[0]);
+          context.print(shown, gadgetLines);
+        },
+      },
+      wifi: {
+        summary: "Give a gadget a Wi-Fi network, or make it forget one",
+        usage: "botkins gadgets wifi <gadget> (--add <network> | --forget <network>)",
+        options: {
+          add: { type: "string", value: "network", about: "A network to add. Its password is asked for, hidden, or read from standard input" },
+          forget: { type: "string", value: "network", about: "A saved network to forget" },
+        },
+        details: "The gadget takes the change within ten minutes, when it next looks, and stays on the network it is on. The password goes to the gadget and is kept nowhere else.",
+        async run(context) {
+          const o = context.options;
+          if (context.args.length !== 1 || (o.add === undefined) === (o.forget === undefined)) throw usage("Name the gadget, and give --add or --forget.");
+          const change = o.add !== undefined ? { add: { ssid: o.add, password: await secret(context, "Password for " + o.add + " (empty for an open network)").catch(() => "") } } : { forget: o.forget };
+          context.print(await context.client.call("gadgets.wifi", context.args[0], change), (gadget) => (o.add !== undefined ? gadget.name + " will add " + o.add + " when it next looks." : gadget.name + " will forget " + o.forget + " when it next looks."));
+        },
+      },
+      restart: {
+        summary: "Restart a gadget",
+        usage: "botkins gadgets restart <gadget>",
+        async run(context) {
+          if (context.args.length !== 1) throw usage("Name the gadget (its name or id).");
+          context.print(await context.client.call("gadgets.restart", context.args[0]), (gadget) => gadget.name + " restarts when it next looks.");
         },
       },
     },

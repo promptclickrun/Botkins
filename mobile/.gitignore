@@ -64,3 +64,4 @@ __pycache__/
 
 # Made by @bacons/apple-targets at prebuild from targets/widgets/symbols (scripts/botkin-symbols.py)
 /targets/widgets/Assets.xcassets/
+/targets/watch/Assets.xcassets/

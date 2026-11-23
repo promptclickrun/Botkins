@@ -502,3 +502,7 @@
 .artifact-preview-image { display: block; max-width: 100%; max-height: 160px; margin: 0 auto; object-fit: contain; }
 .artifact-preview-media { width: 100%; max-height: 160px; }
 .artifact-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.pr-panel { overflow: auto; height: 100%; box-sizing: border-box; padding: 16px; overflow-wrap: anywhere; }
+.pr-panel h3 { margin: 22px 0 8px; }
+.pr-panel .textbutton { white-space: normal; text-align: left; }

@@ -96,9 +96,9 @@ test("the switcher lists every computer, ticks the one in use, and ends with a w
   assert.deepEqual(computerActions([a, b], "bbb"), [
     { id: "use:aaa", title: "Mac aaa", state: "off" },
     { id: "use:bbb", title: "Mac bbb", state: "on" },
-    { id: "add", title: "Add a computer…", image: "plus" },
+    { id: "add", title: "Connect a computer…", image: "plus" },
   ]);
-  assert.deepEqual(computerActions([], null), [{ id: "add", title: "Add a computer…", image: "plus" }]);
+  assert.deepEqual(computerActions([], null), [{ id: "add", title: "Connect a computer…", image: "plus" }]);
   assert.deepEqual(computerActions([{ ...a, name: "" }], null)[0], { id: "use:aaa", title: "Computer", state: "off" });
   assert.deepEqual(computerChoice("use:bbb"), { use: "bbb" });
   assert.equal(computerChoice("add"), "add");

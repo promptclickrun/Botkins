@@ -20,6 +20,9 @@ These modules let a paired phone running Botkins use a desktop app over the loca
 | `relay.mjs` | `RelayHost`: the active and standby v3 sockets (with v2 fallback) that let a phone away from the network reach the computer. `RelayLink` remains for legacy callers. Also signs what is sent to the relay's push route. |
 | `push.mjs` | `Push`: notifications and Live Activities for phones that asked. See "Push notifications". |
 | `device.mjs` | `DeviceTools`: tools that run on a paired phone, and the list of them. See "Tools that run on a phone". |
+| `gadget.mjs` | Gadgets: small devices that talk with a bot. Pairing by introduction, the two small parts a gadget follows, and speech in and out as plain samples. The contract is `gadget/docs/contract.md`. See "Gadgets". |
+| `gadget-setup.mjs` | Setting a gadget up over its USB port: the introducer's half, for the app's own page and `botkins gadgets add`. |
+| `botkin-svg.mjs` | A bot's Botkin in each pose a gadget shows, as SVG from the design kit found beside the link (`new LinkHost({ botkins })` replaces it; `null` is none). |
 | `voice.mjs` | `Voice`: speech to text, text to speech and live voice sessions, through providers the person chose. `VOICE.md` has the contract and every provider. See "Voice". |
 | `tools.mjs` | Runs the computer's command-line tools without a shell, with a time limit and a small environment. |
 | `net.mjs` | Which addresses to offer a phone, and which callers count as nearby. |
@@ -54,7 +57,7 @@ await link.start(); // listens only when the person has turned phone access on
 What the app may put on `backend`, besides the first four (`info`, `snapshot`, `call`, `subscribe`):
 
 - `extras`: more calls, reached from the phone as `link.<name>`. Each name is also listed as a capability (`adoptMcpSignIn` is one).
-- `capabilities`: more names for `meta().capabilities`, for what the app supports itself. A phone shows a feature only when its name is there. `looks-v2`: the app saves a look's eyes and custom colors (see "Bot looks"). `routine-delivery-v1`: routines take `deliver` (where a run's result lands) and `notify`. `models-v2`: `models()` carries the optional facts of `ModelInfo` (context window and more). `board-mentions-v1`: `send` takes a mention `{ kind: "board", id }`, a Today card being discussed. The link adds its own names (`credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `push-v1`, `device-v1`, `voice-v1`) and, when it keeps the looks itself, `looks-v2`.
+- `capabilities`: more names for `meta().capabilities`, for what the app supports itself. A phone shows a feature only when its name is there. `looks-v2`: the app saves a look's eyes and custom colors (see "Bot looks"). `routine-delivery-v1`: routines take `deliver` (where a run's result lands) and `notify`. `models-v2`: `models()` carries the optional facts of `ModelInfo` (context window and more). `board-mentions-v1`: `send` takes a mention `{ kind: "board", id }`, a Today card being discussed. The link adds its own names (`credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `sync-push-v1`, `push-v1`, `device-v1`, `voice-v1`) and, when it keeps the looks itself, `looks-v2`.
 - `attention()`: `{ focused, chatId? }`, whether the person is looking at the app's own window and at which chat. A reply in that chat then needs no notification on a phone.
 - `voice`: `{ local?, codex? }`, the app's own speech helpers for `voice.mjs` (`VOICE.md`, "What the desktop app provides").
 - `screen`: how to take pictures of the screen (see "The screen").
@@ -76,7 +79,7 @@ A paired phone can do what the person can do in the app, so pairing is a full-tr
 
 ## Teams
 
-Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
+Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember`, `renameMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
 
 `MEMBER_PREFERENCE_FIELDS` is deliberately limited to `appearance`, `foldTools`, `showThinking`, `linkPreviews` and `readAloud`; no approval, access, teamwork, link, provider or voice setting is member-writable.
 
@@ -145,7 +148,7 @@ The key is derived each time from the phone's pairing key, so the computer store
 
 ## Tools that run on a phone
 
-`device.mjs` lets a bot use a paired phone: its calendar, contacts, Health data, location and photos, and a draft email. The header of `device.mjs` is the contract; `DEVICE_TOOLS` in it is the list of tools, with the source and level each needs and the JSON Schema a bot is shown.
+`device.mjs` lets a bot use a paired phone: its calendar, contacts, Health data, location, photos, Apple Music and a draft email. The header of `device.mjs` is the contract; `DEVICE_TOOLS` in it is the list of tools, with the source and level each needs and the JSON Schema a bot is shown.
 
 **The switches are the consent.** In the phone app the person switches each source (Calendar, Contacts, Health, Location, Photos, Mail) off, to read, or to read and interact, after iOS has been asked for what that needs. The phone tells the computer (`link.device.sources`), which keeps the switches per phone in `link.json` (`sources`). A tool exists only while some paired phone allows its source at the level it needs; Location offers only read, and Mail only interact (`cleanSources` lowers Location to read and drops Mail's read). The phone checks its own switch again before it acts, so a stale list here can't reach past a switch.
 
@@ -177,11 +180,23 @@ The key is derived each time from the phone's pairing key, so the computer store
 
 **Not tested for real.** No call to any provider has been made with a real key. Every route was read in documentation and run against a fake provider. `VOICE.md` lists where to try first.
 
+## Gadgets
+
+A gadget (an ESP32 board with a microphone and a speaker) is a paired device of kind `"gadget"`. `gadget/docs/contract.md` is its whole contract; this is what an app does with it.
+
+- **Add one.** `link.addGadget({ publicKey, name?, board?, botId? })` pairs a gadget by its key, with no code, and answers the introduction the gadget needs. `introduce()` in `gadget-setup.mjs` does the whole of setup over a USB port: it reads the gadget's key, calls `add`, hands the gadget the answer and the Wi-Fi network, and waits until the gadget is online. `serialLines(path)` opens a serial port for it on macOS and Linux; an app with a serial API of its own passes its own `io`.
+- **It is the owner's device.** Nothing is cut from what a bot may do in a gadget's chat, and the gadget answers a bot's requests itself. So adding a gadget is a full-trust step, like pairing a phone: say so where one is added. A team member can't add one.
+- **What it is sent.** Two small parts, `meta` and `gadget` (`gadgetPart`), and the reply's text for its own chat. The app's own parts never go to a gadget.
+- **Speech.** `link.gadget.hear` takes a recording in pieces and `link.gadget.speak` reads a reply as 16-bit samples at the gadget's rate. Both use the providers of Settings › Voice, so a gadget needs a provider there that is not "This device". `Voice.speak({ samples: true })` asks each provider for plain samples in place of MP3 (`VOICE.md`).
+- **In the device list** a gadget has `gadget: { board, firmware, botId, settings, wifi, wifiWaiting?, restarting? }`. `link.status().devices` has the whole record. `removeDevice` works as for a phone.
+- **Settings, Wi-Fi and restart** (`gadget-settings-v1`): `link.configureGadget(id, patch)`, `link.gadgetWifi(id, change)` and `link.restartGadget(id)` for the app's own page, the same as a phone's `link.gadgets.*` calls. A Wi-Fi password is held in memory for the gadget, for 10 minutes at most, and written nowhere.
+- **The Botkin's faces.** A gadget draws its bot's Botkin itself, from SVG the link makes with the design kit (`botkin-svg.mjs`). The link finds the kit at `design/botkins-kit` beside it (one or two folders up), so an app that ships the link ships that folder's `customize.js`, `motion/` and `avatars/` too. Without them a gadget shows its own default Botkin.
+
 ## Limits
 
 The host takes at most 256 connections, and at most 24 from one address. A connection that sends nothing is dropped after 10 seconds. A call without a known session, or with a body larger than 6 MB (64 KB for pairing), is refused before any of its body is read, and a call from a phone that was removed while its body was on the way is refused too.
 
-A sync follows up to four chats. With `stream-appends-v1`, each cursor has a chat ID and text ID of up to 128 UTF-16 units, plus two non-negative safe integer offsets. Text-only changes flush to a waiting session at most every 200 ms. Other changes use the 60 ms pump, including stream starts, first text and ends. See [the sync contract](CONTRACT.md#streaming-text). `snapshot()` is called once for each rebuild of the parts, and what that rebuild builds is shared with the views and notifications made from it. A rebuild writes a chat's page and a running turn again only for the steps and messages whose own values changed (`json-cache.mjs`; the app may change its records in place, which is why a record is compared by what it holds and not by identity); a part whose pieces are all as before is not joined or compared, and a phone that is sent indicators is not given a new view for a reply that only grew.
+A sync follows up to four chats. With `stream-appends-v1`, each cursor has a chat ID and text ID of up to 128 UTF-16 units, plus two non-negative safe integer offsets. On direct connections, text-only changes flush to a waiting session at most every 200 ms. Other changes use the 60 ms pump, including stream starts, first text and ends. A relay session polls at 250 ms or uses one open `sync-push-v1` follow with updates spaced by 100 ms. Chunked text keeps its own timing. See [the sync contract](CONTRACT.md#streaming-text). `snapshot()` is called once for each rebuild of the parts, and what that rebuild builds is shared with the views and notifications made from it. A rebuild writes a chat's page and a running turn again only for the steps and messages whose own values changed (`json-cache.mjs`; the app may change its records in place, which is why a record is compared by what it holds and not by identity); a part whose pieces are all as before is not joined or compared, and a phone that is sent indicators is not given a new view for a reply that only grew.
 
 Pairing and session tries are counted per address: 20 in 10 seconds, then that address is told to slow down. A phone keeps at most 6 sessions (its oldest end first) and may have two `link.sync` waits open in each; a newer wait ends the oldest. A phone may have 8 unfinished uploads at once.
 
@@ -251,10 +266,10 @@ Without an adapter, macOS falls back on its own `screencapture` and `sips` (one 
 - Send files (`link.upload`, up to 4 MB a call, 25 MB a file, 200 files and 200 MB per phone) and attach them to a message. Files are kept in `<dir>/uploads/<phone>/`. A file left unfinished for 10 minutes is dropped, finished files are removed after 7 days (checked at start and every 10 minutes), and a phone's files go when the phone is removed. A message may attach only a file its own phone sent, and its `mentions` are cut down to at most 12 of the exact shapes the composer sends (the desktop app itself checks that a mentioned file is inside the chat's own folders).
 - A search for pull requests can't reach other repositories: `repo:`, `org:`, `user:` and `owner:` are removed from the search text. A failed lookup is remembered for 30 seconds, like a good one.
 - Get notifications and Live Activities (`link.push.*`), and choose which of them it wants. See "Push notifications".
-- Let bots use it: switch sources of its calendar, contacts, Health data, location, photos and mail on, and answer what bots ask of it (`link.device.*`). See "Tools that run on a phone".
+- Let bots use it: switch sources of its calendar, contacts, Health data, location, photos, Apple Music and mail on, and answer what bots ask of it (`link.device.*`). See "Tools that run on a phone".
 - Set the speech providers and their keys, dictate and have replies read, and talk live with a bot (`link.voice.*`). See "Voice".
 
-`meta().capabilities` lists `credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `push-v1`, `device-v1` and `voice-v1`, then the names of the app's own `extras` and `backend.capabilities`, so a phone can tell an app that has a feature from an older one. A look's eyes and custom colors, `looks-v2`, is there when the link keeps the looks (the app gave no `setLook`) or the app names it.
+`meta().capabilities` lists `credentials-v1`, `screen-v1`, `prs-v1`, `uploads-v1`, `relay-v1`, `sync-push-v1`, `push-v1`, `device-v1` and `voice-v1`, then the names of the app's own `extras` and `backend.capabilities`, so a phone can tell an app that has a feature from an older one. A look's eyes and custom colors, `looks-v2`, is there when the link keeps the looks (the app gave no `setLook`) or the app names it.
 
 ## Custom views
 

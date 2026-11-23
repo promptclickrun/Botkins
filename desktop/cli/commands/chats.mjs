@@ -153,6 +153,14 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.rename", ref, title.join(" ")), (chat) => "The chat is called " + JSON.stringify(safe(chat.title)) + " now.");
         },
       },
+      "regenerate-title": {
+        summary: "Summarize a chat into a new title",
+        usage: "botkins chats regenerate-title <chat>",
+        details: "Uses the same summarizer as Regenerate title in the app, even when automatic naming is off. It doesn't add a turn to the chat.",
+        async run(context) {
+          context.print(await context.client.call("chats.regenerateTitle", one(context, CHAT)), (chat) => "The chat is called " + JSON.stringify(safe(chat.title)) + " now.");
+        },
+      },
       delete: {
         summary: "Delete a chat, with its messages and its runs",
         usage: "botkins chats delete <chat> [--yes]",
@@ -209,22 +217,23 @@ export const chatsCommands = {
       },
       project: {
         summary: "Put a chat in a project, or take it out, and set how it works there",
-        usage: "botkins chats project <chat> [<project> | --none] [--mode <mode>] [--yes]",
+        usage: "botkins chats project <chat> [<project> | --none] [--folder <path>] [--mode <mode>] [--yes]",
         options: {
+          folder: { type: "string", value: "path", about: "A folder in the project" },
           none: { type: "boolean", about: "Take the chat out of its project" },
           mode: { type: "string", value: "mode", about: "default, plan or yolo" },
           ...YOLO_YES,
         },
-        details: "A mode applies in a project that has a folder. `plan` makes a plan first. `yolo` gives each request of the bot in this chat a yes with no question, but for a request that leaves the sandbox. So `--mode yolo` shows the chat, the project and its folder first, on standard error, and asks. With no terminal it needs --yes. A chat that is in the mode yolo and stays so (a new project, or the mode given again) asks the same. `default` and `plan` ask nothing. A conversation that already started in a folder cannot move to another. Without a project and without --none, the chat keeps its project and only the mode changes.",
+        details: "A mode applies in a project that has a folder. `plan` makes a plan first. `yolo` gives each request of the bot in this chat a yes with no question, but for a request that leaves the sandbox. So `--mode yolo` shows the chat, the project and its folder first, on standard error, and asks. With no terminal it needs --yes. A chat that is in the mode yolo and stays so (a new project, or the mode given again) asks the same. `default` and `plan` ask nothing. A moved conversation carries its transcript to the new folder. Without a project and without --none, the chat keeps its project and only the mode changes.",
         async run(context) {
           const [ref, to, ...more] = context.args;
-          const { none, mode } = context.options;
+          const { none, mode, folder } = context.options;
           if (!ref) throw usage(CHAT);
           if (more.length || (to !== undefined && none)) throw usage("Name one project, or give --none.");
-          if (to === undefined && !none && mode === undefined) throw usage("Name a project, or give --none or --mode.");
+          if (to === undefined && !none && mode === undefined && folder === undefined) throw usage("Name a project, or give --none or --mode.");
           if (mode !== undefined && !["default", "plan", "yolo"].includes(mode)) throw usage("A mode is default, plan or yolo.");
           const chat = await context.client.call("chats.get", ref);
-          const asked = { ...(to !== undefined && { project: to }), ...(none && { none: true }), ...(mode !== undefined && { mode }) };
+          const asked = { ...(folder && { folder }), ...(to !== undefined && { project: to }), ...(none && { none: true }), ...(mode !== undefined && { mode }) };
           // The mode that results decides (a chat in yolo that moves to another project stays in yolo).
           const look = await context.client.call("chats.projectLook", chat.id, asked);
           let agreed = false;
@@ -235,7 +244,7 @@ export const chatsCommands = {
           }
           // (By the ids that were shown, so that a name that matches another project later is not the one that is used.)
           const target = none ? { none: true } : to !== undefined ? { project: look.projectId } : {};
-          context.print(await context.client.call("chats.project", chat.id, { ...target, ...(mode !== undefined && { mode }), ...(agreed && { agreed: true }) }), (done) => named(done) + (done.project ? " is in the project " + JSON.stringify(safe(done.project)) + " (" + done.mode + ")." : " is in no project (" + done.mode + ")."));
+          context.print(await context.client.call("chats.project", chat.id, { ...target, ...(folder && { folder }), ...(mode !== undefined && { mode }), ...(agreed && { agreed: true }) }), (done) => named(done) + (done.project ? " is in the project " + JSON.stringify(safe(done.project)) + " (" + done.mode + ")." : " is in no project (" + done.mode + ")."));
         },
       },
       group: {

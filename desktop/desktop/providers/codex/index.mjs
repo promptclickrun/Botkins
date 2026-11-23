@@ -20,14 +20,30 @@ import { join } from "node:path";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
 import { StdioRpc, cliEnv, findBinary, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
+import { watchQuiet } from "../liveness.mjs";
 import { SessionStore, mcpText, missingConversation, serversWithTokens, transcriptContext } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { env } from "../../home.mjs";
 import { ReportedLimits, modelDetails } from "../../modeldetails.mjs";
+import { tierRejected } from "../../model-speed.mjs";
 import { codexUsage } from "../../providerusage.mjs";
 
-/** The bridge's name among a thread's MCP servers. Its tools are Botkins' own and never ask. */
+/** Translate account-specific catalog labels to the tier ids Codex accepts. */
+function fastModes(model) {
+  const modes = {};
+  for (const tier of model.serviceTiers ?? []) {
+    if (!tier?.id) continue;
+    const name = String(tier.name ?? tier.id).toLowerCase().replace(/[ _-]/g, "");
+    if (name === "ultrafast" || tier.id === "ultrafast") modes.ultrafast = tier.id;
+    else if (name === "fast" || tier.id === "priority") modes.fast = tier.id;
+  }
+  // Older Codex versions report the UI name for priority rather than the wire tier.
+  if (!model.serviceTiers && model.additionalSpeedTiers?.includes("fast")) modes.fast = "priority";
+  return modes;
+}
+
+/** The bridge's name among a thread's MCP servers. */
 export const BRIDGE = "botkins";
 
 const PLANS = {
@@ -253,7 +269,7 @@ class CodexSession extends ProviderSession {
     const finished = Promise.withResolvers();
     finished.promise.catch(() => {});
     const turn = this.turn = { id: eventId, text: [], ...finished };
-    let timer;
+    let watching;
     try {
       const { thread } = await rpc.request("thread/read", { threadId, includeTurns: true });
       const saved = thread?.turns?.find((t) => t.id === eventId);
@@ -269,15 +285,15 @@ class CodexSession extends ProviderSession {
       }
       if (this.stopRequested) await this.interrupt();
       else onReady?.(this.steerInput(rpc, threadId, turn));
-      timer = setTimeout(() => finished.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), 600000);
+      watching = this.watch(turn);
       await finished.promise;
       if (turn.recoveryInterrupted) return null;
       return turn.text.map((item) => item.text).filter(Boolean).join("\n\n");
     } catch (error) {
-      if (timer) await this.interrupt();
+      if (watching) await this.interrupt();
       throw error;
     } finally {
-      clearTimeout(timer);
+      watching?.stop();
       this.turn = null;
     }
   }
@@ -290,14 +306,24 @@ class CodexSession extends ProviderSession {
     };
   }
 
-  async send(message, timeoutMs = 600000, onReady) {
+  /**
+   * Sends one message. There is no time limit: the person stops a turn that runs long, and the
+   * turn ends by itself when Codex's CLI stops or its thread is gone (see watch). `timeoutMs` is
+   * for a caller with nobody to stop it, such as a background summary.
+   */
+  async send(message, timeoutMs, onReady) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;
     let timer;
+    let watching;
     try {
       const threadId = await this.thread();
       const rpc = await this.provider.rpc();
+      const speed = this.model.fastMode;
+      const tier = speed && speed !== "off"
+        ? (await this.provider.models().catch(() => [])).find((m) => m.id === this.model.model)?.fastModes?.[speed]
+        : undefined;
       // Stop was pressed while the thread was still starting: the turn never begins.
       if (this.stopRequested) return { text: "" };
       const settings = approvalSettings(this.mode === "plan" ? "ask" : this.spec.approval);
@@ -305,10 +331,13 @@ class CodexSession extends ProviderSession {
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       // The turn can be failed from elsewhere (the CLI stopping) before anything waits on it.
       finished.catch(() => {});
-      timer = setTimeout(() => turn.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
-      timer.unref?.();
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => turn.reject(Object.assign(new Error("ChatGPT didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
+        timer.unref?.();
+      }
+      watching = this.watch(turn);
       try {
-        const started = await rpc.request("turn/start", {
+        const params = {
           threadId,
           input: userInput({
             ...message,
@@ -322,7 +351,20 @@ class CodexSession extends ProviderSession {
           approvalPolicy: settings.approvalPolicy,
           approvalsReviewer: settings.approvalsReviewer,
           sandboxPolicy: settings.sandboxPolicy,
-        });
+        };
+        // Null clears a tier previously set on this thread. Retry only a rejected start,
+        // never an accepted turn, an ambiguous transport failure, or a streamed reply.
+        const start = (serviceTier) => rpc.request("turn/start", { ...params, serviceTier });
+        let started;
+        try {
+          started = await start(tier ?? null);
+        } catch (error) {
+          if (this.stopRequested || !tierRejected(error.message)) throw error;
+          // An old server may reject the field itself. Otherwise clear any previous thread tier.
+          if (/unknown field|unrecognized (field|parameter)/i.test(error.message)) started = await rpc.request("turn/start", params);
+          else if (tier) started = await start(null);
+          else throw error;
+        }
         turn.id = started.turn.id;
         // The turn's id is its fork boundary (see CodexProvider.forkSession).
         if (!this.spec.temporary) this.provider.sessions.update(this.id, (record) => (record.turns = [...(record.turns ?? []), turn.id].slice(-400)));
@@ -339,6 +381,7 @@ class CodexSession extends ProviderSession {
       }
     } finally {
       clearTimeout(timer);
+      watching?.stop();
       this.turn = null;
       this.sending = false;
     }
@@ -346,6 +389,7 @@ class CodexSession extends ProviderSession {
   /** One app-server notification for this session's thread. */
   notified(method, params) {
     const turn = this.turn;
+    turn?.quiet?.touch();
     switch (method) {
       case "item/started": {
         const item = params.item;
@@ -560,6 +604,28 @@ class CodexSession extends ProviderSession {
     throw Object.assign(new Error("Unsupported request: " + method), { code: -32601 });
   }
 
+  /**
+   * Watches `turn` while Codex is quiet: after each quiet spell Codex is asked whether the thread
+   * is still running it. A CLI that stopped ends the turn at once (CodexProvider.connect), so this
+   * is for a thread that is gone or has gone idle without telling us.
+   */
+  watch(turn) {
+    return (turn.quiet = watchQuiet({ probe: () => this.alive(turn), onDead: (error) => turn.reject(error) }));
+  }
+  /** Rejects only when Codex no longer runs `turn`; a check that fails or gets no answer is no news. */
+  async alive(turn) {
+    const rpc = this.provider.rpcNow;
+    if (!rpc) throw Object.assign(new Error("The Codex CLI stopped."), { code: "BOTKINS_PROVIDER_EXIT" });
+    if (!turn.id || !this.threadId) return;
+    let thread;
+    try {
+      ({ thread } = await rpc.request("thread/read", { threadId: this.threadId, includeTurns: false }, 15000));
+    } catch (error) {
+      if (missingConversation(error)) throw Object.assign(new Error("Codex no longer has this conversation."), { code: "BOTKINS_SESSION_LOST" });
+      return;
+    }
+    if (thread?.status?.type === "idle" || thread?.status?.type === "notLoaded") throw Object.assign(new Error("Codex stopped working on this reply without finishing it."), { code: "BOTKINS_SESSION_LOST" });
+  }
   /** Asks Codex to stop this session's turn, when one is running. Never starts the CLI. */
   interrupt() {
     const turn = this.turn;
@@ -913,8 +979,10 @@ export class CodexProvider extends ModelProvider {
       .filter((m) => !m.hidden)
       .map((m) => {
         const id = m.model ?? m.id;
+        const speeds = fastModes(m);
         return {
           id,
+          ...(Object.keys(speeds).length && { fastModes: speeds }),
           name: m.displayName || m.model || m.id,
           provider: this.id,
           efforts: [...new Set((m.supportedReasoningEfforts ?? []).map((e) => e.reasoningEffort))],

@@ -6,10 +6,11 @@ import { botAccess } from "./access.mjs";
 
 const workspaceFields = new Set([
   "apps", "board", "bots", "chats", "frames", "mcpServers", "mediaPass", "panels",
-  "pendingMessages", "projects", "runs", "sections", "settings", "skills", "spaces", "tasks", "templates",
+  "pendingMessages", "proactive", "projects", "runs", "sections", "settings", "skills", "spaces", "tasks", "templates",
 ]);
 const projectFields = new Set([
   "id", "name", "description", "folder", "color", "todos", "artifacts", "lastUsed", "createdAt",
+  "folders", "mode",
   "path", // migrateProject reads the folder from this field in early files.
 ]);
 

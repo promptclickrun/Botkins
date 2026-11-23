@@ -7,6 +7,7 @@ import { contactsTools } from "./contacts";
 import { healthTools } from "./health";
 import { locationTools } from "./location";
 import { mailTools } from "./mail";
+import { musicTools } from "./music";
 import { photosTools } from "./photos";
 import { allows, type PhoneToolName, SOURCE_NAMES, toolOf } from "./tools";
 
@@ -15,7 +16,7 @@ export type RunContext = { askId?: string };
 type Runner = (args: unknown, context: RunContext) => Promise<unknown>;
 
 /** Every tool's runner, by name. tests/device.test.ts checks each name in DEVICE_TOOLS has one. */
-export const RUNNERS: Record<PhoneToolName, Runner> = { ...calendarTools, ...contactsTools, ...healthTools, ...locationTools, ...photosTools, ...mailTools };
+export const RUNNERS: Record<PhoneToolName, Runner> = { ...calendarTools, ...contactsTools, ...healthTools, ...locationTools, ...photosTools, ...musicTools, ...mailTools };
 
 export async function runDeviceTool(tool: string, args: unknown, context: RunContext = {}): Promise<DeviceAnswer> {
   const spec = toolOf(tool);

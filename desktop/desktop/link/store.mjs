@@ -20,11 +20,13 @@ export const SCREEN_MODES = ["off", "view", "control"];
 export const MAX_OWNER_DEVICES = 20;
 export const MAX_MEMBER_DEVICES = 60;
 /** A paired device is a phone or a computer (another Botkins app that uses this one). */
-export const DEVICE_KINDS = ["phone", "desktop"];
+/** "gadget": a small device that talks with a bot (gadget.mjs). It is named, never guessed from a platform. */
+export const DEVICE_KINDS = ["phone", "desktop", "gadget"];
 const DESKTOP_PLATFORMS = ["darwin", "macos", "mac", "win32", "windows", "linux", "desktop"];
 /** The kind a device says it is, else the kind its platform makes it. A phone when nothing says otherwise, as before. */
 export const deviceKind = (kind, platform) => (DEVICE_KINDS.includes(kind) ? kind : DESKTOP_PLATFORMS.includes(String(platform ?? "").toLowerCase()) ? "desktop" : "phone");
-const deviceName = (name, kind) => String(name || (kind === "desktop" ? "Computer" : "Phone")).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60) || (kind === "desktop" ? "Computer" : "Phone");
+const KIND_NAMES = { desktop: "Computer", gadget: "Gadget" };
+const deviceName = (name, kind) => String(name || (KIND_NAMES[kind] ?? "Phone")).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60) || (KIND_NAMES[kind] ?? "Phone");
 /** The name of the person a device belongs to ("Jordan"), cleaned; "" when there is none. A device's `name` stays its model. */
 export const personName = (value) => (typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60).trim() : "");
 // The Botkins characters, by id. A bot without a look is given the least used one.
@@ -234,7 +236,8 @@ export class LinkStore {
     const member = typeof memberId === "string" && memberId ? memberId : null;
     const count = this.data.devices.filter((device) => (member ? device.memberId : !device.memberId)).length;
     if (count >= (member ? MAX_MEMBER_DEVICES : MAX_OWNER_DEVICES)) throw new Error(member ? "Too many member devices. Remove one first." : "Too many paired owner devices. Remove one first.");
-    const is = deviceKind(kind, platform);
+    // A gadget is the owner's (gadget.mjs). A team member's device that calls itself one is a phone, with a member's cut of everything.
+    const is = member && kind === "gadget" ? "phone" : deviceKind(kind, platform);
     const who = personName(person);
     const device = {
       id: newId(9),
@@ -273,6 +276,23 @@ export class LinkStore {
     this.data.sources = { ...this.data.sources, [deviceId]: sources };
     this.save();
   }
+  /**
+   * What is kept for a gadget (gadget.mjs): its bot and chat, and what it said of itself (board,
+   * firmware, the rate of its speaker). A null or empty value takes a field away.
+   */
+  setGadget(id, patch) {
+    const device = this.device(id);
+    if (device?.kind !== "gadget") return false;
+    const gadget = { ...device.gadget };
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      if (value == null || value === "") delete gadget[key];
+      else gadget[key] = value;
+    }
+    if (JSON.stringify(gadget) === JSON.stringify(device.gadget ?? {})) return true;
+    device.gadget = gadget;
+    this.save();
+    return true;
+  }
   /** Gives a paired device another name. False when there is no such device. */
   /** Admin mode for one of the owner's devices: whether it is shown every member's spaces, bots and chats. Never a member's device. */
   setAdmin(id, on) {
@@ -300,12 +320,23 @@ export class LinkStore {
     if (!device) return false;
     const who = personName(person);
     if (!who) throw new Error("Give the person a name.");
-    if (device.memberId) {
-      const member = this.data.team?.members?.find((item) => item.id === device.memberId);
-      if (member) member.name = who;
-      for (const other of this.data.devices) if (other.memberId === device.memberId) other.person = who;
-    }
+    if (device.memberId) this.nameMember(device.memberId, who);
     device.person = who;
+    this.save();
+    return true;
+  }
+  /** A member and all of their devices take a name, with no save of its own. */
+  nameMember(memberId, who) {
+    const member = this.data.team?.members?.find((item) => item.id === memberId);
+    if (member) member.name = who;
+    for (const other of this.data.devices) if (other.memberId === memberId) other.person = who;
+    return !!member;
+  }
+  /** The owner names a member: the member and all of their devices take the name. False when there is no such member. */
+  renameMember(memberId, name) {
+    const who = personName(name);
+    if (!who) throw new Error("Give the person a name.");
+    if (!this.nameMember(memberId, who)) return false;
     this.save();
     return true;
   }

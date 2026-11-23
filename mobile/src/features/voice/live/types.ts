@@ -1,7 +1,7 @@
 // What every live voice transport shares: its interface, its events, and the small base class that
 // keeps the transcript and runs tools. Pure (no React Native), so the tests run the transports
 // against a fake socket and a fake sound module. A transport never logs audio or a token.
-import { type InputMode, MicGate } from "./input";
+import { type InputMode, MicGate, SPEECH_LEVEL } from "./input";
 
 export type { InputMode } from "./input";
 export type LiveStatus = "connecting" | "listening" | "thinking" | "talking" | "ended";
@@ -38,7 +38,22 @@ export type DuplexLike = {
   stop(): Promise<void>;
   addListener(name: "frame", listener: (frame: AudioFrame) => void): { remove(): void };
   addListener(name: "output", listener: (event: { level: number }) => void): { remove(): void };
-  addListener(name: "interrupted", listener: (event: { began: boolean; failed?: boolean }) => void): { remove(): void };
+  addListener(name: "interrupted", listener: (event: { began: boolean; failed?: boolean; problem?: string }) => void): { remove(): void };
+};
+
+/** The iPhone's custom WebRTC audio device for a WebRTC-only Watch session. */
+export type WatchRtcLike = {
+  readonly sessionId: string;
+  start(): Promise<string>;
+  answer(sdp: string): Promise<void>;
+  send(event: string): void;
+  input(enabled: boolean): void;
+  flush(): void;
+  end(): Promise<void>;
+  onMessage(listener: (message: string) => void): { remove(): void };
+  onState(listener: (state: "open" | "connected" | "failed" | "closed") => void): { remove(): void };
+  onLevel(listener: (level: { mic: number; output: number }) => void): { remove(): void };
+  onInterrupted(listener: (failed: boolean, problem?: string) => void): { remove(): void };
 };
 
 export interface LiveTransport {
@@ -125,6 +140,9 @@ export abstract class LiveBase implements LiveTransport {
   /** The time, for pacing `level`. A transport given a clock of its own sets it. */
   protected clock: () => number = Date.now;
   private heard = { mic: 0, out: 0, told: 0 };
+  /** The loudest the microphone was while it was sent in this push-to-talk turn, and whether this call reports microphone levels at all. */
+  private turnPeak = 0;
+  private metered = false;
 
   constructor(protected readonly runTool: ToolRunner) {}
 
@@ -155,11 +173,25 @@ export abstract class LiveBase implements LiveTransport {
   /** A transport says how loud the microphone or the bot's sound is now; listeners hear of it at a slow, even pace. */
   protected hears(sound: { mic?: number; out?: number }) {
     if (this.ended) return;
+    if (sound.mic !== undefined) {
+      this.metered = true;
+      if (this.gate.open()) this.turnPeak = Math.max(this.turnPeak, sound.mic);
+    }
     Object.assign(this.heard, sound);
     const now = this.clock();
     if (now - this.heard.told < LEVEL_EVERY_MS) return;
     this.heard.told = now;
     this.emit("level", this.heard.out > 0.02 ? this.heard.out : this.heard.mic);
+  }
+
+  /** A new push-to-talk turn begins (not a press that goes on with the last turn). */
+  protected startTurn() {
+    this.turnPeak = 0;
+  }
+
+  /** The turn just held had no speech in it. A call that reports no microphone level can't tell, so it never says so. */
+  protected get quietTurn(): boolean {
+    return this.metered && this.turnPeak < SPEECH_LEVEL;
   }
 
   protected setStatus(status: LiveStatus) {

@@ -415,8 +415,11 @@ export const workspace = {
   },
   models: {
     summary: "List the models the signed-in providers offer",
-    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>]",
+    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>] [--speed <off|fast|ultrafast|inherit> [--bot <bot> | --chat <id>]]",
     options: {
+      speed: { type: "string", value: "mode", about: "Set fast mode. Fast and Ultrafast use your plan allowance much faster" },
+      bot: { type: "string", value: "bot", about: "Set speed for this bot" },
+      chat: { type: "string", value: "id", about: "Set speed for this chat" },
       default: { type: "string", value: "provider/model", about: "Make this the model a bot uses unless it has its own" },
       routines: { type: "string", value: "provider/model", about: "Make this the Default routines model: routines use it unless they have their own. \"none\" clears it" },
       effort: { type: "string", value: "level", about: "With --routines: the thinking level, such as low or high" },
@@ -424,6 +427,14 @@ export const workspace = {
     details: "A routine uses its own model, else the Default routines model, else its bot's model, else the default model.",
     async run(context) {
       const o = context.options;
+      if (o.speed !== undefined) {
+        if (o.default || o.routines || o.effort || (o.bot && o.chat)) throw usage("Set speed separately, for one scope at a time.");
+        if (!["inherit", "off", "fast", "ultrafast"].includes(o.speed) || (o.speed === "inherit" && !o.bot && !o.chat))
+          throw usage("Choose off, fast, ultrafast, or inherit for a bot or chat.");
+        const scope = o.bot ? "bot" : o.chat ? "chat" : "global";
+        return void context.print(await context.client.call("models.speed", scope, o.bot ?? o.chat ?? null, o.speed), () => "Saved " + scope + " fast mode (" + o.speed + ").");
+      }
+      if (o.bot || o.chat) throw usage("--bot and --chat go with --speed.");
       if (o.effort !== undefined && o.routines === undefined) throw usage("--effort goes with --routines <provider/model>.");
       if (o.routines !== undefined) {
         const cleared = o.routines === "none";

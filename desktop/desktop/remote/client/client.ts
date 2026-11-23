@@ -1,12 +1,13 @@
 // The phone's end of the Botkins link (the desktop's end is link-host/server.mjs).
 // It pairs with a computer, opens encrypted sessions, makes calls, and follows the computer's
-// state by asking for the parts that changed. Nothing here depends on React Native, so the same
+// state by polling or receiving sealed relay updates. Nothing here depends on React Native, so the same
 // code runs in the tests.
-import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
+import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, pushNonce, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
 import type { PairTarget } from "./pairing";
 import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
 import { sha256 } from "@noble/hashes/sha2.js";
+import type { ReasoningDelta, ReasoningView } from "./types";
 
 const PREFIX = "/botkins/v1/";
 export const PROTOCOL = 1;
@@ -47,7 +48,7 @@ export class LinkError extends Error {
 }
 
 type FetchResponse = { ok: boolean; status: number; json(): Promise<unknown>; arrayBuffer(): Promise<ArrayBuffer> };
-export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; signal?: AbortSignal }) => Promise<FetchResponse>;
+export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; signal?: AbortSignal; onPart?(part: Uint8Array): void }) => Promise<FetchResponse>;
 
 /** What a computer says about itself. Over the relay it says only the first four (no name, app or version). */
 /** `pairing` says whether a code is open. Through the relay the computer leaves it out, so a stranger can't watch for one. */
@@ -58,7 +59,7 @@ type Hello = { botkins: number; serverId: string; publicKey: string; pairing?: b
  * never waits on the transport to say so. A request that iOS dropped while the app was suspended may
  * never settle, and that must not hold the link.
  */
-async function timed<T>(ms: number, outer: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+async function timed<T>(ms: number, outer: AbortSignal | undefined, run: (signal: AbortSignal, renew: () => void) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stop: (() => void) | undefined;
@@ -74,7 +75,11 @@ async function timed<T>(ms: number, outer: AbortSignal | undefined, run: (signal
     if (outer?.aborted) stop();
   });
   try {
-    return await Promise.race([run(controller.signal), gaveUp]);
+    const renew = () => {
+      clearTimeout(timer);
+      if (stop && !controller.signal.aborted) timer = setTimeout(stop, ms);
+    };
+    return await Promise.race([run(controller.signal, renew), gaveUp]);
   } finally {
     clearTimeout(timer);
     if (stop) outer?.removeEventListener("abort", stop);
@@ -150,6 +155,13 @@ function mergeHosts(worked: string, fresh: string[], saved: string[], limit: num
   return cut;
 }
 
+/**
+ * What a device tells the computer it pairs with, sealed with the code's key (the relay never reads
+ * it). `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"). A
+ * computer from before "device-person-v1" ignores `person` and pairs as before.
+ */
+export type PairDevice = { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string; person?: string };
+
 /** Pairs this phone with a computer that is showing a pairing code. */
 /**
  * Pairs this device with a computer. `kind` says what this device is: a phone (the default), or
@@ -161,7 +173,7 @@ function mergeHosts(worked: string, fresh: string[], saved: string[], limit: num
  * that reached it directly, and asks for a signature made with it before a phone may turn the screen
  * on ("screen-grant-v1"). `grantMessage` is what gets signed.
  */
-export async function pair(fetcher: FetchLike, target: PairTarget, device: { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string }): Promise<Pairing> {
+export async function pair(fetcher: FetchLike, target: PairTarget, device: PairDevice): Promise<Pairing> {
   const { host, hello: found } = await findHost(fetcher, target.hosts, { serverKey: target.serverKey, serverId: target.serverId });
   if (found.botkins !== PROTOCOL) throw new LinkError("protocol", "Update Botkins and your computer's app to the same version.");
   if (found.pairing === false) throw new LinkError("closed", "That code has expired. Show a new one on your computer.");
@@ -202,7 +214,7 @@ export type JoinTarget = {
   serverId?: string;
   name?: string;
 };
-export type JoinDevice = { name: string; platform: string; kind?: "phone" | "desktop"; presenceKey?: string };
+export type JoinDevice = PairDevice;
 export type JoinKeyPair = { publicKey: string; secretKey: string };
 export type JoinAttempt = { target: JoinTarget; device: JoinDevice; keys: JoinKeyPair; serverId?: string };
 export type JoinResult =
@@ -335,12 +347,29 @@ const deviceKeyOf = (pairing: Pairing) => hkdf(agree(unb64u(pairing.secretKey), 
  */
 export const pushKeyOf = (pairing: Pairing) => hkdf(deviceKeyOf(pairing), utf8(pairing.deviceId), "botkins/push/v1");
 
-type Session = { id: string; toHost: Uint8Array; toPhone: Uint8Array; seq: number; base: string };
+type Session = { id: string; toHost: Uint8Array; toPhone: Uint8Array; seq: number; pushCounter: number; base: string };
 const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRelayHost(session.base.replace(/^http:\/\//, "")) ? "relay" : "direct") : null);
 type SyncNews = { epoch: string; v: Record<string, number> | null; parts: Record<string, unknown> };
 class Retry extends Error {}
 
+// Same preview as the host. The portable client is bundled independently of the host modules.
+function reasoningPreview(items: ReasoningView["items"], botId?: string) {
+  return items.filter(item => item.text && (!botId || item.botId === botId)).map(item => item.text).join("\n\n").slice(-4000);
+}
+
+type PreviewSource = { run: string; botId?: string };
+type HeldText = { id: string; stream: string; thinking: string; preview?: PreviewSource };
+type Append = { from: number; add: string };
+type TextDelta = { id: string; stream: Append; thinking: Append; preview?: PreviewSource };
+
 export type LinkOptions = {
+  /** Opt in to boolean live indicators and expanded text:<chatId> parts for watched chats. */
+  streamAppends?: boolean;
+  /**
+   * Ask for steps without their long input and output ("step-details-v1"): such a step says
+   * `more: true`, and `link.step` reads it when it is opened. A computer without it sends them whole.
+   */
+  lightSteps?: boolean;
   fetch: FetchLike;
   /** Parts that changed on the computer, by name. A chat's detail is "chat:<id>", its running turn "run:<id>". */
   onParts(parts: Record<string, unknown>): void;
@@ -361,7 +390,18 @@ export type LinkOptions = {
   wakeMs?: number;
   /** Each time a sync came back: the phone is in step with the computer now. */
   onSync?(): void;
+  /**
+   * How a reply's text comes on this route (default "live", as it is written; true is "live" too). "whole" or
+   * false sends `text: false` ("text-streaming-off-v1"): the indicators stay and the reply comes whole when it
+   * ends. "chunks" sends `text: "chunks"` ("text-chunks-v1"): the text comes in complete sentences every
+   * couple of seconds, or whole from a computer without that. Read on each sync; call `textStreamingChanged`
+   * when the answer may have changed.
+   */
+  textStreaming?(route: LinkRoute): boolean | TextMode;
 };
+
+/** How a reply's text is followed: as it is written, in complete sentences now and then, or whole when it ends. */
+export type TextMode = "live" | "chunks" | "whole";
 
 const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
 /** How long a direct address that answered and then failed is left out, when there is a relay to use. */
@@ -374,8 +414,21 @@ export class LinkClient {
   private session: Session | null = null;
   private opening: Promise<Session> | null = null;
   private epoch = "";
+  private texts = new Map<string, HeldText>();
+  private reasonings = new Map<string, ReasoningView>();
+  private supportsAppends: boolean | undefined;
+  private supportsReasoning: boolean | undefined;
+  private receivedFullLive = false;
+  /** What the last sync asked for, as the option said it and as it was sent. */
+  private sentMode: TextMode = "live";
+  private sentText: TextMode = "live";
+  private supportsPush = false;
+  private pushSession: Session | null = null;
+  /** Whether the computer sends text in chunks ("text-chunks-v1"), once it has said. */
+  private supportsChunks: boolean | undefined;
   private have: Record<string, number> = {};
   private watching: string[] = [];
+  private reasoningWatching: string[] = [];
   private running = false;
   // A late answer belongs to the lifetime that asked, even after a stop and restart.
   private lifetime: object | null = {};
@@ -414,7 +467,15 @@ export class LinkClient {
     this.scheduleProbe();
     void this.follow(this.lifetime);
   }
+  private endPush() {
+    const session = this.pushSession;
+    if (!session) return;
+    this.pushSession = null;
+    void this.request("link.unfollow", [], 4000, undefined, session).catch(() => {});
+  }
+
   stop() {
+    this.endPush();
     this.running = false;
     this.lifetime = null;
     this.opening = null;
@@ -453,6 +514,7 @@ export class LinkClient {
    */
   rest() {
     if (!this.lifetime || this.resting) return;
+    this.endPush();
     this.resting = true;
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
@@ -484,12 +546,29 @@ export class LinkClient {
     const next = [...new Set(chatIds)].sort();
     if (next.join("\n") === this.watching.join("\n")) return;
     this.watching = next;
+    if (this.options.streamAppends && this.supportsAppends) delete this.have.live;
     // The waiting request is for the old set: ask again.
     this.poll?.abort();
+  }
+  /** Requests detailed reasoning for these chats even when reply text is whole/off. */
+  watchReasoning(chatIds: string[]) {
+    const next = [...new Set(chatIds)].filter((id) => id.length > 0 && id.length <= 128).sort().slice(0, 4);
+    if (next.join("\n") === this.reasoningWatching.join("\n")) return;
+    this.reasoningWatching = next;
+    this.poll?.abort();
+  }
+  /** The choice behind `textStreaming` changed: a waiting sync that asked otherwise asks again. */
+  textStreamingChanged() {
+    if (this.session && this.textFor(this.session) !== this.sentMode) this.poll?.abort();
+  }
+  private textFor(session: Session): TextMode {
+    const mode = this.options.textStreaming?.(routeOf(session)!) ?? "live";
+    return mode === true ? "live" : mode === false ? "whole" : mode;
   }
 
   /** Sets the session and reports how it connects. */
   private useSession(session: Session | null) {
+    if (this.pushSession && this.pushSession !== session) this.endPush();
     this.session = session;
     this.setRoute(routeOf(session));
   }
@@ -621,25 +700,49 @@ export class LinkClient {
       if (this.lifetime === lifetime && reply.epoch !== this.epoch) {
         // The computer's app restarted: nothing we hold is known to be current.
         this.epoch = reply.epoch;
+        this.supportsAppends = undefined;
+        this.supportsReasoning = undefined;
+        this.supportsPush = false;
+        this.supportsChunks = undefined;
         this.have = {};
+        this.reasonings.clear();
       }
-      const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, base };
+      const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, pushCounter: 0, base };
       if (this.lifetime === lifetime) this.useSession(session);
       return session;
     }
   }
 
-  private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal): Promise<T> {
-    const session = await this.openSession();
+  private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal, active?: Session, onNews?: (news: SyncNews) => void): Promise<T> {
+    const session = active ?? await this.openSession();
     if (signal?.aborted) throw new Error("The request was cancelled");
     const seq = ++session.seq;
     const sealed = seal(session.toHost, seqNonce(seq), utf8(JSON.stringify({ m: method, a: args })), "rpc:" + session.id);
-    const response = await timed(timeout, signal, (inner) =>
+    let first = true;
+    const response = await timed(timeout, signal, (inner, renew) =>
       this.options.fetch(session.base + PREFIX + "rpc", {
         method: "POST",
         headers: { "content-type": "application/octet-stream", "x-botkins-session": session.id },
         body: concat(seqBytes(seq), sealed),
         signal: inner,
+        ...(onNews && { onPart: (part: Uint8Array) => {
+          if (inner.aborted || this.session !== session) return;
+          if (part.length < 24) throw new Retry();
+          const view = new DataView(part.buffer, part.byteOffset, 8);
+          const counter = view.getUint32(0) * 0x100000000 + view.getUint32(4);
+          if (!Number.isSafeInteger(counter) || counter <= session.pushCounter || (!first && counter !== session.pushCounter + 1)) throw new Retry();
+          const aad = "push:" + session.id + ":" + seq + ":" + (first ? "first" : "more");
+          let news: SyncNews;
+          try {
+            news = JSON.parse(fromUtf8(open(session.toPhone, pushNonce(counter), part.subarray(8), aad)));
+          } catch {
+            throw new Retry();
+          }
+          session.pushCounter = counter;
+          first = false;
+          renew();
+          onNews(news);
+        } }),
       }),
     );
     if (response.status === 401) {
@@ -660,7 +763,7 @@ export class LinkClient {
     for (let attempt = 0; ; attempt++) {
       try {
         // Pi waits for npm to finish installing dependencies on the computer.
-        return await this.request<T>(method, args, method === "piPackages.install" ? 150_000 : 60_000);
+        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000);
       } catch (error) {
         if (this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;
@@ -679,6 +782,130 @@ export class LinkClient {
       const timer = setTimeout(done, ms);
       this.wakeUp = done;
     });
+  }
+
+  private cursors() {
+    return Object.fromEntries(this.watching.slice(0, 4).flatMap((chat) => {
+      const held = this.texts.get(chat);
+      return held ? [[chat, { id: held.id, stream: held.stream.length, thinking: held.thinking.length }]] : [];
+    }));
+  }
+
+  private releaseReasoning(keep: string[]) {
+    const cleared: Record<string, null> = {};
+    for (const chat of this.reasonings.keys()) {
+      if (keep.includes(chat)) continue;
+      this.reasonings.delete(chat);
+      delete this.have["reasoning:" + chat];
+      cleared["reasoning:" + chat] = null;
+    }
+    if (Object.keys(cleared).length) this.options.onParts(cleared);
+  }
+
+  private expandReasoning(parts: Record<string, unknown>) {
+    const meta = parts.meta as { capabilities?: string[] } | undefined;
+    if (meta) this.supportsReasoning = meta.capabilities?.includes("reasoning-appends-v1") === true;
+    for (const [name, value] of Object.entries(parts)) {
+      if (!name.startsWith("reasoning:")) continue;
+      const chat = name.slice(10);
+      if (!value) {
+        this.reasonings.delete(chat);
+        continue;
+      }
+      const delta = value as ReasoningDelta;
+      const previous = this.reasonings.get(chat);
+      if (!delta.reset && previous?.run !== delta.run) {
+        delete this.have[name];
+        throw new Retry();
+      }
+      const byId = new Map((delta.reset || previous?.run !== delta.run ? [] : previous?.items ?? []).map((item) => [item.id, item]));
+      for (const id of delta.remove ?? []) {
+        byId.delete(id);
+      }
+      for (const item of delta.items ?? []) {
+        const held = byId.get(item.id);
+        if (item.from !== 0 && (!held || held.text.length !== item.from)) {
+          this.have = {};
+          this.texts.clear();
+          this.reasonings.clear();
+          throw new Retry();
+        }
+        const text = item.from === 0 ? item.add : held!.text + item.add;
+        byId.set(item.id, { id: item.id, text, started: item.started, ...(item.finished !== undefined && { finished: item.finished }), ...(item.botId && { botId: item.botId }) });
+      }
+      const items = delta.order ? delta.order.flatMap((id) => byId.has(id) ? [byId.get(id)!] : []) : [...byId.values()];
+      const view = { run: delta.run, items };
+      this.reasonings.set(chat, view);
+      parts[name] = view;
+    }
+    // A step may replace the compact run without changing its separately versioned reasoning.
+    for (const [chat, held] of this.reasonings) {
+      const run = parts["run:" + chat] as { id: string; status: string } | null | undefined;
+      const key = "reasoning:" + chat;
+      if (run?.status === "Working" && run.id === held.run && !(key in parts)) parts[key] = held;
+    }
+  }
+
+  private expandText(parts: Record<string, unknown>, watching: string[], requested: boolean) {
+    const meta = parts.meta as { capabilities?: string[] } | undefined;
+    if (meta) this.supportsAppends = meta.capabilities?.includes("stream-appends-v1") === true;
+    const live = parts.live as { streams: Record<string, unknown>; thinking: Record<string, unknown> } | undefined;
+    if (!requested || this.supportsAppends === false) {
+      this.texts.clear();
+      if (live) this.receivedFullLive = true;
+      return;
+    }
+    if (live && this.receivedFullLive) {
+      // The previous full snapshot could include bodies for chats we have never watched.
+      for (const chat of [...Object.keys(live.streams), ...Object.keys(live.thinking)]) {
+        if (!("text:" + chat in parts)) parts["text:" + chat] = null;
+      }
+      this.receivedFullLive = false;
+    }
+    for (const chat of this.texts.keys()) {
+      if (!watching.includes(chat) || (live && !(chat in live.streams) && !(chat in live.thinking))) {
+        this.texts.delete(chat);
+        parts["text:" + chat] = null;
+      }
+    }
+    for (const [name, value] of Object.entries(parts)) {
+      if (!name.startsWith("text:")) continue;
+      const chat = name.slice(5);
+      if (!value) {
+        this.texts.delete(chat);
+        continue;
+      }
+      const delta = value as TextDelta;
+      const prev = this.texts.get(chat);
+      const expand = (field: "stream" | "thinking") => {
+        const { from, add } = delta[field];
+        if (from === 0) return add;
+        if (prev?.id !== delta.id || prev[field].length !== from) {
+          // Replay the entire answer, including other chats already expanded in this batch. The
+          // session is fine, so this asks again from zero and is not a lost connection.
+          this.have = {};
+          this.texts.clear();
+          throw new Retry();
+        }
+        return prev[field] + add;
+      };
+      const stream = expand("stream");
+      const thinking = expand("thinking");
+      this.texts.set(chat, { id: delta.id, stream, thinking, preview: delta.preview });
+      parts[name] = { stream, thinking };
+    }
+  }
+
+  private publishThinkingPreviews(parts: Record<string, unknown>, watching: string[]) {
+    for (const chat of watching) {
+      const key = "text:" + chat;
+      if (!(key in parts) && !("reasoning:" + chat in parts)) continue;
+      const held = this.texts.get(chat);
+      const reasoning = this.reasonings.get(chat);
+      if (held?.preview) {
+        parts[key] = { stream: held.stream, thinking: reasoning?.run === held.preview.run ? reasoningPreview(reasoning.items, held.preview.botId) : "" };
+      }
+    }
   }
 
   private async follow(lifetime: object) {
@@ -700,20 +927,58 @@ export class LinkClient {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
         const quick = this.suspect;
         this.suspect = false;
-        const news = await this.request<SyncNews>("link.sync", [{ epoch: this.epoch, have: this.have, watch: this.watching, wait: quick ? 0 : 25_000 }], quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal);
-        if (this.lifetime !== lifetime) break;
-        failures = 0;
-        this.setState("online");
-        if (this.lifetime !== lifetime) break;
-        if (news.epoch !== this.epoch) {
-          this.epoch = news.epoch;
-          this.have = {};
+        const session = await this.openSession();
+        if (poll.signal.aborted) continue;
+        const mode = this.textFor(session);
+        const text: TextMode = mode === "chunks" && this.supportsChunks === false ? "whole" : mode;
+        // Text back on: the computer sends each held body again from its start.
+        if (text !== "whole" && this.sentText === "whole") {
+          this.texts.clear();
+          delete this.have.live;
         }
-        if (news.v) {
-          this.have = news.v;
-          this.options.onParts(news.parts);
-        }
-        this.options.onSync?.();
+        this.sentMode = mode;
+        this.sentText = text;
+        const watching = this.watching;
+        const detailed = this.reasoningWatching;
+        const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
+          watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
+        const appends = requestText ? { appends: this.cursors() } : {};
+        const requestReasoning = requestText && this.supportsReasoning !== false;
+        const reasoningWatch = requestReasoning ? [...new Set([...detailed, ...(text !== "whole" ? watching.slice(0, 4) : [])])].slice(0, 4) : [];
+        this.releaseReasoning(reasoningWatch);
+        if (poll.signal.aborted) continue;
+        const push = !quick && routeOf(session) === "relay" && this.supportsPush &&
+          "supportsPush" in this.options.fetch && this.options.fetch.supportsPush === true;
+        const accept = (news: SyncNews) => {
+          if (this.lifetime !== lifetime || poll.signal.aborted) return;
+          failures = 0;
+          this.setState("online");
+          if (this.lifetime !== lifetime || poll.signal.aborted) return;
+          if (news.epoch !== this.epoch) {
+            this.epoch = news.epoch;
+            this.have = {};
+          }
+          if (this.options.streamAppends && (watching !== this.watching || detailed !== this.reasoningWatching)) return;
+          if (news.v) {
+            const meta = news.parts.meta as { capabilities?: string[] } | undefined;
+            if (meta) {
+              this.supportsPush = meta.capabilities?.includes("sync-push-v1") === true;
+              this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
+            }
+            if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
+            if (this.options.streamAppends) this.expandReasoning(news.parts);
+            if (requestReasoning && text !== "whole") this.publishThinkingPreviews(news.parts, watching);
+            this.have = news.v;
+            this.options.onParts(news.parts);
+          }
+          this.options.onSync?.();
+        };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        if (push) this.pushSession = session;
+        const news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
+          quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+        if (push && this.pushSession === session) this.pushSession = null;
+        accept(news);
       } catch (error) {
         if (this.lifetime !== lifetime) break;
         // Cut short on purpose (the watched chats changed), or a session to renew: go again.

@@ -1,6 +1,6 @@
 // The phone's end of the relay: how a phone away from the computer's network still reaches it.
-// The computer keeps one outgoing WebSocket open to a relay; the phone opens one too, and the relay
-// passes the link's own (already sealed) requests and answers between them. The wire format is the
+// The computer keeps an active socket and, with v3, a standby; the phone opens one too, and the relay
+// passes the link's own (already sealed) requests, intermediate 0x07 follow parts and final answers between them. The wire format is the
 // header of tests/fake-relay.ts. Nothing here depends on React Native or Node.
 //
 // A relay address is one more entry in the saved host list: `relay!<room>@<authority>`. The client
@@ -74,13 +74,13 @@ export type RelayOptions = {
 };
 
 /** The fetch `relayFetch` makes. `check` pings every open relay socket and ends those that stay silent for `ms` (3 s). */
-export type RelayFetch = FetchLike & { check(ms?: number): void };
+export type RelayFetch = FetchLike & { supportsPush: true; check(ms?: number): void };
 
 const ROUTES: Record<string, number> = { hello: 1, pair: 2, session: 3, rpc: 4, join: 5 };
 const URL_SHAPE = /^https?:\/\/([^/?#]+)\/botkins\/v1\/(hello|pair|session|rpc|join)$/;
 const OPEN = 1;
 type Timer = ReturnType<typeof setTimeout>;
-type Pending = { resolve(response: RelayResponse): void; reject(error: Error): void; frame: Uint8Array; settle(): void };
+type Pending = { onPart?(part: Uint8Array): void; resolve(response: RelayResponse): void; reject(error: Error): void; frame: Uint8Array; settle(): void };
 type RelayResponse = Awaited<ReturnType<FetchLike>>;
 
 function respond(status: number, body: Uint8Array): RelayResponse {
@@ -195,6 +195,16 @@ class Conn {
     const pending = this.pending.get(id);
     // An answer for a request that was given up on is ignored.
     if (!pending) return;
+    if (bytes[0] === 0x07) {
+      try {
+        pending.onPart?.(bytes.subarray(5));
+      } catch (error) {
+        this.forget(id);
+        pending.settle();
+        pending.reject(error instanceof Error ? error : new Error("Invalid follow part"));
+      }
+      return;
+    }
     if (bytes[0] === 0x02 && bytes.length >= 7) {
       this.pending.delete(id);
       pending.settle();
@@ -335,10 +345,11 @@ export function relayFetch(fetcher: FetchLike, options: RelayOptions = {}): Rela
       };
       const settle = () => signal?.removeEventListener("abort", onAbort);
       signal?.addEventListener("abort", onAbort, { once: true });
-      live.add(id, { resolve, reject, frame, settle });
+      live.add(id, { resolve, reject, frame, settle, onPart: init?.onPart });
     });
   };
   return Object.assign(send, {
+    supportsPush: true as const,
     check: (ms = 3000) => {
       for (const conn of [...conns.values()]) conn.check(ms);
     },

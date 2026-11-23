@@ -59,6 +59,8 @@ async function openMarketplace() {
   const dialog = settings();
   await dialog.getByRole("tab", { name: "Marketplace", exact: true }).click();
   await dialog.getByRole("heading", { name: "Marketplace", exact: true }).waitFor();
+  await dialog.getByRole("tablist", { name: "Marketplace" }).getByRole("tab", { name: "Skills" }).click();
+  await dialog.getByRole("button", { name: "testing", exact: true }).waitFor();
   // Marketplace opens on the view last looked at (Apps the first time): these checks are in Plugins.
   await dialog.getByRole("tab", { name: "Plugins", exact: true }).click();
   return dialog;
@@ -305,7 +307,7 @@ try {
   await expect(unmarkedAsk.getByRole("button", { name: "Turn on anyway", exact: true })).toBeVisible();
   await unmarkedAsk.getByRole("button", { name: "Cancel", exact: true }).click();
   // Where the skills are missed: one notice in Skills, and its button leads to the plugin's page.
-  await dialog.getByRole("tab", { name: "Skills", exact: true }).click();
+  await dialog.getByRole("tablist", {name:"Settings"}).getByRole("tab", { name: "Skills", exact: true }).click();
   const missed = dialog.getByRole("status", { name: "Skills from held are off", exact: true });
   await expect(missed).toContainText("They are part of a plugin that is switched off. Review it, then turn it on.");
   await expect(dialog.getByRole("status", { name: /^Skills from/ })).toHaveCount(1);
@@ -314,7 +316,7 @@ try {
   await dialog.getByRole("heading", { name: "held", exact: true }).waitFor();
   await expect(dialog.locator(".plugin-held")).toHaveText(OFF);
   if (process.env.BOTKINS_QA_DIR) await page.screenshot({ path: join(process.env.BOTKINS_QA_DIR, "plugin-held.png") });
-  await dialog.getByRole("tab", { name: "Skills", exact: true }).click();
+  await dialog.getByRole("tablist", {name:"Settings"}).getByRole("tab", { name: "Skills", exact: true }).click();
   await expect(dialog.getByRole("status", { name: /^Skills from/ })).toHaveCount(0);
 
   assert.deepEqual(errors, [], "no renderer page errors");

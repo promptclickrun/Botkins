@@ -65,7 +65,7 @@ function follow(pairing: Pairing) {
     },
   });
   client.watch([...watched.keys()]);
-  client.watchReasoning([...reasoningSheets.keys()]);
+  client.watchReasoning([...reasoningWatchers.keys()]);
   client.start();
 }
 
@@ -152,6 +152,7 @@ export async function boot() {
   // The Home Screen and Lock Screen widgets read what the app last saw (src/state/widgets.ts).
   void import("./widgets").then((widgets) => widgets.startWidgets()).catch(() => {});
   void import("./device").then((device) => device.startDeviceAnswers()).catch(() => {});
+  void import("./watch").then((watch) => watch.startWatchCompanion()).catch(() => {});
   AppState.addEventListener("change", (state) => {
     if (state === "active") {
       nearbyPace.reset();
@@ -272,6 +273,13 @@ export async function switchComputer(serverId: string) {
   await saveIndex().catch(() => {});
 }
 
+/** The Shortcuts computer picker can open before the foreground app has booted. */
+export async function shortcutHosts() {
+  const { kept } = await readSaved();
+  return kept.list.slice().sort((a, b) => Number(b.serverId === kept.current) - Number(a.serverId === kept.current))
+    .map(({ serverId, name }) => ({ id: serverId, name }));
+}
+
 /** An App Intent may run before a scene exists. Read its pairing without starting the UI or changing its computer. */
 export async function shortcutLink(host?: string) {
   const { kept: saved } = await readSaved();
@@ -339,7 +347,7 @@ export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | u
 
 // Chats on screen are watched; each screen counts once.
 const watched = new Map<string, number>();
-const reasoningSheets = new Map<string, number>();
+const reasoningWatchers = new Map<string, number>();
 const watchers = new Set<() => void>();
 /** The chat on screen now (the last one opened), if any. */
 export const chatOnScreen = () => [...watched.keys()].at(-1);
@@ -364,9 +372,9 @@ export function watchChat(id: string) {
     for (const tell of watchers) tell();
   });
 }
-/** A visible Activity sheet can follow its reasoning even when chat replies arrive whole. */
+/** A visible chat or Activity sheet can follow reasoning even when replies arrive whole. */
 export function watchReasoning(id: string) {
-  return watchId(reasoningSheets, id, () => client?.watchReasoning([...reasoningSheets.keys()]));
+  return watchId(reasoningWatchers, id, () => client?.watchReasoning([...reasoningWatchers.keys()]));
 }
 
 /** Loads the page of messages before the ones a chat holds. */

@@ -19,11 +19,12 @@ import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { openFromList, useChatSplit } from "./split";
-import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, type TextPromptOptions, useTextPrompt, useTheme } from "@/ui";
 import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
 import { moveToSection, runSectionAction, runSectionChoice, sectionActions } from "./sectionMenus";
 import { arrangeChats, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
+import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 
 function remove(chat: ChatSummary) {
   Alert.alert("Delete this chat?", chat.title, [
@@ -32,23 +33,16 @@ function remove(chat: ChatSummary) {
   ]);
 }
 
-function rename(chat: ChatSummary) {
-  Alert.prompt(
-    "Rename chat",
-    undefined,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Rename",
-        onPress: (value?: string) => {
-          const title = value?.trim().slice(0, 120);
-          if (title && title !== chat.title) void attempt(api.renameChat(chat.id, title));
-        },
-      },
-    ],
-    "plain-text",
-    chat.title,
-  );
+function rename(chat: ChatSummary, ask: (options: TextPromptOptions) => void) {
+  ask({
+    title: "Rename chat",
+    value: chat.title,
+    confirm: "Rename",
+    onSubmit: (value) => {
+      const title = value.slice(0, 120);
+      if (title !== chat.title) void attempt(api.renameChat(chat.id, title));
+    },
+  });
 }
 
 /** What VoiceOver offers on a chat in place of dragging. */
@@ -68,9 +62,11 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   // With the chat open beside the list (two panes), its row is marked.
   const picked = useChatSplit((split) => split.active && split.id === chat.id);
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
   const mine = myPlace(chat, me) === "manages";
-  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }] : [];
+  const canRegenerate = useCanRegenerateTitle(chat, mine);
+  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
   const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
   // A section is the person's own way to group their chats, like a pin.
   const filing = sections ? [moveToSection(chat, sections)] : [];
@@ -85,16 +81,18 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         ...ends,
       ];
   return (
+    <>
     <HoldMenu
       actions={canChat ? menu : []}
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
-        if (runSectionChoice(chat, action)) return;
+        if (runSectionChoice(chat, action, prompt.ask)) return;
         if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }));
         else if (action === "unread") void attempt(api.setChatFlags(chat.id, { unread: !chat.unread }));
         else if (action === "archive") void attempt(api.setChatFlags(chat.id, { archived: true }), "Archived");
         else if (action === "restore") void attempt(api.setChatFlags(chat.id, { archived: false }), "Restored");
-        else if (action === "rename") rename(chat);
+        else if (action === "rename") rename(chat, prompt.ask);
+        else if (action === regenerateTitleAction.id) regenerateTitle(chat.id);
         else if (action === "delete") remove(chat);
       }}
     >
@@ -105,8 +103,12 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         hitSlop={0}
         accessibilityLabel={title + ", " + (live || preview) + (chat.unread ? ", unread" : "")}
         accessibilityHint="Long press for more"
-        accessibilityActions={actions?.list}
-        onAccessibilityAction={actions ? (event) => actions.run(event.nativeEvent.actionName) : undefined}
+        accessibilityActions={canRegenerate ? [...(actions?.list ?? []), { name: regenerateTitleAction.id, label: regenerateTitleAction.title }] : actions?.list}
+        onAccessibilityAction={actions || canRegenerate ? (event) => {
+          const action = event.nativeEvent.actionName;
+          if (canRegenerate && action === regenerateTitleAction.id) regenerateTitle(chat.id);
+          else actions?.run(action);
+        } : undefined}
       >
         <View style={[{ minHeight: 72, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md }, picked && { backgroundColor: colors.sunken, borderRadius: radius.lg, marginHorizontal: -space.sm, paddingHorizontal: space.sm }]} accessibilityState={picked ? { selected: true } : undefined}>
           {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}
@@ -135,12 +137,15 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         </View>
       </Tap>
     </HoldMenu>
+    {prompt.node}
+    </>
   );
 }
 
 /** A group's heading. A section's folds it with a tap and has the section's menu; the others are plain. */
 function GroupHead({ group, sections, open, onToggle, note }: { group: ChatGroup; sections: Section[]; open: boolean; onToggle: () => void; note?: string }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const section = group.section;
   if (!section)
     return (
@@ -170,12 +175,13 @@ function GroupHead({ group, sections, open, onToggle, note }: { group: ChatGroup
           </T>
           <Fold size={14} color={colors.faint} strokeWidth={2.4} />
         </Tap>
-        <MenuView title={section.name} actions={sectionActions(sections, section)} onPressAction={({ nativeEvent }) => runSectionAction(sections, section, nativeEvent.event)}>
+        <MenuView title={section.name} actions={sectionActions(sections, section)} onPressAction={({ nativeEvent }) => runSectionAction(sections, section, nativeEvent.event, prompt.ask)}>
           <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, marginRight: -space.md, alignItems: "center", justifyContent: "center" }}>
             <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
           </View>
         </MenuView>
       </View>
+      {prompt.node}
       {!!note && (
         <T variant="footnote" color="faint" style={{ paddingBottom: space.sm }}>
           {note}

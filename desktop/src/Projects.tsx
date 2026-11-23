@@ -30,6 +30,8 @@ import "./workspaces.css";
 
 import { WorkBar, type WorkNav } from "./WorkBar";
 import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from "./ProjectExtras";
+import { CloneFields, FolderChoice, projectCapability } from "./ProjectFolders";
+import { FolderBrowserSheet } from "./PluginsSettings";
 import ProjectSpaces from "./ProjectSpaces";
 import { hasSpaces } from "./spaces";
 const api = window.botkins;
@@ -114,6 +116,7 @@ export default function Projects({
       )}
       {creating && (
         <NewProjectDialog
+          clone={projectCapability(state, "project-clone-v1")}
           close={() => setCreating(false)}
           created={(id) => {
             setCreating(false);
@@ -147,12 +150,16 @@ function ProjectRow({ state, project: p, open }: { state: State; project: Projec
 }
 
 function NewProjectDialog({
+  clone,
   close,
   created,
 }: {
   close: () => void;
   created: (id: string) => void;
+  clone: boolean;
 }) {
+  const [repo, setRepo] = useState("");
+  const [parent, setParent] = useState("");
   const ref = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -168,7 +175,8 @@ function NewProjectDialog({
           e.preventDefault();
           setBusy(true);
           try {
-            created(await api.createProject({ name: name.trim(), description: description.trim() }));
+            const data = { name: name.trim() || undefined, description: description.trim() };
+            created(repo.trim() ? await api.cloneProjectRepository(repo, parent, undefined, data) : await api.createProject(data));
           } catch (err) {
             setError(clean(err));
           } finally {
@@ -184,13 +192,13 @@ function NewProjectDialog({
         </div>
         <label className="field">
           Name
-          <input required autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+          <input required={!repo.trim()} autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
         </label>
         <label className="field">
           Description
           <textarea rows={3} maxLength={2000} placeholder="Optional" value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
-        <small>You can add a folder later to make it a coding project.</small>
+        {clone && <CloneFields {...{ repo, parent, setRepo, setParent }} />}
         {error && (
           <p className="field-error" role="alert">
             {error}
@@ -200,8 +208,8 @@ function NewProjectDialog({
           <button type="button" className="secondary" onClick={close}>
             Cancel
           </button>
-          <button className="primary" disabled={busy || !name.trim()}>
-            Create project
+          <button className="primary" disabled={busy || (!name.trim() && !repo.trim())}>
+            {busy && repo ? "Cloning…" : "Create project"}
           </button>
         </div>
       </form>
@@ -244,6 +252,7 @@ function ProjectPage({
   // Changes shows only for a folder that is a git repository.
   useEffect(() => {
     setRepo(false);
+    if ((project.folders?.length ?? 0) > 1) { setRepo(true); return; }
     if (!project.folder) return;
     let live = true;
     api
@@ -253,7 +262,7 @@ function ProjectPage({
     return () => {
       live = false;
     };
-  }, [project.id, project.folder]);
+  }, [project.id, project.folder, project.folders?.length]);
   useEffect(() => {
     if (section === "changes" && !repo) setSection("overview");
   }, [repo]);
@@ -358,6 +367,10 @@ function Overview({
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [repo, setRepo] = useState("");
+  const [parent, setParent] = useState("");
+  const [browsing, setBrowsing] = useState(false);
+  const [cloning, setCloning] = useState(false);
   const dialogs = useAsk();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   useEffect(() => {
@@ -432,33 +445,30 @@ function Overview({
           </div>
         )}
       </Card>
-      <Card
-        title="Folder"
-        note={project.folder ? "Chats in this project run in this folder, with Default, Plan and YOLO modes." : "Optional. Add a folder to make this a coding project."}
-      >
-        {project.folder ? (
-          <ul className="edit-list">
-            <li>
-              <FolderGit2 size={16} />
-              <span className="grow mono" title={project.folder}>
-                {project.folder}
-              </span>
-              <button className="icon-button" aria-label="Reveal folder" title="Show in Finder" onClick={() => run(api.revealProject(project.id))}>
-                <FolderOpen size={16} />
-              </button>
+      <Card title={projectCapability(state, "project-folders-v1") ? "Folders" : "Folder"}>
+        <ul className="edit-list">
+          {(project.folders ?? (project.folder ? [project.folder] : [])).map((path, index) => (
+            <li key={path}>
+              <span className="grow mono">{path}{!index && project.folders && " · Default"}</span>
+              <button aria-label="Reveal folder" onClick={() => run(api.revealProject(project.id, path))}><FolderOpen size={16} /></button>
+              {!!index && <button onClick={() => run(api.editProjectFolder(project.id, "default", path))}>Make default</button>}
+              <button onClick={async () => {
+                if (await dialogs.ask({ title: "Remove folder?", body: path + " stays on the computer.", confirm: "Remove folder", danger: true }))
+                  run(project.folders ? api.editProjectFolder(project.id, "remove", path) : api.updateProject(project.id, { folder: null }));
+              }}>Remove folder</button>
             </li>
-          </ul>
-        ) : null}
-        <div className="actionrow">
-          <button onClick={() => run(api.chooseProjectFolder(project.id))}>
-            <FolderOpen size={15} /> {project.folder ? "Change folder…" : "Choose folder…"}
-          </button>
-          {project.folder && (
-            <button onClick={() => run(api.updateProject(project.id, { folder: null }))}>
-              <X size={15} /> Remove folder
-            </button>
-          )}
-        </div>
+          ))}
+        </ul>
+        <button onClick={() => state.remote?.using ? setBrowsing(true) : run(api.chooseProjectFolder(project.id, !!project.folders))}><FolderOpen size={15} /> {project.folders ? "Add folder…" : "Choose folder…"}</button>
+        {browsing && <FolderBrowserSheet project close={() => setBrowsing(false)} choose={(path) => {
+          setBrowsing(false);
+          run(project.folders ? api.editProjectFolder(project.id, "add", path) : api.updateProject(project.id, { folder: path }));
+        }} />}
+        {projectCapability(state, "project-clone-v1") && <CloneFields {...{ repo, parent, setRepo, setParent }} />}
+        {repo.trim() && <button disabled={cloning} onClick={() => {
+          setCloning(true);
+          run(api.cloneProjectRepository(repo, parent, project.id).then(() => setRepo("")).finally(() => setCloning(false)));
+        }}>{cloning ? "Cloning…" : "Clone repository"}</button>}
       </Card>
       <Card title="Delete project" note={(chats === 1 ? "Its chat stays" : chats ? "Its " + chats + " chats stay" : "Nothing in Chats changes") + (chats ? " in Chats, outside any project." : ".") + " Its to-do list is deleted."}>
         <div className="actionrow">
@@ -505,7 +515,10 @@ function ProjectChats({
   openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
 }) {
-  const [mode, setMode] = useState<ChatMode>("default");
+  const [localMode, setMode] = useState<ChatMode>("default");
+  const savesMode = projectCapability(state, "project-mode-v1");
+  const mode = savesMode ? project.mode ?? "default" : localMode;
+  const [folder, setFolder] = useState<string>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [adding, setAdding] = useState(false);
@@ -514,7 +527,7 @@ function ProjectChats({
     setBusy(bot.id);
     setError("");
     try {
-      openChat(await api.startProjectChat([bot.id], project.id, project.folder ? mode : "default"));
+      openChat(await api.startProjectChat([bot.id], project.id, project.folder ? mode : "default", project.folders?.includes(folder ?? "") ? folder : undefined));
     } catch (e) {
       setError(clean(e));
     } finally {
@@ -547,7 +560,7 @@ function ProjectChats({
           project.folder && (
             <label className="field-inline compact">
               <span>Mode</span>
-              <select aria-label="Mode" className="record-select" value={mode} onChange={(e) => setMode(e.target.value as ChatMode)}>
+              <select aria-label="Mode" className="record-select" value={mode} onChange={(e) => { const next = e.target.value as ChatMode; if (savesMode) void api.updateProject(project.id, { mode: next }).catch((err) => setError(clean(err))); else setMode(next); }}>
                 {(Object.keys(modeLabels) as ChatMode[]).map((m) => (
                   <option key={m} value={m}>
                     {modeLabels[m].label} – {modeLabels[m].hint}
@@ -558,6 +571,7 @@ function ProjectChats({
           )
         }
       >
+        <FolderChoice project={project} value={folder} change={setFolder} />
         <ul className="edit-list bot-pick-list" aria-label="Bots">
           {visible.map((b) => {
             const ok = canUseProject(state, b, project);

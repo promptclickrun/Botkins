@@ -14,7 +14,7 @@ export function switchTo(serverId: string) {
   showToast("Now using " + (next.name || "that computer"), "success");
 }
 
-/** Pairing one more computer. The ones the phone has stay paired. */
+/** Connecting one more computer ("Connect a computer"). The ones the phone has stay paired. */
 export const addComputer = () => router.push("/pair/scan");
 
 // About how long the phone's menu takes to close. A switch redraws all of Home, so it waits for the

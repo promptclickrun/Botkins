@@ -220,10 +220,10 @@ export function sessionIdFor(system, first) {
  *   kinds  who spoke each turn ("user" or "assistant")
  *   marks  the mark at each turn
  */
-export function outline({ system, model, effort, maxTokens, extra, turns }) {
+export function outline({ system, model, effort, maxTokens, extra, fastMode = false, turns }) {
   const lines = turns.map((frame) => JSON.stringify(frame.type === "user" ? { ...frame, shouldQuery: false } : frame));
   const marks = [];
-  let mark = createHash("sha256").update(JSON.stringify([system, model, EFFORTS.includes(effort) ? effort : null, maxTokens, extra])).digest("hex");
+  let mark = createHash("sha256").update(JSON.stringify([system, model, EFFORTS.includes(effort) ? effort : null, maxTokens, extra, !!fastMode])).digest("hex");
   for (const line of lines) marks.push((mark = createHash("sha256").update(mark).update(line).digest("hex")));
   return { lines, kinds: turns.map((frame) => frame.type), marks };
 }
@@ -272,17 +272,21 @@ function runEnvironment(env) {
   return environment;
 }
 
-/** Reads a run's output a line at a time: the next thing Claude Code says, or null when it is done. */
+/**
+ * Reads a run's output a line at a time: the next thing Claude Code says, or null when it is done
+ * (its output closed because it exited). Without a `limit` it waits for as long as it takes: the
+ * runtime hanging up (the person's Stop) ends the run, and so does the process exiting.
+ */
 function reader(child) {
   const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
   let timer;
   return {
-    /** Silence past `limit` throws a 504. */
+    /** With a `limit`, silence past it throws a 504. */
     async next(limit) {
-      const waited = new Promise((_, reject) => (timer = setTimeout(() => reject(new PlanError(504, "api_error", "Claude Code stopped answering.")), limit)));
+      const waited = limit > 0 ? new Promise((_, reject) => (timer = setTimeout(() => reject(new PlanError(504, "api_error", "Claude Code stopped answering.")), limit))) : null;
       try {
         for (;;) {
-          const { value, done } = await Promise.race([lines.next(), waited]);
+          const { value, done } = await (waited ? Promise.race([lines.next(), waited]) : lines.next());
           if (done) return null;
           try {
             return JSON.parse(value);
@@ -597,7 +601,7 @@ export class ClaudePool {
    * Tells a run a request's beginning: the control messages a hand-over sends, then each turn,
    * replayed and acknowledged. With `from`, the run has all of that up to that turn already.
    */
-  async tell(run, { system, tools, extra, effort, maxTokens, model, bridge, shape }, from = 0) {
+  async tell(run, { system, tools, extra, effort, maxTokens, model, fastMode, bridge, shape }, from = 0) {
     // A run that is still starting answers when its startup lets it.
     const within = this.settleMs + HANDOVER_MS;
     if (!from) {
@@ -607,7 +611,7 @@ export class ClaudePool {
         endpoint?.close();
         throw new Error("The run ended.");
       }
-      await handOver(run, { system, endpoint, extra, effort, maxTokens, model, within });
+      await handOver(run, { system, endpoint, extra, fastMode, effort, maxTokens, model, within });
     }
     for (const [index, line] of shape.lines.entries()) {
       if (index < from) continue;
@@ -695,7 +699,7 @@ const REST_MS = 60_000;
  * the system prompt, the tool server, the extra request fields and the model. Throws when the run
  * refuses one or doesn't answer in time.
  */
-async function handOver(run, { system, endpoint, extra, effort, maxTokens, model, within = HANDOVER_MS }) {
+async function handOver(run, { system, endpoint, extra, effort, maxTokens, model, fastMode, within = HANDOVER_MS }) {
   const until = Date.now() + within;
   let sent = 0;
   const control = async (request) => {
@@ -713,7 +717,7 @@ async function handOver(run, { system, endpoint, extra, effort, maxTokens, model
   if (endpoint) await control({ subtype: "mcp_set_servers", servers: { [TOOL_SERVER]: { type: "http", url: endpoint.url, headers: endpoint.headers } } });
   await control({
     subtype: "apply_flag_settings",
-    settings: { env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra), ...thinkingLevel(effort), ...(maxTokens && { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens) }) } },
+    settings: { ...(fastMode && { fastMode: true }), env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra), ...thinkingLevel(effort), ...(maxTokens && { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens) }) } },
   });
   if (run.model !== model) await control({ subtype: "set_model", model });
 }
@@ -742,7 +746,6 @@ function failure(code, detail) {
  * @param options.bridge   The local tool server (desktop/providers/toolbridge.mjs), to list the tools.
  * @param options.emit     (event) => void: each stream event of the reply, tool names as the runtime knows them.
  * @param options.signal   Aborts the run (the runtime hung up).
- * @param options.idleMs   How long Claude Code may say nothing before the run is given up.
  * @param options.ended    () => void: the reply is whole, so the caller can finish its answer. What
  *                         follows (below) never holds the answer back.
  * @param options.report   (modelUsage) => void: what Claude Code said about the models it used, at
@@ -755,7 +758,7 @@ function failure(code, detail) {
  *                         the request.
  * Throws PlanError. A failure after the reply began is thrown too; the caller decides how to tell the runtime.
  */
-export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, idleMs = 240_000, launch = spawn, ended, report, reportMs = 4000, pool, handoverMs = HANDOVER_MS }) {
+export async function claudeTurn(body, { file, fastMode, env, cwd, bridge, emit, signal, launch = spawn, ended, report, reportMs = 4000, pool, handoverMs = HANDOVER_MS }) {
   if (!file) throw new PlanError(503, "api_error", "Claude Code isn't installed. Install it from https://code.claude.com/docs/en/setup, then sign in under Settings › Model providers.");
   if (typeof body?.model !== "string" || !body.model) throw new PlanError(400, "invalid_request_error", "No model was named.");
   const names = toolNames(body.tools);
@@ -767,7 +770,7 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, i
   const maxTokens = Number.isInteger(body.max_tokens) && body.max_tokens > 0 ? body.max_tokens : 0;
   const effort = body.output_config?.effort;
   const where = { file, env, cwd };
-  const shape = pool ? outline({ system, model: body.model, effort, maxTokens, extra, turns }) : null;
+  const shape = pool ? outline({ system, model: body.model, effort, maxTokens, extra, fastMode, turns }) : null;
   // The tool server's address for this request, opened when a run has to be told of it. A run
   // that was told the request ahead of time was given its own.
   let endpoint = null;
@@ -790,7 +793,7 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, i
       tellNext = () => {
         tellNext = null;
         try {
-          pool.tellAhead(where, shape, { system, tools, extra, effort, maxTokens, model: body.model, bridge });
+          pool.tellAhead(where, shape, { system, tools, extra, fastMode, effort, maxTokens, model: body.model, bridge });
         } catch (error) {
           pool.log("harness: " + (error?.message ?? error));
         }
@@ -816,7 +819,7 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, i
           // The run that takes its place starts now, so it has the length of this reply to get ready:
           // the runtime's next request (after a tool call) often follows within seconds.
           pool.ensure({ ...where, model: body.model });
-          await handOver(waiting, { system, endpoint: await listing(), extra, effort, maxTokens, model: body.model, within: handoverMs });
+          await handOver(waiting, { system, endpoint: await listing(), extra, fastMode, effort, maxTokens, model: body.model, within: handoverMs });
         }
         read = waiting.read;
         stderr = () => waiting.stderr;
@@ -835,7 +838,7 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, i
       writeFileSync(join(dir, "system.md"), system, { mode: 0o600 });
       // The tool server's address and its one-time secret travel in a file, not on the command line.
       writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: endpoint ? { [TOOL_SERVER]: { type: "http", url: endpoint.url, headers: endpoint.headers } } : {} }), { mode: 0o600 });
-      writeFileSync(join(dir, "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra) } }), { mode: 0o600 });
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...(fastMode && { fastMode: true }), env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra) } }), { mode: 0o600 });
       const args = cliArgs({ model: body.model, systemFile: join(dir, "system.md"), mcpFile: join(dir, "mcp.json"), settingsFile: join(dir, "settings.json"), sessionId: sessionIdFor(system, turns[0]) });
       const environment = runEnvironment(env);
       Object.assign(environment, thinkingLevel(effort));
@@ -858,8 +861,9 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, i
       read = reader(child);
     }
     if (pool) pool.counts[dir ? "own" : fed ? "ahead" : "handed"]++;
-    // The next thing Claude Code says, or null when it is done. Silence past the limit ends the run.
-    const next = (limit = idleMs) => read.next(limit);
+    // The next thing Claude Code says, or null when it is done. A run has no silence limit: Claude
+    // Code may think or run a tool for as long as it takes, and the person's Stop (the signal) or its exit ends the run.
+    const next = (limit) => read.next(limit);
     const said = (ended) => new PlanError(500, "api_error", "Claude Code stopped " + ended + "." + (stderr().trim() ? " " + stderr().trim().split("\n").at(-1).slice(0, 300) : ""));
 
     for (const [index, frame] of turns.entries()) {

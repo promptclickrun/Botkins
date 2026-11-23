@@ -1,8 +1,15 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
+export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
+  fastModes?: Partial<Record<Exclude<FastMode, "off">, string>>;
   id: string;
   name: string;
   provider?: string;
@@ -118,6 +125,7 @@ export type BotkinEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curi
 export type BotkinLook = { head: string; palette: string; eyes?: BotkinEyes; colors?: [string, string, string, string] };
 export type BotAccessGrant = { all: boolean; projects: string[] };
 export type Bot = {
+  fastMode?: FastMode;
   id: string;
   name: string;
   role: string;
@@ -270,6 +278,12 @@ export type Catalog = { choices: Capability[]; servers: { name: string; status: 
 /** A file the phone uploaded to the computer for a message. */
 export type UploadedFile = { id: string; name: string; path: string; size: number };
 /** A pull request of the repository a chat's project works in. */
+export type PullRequestDetail = PullRequest & {
+  body: string; createdAt: string; summary: string; review: string;
+  checks: { name: string; result: string }[];
+  files: { path: string; additions: number; deletions: number }[];
+};
+export type PullAnswer<T> = ({ available: true } & T) | { available: false; reason: string };
 export type PullRequest = { number: number; title: string; url: string; state: "open" | "closed" | "merged"; draft: boolean; author?: string; head?: string; base?: string; updatedAt?: string; repository?: string };
 
 // Credentials. Values stay on the computer: the phone can save one, and can name one in a call
@@ -401,6 +415,7 @@ export type RoutineInput = {
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
+  fastMode?: FastMode;
   id: string;
   botId: string;
   /** How many tabs the chat's side pane has ("side-pane-v1"). The tabs come with the chat's detail. */
@@ -419,6 +434,7 @@ export type ChatSummary = {
   /** The section the person put it in on their Chats screen ("chat-sections-v1"). Their own: nobody else sees it. */
   sectionId?: string;
   projectId?: string;
+  folder?: string;
   mode?: ChatMode;
   panelId?: string;
   model?: ModelChoice;
@@ -429,6 +445,7 @@ export type ChatSummary = {
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
 };
 export type Step = {
+  background?: boolean;
   id: string;
   name: string;
   source?: string;
@@ -447,7 +464,7 @@ export type Step = {
 };
 /** One step's input and output, read when the step is opened (`link.step`). */
 export type StepDetail = { input?: string; output?: string };
-export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled"; dependsOn?: string[] };
+export type Todo ={ id: string; title: string; status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed"; dependsOn?: string[] };
 export type Reasoning = { id: string; text: string; started: number; finished?: number; botId?: string };
 /** One reasoning item's wire suffix for a phone following a working turn. */
 export type ReasoningAppend = Omit<Reasoning, "text"> & { from: number; add: string };
@@ -760,6 +777,8 @@ export type TaskInput = { id?: string; title: string; body?: string; botId?: str
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 export type Project = {
+  folders?: string[];
+  mode?: ChatMode;
   id: string;
   name: string;
   description?: string;
@@ -836,6 +855,7 @@ export type Appearance = {
 };
 export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
 export type Preferences = {
+  fastMode?: FastMode;
   model: ModelChoice;
   /** The Default routines model ("routine-models-v1"): routines without their own use it before their bot's. */
   routineModel?: ModelChoice;
@@ -858,6 +878,8 @@ export type Preferences = {
   teamwork?: boolean;
   /** Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0 for off. Missing on an older computer. */
   autoSummarize?: number;
+  /** Settings › Experimental › Proactive agent: the computer's switch. Each bot's own is the `proactive` part. Missing on a computer without "proactive-agent-v2". */
+  proactive?: ProactiveSettings;
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
@@ -956,6 +978,7 @@ export type UsageReport = {
 
 /**
  * `capabilities` names what this computer's link can do beyond the basics: "credentials-v1",
+ * "pr-panel-v1" (owner-only pull request details and per-file patches),
  * "screen-v1", "prs-v1", "uploads-v1", "relay-v1" (the computer keeps a relay open, so a phone away
  * from its network can reach it), "push-v1" (notifications and Live Activities), "device-v1" (tools
  * that run on a phone), "voice-v1" (speech through the computer's providers, and live voice),
@@ -986,7 +1009,11 @@ export type UsageReport = {
  * "team-people-v1" (the people in a chat: `ChatSummary.invited`, `link.team.inviteToChat` and
  * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
  * view of bots and chats, kept by the computer for them).
+ * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
+ * "project-folders-v1" (ordered folders and chat folder choice), "project-mode-v1" (saved project mode),
+ * "project-clone-v1" (clone from GitHub on the computer),
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
+ * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
@@ -997,6 +1024,7 @@ export type UsageReport = {
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
+ * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  */
@@ -1016,6 +1044,30 @@ export type Meta = {
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
+export type ProactiveWatch = "runs" | "tasks" | "requests";
+/** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
+export type ProactiveSettings = { enabled: boolean };
+/** What a bot's Proactive agent is set to. */
+export type ProactiveBotSettings = { enabled: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/**
+ * One bot's agent as this phone is sent it. The owner is sent `person` ("owner", or the member it works for). A member is sent
+ * `mine` for their own agents and, for another person's, only `{ enabled, taken }`: every other field may be missing, and a
+ * computer may add more.
+ */
+export type ProactiveBot = Partial<ProactiveBotSettings> & {
+  enabled: boolean;
+  person?: string;
+  mine?: boolean;
+  taken?: boolean;
+  /** The agent's routine's chat (Check now is `runRoutine` on it). */
+  chatId?: string;
+  lastSweepAt?: number;
+  pings?: number;
+  day?: string;
+  log?: ProactiveLog[];
+};
+export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
   settings: Preferences;
@@ -1033,6 +1085,8 @@ export type Parts = {
   /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
   spaces?: SpaceSummary[];
   tasks: BotTask[];
+  /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
+  proactive?: ProactivePart;
   projects: Project[];
   mcp: McpServer[];
   skills: { folders: { id: string; path: string }[]; plugins: { id: string; path: string }[]; disabled: string[] };
@@ -1297,11 +1351,80 @@ export type PushTarget = { token: string; env: "production" | "sandbox"; start?:
  * `name` describes the device ("iPhone 17 Pro"); `person` is who it belongs to ("Jordan"), given when
  * it paired or set by the owner ("device-person-v1"). A device paired before has none.
  */
-export type PairedDevice = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean; current?: boolean };
+export type PairedDevice = {
+  id: string;
+  name: string;
+  person?: string;
+  platform: string;
+  kind: "phone" | "desktop" | "gadget";
+  /** A gadget's board and firmware, as it said them, the bot it talks with ("gadgets-v1"), and its settings and Wi-Fi ("gadget-settings-v1"). */
+  gadget?: GadgetInfo;
+  createdAt: number;
+  lastSeenAt: number;
+  connected: boolean;
+  current?: boolean;
+};
+/**
+ * What a gadget is handed once a trusted device named it by its key ("gadgets-v1",
+ * "link.gadgets.add"): who the computer is and where to find it. With its own secret key that is
+ * a gadget's whole `Pairing`.
+ */
+export type GadgetIntroduction = { deviceId: string; serverId: string; serverKey: string; name: string; hosts: string[] };
+/** A gadget's settings ("gadget-settings-v1"). The computer keeps them; the gadget applies them. */
+export type GadgetSettings = {
+  /** 0 to 100. */
+  volume: number;
+  mic: "low" | "normal" | "high";
+  /** The microphone is off. */
+  mute: boolean;
+  /** 5 to 100. */
+  brightness: number;
+  /** Seconds idle before the screen dims, and before it goes dark. 0 is never. */
+  dimAfter: number;
+  offAfter: number;
+};
+/** A gadget as the device list shows it. */
+export type GadgetInfo = {
+  board?: string;
+  firmware?: string;
+  botId?: string;
+  settings?: GadgetSettings;
+  /** The network in use, the saved networks' names and the signal in dBm, as the gadget last said. Never a password. */
+  wifi?: { network?: string; saved: string[]; signal?: number };
+  /** Wi-Fi changes the gadget hasn't taken yet. */
+  wifiWaiting?: ({ add: string } | { forget: string })[];
+  /** A restart was asked for and hasn't happened yet. */
+  restarting?: true;
+};
+/** A Wi-Fi change for a gadget: a network with its password, or one to forget. */
+export type GadgetWifiChange = { add: { ssid: string; password: string } } | { forget: string };
+/** The part a gadget follows in place of the app's parts (gadget/docs/contract.md). */
+export type GadgetPart = {
+  name: string;
+  bot: { id: string; name: string; look?: BotkinLook } | null;
+  bots: { id: string; name: string }[];
+  chat: { id: string; title: string } | null;
+  phase: "idle" | "working" | "writing" | "request";
+  doing?: string;
+  request?: { id: string; kind: AgentRequest["kind"]; title: string; preview?: string; choices?: string[]; remember?: true; freeform?: true };
+  queued?: number;
+  /** The newest reply, as plain words. `parts` is how many pieces "link.gadget.speak" reads it in. */
+  reply?: { id: string; text: string; parts: number };
+  voice: { hear: boolean; speak: boolean; live?: LiveProvider };
+  /** While working: how many steps the turn has taken. */
+  steps?: number;
+  settings: GadgetSettings;
+  /** Names the bot's Botkin: a new one means the faces ("link.gadget.face") are new. Absent on a computer without the design kit. */
+  face?: { look: string };
+  /** Wi-Fi changes for the gadget to take and then report done ("link.gadget.set" `wifiDone`). */
+  wifi?: { changes: ({ id: string } & ({ add: { ssid: string; password: string } } | { forget: string }))[] };
+  /** A restart the owner asked for: the gadget says `restarting` with this id, then restarts. */
+  restart?: string;
+};
 export type PhoneRecord = {
   name: string;
   /** What the device is. Missing on an older computer, where every paired device is a phone. */
-  kind?: "phone" | "desktop";
+  kind?: "phone" | "desktop" | "gadget";
   platform?: string;
   /** The computer keeps this phone's presence key: it paired directly, with a build that has one ("screen-grant-v1"). */
   presence?: true;
@@ -1317,7 +1440,7 @@ export type ActivityState = { phase: "thinking" | "working" | "waiting" | "needs
 // ---------------------------------------------------------------------------------------------
 // Device access (capability "device-v1"): tools a bot can call that run on a paired phone.
 
-export type DeviceSource = "calendar" | "contacts" | "health" | "location" | "photos" | "mail";
+export type DeviceSource = "calendar" | "contacts" | "health" | "location" | "photos" | "music" | "mail";
 /** off: bots can't use it. read: look only. interact: look, and add or change. */
 export type DeviceLevel = "off" | "read" | "interact";
 export type DeviceSources = Partial<Record<DeviceSource, DeviceLevel>>;
@@ -1385,7 +1508,7 @@ export type LiveSession =
 
 /** The desktop's calls a phone may make (link-host/methods.mjs), with their arguments and answers. */
 export type Calls = {
-  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers">> & { appearance?: Partial<Appearance> }): void;
+  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers" | "proactive">> & { appearance?: Partial<Appearance>; proactive?: Partial<ProactiveSettings> }): void;
   appInfo(): { version: string; electron: string; chrome: string; platform: string };
   // ---- The computer's own updates ("app-update-v1"; the owner's devices only). None takes a version or an address.
   appUpdateStatus(): AppUpdate;
@@ -1403,6 +1526,11 @@ export type Calls = {
   duplicateBot(id: string): string;
   setBotAccess(botId: string, grant: BotAccessGrant): void;
   setBotIntegrations(botId: string, off: { skillsOff?: string[]; mcpOff?: string[] }): void;
+  /**
+   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2".
+   * A role that manages the bot may; the agent works for the person who set it up, and is theirs alone to change (the owner may change any).
+   */
+  setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): void;
   botMemory(botId: string): string;
   setBotMemory(botId: string, text: string): void;
   saveTemplate(botId: string, name?: string): string;
@@ -1415,10 +1543,12 @@ export type Calls = {
   createGroupChat(botIds: string[], title?: string): string;
   setChatFlags(id: string, flags: Partial<Pick<ChatSummary, "pinned" | "archived" | "unread">>): void;
   renameChat(id: string, title: string): void;
+  /** Generates and saves a title from the chat's messages ("chat-title-regeneration-v1"). */
+  regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
-  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
+  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
@@ -1435,7 +1565,7 @@ export type Calls = {
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
   /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */
-  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null): void;
+  setModel(scope: "global" | "routines" | "bot" | "chat", id: string | null, value: ModelChoice | null, fastMode?: FastMode | null): void;
   providers(refresh?: boolean): ProviderStatus[];
   /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
@@ -1493,8 +1623,12 @@ export type Calls = {
   cancelMcpSignIn(id: string): boolean;
   signOutMcpServer(id: string): void;
   createProject(input: { name?: string; description?: string; color?: ProjectColor | null }): string;
+  editProjectFolder(id: string, action: "add" | "remove" | "default", path: string): string[];
+  chatProjectFolder(id: string): string | null;
+  setChatFolder(id: string, path: string | null): void;
+  cloneProjectRepository(repository: string, parent?: string, id?: string, data?: { name?: string; description?: string }): string;
   /** `folder: null` unlinks the project's folder (the folder itself is left alone). */
-  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null }): void;
+  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null; mode?: ChatMode }): void;
   /** The folders inside `path`, or inside the home folder. Needs "folders-v1". */
   listFolders(path?: string): FolderList;
   /** A project for a folder chosen in the folder browser (or the one it already has); answers its id. Needs "folders-v1". */
@@ -1523,8 +1657,8 @@ export type Calls = {
   renameSection(id: string, name: string): void;
   deleteSection(id: string): void;
   renameTemplate(id: string, name: string): void;
-  /** Changes the project and mode of a chat that has no messages yet. */
-  setChatProject(chatId: string, projectId: string | null, mode?: "default" | "plan" | "yolo"): void;
+  /** Changes a chat's project or mode. Moving a started chat carries its transcript into the next session. */
+  setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): void;
   linkPreview(url: string): LinkPreview | null;
   /** Pauses, resumes or deletes a schedule a bot made in a chat. */
   changeSchedule(chatId: string, id: number, action: "pause" | "resume" | "delete"): void;
@@ -1542,9 +1676,9 @@ export type Calls = {
   addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean };
   renameProject(id: string, name: string): void;
   /** What changed in a project's folder, one file's changes as text, and committing all of it. */
-  projectChanges(id: string): ProjectChanges;
-  projectDiff(id: string, file: string): { text: string; truncated: boolean };
-  projectCommit(id: string, message: string): string;
+  projectChanges(id: string, folder?: string): ProjectChanges;
+  projectDiff(id: string, file: string, folder?: string): { text: string; truncated: boolean };
+  projectCommit(id: string, message: string, folder?: string): string;
   moveTodo(projectId: string, todoId: string, delta: -1 | 1): void;
   /** Makes the wiki page for a project that has none yet; answers the page's path. */
   createWikiPageFor(record: { kind: "project"; id: string }): string;
@@ -1593,6 +1727,10 @@ export type Calls = {
   "plugins.refresh"(): PluginMarketplace[];
   // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
   /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "skills.upload"(file: SkillUpload): SkillImportResult;
+  "skillsCatalog.search"(query: string): CatalogSkill[];
+  "skillsCatalog.preview"(id: string): CatalogPreview;
+  "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];
@@ -1668,6 +1806,13 @@ export type Calls = {
   /** Sends a file to the computer for the next message. `data` is base64, at most about 3 MB a call; a larger file goes in parts with the same `id`. */
   /** The devices paired with the computer. Needs "devices-v1". */
   "link.devices.list"(): PairedDevice[];
+  /** Pairs a gadget by introduction ("gadgets-v1"): its public key (X25519, base64url) as it gave it over a cable or Bluetooth. */
+  "link.gadgets.add"(input: { publicKey: string; name?: string; board?: string; botId?: string }): GadgetIntroduction;
+  /** A gadget's settings and its bot ("gadget-settings-v1"): any of them. Answers the device list afterwards. */
+  "link.gadgets.configure"(id: string, patch: Partial<GadgetSettings> & { botId?: string }): PairedDevice[];
+  /** A Wi-Fi network to add, with its password, or to forget. The gadget takes it at its next look (within 10 minutes). */
+  "link.gadgets.wifi"(id: string, change: GadgetWifiChange): { queued: true };
+  "link.gadgets.restart"(id: string): null;
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
   /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */
@@ -1687,12 +1832,15 @@ export type Calls = {
   "link.team.moveMember"(memberId: string, groupId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.removeMember"(memberId: string): Extract<TeamPart, { roles: Role[] }>;
   "link.team.rename"(name: string): Extract<TeamPart, { roles: Role[] }>;
+  "link.team.renameMember"(memberId: string, name: string): Extract<TeamPart, { roles: Role[] }>;
   /** A custom view (an html block) as its bot wrote it, and its data. Needs "frames-v1". */
   "link.frame.page"(frame: string): { html: string; data: unknown };
   /** The chat a custom view's answer goes to, for a view in a Today panel. */
   "link.frame.chat"(frame: string): { chatId: string | null };
   "link.upload"(file: { id?: string; name: string; data: string; last?: boolean }): UploadedFile;
   /** Pull requests of the repository behind a chat's project. `available: false` says why there are none to offer. */
+  "link.pullRequest"(input: { url: string }): PullAnswer<{ pull: PullRequestDetail }>;
+  "link.pullRequestDiff"(input: { url: string; path: string }): PullAnswer<{ text: string }>;
   "link.pullRequests"(where: { chatId?: string; projectId?: string }, query?: string): { available: boolean; reason?: string; items: PullRequest[] };
   "link.credentials.save"(input: CredentialInput): string;
   "link.credentials.remove"(id: string): void;

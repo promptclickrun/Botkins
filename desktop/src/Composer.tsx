@@ -10,9 +10,11 @@ import {
   toInput,
   tokenOf,
   useMentionables,
+  useProjectPulls,
   type DraftMention,
 } from "./MentionMenu";
 import type { Attachment, Bot, BotLook, BotVoice, Capability, MentionInput } from "./types";
+import { draftPulls } from "../desktop/remote/client/pr-reference";
 import { useComposerVoice } from "./ComposerVoice";
 import ProviderIcon, { hasProviderMark } from "./ProviderIcon";
 
@@ -24,6 +26,7 @@ const NO_MENTIONS: DraftMention[] = [];
 type Props = {
   botId: string;
   chatId?: string;
+  listPulls?: boolean;
   sourceKey: string;
   draft: string;
   placeholder: string;
@@ -54,6 +57,7 @@ type Props = {
 export default function Composer({
   botId,
   chatId,
+  listPulls,
   sourceKey,
   draft,
   placeholder,
@@ -74,6 +78,7 @@ export default function Composer({
   botVoice,
   startChat,
 }: Props) {
+  const references = chatId ? draftPulls(draft) : [];
   const [focused, focus] = useState(false);
   const [dismissed, dismiss] = useState(false);
   const [choices, setChoices] = useState<Capability[]>([]);
@@ -101,9 +106,10 @@ export default function Composer({
     (trigger.sigil === "#" || !!members?.length) &&
     !picked.some((t) => (trigger.sigil + trigger.query).startsWith(t));
   const found = useMentionables(triggerOpen, chatId, botId);
-  const mentionChoices = trigger ? mentionOptions(trigger.sigil, trigger.query, found.data, members) : [];
+  const pulls = useProjectPulls(listPulls && triggerOpen && trigger?.sigil === "#" ? chatId : undefined, trigger?.query ?? "");
+  const mentionChoices = trigger ? mentionOptions(trigger.sigil, trigger.query, found.data, members, pulls.value?.items) : [];
   // Spaces are allowed while the text still matches something.
-  const mentioning = triggerOpen && (!/\s/.test(trigger!.query) || mentionChoices.length > 0);
+  const mentioning = triggerOpen && (!/\s/.test(trigger!.query) || mentionChoices.length > 0 || pulls.loading);
   const mentionAt = Math.min(index, Math.max(0, mentionChoices.length - 1));
   function pickMention(i: number) {
     const choice = mentionChoices[i];
@@ -301,7 +307,7 @@ export default function Composer({
       }}
     >
       {voice.strip}
-      {(quote || files.length > 0 || mentions.length > 0 || attachError) && (
+      {(quote || files.length > 0 || mentions.length > 0 || references.length > 0 || attachError) && (
         <div className="composer-extras">
           {quote && (
             <div className="reply-quote">
@@ -312,8 +318,13 @@ export default function Composer({
               </button>
             </div>
           )}
-          {(files.length > 0 || mentions.length > 0) && (
+          {(files.length > 0 || mentions.length > 0 || references.length > 0) && (
             <div className="composer-chips">
+          {references.length > 0 && <ul className="attach-chips" aria-label="Pull request references">
+            {references.map(({ url, label }) => <li key={url} className="mention-chip">
+              <a className="mention-open pr-reference" href={url} onClick={(event) => { event.preventDefault(); void window.botkins.openLink(url); }}>{label}</a>
+            </li>)}
+          </ul>}
           <MentionChips list={mentions} remove={(m) => setMentions(mentions.filter((x) => x !== m))} />
           {files.length > 0 && (
             <ul className="attach-chips" aria-label="Attachments">
@@ -499,8 +510,8 @@ export default function Composer({
           sigil={trigger!.sigil}
           options={mentionChoices}
           selected={mentionAt}
-          loading={found.loading}
-          error={found.error}
+          loading={found.loading || pulls.loading}
+          error={found.error || pulls.value?.reason || ""}
           filtered={!!trigger!.query}
           pick={pickMention}
         />

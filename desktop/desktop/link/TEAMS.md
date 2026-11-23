@@ -49,7 +49,7 @@ A new team starts with one group, **Everyone** (`g_everyone`, role Guest).
 
 Always owner only, whatever the role: provider sign-in and keys (`signIn`, `auth`, `providers`, `setProviderEnabled`, `connectProviderService`…), `credentials`, `removeCredential`, every `link.devices.*`, `link.screen.*`, `link.device.*` (the phone tools), `link.push.test`, projects, wiki, tasks, folders (`listFolders`), `setBotAccess`, `setBotIntegrations`, `botMemory`, `setBotMemory`, templates import and export, and every `link.team.*` management call. A member's `setPreferences` with `settings.manage` may change only the display fields listed in `MEMBER_PREFERENCE_FIELDS`. It never changes `approval`, `access`, `teamwork`, the link or voice keys.
 
-Bot-scoped calls (`createChat`, `send`, `updateBot`, `deleteBot`…) also need the bot to be visible to the role. Chat-scoped calls (`send`, `stop`, `renameChat`, `deleteChat`, `respond`…) also need `chat.createdBy === memberId`. A member never answers a `permission` or `secure` prompt. Those go to the owner (see "Bots and identity").
+Bot-scoped calls (`createChat`, `send`, `updateBot`, `setBotProactive`, `deleteBot`…) also need the bot to be visible to the role. Chat-scoped calls (`send`, `stop`, `renameChat`, `deleteChat`, `respond`…) also need `chat.createdBy === memberId`. A member never answers a `permission` or `secure` prompt. Those go to the owner (see "Bots and identity").
 
 ### What a member is sent
 
@@ -60,6 +60,9 @@ The host filters parts for each member session before sealing (`filterParts(part
 - `panels`, `board`: with `today.view`. Otherwise empty.
 - `skills`, `mcp`, `plugins`: with that scope's first action. Never a secret value, a command line, an env var, a header or a file path.
 - `settings`: with `settings.view`, only `MEMBER_PREFERENCE_FIELDS`. Otherwise empty.
+- `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
+- `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
+- `proactive`: with `agents.manage`, the computer's switch and the settings and log of the Proactive agents that member set up for the bots their role sees (`memberProactive`); for another person's only that it is there. See CONTRACT.md, "A bot's Proactive agent".
 - Never: `credentials`, `phones`, `asks` of the owner's chats, `voice` keys, `host` screen state, `projects`, `tasks`, wiki.
 - `team`: `{ me: { memberId, name, group: { id, name }, role: { name, perms, bots } }, team: { name } }`. Owner devices get the full team (below).
 - `meta.you`: `{ kind: "member", memberId, name }` or `{ kind: "owner" }`.
@@ -67,7 +70,7 @@ The host filters parts for each member session before sealing (`filterParts(part
 ## Bots and identity (decided by the owner: "trusted team")
 
 - A bot keeps its tools on a member's turn: shell, files, MCP servers, skills and plugins, as on the owner's turns. The role trims them. Without `mcp.use` the bot gets no MCP servers on that member's turns. Without `skills.use`, no skills. Without `plugins.use`, no plugin tools.
-- Identity travels with each message. The desktop stamps `author: { memberId, name }` on a member's user messages and `createdBy: memberId` on a chat a member creates. Before a member's message, the bot is told who is speaking: `[From <name>, a member of <team name>'s team, not the owner]`. Owner messages carry no stamp. A bot can always tell members A, B and C apart and from the owner.
+- Identity travels with each message. The desktop stamps `author: { memberId, name }` on a member's user messages and `createdBy: memberId` on a chat a member creates. Before a member's message in a chat of one person, the bot is told who is speaking: `[From <name>, a member of <team name>'s team, not the owner]`; in a chat of several people each message starts with its speaker's name instead (see "People in a chat"). Owner messages carry no stamp. A bot can always tell members A, B and C apart and from the owner.
 - Approval prompts (`permission`, `secure`) raised on a member's turn go to the owner: the desktop's request panel, and a push to owner devices. The member sees "Waiting for <owner name> to approve".
 - The owner sees members' chats in the app, marked with the member's name.
 
@@ -131,7 +134,9 @@ Answer =  { status: "pending", requestId, team }                           // fi
 
 ### Owner calls (`link.team.*`, owner devices only; the desktop calls the same functions host-side)
 
-`link.team.get()`, `link.team.saveRole(role)`, `link.team.deleteRole(id)`, `link.team.saveGroup(group)`, `link.team.deleteGroup(id, moveTo)`, `link.team.createInvite({ groupId, days, maxUses })` → `Invite & { link }`, `link.team.revokeInvite(id)`, `link.team.approve(requestId, groupId?)`, `link.team.deny(requestId)`, `link.team.moveMember(memberId, groupId)`, `link.team.removeMember(memberId)`, `link.team.rename(name)`.
+`link.team.get()`, `link.team.saveRole(role)`, `link.team.deleteRole(id)`, `link.team.saveGroup(group)`, `link.team.deleteGroup(id, moveTo)`, `link.team.createInvite({ groupId, days, maxUses })` → `Invite & { link }`, `link.team.revokeInvite(id)`, `link.team.approve(requestId, groupId?)`, `link.team.deny(requestId)`, `link.team.moveMember(memberId, groupId)`, `link.team.removeMember(memberId)`, `link.team.rename(name)`, `link.team.renameMember(memberId, name)`.
+
+`link.team.renameMember` (capability `member-rename-v1`) is owner only. The name is trimmed and has 1 to 60 characters with no control characters, as the team's own name has; anything else is refused ("Give the member a name of up to 60 characters."), and so is a member who left ("That member is no longer on the team."). The member and every device of theirs take the name, as when a member's device sets its person (`link.devices.setPerson`), and the answer is the owner's `team` part. Every session is told at once, so the new name is in `team.people`, in `meta.you` of the member's own devices and in what the app reads from `link.team()`. A message keeps the name it was sent with, and a window shows the member's name as the team has it now. Without the capability a client leaves out Rename.
 
 The `team` part for owner devices: `{ name, roles, groups, members (with devices: name, kind, platform, connected), invites (with link), requests (pending, with name, platform, kind, at, inviteId) }`.
 
@@ -144,6 +149,7 @@ A **person** is the owner (id `"owner"`) or a member (their member id). The owne
 - `ChatSummary.invited?: string[]` goes to the owner and to the chat's people. The `team` part has `people: { id, name }[]`: the whole team for the owner and for a member who can start a chat (and so invite); for anyone else only the owner and the people of the chats they are in.
 - `link.team.inviteToChat(chatId, personId)` and `link.team.removeFromChat(chatId, personId)` answer the invited list afterwards. The chat's starter or the owner invites and removes; someone invited may take themselves out. A chat holds up to 20 people.
 - Someone invited sees the chat and may read it, send, stop, answer its questions, fork it and set their own flags on it. An invite never widens a role: a person whose role can't use the chat's bot can't be invited ("That person's role can't use this chat's bot. Change their role in Team settings first."), and loses the chat if their role later loses the bot. They may not rename, compact or delete it, change its model, project or schedule, or invite. Their messages carry their name, and a turn they start runs under the narrower of the starter's limits and their own (the app's `team-turn.mjs`).
+- Whom the bot is told it is talking to is the host app's own (`team-turn.mjs`); no call or field is added. Every turn starts with one line that names the person it is for by their Botkins name and person id, never by an email or the computer's account; the owner nobody named is left out. In a chat of more than one person each person's message also starts with their name (`[Sam] ...`), and the line lists the chat's people. A routine's, task's or panel refresh's turn is labelled as started on its own, never as the owner's. A teammate asked through `ask_teammate` is told whose request it is. Phones show the name over someone else's message from `author` (and, for the owner's, from `people`) in a chat of more than one person.
 - Removing a member drops their invitations and their view. Deleting a chat through the link drops its people and everyone's marks on it. Taking a person out of a chat ends that chat's card on their phones.
 - For the app on the host: `link.chatPeople(chatId)` → `{ createdBy, invited }` (never throws), `link.inChat(chatId, personId)`, `link.notifiesOwner(chatId)`, `link.inviteToChat`, `link.removeFromChat`, `link.removeChatPeople(chatId)`.
 
@@ -188,7 +194,7 @@ Decided by the owner on 2026-11-20: "the owner should be able to [open a member'
 
 ## Capability
 
-The host lists `teams-v1` in `meta.capabilities`. A client checks it before showing Join or Team. Otherwise it says "Update Botkins on the owner's computer".
+The host lists `teams-v1` in `meta.capabilities`. A client checks it before showing Join or Team. Otherwise it says "Update Botkins on the owner's computer". `member-rename-v1` is for renaming a member: a client checks it before it offers Rename.
 
 ## UX copy (exact)
 

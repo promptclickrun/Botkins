@@ -129,6 +129,11 @@ export function seqNonce(seq: number): Uint8Array {
   }
   return nonce;
 }
+export function pushNonce(counter: number): Uint8Array {
+  const nonce = seqNonce(counter);
+  nonce[0] = 1;
+  return nonce;
+}
 export const seqBytes = (seq: number) => seqNonce(seq).subarray(4);
 
 /** A code as typed: upper case, without spaces or dashes. */

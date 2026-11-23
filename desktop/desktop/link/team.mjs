@@ -38,6 +38,9 @@ const POLICY = {
   duplicateBot: ["agents", "create"],
   importableAgents: ["agents", "create"],
   importAgents: ["agents", "create"],
+  // A bot's Proactive agent: the person who may manage the bot sets it, for themselves (the app checks whose it is).
+  // The computer's own switch for it is a preference, which a member never changes (setPreferences below).
+  setBotProactive: ["agents", "manage"],
   setBotAccess: "owner",
   setBotIntegrations: "owner",
   botMemory: "owner",
@@ -54,6 +57,7 @@ const POLICY = {
   createGroupChat: ["agents", "chat"],
   setChatFlags: ["agents", "chat"],
   renameChat: ["agents", "chat"],
+  regenerateChatTitle: ["agents", "chat"],
   deleteChat: ["agents", "chat"],
   forkChat: ["agents", "chat"],
   warmChat: ["agents", "chat"],
@@ -139,6 +143,10 @@ const POLICY = {
   "link.chats.setSection": ["agents", "view"],
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
+  "skills.upload": ["skills", "create"],
+  "skillsCatalog.search": ["skills", "read"],
+  "skillsCatalog.preview": ["skills", "read"],
+  "skillsCatalog.install": ["skills", "create"],
   saveSkill: ["skills", "create"],
   removeSkill: ["skills", "delete"],
   setSkillEnabled: ["skills", "manage"],
@@ -155,6 +163,10 @@ const POLICY = {
   removeCredential: "owner",
   createProject: "owner",
   updateProject: "owner",
+  editProjectFolder: "owner",
+  setChatFolder: "owner",
+  chatProjectFolder: "owner",
+  cloneProjectRepository: "owner",
   renameProject: "owner",
   removeProject: "owner",
   projectChanges: "owner",
@@ -240,7 +252,8 @@ const POLICY = {
   "link.push.test": "owner",
   "link.voice.set": "owner",
   "link.voice.key": "owner",
-  "link.voice.options": ["settings", "view"],
+  // The voices a provider lists, for choosing a bot's own voice ("bot-voice-v1"): a role that manages bots needs it, and it lists only names.
+  "link.voice.options": ["agents", "manage"],
   "link.voice.transcribe": ["agents", "chat"],
   "link.voice.speak": ["agents", "chat"],
   "link.voice.live": ["agents", "chat"],
@@ -248,6 +261,17 @@ const POLICY = {
   "link.device.sources": "owner",
   "link.device.answer": "owner",
   "link.device.file": "owner",
+  // Gadgets (gadget.mjs) are the owner's: an owner device names one, and a gadget makes its own calls.
+  "link.gadgets.add": "owner",
+  "link.gadget.hello": "owner",
+  "link.gadget.set": "owner",
+  "link.gadget.say": "owner",
+  "link.gadget.hear": "owner",
+  "link.gadget.speak": "owner",
+  "link.gadget.face": "owner",
+  "link.gadgets.configure": "owner",
+  "link.gadgets.wifi": "owner",
+  "link.gadgets.restart": "owner",
   "link.devices.list": "owner",
   "link.devices.rename": "owner",
   "link.devices.setPerson": "owner",
@@ -256,6 +280,8 @@ const POLICY = {
   "link.frame.chat": ["today", "view"],
   "link.upload": ["agents", "chat"],
   "link.pullRequests": "owner",
+  "link.pullRequest": "owner",
+  "link.pullRequestDiff": "owner",
   "link.credentials.save": "owner",
   "link.credentials.remove": "owner",
   "link.credentials.check": "owner",
@@ -285,6 +311,7 @@ const POLICY = {
   "link.team.moveMember": "owner",
   "link.team.removeMember": "owner",
   "link.team.rename": "owner",
+  "link.team.renameMember": "owner",
   // The people in a chat ("team-people-v1"): its creator or the owner invites; an invited person may leave.
   "link.team.inviteToChat": ["agents", "chat"],
   "link.team.removeFromChat": ["agents", "chat"],
@@ -388,10 +415,10 @@ const SELF_METHODS = new Set([
   // A member may always leave: it removes only their own device.
   "link.unpair",
 ]);
-const BOT_METHODS = new Set(["updateBot", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "deleteChat", "forkChat", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
+const BOT_METHODS = new Set(["updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
+const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
-const CREATOR_METHODS = new Set(["renameChat", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
+const CREATOR_METHODS = new Set(["renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */
 const ROUTINE_METHODS = new Set(["updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine"]);
 
@@ -791,6 +818,32 @@ export function ownerParts(parts, team, extra = {}) {
   return out;
 }
 
+const SET = "(set)";
+/**
+ * The shared voice settings as a role that manages bots is sent them, to choose a bot's own voice ("bot-voice-v1"):
+ * the shared choices, and what each provider has (a key, sign-in or model is there or not). Never a key, and never an
+ * address, region, deployment or agent id: where one is set it is sent as a mark that it is, which is all a phone asks.
+ */
+export function memberVoice(voice) {
+  const providers = voice?.providers;
+  if (!voice || !providers) return undefined;
+  const { openai, azure, elevenlabs, gemini, custom, local, codex } = providers;
+  return {
+    stt: voice.stt,
+    tts: voice.tts,
+    live: voice.live,
+    providers: {
+      openai: { baseUrl: "", hasKey: openai?.hasKey === true },
+      azure: { kind: azure?.kind === "speech" ? "speech" : "openai", hasKey: azure?.hasKey === true, ...(azure?.endpoint && { endpoint: SET }), ...(azure?.region && { region: SET }), ...(azure?.sttDeployment && { sttDeployment: SET }), ...(azure?.ttsDeployment && { ttsDeployment: SET }) },
+      elevenlabs: { hasKey: elevenlabs?.hasKey === true },
+      gemini: { hasKey: gemini?.hasKey === true },
+      custom: { hasKey: custom?.hasKey === true, ...(custom?.baseUrl && { baseUrl: SET }) },
+      local: { available: local?.available === true, models: Array.isArray(local?.models) ? local.models : [] },
+      codex: { available: codex?.available === true, signedIn: codex?.signedIn === true },
+    },
+  };
+}
+
 /** A member's role, by their id. */
 export const roleOfMember = (team, memberId) => roleFor({ kind: "member", memberId }, team);
 function roleFor(principal, team) {
@@ -865,6 +918,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
+  if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";
   if (method === "setPreferences") {
     const patch = args[0];
     if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some((field) => !MEMBER_PREFERENCE_FIELDS.includes(field))) return "Your team role can change display preferences only.";
@@ -963,6 +1017,23 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerNam
   };
 }
 
+/**
+ * The `proactive` part as a member is sent it: the computer's switch, and for each bot their role manages the settings and
+ * log of the agent they set up (`mine`), or only that another person's is there (`taken`). Never `person`, and nothing of the
+ * owner's agents or another member's.
+ */
+export function memberProactive(part, me, botIds) {
+  const bots = {};
+  for (const [id, entry] of Object.entries(part?.bots ?? {})) {
+    if (!botIds.has(id) || !entry || typeof entry !== "object") continue;
+    if (entry.person === me) {
+      const { person: _person, ...rest } = entry;
+      bots[id] = { ...rest, mine: true };
+    } else bots[id] = { enabled: entry.enabled === true, taken: true };
+  }
+  return { enabled: part?.enabled === true, bots };
+}
+
 /** A copy of the named parts with everything outside a member's role and ownership removed. */
 export function filterParts(parts, principal, team, extra = {}) {
   if (principal?.kind === "owner") return parts;
@@ -979,6 +1050,9 @@ export function filterParts(parts, principal, team, extra = {}) {
   // A bot as a member sees it: without what the owner wrote for it or where it came from, and with
   // the member's own hidden and pinned marks and order. The owner's marks are the owner's.
   const mayManage = can("agents", "manage");
+  // The shared voice is the owner's, but a role that manages bots needs its choices and what is ready to set a bot's own voice.
+  const sharedVoice = mayManage ? memberVoice(parts.voice) : undefined;
+  if (sharedVoice) out.voice = sharedVoice;
   const seen = (bot) => {
     // What the owner wrote for the bot (both of its prompts) is for a role that manages bots; where it came from is the owner's alone.
     const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, instructions, clarificationInstructions, ...rest } = bot;
@@ -995,10 +1069,12 @@ export function filterParts(parts, principal, team, extra = {}) {
   const visibleBots = can("agents") ? (parts.bots ?? []).filter((bot) => visible(role, bot.id)) : [];
   out.bots = visibleBots.map(seen).sort((a, b) => (place.get(a.id) ?? Infinity) - (place.get(b.id) ?? Infinity));
   const botIds = new Set(visibleBots.map((bot) => bot.id));
+  // The Proactive agent as this member may see it: their own bots' agents, and only whether another person's is there.
+  if ("proactive" in parts) out.proactive = memberProactive(parts.proactive, me, mayManage ? botIds : new Set());
   // A chat's flags are the member's own. Unread is theirs too: since they last marked it read; a
   // chat they never marked follows the workspace when they started it, and is new to them otherwise.
   out.chats = shared.map((chat) => {
-    const { pinned: _pinned, archived: _archived, unread, ...rest } = chat;
+    const { pinned: _pinned, archived: _archived, folder: _folder, unread, ...rest } = chat;
     const own = view.chats[chat.id];
     const mine = chat.createdBy === me;
     const fresh = own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0);
@@ -1051,6 +1127,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   out.mcp = can("mcp") ? scrub(parts.mcp ?? []) : [];
   out.plugins = can("plugins") ? scrub(parts.plugins ?? []) : [];
   out.settings = can("settings") ? Object.fromEntries(Object.entries(parts.settings ?? {}).filter(([name]) => MEMBER_PREFERENCE_FIELDS.includes(name))) : {};
+  if (mayManage && parts.settings?.fastMode) out.settings.fastMode = parts.settings.fastMode;
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.
   out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name);

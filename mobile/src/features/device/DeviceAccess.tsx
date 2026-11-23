@@ -1,7 +1,7 @@
 // Tools › Device access: what bots may use on this phone, source by source, and what they used.
 import { ExternalLink, Laptop, Mail, MessageCircle } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Linking, View } from "react-native";
+import { AppState, Linking, Platform, View } from "react-native";
 import type { Access } from "@/device/access";
 import { levelsOf, SOURCE_NAMES, SOURCES, toolLabel, toolOf } from "@/device/tools";
 import type { DeviceLevel, DeviceSource } from "@/link/types";
@@ -16,6 +16,7 @@ type Held = { access?: Access; refused?: boolean };
 
 const LEVEL_WORDS: Record<DeviceLevel, string> = { off: "Off", read: "Read", interact: "Interact" };
 const MAC_WORDS: Record<DeviceLevel, string> = { off: "Off. Turn it on in Botkins on your Mac", read: "Read", interact: "Read and interact" };
+const PHONE_SOURCES = Platform.OS === "ios" ? SOURCES : SOURCES.filter((source) => source !== "music");
 
 const usable = (access: Access | undefined) => access?.state === "granted" || access?.state === "limited" || access?.state === "asked";
 const openSettings = () => void Linking.openSettings().catch(() => {});
@@ -176,7 +177,7 @@ export default function DeviceAccess() {
   const look = useCallback(async () => {
     const levels = useDevicePrefs.getState().sources;
     const found = await Promise.all(
-      SOURCES.map(async (source) => {
+      PHONE_SOURCES.map(async (source) => {
         const level = levels[source] ?? "off";
         const refused = heldNow.current[source]?.refused;
         if (level === "off" && !refused) return [source, undefined] as const;
@@ -214,7 +215,7 @@ export default function DeviceAccess() {
           Update Botkins on your computer
         </T>
       )}
-      {SOURCES.map((source) => (
+      {PHONE_SOURCES.map((source) => (
         <SourceCard key={source} source={source} held={held[source] ?? {}} onHeld={onHeld} />
       ))}
       <MacTools />

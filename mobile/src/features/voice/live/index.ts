@@ -3,25 +3,30 @@ import type { LiveProvider, LiveSession } from "@/link/types";
 import { ElevenLabsTransport } from "./elevenlabs";
 import { GeminiTransport } from "./gemini";
 import { OpenAISocketTransport } from "./openai";
-import type { Connect, DuplexLike, LiveTransport, ToolRunner } from "./types";
+import type { Connect, DuplexLike, LiveTransport, ToolRunner, WatchRtcLike } from "./types";
 import { type Negotiate, WebRTCTransport } from "./webrtc";
+import { WatchRTCTransport } from "./watch-rtc";
 
 export type { Line, LiveStatus, LiveTransport } from "./types";
 export { chatTools, type ChatAccess, type ChatSnapshot } from "./askBot";
 
 type WebRTC = typeof import("react-native-webrtc");
 
-export type Kit = { webrtc: WebRTC | null; duplex: DuplexLike | null; connect: Connect; route: (speaker: boolean) => Promise<void> };
+export type Kit = { webrtc: WebRTC | null; duplex: DuplexLike | null; watchRtc?: WatchRtcLike | null; connect: Connect; route: (speaker: boolean) => Promise<void> };
 
 /** Whether this build can talk to a provider, and how: with an offer (WebRTC) or without one (a socket). */
-export function planFor(provider: LiveProvider, kit: Pick<Kit, "webrtc" | "duplex">): "offer" | "socket" | null {
-  if (provider === "codex") return kit.webrtc ? "offer" : null;
+export function planFor(provider: LiveProvider, kit: Pick<Kit, "webrtc" | "duplex" | "watchRtc">): "offer" | "socket" | null {
+  if (provider === "codex") return kit.webrtc || kit.watchRtc ? "offer" : null;
   if (provider === "openai") return kit.webrtc ? "offer" : kit.duplex ? "socket" : null;
   return kit.duplex ? "socket" : null;
 }
 
-export function webrtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner): WebRTCTransport {
-  return new WebRTCTransport(kit.webrtc!, negotiate, tools, kit.route);
+export function webrtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string): WebRTCTransport {
+  return new WebRTCTransport(kit.webrtc!, negotiate, tools, kit.route, language);
+}
+
+export function watchRtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string): WatchRTCTransport {
+  return new WatchRTCTransport(kit.watchRtc!, negotiate, tools, language);
 }
 
 /** The socket transport for a session the computer set up without an offer. */

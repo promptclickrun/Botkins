@@ -1,3 +1,4 @@
+import { changedFolders, repositoryName } from "./project-folders.mjs";
 // A stand-in for the desktop app, for developing and testing the phone app without it.
 // It keeps a small workspace in memory, shaped like the desktop's, and answers a message with a
 // scripted reply: thinking, one tool step, then streamed text. A message with "approve" in it asks
@@ -5,15 +6,19 @@
 import { addUserMessage, recordVoiceLine } from "./voice-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { posix } from "node:path";
+import { basename, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { demoGitHub } from "./mock-prs.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
+import { uploadSkill } from "./skill-import.mjs";
+import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 
 const now = () => Date.now();
 /** The demo computer's owner, as a person. */
 const OWNER_NAME = "Alex";
+const DESIGN_SKILL = "---\nname: design-review\ndescription: Review a design.\n---\nCheck readability and contrast.";
 const BUILTIN_SPACES = [["today", "Today"], ["feed", "Feed"], ["ideas", "Ideas"], ["goals", "Goals"]];
 const CARD_SPACE = { feed: "feed", idea: "ideas", goal: "goals" };
 const SPACE_LIMIT = { spaces: 60, panels: 40, notes: 50 };
@@ -232,7 +237,7 @@ export function seed() {
       { id: "t4", title: "Collect launch metrics", body: "", botId: "bot-tally", priority: "low", status: "done", createdBy: "bot-mira", createdAt: t - 50 * HOUR, updatedAt: t - 20 * HOUR },
     ],
     projects: [
-      { id: "p1", name: "Website", description: "Marketing site and pricing page", color: "coral", folder: REPO, todos: [{ id: "td1", text: "Final pass on pricing copy", done: false, createdAt: t - 6 * HOUR }, { id: "td2", text: "Compress hero images", done: true, createdAt: t - 30 * HOUR, doneAt: t - 20 * HOUR }], lastUsed: t - 2 * HOUR, createdAt: t - 30 * 24 * HOUR },
+      { id: "p1", name: "Website", description: "Marketing site and pricing page", color: "coral", folder: REPO, folders: [REPO, "/Users/demo/Code/website"], todos: [{ id: "td1", text: "Final pass on pricing copy", done: false, createdAt: t - 6 * HOUR }, { id: "td2", text: "Compress hero images", done: true, createdAt: t - 30 * HOUR, doneAt: t - 20 * HOUR }], lastUsed: t - 2 * HOUR, createdAt: t - 30 * 24 * HOUR },
       { id: "p2", name: "Mobile app", color: "blue", folder: REPO, todos: [], lastUsed: t - 3 * 24 * HOUR, createdAt: t - 12 * 24 * HOUR },
       // A project with no folder: no modes, nothing to unlink.
       { id: "p3", name: "Garden plans", description: "Beds, seeds and the watering rota", color: "green", todos: [{ id: "td3", text: "Order seed potatoes", done: false, createdAt: t - 26 * HOUR }, { id: "td4", text: "Fix the rain barrel", done: false, createdAt: t - 20 * HOUR }, { id: "td5", text: "Sketch the new bed", done: false, createdAt: t - 4 * HOUR }], lastUsed: t - 6 * 24 * HOUR, createdAt: t - 40 * 24 * HOUR },
@@ -245,6 +250,8 @@ export function seed() {
     skills: { folders: [{ id: "folder-team", path: "/Users/demo/team-skills" }], plugins: [{ id: "plugin-review", path: "/Users/demo/.plugins/code-review" }], disabled: [] },
     wiki: { revision: 1 },
     providers: { revision: 1 },
+    // The Proactive agent: the computer's switch, and each bot's agent by bot id (the desktop's desktop/proactive.mjs).
+    proactive: { enabled: false, bots: {} },
     settings: {
       model: { model: "auto" },
       appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default", avatarAnimations: true },
@@ -263,6 +270,7 @@ export function seed() {
       teamwork: true,
       // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
       autoSummarize: 10,
+      proactive: { enabled: false },
       harness: "copilot",
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, grok: { enabled: false } },
     },
@@ -1184,16 +1192,20 @@ const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.
 export class MockBackend {
   constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
+    if (process.env.BOTKINS_DEV_PRS === "1") this.runGitHub = demoGitHub;
     this.streamAppends = appends;
     this.timeline = timeline;
     // A computer nobody has set up yet: no bots, and nothing that belongs to one.
     if (process.env.BOTKINS_DEV_EMPTY === "1") Object.assign(state, { bots: [], chats: [], runs: [], routines: [], tasks: [], board: [], panels: [], sections: [], requests: [] });
     Object.assign(this, { state, speed, listeners: new Set(), turns: new Map(), waiting: new Map(), memory: new Map(), skillList: SKILLS.map((s) => ({ ...s })) });
+    for (const p of state.projects ?? []) p.folders ??= p.folder ? [p.folder] : [];
+    this.cloneFolders = new Set();
     this.wiki = new MockWiki(state);
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "models-v2", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1220,7 +1232,10 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1");
+    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1");
+    this.catalogToken = "";
+    this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
+
     this.piPackages = new Map();
     this.pluginsOn = process.env.BOTKINS_DEV_PLUGINS !== "off";
     this.pluginPage = pluginPage;
@@ -1973,6 +1988,21 @@ export class MockBackend {
       this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author, clientMessageId: next.clientMessageId });
     }
   }
+  applyFolders(project, folders) {
+    const chats = this.state.chats.filter((c) => c.projectId === project.id);
+    if (chats.some((c) => this.turns.has(c.id))) throw new Error("Wait for the reply to finish.");
+    if (folders.length && chats.some((c) => c.botIds?.length > 1)) throw new Error("Group chats take text only.");
+    for (const chat of chats) {
+      const before = chat.folder ?? project.folder;
+      if (!folders.includes(chat.folder) || chat.folder === folders[0]) delete chat.folder;
+      if (before !== (chat.folder ?? folders[0]) && chat.messages.length) chat.restartSession = true;
+      if (!folders.length) chat.mode = "default";
+    }
+    project.folders = folders;
+    if (folders.length) project.folder = folders[0];
+    else delete project.folder;
+  }
+
   handlers = {
     appInfo: () => ({ version: this.updates?.current ?? "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
     setPreferences(patch) {
@@ -1994,6 +2024,14 @@ export class MockBackend {
         // BOTKINS_DEV_STARTUP=refuse: the system won't change what starts with the computer, so the choice goes back.
         if (process.env.BOTKINS_DEV_STARTUP === "refuse" && next.runAtStartup !== settings.background.runAtStartup) throw new Error("This computer wouldn't change what starts with it.");
         rest.background = next;
+      }
+      // The Proactive agent's switch for the computer takes `enabled` only, as the desktop's desktop/proactive-settings.mjs does.
+      if (rest.proactive) {
+        const unknown = Object.keys(rest.proactive).find((key) => key !== "enabled");
+        if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown + ". A bot's own settings are changed on its profile.");
+        if (typeof (rest.proactive.enabled ?? settings.proactive.enabled) !== "boolean") throw new Error("Choose on or off");
+        rest.proactive = { enabled: rest.proactive.enabled ?? settings.proactive.enabled };
+        this.state.proactive.enabled = rest.proactive.enabled;
       }
       Object.assign(settings, rest);
       if (appearance) Object.assign(settings.appearance, appearance, appearance.colorTheme !== undefined && { themePicked: true }, appearance.font !== undefined && { fontPicked: true });
@@ -2069,6 +2107,28 @@ export class MockBackend {
       if (skillsOff) bot.skillsOff = skillsOff;
       if (mcpOff) bot.mcpOff = mcpOff;
     },
+    // A bot's Proactive agent, for the person who calls: the one who first sets it up is the one it works for (the desktop's desktop/proactive.mjs).
+    setBotProactive(id, patch) {
+      this.bot(id);
+      const person = this.caller.id;
+      const held = this.state.proactive.bots[id];
+      if (person !== "owner" && held && held.person !== person) throw new Error("This bot's Proactive agent is set up for someone else.");
+      if (patch === null) {
+        delete this.state.proactive.bots[id];
+        return null;
+      }
+      const usual = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" };
+      if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid Proactive agent setting");
+      const unknown = Object.keys(patch).find((key) => !Object.hasOwn(usual, key));
+      if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
+      const owner = (held?.person ?? person) === "owner";
+      // A member's agent never looks around the computer's own accounts, and tasks are the owner's.
+      const next = { ...(held ?? { ...usual, ...(!owner && { sweepHours: 0, watch: ["runs", "requests"] }) }), ...patch, person: held?.person ?? person };
+      if (!owner && next.sweepHours !== 0) throw new Error("Only the owner can turn on look-around: it reads the computer's own tools and accounts.");
+      if (!owner) next.watch = next.watch.filter((watch) => watch !== "tasks");
+      this.state.proactive.bots[id] = next;
+      return null;
+    },
     botMemory(id) {
       return this.memory.get(id) ?? (id === "bot-mira" ? "- Prefers short lists\n- Launch is on the 24th\n- Weekly review happens on Fridays" : "");
     },
@@ -2137,6 +2197,13 @@ export class MockBackend {
     renameChat(id, title) {
       Object.assign(this.chat(id), { title: text(title, 120, "title"), titleSet: true });
     },
+    regenerateChatTitle(id) {
+      const chat = this.chat(id);
+      if (chat.temporary || chat.panelId || chat.schedules?.some((entry) => entry.routine)) throw new Error("This chat's title can't be regenerated.");
+      const opening = chat.messages.find((message) => message.role === "user" && message.text?.trim());
+      if (!opening) throw new Error("Send a message before regenerating the title.");
+      return (chat.title = opening.text.trim().replace(/\s+/g, " ").slice(0, 80));
+    },
     deleteChat(id) {
       this.chat(id);
       this.state.chats = this.state.chats.filter((c) => c.id !== id);
@@ -2158,28 +2225,32 @@ export class MockBackend {
       this.state.chats.unshift(chat);
       return chat.id;
     },
-    // Only before the first message. A project without a folder keeps the default mode.
-    setChatProject(chatId, projectId, mode) {
+    setChatProject(chatId, projectId, mode, folder) {
       const chat = this.chat(chatId);
-      // As the app on the computer: a chat that has started may move between projects unless that
-      // would change the folder it works in.
       if (this.turns.has(chatId)) throw new Error("Wait for the reply to finish before changing the project.");
-      const started = chat.messages.length > 0;
-      const before = this.state.projects.find((p) => p.id === chat.projectId)?.folder ?? null;
-      if (projectId == null) {
-        if (chat.projectId && started && before) throw new Error("This conversation already started in its project. Start a new chat instead.");
-        delete chat.projectId;
-        chat.mode = "default";
-        return;
-      }
-      const project = this.state.projects.find((p) => p.id === projectId);
-      if (!project) throw new Error("This project no longer exists.");
-      const after = project.folder ?? null;
-      if (started && projectId !== chat.projectId && (before || after) && before !== after) throw new Error("This conversation already started in another folder. Start a new chat for this project.");
-      if (chat.botIds && project.folder) throw new Error("Group chats are text only, so they can't use a project with a folder.");
+      const project = projectId && this.state.projects.find((p) => p.id === projectId);
+      if (projectId && !project) throw new Error("This project no longer exists.");
+      if (chat.botIds?.length > 1 && project?.folder) throw new Error("Group chats are text only, so they can't use a project with a folder.");
       if (mode && !["default", "plan", "yolo"].includes(mode)) throw new Error("Choose Default, Plan or YOLO.");
-      chat.projectId = projectId;
-      chat.mode = project.folder ? (mode ?? "default") : "default";
+      if (folder === undefined && projectId === chat.projectId) folder = chat.folder;
+      if (folder && !project?.folders?.includes(folder)) throw new Error("Choose a folder in this project.");
+      folder = folder === project?.folder ? undefined : folder || undefined;
+      if (chat.messages.length && (chat.projectId !== project?.id || chat.folder !== folder)) chat.restartSession = true;
+      if (folder) chat.folder = folder;
+      else delete chat.folder;
+      if (project) chat.projectId = project.id;
+      else delete chat.projectId;
+      chat.mode = project?.folder ? mode ?? project.mode ?? "default" : "default";
+    },
+    chatProjectFolder(chatId) {
+      const chat = this.chat(chatId);
+      const project = this.state.projects.find((p) => p.id === chat.projectId);
+      return project?.folders.includes(chat.folder) ? chat.folder : project?.folder ?? null;
+    },
+    setChatFolder(chatId, path) {
+      const chat = this.chat(chatId);
+      if (!chat.projectId) throw new Error("Choose a project first.");
+      this.handlers.setChatProject.call(this, chatId, chat.projectId, chat.mode, path ?? null);
     },
     // The quote, mentions and attachments are accepted and ignored. `delivery: "steer"` hands the
     // message to a turn that takes one ("long turn"); any other turn keeps it for after.
@@ -2194,6 +2265,10 @@ export class MockBackend {
         return;
       }
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
+      if (chat.restartSession) {
+        chat.forkContext = chat.messages.map((m) => m.role + ": " + m.text).join("\n");
+        delete chat.restartSession;
+      }
       const scheduled = this.scheduled;
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
@@ -2339,8 +2414,8 @@ export class MockBackend {
       const details = {
         "copilot/claude-sonnet-5-5": { contextWindow: 1_000_000, maxOutput: 128_000, maxPrompt: 936_000, vision: true, tools: true, vendor: "Anthropic", tier: "Premium", description: "Fast and capable, through Copilot" },
         "claude/claude-fable-5-2": { contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", effortNotes: { low: "Quick answers", high: "Thinks it through", max: "The longest thinking" } },
-        "claude/claude-opus-5-5": { contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", description: "Deep work and long tasks" },
-        "codex/gpt-5.5-codex": { contextWindow: 400_000, maxOutput: 128_000, vision: true, tools: true, vendor: "OpenAI" },
+        "claude/claude-opus-5-5": { fastModes: { fast: "fast" }, contextWindow: 1_000_000, maxOutput: 128_000, vision: true, tools: true, vendor: "Anthropic", description: "Deep work and long tasks" },
+        "codex/gpt-5.5-codex": { fastModes: { fast: "priority", ultrafast: "ultrafast" }, contextWindow: 400_000, maxOutput: 128_000, vision: true, tools: true, vendor: "OpenAI" },
         "opencode/big-pickle": { contextWindow: 128_000, tools: true, tier: "Free" },
       };
       return MODELS.filter((m) => on[m.provider]?.enabled).map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
@@ -2355,7 +2430,12 @@ export class MockBackend {
       const capable = this.capabilities.includes("provider-signin-v1");
       return PROVIDERS.map((p) => ({ ...this.signIns.status(p, capable), enabled: !!this.state.settings.providers[p.id]?.enabled }));
     },
-    setModel(scope, id, value) {
+    setModel(scope, id, value, fastMode) {
+      if (fastMode !== undefined && scope !== "routines") {
+        const target = scope === "global" ? this.state.settings : scope === "bot" ? this.bot(id) : this.chat(id);
+        if (fastMode === null) delete target.fastMode;
+        else target.fastMode = fastMode;
+      }
       if (scope === "global") this.state.settings.model = value ?? { model: "auto" };
       else if (scope === "routines") {
         if (value) this.state.settings.routineModel = value;
@@ -2854,19 +2934,46 @@ export class MockBackend {
     removeCredential() {},
     // Projects
     createProject(input) {
-      const project = { id: "p-" + randomUUID().slice(0, 6), name: text(input.name, 80, "name"), ...(input.description && { description: input.description }), ...(input.color && { color: input.color }), todos: [], lastUsed: now(), createdAt: now() };
+      const project = { id: "p-" + randomUUID().slice(0, 6), name: text(input.name, 80, "name"), folders: [], ...(input.description && { description: input.description }), ...(input.color && { color: input.color }), todos: [], lastUsed: now(), createdAt: now() };
       this.state.projects.push(project);
       return project.id;
     },
     updateProject(id, patch) {
       const project = this.state.projects.find((p) => p.id === id);
       if (!project) throw new Error("This project no longer exists.");
-      // A folder comes from the folder browser (`listFolders`); null unlinks it.
-      if ("folder" in patch && patch.folder !== null) chosenFolder(patch.folder);
-      const { folder, ...rest } = patch;
+      const { folder, mode, ...rest } = patch;
+      if (mode != null && !["default", "plan", "yolo"].includes(mode)) throw new Error("Choose Default, Plan or YOLO.");
+      if (folder !== undefined) {
+        if (folder) chosenFolder(folder);
+        const siblings = project.folders.slice(1).filter((f) => f !== folder);
+        this.applyFolders(project, folder ? [folder, ...siblings] : siblings);
+      }
+      if (mode === "default") delete project.mode;
+      else if (mode) project.mode = mode;
       Object.assign(project, rest);
-      if (folder === null) delete project.folder;
-      else if (folder !== undefined) project.folder = folder;
+    },
+    editProjectFolder(id, action, path) {
+      const p = this.state.projects.find((item) => item.id === id);
+      if (!p) throw new Error("This project no longer exists.");
+      if (action === "add" && !this.cloneFolders.has(path)) chosenFolder(path);
+      this.applyFolders(p, changedFolders(p.folders, action, path));
+      return p.folders;
+    },
+    cloneProjectRepository(repository, parent, id, data) {
+      const repo = repositoryName(repository).split("/")[1];
+      if (parent) chosenFolder(parent);
+      const folder = posix.join(parent || "/Users/demo", repo);
+      if (this.cloneFolders.has(folder) || demoFolder(folder)) throw new Error("The destination folder is not empty.");
+      if (id) {
+        const p = this.state.projects.find((p) => p.id === id);
+        if (!p) throw new Error("This project no longer exists.");
+        this.applyFolders(p, changedFolders(p.folders, "add", folder));
+      } else {
+        id = this.handlers.createProject.call(this, { ...data, name: data?.name || repo });
+        this.applyFolders(this.state.projects.find((p) => p.id === id), [folder]);
+      }
+      this.cloneFolders.add(folder);
+      return id;
     },
     // The folders inside the home folder or a plugged-in disk, by name: never a file, never what a file holds, nothing hidden.
     listFolders(path) {
@@ -2885,16 +2992,18 @@ export class MockBackend {
       chosenFolder(path);
       const existing = this.state.projects.find((p) => p.folder === path);
       if (existing) return existing.id;
-      const project = { id: "p-" + randomUUID().slice(0, 6), name: posix.basename(path), folder: path, todos: [], lastUsed: now(), createdAt: now() };
+      const project = { id: "p-" + randomUUID().slice(0, 6), name: posix.basename(path), folder: path, folders: [path], todos: [], lastUsed: now(), createdAt: now() };
       this.state.projects.push(project);
       return project.id;
     },
-    startProjectChat(botIds, projectId, mode) {
+    startProjectChat(botIds, projectId, mode, folder) {
       if (!Array.isArray(botIds) || !botIds.length) throw new Error("Choose a bot.");
       const project = this.state.projects.find((p) => p.id === projectId);
       if (!project) throw new Error("This project no longer exists.");
       botIds.forEach((id) => this.bot(id));
-      const chat = { id: "chat-" + randomUUID().slice(0, 8), botId: botIds[0], ...(botIds.length > 1 && { botIds }), title: "New chat", time: now(), projectId, mode: project.folder ? (mode ?? "default") : "default", messages: [] };
+      if (botIds.length > 1 && project.folder) throw new Error("Group chats take text only.");
+      if (folder && !project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      const chat = { ...(folder && folder !== project.folder && { folder }), id: "chat-" + randomUUID().slice(0, 8), botId: botIds[0], ...(botIds.length > 1 && { botIds }), title: "New chat", time: now(), projectId, mode: project.folder ? (mode ?? project.mode ?? "default") : "default", messages: [] };
       this.state.chats.unshift(chat);
       project.lastUsed = now();
       return chat.id;
@@ -2903,6 +3012,9 @@ export class MockBackend {
       Object.assign(this.state.projects.find((p) => p.id === id) ?? {}, { name });
     },
     removeProject(id) {
+      const chats = this.state.chats.filter((chat) => chat.projectId === id);
+      if (chats.some((c) => this.turns.has(c.id))) throw new Error("Wait for the reply to finish.");
+      for (const chat of chats) this.handlers.setChatProject.call(this, chat.id, null);
       this.state.projects = this.state.projects.filter((p) => p.id !== id);
     },
     // "project-artifacts-v1": a project keeps a list of artifact ids, newest attached first.
@@ -2934,24 +3046,26 @@ export class MockBackend {
       return { items };
     },
     // A project's changes are made up (the folder itself is never read or touched). Committing clears them.
-    projectChanges(id) {
+    projectChanges(id, folder) {
       const project = this.state.projects.find((p) => p.id === id);
       if (!project) throw new Error("This project no longer exists.");
       if (!project.folder) return { repo: false, files: [] };
-      const files = (this.changedFiles ??= new Map()).get(id) ?? (this.changedFiles.set(id, MADE_UP_CHANGES.map((file) => ({ ...file }))), this.changedFiles.get(id));
+      folder ??= project.folder;
+      if (!project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      const files = (this.changedFiles ??= new Map()).get(folder) ?? (this.changedFiles.set(folder, MADE_UP_CHANGES.map((file) => ({ ...file }))), this.changedFiles.get(folder));
       const sum = (key) => files.reduce((total, file) => total + file[key], 0);
-      return { repo: true, root: project.folder, branch: "feature/" + slug(project.name), upstream: "origin/main", ahead: 2, behind: 0, files, added: sum("added"), removed: sum("removed") };
+      return { repo: true, root: folder, branch: "feature/" + slug(project.name), upstream: "origin/main", ahead: 2, behind: 0, files, added: sum("added"), removed: sum("removed") };
     },
-    projectDiff(id, file) {
-      const changed = this.handlers.projectChanges.call(this, id).files.find((f) => f.path === file);
+    projectDiff(id, file, folder) {
+      const changed = this.handlers.projectChanges.call(this, id, folder).files.find((f) => f.path === file);
       if (!changed) throw new Error("That file has no changes now.");
       return { text: MADE_UP_DIFFS[file] ?? "--- a/" + file + "\n+++ b/" + file + "\n@@ -1 +1 @@\n-old line\n+new line", truncated: false };
     },
-    projectCommit(id, message) {
-      const changes = this.handlers.projectChanges.call(this, id);
+    projectCommit(id, message, folder) {
+      const changes = this.handlers.projectChanges.call(this, id, folder);
       text(message, 2000, "commit message");
       if (!changes.repo || !changes.files.length) throw new Error("There is nothing to commit.");
-      this.changedFiles.set(id, []);
+      this.changedFiles.set(changes.root, []);
       return randomUUID().replace(/-/g, "").slice(0, 7);
     },
     addTodo(projectId, value) {
@@ -3099,6 +3213,42 @@ export class MockBackend {
       const servers = new Set(Object.values(record.serverIds ?? {}));
       this.state.mcpServers = this.state.mcpServers.filter((server) => !servers.has(server.id));
       this.plugins.installed = this.plugins.installed.filter((item) => item !== record);
+    },
+    // The demo uses the same upload reader and keeps the resulting skills in memory.
+    "skills.upload"(file) {
+      return uploadSkill({
+        importSkillFolders: (folders, replace) => {
+          const skills = folders.map(folder => parseSkill(readFileSync(join(folder, "SKILL.md"), "utf8"), basename(folder)));
+          const conflicts = skills.filter(s => this.skillList.some(old => old.name === s.name) && !replace.includes(s.name)).map(s => s.name);
+          if (conflicts.length) return {added: [], conflicts};
+          const added = skills.map(s => s.name);
+          if (new Set(added.map(slug)).size !== added.length) throw new Error("Duplicate skill name.");
+          this.skillList = this.skillList.filter(old => !added.includes(old.name));
+          for (const skill of skills) {
+            this.skillList.unshift({...skill, path: "/skills/" + slug(skill.name), origin: "botkins", enabled: true, editable: true});
+            this.handlers.setSkillEnabled.call(this, skill.name, true);
+          }
+          if (added.includes(this.demoSkill.name)) this.demoInstalled = false;
+          return {added, conflicts: []};
+        },
+      }, file);
+    },
+    "skillsCatalog.search"(query) {
+      if (typeof query !== "string" || query.trim().length < 2) throw new Error("Enter at least two characters.");
+      const installed = this.demoInstalled && this.skillList.some(s => s.name === this.demoSkill.name);
+      return this.demoSkill.name.includes(query.trim().toLowerCase()) ? [{...this.demoSkill, installed: installed ? this.demoSkill.name : undefined}] : [];
+    },
+    "skillsCatalog.preview"(id) {
+      if (id !== this.demoSkill.id) throw new Error("Unknown demo skill.");
+      this.catalogToken = randomUUID();
+      return {name: this.demoSkill.name, description: "Review a design.", text: DESIGN_SKILL, token: this.catalogToken};
+    },
+    async "skillsCatalog.install"(token, replace) {
+      if (!token || token !== this.catalogToken) throw new Error("Open the preview again.");
+      const data = Buffer.from(DESIGN_SKILL).toString("base64");
+      const result = await this.handlers["skills.upload"].call(this, {filename: "design-review.md", data, replace});
+      if (result.added.length) this.demoInstalled = true;
+      return result;
     },
     // A Pi catalog and isolated package state for this demo host.
     "piPackages.browse"({ query = "", page = 1 } = {}) {

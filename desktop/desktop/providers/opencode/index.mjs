@@ -20,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
+import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
 import { SessionStore, serversWithTokens, transcriptContext } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
@@ -169,11 +170,17 @@ class OpenCodeSession extends ProviderSession {
     return info.id;
   }
 
-  async send(message, timeoutMs = 600000) {
+  /**
+   * Sends one message. There is no time limit: the person stops a turn that runs long, and the
+   * turn ends by itself when OpenCode's server stops, its session is gone, or it ended unheard
+   * (see alive). `timeoutMs` is for a caller with nobody to stop it, such as a background summary.
+   */
+  async send(message, timeoutMs) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
     this.sending = true;
     this.stopRequested = false;
     let timer;
+    let watching;
     try {
       const sessionId = await this.session();
       const api = await this.provider.server();
@@ -186,8 +193,11 @@ class OpenCodeSession extends ProviderSession {
       const turn = (this.turn = { text: [], any: false, usage: { input: 0, output: 0, cacheRead: 0, cost: 0 }, failure: "", started: Date.now(), posted: false, ended: false });
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       finished.catch(() => {});
-      timer = setTimeout(() => turn.reject(Object.assign(new Error("OpenCode didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
-      timer.unref?.();
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => turn.reject(Object.assign(new Error("OpenCode didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"})), timeoutMs);
+        timer.unref?.();
+      }
+      watching = turn.quiet = watchQuiet({ every: this.provider.quietCheckMs, probe: () => this.alive(), onDead: (error) => turn.reject(error) });
       try {
         const { data } = await api.post("/api/session/" + sessionId + "/prompt", {
           text: this.mode === "plan" ? "Plan mode: do not change any file. Work out a plan, show it, and ask before carrying it out.\n\n" + message.prompt : message.prompt,
@@ -220,20 +230,33 @@ class OpenCodeSession extends ProviderSession {
       return { text };
     } finally {
       clearTimeout(timer);
+      watching?.stop();
       this.turn = null;
       this.sending = false;
     }
   }
   /**
+   * What a quiet spell asks of OpenCode. Rejects only when the turn can't go on: the server
+   * stopped, or it no longer holds the session. A turn that ended without its events reaching us
+   * is finished from what OpenCode stored (resync). A check that fails or gets no answer is no news.
+   */
+  async alive() {
+    if (!(await this.provider.serverIfRunning?.())) throw Object.assign(new Error("OpenCode stopped."), { code: "BOTKINS_PROVIDER_EXIT" });
+    await this.resync({ strict: true });
+  }
+  /**
    * Looks at the session after the event stream was lost and found again: a turn that ended
    * meanwhile is finished from what OpenCode has stored, so it doesn't wait for an event that
-   * already went by.
+   * already went by. `strict` (a quiet spell's check) also says when OpenCode no longer has the session.
    */
-  async resync() {
+  async resync({ strict = false } = {}) {
     const turn = this.turn;
     const api = this.provider.serverIfRunning && (await this.provider.serverIfRunning());
     if (!turn || !api || !this.sessionId) return;
-    const info = await api.get("/api/session/" + this.sessionId, undefined, 15000).then((r) => r.data, () => null);
+    const info = await api.get("/api/session/" + this.sessionId, undefined, 15000).then((r) => r.data, (error) => {
+      if (strict && error.status === 404) throw Object.assign(new Error("OpenCode no longer has this conversation."), { code: "BOTKINS_SESSION_LOST" });
+      return null;
+    });
     if (this.turn !== turn || !turn.posted || !info?.time?.idle || info.time.idle < turn.started) return;
     turn.ended = true;
     if (info.outcome === "failed") return turn.reject(new Error(turn.failure || "OpenCode couldn't finish this reply."));
@@ -247,6 +270,7 @@ class OpenCodeSession extends ProviderSession {
   /** One event from OpenCode's stream for this session, or for a helper session it started. */
   received(event) {
     const { type, data } = event;
+    this.turn?.quiet?.touch();
     const child = data.sessionID !== this.sessionId;
     // A helper asks the person through the session that started it.
     if (type === "permission.asked") return void this.permission(data);
@@ -548,10 +572,11 @@ export class OpenCodeProvider extends ModelProvider {
    * @param options.binary   A path to the OpenCode CLI, instead of looking for `opencode`.
    * @param options.connect  For tests: async () => ({ url, password }) of a server that is already running.
    * @param options.pollMs   How often a sign-in that is waiting for the browser is asked about.
+   * @param options.quietCheckMs  How long a turn is quiet before OpenCode is asked whether it still has the session.
    */
-  constructor({ dataDir, bridge, binary, connect, pollMs = 1500 } = {}) {
+  constructor({ dataDir, bridge, binary, connect, pollMs = 1500, quietCheckMs = QUIET_CHECK_MS } = {}) {
     super();
-    Object.assign(this, { dataDir, bridge, binary, connect, pollMs });
+    Object.assign(this, { dataDir, bridge, binary, connect, pollMs, quietCheckMs });
     this.sessions = new SessionStore(dataDir && join(dataDir, "sessions.json"));
     this.open = new Map();
     // OpenCode sessions whose last turn was given up on before OpenCode said it had ended.

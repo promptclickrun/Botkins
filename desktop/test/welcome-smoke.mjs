@@ -4,12 +4,14 @@
 // launch that skips the welcome, every Settings section through the side menu, Settings › Model providers
 // (sign-out question, remove and add back, the last provider kept), and Create a bot with Bot Studio.
 // Uses an isolated data folder. Set WELCOME_SHOTS to a folder to save light and dark screenshots.
+import { stubTemplate } from "./template-fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
 import { seedApp } from "./starter.mjs";
+import { setUpHere } from "./welcome-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-welcome-"));
 const shots = process.env.WELCOME_SHOTS;
@@ -171,6 +173,8 @@ try {
   await start();
   await welcome().waitFor();
   await expect(page.getByRole("heading", { name: "Home", exact: true })).toHaveCount(0);
+  // The first question is how Botkins is used here: this smoke sets it up on this computer.
+  await setUpHere(page);
   await expect(button("Get started").or(page.getByRole("button", { name: /^Sign in /, disabled: false })).first()).toBeVisible({ timeout: 30000 });
 
   // 2. The three main choices: ChatGPT, Claude and GitHub Copilot, in that order and as equals,
@@ -312,11 +316,13 @@ try {
     "Teamwork",
     "Team",
     "Access",
+    "Computers and teams",
     "Phone",
     "Voice",
     "Usage",
     "Storage",
     "Model providers",
+    "Experimental",
     "About",
   ];
   const tabs = dialog.getByRole("tablist", { name: "Settings" });
@@ -414,11 +420,12 @@ try {
   await sheet.getByLabel("Instructions", { exact: true }).fill("Plan plantings by season and keep lists short.");
   await sheet.getByText("Click to change").waitFor();
   await shoot("create-bot");
-  await sheet.getByRole("button", { name: "Start from a template", exact: true }).click();
-  await sheet.getByRole("group", { name: "Built-in templates" }).waitFor();
+  await stubTemplate(app);
+  await sheet.getByRole("button", { name: "Start from template", exact: true }).click();
+  await sheet.getByRole("group", { name: "Marketplace templates" }).waitFor();
   await shoot("create-bot-templates");
   await page.keyboard.press("Escape");
-  await expect(sheet.getByRole("group", { name: "Built-in templates" })).toHaveCount(0);
+  await expect(sheet.getByRole("group", { name: "Marketplace templates" })).toHaveCount(0);
   await expect(sheet).toBeVisible();
 
   const studio = page.getByRole("dialog", { name: "Bot Studio" });

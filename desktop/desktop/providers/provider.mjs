@@ -216,7 +216,13 @@ export class ProviderSession {
   on(_handler) {
     return () => {};
   }
-  /** Sends one message and resolves with { text } when the reply is complete. */
+  /**
+   * Sends one message and resolves with { text } when the reply is complete. A turn has no time
+   * limit (see liveness.mjs): it ends when the reply is done, when the person stops it (abort), or
+   * when the harness is gone (its process exited, its connection closed, its session no longer
+   * exists), which rejects with that error. `_timeoutMs` is for a caller with nobody to stop it,
+   * such as a background summary: past it the turn rejects with code BOTKINS_TURN_TIMEOUT.
+   */
   async send(_message, _timeoutMs) {
     unsupported("sending messages");
   }

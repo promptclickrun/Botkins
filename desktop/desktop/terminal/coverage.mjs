@@ -43,6 +43,7 @@ export const WORKSPACE = {
   reorderBots: cmd("bots order"),
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
+  setBotProactive: cmd("bots proactive"),
   ...each("botMemory setBotMemory", cmd("bots memory")),
   ...each("addSection", cmd("bots sections add")),
   renameSection: cmd("bots sections rename"),
@@ -79,6 +80,7 @@ export const WORKSPACE = {
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
   renameChat: cmd("chats rename"),
+  regenerateChatTitle: cmd("chats regenerate-title"),
   deleteChat: cmd("chats delete"),
   forkChat: cmd("chats fork"),
   compact: cmd("chats compact"),
@@ -106,6 +108,10 @@ export const WORKSPACE = {
   previewCadence: cmd("routines when"),
   changeSchedule: cmd("routines schedule"),
   // ── Plugins ──
+  "skills.upload": cmd("skills upload"),
+  "skillsCatalog.search": cmd("skills search"),
+  "skillsCatalog.preview": cmd("skills preview"),
+  "skillsCatalog.install": cmd("skills install"),
   "piPackages.browse": cmd("pi browse"),
   "piPackages.preview": cmd("pi show"),
   "piPackages.list": cmd("pi list"),
@@ -162,6 +168,10 @@ export const WORKSPACE = {
   ...each("createProject addProjectFolder", cmd("projects add")),
   addProject: no("window"), // a folder dialog; `projects add <folder>` takes the path itself
   renameProject: cmd("projects rename"),
+  editProjectFolder: cmd("projects folder"),
+  chatProjectFolder: cmd("chats show"),
+  setChatFolder: cmd("chats project"),
+  cloneProjectRepository: cmd("projects clone"),
   updateProject: cmd("projects edit"),
   removeProject: cmd("projects remove"),
   addProjectArtifact: cmd("projects add-artifact"),
@@ -253,6 +263,7 @@ export const WORKSPACE = {
   // The team (control-team.mjs): kept by the phone link, reached through the app's own calls.
   team: cmd("team show"),
   renameTeam: cmd("team rename"),
+  renameTeamMember: cmd("team members rename"),
   saveTeamRole: cmd("team roles save"),
   deleteTeamRole: cmd("team roles remove"),
   saveTeamGroup: cmd("team groups save"),
@@ -276,10 +287,13 @@ export const WORKSPACE = {
   renamePhone: cmd("devices rename"),
   setPhonePerson: cmd("devices set-person"),
   removePhone: cmd("devices remove"),
+  configureGadget: cmd("gadgets set"),
+  gadgetWifi: cmd("gadgets wifi"),
+  restartGadget: cmd("gadgets restart"),
   setPhoneRelay: cmd("relay on"),
   resetPhoneRelay: cmd("relay reset"),
   // ── What needs a window ──
-  ...each("chooseFiles chooseProjectFolder pickPluginFolder addSkillFolder", no("window")), // a file or folder dialog (a path is given to the command instead)
+  ...each("chooseFiles chooseProjectFolder pickPluginFolder pickSkillUpload addSkillFolder", no("window")), // a file or folder dialog (a path is given to the command instead)
   ...each("revealProject revealSkill revealWiki revealWikiExport openChatPath openLink openAppRelease", no("window")), // opens a folder, a file or a link on the computer's screen
   ...each("copyText copyReply", no("window")), // the clipboard
   ...each("exportTemplate importTemplate exportUsage exportWiki", no("window")), // a save or open dialog; the text forms have commands
@@ -295,9 +309,17 @@ export const LINK = {
   "link.devices.rename": cmd("devices rename"),
   "link.devices.setPerson": cmd("devices set-person"),
   "link.devices.remove": cmd("devices remove"),
+  // Gadgets (desktop/link/gadget.mjs). A person names one from a cable; the rest are a gadget's own calls,
+  // which only a paired gadget makes, as a phone makes its own.
+  "link.gadgets.add": cmd("gadgets add"),
+  "link.gadgets.configure": cmd("gadgets set"),
+  "link.gadgets.wifi": cmd("gadgets wifi"),
+  "link.gadgets.restart": cmd("gadgets restart"),
+  ...each("link.gadget.hello link.gadget.set link.gadget.say link.gadget.hear link.gadget.speak link.gadget.face", no("phone's own")),
   // The team, as the link names the same calls (control-team.mjs).
   "link.team.get": cmd("team show"),
   "link.team.rename": cmd("team rename"),
+  "link.team.renameMember": cmd("team members rename"),
   "link.team.saveRole": cmd("team roles save"),
   "link.team.deleteRole": cmd("team roles remove"),
   "link.team.saveGroup": cmd("team groups save"),
@@ -330,6 +352,7 @@ export const LINK = {
   ...each("link.device.answer link.device.file link.device.sources link.upload link.pullRequests", no("phone's own")),
   ...each("link.push.activity link.push.prefs link.push.presence link.push.register link.push.test link.push.unregister", no("phone's own")),
   ...each("link.screen.frame link.screen.grant.begin link.screen.grant.confirm link.screen.info link.screen.input link.screen.revoke link.screen.stop", no("phone's own")),
+  ...each("link.pullRequest link.pullRequestDiff", no("window's own")),
   ...each("link.frame.chat link.frame.page", no("phone's own")),
   ...each("link.voice.endLive link.voice.key link.voice.live link.voice.options link.voice.set link.voice.speak link.voice.transcribe", no("phone's own")),
 };
@@ -348,6 +371,12 @@ export const CHANGES = {
   "devices.rename": 0,
   "devices.setPerson": 0,
   "devices.remove": 0,
+  // A gadget set up over a cable: its name as the computer keeps it. Never the Wi-Fi network or its password.
+  "gadgets.add": (args, value) => value?.name,
+  // A gadget's settings, a network for it, a restart: the gadget's name, never a network's name or a password.
+  "gadgets.set": (args, value) => value?.name,
+  "gadgets.wifi": (args, value) => value?.name,
+  "gadgets.restart": (args, value) => value?.name,
   // An answer to a request that waits in a chat: the chat's id, the kind of the request (one of four fixed words) and yes or no. Never the request's text or the answer's, never a value.
   "chat.respond": (args, value) => (value?.chatId && ["permission", "secure", "question", "form"].includes(value.kind) && ["yes", "no"].includes(value.answered) ? value.chatId + " " + value.kind + " " + value.answered : (value?.chatId ?? null)),
   "bots.add": (args) => args?.[0]?.name,
@@ -357,12 +386,15 @@ export const CHANGES = {
   "providers.login": 0,
   "providers.logout": 0,
   "models.default": null,
+  "models.speed": ([scope, id]) => id ?? scope,
   "models.routines": null,
   "routines.run": 0,
   "routines.pause": 0,
   "routines.resume": 0,
   "plugins.addMarketplace": null,
   "plugins.removeMarketplace": 0,
+  "skills.upload": (_, result) => result?.added?.join(", "),
+  "skillsCatalog.install": (_, result) => result?.added?.[0],
   "piPackages.install": 0,
   "piPackages.setEnabled": 0,
   "plugins.install": 0,
@@ -401,6 +433,8 @@ export const CHANGES = {
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
+  // The bot's name only: not its rules, and not who the agent works for.
+  "bots.proactive.set": (args, value) => value?.name ?? args?.[0],
   "bots.memory.set": (args, value) => value?.name ?? args?.[0],
   "bots.sections.add": (args, value) => value?.name ?? args?.[0],
   "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
@@ -416,6 +450,7 @@ export const CHANGES = {
   // ── Chats (control-chats.mjs) ──
   // A chat is named by its id: a title is a text that a person (or a model) wrote, so it is not in the log. A section is by its id too, and a new one by its name.
   "chats.rename": (args, value) => value?.id,
+  "chats.regenerateTitle": (args, value) => value?.id,
   "chats.delete": (args, value) => value?.id,
   "chats.fork": (args, value) => value?.from,
   "chats.compact": (args, value) => value?.id,
@@ -444,6 +479,8 @@ export const CHANGES = {
   // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
   "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
   "projects.rename": (args, value) => value?.name ?? args?.[0],
+  "projects.folder": (args, value) => value?.id ?? args?.[0],
+  "projects.clone": (_args, value) => value?.id,
   "projects.edit": (args, value) => value?.name ?? args?.[0],
   "projects.remove": (args, value) => value?.name ?? args?.[0],
   "projects.addArtifact": (args, value) => value?.project?.name ?? args?.[0],
@@ -550,6 +587,7 @@ export const CHANGES = {
   "team.approve": (args, value) => value?.member?.id ?? value?.id,
   "team.deny": (args, value) => value?.id,
   "team.moveMember": (args, value) => value?.id,
+  "team.renameMember": (args, value) => value?.id,
   "team.removeMember": (args, value) => value?.id,
   "team.inviteToChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
   "team.removeFromChat": (args, value) => (value ? value.chat.id + " (" + value.person.id + ")" : null),
@@ -559,10 +597,10 @@ export const CHANGES = {
   "apps.remove": (args, value) => value?.slug ?? args?.[0],
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
-  bots: ["bots.flags", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
+  bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
@@ -603,6 +641,8 @@ const FIXED_WORDS = {
   teamwork: onOff,
   // A login item on this computer: the person sees afterwards that a bot made Botkins start at login.
   "background.runAtStartup": onOff,
+  // An unattended bot that reads the person's sources: the log says when it was turned on.
+  "proactive.enabled": onOff,
 };
 const fixedWord = (key, value) => {
   const word = typeof key === "string" && Object.hasOwn(FIXED_WORDS, key) ? FIXED_WORDS[key](value) : null;

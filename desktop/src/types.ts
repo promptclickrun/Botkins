@@ -1,7 +1,14 @@
+import type { Calls } from "../desktop/remote/client/types";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
 import type { HotMessage } from "./hotState";
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type Bot = {
+  fastMode?: FastMode;
   id: string;
   name: string;
   role: string;
@@ -118,6 +125,7 @@ export type Message = {
   author?: { memberId: string; name: string };
 };
 export type Chat = {
+  fastMode?: FastMode;
   /** Latest message count advertised by a paired computer, even before its chat page arrives. */
   count?: number;
   loaded?: { from: number; total: number } | null;
@@ -133,6 +141,7 @@ export type Chat = {
   invited?: string[];
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
+  folder?: string;
   mode?: ChatMode;
   panelId?: string;
   title: string;
@@ -256,7 +265,7 @@ export type Reasoning = {
 export type Todo = {
   id: string;
   title: string;
-  status: "pending" | "in_progress" | "done" | "blocked" | "cancelled";
+  status: "pending" | "in_progress" | "done" | "blocked" | "cancelled" | "failed";
   dependsOn?: string[];
 };
 export type Subagent = {
@@ -367,6 +376,8 @@ export type State = {
   adminMode?: boolean;
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
+  /** The Proactive agent: the computer's switch, and each bot's agent with what it did (desktop/proactive.mjs). Missing on an older computer. */
+  proactive?: ProactivePart;
   /** Project workspaces. One with a folder is also a coding project. */
   projects?: Project[];
   /** MCP servers every bot can use (Settings › MCP servers). Secret values never reach the page. */
@@ -414,6 +425,8 @@ export type ChatSchedule = {
   enabled?: boolean;
   /** Set on routines: named scheduled tasks in their own "Routine · <name>" chat (desktop/routines.mjs). */
   routine?: boolean;
+  /** A Proactive agent's routine: Botkins keeps it, and it is changed on the bot's profile. */
+  proactive?: boolean;
   /** Where a routine's result goes besides its own chat. Missing means its own chat. */
   deliver?: RoutineDelivery;
   /** false when the routine runs quietly: no notification when a run finishes. Left out when it notifies. */
@@ -537,10 +550,13 @@ declare global {
         scope: "global" | "routines" | "bot" | "chat",
         id: string | null,
         value: ModelChoice | null,
+        fastMode?: FastMode | null,
       ): Promise<void>;
       setPreferences(
-        patch: Partial<Omit<Preferences, "model" | "appearance">> & {
+        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive">> & {
           appearance?: Partial<Appearance>;
+          /** Only what changes: the computer lays it over what it has (desktop/proactive-settings.mjs). */
+          proactive?: Partial<ProactiveSettings>;
         },
       ): Promise<void>;
       sideQuestion(id: string, question: string): Promise<string>;
@@ -569,6 +585,9 @@ declare global {
       importableAgents(): Promise<ImportableAgent[]>;
       /** Makes a bot of each agent, in the order given. Returns the new bots' ids. */
       importAgents(keys: string[]): Promise<string[]>;
+      "link.pullRequests"(where: { chatId: string }, query?: string): Promise<ReturnType<Calls["link.pullRequests"]>>;
+      "link.pullRequest"(input: { url: string }): Promise<ReturnType<Calls["link.pullRequest"]>>;
+      "link.pullRequestDiff"(input: { url: string; path: string }): Promise<ReturnType<Calls["link.pullRequestDiff"]>>;
       openLink(url: string): Promise<void>;
       "artifacts.list": (input: { botId: string; chatId?: string; kind?: "files" | "media"; folder?: string; cursor?: string }) => Promise<{ items: Artifact[]; nextCursor: string | null }>;
       "artifacts.read": (idOrPath: string, options?: { offset?: number; length?: number }) => Promise<{ artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null }>;
@@ -647,24 +666,29 @@ declare global {
         patch: Partial<Pick<Chat, "pinned" | "archived" | "unread">>,
       ): Promise<void>;
       renameChat(id: string, title: string): Promise<void>;
+      regenerateChatTitle(id: string): Promise<string>;
       deleteChat(id: string): Promise<void>;
       /** The person's answer to a Feed post, idea or goal. Returns a new goal's id for "goal". */
       // Projects and Project Changes
       addProject(): Promise<string | null>;
       renameProject(id: string, name: string): Promise<void>;
       removeProject(id: string): Promise<void>;
-      setChatProject(chatId: string, projectId: string | null, mode?: ChatMode): Promise<void>;
-      projectChanges(id: string): Promise<ProjectChanges>;
-      projectDiff(id: string, file: string): Promise<{ text: string; truncated: boolean }>;
-      projectCommit(id: string, message: string): Promise<string>;
-      revealProject(id: string): Promise<string>;
+      setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): Promise<void>;
+      projectChanges(id: string, folder?: string): Promise<ProjectChanges>;
+      projectDiff(id: string, file: string, folder?: string): Promise<{ text: string; truncated: boolean }>;
+      projectCommit(id: string, message: string, folder?: string): Promise<string>;
+      revealProject(id: string, folder?: string): Promise<string>;
       // Project workspaces, to-dos and agent access
       createProject(data: ProjectInput): Promise<string>;
-      updateProject(id: string, patch: Partial<Omit<ProjectInput, "folder">> & { folder?: string | null }): Promise<void>;
+      editProjectFolder(id: string, action: "add" | "remove" | "default", path: string): Promise<string[]>;
+      chatProjectFolder(id: string): Promise<string | null>;
+      setChatFolder(id: string, path: string | null): Promise<void>;
+      cloneProjectRepository(repository: string, parent?: string, id?: string, data?: { name?: string; description?: string }): Promise<string>;
+      updateProject(id: string, patch: Partial<Omit<ProjectInput, "folder">> & { folder?: string | null; mode?: ChatMode }): Promise<void>;
       /** Asks for a folder and gives it to the project. Null when cancelled. */
-      chooseProjectFolder(id: string): Promise<string | null>;
+      chooseProjectFolder(id: string, append?: boolean): Promise<string | null>;
       /** A new chat in a project with one bot, or 2 to 6 for a group. Every bot needs access. */
-      startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): Promise<string>;
+      startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): Promise<string>;
       /** Attaches an artifact to a project; one already there moves to the front. Answers the project's list afterwards. */
       addProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
       removeProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
@@ -763,6 +787,8 @@ declare global {
       revealSkill(name: string): Promise<void>;
       /** Which skills (names) and MCP servers (ids) one bot leaves out. */
       setBotIntegrations(botId: string, patch: { skillsOff?: string[]; mcpOff?: string[] }): Promise<void>;
+      /** Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2". */
+      setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): Promise<void>;
       // Marketplace plugins (`plugins-v1`, docs/plugins.md). Dotted names match the link contract.
       "plugins.marketplaces"(): Promise<PluginMarketplace[]>;
       "plugins.addMarketplace"(source: string): Promise<PluginMarketplace>;
@@ -779,6 +805,11 @@ declare global {
       /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
       "plugins.refresh"?(): Promise<PluginMarketplace[]>;
       // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
+      pickSkillUpload(): Promise<SkillUpload | null>;
+      "skills.upload"(file: SkillUpload): Promise<SkillImportResult>;
+      "skillsCatalog.search"(query: string): Promise<CatalogSkill[]>;
+      "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
+      "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
       "piPackages.preview"(name: string): Promise<PiPackageVersion>;
       "piPackages.list"(): Promise<InstalledPiPackage[]>;
@@ -958,6 +989,10 @@ declare global {
       cancelPhonePairing(): Promise<void>;
       removePhone(id: string): Promise<void>;
       renamePhoneLinkComputer(name: string): Promise<void>;
+      /** A gadget's page ("gadget-settings-v1"): any of its settings and its bot, a Wi-Fi network to add or forget, a restart. Each answers what Settings › Phone shows. */
+      configureGadget(id: string, patch: Partial<GadgetSettings> & { botId?: string }): Promise<PhoneLink>;
+      gadgetWifi(id: string, change: GadgetWifiChange): Promise<PhoneLink>;
+      restartGadget(id: string): Promise<PhoneLink>;
       /** What a paired phone may do with this screen. Only this window can change it. */
       setPhoneScreen(mode: PhoneLink["screen"]["mode"]): Promise<PhoneLink>;
       /** Away from home, on or off. Turning it on needs phone access on. Only this window can change it. */
@@ -1042,6 +1077,7 @@ declare global {
       moveTeamMember(id: string, groupId: string): Promise<OwnerTeam>;
       removeTeamMember(id: string): Promise<OwnerTeam>;
       renameTeam(name: string): Promise<OwnerTeam>;
+      renameTeamMember(id: string, name: string): Promise<OwnerTeam>;
       /** Shows a paired computer's workspace in this window, or this computer's own (null). */
       useRemoteHost(id: string | null): Promise<unknown>;
       forgetRemoteHost(id: string): Promise<void>;
@@ -1473,7 +1509,9 @@ export type ModelChoice = {
   source?: string;
   reasoningEffort?: string;
 };
+export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
+  fastModes?: Partial<Record<Exclude<FastMode, "off">, string>>;
   id: string;
   name: string;
   /** The provider's id ("copilot", "codex", "claude", "opencode") and its name for people ("ChatGPT"). */
@@ -1587,6 +1625,34 @@ export type ProviderService = {
   methods: { type: "key" | "oauth"; id?: string; label: string }[];
 };
 /** Phone access as Settings › Phone shows it. */
+/** A gadget's settings ("gadget-settings-v1", gadget/docs/contract.md "Settings"). The link keeps them; the gadget applies them. */
+export type GadgetSettings = {
+  /** 0 to 100. */
+  volume: number;
+  mic: "low" | "normal" | "high";
+  /** The microphone is off. */
+  mute: boolean;
+  /** 5 to 100. */
+  brightness: number;
+  /** Seconds idle before the screen dims, and before it goes dark. 0 is never. */
+  dimAfter: number;
+  offAfter: number;
+};
+/** A gadget as the device list shows it: the same shape a phone gets from "link.devices.list". */
+export type GadgetInfo = {
+  board?: string;
+  firmware?: string;
+  botId?: string;
+  settings?: GadgetSettings;
+  /** The network in use, the saved networks' names and the signal in dBm, as the gadget last said. Never a password. */
+  wifi?: { network?: string; saved: string[]; signal?: number };
+  /** Wi-Fi changes the gadget hasn't taken yet. */
+  wifiWaiting?: ({ add: string } | { forget: string })[];
+  /** A restart was asked for and hasn't happened yet. */
+  restarting?: true;
+};
+/** A Wi-Fi change for a gadget: a network with its password, or one to forget. */
+export type GadgetWifiChange = { add: { ssid: string; password: string } } | { forget: string };
 export type PhoneLink = {
   canSetPerson?: boolean;
   /** The server operator handles pairing outside this virtual workspace. */
@@ -1600,7 +1666,9 @@ export type PhoneLink = {
   /** The name phones show for this computer. */
   name: string;
   addresses: { address: string; kind: "lan" | "tailnet" | "loopback" | "link"; interface: string }[];
-  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop"; createdAt: number; lastSeenAt: number; connected: boolean }[];
+  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop" | "gadget"; gadget?: GadgetInfo; createdAt: number; lastSeenAt: number; connected: boolean }[];
+  /** The link has "gadget-settings-v1": a gadget's page with its settings, Wi-Fi and restart, and `gadget` on each gadget above. */
+  gadgetSettings?: boolean;
   /** An open pairing code. `qr` is the code's link as one SVG path in a square of `size` units. */
   pairing: { code: string; expiresAt: number; url: string; qr: { size: number; d: string } } | null;
   /**
@@ -1667,6 +1735,7 @@ export type MacToolsStatus = {
 };
 
 export type Preferences = {
+  fastMode?: FastMode;
   model: ModelChoice;
   /** The Default routines model: routines without their own use it before their bot's (desktop/workspace.mjs, effectiveModel). */
   routineModel?: ModelChoice;
@@ -1674,8 +1743,10 @@ export type Preferences = {
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
   /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */
   botTap?: import("./chatDisplay").ChatDisplay["botTap"];
-  steps?: "folded" | "every" | "failed" | "hidden";
+  steps?: "folded" | "open" | "failed";
   thinking?: "open" | "folded" | "hidden";
+  /** Collapse finished work to one expandable elapsed-time/count line on this computer. */
+  foldFinishedSteps?: boolean;
   foldTools: boolean;
   showThinking: boolean;
   /** Show a card for the first web link in a reply. Private and local hosts are never fetched. */
@@ -1721,8 +1792,45 @@ export type Preferences = {
    * for off (desktop/summaries.mjs). Missing on an older computer.
    */
   autoSummarize?: number;
+  /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
+  proactive?: ProactiveSettings;
 };
+export type ProactiveWatch = "runs" | "tasks" | "requests";
+/** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
+export type ProactiveSettings = { enabled: boolean };
+/** What a bot's Proactive agent is set to (desktop/proactive-settings.mjs). */
+export type ProactiveBotSettings = {
+  enabled: boolean;
+  /** Minutes between checks: 15, 30, 60 or 120. */
+  every: number;
+  /** Hours between looks around the bot's own sources; 0 for never. */
+  sweepHours: number;
+  maxPerDay: number;
+  deliver: "chat" | "feed";
+  watch: ProactiveWatch[];
+  instructions: string;
+};
+/**
+ * One bot's agent as this window is sent it. The owner is sent `person` ("owner", or the member it works for); a member is
+ * sent `mine` for their own agents and for another person's only `{ enabled, taken }`, so every other field may be missing.
+ */
+export type ProactiveBot = Partial<ProactiveBotSettings> & {
+  enabled: boolean;
+  person?: string;
+  mine?: boolean;
+  taken?: boolean;
+  /** The agent's routine's chat. */
+  chatId?: string;
+  lastSweepAt?: number;
+  pings?: number;
+  day?: string;
+  log?: ProactiveLog[];
+};
+export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+/** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
+  background?: boolean;
   agentId?: string;
   id: string;
   name: string;
@@ -1801,6 +1909,8 @@ export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: 
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 /** A project workspace. With a folder, its chats are coding chats with modes and Changes. */
 export type Project = {
+  folders?: string[];
+  mode?: ChatMode;
   id: string;
   name: string;
   description?: string;

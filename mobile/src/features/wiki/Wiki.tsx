@@ -2,12 +2,12 @@ import { type MenuAction, MenuView } from "@react-native-menu/menu";
 import { router, Stack } from "expo-router";
 import { BookOpen, ChevronRight, CircleHelp, Ellipsis, FileText, Inbox, Plus, Search, Share, Sparkles, X } from "lucide-react-native";
 import { type ReactElement, useEffect, useState } from "react";
-import { Alert, Platform, TextInput, View } from "react-native";
+import { Alert, TextInput, View } from "react-native";
 import type { WikiTree } from "@/link/types";
 import { useBots } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
-import { Button, EmptyState, Group, HoldMenu, IconButton, IconTile, Label, Loading, Page, radius, Row, space, T, Tap, useTheme } from "@/ui";
+import { Button, EmptyState, Group, HoldMenu, IconButton, IconTile, Label, Loading, Page, radius, Row, space, T, Tap, type TextPromptOptions, useTextPrompt, useTheme } from "@/ui";
 import { loadTree, useWikiTree } from "./data";
 import { editPage, exportWiki, newPageIn, openPage } from "./nav";
 import { folderName, foldersIn, hasPages, NEW_TEMPLATE, pagesAt, pagesIn, plural, renamedFolder, sections, suggestedLine, when, WIKI_ASKS } from "./model";
@@ -39,6 +39,7 @@ export default function Wiki() {
 
 function AddMenu({ tree }: { tree?: WikiTree }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   const list = tree ? sections(tree) : [];
   const button = (
     <View accessible accessibilityRole="button" accessibilityLabel="New page" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
@@ -51,31 +52,22 @@ function AddMenu({ tree }: { tree?: WikiTree }) {
         {button}
       </Tap>
     );
-  const newSection = () =>
-    Alert.prompt(
-      "New section",
-      undefined,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Add", onPress: (name?: string) => void (name?.trim() && attempt(api.createWikiFolder({ parent: "", name: name.trim() }), "Section added")) },
-      ],
-      "plain-text",
-    );
+  const newSection = () => prompt.ask({ title: "New section", confirm: "Add", onSubmit: (name) => void attempt(api.createWikiFolder({ parent: "", name }), "Section added") });
   return (
-    <MenuView
-      title="New page in"
-      actions={[
-        ...list.map((folder) => ({ id: "in:" + folder, title: folderName(folder) })),
-        ...(Platform.OS === "ios" ? [{ id: "section", title: "New section…", image: "folder.badge.plus" }] : []),
-      ]}
-      onPressAction={({ nativeEvent }) => {
-        const id = nativeEvent.event;
-        if (id === "section") newSection();
-        else if (id.startsWith("in:")) newPageIn(id.slice(3));
-      }}
-    >
-      {button}
-    </MenuView>
+    <>
+      <MenuView
+        title="New page in"
+        actions={[...list.map((folder) => ({ id: "in:" + folder, title: folderName(folder) })), { id: "section", title: "New section…", image: "folder.badge.plus" }]}
+        onPressAction={({ nativeEvent }) => {
+          const id = nativeEvent.event;
+          if (id === "section") newSection();
+          else if (id.startsWith("in:")) newPageIn(id.slice(3));
+        }}
+      >
+        {button}
+      </MenuView>
+      {prompt.node}
+    </>
   );
 }
 
@@ -144,6 +136,7 @@ function Results({ query }: { query: string }) {
 
 function Tree({ tree }: { tree: WikiTree }) {
   const { colors } = useTheme();
+  const prompt = useTextPrompt();
   // Folders inside a section open in place.
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
@@ -174,7 +167,7 @@ function Tree({ tree }: { tree: WikiTree }) {
     for (const sub of foldersIn(tree, folder)) {
       const expanded = !!open[sub];
       out.push(
-        <HoldMenu key={"folder:" + sub} actions={folderActions(sub)} onPressAction={({ nativeEvent }) => folderAction(tree, sub, nativeEvent.event)}>
+        <HoldMenu key={"folder:" + sub} actions={folderActions(sub)} onPressAction={({ nativeEvent }) => folderAction(tree, sub, nativeEvent.event, prompt.ask)}>
           <Row
             leading={
               <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -198,13 +191,14 @@ function Tree({ tree }: { tree: WikiTree }) {
   const top = rows("", 0);
   return (
     <>
+      {prompt.node}
       <Suggested tree={tree} />
       {top.length > 0 && <Group>{top}</Group>}
       {sections(tree).map((section) => {
         const inside = rows(section, 0);
         return (
           <View key={section}>
-            <SectionHead tree={tree} folder={section} />
+            <SectionHead tree={tree} folder={section} ask={prompt.ask} />
             <Group>{inside.length ? inside : <Row title="Write a page" tone="accent" onPress={() => newPageIn(section)} />}</Group>
           </View>
         );
@@ -219,45 +213,37 @@ function Tree({ tree }: { tree: WikiTree }) {
 
 // A section's or folder's menu, as on the computer: New page, New folder inside…, Rename…, Edit template (sections only), Delete….
 
-/** Typing a name needs Alert.prompt, which only an iPhone has. */
-const canPrompt = Platform.OS === "ios";
-
 function folderActions(folder: string): MenuAction[] {
   const section = !folder.includes("/");
   return [
     { id: "page", title: "New page", image: "doc.badge.plus" },
-    ...(canPrompt ? [{ id: "folder", title: "New folder inside…", image: "folder.badge.plus" }] : []),
-    ...(canPrompt ? [{ id: "rename", title: "Rename…", image: "pencil" }] : []),
+    { id: "folder", title: "New folder inside…", image: "folder.badge.plus" },
+    { id: "rename", title: "Rename…", image: "pencil" },
     ...(section ? [{ id: "template", title: "Edit template", image: "doc.text" }] : []),
     { id: "delete", title: "Delete…", image: "trash", attributes: { destructive: true } },
   ];
 }
 
-function folderAction(tree: WikiTree, folder: string, action: string) {
+function folderAction(tree: WikiTree, folder: string, action: string, ask: (options: TextPromptOptions) => void) {
   const name = folderName(folder);
   if (action === "page") newPageIn(folder);
   else if (action === "folder")
-    Alert.prompt("New folder in " + name, undefined, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Create folder", onPress: (value?: string) => void (value?.trim() && attempt(api.createWikiFolder({ parent: folder, name: value.trim() }), "Folder added").then(() => loadTree())) },
-    ]);
+    ask({
+      title: "New folder in " + name,
+      confirm: "Create folder",
+      onSubmit: (value) => void attempt(api.createWikiFolder({ parent: folder, name: value }), "Folder added").then(() => loadTree()),
+    });
   else if (action === "rename")
-    Alert.prompt(
-      "Rename “" + name + "”",
-      "Links to its pages are updated.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Rename",
-          onPress: (value?: string) => {
-            const next = renamedFolder(folder, value ?? "");
-            if (next && next !== folder) void attempt(api.moveWiki(folder, next), "Renamed").then(() => loadTree());
-          },
-        },
-      ],
-      "plain-text",
-      name,
-    );
+    ask({
+      title: "Rename “" + name + "”",
+      message: "Links to its pages are updated.",
+      value: name,
+      confirm: "Rename",
+      onSubmit: (value) => {
+        const next = renamedFolder(folder, value);
+        if (next && next !== folder) void attempt(api.moveWiki(folder, next), "Renamed").then(() => loadTree());
+      },
+    });
   else if (action === "template") void editTemplate(tree, folder);
   else if (action === "delete") {
     const count = pagesIn(tree, folder).length;
@@ -280,14 +266,14 @@ async function editTemplate(tree: WikiTree, folder: string) {
 }
 
 /** A section's name with its menu beside it. */
-function SectionHead({ tree, folder }: { tree: WikiTree; folder: string }) {
+function SectionHead({ tree, folder, ask }: { tree: WikiTree; folder: string; ask: (options: TextPromptOptions) => void }) {
   const { colors } = useTheme();
   return (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
       <View style={{ flex: 1 }}>
         <Label style={{ marginBottom: 0 }}>{folderName(folder)}</Label>
       </View>
-      <MenuView title={folderName(folder)} actions={folderActions(folder)} onPressAction={({ nativeEvent }) => folderAction(tree, folder, nativeEvent.event)}>
+      <MenuView title={folderName(folder)} actions={folderActions(folder)} onPressAction={({ nativeEvent }) => folderAction(tree, folder, nativeEvent.event, ask)}>
         <View accessible accessibilityRole="button" accessibilityLabel={folderName(folder) + " options"} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
           <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
         </View>

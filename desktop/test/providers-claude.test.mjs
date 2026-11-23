@@ -12,6 +12,7 @@ import { BRIDGE, ClaudeProvider, describeRequest, permissionSettings, projectIns
 import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 import { uuidFor } from "../desktop/providers/sessions.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
+import { pass, until, watching } from "./quiet-turns.mjs";
 
 const MODELS = [
   { value: "default", resolvedModel: "claude-opus-9", displayName: "Default (recommended)", description: "Opus 9" },
@@ -108,6 +109,11 @@ function fakeSdk(play = async (turn) => turn.say("ok"), models = MODELS) {
           wake?.();
         },
       };
+      // An aborted query's stream ends, as the SDK's does.
+      options.abortController?.signal.addEventListener("abort", () => {
+        q.wasClosed = true;
+        wake?.();
+      });
       return q;
     },
   };
@@ -426,6 +432,55 @@ test("a turn can fail, be stopped, and say why in plain words", async (t) => {
   assert.equal(log.interrupts, 1);
 });
 
+test("a Claude turn that is quiet for hours is not given up on: it ends when Claude Code replies, dies, or is stopped", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let release;
+  let mode = "reply";
+  const { provider, log } = setup(t, async (turn) => {
+    turn.say("Part one.");
+    await new Promise((resolve) => (release = resolve));
+    if (mode === "crash") throw new Error("Claude Code process exited with code 1");
+    turn.say(" Part two.");
+  });
+  const session = await provider.openSession(spec());
+  const quiet = async (turnOf) => {
+    release = undefined;
+    const sending = watching(turnOf());
+    await until(() => release, "the turn is quiet");
+    await pass(t, 3 * 60 * 60 * 1000);
+    assert.equal(sending.seen.state, "pending", "three hours of silence did not end the turn");
+    return sending;
+  };
+  const replied = await quiet(() => session.send({ prompt: "Go" }));
+  release();
+  await replied.done;
+  assert.equal(replied.seen.state, "done");
+  assert.match(replied.seen.value.text, /Part two\./);
+  mode = "crash";
+  const crashed = await quiet(() => session.send({ prompt: "Go again" }));
+  release();
+  await crashed.done;
+  assert.match(crashed.seen.value.message, /Claude Code stopped: Claude Code process exited with code 1/);
+  mode = "reply";
+  const stopped = await quiet(() => session.send({ prompt: "And again" }));
+  await session.abort();
+  await stopped.done;
+  assert.equal(stopped.seen.state, "done", "Stop ends the turn with what was written");
+  assert.equal(log.interrupts, 1);
+});
+
+test("a caller that names a time limit gets it from Claude", async (t) => {
+  // The provider's own timers never keep a process alive; this test waits on one.
+  const alive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(alive));
+  const { provider } = setup(t, async (turn) => {
+    turn.say("Working");
+    turn.hang = true;
+  });
+  const session = await provider.openSession(spec());
+  await assert.rejects(session.send({ prompt: "Summarize" }, 40), (error) => error.code === "BOTKINS_TURN_TIMEOUT");
+});
+
 test("a fork stops before the chosen message, a side question is never saved, and delete forgets the session", async (t) => {
   const { provider, log } = setup(t, async (turn) => turn.say("Reply to " + turn.prompt));
   const session = await provider.openSession(spec());
@@ -625,4 +680,12 @@ test("the plan's limits come from Claude Code's own usage call, and the plan is 
   assert.equal(log.queries.length, asked);
   status = { loggedIn: false };
   await assert.rejects(provider.usage(), /isn't signed in/);
+});
+
+test("fast mode opts supported Claude models in and skips unsupported modes", async (t) => {
+  const { provider } = setup(t, () => {}, { models: [{ value: "opus", supportsFastMode: true }, { value: "haiku" }] });
+  for (const [model, fastMode, expected] of [["opus", "fast", true], ["opus", "ultrafast", undefined], ["haiku", "fast", undefined]]) {
+    const session = await provider.openSession(spec({ model: { model, fastMode } }));
+    assert.equal((await session.options()).settings?.fastMode, expected);
+  }
 });

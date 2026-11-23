@@ -24,6 +24,7 @@ export default function NewChat({
 }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [projectId, setProjectId] = useState<string>();
+  const [folder, setFolder] = useState<string>();
   const [mode, setMode] = useState<ChatMode>("default");
   const [busy, setBusy] = useState(false);
   const toggle = (id: string) =>
@@ -36,7 +37,7 @@ export default function NewChat({
       // A chat in a project is made with it, so the backend checks every bot's access first
       // and the session opens in the project's folder.
       const project = state.projects?.find((p) => p.id === projectId);
-      if (project && picked.length && ids.length === picked.length) id = await api.startProjectChat(ids, project.id, project.folder ? mode : "default");
+      if (project && picked.length && ids.length === picked.length) id = await api.startProjectChat(ids, project.id, project.folder ? mode : "default", folder);
       else if (ids.length > 1) id = await api.createGroupChat(ids);
       else id = await api.createChat(ids[0]);
       await open(id);
@@ -82,7 +83,9 @@ export default function NewChat({
           botIds={picked}
           projectId={projectId}
           mode={mode}
-          change={(p, m) => {
+          folder={folder}
+          change={(p, m, path) => {
+            setFolder(path);
             setProjectId(p);
             setMode(m);
           }}

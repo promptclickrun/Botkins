@@ -1,6 +1,7 @@
 // Non-live smoke for Botkin looks and agent management: bot creation with a look and template, pin,
 // sections, hide and show, primary, the bot page, and chat rename, archive and restore.
 // Set AGENTS_SHOTS to a folder to save light and dark screenshots there.
+import { stubTemplate } from "./template-fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,10 +53,11 @@ try {
 
   // Create a bot from a template with a chosen character and palette.
   await page.getByRole("button", { name: "Add bot", exact: true }).click();
-  await dialog.getByRole("button", { name: "Start from a template", exact: true }).click();
-  await dialog.getByRole("group", { name: "Built-in templates" }).getByRole("button", { name: "Researcher", exact: true }).click();
+  await stubTemplate(app);
+  await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
+  await dialog.getByRole("group", { name: "Marketplace templates" }).getByRole("button", { name: /Archive Guide/ }).click();
   await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("Research assistant");
-  await expect(dialog.getByRole("button", { name: "Template: Researcher" })).toBeVisible();
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue("Archive Guide");
   // The Botkin opens Bot Studio in its own sheet, on the template's character.
   await dialog.getByRole("button", { name: "Open Bot Studio", exact: true }).click();
   const studio = page.getByRole("dialog", { name: "Bot Studio" });
@@ -209,7 +211,9 @@ try {
   await expect(editor).toHaveCount(0);
   // A kit palette drops the custom colors and keeps the eyes.
   await expect.poll(async () => (await bot("Ranger")).look).toEqual({ head: "skiff", palette: "fig", eyes: "wink" });
-  await main.getByLabel("About", { exact: true }).fill("Digs up sources and sums them up.");
+  const about = main.getByPlaceholder("A line about what this bot is for");
+  await expect(about).toHaveValue("Finds primary sources.");
+  await about.fill("Digs up sources and sums them up.");
   await main.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(async () => (await bot("Ranger")).summary).toBe("Digs up sources and sums them up.");
   await main.getByText("2 chats").waitFor();

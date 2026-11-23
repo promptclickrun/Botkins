@@ -6,14 +6,15 @@
 // Fast while a reply streams: marked tokens for blank-line-separated top-level blocks are retained,
 // while marked lexes only the active tail until its Markdown shape is definitely closed.
 import * as Clipboard from "expo-clipboard";
-import * as WebBrowser from "expo-web-browser";
 import { Check, ChevronDown, Copy, Info, Lightbulb, type LucideIcon, MessageSquareWarning, OctagonAlert, TriangleAlert } from "lucide-react-native";
 import { Marked, type Token, type Tokens } from "marked";
-import { Fragment, memo, type ReactNode, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type ReactNode, useContext, useMemo, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, type TextStyle, View } from "react-native";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { haptic } from "./haptics";
 import { codePalette, type CodeRun, highlightCode } from "./highlight";
+import { pullRequestUrl } from "../../link-host/pr-url.mjs";
+import { LinkHold, type LinkHoldApi, linkPress, MessageLink, openLink as defaultOpenLink } from "./LinkHold";
 import { parseStreamingMarkdown, type MarkdownStreamCache } from "./markdownCache";
 import { CELL_PAD, tableWidths } from "./tables";
 import { Tap } from "./Tap";
@@ -102,7 +103,7 @@ function fenceClosed(raw: string): boolean {
 export type PathLinks = { has: (path: string) => boolean; find: (text: string) => { start: number; end: number; path: string }[]; open: (path: string) => void };
 
 /** `scale` is the type scale at the person's text size and in their font. */
-type Ctx = { colors: Colors; scale: TypeScale; base: TextStyle; highlight: boolean; wrap: boolean; notes: Map<string, number>; onLink: (url: string) => void; paths?: PathLinks };
+type Ctx = { colors: Colors; scale: TypeScale; base: TextStyle; highlight: boolean; wrap: boolean; notes: Map<string, number>; onLink: (url: string) => void; hold: LinkHoldApi | null; paths?: PathLinks };
 
 /** Text with the paths in it that open something drawn as links. Without any, the text as it is. */
 function withPaths(text: string, paths: PathLinks | undefined, color: string, k: string): ReactNode {
@@ -128,11 +129,6 @@ function withPaths(text: string, paths: PathLinks | undefined, color: string, k:
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
-}
-
-function openLink(url: string) {
-  if (!/^https?:\/\//i.test(url)) return;
-  void WebBrowser.openBrowserAsync(url).catch(() => {});
 }
 
 const unescape = (text: string) => text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
@@ -177,7 +173,7 @@ function inline(tokens: Token[] | undefined, ctx: Ctx, key = "i"): ReactNode[] {
       case "link": {
         const link = token as Tokens.Link;
         return (
-          <Text key={k} style={{ color: ctx.colors.accentText, textDecorationLine: "underline" }} onPress={() => ctx.onLink(link.href)} accessibilityRole="link">
+          <Text key={k} style={{ color: ctx.colors.accentText, textDecorationLine: "underline" }} {...linkPress(ctx.hold, link.href, () => ctx.onLink(link.href))} accessibilityRole="link">
             {inline(link.tokens, ctx, k)}
           </Text>
         );
@@ -185,7 +181,7 @@ function inline(tokens: Token[] | undefined, ctx: Ctx, key = "i"): ReactNode[] {
       case "image": {
         const image = token as Tokens.Image;
         return (
-          <Text key={k} style={{ color: ctx.colors.accentText, textDecorationLine: "underline" }} onPress={() => ctx.onLink(image.href)} accessibilityRole="link">
+          <Text key={k} style={{ color: ctx.colors.accentText, textDecorationLine: "underline" }} {...linkPress(ctx.hold, image.href, () => ctx.onLink(image.href))} accessibilityRole="link">
             {image.text || image.href}
           </Text>
         );
@@ -524,10 +520,12 @@ const Footnotes = memo(function Footnotes({ notes, ctx }: { notes: Footnote[]; c
 // ---------------------------------------------------------------------------------------------
 // Inline-only text (a person's own message): links and inline code, nothing else.
 
-const INLINE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]])/g;
+const INLINE = /\[((?:\\.|[^\]\\\n])+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]])/g;
 
-function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; paths?: PathLinks }) {
+function InlineOnly({ text, base, paths, plain }: { text: string; base: TextStyle; paths?: PathLinks; plain?: boolean }) {
   const scale = useTheme().type;
+  const openLink = useContext(MessageLink);
+  const hold = useContext(LinkHold);
   // A person's bubble has its own text color; a path in it is underlined in that color.
   const linkColor = String(base.color ?? "");
   const parts = useMemo(() => {
@@ -535,6 +533,7 @@ function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; path
     let last = 0;
     INLINE.lastIndex = 0;
     for (let match = INLINE.exec(text); match; match = INLINE.exec(text)) {
+      if (plain && !pullRequestUrl(match[2] ?? match[4])) continue;
       if (match.index > last) out.push(withPaths(text.slice(last, match.index), paths, linkColor, "t" + last));
       const k = "u" + match.index;
       const code = match[3];
@@ -551,8 +550,8 @@ function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; path
       else {
         const href = match[2] ?? match[4];
         out.push(
-          <Text key={k} style={{ textDecorationLine: "underline", fontWeight: "600" }} onPress={() => openLink(href)} accessibilityRole="link">
-            {match[1] ?? match[4]}
+          <Text key={k} style={{ textDecorationLine: "underline", fontWeight: "600" }} {...linkPress(hold, href, () => openLink(href))} accessibilityRole="link">
+            {plain ? match[0] : match[1]?.replace(/\\([[\]\\])/g, "$1") ?? match[4]}
           </Text>,
         );
       }
@@ -560,7 +559,7 @@ function InlineOnly({ text, base, paths }: { text: string; base: TextStyle; path
     }
     if (last < text.length) out.push(withPaths(text.slice(last), paths, linkColor, "t" + last));
     return out;
-  }, [text, base, paths, linkColor]);
+  }, [text, base, paths, linkColor, hold, scale, openLink, plain]);
   return (
     <Text selectable maxFontSizeMultiplier={1.35} style={base}>
       {parts}
@@ -593,6 +592,8 @@ export type MarkdownProps = {
 /** Renders Markdown. Safe to re-render while a reply streams in. */
 export const Markdown = memo(function Markdown({ text, color, size = "body", plain, inline: inlineOnly, highlight, wrapCode, paths, streaming = false }: MarkdownProps) {
   const { colors, type: scale } = useTheme();
+  const openLink = useContext(MessageLink);
+  const hold = useContext(LinkHold);
   const prefHighlight = useChatPrefs((prefs) => prefs.highlight);
   const prefWrap = useChatPrefs((prefs) => prefs.wrapCode);
   const doHighlight = highlight ?? prefHighlight;
@@ -616,10 +617,10 @@ export const Markdown = memo(function Markdown({ text, color, size = "body", pla
   const noteKey = parsed ? [...parsed.numbers.keys()].join("\u0000") : "";
   const ctx = useMemo<Ctx>(() => {
     const notes = new Map<string, number>(noteKey ? noteKey.split("\u0000").map((id, index) => [id, index + 1]) : []);
-    return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink, paths };
-  }, [colors, scale, base, doHighlight, wrap, noteKey, paths]);
+    return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink, hold, paths };
+  }, [colors, scale, base, doHighlight, wrap, noteKey, hold, paths, openLink]);
 
-  if (inlineOnly) return <InlineOnly text={text} base={base} paths={paths} />;
+  if (inlineOnly || (plain && openLink !== defaultOpenLink)) return <InlineOnly text={text} base={base} paths={paths} plain={!inlineOnly && plain} />;
   if (!parsed)
     return (
       <Text selectable maxFontSizeMultiplier={1.35} style={base}>

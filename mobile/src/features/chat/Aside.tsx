@@ -1,14 +1,9 @@
-// The bot's thinking and its interim texts ("updates"), wherever they show: in a turn under way, in
-// an Every step turn that ended, and in an opened fold. The two are drawn apart on purpose (the
-// owner's pick, 2026-11-22). An update is something the bot said, so it reads like its reply: the
-// same text at full size, a shade quieter, with no box, label or line. Thinking is the bot's face,
-// still, with a muted line beside it ("Coding · One promise per session…"), and the steps of that
-// part sit under it (LiveTurn.tsx). While the bot is thinking with no step running, "Coding" is the
-// turn's live line and shimmers (`shimmer`, T3 Code's "Thinking" row); a live thought then hangs
-// beside the word instead of flowing under it, so the word is one line the band can cross. Settings › Chat › Thinking and updates says how much: Open shows
-// all of it, Folded the last few lines (a tap shows the rest), Hidden keeps both out of the chat
-// (turn.ts never hands them over). The reply is never one.
-import { useState } from "react";
+// A progress update reads like the reply. A thought is quieter and sits beside the bot’s face.
+// The active canvas uses Open. An expanded completed fold can also disclose Folded activity.
+// While the bot is thinking with no step running, "Coding" is the turn's live line and shimmers
+// (`shimmer`, T3 Code's "Thinking" row, the owner's pick 2026-11-23); a live thought then hangs
+// beside the word instead of flowing under it, so the word is one line the band can cross.
+import { useEffect, useState } from "react";
 import { View } from "react-native";
 import type { Bot } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
@@ -41,12 +36,15 @@ export function Aside({ kind, text, live, bot, state, label, shimmer = false }: 
   const mode = useChatPrefs((prefs) => prefs.thinking);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const [open, setOpen] = useState(mode === "show");
+  // A setting change must not leave an already-mounted update in its old preview state. Open is
+  // intentionally full and readable; Folded keeps the compact tail until the person expands it.
+  useEffect(() => setOpen(mode === "show"), [mode]);
   const toggle = () => setOpen(!open);
 
   if (kind === "update") {
     const flat = plainPreview(text);
     return (
-      <Tap onPress={toggle} feel="select" sink={0.99} accessibilityLabel={(open ? "Hide" : "Show") + " the rest of this update"} accessibilityState={{ expanded: open }}>
+      <Tap onPress={toggle} feel="select" sink={0.99} accessibilityLabel={open ? text : "Show the rest of this update: " + text} accessibilityState={{ expanded: open }}>
         {open ? (
           <Markdown text={text} plain={!markdown} color={colors.ink2} />
         ) : (
@@ -64,7 +62,7 @@ export function Aside({ kind, text, live, bot, state, label, shimmer = false }: 
       onPress={toggle}
       feel="select"
       sink={0.99}
-      accessibilityLabel={head + ". " + (open ? text : tailOf(text))}
+      accessibilityLabel={head + ". " + text}
       accessibilityHint={open ? "Shows less" : "Shows all of it"}
       accessibilityState={{ expanded: open }}
       style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}
@@ -93,12 +91,12 @@ export function Aside({ kind, text, live, bot, state, label, shimmer = false }: 
           )}
         </View>
       ) : (
-      <T variant="subhead" color="muted" numberOfLines={open ? undefined : 3} style={{ flex: 1 }}>
-        <T variant="subhead" weight="600" color="ink">
-          {head}
+        <T variant="subhead" color="muted" numberOfLines={open ? undefined : 3} style={{ flex: 1 }}>
+          <T variant="subhead" weight="600" color="ink">
+            {head}
+          </T>
+          {text ? " · " + (open ? text : tailOf(text)) : ""}
         </T>
-        {text ? " · " + (open ? text : tailOf(text)) : ""}
-      </T>
       )}
     </Tap>
   );
