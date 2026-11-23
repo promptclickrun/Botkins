@@ -376,7 +376,7 @@ botkins models --routines claude/claude-sonnet-5-5 --effort low
 
 ### Projects, to-dos, tasks and artifacts
 
-A **project** keeps a folder, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
+A **project** keeps folders, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
 
 ```sh
 botkins folders
@@ -392,6 +392,8 @@ botkins artifacts list --bot Nova
 botkins artifacts read <artifact> --output ./notes.pdf
 ```
 
+- Use `botkins projects folder <project> <add|remove|default> <path>` to manage the ordered list. `botkins projects clone <owner/repo> [--parent <path>] [--project <project>]` clones on this host, creating a project when none is given. The default parent is the host user's home directory.
+- Save a project's mode with `projects edit <project> --mode plan` (or `default` or `yolo`). `projects chat` and `chats project` accept `--folder <path>`. A moved chat carries its transcript to the next session. `projects changes`, `diff` and `commit` also accept `--folder`.
 - **A project's folder is a path on this computer.** It must be one that the window's folder chooser can show a paired phone: in the home folder of the user that runs Botkins, or on a plugged-in disk (`botkins folders` lists what you can choose). `projects add <folder>`, `projects edit --folder` use the app's own check and its own refusal; there is no second rule. A folder that has a project is not added twice. `projects edit --no-folder` takes the folder away.
 - **`projects remove` asks first.** The question says what goes with the project (its to-do list, its list of attached artifacts) and that its chats stay, with no project. The folder and its files are not touched. With no terminal it needs `--yes`.
 - **`projects commit` shows the files first and asks.** It prints the folder, the branch and each file that goes into the commit, then asks (`--yes` with no terminal). It stages every change in the project's folder (`git add -A`), so a project in a folder of a larger repository commits only that folder's files, and the files that were staged before. `projects changes` marks each file with whether a commit takes it. Git hooks do not run. The message comes from `--message <text>`, from `--file <path>` or `--message -` or `--file -` (standard input), or, at a terminal, from a question. If the changes are not the files that were shown, nothing is committed. The log has the project's name, never the message or the files.

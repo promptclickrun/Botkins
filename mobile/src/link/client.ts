@@ -763,7 +763,7 @@ export class LinkClient {
     for (let attempt = 0; ; attempt++) {
       try {
         // Pi waits for npm to finish installing dependencies on the computer.
-        return await this.request<T>(method, args, method === "piPackages.install" ? 150_000 : 60_000);
+        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000);
       } catch (error) {
         if (this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;

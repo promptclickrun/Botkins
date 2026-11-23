@@ -1,3 +1,4 @@
+import { changedFolders, repositoryName } from "./project-folders.mjs";
 // A stand-in for the desktop app, for developing and testing the phone app without it.
 // It keeps a small workspace in memory, shaped like the desktop's, and answers a message with a
 // scripted reply: thinking, one tool step, then streamed text. A message with "approve" in it asks
@@ -232,7 +233,7 @@ export function seed() {
       { id: "t4", title: "Collect launch metrics", body: "", botId: "bot-tally", priority: "low", status: "done", createdBy: "bot-mira", createdAt: t - 50 * HOUR, updatedAt: t - 20 * HOUR },
     ],
     projects: [
-      { id: "p1", name: "Website", description: "Marketing site and pricing page", color: "coral", folder: REPO, todos: [{ id: "td1", text: "Final pass on pricing copy", done: false, createdAt: t - 6 * HOUR }, { id: "td2", text: "Compress hero images", done: true, createdAt: t - 30 * HOUR, doneAt: t - 20 * HOUR }], lastUsed: t - 2 * HOUR, createdAt: t - 30 * 24 * HOUR },
+      { id: "p1", name: "Website", description: "Marketing site and pricing page", color: "coral", folder: REPO, folders: [REPO, "/Users/demo/Code/website"], todos: [{ id: "td1", text: "Final pass on pricing copy", done: false, createdAt: t - 6 * HOUR }, { id: "td2", text: "Compress hero images", done: true, createdAt: t - 30 * HOUR, doneAt: t - 20 * HOUR }], lastUsed: t - 2 * HOUR, createdAt: t - 30 * 24 * HOUR },
       { id: "p2", name: "Mobile app", color: "blue", folder: REPO, todos: [], lastUsed: t - 3 * 24 * HOUR, createdAt: t - 12 * 24 * HOUR },
       // A project with no folder: no modes, nothing to unlink.
       { id: "p3", name: "Garden plans", description: "Beds, seeds and the watering rota", color: "green", todos: [{ id: "td3", text: "Order seed potatoes", done: false, createdAt: t - 26 * HOUR }, { id: "td4", text: "Fix the rain barrel", done: false, createdAt: t - 20 * HOUR }, { id: "td5", text: "Sketch the new bed", done: false, createdAt: t - 4 * HOUR }], lastUsed: t - 6 * 24 * HOUR, createdAt: t - 40 * 24 * HOUR },
@@ -1192,11 +1193,14 @@ export class MockBackend {
     // A computer nobody has set up yet: no bots, and nothing that belongs to one.
     if (process.env.BOTKINS_DEV_EMPTY === "1") Object.assign(state, { bots: [], chats: [], runs: [], routines: [], tasks: [], board: [], panels: [], sections: [], requests: [] });
     Object.assign(this, { state, speed, listeners: new Set(), turns: new Map(), waiting: new Map(), memory: new Map(), skillList: SKILLS.map((s) => ({ ...s })) });
+    for (const p of state.projects ?? []) p.folders ??= p.folder ? [p.folder] : [];
+    this.cloneFolders = new Set();
     this.wiki = new MockWiki(state);
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1976,6 +1980,21 @@ export class MockBackend {
       this.handlers.send.call(this, id, next.text, { voiceId: next.voiceId, author: next.author, clientMessageId: next.clientMessageId });
     }
   }
+  applyFolders(project, folders) {
+    const chats = this.state.chats.filter((c) => c.projectId === project.id);
+    if (chats.some((c) => this.turns.has(c.id))) throw new Error("Wait for the reply to finish.");
+    if (folders.length && chats.some((c) => c.botIds?.length > 1)) throw new Error("Group chats take text only.");
+    for (const chat of chats) {
+      const before = chat.folder ?? project.folder;
+      if (!folders.includes(chat.folder) || chat.folder === folders[0]) delete chat.folder;
+      if (before !== (chat.folder ?? folders[0]) && chat.messages.length) chat.restartSession = true;
+      if (!folders.length) chat.mode = "default";
+    }
+    project.folders = folders;
+    if (folders.length) project.folder = folders[0];
+    else delete project.folder;
+  }
+
   handlers = {
     appInfo: () => ({ version: this.updates?.current ?? "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
     setPreferences(patch) {
@@ -2198,28 +2217,32 @@ export class MockBackend {
       this.state.chats.unshift(chat);
       return chat.id;
     },
-    // Only before the first message. A project without a folder keeps the default mode.
-    setChatProject(chatId, projectId, mode) {
+    setChatProject(chatId, projectId, mode, folder) {
       const chat = this.chat(chatId);
-      // As the app on the computer: a chat that has started may move between projects unless that
-      // would change the folder it works in.
       if (this.turns.has(chatId)) throw new Error("Wait for the reply to finish before changing the project.");
-      const started = chat.messages.length > 0;
-      const before = this.state.projects.find((p) => p.id === chat.projectId)?.folder ?? null;
-      if (projectId == null) {
-        if (chat.projectId && started && before) throw new Error("This conversation already started in its project. Start a new chat instead.");
-        delete chat.projectId;
-        chat.mode = "default";
-        return;
-      }
-      const project = this.state.projects.find((p) => p.id === projectId);
-      if (!project) throw new Error("This project no longer exists.");
-      const after = project.folder ?? null;
-      if (started && projectId !== chat.projectId && (before || after) && before !== after) throw new Error("This conversation already started in another folder. Start a new chat for this project.");
-      if (chat.botIds && project.folder) throw new Error("Group chats are text only, so they can't use a project with a folder.");
+      const project = projectId && this.state.projects.find((p) => p.id === projectId);
+      if (projectId && !project) throw new Error("This project no longer exists.");
+      if (chat.botIds?.length > 1 && project?.folder) throw new Error("Group chats are text only, so they can't use a project with a folder.");
       if (mode && !["default", "plan", "yolo"].includes(mode)) throw new Error("Choose Default, Plan or YOLO.");
-      chat.projectId = projectId;
-      chat.mode = project.folder ? (mode ?? "default") : "default";
+      if (folder === undefined && projectId === chat.projectId) folder = chat.folder;
+      if (folder && !project?.folders?.includes(folder)) throw new Error("Choose a folder in this project.");
+      folder = folder === project?.folder ? undefined : folder || undefined;
+      if (chat.messages.length && (chat.projectId !== project?.id || chat.folder !== folder)) chat.restartSession = true;
+      if (folder) chat.folder = folder;
+      else delete chat.folder;
+      if (project) chat.projectId = project.id;
+      else delete chat.projectId;
+      chat.mode = project?.folder ? mode ?? project.mode ?? "default" : "default";
+    },
+    chatProjectFolder(chatId) {
+      const chat = this.chat(chatId);
+      const project = this.state.projects.find((p) => p.id === chat.projectId);
+      return project?.folders.includes(chat.folder) ? chat.folder : project?.folder ?? null;
+    },
+    setChatFolder(chatId, path) {
+      const chat = this.chat(chatId);
+      if (!chat.projectId) throw new Error("Choose a project first.");
+      this.handlers.setChatProject.call(this, chatId, chat.projectId, chat.mode, path ?? null);
     },
     // The quote, mentions and attachments are accepted and ignored. `delivery: "steer"` hands the
     // message to a turn that takes one ("long turn"); any other turn keeps it for after.
@@ -2234,6 +2257,10 @@ export class MockBackend {
         return;
       }
       // A routine's run says so, as the real app's does (`scheduled` is set by runRoutine).
+      if (chat.restartSession) {
+        chat.forkContext = chat.messages.map((m) => m.role + ": " + m.text).join("\n");
+        delete chat.restartSession;
+      }
       const scheduled = this.scheduled;
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
@@ -2899,19 +2926,46 @@ export class MockBackend {
     removeCredential() {},
     // Projects
     createProject(input) {
-      const project = { id: "p-" + randomUUID().slice(0, 6), name: text(input.name, 80, "name"), ...(input.description && { description: input.description }), ...(input.color && { color: input.color }), todos: [], lastUsed: now(), createdAt: now() };
+      const project = { id: "p-" + randomUUID().slice(0, 6), name: text(input.name, 80, "name"), folders: [], ...(input.description && { description: input.description }), ...(input.color && { color: input.color }), todos: [], lastUsed: now(), createdAt: now() };
       this.state.projects.push(project);
       return project.id;
     },
     updateProject(id, patch) {
       const project = this.state.projects.find((p) => p.id === id);
       if (!project) throw new Error("This project no longer exists.");
-      // A folder comes from the folder browser (`listFolders`); null unlinks it.
-      if ("folder" in patch && patch.folder !== null) chosenFolder(patch.folder);
-      const { folder, ...rest } = patch;
+      const { folder, mode, ...rest } = patch;
+      if (mode != null && !["default", "plan", "yolo"].includes(mode)) throw new Error("Choose Default, Plan or YOLO.");
+      if (folder !== undefined) {
+        if (folder) chosenFolder(folder);
+        const siblings = project.folders.slice(1).filter((f) => f !== folder);
+        this.applyFolders(project, folder ? [folder, ...siblings] : siblings);
+      }
+      if (mode === "default") delete project.mode;
+      else if (mode) project.mode = mode;
       Object.assign(project, rest);
-      if (folder === null) delete project.folder;
-      else if (folder !== undefined) project.folder = folder;
+    },
+    editProjectFolder(id, action, path) {
+      const p = this.state.projects.find((item) => item.id === id);
+      if (!p) throw new Error("This project no longer exists.");
+      if (action === "add" && !this.cloneFolders.has(path)) chosenFolder(path);
+      this.applyFolders(p, changedFolders(p.folders, action, path));
+      return p.folders;
+    },
+    cloneProjectRepository(repository, parent, id, data) {
+      const repo = repositoryName(repository).split("/")[1];
+      if (parent) chosenFolder(parent);
+      const folder = posix.join(parent || "/Users/demo", repo);
+      if (this.cloneFolders.has(folder) || demoFolder(folder)) throw new Error("The destination folder is not empty.");
+      if (id) {
+        const p = this.state.projects.find((p) => p.id === id);
+        if (!p) throw new Error("This project no longer exists.");
+        this.applyFolders(p, changedFolders(p.folders, "add", folder));
+      } else {
+        id = this.handlers.createProject.call(this, { ...data, name: data?.name || repo });
+        this.applyFolders(this.state.projects.find((p) => p.id === id), [folder]);
+      }
+      this.cloneFolders.add(folder);
+      return id;
     },
     // The folders inside the home folder or a plugged-in disk, by name: never a file, never what a file holds, nothing hidden.
     listFolders(path) {
@@ -2930,16 +2984,18 @@ export class MockBackend {
       chosenFolder(path);
       const existing = this.state.projects.find((p) => p.folder === path);
       if (existing) return existing.id;
-      const project = { id: "p-" + randomUUID().slice(0, 6), name: posix.basename(path), folder: path, todos: [], lastUsed: now(), createdAt: now() };
+      const project = { id: "p-" + randomUUID().slice(0, 6), name: posix.basename(path), folder: path, folders: [path], todos: [], lastUsed: now(), createdAt: now() };
       this.state.projects.push(project);
       return project.id;
     },
-    startProjectChat(botIds, projectId, mode) {
+    startProjectChat(botIds, projectId, mode, folder) {
       if (!Array.isArray(botIds) || !botIds.length) throw new Error("Choose a bot.");
       const project = this.state.projects.find((p) => p.id === projectId);
       if (!project) throw new Error("This project no longer exists.");
       botIds.forEach((id) => this.bot(id));
-      const chat = { id: "chat-" + randomUUID().slice(0, 8), botId: botIds[0], ...(botIds.length > 1 && { botIds }), title: "New chat", time: now(), projectId, mode: project.folder ? (mode ?? "default") : "default", messages: [] };
+      if (botIds.length > 1 && project.folder) throw new Error("Group chats take text only.");
+      if (folder && !project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      const chat = { ...(folder && folder !== project.folder && { folder }), id: "chat-" + randomUUID().slice(0, 8), botId: botIds[0], ...(botIds.length > 1 && { botIds }), title: "New chat", time: now(), projectId, mode: project.folder ? (mode ?? project.mode ?? "default") : "default", messages: [] };
       this.state.chats.unshift(chat);
       project.lastUsed = now();
       return chat.id;
@@ -2948,6 +3004,9 @@ export class MockBackend {
       Object.assign(this.state.projects.find((p) => p.id === id) ?? {}, { name });
     },
     removeProject(id) {
+      const chats = this.state.chats.filter((chat) => chat.projectId === id);
+      if (chats.some((c) => this.turns.has(c.id))) throw new Error("Wait for the reply to finish.");
+      for (const chat of chats) this.handlers.setChatProject.call(this, chat.id, null);
       this.state.projects = this.state.projects.filter((p) => p.id !== id);
     },
     // "project-artifacts-v1": a project keeps a list of artifact ids, newest attached first.
@@ -2979,24 +3038,26 @@ export class MockBackend {
       return { items };
     },
     // A project's changes are made up (the folder itself is never read or touched). Committing clears them.
-    projectChanges(id) {
+    projectChanges(id, folder) {
       const project = this.state.projects.find((p) => p.id === id);
       if (!project) throw new Error("This project no longer exists.");
       if (!project.folder) return { repo: false, files: [] };
-      const files = (this.changedFiles ??= new Map()).get(id) ?? (this.changedFiles.set(id, MADE_UP_CHANGES.map((file) => ({ ...file }))), this.changedFiles.get(id));
+      folder ??= project.folder;
+      if (!project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      const files = (this.changedFiles ??= new Map()).get(folder) ?? (this.changedFiles.set(folder, MADE_UP_CHANGES.map((file) => ({ ...file }))), this.changedFiles.get(folder));
       const sum = (key) => files.reduce((total, file) => total + file[key], 0);
-      return { repo: true, root: project.folder, branch: "feature/" + slug(project.name), upstream: "origin/main", ahead: 2, behind: 0, files, added: sum("added"), removed: sum("removed") };
+      return { repo: true, root: folder, branch: "feature/" + slug(project.name), upstream: "origin/main", ahead: 2, behind: 0, files, added: sum("added"), removed: sum("removed") };
     },
-    projectDiff(id, file) {
-      const changed = this.handlers.projectChanges.call(this, id).files.find((f) => f.path === file);
+    projectDiff(id, file, folder) {
+      const changed = this.handlers.projectChanges.call(this, id, folder).files.find((f) => f.path === file);
       if (!changed) throw new Error("That file has no changes now.");
       return { text: MADE_UP_DIFFS[file] ?? "--- a/" + file + "\n+++ b/" + file + "\n@@ -1 +1 @@\n-old line\n+new line", truncated: false };
     },
-    projectCommit(id, message) {
-      const changes = this.handlers.projectChanges.call(this, id);
+    projectCommit(id, message, folder) {
+      const changes = this.handlers.projectChanges.call(this, id, folder);
       text(message, 2000, "commit message");
       if (!changes.repo || !changes.files.length) throw new Error("There is nothing to commit.");
-      this.changedFiles.set(id, []);
+      this.changedFiles.set(changes.root, []);
       return randomUUID().replace(/-/g, "").slice(0, 7);
     },
     addTodo(projectId, value) {

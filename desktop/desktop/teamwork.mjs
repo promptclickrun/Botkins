@@ -154,8 +154,13 @@ export class Teamwork {
       approval: chat.approval,
       messages: [],
       projectId: chat.projectId,
+      folder: chat.folder,
       helper: true,
       extraInstructions: this.helperNote(asker),
+      get restartSession() { return record.restartSession; },
+      set restartSession(value) { record.restartSession = value; },
+      get sessionFolder() { return record.sessionFolder; },
+      set sessionFolder(value) { record.sessionFolder = value; },
       get established() {
         return record.established;
       },

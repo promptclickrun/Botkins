@@ -24,6 +24,7 @@ import { Notifier } from "./notify.mjs";
 import { usageCsv, usageReport } from "./usage.mjs";
 import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
+import { cloneProjectRepository } from "./project-clone.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
 import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
@@ -111,13 +112,13 @@ export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", CHAT_TITLE_REGENERATION];
+export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", CHAT_TITLE_REGENERATION];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
+  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -706,12 +707,24 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     renameProject: (id, name) => workspace.projects.rename(id, name),
     removeProject: (id) => workspace.projects.remove(id),
-    setChatProject: (chatId, projectId, mode) => workspace.projects.setChatProject(chatId, projectId, mode),
-    projectChanges: (id) => workspace.projects.changes(id),
-    projectDiff: (id, file) => workspace.projects.diff(id, file),
-    projectCommit: (id, message) => workspace.projects.commit(id, message),
-    revealProject: (id) => {
-      const folder = workspace.projects.folderOf(id);
+    editProjectFolder: (id, action, path) => workspace.projects.editFolder(id, action, path),
+    chatProjectFolder: (id) => workspace.projects.folderFor(workspace.chat(id)),
+    setChatFolder: (id, path) => {
+      const chat = workspace.chat(id);
+      if (!chat.projectId) throw new Error("Choose a project first.");
+      workspace.projects.setChatProject(id, chat.projectId, chat.mode, path ?? null);
+    },
+    cloneProjectRepository: (repository, parent, id, data) => cloneProjectRepository(repository, parent, (folder) => {
+      if (!id) return workspace.projects.create({ name: data?.name, description: data?.description, folder });
+      workspace.projects.editFolder(id, "add", folder);
+      return id;
+    }),
+    setChatProject: (...args) => workspace.projects.setChatProject(...args),
+    projectChanges: (...args) => workspace.projects.changes(...args),
+    projectDiff: (...args) => workspace.projects.diff(...args),
+    projectCommit: (...args) => workspace.projects.commit(...args),
+    revealProject: (id, path) => {
+      const folder = workspace.projects.folderOf(id, path);
       // Opening a folder that is an app (or another bundle) would start it: such a folder is shown in its place.
       if (extname(folder) && existsSync(join(folder, "Contents"))) return void host.shell.showItemInFolder(folder);
       return host.shell.openPath(folder);
@@ -719,13 +732,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Project workspaces, to-dos and agent access (desktop/projects.mjs, access.mjs)
     createProject: (data) => workspace.projects.create(data),
     updateProject: (id, patch) => workspace.projects.update(id, patch),
-    chooseProjectFolder: async (id) => {
+    chooseProjectFolder: async (id, append) => {
       const paths = await host.dialogs.open({ title: "Choose a folder for this project", properties: ["openDirectory", "createDirectory"] });
       if (!paths) return null;
-      workspace.projects.update(id, { folder: paths[0] });
+      if (append) workspace.projects.editFolder(id, "add", paths[0]);
+      else workspace.projects.update(id, { folder: paths[0] });
       return paths[0];
     },
-    startProjectChat: (botIds, projectId, mode) => workspace.projects.startChat(botIds, projectId, mode),
+    startProjectChat: (...args) => workspace.projects.startChat(...args),
     // Artifacts a person attached to a project (capability "project-artifacts-v1").
     addProjectArtifact: (projectId, artifactId) => workspace.projects.addArtifact(projectId, artifactId),
     removeProjectArtifact: (projectId, artifactId) => workspace.projects.removeArtifact(projectId, artifactId),

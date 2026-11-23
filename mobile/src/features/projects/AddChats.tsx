@@ -30,7 +30,7 @@ export default function AddChats() {
     if (adding) return;
     setAdding(chatId);
     // The computer says why when a chat can't move (it started in another folder, or its bot has no access).
-    await attempt(api.setChatProject(chatId, project.id, "default"), "Added to " + project.name);
+    await attempt(api.setChatProject(chatId, project.id), "Added to " + project.name);
     setAdding(null);
   };
   return (

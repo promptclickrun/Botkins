@@ -423,6 +423,7 @@ export type ChatSummary = {
   /** The section the person put it in on their Chats screen ("chat-sections-v1"). Their own: nobody else sees it. */
   sectionId?: string;
   projectId?: string;
+  folder?: string;
   mode?: ChatMode;
   panelId?: string;
   model?: ModelChoice;
@@ -765,6 +766,8 @@ export type TaskInput = { id?: string; title: string; body?: string; botId?: str
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 export type Project = {
+  folders?: string[];
+  mode?: ChatMode;
   id: string;
   name: string;
   description?: string;
@@ -995,6 +998,8 @@ export type UsageReport = {
  * `removeFromChat`, `team.people`; a chat's alerts go to its people only; and each member's own
  * view of bots and chats, kept by the computer for them).
  * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
+ * "project-folders-v1" (ordered folders and chat folder choice), "project-mode-v1" (saved project mode),
+ * "project-clone-v1" (clone from GitHub on the computer),
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
@@ -1493,7 +1498,7 @@ export type Calls = {
   deleteChat(id: string): void;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
-  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode): string;
+  startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
@@ -1568,8 +1573,12 @@ export type Calls = {
   cancelMcpSignIn(id: string): boolean;
   signOutMcpServer(id: string): void;
   createProject(input: { name?: string; description?: string; color?: ProjectColor | null }): string;
+  editProjectFolder(id: string, action: "add" | "remove" | "default", path: string): string[];
+  chatProjectFolder(id: string): string | null;
+  setChatFolder(id: string, path: string | null): void;
+  cloneProjectRepository(repository: string, parent?: string, id?: string, data?: { name?: string; description?: string }): string;
   /** `folder: null` unlinks the project's folder (the folder itself is left alone). */
-  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null }): void;
+  updateProject(id: string, patch: { name?: string; description?: string; color?: ProjectColor | null; folder?: string | null; mode?: ChatMode }): void;
   /** The folders inside `path`, or inside the home folder. Needs "folders-v1". */
   listFolders(path?: string): FolderList;
   /** A project for a folder chosen in the folder browser (or the one it already has); answers its id. Needs "folders-v1". */
@@ -1598,8 +1607,8 @@ export type Calls = {
   renameSection(id: string, name: string): void;
   deleteSection(id: string): void;
   renameTemplate(id: string, name: string): void;
-  /** Changes the project and mode of a chat that has no messages yet. */
-  setChatProject(chatId: string, projectId: string | null, mode?: "default" | "plan" | "yolo"): void;
+  /** Changes a chat's project or mode. Moving a started chat carries its transcript into the next session. */
+  setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): void;
   linkPreview(url: string): LinkPreview | null;
   /** Pauses, resumes or deletes a schedule a bot made in a chat. */
   changeSchedule(chatId: string, id: number, action: "pause" | "resume" | "delete"): void;
@@ -1617,9 +1626,9 @@ export type Calls = {
   addSkillFolderAt(path: string): { kind: "skill" | "plugin" | "folder"; name: string; count?: number; id?: string; enabled?: boolean };
   renameProject(id: string, name: string): void;
   /** What changed in a project's folder, one file's changes as text, and committing all of it. */
-  projectChanges(id: string): ProjectChanges;
-  projectDiff(id: string, file: string): { text: string; truncated: boolean };
-  projectCommit(id: string, message: string): string;
+  projectChanges(id: string, folder?: string): ProjectChanges;
+  projectDiff(id: string, file: string, folder?: string): { text: string; truncated: boolean };
+  projectCommit(id: string, message: string, folder?: string): string;
   moveTodo(projectId: string, todoId: string, delta: -1 | 1): void;
   /** Makes the wiki page for a project that has none yet; answers the page's path. */
   createWikiPageFor(record: { kind: "project"; id: string }): string;

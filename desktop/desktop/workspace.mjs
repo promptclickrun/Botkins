@@ -1238,15 +1238,17 @@ export class Workspace {
       task.gateway = hosted ? this.harness.gateway.server : null;
       task.route = { choice, hosted: !!hosted, via: hosted ? via : null };
     }
-    // A conversation whose model moved to another provider starts a session there. Its transcript
-    // goes along in the instructions, the way a forked chat's does.
-    if (chat.established && this.sessionProvider(chat) !== provider) {
-      await this.sessionProvider(chat)
-        .deleteSession(chat.sessionId ?? chat.id)
-        .catch(() => {});
+    // A changed provider, project or working folder starts a fresh session with the transcript.
+    const moved = chat.restartSession || (chat.established && chat.sessionFolder !== undefined && chat.sessionFolder !== folder);
+    if (moved || (chat.established && this.sessionProvider(chat) !== provider)) {
+      if (chat.established) {
+        await this.sessionProvider(chat).deleteSession(chat.sessionId ?? chat.id).catch(() => {});
+      }
       chat.established = false;
-      if (!chat.sessionId)
+      if (moved || !chat.sessionId)
         chat.forkContext = forkTranscript((chat.messages ?? []).slice(0, run ? -1 : undefined), bot.name);
+      if (chat.sessionId) chat.restartSession = false;
+      else delete chat.restartSession;
     }
     const handlers = run && {
       permission: (request) => this.interactions.permission(chat, task, request),
@@ -1329,9 +1331,10 @@ export class Workspace {
       history: () => chat.messages ?? [],
       handlers: handlers || null,
     });
-    if (!chat.temporary && (!chat.established || chat.sessionProvider !== provider.id)) {
+    if (!chat.temporary && (!chat.established || chat.sessionProvider !== provider.id || chat.sessionFolder !== (projectFolder || undefined))) {
       chat.established = true;
       chat.sessionProvider = provider.id;
+      if (projectFolder || chat.sessionFolder) chat.sessionFolder = projectFolder || undefined;
       this.save();
     }
     return session;
@@ -1395,7 +1398,7 @@ export class Workspace {
    */
   menuTarget(bot, chat) {
     // A chat's own model or project changes what its menu shows, so those get their own.
-    const key = bot.id + (chat?.projectId ? "\n" + chat.projectId : "") + (chat?.model ? "\n" + JSON.stringify(chat.model) : "") + (chat?.fastMode ? "\nspeed=" + chat.fastMode : "");
+    const key = bot.id + (chat?.folder ?? "") + (chat?.projectId ? "\n" + chat.projectId : "") + (chat?.model ? "\n" + JSON.stringify(chat.model) : "") + (chat?.fastMode ? "\nspeed=" + chat.fastMode : "");
     let target = this.menus.get(key);
     if (!target) {
       target = {
@@ -1405,6 +1408,7 @@ export class Workspace {
         established: false,
         menu: true,
         ...(chat?.projectId && { projectId: chat.projectId }),
+        ...(chat?.folder && { folder: chat.folder }),
         ...(chat?.model && { model: chat.model }),
         ...(chat?.fastMode && { fastMode: chat.fastMode }),
       };
@@ -1696,12 +1700,16 @@ export class Workspace {
       botId: bot.id,
       title: chat.title,
       approval: chat.approval,
-      messages: chat.messages.filter((m) => m.botId === bot.id),
+      messages: member.restartSession ? chat.messages : chat.messages.filter((m) => m.botId === bot.id),
       fastMode: chat.fastMode,
       groupInstructions: groupInstructions(bot, members),
       // The group's project gives each member its context and to-do tools, never a folder.
       projectId: chat.projectId,
       group: true,
+      get restartSession() { return member.restartSession; },
+      set restartSession(value) { member.restartSession = value; },
+      get sessionFolder() { return member.sessionFolder; },
+      set sessionFolder(value) { member.sessionFolder = value; },
       get established() {
         return member.established;
       },

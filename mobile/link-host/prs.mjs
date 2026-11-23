@@ -1,6 +1,6 @@
 // Pull requests of the repository a chat's project works in, read with the GitHub CLI (gh) that
 // the person already signed in to on this computer. Nothing here talks to GitHub itself.
-import { statSync } from "node:fs";
+import { folderFor } from "./project-folders.mjs";
 import { findTool, inherit, runTool, searchDirs, toolEnv } from "./tools.mjs";
 
 const TIMEOUT = 15_000;
@@ -56,12 +56,8 @@ export class PullRequests {
     const id = chat?.projectId ?? (typeof projectId === "string" ? projectId : null);
     const project = id ? (state.projects ?? []).find((p) => p.id === id) : null;
     if (!project?.folder || typeof project.folder !== "string") return { reason: "This chat isn't in a project folder." };
-    try {
-      if (!statSync(project.folder).isDirectory()) throw new Error("not a folder");
-    } catch {
-      return { reason: "The project's folder can't be found on this computer." };
-    }
-    return { folder: project.folder };
+    const folder = folderFor(project, chat);
+    return folder ? { folder } : { reason: "The project's folder can't be found on this computer." };
   }
   /** `where` is { chatId?, projectId? }. A number as the query looks that pull request up as well. */
   async lookup(where, query) {

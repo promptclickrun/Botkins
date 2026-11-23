@@ -159,6 +159,10 @@ const POLICY = {
   removeCredential: "owner",
   createProject: "owner",
   updateProject: "owner",
+  editProjectFolder: "owner",
+  setChatFolder: "owner",
+  chatProjectFolder: "owner",
+  cloneProjectRepository: "owner",
   renameProject: "owner",
   removeProject: "owner",
   projectChanges: "owner",
@@ -1059,7 +1063,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   // A chat's flags are the member's own. Unread is theirs too: since they last marked it read; a
   // chat they never marked follows the workspace when they started it, and is new to them otherwise.
   out.chats = shared.map((chat) => {
-    const { pinned: _pinned, archived: _archived, unread, ...rest } = chat;
+    const { pinned: _pinned, archived: _archived, folder: _folder, unread, ...rest } = chat;
     const own = view.chats[chat.id];
     const mine = chat.createdBy === me;
     const fresh = own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0);

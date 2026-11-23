@@ -775,9 +775,10 @@ export default function ChatView({
         <div className="chathead-tools">
           {project && (
             <div className="project-tag">
-              <span className="project-label" title={project.folder ?? project.name}>
+              <span className="project-label" title={chat.folder ?? project.folder ?? project.name}>
                 {project.folder ? <FolderGit2 size={13} /> : <FolderKanban size={13} />}
                 <span>{project.name}</span>
+                {project.folders && project.folder && <small>{chat.folder ?? project.folder}</small>}
                 {project.folder && <em>{modeLabels[mode].label}</em>}
               </span>
               {project.folder && (
@@ -928,9 +929,10 @@ export default function ChatView({
                       botIds={chat.botIds?.length ? chat.botIds : [chat.botId]}
                       projectId={chat.projectId}
                       mode={mode}
-                      change={(projectId, next) =>
+                      folder={chat.folder}
+                      change={(projectId, next, path) =>
                         void window.botkins
-                          .setChatProject(chat.id, projectId ?? null, next)
+                          .setChatProject(chat.id, projectId ?? null, next, path)
                           .catch((e) => setNotice(e.message))
                       }
                       fail={(e) => setNotice(e instanceof Error ? e.message : String(e))}
@@ -1200,7 +1202,7 @@ export default function ChatView({
           </div>
         )}
         {project?.folder && showChanges && (
-          <ProjectChanges key={project.id} state={state} projectId={project.id} close={() => setShowChanges(false)} />
+          <ProjectChanges chatId={chat.id} key={chat.id} state={state} projectId={project.id} close={() => setShowChanges(false)} />
         )}
         {requests[0] && (
           <RequestPanel
