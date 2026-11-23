@@ -88,7 +88,7 @@ struct StartBotkinsVoiceChat: AppIntent {
 @available(iOS 17.0, *)
 struct OpenBotkins: AppIntent {
   static let title: LocalizedStringResource = "Open Botkins"
-  static let description = IntentDescription("Open Botkins on this iPhone.")
+  static let description = IntentDescription("Open the Botkins app.")
   static let openAppWhenRun = true
   static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
 
