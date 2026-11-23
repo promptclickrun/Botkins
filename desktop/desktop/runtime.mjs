@@ -43,6 +43,8 @@ import { liveContextFor } from "./live-context.mjs";
 import { PHONE_PATIENCE_MS, SignIns } from "./terminal/signin.mjs";
 import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
+import { pickedSkill, uploadSkill } from "./link/skill-import.mjs";
+import { skillsCatalog } from "./skills-catalog.mjs";
 import { zip } from "./zip.mjs";
 import { LinkPreviews } from "./linkpreview.mjs";
 // Phone access: the Botkins link, copied unchanged from the Botkins repo (desktop/link/README.md).
@@ -111,13 +113,13 @@ export const PROVIDER_SIGNIN = "provider-signin-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", CHAT_TITLE_REGENERATION];
+export const CAPABILITIES = ["client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
+  CAPABILITIES.filter((name) => (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -360,7 +362,16 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return { kind: "plugin", name: added.name, id: added.id, enabled: added.enabled === true };
     }
   };
+  const catalog = skillsCatalog(() => workspace.integrations);
   const handlers = {
+    pickSkillUpload: async () => {
+      const paths = await host.dialogs.open({title: "Upload skill", properties: ["openFile"], filters: [{ name: "Skills", extensions: ["md", "zip"] }]});
+      return paths?.length ? pickedSkill(paths[0]) : null;
+    },
+    "skills.upload": (file) => uploadSkill(workspace.integrations, file),
+    "skillsCatalog.search": catalog.search,
+    "skillsCatalog.preview": catalog.preview,
+    "skillsCatalog.install": catalog.install,
     ...pluginHandlers(workspace.plugins, savedCredentials),
     "piPackages.browse": (query) => pi.packages.browse(query),
     "piPackages.preview": (name) => pi.packages.preview(name),

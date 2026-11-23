@@ -1,6 +1,11 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
 
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
@@ -1007,6 +1012,7 @@ export type UsageReport = {
  * `plugins` and the calls `plugins.*`; docs/plugins.md).
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
+ * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  */
@@ -1668,6 +1674,10 @@ export type Calls = {
   "plugins.refresh"(): PluginMarketplace[];
   // ---- Agent templates ("agent-templates-v1", docs/agent-templates.md)
   /** In the catalogs' own order. `query` (at most 200 characters) matches name, role, summary, category and keywords. `categories` counts what the other filters leave. */
+  "skills.upload"(file: SkillUpload): SkillImportResult;
+  "skillsCatalog.search"(query: string): CatalogSkill[];
+  "skillsCatalog.preview"(id: string): CatalogPreview;
+  "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];

@@ -47,7 +47,7 @@ export function enabledSkills(spec) {
   const list = [];
   const plugins = (spec.plugins ?? []).map((folder) => join(folder, "skills")).filter((folder) => existsSync(folder));
   for (const folder of [...(spec.skills?.directories ?? []), ...plugins])
-    for (const skill of skillsIn(folder)) {
+    for (const skill of skillsIn(folder, undefined, spec.skills?.standalone)) {
       if (seen.has(skill.name) || off.has(skill.name)) continue;
       seen.add(skill.name);
       list.push({ name: skill.name, description: skill.description, path: skill.path });

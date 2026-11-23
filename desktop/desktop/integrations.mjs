@@ -16,13 +16,15 @@
 // read folders that stay where they are (linked folders) and plugin folders.
 // MCP servers are stored in the workspace file (mode 0600). Their environment values and headers
 // often hold keys, so the app's page never receives them: it sees the names only.
+export { parseSkill, slug } from "./link/skill-format.mjs";
+import { parseSkill, slug } from "./link/skill-format.mjs";
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
 import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
 import { reachable } from "./terminal/reach.mjs";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const bundledSkills = fileURLToPath(new URL("./skills/", import.meta.url));
@@ -168,45 +170,14 @@ export function parseServers(json, baseDir, sealFor) {
   });
 }
 
-/** name and description from a SKILL.md, and the instructions under its front matter. */
-export function parseSkill(source, fallbackName) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(source);
-  const meta = {};
-  if (match) {
-    const lines = match[1].split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(lines[i]);
-      if (!field) continue;
-      let value = field[2].trim();
-      if (/^[>|][+-]?$/.test(value)) {
-        // A folded or literal block: the indented lines that follow.
-        const block = [];
-        while (i + 1 < lines.length && /^(\s+|$)/.test(lines[i + 1])) block.push(lines[++i].trim());
-        value = block.join(value.startsWith(">") ? " " : "\n").trim();
-      } else value = value.replace(/^(["'])(.*)\1$/, "$2");
-      meta[field[1].toLowerCase()] = value;
-    }
-  }
-  return {
-    name: (meta.name || fallbackName || "").trim(),
-    description: (meta.description || "").trim(),
-    instructions: (match ? source.slice(match[0].length) : source).trim(),
-  };
-}
 const skillFile = ({ name, description, instructions }) =>
   "---\nname: " + name + "\ndescription: " + JSON.stringify(description) + "\n---\n\n" + instructions.trim() + "\n";
-export const slug = (value) =>
-  String(value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
 
 /**
  * The skills under a folder: every folder holding a SKILL.md, up to four levels down, which is
  * how the Copilot runtime reads a skills folder too. Hidden folders and node_modules are skipped.
  */
-export function skillsIn(folder, origin) {
+export function skillsIn(folder, origin, standalone = []) {
   const found = [];
   const names = new Set();
   const walk = (dir, depth) => {
@@ -233,6 +204,8 @@ export function skillsIn(folder, origin) {
             names.add(skill.name);
             found.push({ name: skill.name, description: skill.description.slice(0, 600), path, origin });
           }
+          // Each imported skill has its own top-level folder. A manifest among its references is a companion file.
+          if (standalone.includes(path)) continue;
         }
       } catch {
         // No SKILL.md here; it may be a folder of skills.
@@ -269,6 +242,8 @@ export class Integrations {
     const state = ws.state;
     state.mcpServers ??= [];
     state.skills = {
+      ...(Array.isArray(state.skills?.standalone) && {standalone: state.skills.standalone}),
+      ...(state.skills?.catalog && {catalog: state.skills.catalog}),
       folders: Array.isArray(state.skills?.folders) ? state.skills.folders : [],
       plugins: Array.isArray(state.skills?.plugins) ? state.skills.plugins : [],
       disabled: Array.isArray(state.skills?.disabled) ? state.skills.disabled : [],
@@ -357,6 +332,9 @@ export class Integrations {
   }
   get servers() {
     return this.ws.state.mcpServers;
+  }
+  get standaloneSkills() {
+    return (this.skillState.standalone ?? []).map(name => join(this.skillsDir, name));
   }
   get skillState() {
     return this.ws.state.skills;
@@ -668,7 +646,7 @@ export class Integrations {
         out.push({ ...s, ...extra, enabled: !disabled.has(s.name) });
       }
     };
-    add(skillsIn(this.skillsDir, "botkins"), { editable: true });
+    add(skillsIn(this.skillsDir, "botkins", this.standaloneSkills), { editable: true });
     for (const folder of this.skillState.folders) add(skillsIn(folder.path, "folder"), { folderId: folder.id });
     add(skillsIn(bundledSkills, "built-in"));
     // The command-line skill stays in the list on a host with no command, with the reason. Its switch is still the person's own.
@@ -688,7 +666,7 @@ export class Integrations {
     return parseSkill(readFileSync(join(dir, "SKILL.md"), "utf8"), name);
   }
   ownSkillDir(name) {
-    const skill = skillsIn(this.skillsDir, "botkins").find((s) => s.name === name);
+    const skill = skillsIn(this.skillsDir, "botkins", this.standaloneSkills).find((s) => s.name === name);
     if (!skill) throw new Error("This skill isn't one Botkins keeps. Skills from linked folders are edited in their folder.");
     return skill.path;
   }
@@ -708,6 +686,10 @@ export class Integrations {
     if (current && current !== dir) renameSync(current, dir);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), skillFile(skill));
+    if (original && original !== id) {
+      if (this.skillState.standalone) this.skillState.standalone = this.skillState.standalone.map(entry => entry === basename(current) ? id : entry);
+      for (const [entry, old] of Object.entries(this.skillState.catalog ?? {})) if (old === original) this.skillState.catalog[entry] = id;
+    }
     if (original && original !== id) this.skillState.disabled = this.skillState.disabled.map((n) => (n === original ? id : n));
     this.changed();
     return id;
@@ -733,16 +715,9 @@ export class Integrations {
     // A chosen link means the folder it points to. Links inside a skill are still not followed when copying.
     path = realpathSync(path);
     if (existsSync(join(path, "SKILL.md"))) {
-      const skill = parseSkill(readFileSync(join(path, "SKILL.md"), "utf8").slice(0, MAX_SKILL_TEXT), basename(path));
-      const id = slug(skill.name || basename(path));
-      if (!SKILL_NAME.test(id)) throw new Error("This skill needs a name in its SKILL.md.");
-      if (this.skills().some((s) => s.name === id || s.name === skill.name)) throw new Error("A skill named " + id + " already exists.");
-      mkdirSync(this.skillsDir, { recursive: true });
-      const dir = join(this.skillsDir, id);
-      // Links inside the skill are not followed, so a skill can't pull in files from elsewhere.
-      cpSync(path, dir, { recursive: true, filter: (source) => !lstatSync(source).isSymbolicLink() && basename(source) !== ".git" });
-      this.changed();
-      return { kind: "skill", name: skill.name || id };
+      const result = this.importSkillFolders([path], [], false);
+      if (result.conflicts.length) throw new Error("A skill named " + result.conflicts[0] + " already exists.");
+      return { kind: "skill", name: result.added[0] };
     }
     if (isPlugin(path)) throw Object.assign(new Error("This folder is a plugin, which can run commands on this computer. It is not added as a folder of skills."), { code: "PLUGIN_FOLDER", folder: path });
     const count = skillsIn(path, "folder").length;
@@ -751,8 +726,74 @@ export class Integrations {
     this.changed();
     return { kind: "folder", name: basename(path), count };
   }
+  /** Prepare the whole batch before publishing. Keep old directories until every rename succeeds. */
+  importSkillFolders(paths, replace, enable = true, standalone = new Set()) {
+    if (lstatSync(this.skillsDir, {throwIfNoEntry:false})?.isSymbolicLink()) throw new Error("The Botkins skills folder cannot be a symbolic link.");
+    const installed = this.skills();
+    const names = new Set();
+    const conflicts = [];
+    const plans = paths.map((path) => {
+      const parsed = parseSkill(readFileSync(join(path, "SKILL.md"), "utf8").slice(0, MAX_SKILL_TEXT), basename(path));
+      const id = slug(parsed.name);
+      const name = parsed.name || id;
+      if (!SKILL_NAME.test(id) || name.length > 200) throw new Error("This skill needs a valid name.");
+      if (names.has(id)) throw new Error("Duplicate skill name: " + name);
+      names.add(id);
+      const existing = installed.find((s) => s.name === name || slug(s.name) === id);
+      const dest = join(this.skillsDir, id);
+      if (existing && !replace.includes(existing.name)) conflicts.push(existing.name);
+      if (existing?.editable && replace.includes(existing.name)) {
+        const parent = dirname(existing.path);
+        const expected = join(realpathSync(this.skillsDir), relative(this.skillsDir, parent));
+        if (realpathSync(parent) !== expected) throw new Error("Cannot replace a skill reached through a symbolic link.");
+      }
+      if (lstatSync(dest, {throwIfNoEntry: false}) && existing?.path !== dest) throw new Error("The skill folder already exists: " + id);
+      return { path, name, dest, existing };
+    });
+    if (conflicts.length) return { added: [], conflicts };
+    mkdirSync(this.skillsDir, { recursive: true });
+    const staging = mkdtempSync(join(this.skillsDir, ".import-"));
+    const undo = [];
+    try {
+      for (const [i, plan] of plans.entries()) {
+        cpSync(plan.path, join(staging, String(i)), { recursive: true, filter: (source) => !lstatSync(source).isSymbolicLink() && basename(source) !== ".git" });
+      }
+      // Legacy imports can be nested. Move children first so rollback restores their parents first.
+      const replaced = plans.filter(plan => plan.existing?.editable).sort((a, b) => b.existing.path.length - a.existing.path.length);
+      for (const [i, plan] of replaced.entries()) {
+        const backup = join(staging, "old-" + i);
+        renameSync(plan.existing.path, backup);
+        undo.push(() => renameSync(backup, plan.existing.path));
+      }
+      for (const [i, plan] of plans.entries()) {
+        renameSync(join(staging, String(i)), plan.dest);
+        undo.push(() => rmSync(plan.dest, { recursive: true }));
+      }
+    } catch (error) {
+      for (const rollback of undo.reverse()) rollback();
+      throw error;
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
+    const boundaries = new Set(this.skillState.standalone);
+    for (const plan of plans) {
+      const dir = basename(plan.dest);
+      if (standalone.has(plan.path)) boundaries.add(dir);
+      else boundaries.delete(dir);
+    }
+    if (boundaries.size) this.skillState.standalone = [...boundaries];
+    else delete this.skillState.standalone;
+    const added = plans.map((plan) => plan.name);
+    for (const [id, name] of Object.entries(this.skillState.catalog ?? {})) if (added.includes(name) || plans.some(plan => plan.existing?.name === name)) delete this.skillState.catalog[id];
+    if (enable) this.skillState.disabled = this.skillState.disabled.filter((name) => !added.includes(name));
+    this.changed();
+    return { added, conflicts: [] };
+  }
   removeSkill(name) {
-    rmSync(this.ownSkillDir(name), { recursive: true, force: true });
+    const dir = this.ownSkillDir(name);
+    rmSync(dir, { recursive: true, force: true });
+    if (this.skillState.standalone) this.skillState.standalone = this.skillState.standalone.filter(entry => entry !== basename(dir));
+    for (const [id, skill] of Object.entries(this.skillState.catalog ?? {})) if (skill === name) delete this.skillState.catalog[id];
     this.skillState.disabled = this.skillState.disabled.filter((n) => n !== name);
     for (const bot of this.ws.state.bots) if (bot.skillsOff) bot.skillsOff = bot.skillsOff.filter((n) => n !== name);
     this.changed();
@@ -785,9 +826,17 @@ export class Integrations {
    * @param turn.member  True when a team member wrote the message or the chat is a member's (accessForTurn).
    */
   skillsFor(bot, { member = false } = {}) {
+    const base = [bundledSkills];
+    if (existsSync(this.skillsDir)) {
+      // Only change precedence when the person installed a replacement for a built-in skill.
+      const overrides = skillsIn(bundledSkills).some(s => existsSync(join(this.skillsDir, slug(s.name), "SKILL.md")));
+      if (overrides) base.unshift(this.skillsDir);
+      else base.push(this.skillsDir);
+    }
     return {
       // A linked folder that has become a plugin since it was linked is not handed on, as a plugin can start commands. It stays linked, and is looked at again at each call.
-      directories: [bundledSkills, ...(existsSync(this.skillsDir) ? [this.skillsDir] : []), ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
+      directories: [...base, ...this.skillState.folders.map((f) => f.path).filter((p) => existsSync(p) && !isPlugin(p))],
+      ...(this.skillState.standalone?.length && {standalone: this.standaloneSkills}),
       // The command-line skill goes last, and only a host where a bot's shell finds the command offers it.
       // Never in a member's turn: the socket knows no member, so a member's bot must not be taught to act as the owner at the socket.
       disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...(this.reachable() && !member ? [] : [COMMAND_SKILL])])],

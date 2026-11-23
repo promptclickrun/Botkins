@@ -226,7 +226,7 @@ function Menu({ request, close }: { request: MenuRequest; close: () => void }) {
         ),
       )}
     </div>,
-    document.body,
+    request.from?.closest("dialog") ?? document.body,
   );
 }
 
@@ -237,7 +237,7 @@ export function useMenu() {
   function show(e: ReactMouseEvent<HTMLElement>, label: string, items: MenuItem[]) {
     e.preventDefault();
     e.stopPropagation();
-    const button = (e.target as HTMLElement).closest<HTMLElement>(".menu-button");
+    const button = (e.target as HTMLElement).closest<HTMLElement>('.menu-button, button[aria-haspopup="menu"]');
     if (e.type === "contextmenu" || !button) {
       setRequest({ x: e.clientX, y: e.clientY, items, label, from: e.currentTarget.querySelector(".menu-button") });
     } else {

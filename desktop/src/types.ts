@@ -1,5 +1,10 @@
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
+export type SkillUpload = { filename: string; data: string; replace?: string[] };
+export type SkillImportResult = { added: string[]; conflicts: string[] };
+export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+
 export type Bot = {
   fastMode?: FastMode;
   id: string;
@@ -786,6 +791,11 @@ declare global {
       /** Reads every marketplace again now ("market-refresh-v1"). One that can't be read keeps its last list and has `error`. */
       "plugins.refresh"?(): Promise<PluginMarketplace[]>;
       // Agent templates in the marketplaces ("agent-templates-v1", the phone's docs/agent-templates.md)
+      pickSkillUpload(): Promise<SkillUpload | null>;
+      "skills.upload"(file: SkillUpload): Promise<SkillImportResult>;
+      "skillsCatalog.search"(query: string): Promise<CatalogSkill[]>;
+      "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
+      "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
       "piPackages.preview"(name: string): Promise<PiPackageVersion>;
       "piPackages.list"(): Promise<InstalledPiPackage[]>;
