@@ -1061,10 +1061,11 @@ std::string Gadget::console(const std::string& line) {
     ms = ms < 300 ? 300 : ms > 10000 ? 10000 : ms;
     if (hold_thread_.joinable()) hold_thread_.join();
     start_listening();
-    hold_thread_ = std::thread([this, ms] {
+    auto hold = [this, ms] {
       for (int waited = 0; waited < ms && running_; waited += 50) std::this_thread::sleep_for(std::chrono::milliseconds(50));
       stop_listening();
-    });
+    };
+    hold_thread_ = board_.thread ? board_.thread("hold", hold) : std::thread(hold);
     return reply_line(Json::object().set("ok", true));
   }
   if (what == "answer") {

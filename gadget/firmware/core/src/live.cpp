@@ -368,10 +368,14 @@ void LiveVoice::stop() {
 void LiveVoice::run() {
   for (;;) {
     {
-      std::lock_guard<std::mutex> lock(m_);
+      std::unique_lock<std::mutex> lock(m_);
       if (!want_ || stopping_) {
-        // The last thing this thread does: a press may join it as soon as it says so.
+        // The last thing this thread does: a press may join it as soon as it says so. An ended thread
+        // keeps its stack until it is joined, so the worker joins it now, unless a press does first.
         running_ = false;
+        const bool join = !stopping_;
+        lock.unlock();
+        if (join) hooks_.post([this](Link&) { join_ended(); });
         return;
       }
       want_ = false;
@@ -414,6 +418,13 @@ void LiveVoice::run() {
     }
     close_session();
   }
+}
+
+/** On the worker: joins the live thread once it has ended, so its stack is freed between sessions. */
+void LiveVoice::join_ended() {
+  std::lock_guard<std::mutex> lock(m_);
+  // A press since then has joined it and started another; stop() joins it itself.
+  if (!running_ && !stopping_ && thread_.joinable()) thread_.join();
 }
 
 /** Asks the computer for a session, opens the provider's socket and waits for the setup to take, all within `open_ms_`. */

@@ -202,6 +202,7 @@ class LiveVoice {
   };
 
   void run();
+  void join_ended();
   bool open_session();
   void serve(std::unique_lock<std::mutex>& lock);
   void close_session();

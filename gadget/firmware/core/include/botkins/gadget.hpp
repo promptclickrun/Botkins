@@ -61,9 +61,10 @@ struct Board {
   /** A live voice session closes after this long with no press and no sound (botkins/live.hpp). */
   int live_idle_ms = 180000;
   /**
-   * Starts one of the core's threads that come and go: the live voice's, named "live", which runs while
-   * a session is open. Null: a plain std::thread. A port may give it a stack of its own size, or log
-   * how much of it was used. It must start `run` and return the thread; the core joins it.
+   * Starts one of the core's threads that come and go: "live", the live voice's, which runs while a
+   * session is open, and "hold", which holds the talk button for the console's `listen`. Null: a plain
+   * std::thread. A port may give each a stack of its own size, or log how much of it was used. It must
+   * start `run` and return the thread; the core joins it.
    */
   std::function<std::thread(const char* name, std::function<void()> run)> thread;
 };

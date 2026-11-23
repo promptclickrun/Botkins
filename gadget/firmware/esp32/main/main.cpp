@@ -22,8 +22,9 @@
 namespace {
 const char* TAG = "botkins";
 const char* kWifi = "wifi";  // the core's name for the saved network (core/src/gadget.cpp)
-// The live voice's thread stack (Board::thread, below).
-const int kLiveStack = 16 * 1024;
+// The stacks of the threads the core makes as it needs them (Board::thread, below). On the StopWatch
+// the live voice's used 4.1 KB through a session with ask_bot; the console's `listen` hold, little.
+int thread_stack(const std::string& name) { return name == "live" ? 10 * 1024 : 6 * 1024; }
 
 // esp_fill_random gives true random numbers once the radio is on (WifiNetwork::begin runs first).
 void fill_random(uint8_t* out, size_t size) { esp_fill_random(out, size); }
@@ -90,23 +91,25 @@ extern "C" void app_main(void) {
   config.socket = [] { return std::unique_ptr<botkins::Socket>(new port::EspSocket()); };
   // The owner's restart (the part's `restart`): the core says it is restarting, then calls this.
   config.restart = [] { esp_restart(); };
-  // The live voice's thread, made while a session is open beside the relay's socket and the live one.
-  // Its stack is internal RAM: a call it makes may open a link session and save the computer's
-  // addresses to flash, which a task with its stack in PSRAM must not do. As the thread ends, the log
-  // says how much of the stack it never used.
+  // The threads the core makes as it needs them: the live voice's, made while a session is open beside
+  // the relay's socket and the live one, and the console's `listen` hold. Each gets a stack of its own
+  // size, not the 16 KB of the core's long-lived threads. Stacks stay in internal RAM: a call on the
+  // live thread may open a link session and save the computer's addresses to flash, which a task with
+  // its stack in PSRAM must not do. As a thread ends, the log says how much of its stack it never used.
   config.thread = [](const char* name, std::function<void()> run) {
     esp_pthread_cfg_t before = esp_pthread_get_default_config();
     if (esp_pthread_get_cfg(&before) != ESP_OK) before = esp_pthread_get_default_config();
+    const std::string label = name;
+    const int stack = thread_stack(label);
     esp_pthread_cfg_t own = esp_pthread_get_default_config();
-    own.stack_size = kLiveStack;
+    own.stack_size = stack;
     own.prio = 5;
     own.inherit_cfg = false;
     own.thread_name = name;
     esp_pthread_set_cfg(&own);
-    std::string label = name;
-    std::thread thread([run = std::move(run), label] {
+    std::thread thread([run = std::move(run), label, stack] {
       run();
-      ESP_LOGI(TAG, "%s thread ended; its stack had at least %u of %d bytes left", label.c_str(), (unsigned)uxTaskGetStackHighWaterMark(nullptr), kLiveStack);
+      ESP_LOGI(TAG, "%s thread ended; its stack had at least %u of %d bytes left", label.c_str(), (unsigned)uxTaskGetStackHighWaterMark(nullptr), stack);
     });
     // Only this one: the calling task's own threads are made as before.
     esp_pthread_set_cfg(&before);
