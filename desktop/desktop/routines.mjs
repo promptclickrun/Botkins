@@ -653,6 +653,7 @@ export class Routines {
           "routine_create",
           "Create a routine when the person asks you to do something on a schedule or to remind them later. " +
             "The routine runs `instructions` as a new turn in its own chat at each time, and `deliver` can send the result to your chat with the person, their Feed, Ideas or Goals. Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" " +
+            "Before you create it, confirm with the person how often it runs, where the result goes (`deliver`), and whether they want a notification each run (`notify`), unless they already said. " +
             "Today is " + new Date().toISOString().slice(0, 10) + ".",
           { name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
           ["name", "instructions", "cadence"],
