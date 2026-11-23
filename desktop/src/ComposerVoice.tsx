@@ -155,9 +155,11 @@ export function useComposerVoice({
       if (provider === "codex" && !settings.providers.codex.signedIn)
         return setNote({ text: "Live voice by ChatGPT needs you signed in with ChatGPT in Settings › Model providers.", settings: true });
       // A key that isn't there yet is asked for here, before a chat is made or the microphone opens.
-      const named = { openai: "OpenAI", gemini: "Gemini", elevenlabs: "ElevenLabs" } as const;
+      const named = { openai: "OpenAI", azure: "Azure", gemini: "Gemini", elevenlabs: "ElevenLabs" } as const;
       if (provider !== "codex" && !settings.providers[provider].hasKey)
         return setNote({ text: "Live voice by " + named[provider] + " needs " + (provider === "gemini" ? "a " : "an ") + named[provider] + " key. Add it in Settings › Voice.", settings: true });
+      // Azure's live voice goes to the resource's own address, not a region.
+      if (provider === "azure" && !settings.providers.azure.endpoint) return setNote({ text: "Live voice by Azure needs your resource's endpoint. Add it in Settings › Voice.", settings: true });
       const id = chatId ?? (await startChat?.());
       if (!id) return;
       startLive(id, provider);

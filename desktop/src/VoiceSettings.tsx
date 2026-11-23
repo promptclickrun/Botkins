@@ -30,6 +30,7 @@ const LIVE: { id: LiveProvider | ""; name: string }[] = [
   { id: "", name: "None chosen yet" },
   { id: "codex", name: "ChatGPT sign-in" },
   { id: "openai", name: "OpenAI key" },
+  { id: "azure", name: "Azure key" },
   { id: "gemini", name: "Gemini key" },
   { id: "elevenlabs", name: "ElevenLabs key" },
 ];
@@ -76,15 +77,18 @@ function SetupButton({ provider, onClick }: { provider: string; onClick: () => v
 }
 
 /** Which key a provider needs, and whether it is saved. */
-function keyNote(s: DeskVoiceSettings, provider: string) {
+function keyNote(s: DeskVoiceSettings, provider: string, kind?: "stt" | "tts" | "live") {
   if (provider === "device" || provider === "local" || provider === "codex") return "";
   const p = s.providers[provider as VoiceKeyProvider] as { hasKey: boolean } | undefined;
   if (provider === "custom") return s.providers.custom.baseUrl ? "" : "Add your server's address under Keys and servers.";
-  return p?.hasKey ? "" : "Add " + (provider === "gemini" ? "a" : "an") + " " + NAMES[provider as VoiceKeyProvider] + " key under Keys and servers.";
+  if (!p?.hasKey) return "Add " + (provider === "gemini" ? "a" : "an") + " " + NAMES[provider as VoiceKeyProvider] + " key under Keys and servers.";
+  // Live voice is on the resource's own address, whichever service dictation and reading use.
+  if (provider === "azure" && kind === "live" && !s.providers.azure.endpoint) return "Add your Azure resource endpoint under Keys and servers.";
+  return "";
 }
 
 /** The models and voices a provider offers, read when the choice changes. */
-export function useOptions(kind: "stt" | "tts" | "live", provider: string | null, stamp: string) {
+export function useOptions(kind: "stt" | "tts" | "live", provider: string | null, stamp: string, model?: string) {
   const [options, setOptions] = useState<VoiceOptions>({ models: [], voices: [] });
   const [error, setError] = useState("");
   useEffect(() => {
@@ -93,14 +97,14 @@ export function useOptions(kind: "stt" | "tts" | "live", provider: string | null
     setError("");
     // Codex lists live voices (through the computer's app), as the phone shows them; it has nothing for speech in or out.
     if (!provider || provider === "device" || (provider === "codex" && kind !== "live")) return;
-    api
-      .voiceOptions(kind, provider)
+    // Azure's voices belong to a model ("" is the standard ones), so they are read again when the model changes.
+    (provider === "azure" && kind === "tts" && model !== undefined ? api.voiceOptions(kind, provider, model) : api.voiceOptions(kind, provider))
       .then((o) => live && setOptions(o))
       .catch((e) => live && setError(errorText(e)));
     return () => {
       live = false;
     };
-  }, [kind, provider, stamp]);
+  }, [kind, provider, stamp, provider === "azure" && kind === "tts" ? model : undefined]);
   return { options, error };
 }
 
@@ -229,6 +233,38 @@ function Pick({ label, help, value, options, change, empty = "Default", disabled
   );
 }
 
+const OTHER = "__other__";
+/** The words of typing a model or a voice that isn't listed (the phone says the same). */
+const OTHER_MODEL = { choice: "Other model…", title: "Other model", message: "Type the model's name, such as MAI-Transcribe-2. For Azure OpenAI audio, type the deployment's name." };
+const OTHER_VOICE = { choice: "Other voice…", title: "Other voice", message: "Type the voice's name, such as en-US-Harper:MAI-Voice-2.1." };
+
+/**
+ * A choice that also lets the person type what isn't listed. A provider that names its own default
+ * (a choice with no id, such as Azure's standard voices) is not given a second one.
+ */
+function TypedPick({ label, help, value, options, change, typing }: { label: string; help?: string; value: string; options: { id: string; name: string }[]; change: (id: string) => Promise<void>; typing: { choice: string; title: string; message: string } }) {
+  const [typed, setTyped] = useState(false);
+  return (
+    <>
+      <Pick
+        label={label}
+        help={help}
+        value={value}
+        options={[...options, { id: OTHER, name: typing.choice }]}
+        empty={options.some((o) => !o.id) ? null : "Default"}
+        change={(id) => {
+          if (id === OTHER) setTyped(true);
+          else {
+            setTyped(false);
+            void change(id).catch(() => {});
+          }
+        }}
+      />
+      {typed && <TextRow label={typing.title} help={typing.message} value="" wide save={(text) => (text ? change(text).then(() => setTyped(false)) : Promise.resolve())} />}
+    </>
+  );
+}
+
 /** Settings › Voice: dictation, reading aloud, live voice, and the keys and servers they use. */
 export default function VoiceSettings({ state }: { state: State }) {
   const [s, setS] = useState<DeskVoiceSettings>();
@@ -256,7 +292,7 @@ export default function VoiceSettings({ state }: { state: State }) {
   // Lists of models and voices are read again after a key or address changes.
   const stamp = JSON.stringify(s?.providers ?? null);
   const stt = useOptions("stt", s?.stt.provider ?? null, stamp);
-  const tts = useOptions("tts", s?.tts.provider ?? null, stamp);
+  const tts = useOptions("tts", s?.tts.provider ?? null, stamp, s?.tts.model ?? "");
   const liveOptions = useOptions("live", s?.live.provider ?? null, stamp);
   // The providers whose saved key went with a change of address (the link keeps a key with the
   // address it was given for), until a key is saved for the new one.
@@ -316,13 +352,13 @@ export default function VoiceSettings({ state }: { state: State }) {
           : "This computer has no dictation that Botkins can start. Choose a speech service here to dictate in Botkins."
       : s.stt.provider === "local"
         ? LOCAL_NOTE
-        : keyNote(s, s.stt.provider) || "Your recording goes to " + (STT.find((p) => p.id === s.stt.provider)?.name ?? "it") + " to be written out.";
+        : keyNote(s, s.stt.provider, "stt") || "Your recording goes to " + (STT.find((p) => p.id === s.stt.provider)?.name ?? "it") + " to be written out.";
   const readingHelp =
     s.tts.provider === "device"
       ? "Uses the voices that come with this computer."
       : s.tts.provider === "local"
         ? LOCAL_NOTE
-        : keyNote(s, s.tts.provider) || "The text goes to " + (TTS.find((p) => p.id === s.tts.provider)?.name ?? "it") + " to be read.";
+        : keyNote(s, s.tts.provider, "tts") || "The text goes to " + (TTS.find((p) => p.id === s.tts.provider)?.name ?? "it") + " to be read.";
   const codex = s.providers.codex;
   const liveHelp = !s.live.provider
     ? "Choose who does the talking. Live voice then answers out loud as you speak, and your bot does the work."
@@ -332,19 +368,19 @@ export default function VoiceSettings({ state }: { state: State }) {
         : codex.signedIn
           ? "Uses your ChatGPT plan through the Codex app. This is an early Codex feature and may stop working after a Codex update."
           : "Sign in with ChatGPT in Settings › Model providers first."
-      : keyNote(s, s.live.provider) || "Your voice goes straight to " + (LIVE.find((p) => p.id === s.live.provider)?.name.replace(/ key$/, "") ?? "it") + " while live voice is on.";
+      : keyNote(s, s.live.provider, "live") || "Your voice goes straight to " + (LIVE.find((p) => p.id === s.live.provider)?.name.replace(/ key$/, "") ?? "it") + " while live voice is on.";
   const azure = s.providers.azure;
   const sttName = STT.find((provider) => provider.id === s.stt.provider)?.name ?? s.stt.provider;
   const ttsName = TTS.find((provider) => provider.id === s.tts.provider)?.name ?? s.tts.provider;
   const liveName = LIVE.find((provider) => provider.id === (s.live.provider ?? ""))?.name ?? "Off";
   const keyCount = KEYED.filter((provider) => s.providers[provider].hasKey).length;
-  const dictationSummary = keyNote(s, s.stt.provider) || (s.stt.provider === "device" ? "Uses this computer's dictation" : s.stt.language ? "Language " + s.stt.language : "Ready to transcribe");
-  const readingSummary = keyNote(s, s.tts.provider) || (state.settings.readAloud ? "Reads replies aloud" : "Set up, when you need it");
+  const dictationSummary = keyNote(s, s.stt.provider, "stt") || (s.stt.provider === "device" ? "Uses this computer's dictation" : s.stt.language ? "Language " + s.stt.language : "Ready to transcribe");
+  const readingSummary = keyNote(s, s.tts.provider, "tts") || (state.settings.readAloud ? "Reads replies aloud" : "Set up, when you need it");
   const liveSummary = !s.live.provider
     ? "Choose a provider to begin"
     : s.live.provider === "codex" && !codex.signedIn
       ? "Sign in under Model providers"
-      : keyNote(s, s.live.provider) || (liveInput === "ptt" ? "Push to talk" : "Live conversation");
+      : keyNote(s, s.live.provider, "live") || (liveInput === "ptt" ? "Push to talk" : "Live conversation");
   const goKeys = (provider: VoiceKeyProvider) => {
     setKeysFocus(provider);
     setPage("keys");
@@ -392,8 +428,12 @@ export default function VoiceSettings({ state }: { state: State }) {
           empty={null}
           change={(provider) => void change({ stt: { provider: provider as SttProvider } }).catch(() => {})}
         />
-        {keyNote(s, s.stt.provider) && KEYED.includes(s.stt.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.stt.provider as VoiceKeyProvider]} onClick={() => goKeys(s.stt.provider as VoiceKeyProvider)} />}
-        {stt.options.models.length > 0 && <Pick label="Model" value={s.stt.model ?? ""} options={stt.options.models} change={(model) => void change({ stt: { model } }).catch(() => {})} />}
+        {keyNote(s, s.stt.provider, "stt") && KEYED.includes(s.stt.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.stt.provider as VoiceKeyProvider]} onClick={() => goKeys(s.stt.provider as VoiceKeyProvider)} />}
+        {s.stt.provider === "azure" ? (
+          <TypedPick label="Model" value={s.stt.model ?? ""} options={stt.options.models} typing={OTHER_MODEL} change={(model) => change({ stt: { model } })} />
+        ) : (
+          stt.options.models.length > 0 && <Pick label="Model" value={s.stt.model ?? ""} options={stt.options.models} change={(model) => void change({ stt: { model } }).catch(() => {})} />
+        )}
         {s.stt.provider !== "device" && (
           <TextRow label="Language" help="Such as en or en-US. Leave it empty to let the service tell." value={s.stt.language ?? ""} placeholder="Automatic" save={(language) => change({ stt: { language } })} />
         )}
@@ -421,10 +461,20 @@ export default function VoiceSettings({ state }: { state: State }) {
           empty={null}
           change={(provider) => void change({ tts: { provider: provider as TtsProvider } }).catch(() => {})}
         />
-        {keyNote(s, s.tts.provider) && KEYED.includes(s.tts.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.tts.provider as VoiceKeyProvider]} onClick={() => goKeys(s.tts.provider as VoiceKeyProvider)} />}
-        {tts.options.models.length > 0 && <Pick label="Model" value={s.tts.model ?? ""} options={tts.options.models} change={(model) => void change({ tts: { model } }).catch(() => {})} />}
-        {(s.tts.provider === "device" ? deviceVoices : tts.options.voices).length > 0 && (
-          <Pick label="Voice" value={s.tts.voice ?? ""} options={s.tts.provider === "device" ? deviceVoices : tts.options.voices} change={(voice) => void change({ tts: { voice } }).catch(() => {})} />
+        {keyNote(s, s.tts.provider, "tts") && KEYED.includes(s.tts.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.tts.provider as VoiceKeyProvider]} onClick={() => goKeys(s.tts.provider as VoiceKeyProvider)} />}
+        {/* Azure's voices belong to its model, so a new model clears the voice and the voices below are read again for it. */}
+        {s.tts.provider === "azure" ? (
+          <>
+            <TypedPick label="Model" value={s.tts.model ?? ""} options={tts.options.models} typing={OTHER_MODEL} change={(model) => change({ tts: { model, voice: "" } })} />
+            <TypedPick label="Voice" value={s.tts.voice ?? ""} options={tts.options.voices} typing={OTHER_VOICE} change={(voice) => change({ tts: { voice } })} />
+          </>
+        ) : (
+          <>
+            {tts.options.models.length > 0 && <Pick label="Model" value={s.tts.model ?? ""} options={tts.options.models} change={(model) => void change({ tts: { model } }).catch(() => {})} />}
+            {(s.tts.provider === "device" ? deviceVoices : tts.options.voices).length > 0 && (
+              <Pick label="Voice" value={s.tts.voice ?? ""} options={s.tts.provider === "device" ? deviceVoices : tts.options.voices} change={(voice) => void change({ tts: { voice } }).catch(() => {})} />
+            )}
+          </>
         )}
         {tts.error && <p className="set-status error-text voice-inline">{tts.error}</p>}
         <Row label="Speed" help={s.tts.provider === "gemini" ? "Gemini reads at its own speed." : undefined}>
@@ -455,8 +505,13 @@ export default function VoiceSettings({ state }: { state: State }) {
           disabledIds={codex.available ? [] : ["codex"]}
           change={(provider) => void change({ live: { provider: (provider || null) as LiveProvider | null } }).catch(() => {})}
         />
-        {!!s.live.provider && keyNote(s, s.live.provider) && KEYED.includes(s.live.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.live.provider as VoiceKeyProvider]} onClick={() => goKeys(s.live.provider as VoiceKeyProvider)} />}
-        {liveOptions.options.models.length > 0 && <Pick label="Model" value={s.live.model ?? ""} options={liveOptions.options.models} change={(model) => void change({ live: { model } }).catch(() => {})} />}
+        {!!s.live.provider && keyNote(s, s.live.provider, "live") && KEYED.includes(s.live.provider as VoiceKeyProvider) && <SetupButton provider={NAMES[s.live.provider as VoiceKeyProvider]} onClick={() => goKeys(s.live.provider as VoiceKeyProvider)} />}
+        {/* On Azure the model is the realtime deployment's name, so it may be typed. */}
+        {s.live.provider === "azure" ? (
+          <TypedPick label="Model" value={s.live.model ?? ""} options={liveOptions.options.models} typing={OTHER_MODEL} change={(model) => change({ live: { model } })} />
+        ) : (
+          liveOptions.options.models.length > 0 && <Pick label="Model" value={s.live.model ?? ""} options={liveOptions.options.models} change={(model) => void change({ live: { model } }).catch(() => {})} />
+        )}
         {liveOptions.options.voices.length > 0 && <Pick label="Voice" value={s.live.voice ?? ""} options={liveOptions.options.voices} change={(voice) => void change({ live: { voice } }).catch(() => {})} />}
         {liveOptions.error && <p className="set-status error-text voice-inline">{liveOptions.error}</p>}
         <div className="set-row">
@@ -490,7 +545,7 @@ export default function VoiceSettings({ state }: { state: State }) {
             />
           </div>
         </div>
-        <TextRow label="Endpoint" help={azure.kind === "speech" ? "Your resource's address, or leave it empty and give the region." : "Such as https://your-name.openai.azure.com"} value={azure.endpoint ?? ""} wide save={(endpoint) => change({ providers: { azure: { endpoint } } })} />
+        <TextRow label="Endpoint" help={azure.kind === "speech" ? "Your resource's address, or leave it empty and give the region. Live voice needs the address." : "Such as https://your-name.openai.azure.com"} value={azure.endpoint ?? ""} wide save={(endpoint) => change({ providers: { azure: { endpoint } } })} />
         {azure.kind === "speech" && <TextRow label="Region" help="Such as eastus." value={azure.region ?? ""} save={(region) => change({ providers: { azure: { region } } })} />}
         {azure.kind === "openai" && (
           <>

@@ -59,7 +59,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
   const tts = shared ? effectiveTts(shared.tts, own?.tts) : undefined;
   const live = shared ? effectiveLive(shared.live, own?.live) : undefined;
   const stamp = JSON.stringify(shared?.providers ?? null);
-  const ttsOptions = useOptions("tts", tts?.provider ?? null, stamp);
+  const ttsOptions = useOptions("tts", tts?.provider ?? null, stamp, tts?.model ?? "");
   const liveOptions = useOptions("live", live?.provider ?? null, stamp);
   const [speed, setSpeed] = useState(1);
   // The speed is saved a moment after the slider stops: into the bot's voice as it is then, so a
@@ -118,7 +118,7 @@ export default function BotVoiceCard({ bot }: { bot: Bot }) {
         />
         {lackOf("tts", tts.provider) && <small className="muted">This provider {lackOf("tts", tts.provider)}. Set it up in Settings › Voice.</small>}
         {!onComputer && ttsOptions.options.models.length > 0 && (
-          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models} change={(model) => save(unpinIfBare(withSection(own, "tts", { ...(model ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), model: model || undefined }), "tts", shared.tts.provider))} />
+          <Pick label="Model" value={own?.tts?.model ?? ""} empty={none(tts.provider === shared.tts.provider)} items={ttsOptions.options.models.filter((item) => item.id)} change={(model) => save(unpinIfBare(withSection(own, "tts", { ...(model ? { provider: own?.tts?.provider ?? tts.provider ?? undefined } : {}), model: model || undefined }), "tts", shared.tts.provider))} />
         )}
         {(onComputer ? systems : ttsOptions.options.voices).length > 0 && (
           <Pick

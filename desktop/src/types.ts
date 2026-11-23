@@ -1020,7 +1020,8 @@ declare global {
       setVoice(patch: VoicePatch): Promise<DeskVoiceSettings>;
       /** Saves a key (a string) or removes it (null). The answer only says whether one is saved. */
       setVoiceKey(provider: VoiceKeyProvider, key: string | null): Promise<DeskVoiceSettings>;
-      voiceOptions(kind: "stt" | "tts" | "live", provider: string): Promise<VoiceOptions>;
+      /** For Azure, `model` is the model whose voices are wanted ("" is the standard voices); without it, the saved one. */
+      voiceOptions(kind: "stt" | "tts" | "live", provider: string, model?: string): Promise<VoiceOptions>;
       /** A recording from the microphone, as text (not for "This computer"). */
       transcribe(bytes: Uint8Array, format: "wav" | "m4a" | "mp3" | "webm", language?: string): Promise<{ text: string }>;
       /** { device: true }: speak it with the page's own voices. Otherwise the audio, in parts. */
@@ -2024,7 +2025,7 @@ export type BotTemplate = {
 // Voice (capability "voice-v1"), as in the Botkins link (desktop/link/VOICE.md). Keys stay in the main process.
 export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom" | "local";
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
-export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
+export type LiveProvider = "codex" | "openai" | "azure" | "gemini" | "elevenlabs";
 export type VoiceKeyProvider = "openai" | "azure" | "elevenlabs" | "gemini" | "custom";
 /**
  * A voice of a bot's own ("bot-voice-v1"), saved with the bot. Every field is optional: one that is
