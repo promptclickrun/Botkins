@@ -57,7 +57,7 @@ const blockSchema = {
         type: { const: "badges" },
         items: {
           type: "array",
-          items: object({ label: string, tone: { enum: ["neutral", "positive", "warning", "negative", "accent"] } }, ["label"]),
+          items: object({ label: string, tone: { type: "string", enum: ["neutral", "positive", "warning", "negative", "accent"] } }, ["label"]),
         },
       },
       ["type", "items"],
@@ -658,7 +658,7 @@ export class Panels {
           {
             key: string,
             space: string,
-            action: { enum: ["set", "pause", "resume", "remove"] },
+            action: { type: "string", enum: ["set", "pause", "resume", "remove"] },
             cron: string,
             timezone: string,
             prompt: string,
