@@ -442,6 +442,8 @@ export class Gadgets {
     // entry, and only that: a key some phone or computer paired with is not a gadget's to take.
     const same = host.store.data.devices.filter((device) => device.publicKey === publicKey.toString("base64url"));
     if (same.some((device) => device.kind !== "gadget" || device.memberId)) throw new Failure("That key belongs to another paired device.");
+    // What the owner set for it stays: its settings, and its bot unless another is named.
+    const kept = same.at(-1)?.gadget ?? {};
     for (const old of same) host.removeDevice(old.id);
     let device;
     try {
@@ -449,7 +451,7 @@ export class Gadgets {
     } catch (error) {
       throw new Failure(error.message);
     }
-    host.store.setGadget(device.id, { ...(board && { board }), ...(botId && { botId }) });
+    host.store.setGadget(device.id, { ...(kept.settings && { settings: kept.settings }), ...(kept.botId && { botId: kept.botId }), ...(board && { board }), ...(botId && { botId }) });
     host.dirty = true;
     host.changed();
     host.emit("paired", device);
@@ -506,6 +508,7 @@ export class Gadgets {
 
   hello(device, input) {
     this.host.store.setGadget(device.id, cleanHello(input));
+    // The app's own page shows what the gadget reports (its Wi-Fi).
     this.host.emit("status");
     return this.settings(device);
   }
@@ -555,6 +558,7 @@ export class Gadgets {
     this.wifi.set(device.id, [...waiting, { id: randomUUID().slice(0, 12), ...clean, at: Date.now() }]);
     this.host.dirty = true;
     this.host.changed();
+    this.host.emit("status");
     return { queued: true };
   }
   /** Asks the gadget to restart. It says it is restarting, and its sessions come back by themselves. */
@@ -563,6 +567,7 @@ export class Gadgets {
     this.restarts.set(device.id, randomUUID().slice(0, 12));
     this.host.dirty = true;
     this.host.changed();
+    this.host.emit("status");
     return null;
   }
   /** Another bot, another chat, or a new chat with the next thing said. */
@@ -595,6 +600,8 @@ export class Gadgets {
     this.host.store.setGadget(device.id, patch);
     this.host.dirty = true;
     this.host.changed();
+    // The app's own page shows settings changed on the gadget, and Wi-Fi changes and restarts it took.
+    this.host.emit("status");
     return this.settings(device);
   }
 

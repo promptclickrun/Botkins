@@ -396,6 +396,10 @@ test("the owner sets a gadget's volume, microphone and screen from a phone, and 
   await phone.client.call("link.gadgets.configure", intro.deviceId, { botId: "bot-quill" });
   await until(() => gadget.gadget().bot?.id === "bot-quill" && gadget.gadget().chat === null, "the other bot, no chat");
   await assert.rejects(phone.client.call("link.gadgets.configure", intro.deviceId, { botId: "bot-nobody" }), /no longer exists/);
+  // Set up again (its settings erased, or another computer's cable), it keeps what the owner set, and its bot.
+  const again = link.addGadget({ publicKey: device.publicKey });
+  const kept = link.devices().find((item: PairedDevice) => item.id === again.deviceId)!;
+  assert.deepEqual([kept.gadget!.settings!.volume, kept.gadget!.settings!.mic, kept.gadget!.botId], [35, "high", "bot-quill"]);
   for (const each of [gadget, phone]) each.client.stop();
   await link.stop();
 });
