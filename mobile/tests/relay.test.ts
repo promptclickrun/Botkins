@@ -278,6 +278,12 @@ test("quiet follows heartbeat at 25 seconds and renew at four minutes", async (t
     t.mock.timers.tick(ms);
     await new Promise<void>(resolve => setImmediate(resolve));
   };
+  // The computer's own work (its files, its crypto) runs on the real event loop. On a busy machine it
+  // needs more turns than one tick gives it, so wait for it with the mocked clock standing still.
+  const settle = async (done: () => boolean) => {
+    const end = performance.now() + 5000;
+    while (!done() && performance.now() < end) await advance(0);
+  };
   client.start();
   const pushes = () => relay.passed.filter(frame => frame[8] === 7);
   try {
@@ -289,7 +295,10 @@ test("quiet follows heartbeat at 25 seconds and renew at four minutes", async (t
     const first = session.used;
     while (Date.now() < first + 24_999) await advance(Math.min(1000, first + 24_999 - Date.now()));
     assert.equal(pushes().length, 0);
-    for (let i = 0; i < 4; i++) await advance(1);
+    for (let i = 0; i < 4 && !pushes().length; i++) {
+      await advance(1);
+      await settle(() => pushes().length > 0);
+    }
     assert.equal(pushes().length, 1);
     assert.equal(session.used, first + 25_000);
     const body = Buffer.from(pushes()[0]);
@@ -299,7 +308,10 @@ test("quiet follows heartbeat at 25 seconds and renew at four minutes", async (t
     assert.deepEqual(news, { epoch: link.epoch, v: null, parts: {} });
     while (Date.now() < first + 239_999) await advance(Math.min(1000, first + 239_999 - Date.now()));
     assert.equal(relay.requests, initial);
-    for (let i = 0; i < 12; i++) await advance(1);
+    for (let i = 0; i < 12 && relay.requests === initial; i++) {
+      await advance(1);
+      await settle(() => relay.requests > initial);
+    }
     assert.equal(relay.requests, initial + 1);
     assert.equal(link.sessions.size, 1);
     assert.ok(session.follow);
