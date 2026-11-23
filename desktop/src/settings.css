@@ -707,8 +707,10 @@ dialog.bot-sheet .sectionhead {
   min-height: 34px;
 }
 
-/* "Start from a template" popover */
+/* Create a bot start options */
 .template-picker {
+  display: flex;
+  gap: 6px;
   position: relative;
 }
 .template-trigger {
@@ -744,14 +746,6 @@ dialog.bot-sheet .sectionhead {
 }
 .template-section {
   display: grid;
-}
-/* The six built-ins sit in two columns so the whole menu fits without scrolling. */
-.template-section[aria-label="Built-in templates"] {
-  grid-template-columns: 1fr 1fr;
-  column-gap: 2px;
-}
-.template-section[aria-label="Built-in templates"] .template-heading {
-  grid-column: 1 / -1;
 }
 .template-section + .template-section {
   border-top: 1px solid var(--line);
@@ -797,6 +791,7 @@ dialog.bot-sheet .sectionhead {
   font-weight: 600;
 }
 .template-item small {
+  display: block;
   font-size: calc(12px * var(--text-scale));
   white-space: nowrap;
   overflow: hidden;
@@ -819,12 +814,6 @@ dialog.bot-sheet .sectionhead {
 .template-empty {
   padding: 4px 8px 8px;
   font-size: calc(12px * var(--text-scale));
-}
-.template-foot {
-  border-top: 1px solid var(--line);
-  margin-top: 6px;
-  padding: 6px 4px 2px;
-  display: flex;
 }
 
 /* --------------------------------------------------------------- Bot Studio */

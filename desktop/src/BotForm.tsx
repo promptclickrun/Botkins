@@ -1,64 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Bot as BotIcon, ChevronDown, Download, Ellipsis, LayoutTemplate, Plus, Trash2, Upload } from "lucide-react";
 import { BotStudio } from "./BotStudio";
 import { BotAvatar } from "./Avatar";
 import { freshLook } from "./botkins";
-import type { BotLook, BotTemplate, ImportableAgent, MarketAgentTemplate } from "./types";
+import type { BotLook, BotTemplate, ImportableAgent, MarketAgent, MarketAgentTemplate, State } from "./types";
+import { supportsAgentTemplates } from "./MarketAgents";
+import { errorText } from "./SettingsRows";
 import "./agents.css";
 import "./settings.css";
 import "./botpage.css";
 
-type Template = {
-  name: string;
-  role: string;
-  instructions: string;
-  /** The character that suits it. The same choices as the phone app. */
-  look: BotLook;
-};
-export const templates: Template[] = [
-  {
-    name: "Writer",
-    role: "Writing partner",
-    instructions:
-      "Help me draft, edit and tighten writing. Match my voice, keep it plain and concise, and point out anything unclear.",
-    look: { head: "muse", palette: "original" },
-  },
-  {
-    name: "Researcher",
-    role: "Research assistant",
-    instructions:
-      "Find and summarize reliable information. Cite your sources, separate facts from guesses, and say when you are unsure.",
-    look: { head: "fathom", palette: "original" },
-  },
-  {
-    name: "Coder",
-    role: "Coding partner",
-    instructions:
-      "Help me write, review and debug code. Read the existing code first, keep changes small, and explain the trade-offs.",
-    look: { head: "tinker", palette: "original" },
-  },
-  {
-    name: "Planner",
-    role: "Planning and priorities",
-    instructions:
-      "Turn goals into clear plans with next steps, owners and dates. Keep lists short and flag risks early.",
-    look: { head: "beacon", palette: "original" },
-  },
-  {
-    name: "Tutor",
-    role: "Patient tutor",
-    instructions:
-      "Teach step by step. Check what I already know, use examples, and ask a short question to confirm I understood.",
-    look: { head: "wicket", palette: "original" },
-  },
-  {
-    name: "Analyst",
-    role: "Data analyst",
-    instructions:
-      "Analyze data and numbers. Show your method, state assumptions, and summarize the result in one or two sentences first.",
-    look: { head: "spool", palette: "original" },
-  },
-];
+type Picker = "templates" | "import" | undefined;
 
 /** The Create a bot sheet. Calls `created` with the new bot's id. */
 export default function BotForm({
@@ -68,6 +20,7 @@ export default function BotForm({
   saved = [],
   agents: given,
   taken,
+  remote,
   start,
 }: {
   created: (id: string) => void;
@@ -80,6 +33,7 @@ export default function BotForm({
   agents?: ImportableAgent[];
   /** The looks of the bots there already are, so the new bot starts as a character few of them have. */
   taken?: (BotLook | undefined)[];
+  remote?: State["remote"];
   /** An agent template from Marketplace › Agents to start from: the form opens filled in from it. */
   start?: MarketAgentTemplate;
 }) {
@@ -95,7 +49,6 @@ export default function BotForm({
   const agent = agents.find((a) => a.key === agentKey);
   const [look, setLook] = useState<BotLook>(() => start?.look ?? freshLook(taken));
   const [studio, setStudio] = useState(false);
-  const [template, setTemplate] = useState<Template>();
   const [mine, setMine] = useState<string>();
   /** The marketplace template the form was filled from, until another start is chosen. */
   const [market, setMarket] = useState(start);
@@ -104,33 +57,31 @@ export default function BotForm({
   const [summary, setSummary] = useState(start?.summary ?? "");
   const [instructions, setInstructions] = useState(start?.instructions ?? "");
   const [busy, setBusy] = useState(false);
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState<Picker>();
   const chosen = saved.find((t) => t.id === mine);
-  function use(t: Template) {
-    setMarket(undefined);
-    setTemplate(t);
+  function useMarket(t: MarketAgentTemplate) {
+    setMarket(t);
     setMine(undefined);
     setAgentKey(undefined);
+    setName(t.name);
     setRole(t.role);
-    setSummary("");
+    setSummary(t.summary);
     setInstructions(t.instructions);
-    setLook(t.look);
-    setPicking(false);
+    setLook(t.look ?? freshLook(taken));
+    setPicking(undefined);
   }
   function useAgent(a: ImportableAgent) {
     setMarket(undefined);
-    setTemplate(undefined);
     setMine(undefined);
     setAgentKey(a.key);
     setName(a.name);
     setRole(a.role);
     setSummary(a.summary);
     setInstructions(a.instructions);
-    setPicking(false);
+    setPicking(undefined);
   }
   function useMine(t: BotTemplate) {
     setMarket(undefined);
-    setTemplate(undefined);
     setMine(t.id);
     setAgentKey(undefined);
     setName(t.name);
@@ -138,7 +89,7 @@ export default function BotForm({
     setSummary(t.summary ?? "");
     setInstructions(t.instructions);
     if (t.look) setLook(t.look);
-    setPicking(false);
+    setPicking(undefined);
   }
   async function importOne() {
     try {
@@ -151,7 +102,6 @@ export default function BotForm({
       fail(e);
     }
   }
-  const current = template?.name ?? chosen?.name;
   return (
     <form
       className="botform"
@@ -179,13 +129,12 @@ export default function BotForm({
         <TemplateMenu
           open={picking}
           setOpen={setPicking}
-          current={agent ? "Agent: " + agent.name : market ? "Marketplace: " + market.name : current && "Template: " + current}
-          template={template}
+          remote={remote}
           mine={mine}
           saved={saved}
           agents={agents}
           agentKey={agentKey}
-          use={use}
+          useMarket={useMarket}
           useMine={useMine}
           useAgent={useAgent}
           importOne={() => void importOne()}
@@ -236,7 +185,7 @@ export default function BotForm({
               maxLength={48}
               required
               autoFocus
-              placeholder={template?.name ?? "e.g. Nova"}
+              placeholder="e.g. Nova"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -304,33 +253,29 @@ export default function BotForm({
   );
 }
 
-/** "Start from a template": a popover with the built-ins, the person's own templates and Import…. */
 function TemplateMenu({
   open,
   setOpen,
-  current,
-  template,
+  remote,
   mine,
   saved,
   agents,
   agentKey,
-  use,
+  useMarket,
   useMine,
   useAgent,
   importOne,
   forget,
   exportOne,
 }: {
-  open: boolean;
-  setOpen: (v: boolean) => void;
-  /** The trigger's label once something is chosen. */
-  current?: string;
-  template?: Template;
+  open: Picker;
+  setOpen: (value: Picker) => void;
+  remote?: State["remote"];
   mine?: string;
   saved: BotTemplate[];
   agents: ImportableAgent[];
   agentKey?: string;
-  use: (t: Template) => void;
+  useMarket: (t: MarketAgentTemplate) => void;
   useMine: (t: BotTemplate) => void;
   useAgent: (a: ImportableAgent) => void;
   importOne: () => void;
@@ -340,12 +285,10 @@ function TemplateMenu({
   const box = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState("");
   useEffect(() => {
-    if (!open) {
-      setMenu("");
-      return;
-    }
+    setMenu("");
+    if (!open) return;
     const away = (e: MouseEvent) => {
-      if (!box.current?.contains(e.target as Node)) setOpen(false);
+      if (!box.current?.contains(e.target as Node)) setOpen(undefined);
     };
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
@@ -361,8 +304,8 @@ function TemplateMenu({
           e.stopPropagation();
           if (menu) setMenu("");
           else {
-            setOpen(false);
-            box.current?.querySelector<HTMLElement>(".template-trigger")?.focus();
+            setOpen(undefined);
+            box.current?.querySelector<HTMLElement>('.template-trigger[aria-expanded="true"]')?.focus();
           }
         }
       }}
@@ -371,34 +314,21 @@ function TemplateMenu({
         type="button"
         className="template-trigger"
         aria-haspopup="true"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        aria-expanded={open === "templates"}
+        onClick={() => setOpen(open === "templates" ? undefined : "templates")}
       >
         <LayoutTemplate size={15} />
-        {current || "Start from a template"}
+        Start from template
         <ChevronDown size={14} />
       </button>
-      {open && (
+      <button type="button" className="template-trigger" aria-haspopup="true" aria-expanded={open === "import"} onClick={() => setOpen(open === "import" ? undefined : "import")}>
+        <Upload size={15} /> Import <ChevronDown size={14} />
+      </button>
+      {open === "import" && (
         <div className="template-pop">
-          <div className="template-section" role="group" aria-label="Built-in templates">
-            <span className="template-heading">Built-in</span>
-            {templates.map((t) => (
-              <button
-                type="button"
-                key={t.name}
-                className="template-item"
-                aria-label={t.name}
-                aria-pressed={template === t}
-                onClick={() => use(t)}
-              >
-                <BotAvatar look={t.look} size={32} />
-                <span>
-                  <strong>{t.name}</strong>
-                  <small>{t.role}</small>
-                </span>
-              </button>
-            ))}
-          </div>
+          <button type="button" className="set-button" onClick={importOne}>
+            <Upload size={14} /> Import from file…
+          </button>
           {[...new Set(agents.map((a) => a.providerName))].map((provider) => (
             <div key={provider} className="template-section" role="group" aria-label={"Your " + provider + " agents"}>
               <span className="template-heading">Your {provider} agents</span>
@@ -422,6 +352,16 @@ function TemplateMenu({
               ))}
             </div>
           ))}
+        </div>
+      )}
+      {open === "templates" && (
+        <div className="template-pop">
+          <div className="template-section" role="group" aria-label="Marketplace templates">
+            <span className="template-heading">Marketplace</span>
+            {supportsAgentTemplates(remote) ? <MarketTemplates key={remote?.using?.id} pick={useMarket} /> : (
+              <p className="set-status"><strong>Agents need an update</strong><br />Update the app on your computer to see agent templates here.</p>
+            )}
+          </div>
           <div className="template-section" role="group" aria-label="Your templates">
             <span className="template-heading">Your templates</span>
             {saved.map((t) => (
@@ -438,6 +378,7 @@ function TemplateMenu({
                   <span>
                     <strong>{t.name}</strong>
                     <small>{t.source === "imported" ? "Imported · " + t.role : t.role}</small>
+                    {t.summary && <small>{t.summary}</small>}
                   </span>
                 </button>
                 <button
@@ -481,13 +422,35 @@ function TemplateMenu({
               <small className="template-empty">Save a bot as a template from its page, or import one someone shared.</small>
             )}
           </div>
-          <div className="template-foot">
-            <button type="button" className="set-button" onClick={importOne}>
-              <Upload size={14} /> Import…
-            </button>
-          </div>
         </div>
       )}
     </div>
   );
+}
+
+function MarketTemplates({ pick }: { pick: (template: MarketAgentTemplate) => void }) {
+  const [agents, setAgents] = useState<MarketAgent[]>();
+  const [id, setId] = useState("");
+  const [error, setError] = useState("");
+  const [tries, setTries] = useState(0);
+  const apply = useEffectEvent(pick);
+  useEffect(() => {
+    let live = true;
+    setError("");
+    const read = id
+      ? window.botkins["agents.template"](id).then((t) => live && apply(t))
+      : window.botkins["agents.browse"]({}).then((page) => live && setAgents(page.agents));
+    read.catch((e) => live && setError(errorText(e)));
+    return () => { live = false; };
+  }, [id, tries]);
+
+  if (error) return <p className="set-status error-text" role="alert">{error} <button type="button" className="set-link" onClick={() => setTries(tries + 1)}>Retry</button></p>;
+  if (!agents || id) return <p className="set-status">{id ? "Reading the template…" : "Loading agents…"}</p>;
+  if (!agents.length) return <p className="template-empty">No agent templates yet</p>;
+  return agents.map((t) => (
+    <button key={t.id} type="button" className="template-item" onClick={() => setId(t.id)}>
+      <BotAvatar look={t.look} size={32} />
+      <span><strong>{t.name}</strong><small>{t.role}</small>{t.summary && <small>{t.summary}</small>}</span>
+    </button>
+  ));
 }
