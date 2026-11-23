@@ -152,6 +152,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/index" />
               <Stack.Screen name="settings/desktop" />
               <Stack.Screen name="settings/computers" />
+              <Stack.Screen name="settings/gadget/[id]" />
               <Stack.Screen name="settings/tabs" />
               <Stack.Screen name="settings/appearance" />
               <Stack.Screen name="settings/approvals" />
