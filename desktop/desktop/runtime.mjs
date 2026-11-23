@@ -1005,7 +1005,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     voiceSettings: () => voiceDesk.settings(),
     setVoice: (patch) => voiceDesk.set(patch),
     setVoiceKey: (provider, key) => voiceDesk.setKey(provider, key),
-    voiceOptions: (kind, provider) => voiceDesk.options(kind, provider),
+    voiceOptions: (kind, provider, model) => voiceDesk.options(kind, provider, model),
     transcribe: (bytes, format, language) => voiceDesk.transcribe(bytes, format, language),
     speak: (text, options) => voiceDesk.speak(text, options ?? {}),
     startDictation: () => voiceDesk.startDictation(),

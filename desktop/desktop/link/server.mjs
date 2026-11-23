@@ -300,7 +300,7 @@ export class LinkHost extends EventEmitter {
         if (args[1] !== null && (typeof args[1] !== "string" || !args[1] || args[1].length > 4000)) throw new Failure("That isn't a key.");
         this.voice.setKey(args[0], args[1]);
       },
-      "link.voice.options": (_session, a) => this.voice.options(a[0], a[1]),
+      "link.voice.options": (_session, a) => this.voice.options(a[0], a[1], a[2]),
       "link.voice.transcribe": async (_session, a) => {
         const audio = Buffer.from(String(a[0]?.audio ?? ""), "base64");
         if (!audio.length) throw new Failure("There was nothing to hear.");
