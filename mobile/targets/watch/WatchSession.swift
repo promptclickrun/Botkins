@@ -141,7 +141,50 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     activeSessionId = id
     inputSequence = 0
     outputSequence = 0
-    let engine = WatchVoiceEngine(
+    var recovering = false
+    while true {
+      let engine = makeEngine(sessionId: id)
+      self.engine = engine
+      var stage = "configuring audio"
+      do {
+        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default)
+        stage = "activating audio"
+        try await WatchVoiceEngine.activate()
+        guard self.engine === engine else { throw CancellationError() }
+        stage = "starting the microphone"
+        try engine.start(inputRate: inputRate, outputRate: outputRate, voiceProcessing: !recovering)
+        localVoice = WatchVoice(
+          status: snapshot.voice.sessionId == id ? snapshot.voice.status : "connecting",
+          sessionId: id,
+          chatId: snapshot.voice.chatId,
+          muted: snapshot.voice.muted,
+          push: snapshot.voice.push,
+          problem: nil,
+          level: 0
+        )
+        return ["sessionId": id, "microphoneReady": true]
+      } catch {
+        guard self.engine === engine else { return ["sessionId": id, "problem": "The Watch call ended."] }
+        let cause = error as NSError
+        if cause.watchAudioServiceDied && !recovering {
+          // Give the audio service time to return, then rebuild without the optional voice processor.
+          recovering = true
+          engine.stop()
+          try? await Task.sleep(for: .milliseconds(300))
+          guard self.engine === engine else { return ["sessionId": id, "problem": "The Watch call ended."] }
+          if !Task.isCancelled { continue }
+        }
+        let reason = cause.watchAudioServiceDied
+          ? "Watch audio stopped while \(stage) (-308). Try voice again."
+          : "Watch microphone failed while \(stage). \(cause.localizedDescription)"
+        stopAudio(reason)
+        return ["sessionId": id, "problem": reason]
+      }
+    }
+  }
+
+  private func makeEngine(sessionId id: String) -> WatchVoiceEngine {
+    WatchVoiceEngine(
       sendFrame: { [weak self] pcm, rate in
         Task { @MainActor in self?.sendAudio(pcm, rate: rate, sessionId: id) }
       },
@@ -152,27 +195,6 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
         Task { @MainActor in self?.audioInterrupted(began, shouldResume: shouldResume, sessionId: id) }
       }
     )
-    self.engine = engine
-    do {
-      try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default)
-      try await WatchVoiceEngine.activate()
-      guard self.engine === engine else { throw CancellationError() }
-      try engine.start(inputRate: inputRate, outputRate: outputRate)
-      localVoice = WatchVoice(
-        status: snapshot.voice.sessionId == id ? snapshot.voice.status : "connecting",
-        sessionId: id,
-        chatId: snapshot.voice.chatId,
-        muted: snapshot.voice.muted,
-        push: snapshot.voice.push,
-        problem: nil,
-        level: 0
-      )
-      return ["sessionId": id, "microphoneReady": true]
-    } catch {
-      let reason = "Watch microphone could not start. " + error.localizedDescription
-      if self.engine === engine { stopAudio(reason) }
-      return ["sessionId": id, "problem": reason]
-    }
   }
 
   private func stopAudio(_ reason: String?) {
