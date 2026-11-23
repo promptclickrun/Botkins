@@ -12,6 +12,7 @@
 // to `console()` and print what it returns. gadget/docs/contract.md has every rule.
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -169,6 +170,14 @@ class Gadget {
   void adopt(const Introduction& introduction);
   void forget_link();
   void upload(Link& link, const std::string& take, std::vector<int16_t> rest, bool last, bool cancel);
+  void apply_settings(const Json& part);
+  void send_settings();
+  void ensure_faces();
+  void fetch_face(Link& link, const std::string& look);
+  void apply_wifi(Link& link, const std::vector<Json>& changes);
+  void load_networks();
+  void save_networks();
+  Json wifi_report();
   void read_aloud(Link& link, const std::string& reply, int parts, uint32_t quiet);
   bool wait(int ms);
 
@@ -184,6 +193,13 @@ class Gadget {
   std::shared_ptr<Link> link_;
   uint32_t generation_ = 0;  // goes up when the introduction changes
   std::deque<Job> jobs_;
+  std::string face_look_;  // the set of faces the computer names; fetched one pose at a time
+  bool fetching_face_ = false;
+  Json settings_unsent_ = Json::object();  // changed on the gadget, not yet taken by the computer
+  int settings_sending_ = 0;
+  std::vector<std::pair<std::string, std::string>> networks_;  // saved Wi-Fi networks, most recent first
+  size_t network_at_ = 0;  // the one being joined
+  std::atomic<bool> report_wifi_{false};
 
   // What the sync thread holds of the computer's state. Its own: no lock.
   Json have_ = Json::object();
@@ -191,6 +207,9 @@ class Gadget {
   size_t stream_units_ = 0, thinking_units_ = 0;
   bool greeted_ = false, first_part_ = true;
   std::string unreachable_;  // the sentence on show about not reaching the computer, while it is
+  std::string restart_seen_;  // the restart the owner asked for, once it was taken
+  std::vector<std::string> wifi_taken_;  // Wi-Fi changes taken, until the computer stops sending them
+  std::chrono::steady_clock::time_point switched_at_{};  // when another saved network was last tried
   std::vector<std::pair<std::string, std::string>> bots_;
   std::string bot_id_;
 

@@ -37,6 +37,8 @@ struct Network {
   /** "off", "joining", "on" or "failed". */
   virtual const char* state() = 0;
   virtual std::string address() = 0;
+  /** The signal of the network in use, in dBm (-30 is strong, -85 weak). 0 when it isn't known. */
+  virtual int signal() { return 0; }
 };
 
 /** The speaker: 16-bit mono samples. `write` returns when they are queued to play, so it paces the reader. */

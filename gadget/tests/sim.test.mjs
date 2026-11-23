@@ -156,6 +156,44 @@ test("a gadget is set up over its USB port, talks, listens, reads replies aloud,
   for (let i = 0; i < first.pcm.length; i += 2) peak = Math.max(peak, Math.abs(first.pcm.readInt16LE(i)));
   assert.ok(peak > 6500 && peak <= 8000, "the samples are the tone, peak " + peak);
 
+  // The bot's Botkin arrives in every pose, from the computer's design kit.
+  await until(() => sim.view.faces === 7 && !!sim.view.look, "the Botkin's seven faces");
+  // A working turn counted its steps, for the halo's arc.
+  assert.ok(sim.views.some((view) => view.steps > 0), "the steps of the turn reached the gadget");
+
+  // Settings from the owner's page reach the gadget; the gadget's own reach the page.
+  assert.deepEqual(sim.view.settings, { volume: 60, mic: "normal", mute: false, brightness: 80, dimAfter: 30, offAfter: 300 });
+  link.configureGadget(listed.id, { volume: 25, brightness: 50 });
+  await until(() => sim.view.settings.volume === 25 && sim.view.settings.brightness === 50, "the owner's settings on the gadget");
+  await sim.ask({ do: "settings", mute: true });
+  await until(() => link.status().devices.find((device) => device.id === listed.id).gadget.settings?.mute === true, "the gadget's mute on the computer");
+  assert.equal(sim.view.settings.volume, 25, "the computer's answer kept the volume");
+  // Muted, holding talk says so and sends nothing.
+  heard.length = 0;
+  sim.send("hear " + join(dir, "nothing.wav"));
+  writeFileSync(join(dir, "short.wav"), wavFromPcm(tone(1, 16000), 16000));
+  sim.send("hear " + join(dir, "short.wav"));
+  await until(() => /microphone is off/.test(sim.view.notice ?? ""), "the microphone is off");
+  assert.equal(heard.length, 0);
+  await sim.ask({ do: "settings", mute: false });
+  await until(() => link.status().devices.find((device) => device.id === listed.id).gadget.settings?.mute === false, "unmuted");
+  // Kept across a restart (below): the gadget's own copy.
+  assert.match(readFileSync(join(dir, "settings.txt"), "utf8"), /"volume":25/);
+
+  // A Wi-Fi network from the owner's page: saved on the gadget, and the page sees it by name.
+  link.gadgetWifi(listed.id, { add: { ssid: "Cabin", password: "pine-needles-9" } });
+  await until(() => (link.status().devices.find((device) => device.id === listed.id).gadget.wifi?.saved ?? []).includes("Cabin"), "the network saved on the gadget");
+  assert.equal(link.devices().find((device) => device.id === listed.id).gadget.wifiWaiting, undefined);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "wifi.txt"), "utf8")).networks.map((network) => network.ssid), ["Cabin"]);
+  assert.ok(!sim.lines.some((line) => line.includes("pine-needles-9")), "the password is in no line the gadget printed");
+  link.gadgetWifi(listed.id, { forget: "Cabin" });
+  await until(() => !existsSync(join(dir, "wifi.txt")), "the network forgotten");
+
+  // A restart from the owner's page: the gadget says it is restarting, and the page stops waiting.
+  link.restartGadget(listed.id);
+  await until(() => sim.lines.includes("restart"), "the gadget restarting");
+  await until(() => !link.devices().find((device) => device.id === listed.id).gadget.restarting, "the restart taken");
+
   // A recording: it goes up in pieces while it is made, and is heard once.
   const recording = join(dir, "question.wav");
   writeFileSync(recording, wavFromPcm(tone(2, 16000), 16000));
