@@ -20,6 +20,11 @@
 //   BOTKINS_DEV_GADGET=<serial port>      set a gadget up over that USB port at the start (gadget/docs/contract.md);
 //                                         BOTKINS_DEV_WIFI_SSID and BOTKINS_DEV_WIFI_PASSWORD give it a network.
 //                                         In this console: gadget <serial port> [network name] [password]
+//                                         and, for the paired gadget, as its owner's page would:
+//                                           gadget show
+//                                           gadget set volume=30 mic=high mute=true brightness=50 dimAfter=10 offAfter=60 botId=bot-quill
+//                                           gadget wifi add <network> [password] | gadget wifi forget <network>
+//                                           gadget restart
 // The pairing link is also written to <dir>/pairing-url.txt for scripts and simulators.
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -113,6 +118,25 @@ backend.updates.onRestart = async () => {
 host.setName(process.env.BOTKINS_DEV_NAME ?? "Demo Mac");
 if (process.env.BOTKINS_DEV_VOICE === "mac") host.voice.set({ stt: { provider: "local" }, tts: { provider: "local" } });
 
+/** The owner's page for the paired gadget, as console lines: what a phone's Settings › Devices does. */
+function gadgetCommand(what, words) {
+  const gadget = host.devices().find((device) => device.kind === "gadget");
+  if (!gadget) return console.log("Gadget        none is paired with this demo computer.");
+  try {
+    if (what === "set") {
+      const patch = Object.fromEntries(words.map((word) => word.split("=")).map(([key, value]) => [key, value === "true" ? true : value === "false" ? false : /^-?\d+$/.test(value ?? "") ? Number(value) : value]));
+      host.configureGadget(gadget.id, patch);
+    } else if (what === "wifi") {
+      const [verb, ssid, ...password] = words;
+      host.gadgetWifi(gadget.id, verb === "add" ? { add: { ssid, password: password.join(" ") } } : { forget: ssid });
+    } else if (what === "restart") host.restartGadget(gadget.id);
+    const now = host.devices().find((device) => device.id === gadget.id);
+    console.log("Gadget        " + now.name + (now.connected ? " (connected) " : " (not connected) ") + JSON.stringify({ ...now.gadget, ...(now.gadget.wifiWaiting && { wifiWaiting: now.gadget.wifiWaiting }) }));
+  } catch (error) {
+    console.log("Gadget        " + error.message);
+  }
+}
+
 /** Sets a gadget up over a USB port: reads its key, names it to this demo computer, and hands it the answer. */
 async function setUpGadget(port, wifi) {
   let io;
@@ -197,6 +221,7 @@ host.on("joinRequest", (request) => {
 const input = createInterface({ input: process.stdin, output: process.stdout });
 input.on("line", (line) => {
   const [action, id = latestRequest?.id, ...more] = line.trim().split(/\s+/);
+  if (action === "gadget" && ["show", "set", "wifi", "restart"].includes(id)) return gadgetCommand(id, more);
   if (action === "gadget") {
     if (!id) return console.log("Type: gadget <serial port> [network name] [password]");
     return void setUpGadget(id, more.length ? { ssid: more[0], password: more.slice(1).join(" ") } : undefined);
