@@ -8,11 +8,12 @@ export function providerBadge(provider: ProviderStatus): { label: string; tone: 
   if (provider.starting) return { label: "Starting…", tone: "info" };
   if (provider.error) return { label: "Problem", tone: "danger" };
   if (provider.connected) return { label: "Connected", tone: "success" };
+  if (provider.signIn === "key") return { label: "Not set up", tone: "accent" };
   return { label: "Sign in", tone: "accent" };
 }
 
 /** The line under a provider's name: who is signed in, else what to do. */
 export function providerLine(provider: ProviderStatus) {
   if (provider.connected && (provider.account || provider.plan)) return [provider.account, provider.plan].filter(Boolean).join(" · ");
-  return provider.error ?? provider.message ?? provider.description;
+  return provider.error ?? provider.keyed?.needs ?? provider.message ?? provider.description;
 }

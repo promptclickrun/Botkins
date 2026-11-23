@@ -17,11 +17,13 @@ export type ProviderAction =
   | { kind: "token" } // a pasted token is the only way from here
   | { kind: "computer" } // a computer without the capability: finish on the computer
   | { kind: "services" } // its model services, one by one
+  | { kind: "key" } // an API key and its settings, on its page ("keyed-providers-v1")
   | { kind: "none" };
 
 export function providerAction(provider: ProviderStatus, capable: boolean): ProviderAction {
   if (!provider.installed) return capable && provider.install?.command ? { kind: "install" } : { kind: "install-guide" };
   if (provider.signIn === "services") return { kind: "services" };
+  if (provider.signIn === "key") return { kind: "key" };
   if (provider.connected) return { kind: "none" };
   const ways = capable ? provider.signInWays : undefined;
   if (ways?.guided) return { kind: "signin", token: ways.token };

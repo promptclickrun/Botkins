@@ -1629,7 +1629,7 @@ export type ProviderStatus = {
   plan?: string;
   /** What to do next when something is missing. */
   message?: string;
-  /** "browser": signIn(id) opens a sign-in page. "services": the person connects model services (providerServices). */
+  /** "browser": signIn(id) opens a sign-in page. "services": the person connects model services (providerServices). "key": an API key and the settings in `keyed`. */
   signIn: "browser" | "services" | "key" | null;
   /** signOut(id) can remove the sign-in. */
   signOut: boolean;
