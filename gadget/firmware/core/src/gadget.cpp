@@ -29,7 +29,9 @@ std::string reply_line(const Json& json) { return std::string(kMark) + json.dump
 Json args(Json one) { return Json::array().push(std::move(one)); }
 }  // namespace
 
-Gadget::Gadget(Board board) : board_(std::move(board)) {}
+Gadget::Gadget(Board board) : board_(std::move(board)) {
+  if (board_.socket) relay_.reset(new RelayTransport(*board_.transport, board_.socket));
+}
 Gadget::~Gadget() { stop(); }
 
 void Gadget::begin() {
@@ -101,7 +103,8 @@ std::shared_ptr<Link> Gadget::link(uint32_t* generation) {
   if (generation) *generation = generation_;
   if (!intro_.valid()) return nullptr;
   if (!link_) {
-    link_ = std::make_shared<Link>(*board_.transport, keys_, intro_);
+    link_ = std::make_shared<Link>(relay_ ? *relay_ : *board_.transport, keys_, intro_);
+    link_->probe_ms = board_.relay_probe_ms;
     // The computer's addresses as it gives them are kept: this is how a computer that moved is found again.
     // A link from before another setup says nothing about the computer held now.
     const uint32_t mine = generation_;
@@ -221,6 +224,9 @@ void Gadget::sync_loop() {
       if (result.ok()) greeted_ = true;
     }
     if (greeted_) {
+      // Through the relay, now and then: is the computer's own address back? This thread waits for news
+      // anyway, so a look that finds nobody costs no one.
+      link->probe();
       Json request = Json::object().set("epoch", epoch_).set("have", have_).set("wait", 25000);
       if (!chat_id_.empty()) {
         request.set("watch", Json::array().push(chat_id_));
@@ -258,11 +264,14 @@ void Gadget::sync_loop() {
       // means its Botkins is closed, or it is on another network.
       if (result.error == Link::Error::Offline && failures == kTriesBeforeTelling) {
         std::string computer;
+        bool relay = false;
         {
           std::lock_guard<std::mutex> lock(mutex_);
           computer = intro_.name.empty() ? "your computer" : intro_.name;
+          for (const auto& host : intro_.hosts) relay = relay || (relay_ && host.compare(0, 6, "relay!") == 0);
         }
-        unreachable_ = "Can't reach " + computer + ". Check that Botkins is open there, on the same Wi-Fi.";
+        // Through its relay a computer is reached from any network: "the same Wi-Fi" is then not what to check.
+        unreachable_ = "Can't reach " + computer + (relay ? ". Check that Botkins is open there." : ". Check that Botkins is open there, on the same Wi-Fi.");
         notice(unreachable_);
       }
       if (!wait(ms)) break;

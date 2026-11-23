@@ -8,7 +8,12 @@ namespace botkins {
 namespace {
 const char* kPrefix = "/botkins/v1/";
 const int kHelloMs = 3000;
+// A direct address gets little time when the relay is there to take over (the phone's 1.5 s).
+const int kQuickHelloMs = 1500;
+// The relay's first request may have to open its socket first (TLS, on a board).
+const int kRelayHelloMs = 8000;
 const int kSessionMs = 10000;
+const int kProbeMaxMs = 10 * 60 * 1000;
 const size_t kMaxHosts = 8;
 
 bool is_relay(const std::string& host) { return host.rfind("relay!", 0) == 0; }
@@ -51,12 +56,16 @@ void Link::reset() {
   has_session_ = false;
 }
 
-Link::Error Link::open_at(const std::string& host) {
-  // Who is there: the computer this gadget was introduced to, or nobody it talks to.
-  HttpResponse hello = transport_.request(host, "GET", std::string(kPrefix) + "hello", {}, "", kHelloMs);
+/** Who is there: the computer this gadget was introduced to, or nobody it talks to. */
+bool Link::answers(const std::string& host, int hello_ms) {
+  HttpResponse hello = transport_.request(host, "GET", std::string(kPrefix) + "hello", {}, "", hello_ms);
   Json said;
-  if (hello.status != 200 || !Json::parse(hello.body, said)) return Error::Offline;
-  if (said["serverId"].str() != intro_.server_id || said["publicKey"].str() != intro_.server_key) return Error::Offline;
+  if (hello.status != 200 || !Json::parse(hello.body, said)) return false;
+  return said["serverId"].str() == intro_.server_id && said["publicKey"].str() == intro_.server_key;
+}
+
+Link::Error Link::open_at(const std::string& host, int hello_ms) {
+  if (!answers(host, hello_ms)) return Error::Offline;
 
   KeyPair eph = new_key_pair();
   uint8_t nonce[16];
@@ -93,12 +102,27 @@ Link::Error Link::open_at(const std::string& host) {
     has_session_ = !session_.id.empty();
     epoch_ = ok["epoch"].str();
     // The address that just worked stays first; the computer's current ones follow, then the ones held.
-    std::vector<std::string> hosts{host};
-    auto add = [&hosts](const std::string& item) {
-      if (!item.empty() && item.size() < 200 && hosts.size() < kMaxHosts && std::find(hosts.begin(), hosts.end(), item) == hosts.end()) hosts.push_back(item);
+    // The computer's current relay entry replaces older ones (its room changes with its relay key).
+    std::vector<std::string> current, hosts{host};
+    for (const Json& item : ok["hosts"].items()) current.push_back(item.str());
+    const bool relay_now = std::any_of(current.begin(), current.end(), is_relay);
+    auto add = [&](const std::string& item) {
+      if (relay_now && is_relay(item) && item != host && std::find(current.begin(), current.end(), item) == current.end()) return;
+      if (!item.empty() && item.size() < 200 && std::find(hosts.begin(), hosts.end(), item) == hosts.end()) hosts.push_back(item);
     };
-    for (const Json& item : ok["hosts"].items()) add(item.str());
+    for (const auto& item : current) add(item);
     for (const auto& item : intro_.hosts) add(item);
+    // A computer with many addresses must not push its relay entry out of the few kept.
+    if (hosts.size() > kMaxHosts) {
+      auto relay = std::find_if(hosts.begin(), hosts.end(), is_relay);
+      const std::string kept = relay == hosts.end() ? "" : *relay;
+      hosts.resize(kMaxHosts);
+      if (!kept.empty() && std::none_of(hosts.begin(), hosts.end(), is_relay)) hosts.back() = kept;
+    }
+    if (is_relay(host)) {
+      probe_wait_ = probe_ms;
+      probe_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(probe_wait_);
+    }
     if (hosts != intro_.hosts) {
       intro_.hosts = hosts;
       changed = hosts;
@@ -120,13 +144,40 @@ Link::Error Link::open_session() {
     hosts = intro_.hosts;
   }
   if (!has_device_key_) return Error::Removed;
-  for (const auto& host : hosts) {
-    // The relay's socket is not built yet: a gadget is reached on the computer's own network (or a tailnet).
-    if (is_relay(host)) continue;
-    Error error = open_at(host);
+  // As the phone does: the computer's own addresses first, and the relay only when none of them answered.
+  std::vector<std::string> direct, relays;
+  for (const auto& host : hosts) (is_relay(host) ? relays : direct).push_back(host);
+  if (!transport_.relays()) relays.clear();
+  for (const auto& host : direct) {
+    Error error = open_at(host, relays.empty() ? kHelloMs : kQuickHelloMs);
+    if (error != Error::Offline) return error;
+  }
+  for (const auto& host : relays) {
+    Error error = open_at(host, kRelayHelloMs);
     if (error != Error::Offline) return error;
   }
   return Error::Offline;
+}
+
+void Link::probe() {
+  std::vector<std::string> direct;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    if (!has_session_ || !is_relay(session_.host) || now < probe_at_) return;
+    probe_wait_ = probe_wait_ < kProbeMaxMs / 2 ? probe_wait_ * 2 : kProbeMaxMs;
+    probe_at_ = now + std::chrono::milliseconds(probe_wait_);
+    for (const auto& host : intro_.hosts)
+      if (!is_relay(host)) direct.push_back(host);
+  }
+  for (const auto& host : direct) {
+    if (!answers(host, kQuickHelloMs)) continue;
+    // Home again. A call waiting on the relay keeps its session; the next call opens one here (and if
+    // that fails, the relay is tried again in the same look).
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (has_session_ && is_relay(session_.host)) has_session_ = false;
+    return;
+  }
 }
 
 Link::Result Link::call(const std::string& method, const Json& args, int timeout_ms) {

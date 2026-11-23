@@ -26,6 +26,7 @@
 
 #include "botkins/hal.hpp"
 #include "botkins/link.hpp"
+#include "botkins/relay.hpp"
 
 namespace botkins {
 
@@ -50,6 +51,13 @@ struct Board {
   bool screen_round = false;
   /** Restarts the board, when the owner asks for it from the Botkins app. Null: a restart is refused. */
   std::function<void()> restart;
+  /**
+   * Makes a WebSocket (hal.hpp), for reaching the computer through its relay when none of its own
+   * addresses answers. Null on a board without one: the relay's entry is skipped.
+   */
+  std::function<std::unique_ptr<Socket>()> socket;
+  /** While on the relay, how soon the computer's own addresses are asked again; it doubles each time, to 10 minutes. */
+  int relay_probe_ms = 30000;
 };
 
 /** The poses a gadget's Botkin takes. The computer draws each from the bot's own look. */
@@ -182,6 +190,8 @@ class Gadget {
   bool wait(int ms);
 
   Board board_;
+  /** The board's transport with the relay in front of it, when the board can open a WebSocket. Outlives every Link. */
+  std::unique_ptr<RelayTransport> relay_;
   KeyPair keys_{};
   std::atomic<bool> running_{false};
   std::thread sync_thread_, work_thread_;
