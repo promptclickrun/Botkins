@@ -18,7 +18,11 @@
 
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "sdkconfig.h"
 #include "esp_heap_caps.h"
+#if CONFIG_HEAP_TASK_TRACKING
+#include "esp_heap_task_info.h"
+#endif
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "freertos/FreeRTOS.h"
@@ -68,6 +72,7 @@ void handle(const std::string& line) {
   // Lines of the port's own, for measuring: "heap", "heap reset", "tasks" and "socket <url> [subprotocol|-] [first message]".
   if (line == "heap") log_heap("asked");
   else if (line == "tasks") log_tasks();
+  else if (line == "heap tasks") log_heap_tasks();
   else if (line.compare(0, 7, "socket ") == 0) probe_socket(line.substr(7));
   else if (line == "heap reset") {
     heap_reset();
@@ -154,6 +159,40 @@ void log_tasks() {
     ESP_LOGI(TAG, "task %-16s least stack left %5u bytes (%s)", task.pcTaskName, (unsigned)task.usStackHighWaterMark,
              esp_ptr_external_ram(task.pxStackBase) ? "psram" : "internal");
   }
+}
+
+void log_heap_tasks() {
+#if CONFIG_HEAP_TASK_TRACKING
+  // What each task holds of internal RAM now, and the most it ever held (since it started). A build
+  // turns this on for measuring only (CONFIG_HEAP_TASK_TRACKING, with CONFIG_HEAP_TRACK_DELETED_TASKS
+  // for the tasks that are gone): it costs a little on every allocation. The tables go in PSRAM.
+  const size_t kTasks = 48, kHeaps = 256;
+  auto* tasks = static_cast<task_stat_t*>(heap_caps_calloc(kTasks, sizeof(task_stat_t), MALLOC_CAP_SPIRAM));
+  auto* heaps = static_cast<heap_stat_t*>(heap_caps_calloc(kHeaps, sizeof(heap_stat_t), MALLOC_CAP_SPIRAM));
+  heap_all_tasks_stat_t all = {};
+  all.task_count = kTasks;
+  all.stat_arr = tasks;
+  all.heap_count = kHeaps;
+  all.heap_stat_start = heaps;
+  if (tasks && heaps && heap_caps_get_all_task_stat(&all) == ESP_OK) {
+    for (size_t i = 0; i < kTasks && (tasks[i].handle || tasks[i].name[0]); i++) {
+      size_t now = 0, most = 0;
+      for (size_t h = 0; tasks[i].heap_stat && h < tasks[i].heap_count; h++) {
+        const heap_stat_t& heap = tasks[i].heap_stat[h];
+        if (!(heap.caps & MALLOC_CAP_INTERNAL) || (heap.caps & MALLOC_CAP_SPIRAM)) continue;
+        now += heap.current_usage;
+        most += heap.peak_usage;
+      }
+      if (most) ESP_LOGI(TAG, "heap task %-16s internal now %6u, most %6u%s", tasks[i].name, (unsigned)now, (unsigned)most, tasks[i].is_alive ? "" : " (ended)");
+    }
+  } else {
+    ESP_LOGW(TAG, "heap tasks: no statistics");
+  }
+  heap_caps_free(tasks);
+  heap_caps_free(heaps);
+#else
+  ESP_LOGI(TAG, "heap tasks: this build doesn't track the heap by task (CONFIG_HEAP_TASK_TRACKING)");
+#endif
 }
 
 void start_console(botkins::Gadget& gadget) {

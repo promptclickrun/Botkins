@@ -21,7 +21,7 @@ idf.py -p /dev/cu.usbmodemXXXX monitor
 
 The partition table keeps `nvs` at 0x9000 (0x6000), where earlier firmware kept the Wi-Fi network: on its first start the gadget adopts a network the Hermes Gadget firmware saved (namespace `hgadget`, read only) when it has none of its own. Two 4 MB app slots follow.
 
-The USB console carries the boot log and the setup protocol (`../../docs/contract.md`, "Setup over USB"). The board has lines of its own (below), and the port three more: `heap` logs free internal RAM and PSRAM (now, least since `heap reset`, least since boot: the heap's own minimum, which no short dip escapes), `heap reset`, and `socket <url> [subprotocol|-] [first message]` ("The WebSocket", below).
+The USB console carries the boot log and the setup protocol (`../../docs/contract.md`, "Setup over USB"). The board has lines of its own (below), and the port more: `heap` logs free internal RAM and PSRAM (now, least since `heap reset`, least since boot: the heap's own minimum, which no short dip escapes), `heap reset`, `tasks` (each task's least stack left since it started, and whether its stack is internal RAM or PSRAM), `heap tasks` (each task's internal RAM now and the most it held; only in a build with `CONFIG_HEAP_TASK_TRACKING`, and `CONFIG_HEAP_TRACK_DELETED_TASKS` for tasks that ended, which slows every allocation: for measuring only), and `socket <url> [subprotocol|-] [first message]` ("The WebSocket", below).
 
 ## The WebSocket
 
@@ -35,7 +35,7 @@ The USB console carries the boot log and the setup protocol (`../../docs/contrac
 - Sends take a lock of their own (`CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK`), not the one the client's task reads under: the core may hold the socket's task for a while in a message (live voice waits there for room to play), and a send from another thread must not wait for it.
 - The upgrade request is built in the transport's buffer, which is 4 KB (`CONFIG_WS_BUFFER_SIZE`, freed once open), so a long token fits. The log names an address without its query, so a token never shows.
 
-Memory (`sdkconfig.defaults`, the board's): mbedTLS allocates in PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`), so a TLS connection's 16 KB in and 4 KB out buffers and its handshake are not in internal RAM; the client's two 20 KB buffers are in PSRAM too (over `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`). What stays internal is the client's task (an 8 KB stack, of which a TLS handshake and its messages used 3.8 KB) and its small parts: an open socket holds about 14 KB of internal RAM, and about 20 KB at the moment it opens. Each socket logs, as it opens, the time it took (DNS, TCP, TLS and the upgrade) and the memory free; as it closes, the least stack its task had left.
+Memory (`sdkconfig.defaults`, the board's): allocations over 4 KB go to PSRAM (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096`; drivers that need DMA ask for internal RAM themselves). mbedTLS allocates in PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`), so a TLS connection's 16 KB in and 4 KB out buffers and its handshake are not in internal RAM; the client's two 20 KB buffers are in PSRAM too. What stays internal is the client's task (an 8 KB stack, of which a TLS handshake and its messages used 3.8 KB) and its small parts: an open socket holds about 14 KB of internal RAM, and about 20 KB at the moment it opens. Each socket logs, as it opens, the time it took (DNS, TCP, TLS and the upgrade) and the memory free; as it closes, the least stack its task had left.
 
 `socket <url> [subprotocol|-] [first message]` on the console opens one socket there, on a thread of its own (its stack in PSRAM), and logs each step: DNS, TCP and the TLS handshake alone (`esp_tls`, the bundle), the WebSocket's open or why it didn't open (`HTTP 400`, a TLS error), the first message or the server's close (its code and words), with the memory at each step. With `-`, no subprotocol is offered. Measured on the StopWatch (Wi-Fi at -38 dBm):
 
@@ -50,7 +50,18 @@ Memory (`sdkconfig.defaults`, the board's): mbedTLS allocates in PSRAM (`CONFIG_
 | internal RAM, least since boot, online through the relay | 60.5–60.9 KB (the boot's first sync and the faces drawn ahead, with the relay socket open; 71–73 KB on the computer's own network) |
 | PSRAM free, relay socket open | 5.0–5.1 MB (least 4.57 MB) |
 
-A live turn adds the core's live thread (a 16 KB stack in internal RAM, `main.cpp`'s thread settings) to the second socket, while it is open.
+A live session adds the core's live thread and the second socket while it is open. The board makes the thread (`Board::thread` in `main.cpp`): a 10 KB stack in internal RAM, since a call on it may save the computer's addresses to flash, which a task with its stack in PSRAM must not do. A session with `ask_bot` used 4.1 KB of it. When the session ends the gadget's worker joins the thread, so its stack is freed then rather than at the next press. Measured on the StopWatch, paired with a computer through the relay, live voice through Gemini, a spoken request that Gemini hands to the bot with `ask_bot`:
+
+| | |
+| --- | --- |
+| internal RAM free, idle on the relay | 104–108 KB |
+| a live session open, between turns | 78–87 KB |
+| least during the turn | 76 KB |
+| after the session ended | 97.9 KB (the console's `listen` hold keeps its 6 KB stack until the next `listen`) |
+
+Before, with allocations up to 16 KB in internal RAM and 16 KB stacks for the live and hold threads, the least during such a turn was 18–28 KB. `heap tasks` showed why: the live thread's own buffers (the session's setup, each 100 ms of the microphone as base64 and as JSON) are 4–16 KB each, and it held up to 31 KB of internal RAM at once. With 4 KB, that was 18 KB, nearly all in PSRAM.
+
+Gemini ends a session itself after about 2 minutes with nothing sent (close code 1008, "Session closed due to client inactivity"), before the gadget's own 3 minutes. The gadget sees its socket close, and the next press opens another session.
 
 `main/main.cpp` sets `SocketTransport::max_answer` to 512 KiB: a 32,000-byte speak slice is about 43 KB sealed, and a sync answer can carry a long reply's whole text; anything over 16 KB is allocated in PSRAM.
 

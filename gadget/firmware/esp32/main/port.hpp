@@ -55,6 +55,8 @@ void start_console(botkins::Gadget& gadget);
 void log_heap(const char* when);
 /** The console's `tasks`: each task's least stack left since it started, and whether its stack is internal RAM or PSRAM. */
 void log_tasks();
+/** The console's `heap tasks`: each task's internal RAM, now and the most since it started; only in a build with CONFIG_HEAP_TASK_TRACKING. */
+void log_heap_tasks();
 /** The console's `heap reset`: the least free memory counts again from now (the least since boot is kept). */
 void heap_reset();
 /** The least free memory with `caps` (MALLOC_CAP_INTERNAL or MALLOC_CAP_SPIRAM) since boot. */
