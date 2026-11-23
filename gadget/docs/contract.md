@@ -137,7 +137,7 @@ A gadget starts a live session as a phone does: `link.voice.live({ chatId, botId
 
 All of it is in `mobile/link-host/server.mjs` and `crypto.mjs`. This is the part a gadget needs.
 
-- **Transport**: HTTP/1.1 to `http://<host>:<port>/botkins/v1/…`. The default port is 47610. No TLS: every message is sealed by the link. Away from the computer's network, the same requests go over the relay's socket (`mobile/relay/README.md`, "Wire format"; the gadget uses the phone's side, `botkins.phone.v1`, which does need TLS).
+- **Transport**: HTTP/1.1 to `http://<host>:<port>/botkins/v1/…`. The default port is 47610. No TLS: every message is sealed by the link. Away from the computer's network, the same requests go over the relay's socket ("Through the relay" below; the gadget uses the phone's side, `botkins.phone.v1`, which does need TLS).
 - **Text forms**: keys, nonces and boxes are base64url without padding. JSON is UTF-8.
 - **Primitives**: X25519; HKDF-SHA256 with 32 bytes out; ChaCha20-Poly1305 (IETF, 12-byte nonce, 16-byte tag after the ciphertext).
 - **A box** is `base64url(nonce(12, random) + seal(key, nonce, JSON, aad))`.
@@ -166,8 +166,8 @@ toPhone = HKDF(master, salt, "botkins/s2c/v1")
 
 - `403 { "error": "unknown_device" }`: the gadget was removed. Say so ("This gadget was removed. Set it up again to use it."), keep the introduction, and ask again every half minute. Do not erase anything: this answer is not sealed, so any device on the network could give it, and it must not be able to make a gadget forget its computer. Setup replaces the introduction.
 - `403 { "error": "bad_session" }`, `429`: wait and try again; do not forget anything.
-- Nobody answering at any address: wait and try again, 0.4 s growing to 15 s. After the second try, tell the person what to check ("Can't reach Demo Mac. Check that Botkins is open there, on the same Wi-Fi."), and take that sentence away once the computer answers.
-- `hosts` are the computer's addresses now, best first, with a `relay!<room>@<host>` entry when the relay is on. Keep them in flash: this is how a gadget finds a computer whose address changed.
+- Nobody answering at any address: wait and try again, 0.4 s growing to 15 s. After the second try, tell the person what to check ("Can't reach Demo Mac. Check that Botkins is open there, on the same Wi-Fi.", without "on the same Wi-Fi" when the gadget can use a relay entry), and take that sentence away once the computer answers.
+- `hosts` are the computer's addresses now, best first, with a `relay!<room>@<host>` entry when the relay is on. Keep them in flash: this is how a gadget finds a computer whose address changed. Keep at most 8, and never cut the relay entry to make room; the computer's current relay entry replaces older ones.
 - A new `epoch` means the computer's app restarted: forget the versions held (`have`) and every text cursor.
 
 **A call.** Calls are numbered from 1 in each session, and each number is used once:
@@ -195,6 +195,31 @@ answer     { "epoch": epoch, "v": versions | null, "parts": { name: value, … }
 - `wait` is how long the computer may hold the call for news, in milliseconds (30,000 at most). Give the request itself 15 seconds more.
 - `appends` is `{ [chatId]: { id, stream, thinking } }`: the text id held and how many UTF-16 units of each body. `{}` asks from the start. A part `text:<chatId>` is `{ id, stream: { from, add }, thinking: { from, add } }`, or `null` when there is no text. Append `add` at `from`; an `id` or `from` that does not fit what is held means start over from `{}`.
 - One `link.sync` waits at a time. Other calls go beside it on the same session, on a second connection.
+
+**Through the relay.** A computer with its relay on names it in `hosts`: `relay!<room>@<relay host[:port]>`, a 43-character room. An introduction may hold nothing else (a computer that is reachable only through its relay, such as a server in the cloud). The gadget speaks the phone's side of the relay, exactly as `mobile/src/link/relay.ts` does (`mobile/relay/README.md`, "Wire format", has the whole protocol):
+
+- **Which address.** The computer's own addresses first, each given 1.5 s for its `hello` when there is a relay to fall back on (3 s when there is not); the relay only when none of them answered, with 8 s for its `hello` (its socket may have to open first). The session stays where it was opened. While it goes through the relay, the gadget asks the computer's own addresses again before a `link.sync` now and then (after 30 s, doubling to 10 minutes): when one answers as this computer, the next call opens a session there.
+- **The socket.** `wss://<relay host[:port]>/v1/room/<room>` (`ws://` only for `127.0.0.1`, `localhost` and `[::1]`), subprotocol `botkins.phone.v1`, which the relay must choose. One socket carries every request, the waiting `link.sync` and the other calls side by side. 8 s to open it. After it failed to open, requests fail at once for 1 s, doubling to 15 s, so a relay that is down is not hammered.
+- **A request** is one binary message: `[0x01][id u32][route u8][n u8][session: n bytes][body…]`. `route` stands for the method and the path: 1 `hello` (GET), 2 `pair`, 3 `session`, 4 `rpc`, 5 `join` (POST). `session` is the `x-botkins-session` header of an `rpc` call (empty otherwise, at most 255 printable ASCII bytes); no other header goes along. `body` is the HTTP body. Numbers are big-endian. Each id is used once on a socket (the relay remembers answered ones): count up from 0, skipping one still waiting.
+- **What comes back.** `[0x02][id u32][status u16][body…]` is the HTTP answer. `[0x03][id u32]`: no computer is connected, the request was not passed on: as an address that didn't answer. `[0x05]`: the computer left the relay: everything waiting fails as unanswered (the socket stays). `[0x07][id u32]…` is a follow part, sent only for a call that asked to be followed: a gadget asks for none and drops it. An answer for an id given up on is dropped.
+- **Keeping it alive.** While a request waits, send the text `ping` every 25 s; the relay answers `pong`. A socket that has heard nothing 10 s after a ping is dead: what waited on it fails, and the next request opens a new one. A socket with nothing waiting for 30 s is not trusted again: the next request opens a new one. A socket the relay closes (it restarted, or 4008: a ninth socket from the same network took this one's place) fails what waited on it, the same way.
+- **Limits.** The relay closes a phone socket that sends more than 6 MiB + 64 KiB (1009), and a computer's answer may be up to 8 MiB; a gadget takes answers up to its own limit (1 MiB on the host, the transport's `max_answer`), and a longer message closes its socket. A held `link.sync` is well inside the relay's five-minute request lifetime. Over the relay the computer gathers a sync's news every 250 ms.
+
+**What a board needs for it** (`firmware/core/include/botkins/hal.hpp`): a `Socket`, made by `Board::socket`. A board without one skips the relay entry.
+
+```cpp
+struct Socket {
+  struct Events {
+    std::function<void(const uint8_t* data, size_t size, bool binary)> message;  // whole messages, from the socket's thread
+    std::function<void(int code)> closed;  // ended without close(): the close code, or 0
+  };
+  virtual bool open(const std::string& url, const std::string& protocol, int timeout_ms, size_t max_message, Events events) = 0;
+  virtual bool send(const uint8_t* data, size_t size, bool binary) = 0;  // any thread, also two at once
+  virtual void close() = 0;  // not from inside an event; no event after it returns
+};
+```
+
+The core's `RelayTransport` (`firmware/core/src/relay.cpp`) does the rest: it wraps the board's own `Transport`, so a port changes nothing else. It starts no thread: the requests that wait take turns at the keep-alive. Memory: a copy of each request while it is sent (7 bytes and its session more than the body), and each answer once; the socket's own buffers are the board's.
 
 ## Setup over USB
 
@@ -237,4 +262,5 @@ Setup over Bluetooth carries the same objects. It is not built yet.
 ## What was checked, and what was not
 
 - `mobile/tests/gadget.test.ts` runs a gadget's key through the phone's own link client against the demo computer: introduction, the two parts, a typed turn, a recording in pieces, samples back at another rate, a request answered on the gadget, and each refusal.
+- `gadget/tests/relay.test.mjs` runs the compiled core through the real relay (`mobile/relay/node/server.mjs`, over `ws://` on the same computer) with an introduction that names only the relay: a typed turn, its reply read aloud, the faces, a setting from the owner, the relay restarting, the computer's link turned off and on, and the move to the direct address once it answers. The relay over `wss://` on a board (TLS, the certificate bundle) was not tried here.
 - Speech providers: asking each provider for samples (`samples: true` in `voice.mjs`: OpenAI and Azure OpenAI `response_format: "wav"`, Azure Speech `riff-24khz-16bit-mono-pcm`, ElevenLabs `output_format=pcm_24000`) was not tried with a real key. The local model and Gemini already answer with WAV.
