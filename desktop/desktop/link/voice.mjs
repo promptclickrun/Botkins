@@ -18,7 +18,7 @@ import { Failure } from "./tools.mjs";
 
 export const STT_PROVIDERS = ["device", "openai", "azure", "elevenlabs", "custom", "local"];
 export const TTS_PROVIDERS = ["device", "openai", "azure", "elevenlabs", "gemini", "custom", "local"];
-export const LIVE_PROVIDERS = ["codex", "openai", "gemini", "elevenlabs"];
+export const LIVE_PROVIDERS = ["codex", "openai", "azure", "gemini", "elevenlabs"];
 export const KEY_PROVIDERS = ["openai", "azure", "elevenlabs", "gemini", "custom"];
 
 export const MAX_SPEAK = 4000;
@@ -71,7 +71,37 @@ const ELEVEN_STT = pick(["scribe_v2", "scribe_v3", "scribe_v2_medical"]);
 const GEMINI_TTS = pick(["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-pro-preview-tts"]);
 const GEMINI_LIVE = pick(["gemini-3.8-live", "gemini-3.8-live-extended-thinking", "gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-preview-12-2025"]);
 
+// Azure Speech. The standard voices need no model; a model is a way of saying a voice ("en-US-Harper:MAI-Voice-2.1").
+const AZURE_STT = [
+  { id: "", name: "Azure Transcribe (standard)" },
+  { id: "MAI-Transcribe-2", name: "MAI-Transcribe-2 (preview)" },
+  { id: "MAI-Transcribe-1.5", name: "MAI-Transcribe-1.5 (preview)" },
+];
+const AZURE_STANDARD = "Standard neural voices";
+/** The text-to-speech models offered even when the voice list names none of them (a region may not list them). */
+const AZURE_TTS_MODELS = ["MAI-Voice-2.1", "MAI-Voice-2.1-Flash"];
+/** What the voice list says when Azure can't be asked: the voices the MAI-Voice page documents, by locale. */
+const MAI_VOICES = {
+  "en-US": ["Ethan", "Grant", "Harper", "Iris", "Jasper", "Olivia", "Sage"],
+  "en-GB": ["Emily", "Harry"],
+  "en-AU": ["Isla"],
+  "en-IN": ["Dhruv", "Priya"],
+  "de-DE": ["Grant", "Harper", "Klaus", "Mia"],
+  "es-ES": ["Marta"],
+  "es-MX": ["Alejo", "Grant", "Harper", "Valeria"],
+  "fr-FR": ["Grant", "Harper", "Marc", "Soleil"],
+  "hi-IN": ["Arjun", "Dhruv", "Grant", "Harper", "Kavya", "Priya"],
+  "it-IT": ["Grant", "Harper", "Luca", "Rosa"],
+  "pt-BR": ["Caio", "Luana", "Pedro", "Rafael"],
+  "ko-KR": ["Haena", "Harper", "Junho"],
+  "zh-CN": ["Bo", "Lan", "Mei", "Wei"],
+};
+const AZURE_LIVE = pick(["MAI-Realtime-1", "gpt-realtime", "gpt-realtime-mini"], { "MAI-Realtime-1": "MAI-Realtime-1 (limited preview)" });
+
 const DEFAULTS = {
+  azureLive: "MAI-Realtime-1",
+  azureLiveVoice: "marin",
+  azureTranscribe: "whisper-1",
   openai: { stt: "gpt-transcribe", tts: "gpt-4o-mini-tts", ttsVoice: "marin", live: "gpt-realtime-2.1", liveVoice: "marin" },
   custom: { stt: "whisper-1", tts: "tts-1", ttsVoice: "alloy" },
   azureOpenaiVoice: "alloy",
@@ -230,6 +260,54 @@ function address(value, before, label, { plainOk = false } = {}) {
 const LANGUAGE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,199}$/;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+/** A model or deployment of Azure's: a name, up to 64 letters, digits, - _ or . */
+const AZURE_MODEL = SLUG;
+
+/** The `:model` part of an Azure voice name ("en-US-Harper:MAI-Voice-2.1"), or "". */
+const modelOf = (voice) => (voice.includes(":") ? voice.slice(voice.indexOf(":") + 1) : "");
+const baseOf = (voice) => (voice.includes(":") ? voice.slice(0, voice.indexOf(":")) : voice);
+const localeOfVoice = (voice) => baseOf(voice).split("-").slice(0, 2).join("-");
+
+/** Azure's voices for a model from the documented table, as the list would give them. */
+function maiVoices(model) {
+  return Object.entries(MAI_VOICES).flatMap(([locale, names]) => names.map((name) => ({ id: `${locale}-${name}:${model}`, name, language: locale })));
+}
+
+/** Newest MAI voice model first ("MAI-Voice-2.1", "MAI-Voice-2.1-Flash", "MAI-Voice-2", "MAI-Voice-2-Flash"), then the others by name. */
+function byModel(a, b) {
+  const parse = (id) => {
+    const found = /^MAI-Voice-(\d+(?:\.\d+)*)(-.*)?$/i.exec(id);
+    return found ? { version: found[1].split(".").map(Number), flash: !!found[2] } : null;
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (x && y) {
+    for (let i = 0; i < Math.max(x.version.length, y.version.length); i++) {
+      const diff = (y.version[i] ?? 0) - (x.version[i] ?? 0);
+      if (diff) return diff;
+    }
+    return Number(x.flash) - Number(y.flash) || a.localeCompare(b);
+  }
+  return x ? -1 : y ? 1 : a.localeCompare(b);
+}
+
+/**
+ * The name Azure is asked to speak with for a chosen model. A voice that already names this model is
+ * kept; a plain MAI voice name gets the model added; a voice of another model, or a standard neural
+ * voice, is replaced by the model's first documented voice for the same language.
+ */
+function azureVoiceName(voice, model, language) {
+  if (!model) return voice ?? DEFAULTS.azureSpeechVoice;
+  if (voice) {
+    const named = modelOf(voice);
+    if (named.toLowerCase() === model.toLowerCase()) return voice;
+    if (!named && !/neural$/i.test(voice)) return voice + ":" + model;
+  }
+  const locale = voice ? localeOfVoice(voice) : language || "en-US";
+  const table = Object.keys(MAI_VOICES);
+  const at = table.includes(locale) ? locale : (table.find((l) => l.split("-")[0] === locale.split("-")[0]) ?? "en-US");
+  return `${at}-${MAI_VOICES[at][0]}:${model}`;
+}
 
 // ── A voice of a bot's own ──────────────────────────────────────────────────────────────────────
 // A bot may keep a voice of its own (`bot.voice`, saved with the bot by the app; "bot-voice-v1"):
@@ -500,7 +578,8 @@ export class Voice {
       const changed = provider !== before.provider;
       const next = { provider };
       const keep = (key) => (changed && given[key] === undefined ? undefined : before[key]);
-      const model = text(given.model, keep("model"), 200, "model", NAME);
+      // An Azure model is a name typed or chosen (a deployment, or MAI-Voice-2.1): a short plain one.
+      const model = provider === "azure" ? text(given.model, keep("model"), 64, "model", AZURE_MODEL) : text(given.model, keep("model"), 200, "model", NAME);
       if (model !== undefined) next.model = model;
       if (section === "stt") {
         const language = text(given.language, before.language, 20, "language", LANGUAGE);
@@ -621,7 +700,7 @@ export class Voice {
    * One request with a time limit. A failure becomes one plain sentence: the provider, the HTTP
    * status and its own short message. Keys, tokens, the request and the audio never appear in it.
    */
-  async send(provider, url, init, { list = false, secrets = [] } = {}) {
+  async send(provider, url, init, { list = false, secrets = [], limited } = {}) {
     const label = NAMES[provider];
     const signal = AbortSignal.any([AbortSignal.timeout(list ? this.timeouts.list : this.timeouts.request), this.abort.signal]);
     let response;
@@ -633,6 +712,8 @@ export class Voice {
       throw new Failure("Couldn't reach " + label + ".");
     }
     if (response.ok) return response;
+    // A provider that is holding requests back (a preview's quota) says so in a sentence of its own.
+    if (response.status === 429 && limited) throw new Failure(limited);
     let body = "";
     try {
       body = await response.text();
@@ -674,10 +755,12 @@ export class Voice {
     if (!base) throw new Failure("Add the address of your speech server in Settings › Voice first.");
     return base;
   }
-  azure(need) {
+  /** `model` is the one chosen for Azure OpenAI audio: it names the deployment, in place of the saved one. */
+  azure(need, model) {
     const azure = this.data.providers.azure;
     if (need === "openai-stt" || need === "openai-tts") {
-      const deployment = need === "openai-stt" ? azure.sttDeployment : azure.ttsDeployment;
+      if (model && !AZURE_MODEL.test(model)) throw new Failure("That model isn't valid.");
+      const deployment = model || (need === "openai-stt" ? azure.sttDeployment : azure.ttsDeployment);
       if (!azure.endpoint || !deployment) throw new Failure("Add your Azure endpoint and " + (need === "openai-stt" ? "speech to text" : "text to speech") + " deployment in Settings › Voice first.");
       return { base: `${azure.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/audio/${need === "openai-stt" ? "transcriptions" : "speech"}`, deployment, version: azure.apiVersion ?? AZURE_API_VERSION };
     }
@@ -689,6 +772,12 @@ export class Voice {
       tts: `https://${azure.region}.tts.speech.microsoft.com/cognitiveservices/v1`,
       voices: `https://${azure.region}.tts.speech.microsoft.com/cognitiveservices/voices/list`,
     };
+  }
+  /** Where live voice goes on Azure: the resource's OpenAI-compatible address. A Speech setup with only a region has none. */
+  azureLive() {
+    const { endpoint } = this.data.providers.azure;
+    if (!endpoint) throw new Failure("Add your Azure resource endpoint in Settings › Voice to use live voice.");
+    return endpoint + "/openai/v1";
   }
   local(need) {
     const local = this.helpers().local;
@@ -745,20 +834,25 @@ export class Voice {
     } else if (provider === "azure") {
       const key = this.keyOf("azure");
       if (this.data.providers.azure.kind === "openai") {
-        const { base, deployment, version } = this.azure("openai-stt");
+        const { base, deployment, version } = this.azure("openai-stt", model);
         const form = new FormData();
         form.append("file", file(), "audio." + format);
-        form.append("model", model ?? deployment);
+        form.append("model", deployment);
         if (lang) form.append("language", iso(lang));
         result = await this.json("azure", `${base}?api-version=${encodeURIComponent(version)}`, { method: "POST", headers: { "api-key": key }, body: form }, { secrets: [key] });
       } else {
         const { stt } = this.azure("speech");
+        if (model && !AZURE_MODEL.test(model)) throw new Failure("That model isn't valid.");
         const form = new FormData();
         form.append("audio", file(), "audio." + format);
-        form.append("definition", JSON.stringify({ locales: lang ? [lang] : [] }));
+        // A model (MAI-Transcribe-2) is asked for in enhanced mode; with none the standard transcription runs as before.
+        // A locale is a hint, and with none the service tells the language itself.
+        const definition = model ? { enhancedMode: { enabled: true, model }, ...(lang && { locales: [lang] }) } : { locales: lang ? [lang] : [] };
+        form.append("definition", JSON.stringify(definition));
         const answer = await this.json("azure", `${stt}?api-version=${AZURE_FAST_VERSION}`, { method: "POST", headers: { "Ocp-Apim-Subscription-Key": key }, body: form }, { secrets: [key] });
-        const phrases = Array.isArray(answer?.combinedPhrases) ? answer.combinedPhrases.map((p) => (typeof p?.text === "string" ? p.text : "")).filter(Boolean) : [];
-        result = { text: phrases.join(" ") };
+        const said = (list) => (Array.isArray(list) ? list.map((p) => (typeof p?.text === "string" ? p.text : "")).filter(Boolean) : []);
+        const combined = said(answer?.combinedPhrases);
+        result = { text: (combined.length ? combined : said(answer?.phrases)).join(" ") };
       }
     } else if (provider === "elevenlabs") {
       const key = this.keyOf("elevenlabs");
@@ -818,19 +912,23 @@ export class Voice {
     if (provider === "azure") {
       const key = this.keyOf("azure");
       if (this.data.providers.azure.kind === "openai") {
-        const { base, deployment, version } = this.azure("openai-tts");
-        const body = { model: model ?? deployment, input, voice: who ?? DEFAULTS.azureOpenaiVoice, response_format: samples ? "wav" : "mp3" };
+        const { base, deployment, version } = this.azure("openai-tts", model);
+        const body = { model: deployment, input, voice: who ?? DEFAULTS.azureOpenaiVoice, response_format: samples ? "wav" : "mp3" };
         if (rate !== 1) body.speed = rate;
         const audio = await this.bytes("azure", `${base}?api-version=${encodeURIComponent(version)}`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) }, { secrets: [key] });
         return { audio, format: sniff(audio) ?? "mp3" };
       }
       const { tts } = this.azure("speech");
-      const name = who ?? DEFAULTS.azureSpeechVoice;
-      const locale = name.split("-").slice(0, 2).join("-");
+      if (model && !AZURE_MODEL.test(model)) throw new Failure("That model isn't valid.");
+      const name = azureVoiceName(who, model, this.data.stt.language);
+      const locale = localeOfVoice(name);
       const spoken = rate === 1 ? xml(input) : `<prosody rate="${rate}">${xml(input)}</prosody>`;
       const ssml = `<speak version='1.0' xml:lang='${xml(locale)}'><voice xml:lang='${xml(locale)}' name='${xml(name)}'>${spoken}</voice></speak>`;
       const headers = { "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": samples ? "riff-24khz-16bit-mono-pcm" : "audio-24khz-96kbitrate-mono-mp3", "User-Agent": "Botkins" };
-      const audio = await this.bytes("azure", tts, { method: "POST", headers, body: ssml }, { secrets: [key] });
+      const limited = /:MAI-|^MAI-/i.test(name)
+        ? "Azure is limiting requests for this voice right now (429). MAI voices are in preview: check your resource's quota, or try again later."
+        : "Azure is limiting requests right now (429). Try again later.";
+      const audio = await this.bytes("azure", tts, { method: "POST", headers, body: ssml }, { secrets: [key], limited });
       return { audio, format: sniff(audio) ?? "mp3" };
     }
     if (provider === "elevenlabs") {
@@ -870,19 +968,29 @@ export class Voice {
 
   // ── Models and voices ───────────────────────────────────────────────────────────────────────
 
-  /** kind: stt, tts or live. Returns { models, voices }; a provider's own lists are kept for 5 minutes. */
-  async options(kind, provider) {
+  /**
+   * kind: stt, tts or live. Returns { models, voices }; a provider's own lists are kept for 5 minutes.
+   * `model` is the one whose voices are wanted (Azure's voices belong to a model; "" is the standard
+   * ones). Without it the saved model of that provider is used.
+   */
+  async options(kind, provider, model) {
     const allowed = { stt: STT_PROVIDERS, tts: TTS_PROVIDERS, live: LIVE_PROVIDERS }[kind];
     if (!allowed) throw new Failure("That isn't a kind of voice.");
     if (!allowed.includes(provider)) throw new Failure("That provider doesn't do " + { stt: "speech to text", tts: "text to speech", live: "live voice" }[kind] + ".");
-    const stamp = JSON.stringify([kind, provider, this.data.providers, provider in this.data.keys]);
+    let chosen = "";
+    if (provider === "azure") {
+      if (model != null && (typeof model !== "string" || (model !== "" && !AZURE_MODEL.test(model)))) throw new Failure("That model isn't valid.");
+      const saved = this.data[kind];
+      chosen = model ?? (saved.provider === provider ? (saved.model ?? "") : "");
+    }
+    const stamp = JSON.stringify([kind, provider, chosen, this.data.providers, provider in this.data.keys]);
     const cached = this.cache.get(stamp);
     if (cached && this.now() - cached.at < CACHE_MS) return structuredClone(cached.value);
-    const value = await this.lists(kind, provider);
+    const value = await this.lists(kind, provider, chosen);
     this.cache.set(stamp, { at: this.now(), value });
     return structuredClone(value);
   }
-  async lists(kind, provider) {
+  async lists(kind, provider, model = "") {
     const none = { models: [], voices: [] };
     if (provider === "device") return none;
     if (provider === "codex") {
@@ -914,20 +1022,26 @@ export class Voice {
     }
     if (provider === "azure") {
       const azure = this.data.providers.azure;
+      // Live voice speaks the OpenAI realtime protocol, whichever service the audio settings use.
+      if (kind === "live") return { models: AZURE_LIVE, voices: pick(OPENAI_LIVE_VOICES) };
       if (azure.kind === "openai") {
         const deployment = kind === "stt" ? azure.sttDeployment : azure.ttsDeployment;
         return { models: deployment ? [{ id: deployment, name: deployment }] : [], voices: kind === "tts" ? pick(AZURE_OPENAI_VOICES) : [] };
       }
-      if (kind === "stt") return none;
+      if (kind === "stt") return { models: AZURE_STT, voices: [] };
       const key = this.keyOf("azure");
-      const { voices } = this.azure("speech");
-      const list = await this.json("azure", voices, { method: "GET", headers: { "Ocp-Apim-Subscription-Key": key } }, { list: true, secrets: [key] });
-      return {
-        models: [],
-        voices: (Array.isArray(list) ? list : [])
-          .filter((v) => v && typeof v.ShortName === "string")
-          .map((v) => ({ id: v.ShortName, name: clean((v.DisplayName || v.LocalName || v.ShortName) + (v.Gender ? " (" + v.Gender + ")" : "")), ...(typeof v.Locale === "string" && { language: v.Locale }) })),
-      };
+      const { voices: route } = this.azure("speech");
+      const list = await this.json("azure", route, { method: "GET", headers: { "Ocp-Apim-Subscription-Key": key } }, { list: true, secrets: [key] });
+      const all = (Array.isArray(list) ? list : [])
+        .filter((v) => v && typeof v.ShortName === "string")
+        .map((v) => ({ id: v.ShortName, name: clean((v.DisplayName || v.LocalName || v.ShortName) + (v.Gender ? " (" + v.Gender + ")" : "")), ...(typeof v.Locale === "string" && { language: v.Locale }) }));
+      // A voice's model is the part of its name after ":" (none for the standard voices): the models are the ones the list names.
+      const found = new Set([...AZURE_TTS_MODELS, ...all.map((v) => modelOf(v.id)).filter(Boolean)]);
+      const models = [{ id: "", name: AZURE_STANDARD }, ...[...found].sort(byModel).map((id) => ({ id, name: /^MAI-/i.test(id) ? id + " (preview)" : id }))];
+      let voices = all.filter((v) => modelOf(v.id) === model);
+      // Not in the list (a region that doesn't have it yet): the voices the MAI-Voice page documents. Another typed model has none.
+      if (!voices.length && /^MAI-Voice/i.test(model)) voices = maiVoices(model);
+      return { models, voices };
     }
     if (provider === "elevenlabs") {
       if (kind === "stt") return { models: ELEVEN_STT, voices: [] };
@@ -1001,6 +1115,7 @@ export class Voice {
     let session;
     if (choice === "codex") session = await this.liveCodex({ sdp, voice: who, instructions: prompt, tools: list, about });
     else if (choice === "openai") session = await this.liveOpenai({ sdp, model: model ?? DEFAULTS.openai.live, voice: who ?? DEFAULTS.openai.liveVoice, instructions: prompt, tools: list });
+    else if (choice === "azure") session = await this.liveAzure({ sdp, model: model ?? DEFAULTS.azureLive, voice: who ?? DEFAULTS.azureLiveVoice, instructions: prompt, tools: list });
     else if (choice === "gemini") session = await this.liveGemini({ model: model ?? DEFAULTS.geminiLive, voice: who ?? DEFAULTS.geminiVoice, instructions: prompt, tools: list });
     else session = await this.liveEleven({ voice: who, instructions: prompt, tools: list, firstMessage });
     // Only the oldest sessions are forgotten when too many are open; a Codex one is ended first.
@@ -1060,10 +1175,10 @@ export class Voice {
    * The OpenAI realtime session. Over WebRTC the audio formats are negotiated, so they are left out.
    * What the person says is transcribed too, so the caller can show both sides of the talk, in the language chosen for speech to text when there is one.
    */
-  openaiSession({ model, voice, instructions, tools }, socket) {
+  openaiSession({ model, voice, instructions, tools, transcribe = DEFAULTS.openai.stt }, socket) {
     // The chosen language is a hint, so a silent turn can't be heard as another language.
     const { language } = this.data.stt;
-    const transcription = { model: DEFAULTS.openai.stt, ...(language && { language: language.split("-")[0].toLowerCase() }) };
+    const transcription = { model: transcribe, ...(language && { language: language.split("-")[0].toLowerCase() }) };
     const session = { type: "realtime", model, ...(instructions && { instructions }), output_modalities: ["audio"], audio: { input: { turn_detection: { type: "semantic_vad" }, transcription }, output: { voice } } };
     if (socket) {
       session.audio.input.format = { type: "audio/pcm", rate: 24000 };
@@ -1077,29 +1192,51 @@ export class Voice {
   }
   async liveOpenai({ sdp, model, voice, instructions, tools }) {
     const key = this.keyOf("openai");
-    const base = this.openaiBase();
-    const auth = { Authorization: "Bearer " + key };
+    return this.realtime("openai", { key, base: this.openaiBase(), auth: { Authorization: "Bearer " + key }, sdp, model, voice, instructions, tools });
+  }
+  /**
+   * Live voice on Azure: the resource's own realtime route (`{endpoint}/openai/v1`), the same protocol with
+   * the key in `api-key`. The model is the deployment's name (MAI-Realtime-1, gpt-realtime or one the person typed).
+   */
+  async liveAzure({ sdp, model, voice, instructions, tools }) {
+    const key = this.keyOf("azure");
+    if (!AZURE_MODEL.test(model)) throw new Failure("That model isn't valid.");
+    try {
+      return await this.realtime("azure", { key, base: this.azureLive(), auth: { "api-key": key }, sdp, model, voice, instructions, tools, transcribe: DEFAULTS.azureTranscribe });
+    } catch (error) {
+      // Azure's two usual answers, said so a person knows what to do (both seen from a real resource).
+      const said = String(error?.message ?? "");
+      if (/returned 404: API Not Found/i.test(said))
+        throw new Failure("Your Azure resource doesn't offer realtime voice at its address. Live voice needs a Microsoft Foundry resource in a region with realtime models, and a realtime deployment such as MAI-Realtime-1 or gpt-realtime.");
+      if (/DeploymentNotFound|deployment for this resource does not exist/i.test(said))
+        throw new Failure("Your Azure resource has no deployment named “" + model + "”. Deploy one in Microsoft Foundry, or type your deployment's name as the live model.");
+      throw error;
+    }
+  }
+  /** One session of the OpenAI realtime protocol, at `base` (OpenAI's, or an Azure resource's), by WebRTC when an offer comes with it, else by socket. */
+  async realtime(provider, { key, base, auth, sdp, model, voice, instructions, tools, transcribe }) {
+    const label = NAMES[provider];
     if (sdp) {
       // The computer posts the caller's offer with the real key and hands back only the answer.
       const form = new FormData();
       form.set("sdp", sdp);
-      form.set("session", JSON.stringify(this.openaiSession({ model, voice, instructions, tools }, false)));
-      const response = await this.send("openai", base + "/realtime/calls", { method: "POST", headers: auth, body: form }, { secrets: [key] });
+      form.set("session", JSON.stringify(this.openaiSession({ model, voice, instructions, tools, transcribe }, false)));
+      const response = await this.send(provider, base + "/realtime/calls", { method: "POST", headers: auth, body: form }, { secrets: [key] });
       let answer;
       try {
         answer = await response.text();
       } catch {
-        throw new Failure("OpenAI stopped before it finished.");
+        throw new Failure(label + " stopped before it finished.");
       }
-      if (!answer.startsWith("v=0")) throw new Failure("OpenAI sent back something unexpected.");
+      if (!answer.startsWith("v=0")) throw new Failure(label + " sent back something unexpected.");
       // The call's id is the last part of the Location header, when the answer carries one.
       const location = response.headers?.get?.("location");
       const callId = typeof location === "string" ? location.split("?")[0].split("/").filter(Boolean).at(-1) : undefined;
       return { id: callId && /^[\w.-]{1,100}$/.test(callId) ? callId : "live-" + b64u(random(9)), kind: "webrtc", sdp: answer };
     }
-    const event = { type: "session.update", session: this.openaiSession({ model, voice, instructions, tools }, true) };
-    const minted = await this.json("openai", base + "/realtime/client_secrets", { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ expires_after: { anchor: "created_at", seconds: 600 }, session: event.session }) }, { list: true, secrets: [key] });
-    if (typeof minted?.value !== "string" || !minted.value || !Number.isFinite(minted.expires_at)) throw new Failure("OpenAI sent back something unexpected.");
+    const event = { type: "session.update", session: this.openaiSession({ model, voice, instructions, tools, transcribe }, true) };
+    const minted = await this.json(provider, base + "/realtime/client_secrets", { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ expires_after: { anchor: "created_at", seconds: 600 }, session: event.session }) }, { list: true, secrets: [key] });
+    if (typeof minted?.value !== "string" || !minted.value || !Number.isFinite(minted.expires_at)) throw new Failure(label + " sent back something unexpected.");
     const url = new URL(base);
     url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
     url.pathname = url.pathname.replace(/\/+$/, "") + "/realtime";

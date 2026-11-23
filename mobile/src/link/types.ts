@@ -56,6 +56,26 @@ export type HarnessStatus = {
   error?: string;
   install?: { url: string; command?: string };
 };
+/** Which of OpenAI's APIs a model is spoken to in ("keyed-providers-v1"). */
+export type KeyApi = "responses" | "completions";
+/** A model a person names for Azure Foundry (a deployment) or an OpenAI endpoint. */
+export type KeyedModel = { id: string; name?: string; api?: KeyApi; contextWindow?: number; maxOutput?: number };
+/** The settings of OpenRouter (none), Azure Foundry and an OpenAI endpoint. Never a key. */
+export type KeyedConfig = { endpoint?: string; baseUrl?: string; api?: KeyApi; apiVersion?: string; models?: KeyedModel[] };
+/** What the app shows for a provider that answers on a key (`ProviderStatus.keyed`; its `signIn` is "key"). */
+export type KeyedProvider = {
+  /** The settings this provider takes. OpenRouter: none; Azure Foundry: endpoint, apiVersion, models; an OpenAI endpoint: baseUrl, api, models. */
+  fields: Array<"endpoint" | "baseUrl" | "api" | "apiVersion" | "models">;
+  /** A key is kept on the computer (it is never sent back). */
+  hasKey: boolean;
+  /** True only for an OpenAI endpoint: a server on this computer or your own network needs no key. */
+  keyOptional: boolean;
+  config: KeyedConfig;
+  /** What is still missing, in a sentence, or null when the provider is ready. */
+  needs: string | null;
+  /** Where to get a key. */
+  keyUrl?: string;
+};
 export type ProviderStatus = {
   id: string;
   name: string;
@@ -68,7 +88,7 @@ export type ProviderStatus = {
   account?: string;
   plan?: string;
   message?: string;
-  signIn: "browser" | "services" | null;
+  signIn: "browser" | "services" | "key" | null;
   signOut: boolean;
   install?: { url: string; command?: string };
   starting?: boolean;
@@ -80,6 +100,8 @@ export type ProviderStatus = {
    * on a computer without the capability.
    */
   signInWays?: { guided: boolean; token: boolean };
+  /** For a provider whose signIn is "key" (OpenRouter, Azure Foundry, an OpenAI endpoint): its settings and what is missing ("keyed-providers-v1"). */
+  keyed?: KeyedProvider;
 };
 /**
  * What a sign-in or an install run on the computer says, in order ("provider-signin-v1"): a page
@@ -1455,7 +1477,7 @@ export type DeviceAnswer = { ok: true; result: unknown } | { ok: false; error: s
 
 export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom" | "local";
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
-export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
+export type LiveProvider = "codex" | "openai" | "azure" | "gemini" | "elevenlabs";
 /**
  * A voice of a bot's own ("bot-voice-v1"), saved with the bot by the computer's app. Every field is
  * optional: one that is absent means the same as the shared VoiceSettings. No key is ever in it.
@@ -1592,7 +1614,13 @@ export type Calls = {
    * Signs a provider in with a token or key the person pasted (or a saved credential, `{ $credential: id }`).
    * Sent once; the computer keeps it in its own vault or hands it to the tool, and never sends it back.
    */
-  providerUseToken(providerId: string, token: string, options?: { service?: string }): { connected: boolean; account?: string | null; plan?: string | null };
+  providerUseToken(providerId: string, token: string, options?: { service?: string }): { connected: boolean; account?: string | null; plan?: string | null; needs?: string };
+  /**
+   * The settings of OpenRouter, Azure Foundry or an OpenAI endpoint ("keyed-providers-v1"): replaces
+   * all of them and answers the provider's new status. The key goes through providerUseToken. The
+   * computer checks every value and throws a sentence for one that isn't acceptable.
+   */
+  providerConfigure(providerId: string, config: KeyedConfig): ProviderStatus;
   /** Installs a provider's command-line tool with the command the computer names for it (`install.command`). Read it like a sign-in. */
   installProvider(providerId: string): { session: string };
   providerServices(id: string, query?: string): ProviderService[];
@@ -1896,8 +1924,8 @@ export type Calls = {
   "link.voice.set"(patch: VoicePatch): void;
   /** Saves a provider's key on the computer (a string, or a saved credential), or removes it with null. It is never sent back. */
   "link.voice.key"(provider: VoiceKeyProvider, key: string | { $credential: string } | null): void;
-  /** The models and voices a provider offers. */
-  "link.voice.options"(kind: "stt" | "tts" | "live", provider: string): VoiceOptions;
+  /** The models and voices a provider offers. For Azure, `model` is the model whose voices are wanted ("" is the standard voices); without it, the saved one. */
+  "link.voice.options"(kind: "stt" | "tts" | "live", provider: string, model?: string): VoiceOptions;
   /** Speech to text on the computer's provider. `audio` is base64, at most about two minutes of 16 kHz WAV. */
   "link.voice.transcribe"(input: { audio: string; format: "wav" | "m4a" | "mp3" | "webm"; language?: string }): { text: string };
   /** Text to speech on the computer's provider: base64 audio to play. At most 4,000 characters; split long text by sentence. */

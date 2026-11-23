@@ -17,6 +17,7 @@ import { OpenCodeProvider } from "./providers/opencode/index.mjs";
 import { AcpProvider } from "./providers/acp/index.mjs";
 import { PiProvider } from "./providers/pi/index.mjs";
 import { OmpProvider } from "./providers/omp/index.mjs";
+import { keyedProviders } from "./providers/keyed/index.mjs";
 import { ACP_AGENTS } from "./providers/acp/agents.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
 import { tickChatSchedules } from "./schedules.mjs";
@@ -111,10 +112,12 @@ const REPLY_MS = 1500;
 export const APP_UPDATE = "app-update-v1";
 /** A model provider signed in, and its tool installed, from a phone, with no browser here (desktop/terminal/signin.mjs). */
 export const PROVIDER_SIGNIN = "provider-signin-v1";
+/** OpenRouter, Azure Foundry and an OpenAI endpoint: a key and settings per provider (`providerConfigure`, desktop/providers/keyed). */
+export const KEYED_PROVIDERS = "keyed-providers-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION];
+export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -251,6 +254,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     new OpenCodeProvider({ dataDir: join(dataDir, "opencode"), bridge }),
     // Agents that speak the Agent Client Protocol (desktop/providers/acp). Off until the person adds one.
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
+    // OpenRouter, Azure Foundry and an OpenAI endpoint, on a key kept in the vault (desktop/providers/keyed). Off until set up.
+    ...keyedProviders({ dataDir: join(dataDir, "keyed"), vault: () => workspace?.vault }),
     // Pi-compatible harnesses for the ChatGPT and Claude plans, not model providers.
     pi,
     new OmpProvider({ dataDir: join(dataDir, "omp"), bridge, packages: pi.packages }),
@@ -342,7 +347,15 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     openSettings: (tab) => host.window.openSettings(tab),
   });
   // A sign-in page a provider asks for opens in the person's browser, and only a web page does.
-  signIns = new SignIns({ providers: () => providers, vault: () => workspace.vault, changed: (id) => workspace.providerChanged(id) });
+  signIns = new SignIns({
+    providers: () => providers,
+    vault: () => workspace.vault,
+    changed: (id) => workspace.providerChanged(id),
+    // A key provider is switched on when its key and settings are complete.
+    enable: async (id) => {
+      if (!providers.isEnabled(providers.require(id))) await workspace.setProviderEnabled(id, true);
+    },
+  });
   // Tokens kept from an earlier start go where the tools read them.
   signIns.restore();
   const openSignIn = (url) => {
@@ -907,6 +920,20 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     providerUseToken: (id, token, options) => signIns.useToken(String(id), token, { service: typeof options?.service === "string" ? options.service : undefined }),
     installProvider: (id) => signIns.install(String(id), { abandonedMs: PHONE_PATIENCE_MS }),
     setProviderEnabled: (id, enabled) => workspace.setProviderEnabled(id, enabled),
+    // The settings of OpenRouter, Azure Foundry or an OpenAI endpoint (their whole settings are replaced), answered with the provider's new status.
+    // The key itself goes through providerUseToken. A provider whose settings and key are complete is switched on.
+    providerConfigure: async (id, config) => {
+      const provider = providers.require(String(id));
+      if (typeof provider.configure !== "function") throw new Error(provider.name + " has no settings.");
+      provider.configure(config);
+      const status = await provider.status();
+      if (status.connected && !providers.isEnabled(provider)) await workspace.setProviderEnabled(provider.id, true);
+      else await workspace.providerChanged(provider.id);
+      // Sessions open on the old settings are let go: the next message uses the new ones.
+      await provider.releaseSessions?.({ busy: true }).catch(() => {});
+      const now = (await workspace.providerStatuses(true)).find((entry) => entry.id === provider.id);
+      return { ...now, signInWays: signIns.ways(provider), signOut: !!now?.signOut || signIns.hasToken(provider.id) };
+    },
     // A provider that holds several model services (OpenCode): look one up, connect it, remove it.
     providerServices: (id, query) => providers.require(id).services(typeof query === "string" ? query.slice(0, 100) : ""),
     connectProviderService: async (id, serviceId, options) => {
@@ -978,7 +1005,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     voiceSettings: () => voiceDesk.settings(),
     setVoice: (patch) => voiceDesk.set(patch),
     setVoiceKey: (provider, key) => voiceDesk.setKey(provider, key),
-    voiceOptions: (kind, provider) => voiceDesk.options(kind, provider),
+    voiceOptions: (kind, provider, model) => voiceDesk.options(kind, provider, model),
     transcribe: (bytes, format, language) => voiceDesk.transcribe(bytes, format, language),
     speak: (text, options) => voiceDesk.speak(text, options ?? {}),
     startDictation: () => voiceDesk.startDictation(),

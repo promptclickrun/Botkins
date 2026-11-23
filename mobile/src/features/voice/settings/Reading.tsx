@@ -8,12 +8,12 @@ import type { TtsProvider } from "@/link/types";
 import { setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { useOnline } from "@/state/hooks";
 import { Button, Group, Loading, Page, Row, Slider, space, T } from "@/ui";
-import { missing, providerName, TTS_PROVIDERS } from "../choices";
+import { missing, OTHER_MODEL, OTHER_VOICE, providerName, TTS_PROVIDERS } from "../choices";
 import { useVoiceOptions } from "../options";
 import { setPhoneVoice, usePhoneVoice } from "../prefs";
 import { useVoiceSettings, useVoiceSupported } from "../state";
 import { type PhoneVoice, phoneLanguage, phoneVoices, speakText, stopSpeech, useSpeakingNow } from "../tts";
-import { Choice, Note, type Option, providerOptions, save, SetupRow, speedLabel, useProviderSheet, useSpeed, withDefault } from "./shared";
+import { Choice, Note, type Option, providerOptions, save, SetupRow, speedLabel, TypedChoice, useProviderSheet, useSpeed, withDefault } from "./shared";
 
 const SAMPLE = "Hi, I'm your Botkin. This is how I sound.";
 const SAMPLE_ID = "voice-sample";
@@ -31,7 +31,8 @@ export default function Reading() {
   const [openSheet, sheet] = useProviderSheet(voice);
   const provider: TtsProvider = voice?.tts.provider ?? "device";
   const onPhone = provider === "device";
-  const options = useVoiceOptions("tts", provider, voice);
+  const options = useVoiceOptions("tts", provider, voice, voice?.tts.model);
+  const azure = provider === "azure";
   const lack = voice ? missing("tts", provider, voice) : null;
   const phone = usePhoneVoice();
   const readAloud = useChatPrefs((prefs) => prefs.readAloud);
@@ -66,9 +67,16 @@ export default function Reading() {
             onChange={(next) => save({ tts: { provider: next as TtsProvider } })}
             disabled={!voice}
           />
-          {!onPhone && !!options?.models.length && <Choice title="Model" value={voice?.tts.model ?? ""} options={withDefault(options.models)} onChange={(model) => save({ tts: { model: model || undefined } })} />}
+          {/* Azure's voices belong to its model, so a new model clears the voice and the voices below are reloaded for it. */}
+          {azure ? (
+            <TypedChoice title="Model" value={voice?.tts.model ?? ""} items={withDefault(options?.models ?? [])} typing={OTHER_MODEL} onChange={(model) => save({ tts: { model, voice: "" } })} />
+          ) : (
+            !onPhone && !!options?.models.length && <Choice title="Model" value={voice?.tts.model ?? ""} options={withDefault(options.models)} onChange={(model) => save({ tts: { model: model || undefined } })} />
+          )}
           {loadingVoices ? (
             <Row title="Voice" value="Loading…" disabled />
+          ) : azure ? (
+            <TypedChoice title="Voice" value={chosenVoice} items={voiceOptions} typing={OTHER_VOICE} onChange={(next) => save({ tts: { voice: next } })} />
           ) : (
             voiceOptions.length > 1 && <Choice title="Voice" value={chosenVoice} options={voiceOptions} onChange={(next) => (onPhone ? setPhoneVoice({ voice: next || undefined }) : save({ tts: { voice: next || undefined } }))} />
           )}

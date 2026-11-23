@@ -111,7 +111,8 @@ export class Providers {
     return Promise.all(
       this.list.map(async (provider) => {
         const base = { id: provider.id, name: provider.name, description: provider.description, enabled: this.isEnabled(provider), default: provider === this.default };
-        if (!base.enabled) return { ...base, installed: true, connected: false, signIn: null, signOut: false };
+        // A provider that is off is asked nothing, except for what it can say without a call (a key provider's settings).
+        if (!base.enabled) return { ...base, installed: true, connected: false, signIn: null, signOut: false, ...provider.dormant?.() };
         const entry = this.cached(this.statusCache, provider.id, STATUS_FRESH, () => provider.status());
         if (entry.loading) {
           const done = await within(entry.loading, this.statusWait, WAITING);

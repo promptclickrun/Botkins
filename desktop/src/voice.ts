@@ -293,6 +293,9 @@ function levelOf(analyser: AnalyserNode | null) {
 
 // ── Live voice ──────────────────────────────────────────────────────────────────────────────────
 
+/** Providers that speak the OpenAI realtime protocol: OpenAI itself and an Azure resource (the computer holds the key for both). */
+const speaksOpenAi = (provider: string) => provider === "openai" || provider === "azure";
+
 export type LiveState = {
   chatId: string;
   provider: string;
@@ -491,7 +494,7 @@ class LiveCall {
       this.micAnalyser.fftSize = 1024;
       this.ctx.createMediaStreamSource(this.mic).connect(this.micAnalyser);
       this.timer = window.setInterval(() => this.meter(), 80);
-      if (this.state.provider === "codex" || this.state.provider === "openai") await this.webrtc();
+      if (this.state.provider === "codex" || speaksOpenAi(this.state.provider)) await this.webrtc();
       else await this.socket();
     } catch (e) {
       this.fail(e);
@@ -877,7 +880,7 @@ class LiveCall {
   }
   interrupt() {
     if (this.ended) return;
-    if (this.state.provider === "codex" || this.state.provider === "openai") {
+    if (this.state.provider === "codex" || speaksOpenAi(this.state.provider)) {
       if (this.channel?.readyState === "open") {
         this.channel.send(JSON.stringify({ type: "response.cancel" }));
         this.channel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
@@ -896,9 +899,9 @@ class LiveCall {
     if (this.inputMode === "push") this.interrupt();
     this.gate.press();
     if (this.ws?.readyState === WebSocket.OPEN && this.state.provider === "gemini") this.ws.send(JSON.stringify(geminiManualTurn("start")));
-    const socket = this.state.provider === "openai" ? this.ws : this.channel;
-    const open = this.state.provider === "openai" ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
-    if (open && socket && (this.state.provider === "openai" || this.state.provider === "codex")) socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    const socket = speaksOpenAi(this.state.provider) ? this.ws : this.channel;
+    const open = speaksOpenAi(this.state.provider) ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
+    if (open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
     this.applyMic();
   }
   releaseInput() {
@@ -911,9 +914,9 @@ class LiveCall {
       this.releaseTimer = null;
       if (this.ended) return;
       if (this.ws?.readyState === WebSocket.OPEN && this.state.provider === "gemini") this.ws.send(JSON.stringify(geminiManualTurn("end")));
-      const socket = this.state.provider === "openai" ? this.ws : this.channel;
-      const open = this.state.provider === "openai" ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
-      if (open && socket && (this.state.provider === "openai" || this.state.provider === "codex")) {
+      const socket = speaksOpenAi(this.state.provider) ? this.ws : this.channel;
+      const open = speaksOpenAi(this.state.provider) ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
+      if (open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) {
         for (const message of openAiManualTurn(this.turnMs)) socket.send(JSON.stringify(message));
       }
       this.applyMic();
@@ -951,7 +954,7 @@ class LiveCall {
     this.pc = null;
     this.mic = null;
     if (this.session) void api.endLiveVoice(this.session.id).catch(() => {});
-    else if (this.state.provider === "codex" || this.state.provider === "openai") void api.endLiveVoice("").catch(() => {});
+    else if (this.state.provider === "codex" || speaksOpenAi(this.state.provider)) void api.endLiveVoice("").catch(() => {});
     this.session = null;
   }
 }

@@ -8,7 +8,7 @@ type Tts = NonNullable<BotVoice["tts"]>;
 type Live = NonNullable<BotVoice["live"]>;
 
 export const TTS_NAMES: Record<TtsProvider, string> = { device: "This computer", openai: "OpenAI", azure: "Azure", elevenlabs: "ElevenLabs", gemini: "Gemini", custom: "Your own server", local: "This computer's own models" };
-export const LIVE_NAMES: Record<LiveProvider, string> = { codex: "ChatGPT sign-in", openai: "OpenAI", gemini: "Gemini", elevenlabs: "ElevenLabs" };
+export const LIVE_NAMES: Record<LiveProvider, string> = { codex: "ChatGPT sign-in", openai: "OpenAI", azure: "Azure", gemini: "Gemini", elevenlabs: "ElevenLabs" };
 
 /** What reads a bot's replies: its own choices over the shared ones. The shared model and voice belong to the shared provider, so they count only while the provider is the same. */
 export function effectiveTts(shared: VoiceSettings["tts"], own?: Tts): { provider: TtsProvider; model?: string; voice?: string; speed?: number } {
@@ -36,6 +36,8 @@ export function providerLack(kind: "tts" | "live", provider: string, shared: Voi
       return p[provider].hasKey ? null : "needs a key";
     case "azure":
       if (!p.azure.hasKey) return "needs a key";
+      // Live voice is on the resource's own address, whichever service reading uses.
+      if (kind === "live") return p.azure.endpoint ? null : "needs an endpoint";
       if (p.azure.kind === "speech") return p.azure.endpoint || p.azure.region ? null : "needs a region";
       return p.azure.endpoint && p.azure.ttsDeployment ? null : "needs an endpoint";
     case "custom":

@@ -21,7 +21,7 @@ const one = (context, what) => {
 };
 
 // (desktop/terminal/control-voice.mjs VOICE_PROVIDERS holds the lists that are checked; a test keeps them the same.)
-export const VOICE_KINDS = { stt: ["device", "openai", "azure", "elevenlabs", "custom", "local"], tts: ["device", "openai", "azure", "elevenlabs", "gemini", "custom", "local"], live: ["codex", "openai", "gemini", "elevenlabs"], key: ["openai", "azure", "elevenlabs", "gemini", "custom"] };
+export const VOICE_KINDS = { stt: ["device", "openai", "azure", "elevenlabs", "custom", "local"], tts: ["device", "openai", "azure", "elevenlabs", "gemini", "custom", "local"], live: ["codex", "openai", "azure", "gemini", "elevenlabs"], key: ["openai", "azure", "elevenlabs", "gemini", "custom"] };
 const PROVIDER_NAMES = { openai: "OpenAI", azure: "Azure", elevenlabs: "ElevenLabs", gemini: "Gemini", custom: "Custom server", local: "Local", codex: "Codex", device: "This computer" };
 const part = (label, value) => (value === undefined || value === null || value === "" ? null : label + " " + safe(String(value)));
 const voiceText = (voice) => {
@@ -130,7 +130,7 @@ const voiceGroup = {
         "The kind is stt (speech to text), tts (text to speech) or live (live voice). The providers: stt " + list(VOICE_KINDS.stt) + "; tts " + list(VOICE_KINDS.tts) + "; live " + list(VOICE_KINDS.live) + ".",
         "Some lists are built in and no request is made. For the others this computer asks the provider, with the key that is saved for it (save one with `botkins voice key`):",
         "  elevenlabs   its voices (and, for tts, its models), at api.elevenlabs.io",
-        "  azure        its voices, for an Azure Speech setup: at the endpoint or region saved in the app's window",
+        "  azure        its voices and models, for an Azure Speech setup: at the endpoint or region saved in the app's window",
         "  custom       its models and voices, at the server address saved in the app's window",
         "  live codex   the voices of the Codex program on this computer",
         "You cannot choose the address. It is the one saved in the app's window.",

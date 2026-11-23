@@ -80,7 +80,7 @@ export const REMOTE_METHODS = new Set([
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
   // Models and providers
-  "models", "setModel", "providers", "harnesses", "setProviderEnabled", "auth", "signIn", "cancelSignIn", "signOut",
+  "models", "setModel", "providers", "harnesses", "setProviderEnabled", "providerConfigure", "auth", "signIn", "cancelSignIn", "signOut",
   "providerServices", "connectProviderService", "finishProviderService", "cancelProviderService", "disconnectProviderService",
   // Signing in and installing from a phone ("provider-signin-v1"): the computer runs the provider's
   // own sign-in or install command; the phone only names the provider.
@@ -539,7 +539,7 @@ function projectArtifactArgs(method, args) {
 }
 
 /** The longest of each thing a phone sends to sign a provider in or install one. */
-export const PROVIDER_LIMITS = { id: 100, session: 100, service: 200, text: 4000, token: 8000 };
+export const PROVIDER_LIMITS = { id: 100, session: 100, service: 200, text: 4000, token: 8000, address: 400 };
 const cut = (value, limit) => (typeof value === "string" ? value.slice(0, limit) : "");
 
 /**
@@ -571,9 +571,27 @@ function providerArgs(method, args) {
     }
     case "installProvider":
       return [id()];
+    case "providerConfigure":
+      // The settings of a key provider ("keyed-providers-v1"), cut to their shape. The computer checks every value.
+      return [id(), keyedConfig(args[1])];
     default:
       return null;
   }
+}
+
+/** A key provider's settings as a phone sends them: strings of a bounded length and a short list of models, nothing else. */
+function keyedConfig(value) {
+  const object = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const text = (item, limit = PROVIDER_LIMITS.address) => (typeof item === "string" ? item.slice(0, limit) : undefined);
+  const count = (item) => (typeof item === "number" ? item : undefined);
+  const models = Array.isArray(object.models)
+    ? object.models.slice(0, 51).map((model) => {
+        const one = model && typeof model === "object" ? model : {};
+        return { id: text(one.id, 200), name: text(one.name, 200), api: text(one.api, 20), contextWindow: count(one.contextWindow), maxOutput: count(one.maxOutput) };
+      })
+    : undefined;
+  const out = { endpoint: text(object.endpoint), baseUrl: text(object.baseUrl), api: text(object.api, 20), apiVersion: text(object.apiVersion, 60), models };
+  return Object.fromEntries(Object.entries(out).filter(([, item]) => item !== undefined));
 }
 
 /** The update calls ("app-update-v1"), cut to their shape: nothing at all, or exactly one boolean. Null for any other call. */

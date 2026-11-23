@@ -102,7 +102,7 @@ For an installation for the whole computer, run `botkins` with `sudo`. The comma
 
 ## Sign a model provider in
 
-A bot uses a model from a provider: GitHub Copilot, Codex (ChatGPT), Claude Code, OpenCode, or an agent that speaks ACP. Each provider signs in to your own account. You do not need a browser on the host.
+A bot uses a model from a provider: GitHub Copilot, Codex (ChatGPT), Claude Code, OpenCode, an agent that speaks ACP, or an endpoint that takes a key (OpenRouter, Azure Foundry, an OpenAI endpoint). Each provider signs in to your own account or key. You do not need a browser on the host.
 
 ```sh
 botkins providers list
@@ -141,6 +141,27 @@ printenv CLAUDE_TOKEN | botkins providers login claude --token
 ```
 
 Botkins keeps a pasted Claude or Copilot token in its credential vault and gives it to the tool when the tool starts. Codex and OpenCode keep their own. A new token replaces the one that Botkins keeps, and the old one is lost, so that asks first; with no terminal it needs `--yes`.
+
+### OpenRouter, Azure Foundry and an OpenAI endpoint
+
+These three answer on a key and have no program or sign-in page. They are off until a key and settings are complete, and then they switch on by themselves. A bot's turn on one of their models runs in a harness (Pi or OMP, or the Copilot runtime; `botkins preferences harnesses`), which sends its requests to a gateway on this computer. The gateway adds your key. The key stays in the vault and never reaches the harness, the log or a `--json` answer.
+
+| Provider | Key | Settings (`botkins providers set`) |
+|---|---|---|
+| `openrouter` | An OpenRouter key (`sk-or-…`), made at openrouter.ai/keys. | None. Its models are those on OpenRouter that can call tools. |
+| `foundry` | The key of your Azure resource. | `--endpoint` (the resource's address, for example `https://NAME.services.ai.azure.com`, `https://NAME.openai.azure.com` or `https://NAME.cognitiveservices.azure.com`; kept as `<address>/openai/v1`), `--api-version` (only for an older route; not sent when empty) and `--model` for each deployment. |
+| `openai-api` | An API key. A server on this computer or your own network needs none. | `--base-url` (https; http only for `localhost`, a private address or a `.local` name), `--api responses` or `completions` (the usual is `responses`), and `--model` for models that the server's own list (`GET /models`) does not show. |
+
+```sh
+botkins providers set foundry --endpoint https://NAME.cognitiveservices.azure.com --model DeepSeek-V4-Pro --model o-x=responses
+printenv AZURE_KEY | botkins providers login foundry
+botkins providers set openai-api --base-url http://localhost:11434/v1 --model llama3.3
+```
+
+- **`providers set` changes only what you give.** `--model <id>[=<api>]` can be given again for each model and replaces the whole list; `--model-name <id>=<name>` names one of them; `--clear-models` empties the list. A model speaks Chat Completions unless you give `=responses` (or the provider's `--api`, for an OpenAI endpoint). At most 50 models; an id has letters, digits and `. _ : / @ + -` (a deployment's name is allowed as it is).
+- **A key goes to the address that is set.** So changing the address while a key is kept shows where the key will go and asks first (`--yes` with no terminal). Set the address first and the key after, and nothing is asked.
+- **`providers login <provider>` takes the key** from a hidden question or standard input (it is `--token` for these without saying so). `providers logout` removes the key and keeps the settings. `providers list` says what is still missing. `providers list --json` has `keyed` with the settings, whether a key is kept and what is missing; never the key.
+- **A scratch copy** (a data folder of its own, `botkins --data-dir <folder>` or `BOTKINS_DATA_DIR`) keeps the settings in `<folder>/data/keyed/<provider>.json` and the key in that folder's own vault, apart from any other Botkins.
 
 To sign a provider out, run `botkins providers logout <provider>`. It removes the token that Botkins keeps and the provider's own sign-in, so it asks first; with no terminal it needs `--yes`. To see the models, run `botkins models`.
 
@@ -507,7 +528,7 @@ echo "$OPENAI_KEY" | botkins voice key openai
 - **`voice set` changes the choices.** It sets the provider, model, voice, language and speed of speech to text (`--stt`), text to speech (`--tts`) and live voice (`--live`).
 - **`voice set <provider> --address <url>` sets the address of a provider, and takes its key with it.** The providers that have an address are `openai`, `azure` (its endpoint) and `custom`. A key is for the address that it was given for, so the app removes the key that is saved for a provider whenever its address is set, changed or taken away (`--address ""`). The command shows that first, on standard error also with `--yes` and with `--json`: "The key that is saved for <provider> is removed. A key is for the address that it was given for. The command asks for the key for the new address next." It asks (`--yes` with no terminal). It sets the address, and then takes the key for it from a hidden question at a terminal, or from standard input. With no terminal and no key on standard input, the address is set, the provider has no key, and the command says so and names `botkins voice key <provider>`. An address is set on its own, not with the other options.
 - **The call of the service has the same rule.** `voice.set` takes `providers` (the address of a provider) only when the call carries `{ "agreed": true }` after the choices, the mark of a caller that showed the person that the key goes and got a yes. Any other field that is, or could be, an address (`baseUrl`, `endpoint`, `host`, `region`) is refused. A caller with no mark could choose where the next key goes.
-- **`voice options <kind> <provider>` can start a request with the saved key.** The kind is `stt`, `tts` or `live`. The lists of `openai`, `gemini`, `device` and (for speech to text) `elevenlabs` are built in, and no request is made. For the others this computer asks the provider, with the key that is saved for it: `elevenlabs` at `api.elevenlabs.io` (its voices, and for `tts` its models), `azure` with Speech at the endpoint or region that the app saved, and `custom` at the server address that the app saved. For `live codex` the Codex program on this computer lists its voices. The caller gives no address: it is always the one that the app saved.
+- **`voice options <kind> <provider>` can start a request with the saved key.** The kind is `stt`, `tts` or `live`. The lists of `openai`, `gemini`, `device` and (for speech to text) `elevenlabs` are built in, and no request is made. For the others this computer asks the provider, with the key that is saved for it: `elevenlabs` at `api.elevenlabs.io` (its voices, and for `tts` its models), `azure` with Speech at the endpoint or region that the app saved (its models and voices; `live` is built in), and `custom` at the server address that the app saved. For `live codex` the Codex program on this computer lists its voices. The caller gives no address: it is always the one that the app saved.
 - The log has `voice.set` with the names of the sections that changed (`stt`, `tts`, `live`) and the provider of an address that changed (`openai address`), and `voice.key` with the provider. It never has a choice, an address or a key. `voice options` and `voice show` leave no line.
 
 ### Spaces and panels

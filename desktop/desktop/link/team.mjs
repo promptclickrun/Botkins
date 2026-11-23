@@ -82,6 +82,7 @@ const POLICY = {
   providers: ["settings", "view"],
   harnesses: ["settings", "view"],
   setProviderEnabled: "owner",
+  providerConfigure: "owner",
   auth: "owner",
   signIn: "owner",
   cancelSignIn: "owner",

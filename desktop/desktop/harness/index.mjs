@@ -17,12 +17,18 @@
 //   "omp"       OMP (omp.sh), the enhanced Pi harness, runs the same plan models through the
 //               same gateway and Botkins safety layer.
 //
+// OpenRouter, Azure Foundry and an OpenAI endpoint (desktop/providers/keyed) are model endpoints
+// with no program of their own, so a harness always runs their turns: Pi or OMP when one of
+// those is chosen, Pi (else OMP) when "provider" is chosen, the Copilot runtime when "copilot"
+// is. The person's key stays in the gateway (gateway.mjs, /key/<provider>).
+//
 // OpenCode and the ACP agents are whole agents, not model endpoints, so they always run
 // themselves, whichever is chosen.
 import { join } from "node:path";
 import { Gateway } from "./gateway.mjs";
 import { chatgptSignIn } from "./chatgpt.mjs";
 import { friendlyModel } from "../modelnames.mjs";
+import { KEYED, KEYED_IDS } from "../providers/keyed/config.mjs";
 
 export const HARNESSES = ["pi", "provider", "copilot", "omp"];
 export const DEFAULT_HARNESS = "pi";
@@ -110,6 +116,15 @@ export function piModel(model, compat) {
   };
 }
 
+/**
+ * The connections of the key providers (desktop/providers/keyed): one for each API a provider's
+ * models speak, since a connection has one. Chat Completions keeps the provider's own name and
+ * the Responses API adds "-responses" (`botkins-foundry`, `botkins-foundry-responses`).
+ */
+export const keyConnection = (id, api) => (api === "responses" ? id + "-responses" : id);
+/** What Pi is told of each key provider's models: the system role (every host takes it), and OpenRouter's reasoning format. */
+const keyCompat = (id) => ({ supportsDeveloperRole: false, ...(id === "openrouter" && { thinkingFormat: "openrouter" }) });
+
 export class Harness {
   /**
    * @param options.providers  The registry (desktop/providers/index.mjs).
@@ -135,6 +150,7 @@ export class Harness {
           return catalog.find((m) => m.provider === provider && m.id === model)?.fastModes?.[speed];
         },
         chatgpt: codex && { signIn: () => chatgptSignIn(), renew: () => codex.renewSignIn?.() },
+        keyed: (id) => this.providers.byId.get(id)?.connection?.() ?? null,
         claude: claude && (async () => ({ file: await claude.locate(), env: await claude.env(), cwd: join(dir, "harness", "claude"), bridge, report: (modelUsage) => claude.noteLimits?.(modelUsage) })),
         log: (line) => console.error(line),
       });
@@ -188,11 +204,23 @@ export class Harness {
   }
   via(selection) {
     const owner = this.providers.for(selection);
-    if (!Object.hasOwn(PLANS, owner.id)) return null;
     const choice = this.effective();
+    if (KEYED_IDS.includes(owner.id)) return this.keyedVia(choice);
+    if (!Object.hasOwn(PLANS, owner.id)) return null;
     if (choice === "copilot" && this.host && owner !== this.host) return HOST;
     if (PI_COMPATIBLE.has(choice) && this.providers.byId.has(choice)) return choice;
     return null;
+  }
+  /**
+   * The route of a key provider's turns. They have no program, so every choice has one: Pi or OMP
+   * as chosen; for "provider", Pi, else OMP, while their program is on this computer; the Copilot
+   * runtime for "copilot". Null when none can run them (the provider then says why).
+   */
+  keyedVia(choice) {
+    const here = (id) => this.providers.byId.has(id);
+    if (PI_COMPATIBLE.has(choice)) return here(choice) ? choice : null;
+    if (choice === "copilot") return this.host ? HOST : null;
+    return [PI, OMP].find((id) => here(id) && !this.missing.has(id)) ?? (here(PI) ? PI : null);
   }
   /** The provider that runs a selection's turns (`route` as via() says, when known). */
   runner(selection, route = this.via(selection)) {
@@ -208,6 +236,7 @@ export class Harness {
     const base = await this.gateway.start();
     const owner = this.providers.for(selection);
     const plan = PLANS[owner.id];
+    const keyedOwner = KEYED_IDS.includes(owner.id);
     // A chat on a Claude plan's model is opening: Claude Code is started now, so it has finished
     // starting when the first message comes (harness/claude.mjs).
     if (owner.id === "claude") void this.gateway.warm?.(selection.model);
@@ -219,32 +248,55 @@ export class Harness {
     const listed = (id) => {
       const list = catalog.filter((model) => model.provider === id && model.available !== false);
       // The chosen model is offered even when its provider's list couldn't be read just now.
-      if (id === owner.id && !list.some((model) => model.id === selection.model)) list.push({ id: selection.model, name: friendlyModel(selection.model), efforts: selection.reasoningEffort ? [selection.reasoningEffort] : [] });
+      if (id === owner.id && !list.some((model) => model.id === selection.model))
+        list.push({ id: selection.model, name: friendlyModel(selection.model), efforts: selection.reasoningEffort ? [selection.reasoningEffort] : [], ...(keyedOwner && { api: owner.apiFor?.(selection.model) ?? "completions" }) });
       return list;
     };
+    // The key providers' models, by connection: [{ id, api, connection, title, models }].
+    const keyed = () =>
+      KEYED_IDS.filter((id) => this.providers.byId.has(id)).flatMap((id) =>
+        ["completions", "responses"]
+          .map((api) => ({ id, api, connection: keyConnection(id, api), title: KEYED[id].name + (api === "responses" ? " (Responses)" : ""), models: listed(id).filter((model) => (model.api === "responses" ? "responses" : "completions") === api) }))
+          .filter((group) => group.models.length),
+      );
+    /** The connection that serves the selected model, when its provider is a key provider. */
+    const keySource = () => keyConnection(owner.id, owner.apiFor?.(selection.model) ?? listed(owner.id).find((model) => model.id === selection.model)?.api ?? "completions");
     if (PI_COMPATIBLE.has(route)) {
       // Pi and OMP are given a connection for each plan that has models, with those models.
-      const providers = Object.entries(PI_PLANS)
-        .map(([id, each]) => ({ id, each, models: listed(id) }))
-        .filter(({ models }) => models.length)
-        .map(({ each, models }) => ({
-          name: each.name,
-          config: { name: each.title, baseUrl: base + each.path + speedPath, api: each.api, apiKey: this.gateway.secret, ...(each.api === "openai-responses" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
-        }));
+      const providers = [
+        ...Object.entries(PI_PLANS)
+          .map(([id, each]) => ({ id, each, models: listed(id) }))
+          .filter(({ models }) => models.length)
+          .map(({ each, models }) => ({
+            name: each.name,
+            config: { name: each.title, baseUrl: base + each.path + speedPath, api: each.api, apiKey: this.gateway.secret, ...(each.api === "openai-responses" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
+          })),
+        // A key provider's connection to the gateway: Pi's own Bearer header carries this run's secret, never the key.
+        ...keyed().map((group) => ({
+          name: "botkins-" + group.connection,
+          config: { name: group.title, baseUrl: base + "/key/" + group.id, api: group.api === "responses" ? "openai-responses" : "openai-completions", apiKey: this.gateway.secret, authHeader: true, models: group.models.map((model) => piModel(model, keyCompat(group.id))) },
+        })),
+      ];
       return {
-        model: { model: selection.model, source: PI_PLANS[owner.id].name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
+        model: { model: selection.model, source: keyedOwner ? "botkins-" + keySource() : PI_PLANS[owner.id].name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
         inference: { providers },
       };
     }
     const models = [];
     for (const [id, each] of Object.entries(PLANS)) for (const model of listed(id)) models.push(planModel(each.name, model));
+    // The Copilot runtime reaches a key provider as an OpenAI connection, in the API the model speaks.
+    const groups = keyed();
+    for (const group of groups) for (const model of group.models) models.push(planModel(group.connection, model));
     const named = new Set(models.map((model) => model.provider));
     return {
-      model: { model: selection.model, source: plan.name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
+      model: { model: selection.model, source: keyedOwner ? keySource() : plan.name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
       inference: {
-        providers: Object.values(PLANS)
-          .filter((each) => named.has(each.name))
-          .map((each) => ({ name: each.name, type: each.type, ...(each.wireApi && { wireApi: each.wireApi }), baseUrl: base + each.path + speedPath, bearerToken: this.gateway.secret })),
+        providers: [
+          ...Object.values(PLANS)
+            .filter((each) => named.has(each.name))
+            .map((each) => ({ name: each.name, type: each.type, ...(each.wireApi && { wireApi: each.wireApi }), baseUrl: base + each.path + speedPath, bearerToken: this.gateway.secret })),
+          ...groups.map((group) => ({ name: group.connection, type: "openai", wireApi: group.api, baseUrl: base + "/key/" + group.id, bearerToken: this.gateway.secret })),
+        ],
         models,
       },
     };

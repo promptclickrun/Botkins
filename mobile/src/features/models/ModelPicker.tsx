@@ -1,20 +1,22 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Info, Search } from "lucide-react-native";
-import { type ReactNode, useMemo, useState } from "react";
+import { memo, type ReactNode, useMemo, useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { FastMode, ModelChoice, ModelInfo } from "@/link/types";
 import { useBot, useCan, useChat, useModels, usePart, useProviders, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
-import { chooseModel, effectiveModel, effortLabel, findModel, groupModels, modelKey, routineDefault } from "@/state/models";
+import { chooseModel, effectiveModel, effortLabel, findModel, groupModels, type ModelGroup, modelKey, routineDefault } from "@/state/models";
 import { heldRoutineModel } from "@/features/work/routineModel";
 import { useProviderUsage } from "@/state/providerUsage";
 import { Badge, Chip, EmptyState, Group, haptic, IconButton, Label, Loading, ProviderIcon, radius, Row, Sheet, space, T, Tap, useTheme } from "@/ui";
 import { contextFact } from "./facts";
 import { limitLine, limitTone, primaryLimit } from "./limits";
+import { moreAccessibilityLabel, moreLabel, pageGroups, pageMatches } from "./pages";
 import { defaultProviderOf, describeChoice } from "./shared";
 
+type Section = ModelGroup["sections"][number];
 type Scope = "global" | "routines" | "bot" | "chat" | "routine";
 const SCOPES = ["routines", "bot", "chat", "routine"] as const;
 const same = (a: ModelChoice | null | undefined, b: ModelChoice | null | undefined) =>
@@ -86,6 +88,41 @@ function Choice({
 /** What a model's row says under its name: its window when known, then its description. */
 const modelSubtitle = (model: ModelInfo) => (model.available ? [contextFact(model), model.description].filter(Boolean).join(" · ") || undefined : "Not on this account");
 
+const openInfo = (model: ModelInfo) => router.push({ pathname: "/chat/model-info", params: { model: model.id, provider: model.provider ?? "" } });
+
+/**
+ * One model's row. Memoized, with callbacks that take the model, so a keystroke in the search
+ * redraws only the rows that come or go, not every row on screen.
+ */
+const ModelRow = memo(function ModelRow({ model, selected, onPick }: { model: ModelInfo; selected: boolean; onPick: (model: ModelInfo) => void }) {
+  return (
+    <Choice
+      title={model.name}
+      subtitle={modelSubtitle(model)}
+      badge={model.recommended && model.available ? "Recommended" : undefined}
+      selected={selected}
+      disabled={!model.available}
+      onPress={() => onPick(model)}
+      onInfo={() => openInfo(model)}
+    />
+  );
+});
+
+/** The row under a page of models that draws the next page: "Show 25 more", or "Show the last 3". */
+function MoreRow({ rest, providerName, onPress }: { rest: number; providerName?: string; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Tap onPress={onPress} feel="select" sink={1} hitSlop={0} accessibilityRole="button" accessibilityLabel={moreAccessibilityLabel(rest, providerName)}>
+      <View style={{ minHeight: 48, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
+        <ChevronDown size={18} color={colors.accentText} strokeWidth={2.2} />
+        <T variant="callout" color="accentText" weight="500" style={{ flex: 1 }}>
+          {moreLabel(rest)}
+        </T>
+      </View>
+    </Tap>
+  );
+}
+
 /**
  * Picks the model and thinking level for the computer, its routines ("routines": the Default
  * routines model), a bot, a chat, or a routine being edited ("routine": the choice goes back to the
@@ -136,6 +173,14 @@ function Picker() {
   const inheritTitle = scope === "routines" ? "Use the global default" : scope === "routine" || routineChat ? "Use the routines default" : "Use default";
   const [choice, setChoice] = useState<ModelChoice | null>(saved);
   const [query, setQuery] = useState("");
+  // How many pages of models each provider shows, and a search's matches: one each when the
+  // picker opens, and a new search starts its matches at one.
+  const [pages, setPages] = useState<Record<string, number>>({});
+  const [searchPages, setSearchPages] = useState(1);
+  const search = (text: string) => {
+    setQuery(text);
+    setSearchPages(1);
+  };
   const [busy, setBusy] = useState(false);
 
   const chosen = findModel(models ?? [], choice ?? undefined, defaultProvider);
@@ -152,6 +197,16 @@ function Picker() {
   // What is left of each provider's plan, shown under its name while a model is chosen.
   const limits = useProviderUsage();
   const searching = !!query.trim();
+  // Only a page of each provider's models is drawn (a provider can list hundreds); the chosen one is
+  // always among them. A search pages its matches across every provider.
+  const pinned = choice ? chosen : undefined;
+  const paged = useMemo(() => {
+    const isChosen = (model: ModelInfo) => !!pinned && model === pinned;
+    return searching
+      ? pageMatches<ModelInfo, Section, ModelGroup>(groups, searchPages, isChosen)
+      : { groups: pageGroups<ModelInfo, Section, ModelGroup>(groups, pages, isChosen), rest: 0 };
+  }, [groups, searching, searchPages, pages, pinned]);
+  const more = (provider: string) => setPages((all) => ({ ...all, [provider]: (all[provider] ?? 1) + 1 }));
   const isFolded = (provider: string) => !searching && folded.includes(provider);
   const fold = (provider: string) => {
     haptic.select();
@@ -217,7 +272,7 @@ function Picker() {
           {models.length > 8 && (
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
               <View style={{ flex: 1 }}>
-                <SearchField value={query} onChange={setQuery} />
+                <SearchField value={query} onChange={search} />
               </View>
               {groups.length > 1 && !searching && <IconButton icon={allFolded ? ChevronsUpDown : ChevronsDownUp} label={allFolded ? "Open every provider" : "Fold every provider"} variant="soft" size={44} onPress={foldAll} />}
             </View>
@@ -240,7 +295,7 @@ function Picker() {
             </Group>
           )}
 
-          {groups.map((group) => {
+          {paged.groups.map(({ group, sections, rest }) => {
             const shut = isFolded(group.provider);
             const count = group.sections.reduce((sum, section) => sum + section.models.length, 0);
             // A folded provider still says which of its models is chosen.
@@ -280,28 +335,25 @@ function Picker() {
                   </View>
                   {!searching && <Fold size={18} color={colors.faint} strokeWidth={2.2} />}
                 </Tap>
-                {!shut && group.sections.map((section) => (
+                {!shut && sections.map((section, at) => (
                   <View key={section.title ?? ""}>
                     {!!section.title && group.sections.length > 1 && <Label style={{ marginTop: space.xs }}>{section.title}</Label>}
                     <Group>
                       {section.models.map((model) => (
-                        <Choice
-                          key={modelKey(model)}
-                          title={model.name}
-                          subtitle={modelSubtitle(model)}
-                          badge={model.recommended && model.available ? "Recommended" : undefined}
-                          selected={!!choice && chosen === model}
-                          disabled={!model.available}
-                          onPress={() => pick(model)}
-                          onInfo={() => router.push({ pathname: "/chat/model-info", params: { model: model.id, provider: model.provider ?? "" } })}
-                        />
+                        <ModelRow key={modelKey(model)} model={model} selected={!!choice && chosen === model} onPick={pick} />
                       ))}
+                      {at === sections.length - 1 && rest > 0 && <MoreRow key="more" rest={rest} providerName={group.name} onPress={() => more(group.provider)} />}
                     </Group>
                   </View>
                 ))}
               </View>
             );
           })}
+          {paged.rest > 0 && (
+            <Group>
+              <MoreRow rest={paged.rest} onPress={() => setSearchPages((n) => n + 1)} />
+            </Group>
+          )}
           {groups.length === 0 && (
             <T variant="subhead" color="muted" center style={{ paddingVertical: space.xl }}>
               No models match

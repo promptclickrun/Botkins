@@ -102,6 +102,14 @@ export class ModelProvider {
     const auth = await this.auth();
     return { installed: true, connected: !!auth.connected, account: auth.login, signIn: null, signOut: false };
   }
+  /**
+   * What status() says about this provider while it is switched off, without asking it anything
+   * (fields to add to the plain "off" status), or nothing. A provider that is set up in Settings
+   * while off (the key providers) says its settings here.
+   */
+  dormant() {
+    return undefined;
+  }
   /** Starts an interactive sign-in. `open(url)` opens the person's browser. */
   async signIn(_options) {
     unsupported("signing in from Botkins");

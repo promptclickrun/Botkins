@@ -163,7 +163,7 @@ test("bad settings are refused with a plain sentence and change nothing", () => 
   refused(null, "Those voice settings can't be saved.");
   refused({ stt: { provider: "gemini" } }, "That speech to text choice isn't supported.");
   refused({ tts: { provider: "nope" } }, "That text to speech choice isn't supported.");
-  refused({ live: { provider: "azure" } }, "That live voice choice isn't supported.");
+  refused({ live: { provider: "custom" } }, "That live voice choice isn't supported.");
   refused({ tts: { speed: 3 } }, "Speed is between 0.5 and 2.");
   refused({ tts: { speed: "fast" } }, "Speed is between 0.5 and 2.");
   refused({ tts: { auto: "yes" } }, "Reading replies aloud is on or off.");
@@ -313,7 +313,7 @@ test("a missing key or setting is a plain sentence that says where to fix it", a
   await assert.rejects(voice.live({}), { message: "Pick a live voice in Settings › Voice first." });
   await assert.rejects(voice.live({ provider: "openai" }), { message: "Add an OpenAI key in Settings › Voice first." });
   await assert.rejects(voice.options("stt", "gemini"), { message: "That provider doesn't do speech to text." });
-  await assert.rejects(voice.options("live", "azure"), { message: "That provider doesn't do live voice." });
+  await assert.rejects(voice.options("live", "custom"), { message: "That provider doesn't do live voice." });
   await assert.rejects(voice.options("music" as any, "openai"), { message: "That isn't a kind of voice." });
 });
 
@@ -718,7 +718,7 @@ test("options: Azure Speech voices from the voices list", async () => {
   const tts = await voice.options("tts", "azure");
   assert.deepEqual(tts.voices, [{ id: "en-US-JennyNeural", name: "Jenny (Female)", language: "en-US" }, { id: "sv-SE-SofieNeural", name: "Sofie", language: "sv-SE" }]);
   assert.equal(net.last().headers.get("ocp-apim-subscription-key"), "azure-key-0123456789");
-  assert.deepEqual(await voice.options("stt", "azure"), { models: [], voices: [] });
+  assert.deepEqual((await voice.options("stt", "azure")).models.map((m: any) => m.id), ["", "MAI-Transcribe-2", "MAI-Transcribe-1.5"]);
 });
 
 test("options: a speech server's models, its own voices when it has them, else the standard names", async () => {
@@ -1120,7 +1120,7 @@ test("live: input is checked, and a session of another provider ends without cal
   const ended: string[] = [];
   const { voice } = make({ "POST api.openai.com/v1/realtime/client_secrets": () => ({ value: "ek_x_secret_value", expires_at: Math.floor(NOW / 1000) + 600 }) }, { adapter: () => ({ codex: { signedIn: () => true, live: async () => ({ sdp: "v=0", id: "c" }), end: (id: string) => ended.push(id) } }) });
   voice.setKey("openai", KEY);
-  await assert.rejects(voice.live({ provider: "azure" as any }), { message: "That provider doesn't do live voice." });
+  await assert.rejects(voice.live({ provider: "custom" as any }), { message: "That provider doesn't do live voice." });
   await assert.rejects(voice.live({ provider: "openai", sdp: "not an offer" }), { message: "That connection offer isn't valid." });
   await assert.rejects(voice.live({ provider: "openai", instructions: "x".repeat(20_001) }), { message: "The instructions are up to 20,000 characters." });
   await assert.rejects(voice.live({ provider: "openai", voice: "bad voice!" }), { message: "That voice isn't valid." });
@@ -1430,4 +1430,274 @@ test("live speech updates one chat message without starting a bot turn", async (
   } finally {
     await host.stop();
   }
+});
+
+// ── Azure: models, MAI voices and live voice ──────────────────────────────────────────────────
+
+const AZURE_KEY = "azure-key-0123456789";
+const SPEECH = { kind: "speech", endpoint: "https://contoso.cognitiveservices.azure.com" } as const;
+const STT_URL = "POST contoso.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe";
+const TTS_URL = "POST contoso.cognitiveservices.azure.com/tts/cognitiveservices/v1";
+const VOICES_URL = "GET contoso.cognitiveservices.azure.com/tts/cognitiveservices/voices/list";
+const definition = (seen: Seen) => JSON.parse(String((seen.body as FormData).get("definition")));
+
+test("Azure Speech transcription with a model asks for enhanced mode; with none the request is what it was", async () => {
+  const { voice, net } = make({ [STT_URL]: () => ({ combinedPhrases: [{ text: "Hello from Botkins." }] }) });
+  voice.set({ stt: { provider: "azure", language: "en-US" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  await voice.transcribe({ audio: WAV, format: "wav" });
+  assert.deepEqual(definition(net.last()), { locales: ["en-US"] }, "the standard request has no enhanced mode");
+  voice.set({ stt: { model: "MAI-Transcribe-2" } });
+  assert.deepEqual(await voice.transcribe({ audio: WAV, format: "wav" }), { text: "Hello from Botkins." });
+  const seen = net.last();
+  assert.equal(seen.url.searchParams.get("api-version"), "2025-10-15");
+  assert.equal(seen.headers.get("ocp-apim-subscription-key"), AZURE_KEY);
+  assert.deepEqual(definition(seen), { enhancedMode: { enabled: true, model: "MAI-Transcribe-2" }, locales: ["en-US"] });
+  // No language: no locales, so the service tells the language itself.
+  voice.set({ stt: { language: null } });
+  await voice.transcribe({ audio: WAV, format: "wav" });
+  assert.deepEqual(definition(net.last()), { enhancedMode: { enabled: true, model: "MAI-Transcribe-2" } });
+  // A caller's language counts for that call.
+  await voice.transcribe({ audio: WAV, format: "wav", language: "en" });
+  assert.deepEqual(definition(net.last()).locales, ["en"]);
+  // Back to the standard: null clears the model.
+  voice.set({ stt: { model: null } });
+  await voice.transcribe({ audio: WAV, format: "wav" });
+  assert.deepEqual(definition(net.last()), { locales: [] });
+});
+
+test("Azure Speech transcription reads phrases when there are no combined phrases", async () => {
+  const { voice } = make({ [STT_URL]: () => ({ phrases: [{ text: "one" }, { text: "two" }] }) });
+  voice.set({ stt: { provider: "azure", model: "MAI-Transcribe-1.5" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  assert.deepEqual(await voice.transcribe({ audio: WAV, format: "wav" }), { text: "one two" });
+});
+
+test("an Azure model may be typed; a bad one is refused and changes nothing", async () => {
+  const { voice, net } = make({ [STT_URL]: () => ({ combinedPhrases: [{ text: "ok" }] }) });
+  voice.set({ stt: { provider: "azure", model: "MAI-Transcribe-3-preview" }, tts: { provider: "azure", model: "MAI-Voice-3" }, providers: { azure: SPEECH } });
+  assert.equal(voice.settings().stt.model, "MAI-Transcribe-3-preview");
+  assert.equal(voice.settings().tts.model, "MAI-Voice-3");
+  voice.setKey("azure", AZURE_KEY);
+  await voice.transcribe({ audio: WAV, format: "wav" });
+  assert.equal(definition(net.last()).enhancedMode.model, "MAI-Transcribe-3-preview");
+  const kept = voice.settings();
+  for (const bad of ["bad model!", "../../x", "with space", "x".repeat(65), "a:b"]) {
+    assert.throws(() => voice.set({ stt: { model: bad } }), /model/, bad);
+    assert.throws(() => voice.set({ live: { provider: "azure", model: bad } }), /model/, bad);
+  }
+  assert.deepEqual(voice.settings(), kept);
+  // A model that reached a call some other way (a bot's own) is checked there too, before anything is sent.
+  const count = net.seen.length;
+  await assert.rejects(voice.speak({ text: "hi", override: { model: "bad model" } }), { message: "That model isn't valid." });
+  await assert.rejects(voice.options("tts", "azure", "bad model!"), { message: "That model isn't valid." });
+  assert.equal(net.seen.length, count);
+  // The deployment of Azure OpenAI audio is a model that may be typed: it names the deployment.
+  const openai = make({ "POST contoso.openai.azure.com/openai/deployments/mine/audio/transcriptions": () => ({ text: "typed deployment" }) });
+  openai.voice.set({ stt: { provider: "azure", model: "mine" }, providers: { azure: { kind: "openai", endpoint: "https://contoso.openai.azure.com" } } });
+  openai.voice.setKey("azure", AZURE_KEY);
+  assert.deepEqual(await openai.voice.transcribe({ audio: WAV, format: "wav" }), { text: "typed deployment" });
+  assert.equal(fields(openai.net.last()).model, "mine");
+});
+
+test("Azure Speech reading with a MAI model: the voice's name carries the model, a plain voice gets it, another model's voice is replaced", async () => {
+  const { voice, net } = make({ [TTS_URL]: () => new Response(MP3) });
+  voice.set({ tts: { provider: "azure", model: "MAI-Voice-2.1", voice: "en-US-Harper:MAI-Voice-2.1" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  const ssml = () => String(net.last().body);
+  assert.deepEqual(await voice.speak({ text: "Hello." }), { audio: MP3, format: "mp3" });
+  assert.equal(ssml(), "<speak version='1.0' xml:lang='en-US'><voice xml:lang='en-US' name='en-US-Harper:MAI-Voice-2.1'>Hello.</voice></speak>");
+  assert.equal(net.last().headers.get("ocp-apim-subscription-key"), AZURE_KEY);
+  // Without the suffix it is added; the rate is wrapped only when it isn't 1.
+  voice.set({ tts: { voice: "de-DE-Klaus" } });
+  await voice.speak({ text: "Hallo.", speed: 1.25 });
+  assert.equal(ssml(), "<speak version='1.0' xml:lang='de-DE'><voice xml:lang='de-DE' name='de-DE-Klaus:MAI-Voice-2.1'><prosody rate=\"1.25\">Hallo.</prosody></voice></speak>");
+  // Another model's voice, or a standard voice, is replaced by this model's first voice for the language.
+  voice.set({ tts: { voice: "fr-FR-Marc:MAI-Voice-2" } });
+  await voice.speak({ text: "Salut." });
+  assert.match(ssml(), /name='fr-FR-Grant:MAI-Voice-2\.1'/);
+  voice.set({ tts: { voice: "en-GB-SoniaNeural" } });
+  await voice.speak({ text: "Hi." });
+  assert.match(ssml(), /name='en-GB-Emily:MAI-Voice-2\.1'/);
+  // No voice at all: the first en-US one, or the first of the person's language.
+  voice.set({ tts: { voice: null } });
+  await voice.speak({ text: "Hi." });
+  assert.match(ssml(), /name='en-US-Ethan:MAI-Voice-2\.1'/);
+  voice.set({ stt: { language: "pt-BR" } });
+  await voice.speak({ text: "Oi." });
+  assert.match(ssml(), /name='pt-BR-Caio:MAI-Voice-2\.1'/);
+  // The Flash model, and no model at all (today's voice, as it was).
+  voice.set({ tts: { model: "MAI-Voice-2.1-Flash", voice: "en-US-Iris" } });
+  await voice.speak({ text: "Quick." });
+  assert.match(ssml(), /name='en-US-Iris:MAI-Voice-2\.1-Flash'/);
+  voice.set({ tts: { model: null, voice: null } });
+  await voice.speak({ text: "Plain." });
+  assert.equal(ssml(), "<speak version='1.0' xml:lang='en-US'><voice xml:lang='en-US' name='en-US-JennyNeural'>Plain.</voice></speak>");
+  // A voice that already names a model is spoken as it is when there is no model chosen.
+  await voice.speak({ text: "As named.", voice: "en-US-Ava:DragonHDLatestNeural" });
+  assert.match(ssml(), /name='en-US-Ava:DragonHDLatestNeural'/);
+});
+
+test("Azure limiting requests (429) is a sentence about the quota, and a MAI voice's name is not blamed", async () => {
+  const { voice } = make({ [TTS_URL]: () => new Response("", { status: 429 }) });
+  voice.set({ tts: { provider: "azure", model: "MAI-Voice-2.1", voice: "en-US-Harper:MAI-Voice-2.1" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(voice.speak({ text: "Hi." }), { message: "Azure is limiting requests for this voice right now (429). MAI voices are in preview: check your resource's quota, or try again later." });
+  voice.set({ tts: { model: null, voice: "en-US-JennyNeural" } });
+  await assert.rejects(voice.speak({ text: "Hi." }), { message: "Azure is limiting requests right now (429). Try again later." });
+});
+
+test("options: Azure Speech models and voices come from the voice list, by the model after the colon", async () => {
+  const entry = (ShortName: string, Locale: string, DisplayName = ShortName.split("-")[2].split(":")[0]) => ({ ShortName, Locale, DisplayName, Gender: "Female" });
+  const { voice, net } = make({
+    [VOICES_URL]: () => [
+      entry("en-US-JennyNeural", "en-US", "Jenny"),
+      entry("sv-SE-SofieNeural", "sv-SE", "Sofie"),
+      entry("en-US-Ava:DragonHDLatestNeural", "en-US"),
+      entry("cs-CZ-Grant:MAI-Voice-2.1", "cs-CZ"),
+      entry("cs-CZ-Grant:MAI-Voice-2.1-Flash", "cs-CZ"),
+      entry("en-US-Harper:MAI-Voice-2.1", "en-US"),
+      entry("en-US-Ethan:MAI-Voice-2", "en-US"),
+    ],
+  });
+  voice.set({ providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  const standard = await voice.options("tts", "azure");
+  assert.deepEqual(standard.models, [
+    { id: "", name: "Standard neural voices" },
+    { id: "MAI-Voice-2.1", name: "MAI-Voice-2.1 (preview)" },
+    { id: "MAI-Voice-2.1-Flash", name: "MAI-Voice-2.1-Flash (preview)" },
+    { id: "MAI-Voice-2", name: "MAI-Voice-2 (preview)" },
+    { id: "DragonHDLatestNeural", name: "DragonHDLatestNeural" },
+  ]);
+  assert.deepEqual(standard.voices.map((v: any) => v.id), ["en-US-JennyNeural", "sv-SE-SofieNeural"], "the standard voices have no model after the name");
+  const mai = await voice.options("tts", "azure", "MAI-Voice-2.1");
+  assert.deepEqual(mai.voices.map((v: any) => v.id), ["cs-CZ-Grant:MAI-Voice-2.1", "en-US-Harper:MAI-Voice-2.1"]);
+  assert.deepEqual(mai.voices[1], { id: "en-US-Harper:MAI-Voice-2.1", name: "Harper (Female)", language: "en-US" });
+  assert.deepEqual((await voice.options("tts", "azure", "MAI-Voice-2")).voices.map((v: any) => v.id), ["en-US-Ethan:MAI-Voice-2"]);
+  assert.deepEqual((await voice.options("tts", "azure", "DragonHDLatestNeural")).voices.map((v: any) => v.id), ["en-US-Ava:DragonHDLatestNeural"]);
+  // The saved model is used when none is passed, and an empty one is the standard.
+  voice.set({ tts: { provider: "azure", model: "MAI-Voice-2" } });
+  assert.deepEqual((await voice.options("tts", "azure")).voices.map((v: any) => v.id), ["en-US-Ethan:MAI-Voice-2"]);
+  assert.deepEqual((await voice.options("tts", "azure", "")).voices.map((v: any) => v.id), ["en-US-JennyNeural", "sv-SE-SofieNeural"]);
+  // A model typed that names no voice is still fine: no voices (the voice can be typed too).
+  const typed = await voice.options("tts", "azure", "Some-Other-Model");
+  assert.deepEqual(typed.voices, []);
+  assert.equal(net.seen.every((s) => s.method === "GET"), true);
+});
+
+test("options: a MAI model the voice list doesn't have gets the documented voices as <locale>-<Name>:<model>", async () => {
+  const { voice } = make({ [VOICES_URL]: () => [{ ShortName: "en-US-JennyNeural", Locale: "en-US", DisplayName: "Jenny" }] });
+  voice.set({ providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  const found = await voice.options("tts", "azure", "MAI-Voice-2.1-Flash");
+  assert.deepEqual((await voice.options("tts", "azure")).models.map((m: any) => m.id), ["", "MAI-Voice-2.1", "MAI-Voice-2.1-Flash"], "both are offered even when the list names none");
+  const ids = found.voices.map((v: any) => v.id);
+  assert.ok(ids.includes("en-US-Harper:MAI-Voice-2.1-Flash"));
+  assert.ok(ids.includes("hi-IN-Kavya:MAI-Voice-2.1-Flash"));
+  assert.ok(ids.includes("zh-CN-Wei:MAI-Voice-2.1-Flash"));
+  assert.ok(ids.every((id: string) => id.endsWith(":MAI-Voice-2.1-Flash")));
+  assert.deepEqual(found.voices.find((v: any) => v.id.startsWith("en-GB-Emily")), { id: "en-GB-Emily:MAI-Voice-2.1-Flash", name: "Emily", language: "en-GB" });
+  // Every one is a voice that can be saved.
+  voice.set({ tts: { provider: "azure", model: "MAI-Voice-2.1-Flash", voice: ids[0] } });
+});
+
+test("options: Azure live voice offers the realtime models and the OpenAI voices, and asks nobody", async () => {
+  const { voice, net } = make();
+  voice.set({ providers: { azure: SPEECH } });
+  const live = await voice.options("live", "azure");
+  assert.deepEqual(live.models.map((m: any) => m.id), ["MAI-Realtime-1", "gpt-realtime", "gpt-realtime-mini"]);
+  assert.ok(live.voices.some((v: any) => v.id === "marin"));
+  voice.set({ providers: { azure: { kind: "openai" } } });
+  assert.deepEqual((await voice.options("live", "azure")).models.length, 3);
+  assert.equal(net.seen.length, 0);
+});
+
+const OFFER = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\n";
+const ANSWER = "v=0\r\no=azure 2 2 IN IP4 0.0.0.0\r\n";
+
+test("live on Azure over WebRTC: the computer posts the offer to the resource with api-key and returns only the answer", async () => {
+  const { voice, net } = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/calls": () => new Response(ANSWER, { status: 201, headers: { location: "/openai/v1/realtime/calls/rtc_az123" } }) });
+  voice.set({ live: { provider: "azure" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  const session = await voice.live({ sdp: OFFER, instructions: "Be brief.", tools: TOOLS });
+  assert.deepEqual(session, { id: "rtc_az123", kind: "webrtc", sdp: ANSWER });
+  const seen = net.last();
+  assert.equal(seen.url.href, "https://contoso.cognitiveservices.azure.com/openai/v1/realtime/calls");
+  assert.equal(seen.headers.get("api-key"), AZURE_KEY);
+  assert.equal(seen.headers.get("authorization"), null);
+  const form = seen.body as FormData;
+  assert.equal(form.get("sdp"), OFFER);
+  const sent = JSON.parse(String(form.get("session")));
+  assert.equal(sent.type, "realtime");
+  assert.equal(sent.model, "MAI-Realtime-1", "the default is the MAI realtime deployment");
+  assert.equal(sent.audio.output.voice, "marin");
+  assert.equal(sent.instructions, "Be brief.");
+  assert.equal(sent.tools.length, 2);
+  assert.equal(JSON.stringify(session).includes(AZURE_KEY), false);
+  // A typed deployment is the model; so is one chosen from the list.
+  voice.set({ live: { model: "my-realtime-deployment", voice: "cedar" } });
+  await voice.live({ sdp: OFFER });
+  const typed = JSON.parse(String((net.last().body as FormData).get("session")));
+  assert.equal(typed.model, "my-realtime-deployment");
+  assert.equal(typed.audio.output.voice, "cedar");
+  // An answer that isn't one is not passed on, and the sentence names Azure.
+  const odd = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/calls": () => new Response("<html>") });
+  odd.voice.set({ live: { provider: "azure" }, providers: { azure: SPEECH } });
+  odd.voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(odd.voice.live({ sdp: OFFER }), { message: "Azure sent back something unexpected." });
+});
+
+test("live on Azure over a socket: an ephemeral secret from the resource, and the wss address with the deployment", async () => {
+  const { voice, net } = make({ "POST contoso.openai.azure.com/openai/v1/realtime/client_secrets": () => ({ value: "ephemeral_azure_secret_value", expires_at: Math.floor(NOW / 1000) + 600 }) });
+  voice.set({ live: { provider: "azure", model: "gpt-realtime" }, providers: { azure: { kind: "openai", endpoint: "https://contoso.openai.azure.com/" } } });
+  voice.setKey("azure", AZURE_KEY);
+  const session = await voice.live({ instructions: "Be brief.", tools: TOOLS });
+  const seen = net.last();
+  assert.equal(seen.url.href, "https://contoso.openai.azure.com/openai/v1/realtime/client_secrets");
+  assert.equal(seen.headers.get("api-key"), AZURE_KEY);
+  assert.equal(seen.headers.get("authorization"), null);
+  const body = json(seen);
+  assert.deepEqual(body.expires_after, { anchor: "created_at", seconds: 600 });
+  assert.equal(body.session.model, "gpt-realtime");
+  assert.deepEqual(body.session.audio.input.format, { type: "audio/pcm", rate: 24000 });
+  assert.equal(session.kind, "openai-ws");
+  assert.equal(session.url, "wss://contoso.openai.azure.com/openai/v1/realtime?model=gpt-realtime");
+  assert.equal(session.token, "ephemeral_azure_secret_value");
+  assert.equal(session.expiresAt, NOW + 600_000);
+  assert.deepEqual(session.session.session, body.session);
+  // The account's own key is nowhere in what the caller gets.
+  assert.equal(JSON.stringify(session).includes(AZURE_KEY), false);
+  assert.equal(JSON.stringify(session).includes("api-key"), false);
+  // A bot's own deployment goes in the address, escaped.
+  const own = await voice.live({ override: { provider: "azure", model: "bot-deployment.1" } });
+  assert.equal(own.url, "wss://contoso.openai.azure.com/openai/v1/realtime?model=bot-deployment.1");
+  await assert.rejects(voice.live({ override: { provider: "azure", model: "bad model" } }), { message: "That model isn't valid." });
+});
+
+test("live on Azure needs the resource's endpoint and a key, and says so in a sentence", async () => {
+  const { voice, net } = make();
+  voice.set({ live: { provider: "azure" }, providers: { azure: { kind: "speech", region: "eastus" } } });
+  await assert.rejects(voice.live({ sdp: OFFER }), { message: "Add an Azure key in Settings › Voice first." });
+  voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(voice.live({ sdp: OFFER }), { message: "Add your Azure resource endpoint in Settings › Voice to use live voice." });
+  await assert.rejects(voice.live({}), { message: "Add your Azure resource endpoint in Settings › Voice to use live voice." });
+  assert.equal(net.seen.length, 0);
+  // A provider's own error keeps the key out of its sentence.
+  const { voice: failing } = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/calls": () => say(404, { error: { message: "The deployment for " + AZURE_KEY + " does not exist" } }) });
+  failing.set({ live: { provider: "azure" }, providers: { azure: SPEECH } });
+  failing.setKey("azure", AZURE_KEY);
+  await assert.rejects(failing.live({ sdp: OFFER }), (error: Error) => error.message.startsWith("Azure returned 404:") && !error.message.includes(AZURE_KEY));
+});
+
+test("live on Azure: a resource without realtime, and a deployment it doesn't have, are each said plainly", async () => {
+  // Both answers as a real Azure resource gives them (Nov 2026): the route isn't there, or the deployment isn't.
+  const { voice } = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/calls": () => say(404, { error: { code: "Not Found", message: "API Not Found" } }) });
+  voice.set({ live: { provider: "azure" }, providers: { azure: SPEECH } });
+  voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(voice.live({ sdp: OFFER }), { message: "Your Azure resource doesn't offer realtime voice at its address. Live voice needs a Microsoft Foundry resource in a region with realtime models, and a realtime deployment such as MAI-Realtime-1 or gpt-realtime." });
+  const missing = make({ "POST contoso.cognitiveservices.azure.com/openai/v1/realtime/client_secrets": () => say(404, { error: { code: "DeploymentNotFound", message: "The API deployment for this resource does not exist." } }) });
+  missing.voice.set({ live: { provider: "azure", model: "MAI-Realtime-1" }, providers: { azure: SPEECH } });
+  missing.voice.setKey("azure", AZURE_KEY);
+  await assert.rejects(missing.voice.live({}), { message: "Your Azure resource has no deployment named \u201cMAI-Realtime-1\u201d. Deploy one in Microsoft Foundry, or type your deployment's name as the live model." });
 });

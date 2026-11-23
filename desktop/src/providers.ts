@@ -184,6 +184,9 @@ export const PROVIDER_NAMES: Record<string, string> = {
   codex: "ChatGPT",
   claude: "Claude",
   opencode: "OpenCode",
+  openrouter: "OpenRouter",
+  foundry: "Azure Foundry",
+  "openai-api": "OpenAI endpoint",
 };
 
 /**

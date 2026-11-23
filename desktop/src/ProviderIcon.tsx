@@ -18,6 +18,11 @@ const MARKS: Record<string, Mark> = {
     viewBox: "0 0 32 40",
     paths: [{ d: "M24 32H8V16H24V32Z", fill: "var(--provider-icon-soft, currentColor)" }, { d: "M24 8H8V32H24V8ZM32 40H0V0H32V40Z" }],
   },
+  // Simple marks of our own for the providers set up with a key: OpenRouter's fork of arrows,
+  // Azure Foundry's two blades, and brackets for any OpenAI-compatible endpoint.
+  openrouter: { viewBox: "0 0 24 24", paths: [{ d: "M1 10.8H7.6L12.2 6.5H17.5V3.8L22 7.5L17.5 11.2V8.9H13.2L10 12L13.2 15.1H17.5V12.8L22 16.5L17.5 20.2V17.5H12.2L7.6 13.2H1Z" }] },
+  foundry: { viewBox: "0 0 24 24", fill: "#0078D4", paths: [{ d: "M9.6 3H14.2L7.6 21H2.5L8.3 6.2Z" }, { d: "M14.8 6.9L21.5 21H8.9L16.1 19.1L12.3 14.5Z" }] },
+  "openai-api": { viewBox: "0 0 24 24", paths: [{ d: "M8.6 6.2L10 7.6L5.6 12L10 16.4L8.6 17.8L2.8 12Z" }, { d: "M15.4 6.2L14 7.6L18.4 12L14 16.4L15.4 17.8L21.2 12Z" }] },
   // The marks below are the phone app's, path for path (its src/ui/ProviderIcon.tsx), so a provider
   // looks the same in both apps. Where the phone gives a near-black and a near-white for the two
   // themes, the mark takes the text color here.

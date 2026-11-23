@@ -14,15 +14,17 @@ function revisionOf(voice: VoiceSettings | undefined, provider: string) {
 }
 
 /** undefined while loading; an empty list when the provider has none or the computer couldn't say. */
-export function useVoiceOptions(kind: "stt" | "tts" | "live", provider: string | null | undefined, voice: VoiceSettings | undefined): VoiceOptions | undefined {
-  const key = provider && voice && provider !== "device" ? kind + ":" + provider + ":" + revisionOf(voice, provider) : null;
+export function useVoiceOptions(kind: "stt" | "tts" | "live", provider: string | null | undefined, voice: VoiceSettings | undefined, model?: string): VoiceOptions | undefined {
+  // Azure's voices belong to a model ("" is the standard ones), so the list is asked again when the model changes.
+  const wanted = provider === "azure" && kind === "tts" ? (model ?? "") : undefined;
+  const key = provider && voice && provider !== "device" ? kind + ":" + provider + ":" + (wanted ?? "") + ":" + revisionOf(voice, provider) : null;
   const [loaded, setLoaded] = useState<{ key: string; options: VoiceOptions } | null>(null);
   useEffect(() => {
     if (!key || !provider) return;
     let live = true;
     let asked = kept.get(key);
     if (!asked) {
-      asked = api["link.voice.options"](kind, provider).catch(() => EMPTY);
+      asked = (wanted === undefined ? api["link.voice.options"](kind, provider) : api["link.voice.options"](kind, provider, wanted)).catch(() => EMPTY);
       kept.set(key, asked);
       // Asked again after a while, so a list the provider changed shows up.
       setTimeout(() => kept.delete(key), 5 * 60_000);
@@ -33,7 +35,7 @@ export function useVoiceOptions(kind: "stt" | "tts" | "live", provider: string |
     return () => {
       live = false;
     };
-  }, [key, kind, provider]);
+  }, [key, kind, provider, wanted]);
   if (!key) return EMPTY;
   return loaded?.key === key ? loaded.options : undefined;
 }

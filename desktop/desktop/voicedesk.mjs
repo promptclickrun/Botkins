@@ -154,8 +154,9 @@ export class VoiceDesk {
     this.voice.setKey(provider, key == null ? null : key.trim());
     return this.settings();
   }
-  options(kind, provider) {
-    return this.voice.options(kind, provider);
+  /** `model` (optional) is the one whose voices are wanted; without it the saved model counts. */
+  options(kind, provider, model) {
+    return this.voice.options(kind, provider, model);
   }
 
   /** A recording made in the page, as text. */

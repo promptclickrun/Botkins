@@ -68,6 +68,11 @@ function Connection({ provider, voice }: { provider: VoiceKeyProvider; voice: Vo
             <Detail label="API version" value={azure.apiVersion} placeholder="2025-04-01-preview" onSave={(apiVersion) => set({ apiVersion: apiVersion || undefined })} />
           </>
         )}
+        {azure.kind === "speech" && (
+          <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, marginTop: -space.md }}>
+            Live voice needs the endpoint, your resource's address. Dictation and reading can use a region instead.
+          </T>
+        )}
       </View>
     );
   }
