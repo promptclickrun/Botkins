@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
+import { activitySteps } from "../link-host/activity-steps.mjs";
 import { LIGHT_STEP_TEXT, lightPart, lightRun, stepDetail } from "../link-host/parts.mjs";
 import { authorize, TEAM_METHODS } from "../link-host/team.mjs";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
@@ -20,6 +21,24 @@ after(() => {
 });
 const long = (label: string, size = 3000) => (label + " ").repeat(Math.ceil(size / (label.length + 1))).slice(0, size);
 const step = (id: string, more: Partial<Step> = {}): Step => ({ id, name: "bash", label: "Ran a command", status: "Done", started: 1, finished: 2, input: long("in-" + id), output: long("out-" + id), ...more });
+
+test("activity groups background commands after light transfer and shows the newest calls first", () => {
+  const shell = step("background", { input: JSON.stringify({ command: long("build"), mode: "async" }) });
+  const run = {
+    agents: [{ id: "agent" }],
+    steps: [
+      step("new", { started: 5 }), shell, step("agent"), step("child", { agentId: "agent" }),
+      step("old", { started: 2 }), step("tie", { started: 5 }),
+    ],
+  };
+  const light = lightRun(run);
+  assert.equal(light.steps[1].input, undefined);
+  const feed = activitySteps<Step>(light.steps, light.agents);
+  assert.deepEqual(feed.tools.map((step) => step.id), ["tie", "new", "old"]);
+  assert.deepEqual(feed.background.map((step) => step.id), ["background"]);
+  assert.deepEqual(feed.byAgent.get("agent")?.map((step) => step.id), ["child", "agent"]);
+  assert.equal(run.steps[1], shell);
+});
 
 test("a light step keeps what a chat draws and says there is more", () => {
   const run = {

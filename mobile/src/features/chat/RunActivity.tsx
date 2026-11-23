@@ -1,8 +1,8 @@
 import { router, useIsFocused, useLocalSearchParams } from "expo-router";
-import { Ban, Brain, ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleX, MessageCircle } from "lucide-react-native";
+import { Brain, ChevronDown, ChevronRight, CircleDashed, MessageCircle } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
-import type { Run, Step, StepDetail, TeamAsk, Todo } from "@/link/types";
+import type { Run, Step, StepDetail, TeamAsk } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useBots, useModels, useWatchedChat } from "@/state/hooks";
 import { api, watchReasoning } from "@/state/link";
@@ -10,6 +10,8 @@ import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
 import { Badge, EmptyState, Group, Label, Markdown, radius, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
+import { activitySteps } from "../../../link-host/activity-steps.mjs";
+import { TodoList } from "./TodoList";
 import { StepMark } from "./bits";
 import { helperSheet } from "./HelperRail";
 import { stepLabel } from "./turn";
@@ -131,15 +133,6 @@ function Reasoning({ run, startOpen }: { run: Run; startOpen: boolean }) {
   );
 }
 
-function TodoMark({ status }: { status: Todo["status"] }) {
-  const { colors } = useTheme();
-  if (status === "done") return <CircleCheck size={20} color={colors.success} strokeWidth={2.2} />;
-  if (status === "in_progress") return <CircleDashed size={20} color={colors.accent} strokeWidth={2.2} />;
-  if (status === "blocked") return <CircleX size={20} color={colors.warning} strokeWidth={2.2} />;
-  if (status === "cancelled") return <Ban size={20} color={colors.faint} strokeWidth={2.2} />;
-  return <Circle size={20} color={colors.faint} strokeWidth={2.2} />;
-}
-
 const TEAM_TONE: Record<TeamAsk["status"], Tone> = { waiting: "neutral", working: "accent", answered: "success", failed: "danger", stopped: "neutral" };
 
 export default function RunActivity() {
@@ -172,9 +165,11 @@ export default function RunActivity() {
   const took = run.finished ? duration(run.finished - run.time) : run.usage?.durationMs ? duration(run.usage.durationMs) : undefined;
   const model = run.usage?.model ?? (run.model ? modelName(run.model, models) : undefined);
   const facts = [took, model, run.usage ? compactNumber(run.usage.input) + " in · " + compactNumber(run.usage.output) + " out" : undefined].filter(Boolean).join(" · ");
-  // The rail keeps every call, including calls attributed to a helper; the helper drill-down above
-  // remains available for its own context and summary.
-  const steps = run.steps ?? [];
+  // Tasks, then subagents and background work (a helper opens its own activity sheet), then this
+  // turn's own tool calls, newest first. Failed only narrows the conversation, never this sheet.
+  const { tools: steps, background, byAgent } = activitySteps(run.steps, run.agents);
+  const selectedHelperStep = stepId ? byAgent.get(stepId)?.find((step) => step.id === stepId) : undefined;
+
   return (
     <Sheet title="Activity">
       <View style={{ gap: space.sm }}>
@@ -196,12 +191,18 @@ export default function RunActivity() {
         )}
       </View>
 
-      {/* The owner's order (2026-11-20): helpers first, then the to-do list, then the steps and everything else. */}
-      {!!run.agents?.length && (
+      {!!run.todos?.length && (
         <View>
-          <Label>Helpers</Label>
+          <Label>Tasks</Label>
+          <TodoList todos={run.todos} />
+        </View>
+      )}
+
+      {(!!run.agents?.length || background.length > 0) && (
+        <View>
+          <Label>Subagents</Label>
           <Group>
-            {run.agents.map((agent) => (
+            {run.agents?.map((agent) => (
               <Tap key={agent.id} onPress={() => router.push(helperSheet(chatId, run.id, agent.id))} sink={1} feel="select" hitSlop={0} accessibilityLabel={agent.name + ", " + agent.status + ", show activity"}>
                 <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
                   <StepMark status={agent.status} />
@@ -219,21 +220,9 @@ export default function RunActivity() {
                 </View>
               </Tap>
             ))}
-          </Group>
-        </View>
-      )}
-
-      {!!run.todos?.length && (
-        <View>
-          <Label>To do</Label>
-          <Group>
-            {run.todos.map((todo) => (
-              <View key={todo.id} style={{ minHeight: 48, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }} accessibilityLabel={todo.title + ", " + todo.status.replace("_", " ")}>
-                <TodoMark status={todo.status} />
-                <T variant="callout" color={todo.status === "done" || todo.status === "cancelled" ? "muted" : "ink"} style={{ flex: 1, textDecorationLine: todo.status === "cancelled" ? "line-through" : "none" }}>
-                  {todo.title}
-                </T>
-              </View>
+            {selectedHelperStep && <StepRow step={selectedHelperStep} chatId={chatId} runId={runId} startOpen />}
+            {background.map((step) => (
+              <StepRow key={step.id} step={step} chatId={chatId} runId={runId} startOpen={step.id === stepId} />
             ))}
           </Group>
         </View>
@@ -241,7 +230,7 @@ export default function RunActivity() {
 
       {steps.length > 0 && (
         <View>
-          <Label>{steps.length === 1 ? "1 step" : steps.length + " steps"}</Label>
+          <Label>{steps.length === 1 ? "1 tool call" : steps.length + " tool calls"}</Label>
           <Group>
             {steps.map((step) => (
               <StepRow key={step.id} step={step} chatId={chatId} runId={runId} startOpen={step.id === stepId} helperName={run.agents?.find((agent) => agent.id === step.agentId)?.name} />

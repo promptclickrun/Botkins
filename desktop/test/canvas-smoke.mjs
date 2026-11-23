@@ -132,13 +132,17 @@ try {
     const summary = trail.getByRole("button", { name: /Worked for/ });
     await expect(summary).toContainText(run.steps.length + (run.steps.length === 1 ? " step" : " steps"));
     await summary.click();
-    await expect(trail.locator(".work-step-label")).toHaveCount(run.steps.length);
+    // A helper's own steps open in its activity; the rail lists the rest.
+    const listed = run.steps.filter((step) => !run.agents?.some((agent) => agent.id === (step.agentId ?? step.id)));
+    await expect(trail.locator(".work-step-label")).toHaveCount(listed.length);
     if (run.reasoning?.some((thought) => thought.text.trim())) await expect(trail.getByLabel("Thinking").first()).toBeVisible();
     await summary.click();
-    if (run.todos?.length || (await chatOf(id)).todos?.length) {
-      await page.locator(".canvas-chip", { hasText: "Tasks" }).click();
-      await expect(page.getByRole("region", { name: "Tasks" })).toBeVisible();
-    }
+    const rail = page.getByRole("button", { name: /^Todos / });
+    const carried = (await chatOf(id)).todos?.some((todo) => ["pending", "in_progress", "blocked"].includes(todo.status));
+    if (queuedRun.todos ? queuedRun.todos.length > 0 : carried) {
+      await rail.click();
+      await expect(page.locator("#task-drawer")).toBeVisible();
+    } else await expect(rail).toHaveCount(0);
     if (ctx) await expect(page.locator(".context-meter")).toContainText("% of context");
     const scrollable = await page
       .locator(".messages")

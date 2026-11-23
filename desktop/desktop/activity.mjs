@@ -1,3 +1,4 @@
+import { backgroundShell } from "./link/activity-steps.mjs";
 import { displayValue } from "./display.mjs";
 
 function toolLabel(name, args) {
@@ -45,6 +46,7 @@ export function recordActivity(run, { type, data, agentId }, notify) {
       ...(owner && {agentId:owner}),
       name,
       source: data.mcpServerName,
+      ...(backgroundShell(name, data.mcpServerName, data.arguments) && { background: true }),
       label: toolLabel(name, data.arguments),
       input: displayValue(data.arguments, 12000),
       status: "Running",

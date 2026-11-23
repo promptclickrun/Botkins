@@ -37,6 +37,8 @@ import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
 import { drafts, keepDraft, useChatSplit } from "./split";
+import { sessionTodos, todoLabel } from "../../../link-host/session-todos";
+import { TodoList } from "./TodoList";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
@@ -680,7 +682,15 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   };
 
   // The helpers of the chat's newest turn, above the composer.
-  const newest = view ? latestTurn(runPart, view.messages, view.runs) : undefined;
+  const newest = runPart ?? (view && latestTurn(undefined, view.messages, view.runs));
+
+  const todos = sessionTodos(newest?.todos, view?.todos);
+  const [todoDrawerChat, setTodoDrawerChat] = useState<string>();
+  const hasTodos = !!todos?.length;
+  const todoOpen = hasTodos && todoDrawerChat === chatId;
+  useEffect(() => {
+    if (!hasTodos || todoDrawerChat !== chatId) setTodoDrawerChat(undefined);
+  }, [chatId, hasTodos, todoDrawerChat]);
 
   const askSide = (command: string, question: string) => {
     if (!question) {
@@ -896,7 +906,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // second page, and the chat keeps to the first, clear of the fold.
   const project = projects?.find((item) => item.id === chat.projectId);
   const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
-  const room = { top: topBar + banners, dock, bottom: dock + (working ? CAPSULE + space.sm : 0) };
+  const idleTodoRoom = canChat && hasTodos && !working ? CAPSULE + space.sm : 0;
+  const room = { top: topBar + banners, dock: dock + idleTodoRoom, bottom: dock + idleTodoRoom + (working ? CAPSULE + space.sm : 0) };
   const column = (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       {!paneId && header}
@@ -927,13 +938,19 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
           </View>
         </View>
         <Fade edge="bottom" cover={dock} />
-        {working && (
-          <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: dock + space.sm }}>
-            <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />
+        {canChat && (working || hasTodos) && (
+          <View pointerEvents="box-none" style={{ position: "absolute", left: space.sm, right: space.sm, bottom: dock + space.sm, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm }}>
+            {working && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
+            {hasTodos && <Chip label={todoLabel(todos)} selected={todoOpen} onPress={() => setTodoDrawerChat(todoOpen ? undefined : chatId)} />}
           </View>
         )}
         {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
         <View onLayout={(event) => setDock(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
+          {canChat && todoOpen && (
+            <ScrollView style={{ maxHeight: Math.min(240, requestRoom / 2), marginHorizontal: space.md }} keyboardShouldPersistTaps="handled">
+              <TodoList todos={todos} />
+            </ScrollView>
+          )}
           {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
           {canChat && requests.length > 0 && (
             <View style={{ paddingHorizontal: space.md }}>

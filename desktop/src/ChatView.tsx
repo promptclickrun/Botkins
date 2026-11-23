@@ -32,7 +32,7 @@ import type { FilePreview } from "./ChatFileLink";
 import {
   HelperChip,
   HelperDrawer,
-  RunLead,
+  ActivitySections,
   InterimUpdate,
   LiveLead,
   ReasoningUpdate,
@@ -60,6 +60,7 @@ import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
 import { PeopleDialog } from "./ChatPeople";
 import { authorName, chatPeopleView } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
+import { sessionTodos } from "../desktop/link/session-todos";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
 import { regenerateTitleItem, useMenu } from "./Pages";
@@ -239,7 +240,11 @@ export default function ChatView({
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
   const latest = chatRuns[0];
   const requests = state.requests.filter((r) => r.chatId === chat.id);
-  const todos = chat.todos ?? latest?.todos ?? [];
+  const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
+  const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
+  // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
+  const todoBesideFold = latest && (latest.status === "Working" || foldFinishedSteps) &&
+    chat.messages.some((message) => message.role === "user" && message.runId === latest.id && !message.steeredRunId && !message.answer);
   const agents = latest?.agents ?? [];
   const lastUserRun = [...chat.messages].reverse().find((m) => m.role === "user" && m.runId)?.runId;
   // What the chat's bot is doing now; when a reply ends, the avatar plays how it went once.
@@ -645,15 +650,15 @@ export default function ChatView({
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
     }
-    const activityEvents = events.filter((event) => event.kind !== "reply");
-    // A turn's work list starts with its helpers, then its to-do list; the steps and the rest follow.
-    const lead = <RunLead agents={run.agents} todos={run.todos} />;
+    // Steps are drawn by ActivitySections: tasks, subagents and background work, then tool calls newest first.
+    const activityEvents = events.filter((event) => event.kind !== "reply" && event.kind !== "step");
     // Older records can have a summary and distinct tool names without individual call records.
     const olderWork = !allSteps.length && (run.summary || run.usedTools?.length)
       ? <div className="timeline-legacy-work">{run.summary && <p>{run.summary}</p>}{!!run.usedTools?.length && <ul>{run.usedTools.map((name) => <li key={name}>{name}</li>)}</ul>}</div>
       : null;
-    const eventBody = <>{lead}{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}</>;
-    const detailsBody = <>{lead}{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>)}</>;
+    // The rail keeps every call; Settings › Chat › Steps narrows only what the conversation shows.
+    const eventBody = <><ActivitySections run={run} steps={allSteps} />{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}</>;
+    const detailsBody = <><ActivitySections run={run} steps={allSteps} />{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>)}</>;
     // Person messages remain in the transcript even when the bot's work is folded. They are
     // part of the conversation, not activity hidden behind the work summary.
     const personBody = events
@@ -693,6 +698,7 @@ export default function ChatView({
         since={run.time}
         body={eventBody}
         detailsBody={detailsBody}
+        todoRail={run === latest && todoBesideFold && todoRail}
         avatar={stillFace(20)}
         count={countLabel}
         onDetails={() => disclosed()}
@@ -1167,10 +1173,10 @@ export default function ChatView({
             </span>
           </div>
         )}
-        {(todos.length > 0 || agents.length > 0) && (
+        {((todoRail && !todoBesideFold) || agents.length > 0 || drawer === "tasks") && (
           <>
             <div className="canvas-chips">
-              {/* Helpers first, then the to-do list: the owner's order (2026-11-20), as in a turn's work list. */}
+              {/* Composer chips keep the background helpers first. */}
               {agents.length > 0 && (
                 <HelperChip
                   agents={agents}
@@ -1178,12 +1184,10 @@ export default function ChatView({
                   toggle={() => setDrawer(drawer === "helpers" ? "" : "helpers")}
                 />
               )}
-              {todos.length > 0 && (
-                <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />
-              )}
+              {!todoBesideFold && todoRail}
             </div>
             {drawer === "helpers" && <HelperDrawer agents={agents} />}
-            {drawer === "tasks" && <TaskDrawer todos={todos} />}
+            {drawer === "tasks" && todos.length > 0 && <TaskDrawer todos={todos} />}
           </>
         )}
         {blocked.length > 0 && project && (

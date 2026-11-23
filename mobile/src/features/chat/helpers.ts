@@ -49,5 +49,5 @@ export function helperDetail(run: Run, helperId: string, timeline: boolean, now 
   const asked = helper.prompt?.trim() || inputField(start?.input, "prompt", "task", "message", "description") || helper.description?.trim() || undefined;
   const answer = finished ? helper.result?.trim() || start?.output?.trim() || (helper.status === "Failed" ? helper.detail : undefined) || undefined : undefined;
   const known = timeline || all.some((step) => !!step.agentId);
-  return { helper, asked, answer, steps: known ? all.filter((step) => step.agentId === helper.id) : null, took: Math.max(0, (helper.finished ?? now) - helper.started) };
+  return { helper, asked, answer, steps: known ? all.filter((step) => step.agentId === helper.id).reverse().sort((a, b) => b.started - a.started) : null, took: Math.max(0, (helper.finished ?? now) - helper.started) };
 }
