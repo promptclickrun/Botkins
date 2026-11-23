@@ -974,7 +974,9 @@ export class CodexProvider extends ModelProvider {
       list.push(...(page.data ?? []));
       cursor = page.nextCursor;
     } while (cursor && list.length < 500);
-    const catalog = this.catalogLimits();
+    // Read Codex's resolved setting so the catalog passed to Pi and the meter uses the same override.
+    const config = this.home ? await rpc.request("config/read", { includeLayers: false }, 5000).catch(() => null) : null;
+    const catalog = this.catalogLimits(config?.config?.model_context_window);
     return list
       .filter((m) => !m.hidden)
       .map((m) => {
@@ -988,8 +990,8 @@ export class CodexProvider extends ModelProvider {
           efforts: [...new Set((m.supportedReasoningEfforts ?? []).map((e) => e.reasoningEffort))],
           defaultEffort: m.defaultReasoningEffort ?? undefined,
           // What Codex says about the model: its own line, what it takes, each thinking level's
-          // line and its speed class. The window comes from Codex's catalog, else from what Codex
-          // reported after a turn on the model.
+          // line and its speed class. The window comes from Codex's catalog and config, else from
+          // what Codex reported after a turn on the model.
           ...modelDetails({
             description: m.description,
             vision: Array.isArray(m.inputModalities) ? m.inputModalities.includes("image") : undefined,
@@ -1010,15 +1012,19 @@ export class CodexProvider extends ModelProvider {
    * part of the window Codex fills before it makes room, which is what it reports as a turn's
    * window. {} when the file isn't there or reads differently.
    */
-  catalogLimits() {
+  catalogLimits(override) {
     const out = {};
+    const configured = Number.isSafeInteger(override) && override > 0 ? override : null;
     try {
       if (!this.home) return out;
       const saved = JSON.parse(readFileSync(join(this.home, "models_cache.json"), "utf8"));
       for (const model of Array.isArray(saved?.models) ? saved.models : []) {
         if (typeof model?.slug !== "string" || !Number.isInteger(model.context_window) || model.context_window <= 0) continue;
+        // Match Codex: the override replaces the default, but cannot exceed the model's stated maximum.
+        const max = model.max_context_window;
+        const contextWindow = configured === null ? model.context_window : Number.isSafeInteger(max) && max > 0 ? Math.min(configured, max) : configured;
         const share = model.effective_context_window_percent;
-        out[model.slug] = { contextWindow: model.context_window, ...(Number.isFinite(share) && share > 0 && share < 100 && { maxPrompt: Math.floor((model.context_window * share) / 100) }) };
+        out[model.slug] = { contextWindow, ...(Number.isFinite(share) && share > 0 && share < 100 && { maxPrompt: Math.floor((contextWindow * share) / 100) }) };
       }
     } catch {
       // No catalog file: the windows are learned from turns.
